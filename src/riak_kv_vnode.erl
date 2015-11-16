@@ -1915,8 +1915,8 @@ fold_fun(keys, BufferMod, none, undefined) ->
     end;
 fold_fun({keys, RecoverTsFun}, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
-            CompounfKey = RecoverTsFun(Key),
-            BufferMod:add(CompounfKey, Buffer)
+            CompoundKey = RecoverTsFun(Key),
+            BufferMod:add(CompoundKey, Buffer)
     end;
 fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
