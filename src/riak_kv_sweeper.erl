@@ -60,7 +60,7 @@
          sweep/1,
          report_worker_pid/2,
          sweep_result/2,
-         sweep_started/4,
+         update_started_sweep/3,
          update_progress/2,
          stop_all_sweeps/0,
          disable_sweep_scheduling/0,
@@ -112,8 +112,8 @@ enable_sweep_scheduling() ->
 report_worker_pid(Index, Pid) ->
     gen_server:cast(?MODULE, {worker_pid, Index, Pid}).
 
-sweep_started(Index, Pid, ActiveParticipants, Estimate) ->
-    gen_server:cast(?MODULE, {sweep_started, Index, Pid, ActiveParticipants, Estimate}).
+update_started_sweep(Index, ActiveParticipants, Estimate) ->
+    gen_server:cast(?MODULE, {update_started_sweep, Index, ActiveParticipants, Estimate}).
 
 %% @private used by the sweeping process to report results when done.
 sweep_result(Index, Result) ->
@@ -169,8 +169,8 @@ handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
     [stop_sweep(Sweep) || Sweep <- get_running_sweeps(Sweeps)],
     {reply, ok, State}.
 
-handle_cast({sweep_started, Index, Pid, ActiveParticipants, Estimate}, State) ->
-    State1 = updatet_started_sweep(Index, Pid, ActiveParticipants, Estimate, State),
+handle_cast({update_started_sweep, Index, ActiveParticipants, Estimate}, State) ->
+    State1 = update_started_sweep(Index, ActiveParticipants, Estimate, State),
     {noreply, State1};
 
 handle_cast({worker_pid, Index, Pid}, State) ->
@@ -263,15 +263,15 @@ do_sweep(Index, #state{sweep_participants = SweepParticipants, sweeps = Sweeps} 
                     [] ->
                         ok;
                     ActiveParticipants ->
-                        ?MODULE:sweep_started(Index, self(), ActiveParticipants, Estimate),
+                        ?MODULE:update_started_sweep(Index, ActiveParticipants, Estimate),
                         Result = riak_kv_vnode:sweep({Index, node()},
                                                      ActiveParticipants,
                                                      Estimate),
                         ?MODULE:sweep_result(Index, format_result(Result))
                 end
         end,
-    spawn_link(SweepFun),
-    State.
+    Pid = spawn_link(SweepFun),
+    start_sweep(Index, Pid, State).
 
 get_estimate_keys(Index, AAEEnabled, Sweeps) ->
 	#sweep{estimated_keys = OldEstimate} = dict:fetch(Index, Sweeps),
@@ -484,7 +484,17 @@ finish_sweep(Sweeps, #sweep{index = Index}) ->
                         Sweep#sweep{state = idle, pid = undefind, worker_pid = undefind}
                 end, Sweeps).
 
-updatet_started_sweep(Index, Pid, ActiveParticipants, Estimate, State) ->
+start_sweep(Index, Pid, State) ->
+    Sweeps = State#state.sweeps,
+    Sweeps1 =
+        dict:update(Index,
+                    fun(Sweep) ->
+                            Sweep#sweep{state = running,
+                                        pid = Pid}
+                    end, Sweeps),
+    State#state{sweeps = Sweeps1}.
+
+update_started_sweep(Index, ActiveParticipants, Estimate, State) ->
     Sweeps = State#state.sweeps,
     SweepParticipants = State#state.sweep_participants,
     TS = os:timestamp(),
@@ -494,9 +504,7 @@ updatet_started_sweep(Index, Pid, ActiveParticipants, Estimate, State) ->
                         %% We add information about participants that where asked and said no
                         %% So they will not be asked again until they expire.
                         Results = add_asked_to_results(Sweep#sweep.results, SweepParticipants),
-                        Sweep#sweep{state = running,
-                                    pid = Pid,
-                                    results = Results,
+                        Sweep#sweep{results = Results,
                                     estimated_keys = {Estimate, TS},
                                     active_participants = ActiveParticipants,
                                     start_time = TS,
