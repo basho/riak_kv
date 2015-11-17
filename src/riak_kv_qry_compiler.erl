@@ -29,6 +29,7 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -define(MAXSUBQ, 5).
 
@@ -172,6 +173,8 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
     catch
         error:{incomplete_where_clause, _} = E ->
             {error, E};
+        error:{where_clause_is_not_a_range, _} = E ->
+            {error, E};
         error:Reason ->
             % if it is not a known error then return the stack trace for
             % debugging
@@ -209,13 +212,34 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
 break_out_timeseries(Ands, LocalFields, QuantumFields) ->
     case get_fields(QuantumFields, Ands, []) of
         {NewAnds, [Ends, Starts]} ->
-            {Filter, Body} = get_fields(LocalFields, NewAnds, []),
-            {[Starts | Body], [Ends | Body], Filter};
+            ?debugFmt("Ends ~p Starts ~p~n", [Ends, Starts]),
+            case is_range_filter(Starts, Ends) of
+                true ->
+                    {Filter, Body} = get_fields(LocalFields, NewAnds, []),
+                    {[Starts | Body], [Ends | Body], Filter};
+                {false, Reason} ->
+                    error({where_clause_is_not_a_range, Reason})
+            end;
         {_, [{'>',_,_}]} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND});
         {_, [{'<',_,_}]} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND})
     end.
+
+is_range_filter({StartOp, StartCol, _}, {EndOp, EndCol, _}) ->
+    case {is_range_op(StartOp), is_range_op(EndOp)} of
+        {true, true}   -> true;
+        {true, false}  -> {false, ?E_WHERE_CLAUSE_NOT_A_RANGE(EndCol, EndOp)};
+        {false, true}  -> {false, ?E_WHERE_CLAUSE_NOT_A_RANGE(StartCol, StartOp)};
+        {false, false} ->
+            {false, ?E_WHERE_CLAUSE_NOT_A_RANGE(StartCol, StartOp, EndCol, EndOp)}
+    end.
+
+is_range_op('>')  -> true;
+is_range_op('>=') -> true;
+is_range_op('<')  -> true;
+is_range_op('<=') -> true;
+is_range_op(V) when is_atom(V) -> false.
 
 get_fields([], Ands, Acc) ->
     {Ands, lists:sort(Acc)};
@@ -285,7 +309,6 @@ end.
 
 -ifdef(TEST).
 -compile(export_all).
--include_lib("eunit/include/eunit.hrl").
 
 %%
 %% Helper Fns for unit tests
@@ -826,5 +849,30 @@ simplest_compile_once_only_fail_test() ->
     Got = compile(DDL, Q2),
     Expected = {error, 'query is already compiled'},
     ?assertEqual(Expected, Got).
+
+end_key_not_a_range_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 3000 AND time != 5000 "
+        "AND user = \"user_1\" AND location = \"derby\""),
+    Msg = ?E_WHERE_CLAUSE_NOT_A_RANGE(<<"time">>, '!='),
+    ?assertEqual(
+        {error, {where_clause_is_not_a_range, Msg}},
+        compile(DDL, Q)
+    ).
+
+
+start_key_not_a_range_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time = 3000 AND time > 5000 "
+        "AND user = \"user_1\" AND location = \"derby\""),
+    Msg = ?E_WHERE_CLAUSE_NOT_A_RANGE(<<"time">>, '='),
+    ?assertEqual(
+        {error, {where_clause_is_not_a_range, Msg}},
+        compile(DDL, Q)
+    ).
 
 -endif.

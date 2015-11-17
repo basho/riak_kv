@@ -37,3 +37,18 @@
     E_MISSING_PARAM_IN_WHERE_CLAUSE(ParamName),
     iolist_to_binary(["Missing parameter ", ParamName, " in where clause."])
 ).
+
+-define(
+    E_WHERE_CLAUSE_NOT_A_RANGE(ParamName, InvalidOperator),
+    iolist_to_binary([
+        "The where clause is not a complete time range e.g. ",
+        "\n\n    ", ParamName, ", > 1000 and ", ParamName, " < 2000.\n\n",
+        "Operator ", atom_to_list(InvalidOperator), " was used but only '>', '>=', '<' and '<=' are allowed."
+    ])).
+
+-define(
+    E_WHERE_CLAUSE_NOT_A_RANGE(ParamNameA, InvalidOperatorA, ParamNameB, InvalidOperatorB),
+    iolist_to_binary([
+        ?E_WHERE_CLAUSE_NOT_A_RANGE(ParamNameA, InvalidOperatorA), "\n",
+        ?E_WHERE_CLAUSE_NOT_A_RANGE(ParamNameB, InvalidOperatorB)
+    ])).
