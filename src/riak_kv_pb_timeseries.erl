@@ -169,12 +169,9 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                     {ColumnNames, Row} = lists:unzip(Record),
                     %% the columns stored in riak_object are just
                     %% names; we need names with types, so:
-                    ColumnTypesAtoms = get_column_types_atoms(ColumnNames, Mod),
-                    ColumnTypesStrings = get_column_types_strings(ColumnTypesAtoms),
-                    ColumnDescriptions = [#tscolumndescription{name = Name, type = Type}
-                                          || {Name, Type} <- lists:zip(ColumnNames, ColumnTypesStrings)],
-                    Rows = riak_pb_ts_codec:encode_rows(ColumnTypesAtoms, [Row]),
-                    {reply, #tsgetresp{columns = ColumnDescriptions,
+                    ColumnTypes = get_column_types(ColumnNames, Mod),
+                    Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
+                    {reply, #tsgetresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                                        rows = Rows}, State};
                 {error, {bad_key_length, Got, Need}} ->
                     {reply, key_element_count_mismatch(Got, Need), State};
@@ -414,15 +411,13 @@ make_tsqueryresp(FetchedRows, Mod) ->
     %% as returned by fetch, we have in Rows a sequence of KV pairs,
     %% making records concatenated in a flat list
     ColumnNames = get_column_names(FetchedRows),
-    ColumnTypesAtoms = get_column_types_atoms(ColumnNames, Mod),
-    ColumnTypesStrings = get_column_types_strings(ColumnTypesAtoms),
+    ColumnTypes = get_column_types(ColumnNames, Mod),
     Records = assemble_records(FetchedRows, length(ColumnNames)),
     JustRows = lists:map(
                  fun(Rec) -> [C || {_K, C} <- Rec] end,
                  Records),
-    #tsqueryresp{columns = [#tscolumndescription{name = Name, type = Type}
-                            || {Name, Type} <- lists:zip(ColumnNames, ColumnTypesStrings)],
-                 rows = riak_pb_ts_codec:encode_rows(ColumnTypesAtoms, JustRows)}.
+    #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
+                 rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
 
 get_column_names([{C1, _} | MoreRecords]) ->
     {RestOfColumns, _DiscardedValues} =
@@ -432,12 +427,14 @@ get_column_names([{C1, _} | MoreRecords]) ->
             MoreRecords)),
     [C1|RestOfColumns].
 
-get_column_types_atoms(ColumnNames, Mod) ->
+-spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
+get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([ColumnName]) || ColumnName <- ColumnNames].
 
-get_column_types_strings(ColumnTypes) ->
-    [riak_pb_ts_codec:encode_field_type(ColumnType) || ColumnType <- ColumnTypes].
-
+-spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) -> list(#tscolumndescription{}).
+make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
+  [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
+    || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
 
 assemble_records(Rows, RecordSize) ->
     assemble_records_(Rows, RecordSize, []).
