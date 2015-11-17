@@ -152,7 +152,10 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
 
     Mod = riak_ql_ddl:make_module_name(Table),
-    try Mod:get_ddl() of
+    case catch Mod:get_ddl() of
+        {_, {undef, _}} ->
+            Props = riak_core_bucket:get_bucket(Table),
+            {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result =
                 case make_ts_keys(CompoundKey, DDL) of
@@ -181,9 +184,6 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                 {error, Reason} ->
                     {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
             end
-    catch error:{undef, _} ->
-            Props = riak_core_bucket:get_bucket(Table),
-            {reply, missing_helper_module(Table, Props), State}
     end;
 
 
@@ -210,7 +210,10 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
 
     Mod = riak_ql_ddl:make_module_name(Table),
-    try Mod:get_ddl() of
+    case catch Mod:get_ddl() of
+        {_, {undef, _}} ->
+            Props = riak_core_bucket:get_bucket(Table),
+            {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result =
                 case make_ts_keys(CompoundKey, DDL) of
@@ -233,15 +236,15 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
                               ?E_DELETE, flat_format("Failed to delete record: ~p", [Reason])),
                      State}
             end
-    catch error:{undef, _} ->
-            Props = riak_core_bucket:get_bucket(Table),
-            {reply, missing_helper_module(Table, Props), State}
     end;
 
 
 process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
-    try Mod:get_ddl() of
+    case catch Mod:get_ddl() of
+        {_, {undef, _}} ->
+            Props = riak_core_bucket:get_bucket(Table),
+            {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Filter = none,
             Result = riak_client:list_ts_keys(
@@ -256,9 +259,6 @@ process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
                               ?E_LISTKEYS, flat_format("Failed to list keys: ~p", [Reason])),
                      State}
             end
-    catch error:{undef, _} ->
-            Props = riak_core_bucket:get_bucket(Table),
-            {reply, missing_helper_module(Table, Props), State}
     end;
 
 
