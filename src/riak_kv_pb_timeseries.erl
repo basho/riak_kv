@@ -245,10 +245,10 @@ process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
         {_, {undef, _}} ->
             Props = riak_core_bucket:get_bucket(Table),
             {reply, missing_helper_module(Table, Props), State};
-        DDL ->
+        _DDL ->
             Filter = none,
-            Result = riak_client:list_ts_keys(
-                       Table, Filter, Timeout, DDL,
+            Result = riak_client:list_keys(
+                       Table, Filter, Timeout, Mod,
                        {riak_client, [node(), undefined]}),
             case Result of
                 {ok, CompoundKeys} ->

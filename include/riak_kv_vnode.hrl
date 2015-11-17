@@ -37,12 +37,11 @@
           bucket :: binary() | tuple(),
           item_filter :: function()}).
 
-%% Can #riak_kv_listkeys_req_v4{} accommodate a new field for
-%% us, rather than creating a new record?
+%% used to serve list_keys for timeseries
 -record(riak_kv_listkeys_ts_req_v1, {
           table :: binary(),
           item_filter :: none | function(),
-          ddl :: riak_ql_ddl:ddl()}).
+          ddl_mod :: module()}).
 
 -record(riak_kv_listbuckets_req_v1, {
           item_filter :: function()}).

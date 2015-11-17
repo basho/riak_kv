@@ -914,12 +914,12 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                             FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_listkeys_ts_req_v1{table = Table,
                                             item_filter = ItemFilter,
-                                            ddl = DDL},
+                                            ddl_mod = Mod},
                 FilterVNodes, Sender, State) ->
     %% ack-based backpressure, I suppose
     Bucket = {Table, Table},
     ResultFun = result_fun_ack(Bucket, Sender),
-    Opts = [{bucket, Bucket}, {ddl, DDL}],
+    Opts = [{bucket, Bucket}, {ddl_mod, Mod}],
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
@@ -1025,12 +1025,12 @@ handle_coverage_keyfold(Bucket, ItemFilter, Query,
 %% index operations, allow the ModFun for folding to be declared
 %% to support index operations that can return objects
 handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
-                        FilterVNodes, Sender, Opts0,
-                        State=#state{async_folding=AsyncFolding,
-                                     idx=Index,
-                                     key_buf_size=DefaultBufSz,
-                                     mod=Mod,
-                                     modstate=ModState}) ->
+                     FilterVNodes, Sender, Opts0,
+                     State=#state{async_folding = AsyncFolding,
+                                  idx           = Index,
+                                  key_buf_size  = DefaultBufSz,
+                                  mod           = Mod,
+                                  modstate      = ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
@@ -1038,14 +1038,17 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
     Extras = fold_extras_keys(Index, Bucket),
-    %% if Options contain a DDL, then we are folding keys for
+    %% if Options contain ddl_mod, then we are folding keys for
     %% list_ts_keys
     FoldFunSelector =
-        case proplists:get_value(ddl, Opts0) of
+        case proplists:get_value(ddl_mod, Opts0) of
             undefined ->
                 keys;
-            DDL ->
-                {keys, fun(Key) -> recover_ts_key(Key, DDL, Index) end}
+            DDLMod ->
+                #ddl_v1{table = Table,
+                        local_key = #key_v1{ast = Ast}} = DDLMod:get_ddl(),
+                {keys,
+                 fun(Key) -> recover_ts_key(Key, Table, Ast, Index) end}
         end,
     FoldFun = fold_fun(FoldFunSelector, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
@@ -1064,23 +1067,27 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
 		  {noreply, State}
 	  end.
 
--spec recover_ts_key(binary(), #ddl_v1{}, index()) -> [] | tuple().
+-spec recover_ts_key(Key::binary(), Table::binary(), Ast::term(), index()) ->
+                            [] | tuple().
 %% @private
 %% Get the full TS record, then reconstruct the TS key from it using
-%% provided DDL.
-recover_ts_key(Key, DDL = #ddl_v1{table = Table}, Index) ->
+%% provided parts (extracted from DDL to common expression recomputations).
+recover_ts_key(Key, Table, Ast, Index) ->
     Bucket = {Table, Table},
     {ok, RObj} = local_get(Index, {Bucket, Key}),
     case riak_object:get_value(RObj) of
         <<>> ->
             [];
         Record ->
-            {_Columns, Values} = lists:unzip(Record),
-            LK = riak_ql_ddl:get_local_key(DDL, list_to_tuple(Values)),
-            {_Types, LKValues} = lists:unzip(LK),
-            %% there is a lists:flatten on the way back, so:
-            list_to_tuple(LKValues)
+            list_to_tuple(
+              strip_nonlk_fields(Ast, Record))
     end.
+
+%% Special case of riak_ql_ddl:get_local_key/2: accepts [{Type,
+%% Value}] and consults Ast to only keep LK-constituent fields in Obj.
+strip_nonlk_fields(Ast, Obj) ->
+    Params = [P || #param_v1{name = [P]} <- Ast],
+    [V || {N, V} <- Obj, lists:member(N, Params)].
 
 
 handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
@@ -3092,5 +3099,26 @@ flush_msgs() ->
         0 ->
             ok
     end.
+
+strip_nonlk_fields_test() ->
+    ?assertEqual(
+       [1, 3],
+       strip_nonlk_fields(
+         [#param_v1{name = [<<"a">>]},
+          #param_v1{name = [<<"b">>]}],
+         [{<<"a">>, 1}, {<<"x">>, 2}, {<<"b">>, 3}])),
+    ?assertEqual(
+       [1, 2],
+       strip_nonlk_fields(
+         [#param_v1{name = [<<"a">>]},
+          #param_v1{name = [<<"b">>]}],
+         [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
+    ?assertEqual(
+       [1, 2],
+       strip_nonlk_fields(
+         [#param_v1{name = [<<"b">>]},
+          #param_v1{name = [<<"a">>]}],
+         [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
+    ok.
 
 -endif.
