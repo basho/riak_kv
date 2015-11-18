@@ -430,9 +430,10 @@ format_results(Now, Results) ->
     SortedResultList = lists:keysort(1, ResultList),
     [begin
         LastResult = format_timestamp(Now, TimeStamp),
-        io_lib:format("| ~s ~-4s ~-9s", [atom_to_list(Mod), string:to_upper(atom_to_list(Outcome)), LastResult])
+        OutcomeString = string:to_upper(atom_to_list(Outcome)),
+        io_lib:format("| ~s ~-4s ~-9s", [atom_to_list(Mod), OutcomeString, LastResult])
      end
-    || {Mod, {TimeStamp, Outcome}} <- SortedResultList].
+    || {Mod, {TimeStamp, Outcome}} <- SortedResultList, lists:member(Outcome, [succ, fail])].
 
 format_participants(SweepParticipants) ->
     io:format("~s~n~-25s  ~-20s ~-15s~n",
