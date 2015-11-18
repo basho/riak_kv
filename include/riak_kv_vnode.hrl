@@ -40,7 +40,7 @@
 %% used to serve list_keys for timeseries
 -record(riak_kv_listkeys_ts_req_v1, {
           table :: binary(),
-          item_filter :: none | function(),
+          item_filter :: none | fun((list()) -> boolean()),
           ddl_mod :: module()}).
 
 -record(riak_kv_listbuckets_req_v1, {
