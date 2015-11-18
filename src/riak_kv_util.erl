@@ -25,7 +25,8 @@
 -module(riak_kv_util).
 
 
--export([is_x_deleted/1,
+-export([is_x_expired/1,
+         is_x_deleted/1,
          obj_not_deleted/1,
          try_cast/3,
          fallback/4,
@@ -63,6 +64,44 @@
 %% ===================================================================
 %% Public API
 %% ===================================================================
+
+%% @spec is_x_expired(riak_object:riak_object()) -> boolean()
+%% @doc 'true' if all contents of the input object are marked
+%%      as expired; 'false' otherwise
+is_x_expired(Obj) ->
+    Now = os:timestamp(),
+    case [{M, V} || {M, V} <- riak_object:get_contents(Obj),
+                    not expired(Now, M, Obj)] of
+        [] -> true;
+        _ -> false
+    end.
+
+expired(Now, MetaData, Obj) ->
+    case dict:find(<<"X-Riak-TTL">>, MetaData) of
+        {ok, TTL} ->
+            expired_ttl(MetaData, TTL, Now);
+        _ ->
+            expired_by_bucket_ttl(MetaData, riak_object:bucket(Obj), Now)
+    end.
+
+expired_by_bucket_ttl(Metadata, Bucket, Now) ->
+    case riak_core_bucket:get_bucket(Bucket) of
+        BProps when is_list(BProps) ->
+            case proplists:get_value(ttl, BProps) of
+                undefined ->
+                    false;
+                TTL ->
+                    expired_ttl(Metadata, TTL, Now)
+            end;
+        _ ->
+            false
+    end.
+
+expired_ttl(MetaData, TTL, Now) ->
+    LastMod = dict:fetch(<<"X-Riak-Last-Modified">>, MetaData),
+    timer:now_diff(Now, LastMod) div 1000000 > TTL.
+
+
 
 %% @spec is_x_deleted(riak_object:riak_object()) -> boolean()
 %% @doc 'true' if all contents of the input object are marked
@@ -487,6 +526,47 @@ deleted_test() ->
            riak_object:update_metadata(
              O, dict:store(<<"X-Riak-Deleted">>, true, MD))),
     true = is_x_deleted(O1).
+
+setup_bucket_props() ->
+    meck:new(riak_core_bucket),
+    meck:expect(riak_core_bucket, get_bucket,
+                fun(<<"test-ttl">>) -> [{ttl, 1}];
+                   (<<"test-non-ttl">>) -> []
+                end),
+    ok.
+
+teardown_bucket_props(_) ->
+             meck:unload(riak_core_bucket).
+
+
+object_expired_test() ->
+    setup_bucket_props(),
+    ObjectTTL = riak_object:new(<<"test-ttl">>, <<"k">>, "v"),
+    ObjectTTL1 = riak_object:apply_updates(riak_object:update_last_modified(ObjectTTL)),
+    timer:sleep(timer:seconds(1)),
+    false = is_x_expired(ObjectTTL1),
+    MD = riak_object:get_metadata(ObjectTTL1),
+    ObjectTTL2 = riak_object:apply_updates(
+                   riak_object:update_metadata(
+                     ObjectTTL1, dict:store(<<"X-Riak-TTL">>, 0, MD))),
+    ?assertEqual(true, is_x_expired(ObjectTTL2)),
+    teardown_bucket_props(pass).
+
+bucket_ttl_expired_test() ->
+    setup_bucket_props(),
+    ObucketTTL = riak_object:new(<<"test-ttl">>, <<"k_bucket_ttl">>, "v"),
+    ObucketTTL1 = riak_object:apply_updates(riak_object:update_last_modified(ObucketTTL)),
+    timer:sleep(timer:seconds(3)),
+    ?assertEqual(true ,is_x_expired(ObucketTTL1)),
+    teardown_bucket_props(pass).
+
+non_ttl_bucket_test() ->
+    setup_bucket_props(),
+    ObucketNonTTL = riak_object:new(<<"test-non-ttl">>, <<"k_bucket_non-ttl">>, "v"),
+    ObucketNonTTL1 = riak_object:apply_updates(riak_object:update_last_modified(ObucketNonTTL)),
+    timer:sleep(timer:seconds(3)),
+    ?assertEqual(false, is_x_expired(ObucketNonTTL1)),
+    teardown_bucket_props(pass).
 
 make_vtag_test() ->
     crypto:start(),

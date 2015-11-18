@@ -81,7 +81,7 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
 add_result(Idx, {ok, RObj} = Result, GetCore) ->
-    Dels = case riak_kv_util:is_x_deleted(RObj) of
+    Dels = case riak_kv_util:is_x_deleted(RObj) orelse riak_kv_util:is_x_expired(RObj) of
         true ->  1;
         false -> 0
     end,
@@ -143,7 +143,7 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
             Merged; % {ok, MObj}
         tombstone when DeletedVClock ->
             {error, {deleted, riak_object:vclock(MObj)}};
-        _ -> % tombstone or notfound
+        _ -> % tombstone or notfound or expired
             {error, notfound}
     end,
     {Reply, GetCore#getcore{merged = Merged}};
@@ -272,7 +272,7 @@ merge(Replies, AllowMult) ->
             {notfound, undefined};
         _ ->
             Merged = riak_object:reconcile(RObjs, AllowMult), % include tombstones
-            case riak_kv_util:is_x_deleted(Merged) of
+            case riak_kv_util:is_x_deleted(Merged) orelse riak_kv_util:is_x_expired(Merged) of
                 true ->
                     {tombstone, Merged};
                 _ ->
@@ -358,7 +358,17 @@ enough_test_() ->
     ].
 
 response_test_() ->
-    [
+    {setup,
+     fun() ->
+             meck:new(riak_core_bucket),
+             meck:expect(riak_core_bucket, get_bucket,
+                         fun(_) -> [] end),
+             ok
+     end,
+     fun(_) ->
+             meck:unload(riak_core_bucket)
+     end,
+     [
         {"Requirements met",
             fun() ->
                     RObj = riak_object:new(<<"foo">>, <<"bar">>, <<"baz">>),
@@ -450,5 +460,5 @@ response_test_() ->
                                     {3, {error, notfound}}]})),
                     ok
             end}
-    ].
+    ]}.
 -endif.

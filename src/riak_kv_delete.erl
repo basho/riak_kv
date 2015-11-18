@@ -201,16 +201,16 @@ participate_in_sweep(Index, _Pid) ->
     {ok, reap_fun(Index), InitialAcc}.
 
 reap_fun(Index) ->
-    fun({BKey, RObj}, Acc, _Opt) ->
+    fun({_BKey, RObj}, Acc, _Opt) ->
             case riak_kv_util:obj_not_deleted(RObj) of
                 undefined ->
-                    maybe_reap(BKey, RObj, Index, Acc);
+                    maybe_reap(RObj, Index, Acc);
                 _ ->
                     {ok, Acc}
             end
     end.
 
-maybe_reap(_BKey, RObj, Index, Acc) ->
+maybe_reap(RObj, Index, Acc) ->
     case obj_outside_grace_period(RObj) of
         true ->
             riak_kv_stat:update({reap_tombstone, Index}),

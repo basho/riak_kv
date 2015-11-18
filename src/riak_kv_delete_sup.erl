@@ -52,16 +52,39 @@ init([]) ->
     {ok, {{simple_one_for_one, 10, 10}, [DeleteSpec]}}.
 
 maybe_add_sweep_participant() ->
+    maybe_add_reap_sweep_participant(),
+    maybe_add_obj_ttl_sweep_participant().
+
+maybe_add_obj_ttl_sweep_participant() ->
+    RunInterval =
+        app_helper:get_env(riak_kv, obj_ttl_sweep_interval, undefined),
+    case RunInterval of
+        undefined ->
+            false;
+        _ ->
+            add_obj_ttl_sweep_participant(RunInterval)
+    end.
+
+add_obj_ttl_sweep_participant(RunInterval) ->
+    riak_kv_sweeper:add_sweep_participant(
+      #sweep_participant{ description = "Object TTL",
+                          module = riak_kv_object_ttl,
+                          fun_type = ?MODIFY_FUN,
+                          run_interval = RunInterval,
+                          options = [bucket_props]
+                        }).
+
+maybe_add_reap_sweep_participant() ->
     RunInterval =
         app_helper:get_env(riak_kv, reap_sweep_interval, undefined),
     case RunInterval of
         undefined ->
             false;
         _ ->
-            add_sweep_participant(RunInterval)
+            add_reap_sweep_participant(RunInterval)
     end.
 
-add_sweep_participant(RunInterval) ->
+add_reap_sweep_participant(RunInterval) ->
     riak_kv_sweeper:add_sweep_participant(
       #sweep_participant{ description = "Reap tombstones",
                           module = riak_kv_delete,
