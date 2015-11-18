@@ -134,18 +134,20 @@ compile_where(DDL, Where) ->
         {true, NewW} -> NewW
     end.
 
-check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
+quantum_field_name(#ddl_v1{ partition_key = PK }) ->
+    #key_v1{ ast = PartitionKeyAST } = PK,
+    [_, _, Quantum] = PartitionKeyAST,
+    #hash_fn_v1{args = [#param_v1{name = QFieldName} | _]} = Quantum,
+    QFieldName.
+
+check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL,
               [{and_, _LHS, _RHS} = W]) ->
-    try    #key_v1{ast = PAST} = PK,
-           #key_v1{ast = LAST} = LK,
-           LocalFields     = [X || #param_v1{name = X} <- LAST],
-           PartitionFields = [X || #param_v1{name = X} <- PAST],
-           [QField] = [X || #hash_fn_v1{mod  = riak_ql_quanta,
-                                        fn   = quantum,
-                                        args = [#param_v1{name = X} | _Rest]}
-                                <- PAST],
+    try    #key_v1{ast = PartitionKeyAST} = PK,
+           LocalFields     = [X || #param_v1{name = X} <- LK#key_v1.ast],
+           PartitionFields = [X || #param_v1{name = X} <- PartitionKeyAST],
+           [QuantumFieldName] = quantum_field_name(DDL),
            StrippedW = strip(W, []),
-           {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QField]),
+           {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QuantumFieldName]),
            Mod = riak_ql_ddl:make_module_name(T),
            StartKey = rewrite(LK, StartW, Mod),
            EndKey = rewrite(LK, EndW, Mod),
@@ -171,10 +173,9 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
                {error, Errors}
            end
     catch
-        error:{incomplete_where_clause, _} = E ->
-            {error, E};
-        error:{where_clause_is_not_a_range, _} = E ->
-            {error, E};
+        error:{incomplete_where_clause, _} = E -> {error, E};
+        error:{lower_bound_specified_more_than_once, _} = E -> {error, E};
+        error:{upper_bound_specified_more_than_once, _} = E -> {error, E};
         error:Reason ->
             % if it is not a known error then return the stack trace for
             % debugging
@@ -209,37 +210,51 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
             includes(T, Op2, Mod)
     end.
 
-break_out_timeseries(Ands, LocalFields, QuantumFields) ->
-    case get_fields(QuantumFields, Ands, []) of
-        {NewAnds, [Ends, Starts]} ->
-            ?debugFmt("Ends ~p Starts ~p~n", [Ends, Starts]),
-            case is_range_filter(Starts, Ends) of
-                true ->
-                    {Filter, Body} = get_fields(LocalFields, NewAnds, []),
-                    {[Starts | Body], [Ends | Body], Filter};
-                {false, Reason} ->
-                    error({where_clause_is_not_a_range, Reason})
-            end;
-        {_, [{'>',_,_}]} ->
+% find the upper and lower bound for the time
+find_timestamp_bounds(QuantumField, LocalFields) when is_binary(QuantumField) ->
+    find_timestamp_bounds2(QuantumField, LocalFields, [], {undefined, undefined}).
+
+find_timestamp_bounds2(_, [], OtherFilters, BoundsAcc) ->
+    {lists:reverse(OtherFilters), BoundsAcc};
+find_timestamp_bounds2(QuantumFieldName, [{Op, QuantumFieldName, _} = Filter | Tail], OtherFilters, BoundsAcc1) ->
+    % if there are already end bounds throw an error
+    if
+        Op == '>' orelse Op == '>=' ->
+            find_timestamp_bounds2(QuantumFieldName, Tail, OtherFilters, acc_lower_bounds(Filter, BoundsAcc1));
+        Op == '<' orelse Op == '<=' ->
+            find_timestamp_bounds2(QuantumFieldName, Tail, OtherFilters, acc_upper_bounds(Filter, BoundsAcc1));
+        Op == '=' orelse Op == '!=' ->
+            find_timestamp_bounds2(QuantumFieldName, Tail, [Filter | OtherFilters], BoundsAcc1)
+    end;
+find_timestamp_bounds2(QuantumFieldName, [Filter | Tail], OtherFilters, BoundsAcc1) ->
+    % this filter is not on the quantum
+    find_timestamp_bounds2(QuantumFieldName, Tail, [Filter | OtherFilters], BoundsAcc1).
+
+%%
+acc_lower_bounds(Filter, {undefined, U}) ->
+    {Filter, U};
+acc_lower_bounds(_Filter, {_L, _}) ->
+    error({lower_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_LOWER_BOUND}).
+
+%%
+acc_upper_bounds(Filter, {L, undefined}) ->
+    {L, Filter};
+acc_upper_bounds(_Filter, {_, _U}) ->
+    error({upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}).
+
+%%
+break_out_timeseries(Filters1, LocalFields, [QuantumFields]) ->
+    case find_timestamp_bounds(QuantumFields, Filters1) of
+        {_, {undefined, undefined}} ->
+            error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
+        {_, {_, undefined}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND});
-        {_, [{'<',_,_}]} ->
-            error({incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND})
+        {_, {undefined, _}} ->
+            error({incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND});
+        {Filters2, {Starts, Ends}} ->
+            {Filter, Body} = get_fields(LocalFields, Filters2, []),
+            {[Starts | Body], [Ends | Body], Filter}
     end.
-
-is_range_filter({StartOp, StartCol, _}, {EndOp, EndCol, _}) ->
-    case {is_range_op(StartOp), is_range_op(EndOp)} of
-        {true, true}   -> true;
-        {true, false}  -> {false, ?E_WHERE_CLAUSE_NOT_A_RANGE(EndCol, EndOp)};
-        {false, true}  -> {false, ?E_WHERE_CLAUSE_NOT_A_RANGE(StartCol, StartOp)};
-        {false, false} ->
-            {false, ?E_WHERE_CLAUSE_NOT_A_RANGE(StartCol, StartOp, EndCol, EndOp)}
-    end.
-
-is_range_op('>')  -> true;
-is_range_op('>=') -> true;
-is_range_op('<')  -> true;
-is_range_op('<=') -> true;
-is_range_op(V) when is_atom(V) -> false.
 
 get_fields([], Ands, Acc) ->
     {Ands, lists:sort(Acc)};
@@ -301,11 +316,11 @@ rew2([], _W, _Mod, _Acc) ->
 rew2([#param_v1{name = [N]} | T], W, Mod, Acc) ->
     Type = Mod:get_field_type([N]),
     case lists:keytake(N, 2, W) of
-    false                           ->
-        {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(N)}};
-    {value, {_, _, {_, Val}}, NewW} ->
-        rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
-end.
+        false                           ->
+            {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(N)}};
+        {value, {_, _, {_, Val}}, NewW} ->
+            rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
+    end.
 
 -ifdef(TEST).
 -compile(export_all).
@@ -856,23 +871,99 @@ end_key_not_a_range_test() ->
         "SELECT weather FROM GeoCheckin "
         "WHERE time > 3000 AND time != 5000 "
         "AND user = \"user_1\" AND location = \"derby\""),
-    Msg = ?E_WHERE_CLAUSE_NOT_A_RANGE(<<"time">>, '!='),
     ?assertEqual(
-        {error, {where_clause_is_not_a_range, Msg}},
+        {error, {incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND}},
         compile(DDL, Q)
     ).
-
 
 start_key_not_a_range_test() ->
     DDL = get_standard_ddl(),
     {ok, Q} = get_query(
         "SELECT weather FROM GeoCheckin "
-        "WHERE time = 3000 AND time > 5000 "
+        "WHERE time = 3000 AND time < 5000 "
         "AND user = \"user_1\" AND location = \"derby\""),
-    Msg = ?E_WHERE_CLAUSE_NOT_A_RANGE(<<"time">>, '='),
     ?assertEqual(
-        {error, {where_clause_is_not_a_range, Msg}},
+        {error, {incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND}},
         compile(DDL, Q)
     ).
+
+key_is_all_timestamps_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE GeoCheckin ("
+        "time_a TIMESTAMP NOT NULL, "
+        "time_b TIMESTAMP NOT NULL, "
+        "time_c TIMESTAMP NOT NULL, "
+        "PRIMARY KEY("
+        " (time_a, time_b, QUANTUM(time_c, 15, 's')), time_a, time_b, time_c))"),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time_c > 2999 AND time_c < 5000 "
+        "AND time_a = 10 AND time_b = 15"),
+    ?assertMatch(
+        [#riak_sql_v1{
+            'WHERE' = [
+                {startkey, [
+                    {<<"time_a">>, timestamp, 10},
+                    {<<"time_b">>, timestamp, 15},
+                    {<<"time_c">>, timestamp, 2999}
+                ]},
+                {endkey, [
+                    {<<"time_a">>, timestamp, 10},
+                    {<<"time_b">>, timestamp, 15},
+                    {<<"time_c">>, timestamp, 5000}
+                ]},
+                {filter, []},
+                {start_inclusive, false}]
+        }],
+        compile(DDL, Q)
+    ).
+
+duplicate_lower_bound_filter_not_allowed_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 3000 AND  time > 3001 AND time < 5000 "
+        "AND user = \"user_1\" AND location = \"derby\""),
+    ?assertEqual(
+        {error, {lower_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_LOWER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+duplicate_upper_bound_filter_not_allowed_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 3000 AND time < 5000 AND time < 4999 "
+        "AND user = \"user_1\" AND location = \"derby\""),
+    ?assertEqual(
+        {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+% FIXME getting an invalid rewrite error on this
+% filter_on_quanta_field_test() ->
+%     DDL = get_standard_ddl(),
+%     {ok, Q} = get_query(
+%         "SELECT weather FROM GeoCheckin "
+%         "WHERE time > 3000 AND time < 5000 "
+%         "AND time = 3002 AND user = \"user_1\" AND location = \"derby\""),
+%     ?assertMatch(
+%         [#riak_sql_v1{
+%             'WHERE' = [
+%                 {startkey, [
+%                     {<<"time_a">>, timestamp, 10},
+%                     {<<"time_b">>, timestamp, 15},
+%                     {<<"time_c">>, timestamp, 2999}
+%                 ]},
+%                 {endkey, [
+%                     {<<"time_a">>, timestamp, 10},
+%                     {<<"time_b">>, timestamp, 15},
+%                     {<<"time_c">>, timestamp, 5000}
+%                 ]},
+%                 {filter, []},
+%                 {start_inclusive, false}]
+%         }],
+%         compile(DDL, Q)
+%     ).
 
 -endif.
