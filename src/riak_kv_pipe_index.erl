@@ -142,7 +142,7 @@ done(_State) ->
 
 %% Convenience
 
--type bucket_or_filter() :: binary() | {binary(), list()}.
+-type bucket_or_filter() :: binary() | {binary(), list()} | {binary(), list()}.
 
 %% @doc Query and index, and send the results as inputs to the
 %%      given pipe.  This starts a new pipe with one fitting

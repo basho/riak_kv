@@ -770,7 +770,7 @@ diff_specs_core(AllIndexSet, OldIndexSet) ->
 
 %% @doc Get a list of {Index, Value} tuples from the
 %% metadata of an object.
--spec index_data(riak_object()) -> [{binary(), index_value()}].
+-spec index_data(undefined | riak_object()) -> [{binary(), index_value()}].
 index_data(undefined) ->
     [];
 index_data(Obj) ->
