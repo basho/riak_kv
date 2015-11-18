@@ -1047,8 +1047,9 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
             DDLMod ->
                 #ddl_v1{table = Table,
                         local_key = #key_v1{ast = Ast}} = DDLMod:get_ddl(),
+                LKParams = [P || #param_v1{name = [P]} <- Ast],
                 {keys,
-                 fun(Key) -> recover_ts_key(Key, Table, Ast, Index) end}
+                 fun(Key) -> recover_ts_key(Key, Table, LKParams, Index) end}
         end,
     FoldFun = fold_fun(FoldFunSelector, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
@@ -1067,12 +1068,12 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
 		  {noreply, State}
 	  end.
 
--spec recover_ts_key(Key::binary(), Table::binary(), Ast::term(), index()) ->
+-spec recover_ts_key(Key::binary(), Table::binary(), LKParams::[binary()], index()) ->
                             [] | tuple().
 %% @private
 %% Get the full TS record, then reconstruct the TS key from it using
 %% provided parts (extracted from DDL to common expression recomputations).
-recover_ts_key(Key, Table, Ast, Index) ->
+recover_ts_key(Key, Table, LKParams, Index) ->
     Bucket = {Table, Table},
     {ok, RObj} = local_get(Index, {Bucket, Key}),
     case riak_object:get_value(RObj) of
@@ -1080,14 +1081,13 @@ recover_ts_key(Key, Table, Ast, Index) ->
             [];
         Record ->
             list_to_tuple(
-              strip_nonlk_fields(Ast, Record))
+              strip_nonlk_fields(LKParams, Record))
     end.
 
 %% Special case of riak_ql_ddl:get_local_key/2: accepts [{Type,
 %% Value}] and consults Ast to only keep LK-constituent fields in Obj.
-strip_nonlk_fields(Ast, Obj) ->
-    Params = [P || #param_v1{name = [P]} <- Ast],
-    [V || {N, V} <- Obj, lists:member(N, Params)].
+strip_nonlk_fields(LKParams, Obj) ->
+    [V || {N, V} <- Obj, lists:member(N, LKParams)].
 
 
 handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
@@ -3104,20 +3104,17 @@ strip_nonlk_fields_test() ->
     ?assertEqual(
        [1, 3],
        strip_nonlk_fields(
-         [#param_v1{name = [<<"a">>]},
-          #param_v1{name = [<<"b">>]}],
+         [<<"a">>, <<"b">>],
          [{<<"a">>, 1}, {<<"x">>, 2}, {<<"b">>, 3}])),
     ?assertEqual(
        [1, 2],
        strip_nonlk_fields(
-         [#param_v1{name = [<<"a">>]},
-          #param_v1{name = [<<"b">>]}],
+         [<<"a">>, <<"b">>],
          [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
     ?assertEqual(
        [1, 2],
        strip_nonlk_fields(
-         [#param_v1{name = [<<"b">>]},
-          #param_v1{name = [<<"a">>]}],
+         [<<"b">>, <<"a">>],
          [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
     ok.
 
