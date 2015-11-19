@@ -940,7 +940,19 @@ duplicate_upper_bound_filter_not_allowed_test() ->
         compile(DDL, Q)
     ).
 
-% FIXME getting an invalid rewrite error on this
+% FIXME or operators
+% or_test_test() ->
+%     DDL = get_standard_ddl(),
+%     {ok, Q} = get_query(
+%         "SELECT weather FROM GeoCheckin "
+%         "WHERE time > 3000 AND time < 5000 "
+%         "AND user = \"user_1\" AND location = \"derby\" OR location = \"rottingham\""),
+%     ?assertEqual(
+%         {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
+%         compile(DDL, Q)
+%     ).
+
+% TODO support filters on the primary key, this is not currently supported
 % filter_on_quanta_field_test() ->
 %     DDL = get_standard_ddl(),
 %     {ok, Q} = get_query(

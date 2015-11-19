@@ -110,7 +110,7 @@ get_standard_lk() -> #key_v1{ast = [
              ++ "time timestamp not null, "
              ++ "weather varchar not null, "
              ++ "temperature varchar, "
-             ++ "PRIMARY KEY ((quantum(time, 15, s)), time, user))",
+             ++ "PRIMARY KEY ((time, user, quantum(time, 15, 's')), time, user, time))",
              "select weather from GeoCheckin where time > 3000 and time < 5000",
              {error, {missing_param, <<"Missing parameter user in where clause.">>}}).
 
