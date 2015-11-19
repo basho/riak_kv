@@ -250,7 +250,8 @@ process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
                        {riak_client, [node(), undefined]}),
             case Result of
                 {ok, CompoundKeys} ->
-                    Keys = riak_pb_ts_codec:encode_rows([tuple_to_list(A) || A <- CompoundKeys]),
+                    Keys = riak_pb_ts_codec:encode_rows_non_strict(
+                             [tuple_to_list(A) || A <- CompoundKeys]),
                     {reply, #tslistkeysresp{keys = Keys, done = true}, State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(
