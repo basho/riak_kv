@@ -176,6 +176,8 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL
         error:{incomplete_where_clause, _} = E -> {error, E};
         error:{lower_bound_specified_more_than_once, _} = E -> {error, E};
         error:{upper_bound_specified_more_than_once, _} = E -> {error, E};
+        error:{lower_bound_must_be_less_than_upper_bound, _} = E -> {error, E};
+        error:{lower_and_upper_bounds_are_equal_when_no_equals_operator, _} = E -> {error, E};
         error:Reason ->
             % if it is not a known error then return the stack trace for
             % debugging
@@ -251,6 +253,19 @@ break_out_timeseries(Filters1, LocalFields, [QuantumFields]) ->
             error({incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND});
         {_, {undefined, _}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND});
+        {_, {{_,_,{_,Starts}}, {_,_,{_,Ends}}}} when is_integer(Starts),
+                                                     is_integer(Ends),
+                                                     Starts > Ends ->
+            error({lower_bound_must_be_less_than_upper_bound,
+                   ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND});
+        {_, {{'>',_,{_,Starts}}, {'<',_,{_,Ends}}}} when is_integer(Starts),
+                                                         is_integer(Ends),
+                                                         Starts == Ends ->
+            % catch when the filter values for time bounds are equal but we're
+            % using greater than or less than so could never match, if >= or <=
+            % were used on either side then
+            error({lower_and_upper_bounds_are_equal_when_no_equals_operator,
+                   ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR});
         {Filters2, {Starts, Ends}} ->
             {Filter, Body} = get_fields(LocalFields, Filters2, []),
             {[Starts | Body], [Ends | Body], Filter}
@@ -937,6 +952,28 @@ duplicate_upper_bound_filter_not_allowed_test() ->
         "AND user = \"user_1\" AND location = \"derby\""),
     ?assertEqual(
         {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+lower_bound_is_bigger_than_upper_bound_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 6000 AND time < 5000"
+        "AND user = \"user_1\" AND location = \"derby\""),
+    ?assertEqual(
+        {error, {lower_bound_must_be_less_than_upper_bound, ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+lower_bound_is_same_as_upper_bound_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 5000 AND time < 5000"
+        "AND user = \"user_1\" AND location = \"derby\""),
+    ?assertEqual(
+        {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR}},
         compile(DDL, Q)
     ).
 
