@@ -1,8 +1,27 @@
-%% @author mikael
-%% @doc This module keep sweeper callbacks for object TTL.
-
+%% -------------------------------------------------------------------
+%%
+%% riak_kv_object_ttl: This module keep sweeper callbacks for object TTL.
+%%
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
 
 -module(riak_kv_object_ttl).
+-include("riak_kv_wm_raw.hrl").
 
 %% ====================================================================
 %% API functions
@@ -17,10 +36,14 @@ participate_in_sweep(_Index, _Pid) ->
     {ok, ttl_fun(), InitialAcc}.
 
 ttl_fun() ->
-    fun({_BKey, RObj}, Acc, [{bucket_props, BucketProps}]) ->
+    fun({{Bucket, Key}, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             case expired(RObj, BucketProps) of
                 true ->
-                    {deleted, Acc};
+                    Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
+                                                                         "true", dict:new())),
+                    VClock = riak_object:vclock(RObj),
+                    Tombstone = riak_object:set_vclock(Obj0, VClock),
+                    {mutated, Tombstone, Acc};
                 _ ->
                     {ok, Acc}
             end
@@ -38,5 +61,5 @@ failed_sweep(Index, Reason) ->
 %% Internal functions
 %% ====================================================================
 
-expired(_RObj, _BucketProps) ->
-    true.
+expired(RObj, BucketProps) ->
+    riak_kv_util:is_x_expired(RObj, BucketProps).

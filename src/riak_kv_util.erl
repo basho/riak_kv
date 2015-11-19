@@ -26,6 +26,7 @@
 
 
 -export([is_x_expired/1,
+         is_x_expired/2,
          is_x_deleted/1,
          obj_not_deleted/1,
          try_cast/3,
@@ -68,34 +69,42 @@
 %% @spec is_x_expired(riak_object:riak_object()) -> boolean()
 %% @doc 'true' if all contents of the input object are marked
 %%      as expired; 'false' otherwise
+
 is_x_expired(Obj) ->
+    is_x_expired(Obj, undefined).
+
+is_x_expired(Obj, BucketProps) ->
     Now = os:timestamp(),
     case [{M, V} || {M, V} <- riak_object:get_contents(Obj),
-                    not expired(Now, M, Obj)] of
+                    not expired(Now, M, Obj, BucketProps)] of
         [] -> true;
         _ -> false
     end.
 
-expired(Now, MetaData, Obj) ->
+expired(Now, MetaData, Obj, BucketProps) ->
     case dict:find(<<"X-Riak-TTL">>, MetaData) of
         {ok, TTL} ->
             expired_ttl(MetaData, TTL, Now);
         _ ->
-            expired_by_bucket_ttl(MetaData, riak_object:bucket(Obj), Now)
+            expired_by_bucket_ttl(MetaData, riak_object:bucket(Obj), BucketProps, Now)
     end.
 
-expired_by_bucket_ttl(Metadata, Bucket, Now) ->
-    case riak_core_bucket:get_bucket(Bucket) of
-        BProps when is_list(BProps) ->
-            case proplists:get_value(ttl, BProps) of
-                undefined ->
-                    false;
-                TTL ->
-                    expired_ttl(Metadata, TTL, Now)
-            end;
-        _ ->
-            false
+expired_by_bucket_ttl(Metadata, Bucket, undefined, Now) ->
+        case riak_core_bucket:get_bucket(Bucket) of
+            BucketProps when is_list(BucketProps) ->
+                expired_by_bucket_ttl(Metadata, Bucket, BucketProps, Now);
+            _ ->
+                false
+        end;
+
+expired_by_bucket_ttl(Metadata, _Bucket, BucketProps, Now) ->
+    case proplists:get_value(ttl, BucketProps) of
+        undefined ->
+            false;
+        TTL ->
+            expired_ttl(Metadata, TTL, Now)
     end.
+
 
 expired_ttl(MetaData, TTL, Now) ->
     LastMod = dict:fetch(<<"X-Riak-Last-Modified">>, MetaData),

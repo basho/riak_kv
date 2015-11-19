@@ -56,13 +56,13 @@ maybe_add_sweep_participant() ->
     maybe_add_obj_ttl_sweep_participant().
 
 maybe_add_obj_ttl_sweep_participant() ->
-    RunInterval =
-        app_helper:get_env(riak_kv, obj_ttl_sweep_interval, undefined),
-    case RunInterval of
+    RunIntervalFun =
+        fun() -> app_helper:get_env(riak_kv, obj_ttl_sweep_interval, undefined) end,
+    case RunIntervalFun() of
         undefined ->
             false;
         _ ->
-            add_obj_ttl_sweep_participant(RunInterval)
+            add_obj_ttl_sweep_participant(RunIntervalFun)
     end.
 
 add_obj_ttl_sweep_participant(RunInterval) ->
@@ -75,13 +75,13 @@ add_obj_ttl_sweep_participant(RunInterval) ->
                         }).
 
 maybe_add_reap_sweep_participant() ->
-    RunInterval =
-        app_helper:get_env(riak_kv, reap_sweep_interval, undefined),
-    case RunInterval of
+    RunIntervalFun =
+        fun() -> app_helper:get_env(riak_kv, reap_sweep_interval, undefined) end,
+    case RunIntervalFun() of
         undefined ->
             false;
         _ ->
-            add_reap_sweep_participant(RunInterval)
+            add_reap_sweep_participant(RunIntervalFun)
     end.
 
 add_reap_sweep_participant(RunInterval) ->

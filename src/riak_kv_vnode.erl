@@ -2111,7 +2111,7 @@ fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
                       SweepAcc1#sa{active_p = ActiveRest,
                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
         {mutated, MutatedRObj, NewAcc} ->
-            %% Do local put.
+            riak_kv_vnode:local_put(SweepAcc1#sa.index, MutatedRObj),
             fold_funs({BKey, MutatedRObj},
                       SweepAcc1#sa{active_p = ActiveRest,
                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
