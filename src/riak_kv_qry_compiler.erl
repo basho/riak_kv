@@ -29,7 +29,6 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
--include_lib("eunit/include/eunit.hrl").
 
 -define(MAXSUBQ, 5).
 
@@ -339,6 +338,7 @@ rew2([#param_v1{name = [N]} | T], W, Mod, Acc) ->
 
 -ifdef(TEST).
 -compile(export_all).
+-include_lib("eunit/include/eunit.hrl").
 
 %%
 %% Helper Fns for unit tests
