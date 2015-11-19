@@ -19,7 +19,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..95]
+%% @doc Callbacks for TS protobuf messages [codes 90..99]
 
 -module(riak_kv_pb_timeseries).
 
@@ -173,7 +173,8 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                     %% names; we need names with types, so:
                     ColumnTypes = get_column_types(ColumnNames, Mod),
                     Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
-                    {reply, #tsgetresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
+                    {reply, #tsgetresp{columns = make_tscolumndescription_list(
+                                                   ColumnNames, ColumnTypes),
                                        rows = Rows}, State};
                 {error, {bad_key_length, Got, Need}} ->
                     {reply, key_element_count_mismatch(Got, Need), State};
@@ -460,7 +461,8 @@ get_column_names([{C1, _} | MoreRecords]) ->
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([ColumnName]) || ColumnName <- ColumnNames].
 
--spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) -> list(#tscolumndescription{}).
+-spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) ->
+                                           list(#tscolumndescription{}).
 make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
   [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
@@ -474,6 +476,7 @@ assemble_records_(RR, RSize, Acc) ->
     Remaining = lists:nthtail(RSize, RR),
     assemble_records_(
       Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
+
 
 %% ---------------------------------------------------
 % functions supporting list_keys
