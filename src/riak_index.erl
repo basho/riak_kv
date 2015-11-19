@@ -66,12 +66,12 @@
 %%                          | {field_parsing_failed, {Field :: binary(), Value :: binary()}}.
 
 %% @type bucketname()      = binary().
-%% @type index_field()     = binary().
-%% @type index_value()     = binary() | integer().
-%% @type query_element()   = {eq,    index_field(), index_value()} |
-%%                           {range, index_field(), index_value(), index_value()}
-
--type query_def() :: {ok, term()} | {error, term()} | {term(), {error, term()}}.
+-type index_field() :: binary().
+-type index_value() :: binary() | integer().
+-type query_def() :: ?KV_INDEX_Q{} |
+                     #riak_kv_index_v2{} |
+                     {eq, index_field(), index_value()} |
+                     {range, index_field(), index_value(), index_value()}.
 -export_type([query_def/0]).
 
 -type last_result() :: {value(), key()} | key().
