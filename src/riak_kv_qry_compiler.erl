@@ -248,8 +248,13 @@ add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
 
 %% the query is prevalidated so the value can only convert down to one of these
 %% two values (but that may fail in the future)
-normalise(Val, boolean) ->
+normalise(Val, boolean) when is_binary(Val) ->
     case string:to_lower(binary_to_list(Val)) of
+        "true"  -> true;
+        "false" -> false
+    end;
+normalise(Val, boolean) when is_list(Val) ->
+    case string:to_lower(Val) of
         "true"  -> true;
         "false" -> false
     end;
@@ -496,7 +501,7 @@ simple_rewrite_fail_3_test() ->
 
 simplest_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"San Francisco\"",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'San Francisco'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
@@ -524,7 +529,7 @@ simplest_test() ->
 
 simple_with_filter_1_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and weather = \"yankee\"",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'Scotland' and weather = 'yankee'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
@@ -552,7 +557,7 @@ simple_with_filter_1_test() ->
 
 simple_with_filter_2_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and weather = \"yankee\"",
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = 'user_1' and location = 'Scotland' and weather = 'yankee'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
@@ -579,7 +584,7 @@ simple_with_filter_2_test() ->
 
 simple_with_filter_3_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time <= 5000 and user = \"user_1\" and location = \"Scotland\" and weather = \"yankee\"",
+    Query = "select weather from GeoCheckin where time > 3000 and time <= 5000 and user = 'user_1' and location = 'Scotland' and weather = 'yankee'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
@@ -608,7 +613,7 @@ simple_with_filter_3_test() ->
 
 simple_with_2_field_filter_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and weather = \"yankee\" and temperature = 'yelp'",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'Scotland' and weather = 'yankee' and temperature = 'yelp'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
@@ -643,7 +648,7 @@ simple_with_2_field_filter_test() ->
 
 complex_with_4_field_filter_test() ->
     DDL = get_long_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and extra = 1 and (weather = 'yankee' or (temperature = 'yelp' and geohash = 'erko'))",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'Scotland' and extra = 1 and (weather = 'yankee' or (temperature = 'yelp' and geohash = 'erko'))",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
@@ -686,7 +691,7 @@ complex_with_4_field_filter_test() ->
 
 complex_with_boolean_rewrite_filter_test() ->
     DDL = get_long_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\" and (myboolean = False or myboolean = tRue)",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'Scotland' and (myboolean = False or myboolean = tRue)",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Got = compile(DDL, Q),
@@ -722,7 +727,7 @@ complex_with_boolean_rewrite_filter_test() ->
 %% got for 3 queries to get partition ordering problems flushed out
 simple_spanning_boundary_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 31000 and user = \"user_1\" and location = \"Scotland\"",
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 31000 and user = 'user_1' and location = 'Scotland'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% get basic query
@@ -792,7 +797,7 @@ simple_spanning_boundary_test() ->
 
 no_where_clause_fail_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\"",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% now replace the where clause
@@ -805,7 +810,7 @@ no_where_clause_fail_test() ->
 
 simplest_fail_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = \"user_1\"",
+    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     Where = [{xor_, {myop, "fakefield", 22}, {notherop, "real_gucci", atombomb}}],
@@ -818,7 +823,7 @@ simplest_fail_test() ->
 
 simplest_compile_once_only_fail_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = \"user_1\" and location = \"Scotland\"",
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = 'user_1' and location = 'Scotland'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% now try and compile twice
