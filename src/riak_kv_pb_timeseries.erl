@@ -19,7 +19,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..95]
+%% @doc Callbacks for TS protobuf messages [codes 90..99]
 
 -module(riak_kv_pb_timeseries).
 
@@ -172,10 +172,9 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                     %% the columns stored in riak_object are just
                     %% names; we need names with types, so:
                     ColumnTypes = get_column_types(ColumnNames, Mod),
-                    ColumnDescriptions = [#tscolumndescription{name = Name, type = Type}
-                                          || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
-                    Rows = riak_pb_ts_codec:encode_rows([Row]),
-                    {reply, #tsgetresp{columns = ColumnDescriptions,
+                    Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
+                    {reply, #tsgetresp{columns = make_tscolumndescription_list(
+                                                   ColumnNames, ColumnTypes),
                                        rows = Rows}, State};
                 {error, {bad_key_length, Got, Need}} ->
                     {reply, key_element_count_mismatch(Got, Need), State};
@@ -252,7 +251,8 @@ process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
                        {riak_client, [node(), undefined]}),
             case Result of
                 {ok, CompoundKeys} ->
-                    Keys = riak_pb_ts_codec:encode_rows([tuple_to_list(A) || A <- CompoundKeys]),
+                    Keys = riak_pb_ts_codec:encode_rows_non_strict(
+                             [tuple_to_list(A) || A <- CompoundKeys]),
                     {reply, #tslistkeysresp{keys = Keys, done = true}, State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(
@@ -446,9 +446,8 @@ make_tsqueryresp(FetchedRows, Mod) ->
     JustRows = lists:map(
                  fun(Rec) -> [C || {_K, C} <- Rec] end,
                  Records),
-    #tsqueryresp{columns = [#tscolumndescription{name = Name, type = Type}
-                            || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
-                 rows = riak_pb_ts_codec:encode_rows(JustRows)}.
+    #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
+                 rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
 
 get_column_names([{C1, _} | MoreRecords]) ->
     {RestOfColumns, _DiscardedValues} =
@@ -458,14 +457,15 @@ get_column_names([{C1, _} | MoreRecords]) ->
             MoreRecords)),
     [C1|RestOfColumns].
 
+-spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
 get_column_types(ColumnNames, Mod) ->
-    lists:map(
-      fun(C) ->
-              %% make column a single-element list, as
-              %% encode_field_type requires
-              riak_pb_ts_codec:encode_field_type(Mod:get_field_type([C]))
-      end, ColumnNames).
+    [Mod:get_field_type([ColumnName]) || ColumnName <- ColumnNames].
 
+-spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) ->
+                                           list(#tscolumndescription{}).
+make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
+  [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
+    || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
 
 assemble_records(Rows, RecordSize) ->
     assemble_records_(Rows, RecordSize, []).
@@ -476,6 +476,7 @@ assemble_records_(RR, RSize, Acc) ->
     Remaining = lists:nthtail(RSize, RR),
     assemble_records_(
       Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
+
 
 %% ---------------------------------------------------
 % functions supporting list_keys
