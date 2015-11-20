@@ -484,9 +484,8 @@ assert_write_once_not_false(Props) ->
         {<<"write_once">>, false} ->
             throw({error,
                    {write_once,
-                    "Error, the bucket type could not be the created. "
-                    "The write_once property had a value of false but must be true "
-                    "or left blank\n"}});
+                    "Error, the time series bucket type could not be created. "
+                    "The write_once property must be true\n"}});
         _ ->
             ok
     end.
