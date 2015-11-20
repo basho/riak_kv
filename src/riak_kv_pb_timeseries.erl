@@ -302,7 +302,7 @@ decode_query(#tsinterpolation{ base = BaseQuery }) ->
     riak_ql_parser:parse(Lexed).
 
 decoder_parse_error_resp({Token, riak_ql_parser, _}) ->
-    flat_format("Unexpected token '~s'", [Token]);
+    flat_format("Unexpected token '~p'", [Token]);
 decoder_parse_error_resp(Error) ->
     Error.
 
