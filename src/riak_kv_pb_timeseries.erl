@@ -111,37 +111,44 @@ encode(Message) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
+process(#tsputreq{table = Table, columns = _Columns, rows = EncodedRows}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
-    Data = riak_pb_ts_codec:decode_rows(Rows),
-    %% validate only the first row as we trust the client to send us
-    %% perfectly uniform data wrt types and order
-    case (catch Mod:validate_obj(hd(Data))) of
-        true ->
-            %% however, prevent bad data to crash us
-            try
-                case put_data(Data, Table, Mod) of
-                    0 ->
-                        {reply, #tsputresp{}, State};
-                    ErrorCount ->
-                        EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
-                        {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
-                end
-            catch
-                Class:Exception ->
-                    lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
-                    Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
-                    {reply, Error, State}
-            end;
-        false ->
-            {reply, make_rpberrresp(?E_IRREG, "Invalid data"), State};
-        {_, {undef, _}} ->
-            BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
-            {reply, missing_helper_module(Table, BucketProps), State}
+
+    case riak_pb_ts_codec:decode_rows(EncodedRows) of
+        {error, {bad_ts_cell, BadCell=#tscell{}}} ->
+            make_decode_error_response("Error decoding row cell", BadCell, State);
+
+        Rows when is_list(Rows) ->
+            %% validate only the first row as we trust the client to send us
+            %% perfectly uniform data wrt types and order
+            case (catch Mod:validate_obj(hd(Rows))) of
+                true ->
+                    %% however, prevent bad data to crash us
+                    try
+                        case put_data(Rows, Table, Mod) of
+                            0 ->
+                                {reply, #tsputresp{}, State};
+                            ErrorCount ->
+                                EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
+                                {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
+                        end
+                    catch
+                        Class:Exception ->
+                            lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
+                            Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
+                            {reply, Error, State}
+                    end;
+                false ->
+                    {reply, make_rpberrresp(?E_IRREG, "Invalid data"), State};
+                {_, {undef, _}} ->
+                    BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
+                    {reply, missing_helper_module(Table, BucketProps), State}
+            end
     end;
 
 
-process(#tsgetreq{table = Table, key = PbCompoundKey,
+process(#tsgetreq{table = Table,
+                  key = PbCompoundKey,
                   timeout = Timeout},
         State) ->
     Options =
@@ -149,39 +156,43 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
            true -> [{timeout, Timeout}]
         end,
 
-    CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
+    case riak_pb_ts_codec:decode_cells(PbCompoundKey) of
+        {error, {bad_ts_cell, BadCell = #tscell{}}} ->
+            make_decode_error_response("Error decoding key cell", BadCell, State);
 
-    Mod = riak_ql_ddl:make_module_name(Table),
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            Props = riak_core_bucket:get_bucket(Table),
-            {reply, missing_helper_module(Table, Props), State};
-        DDL ->
-            Result =
-                case make_ts_keys(CompoundKey, DDL) of
-                    {ok, PKLK} ->
-                        riak_client:get(
-                          {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]});
-                    ErrorReason ->
-                        ErrorReason
-                end,
-            case Result of
-                {ok, RObj} ->
-                    Record = riak_object:get_value(RObj),
-                    {ColumnNames, Row} = lists:unzip(Record),
-                    %% the columns stored in riak_object are just
-                    %% names; we need names with types, so:
-                    ColumnTypes = get_column_types(ColumnNames, Mod),
-                    Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
-                    {reply, #tsgetresp{columns = make_tscolumndescription_list(
-                                                   ColumnNames, ColumnTypes),
-                                       rows = Rows}, State};
-                {error, {bad_key_length, Got, Need}} ->
-                    {reply, key_element_count_mismatch(Got, Need), State};
-                {error, notfound} ->
-                    {reply, tsgetresp, State};
-                {error, Reason} ->
-                    {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
+        CompoundKey when is_list(CompoundKey) ->
+            Mod = riak_ql_ddl:make_module_name(Table),
+            case catch Mod:get_ddl() of
+                {_, {undef, _}} ->
+                    Props = riak_core_bucket:get_bucket(Table),
+                    {reply, missing_helper_module(Table, Props), State};
+                DDL ->
+                    Result =
+                        case make_ts_keys(CompoundKey, DDL) of
+                            {ok, PKLK} ->
+                                riak_client:get(
+                                  {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]});
+                            ErrorReason ->
+                                ErrorReason
+                        end,
+                    case Result of
+                        {ok, RObj} ->
+                            Record = riak_object:get_value(RObj),
+                            {ColumnNames, Row} = lists:unzip(Record),
+                            %% the columns stored in riak_object are just
+                            %% names; we need names with types, so:
+                            ColumnTypes = get_column_types(ColumnNames, Mod),
+                            Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
+                            {reply, #tsgetresp{columns = make_tscolumndescription_list(
+                                                           ColumnNames, ColumnTypes),
+                                               rows = Rows}, State};
+                        {error, {bad_key_length, Got, Need}} ->
+                            {reply, key_element_count_mismatch(Got, Need), State};
+                        {error, notfound} ->
+                            {reply, tsgetresp, State};
+                        {error, Reason} ->
+                            {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
+                    end
             end
     end;
 
@@ -206,35 +217,39 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
                 riak_object:decode_vclock(PbVClock)
         end,
 
-    CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
+    case riak_pb_ts_codec:decode_cells(PbCompoundKey) of
+        {error, {bad_ts_cell, BadCell = #tscell{}}} ->
+            make_decode_error_response("Error decoding key cell", BadCell, State);
 
-    Mod = riak_ql_ddl:make_module_name(Table),
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            Props = riak_core_bucket:get_bucket(Table),
-            {reply, missing_helper_module(Table, Props), State};
-        DDL ->
-            Result =
-                case make_ts_keys(CompoundKey, DDL) of
-                    {ok, PKLK} ->
-                        riak_client:delete_vclock(
-                          {Table, Table}, PKLK, VClock, Options,
-                          {riak_client, [node(), undefined]});
-                    ErrorReason ->
-                        ErrorReason
-                end,
-            case Result of
-                ok ->
-                    {reply, tsdelresp, State};
-                {error, {bad_key_length, Got, Need}} ->
-                    {reply, key_element_count_mismatch(Got, Need), State};
-                {error, notfound} ->
-                    {reply, tsdelresp, State};
-                {error, Reason} ->
-                    {reply, make_rpberrresp(
-                              ?E_DELETE, flat_format("Failed to delete record: ~p", [Reason])),
-                     State}
-            end
+        CompoundKey when is_list(CompoundKey) ->
+            Mod = riak_ql_ddl:make_module_name(Table),
+            case catch Mod:get_ddl() of
+                {_, {undef, _}} ->
+                    Props = riak_core_bucket:get_bucket(Table),
+                    {reply, missing_helper_module(Table, Props), State};
+                DDL ->
+                    Result =
+                        case make_ts_keys(CompoundKey, DDL) of
+                            {ok, PKLK} ->
+                                riak_client:delete_vclock(
+                                  {Table, Table}, PKLK, VClock, Options,
+                                  {riak_client, [node(), undefined]});
+                            ErrorReason ->
+                                ErrorReason
+                        end,
+                    case Result of
+                        ok ->
+                            {reply, tsdelresp, State};
+                        {error, {bad_key_length, Got, Need}} ->
+                            {reply, key_element_count_mismatch(Got, Need), State};
+                        {error, notfound} ->
+                            {reply, tsdelresp, State};
+                        {error, Reason} ->
+                            {reply, make_rpberrresp(
+                                      ?E_DELETE, flat_format("Failed to delete record: ~p", [Reason])),
+                             State}
+                    end
+        end
     end;
 
 
@@ -318,6 +333,9 @@ make_rpberrresp(Code, Message) ->
     #rpberrorresp{errcode = Code,
                   errmsg = lists:flatten(Message)}.
 
+make_decode_error_response(Msg, BadCell, State) ->
+    ErrorMessage = lists:flatten(io_lib:format("~s, more than 1 record value set: \"~120p\"", [Msg, BadCell])),
+    {reply, make_rpberrresp(?E_IRREG, ErrorMessage), State}.
 
 -spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{}) -> {string(), binary()}.
 decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
@@ -522,6 +540,33 @@ missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
         missing_helper_module(<<"mytype">>, [{ddl, #ddl_v1{}}])
+    ).
+
+put_req_bad_data_test() ->
+    BadRow = #tsrow{cells = [#tscell{varchar_value = <<"foo">>, sint64_value = 64}]},
+    ?assertEqual(
+        {reply,
+            #rpberrorresp{errcode = ?E_IRREG, errmsg = "Error decoding row cell, more than 1 record value set: \"{tscell,<<\"foo\">>,64,undefined,undefined,undefined}\"" },
+            #state{}},
+        process(#tsputreq{table = <<"GeoHash">>, columns = [], rows = [BadRow]}, #state{})
+    ).
+
+get_req_bad_keys_test() ->
+    BadCells = [#tscell{varchar_value = <<"foo">>, sint64_value = 64}],
+    ?assertEqual(
+        {reply,
+            #rpberrorresp{errcode = ?E_IRREG, errmsg = "Error decoding key cell, more than 1 record value set: \"{tscell,<<\"foo\">>,64,undefined,undefined,undefined}\"" },
+            #state{}},
+        process(#tsgetreq{table = <<"GeoHash">>, key = BadCells}, #state{})
+    ).
+
+delete_req_bad_keys_test() ->
+    BadCells = [#tscell{varchar_value = <<"foo">>, sint64_value = 64}],
+    ?assertEqual(
+        {reply,
+            #rpberrorresp{errcode = ?E_IRREG, errmsg = "Error decoding key cell, more than 1 record value set: \"{tscell,<<\"foo\">>,64,undefined,undefined,undefined}\"" },
+            #state{}},
+        process(#tsdelreq{table = <<"GeoHash">>, key = BadCells}, #state{})
     ).
 
 -endif.
