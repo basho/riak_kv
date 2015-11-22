@@ -64,7 +64,6 @@
     rows = []
 }).
 
-
 %% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
 -define(E_SUBMIT,            1001).
 -define(E_FETCH,             1002).
