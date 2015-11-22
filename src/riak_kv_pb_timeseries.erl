@@ -19,15 +19,15 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..95]
+%% @doc Callbacks for TS protobuf messages [codes 90..99]
 
 -module(riak_kv_pb_timeseries).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
+-include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -include("riak_kv_wm_raw.hrl").
--include("riak_kv_qry_queue.hrl").  %% for query_id().
 
 -behaviour(riak_api_pb_service).
 
@@ -64,18 +64,19 @@
     rows = []
 }).
 
-%% these error codes are obviously local to this module,
-%% until a central place for error numbers is defined
--define(E_SUBMIT,   1).
--define(E_FETCH,    2).
--define(E_IRREG,    3).
--define(E_PUT,      4).
--define(E_NOCREATE, 5).
--define(E_NOT_TS_TYPE, 6).
--define(E_MISSING_TYPE, 7).
--define(E_MISSING_TS_MODULE, 8).
--define(E_DELETE,   9).
--define(E_GET,     10).
+%% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
+-define(E_SUBMIT,            1001).
+-define(E_FETCH,             1002).
+-define(E_IRREG,             1003).
+-define(E_PUT,               1004).
+-define(E_NOCREATE,          1005).
+-define(E_NOT_TS_TYPE,       1006).
+-define(E_MISSING_TYPE,      1007).
+-define(E_MISSING_TS_MODULE, 1008).
+-define(E_DELETE,            1009).
+-define(E_GET,               1010).
+-define(E_BAD_KEY_LENGTH,    1011).
+-define(E_LISTKEYS,          1012).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -111,7 +112,8 @@ encode_tsqueryresp(Message) ->
     riak_pb_codec:encode(Message).
 
 -spec decode(integer(), binary()) ->
-    {ok, #ddl_v1{} | #riak_sql_v1{} | #tsputreq{} | #tsputreq2{} | #tsdelreq{} | #tsgetreq{},
+    {ok, #tsputreq{} | #tsputreq2{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+       | #ddl_v1{} | #riak_sql_v1{},
         {PermSpec::string(), Table::binary()}} |
     {error,_}.
 decode(?TIMESERIES_PUT_REQ, Bin) ->
@@ -134,7 +136,9 @@ decode(Code, Bin) ->
         #tsputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
         #tsdelreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_del", Table}}
+            {ok, Msg, {"riak_kv.ts_del", Table}};
+        #tslistkeysreq{table = Table} ->
+            {ok, Msg, {"riak_kv.ts_listkeys", Table}}
     end.
 
 
@@ -145,14 +149,9 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process(atom() | #ddl_v1{} | #riak_sql_v1{} | #tsputreq{} | #tsputreq2{}, #state{}) ->
+-spec process(atom() | #tsputreq{} | #tsputreq2{} |  #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+              | #ddl_v1{} | #riak_sql_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
-process(#ddl_v1{}, State) ->
-    {reply, make_rpberrresp(?E_NOCREATE,
-                            "CREATE TABLE not supported via client interface;"
-                            " use riak-admin command instead"),
-     State};
-
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
 process(#tsputreq2{rows = []}, State) ->
@@ -169,7 +168,7 @@ process(#tsputreq2{table = Table, columns = _Columns, rows = Data}, State) ->
                     0 ->
                         {reply, #tsputresp{}, State};
                     ErrorCount ->
-                        EPutMessage = io_lib:format("Failed to put ~b record(s)", [ErrorCount]),
+                        EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
                         {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
                 end
             catch
@@ -201,21 +200,37 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
 
     Mod = riak_ql_ddl:make_module_name(Table),
-    try Mod:get_ddl() of
+    case catch Mod:get_ddl() of
+        {_, {undef, _}} ->
+            Props = riak_core_bucket:get_bucket(Table),
+            {reply, missing_helper_module(Table, Props), State};
         DDL ->
-            PKLK = make_ts_keys(CompoundKey, DDL),
-            case riak_client:get(
-                   {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]}) of
+            Result =
+                case make_ts_keys(CompoundKey, DDL) of
+                    {ok, PKLK} ->
+                        riak_client:get(
+                          {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]});
+                    ErrorReason ->
+                        ErrorReason
+                end,
+            case Result of
                 {ok, RObj} ->
                     Record = riak_object:get_value(RObj),
-                    {_Columns, Row} = lists:unzip(Record),
-                    {reply, #tsgetresp{rows = riak_pb_ts_codec:encode_rows([Row])}, State};
+                    {ColumnNames, Row} = lists:unzip(Record),
+                    %% the columns stored in riak_object are just
+                    %% names; we need names with types, so:
+                    ColumnTypes = get_column_types(ColumnNames, Mod),
+                    Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
+                    {reply, #tsgetresp{columns = make_tscolumndescription_list(
+                                                   ColumnNames, ColumnTypes),
+                                       rows = Rows}, State};
+                {error, {bad_key_length, Got, Need}} ->
+                    {reply, key_element_count_mismatch(Got, Need), State};
+                {error, notfound} ->
+                    {reply, tsgetresp, State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
             end
-    catch error:{undef, _} ->
-            Props = riak_core_bucket:get_bucket(Table),
-            {reply, missing_helper_module(Table, Props), State}
     end;
 
 
@@ -242,29 +257,64 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
 
     Mod = riak_ql_ddl:make_module_name(Table),
-    try Mod:get_ddl() of
+    case catch Mod:get_ddl() of
+        {_, {undef, _}} ->
+            Props = riak_core_bucket:get_bucket(Table),
+            {reply, missing_helper_module(Table, Props), State};
         DDL ->
-            PKLK = make_ts_keys(CompoundKey, DDL),
-            %% = {PK, LK} = Key to pass to riak_client:delete
             Result =
-                riak_client:delete_vclock(
-                  {Table, Table}, PKLK, VClock, Options,
-                  {riak_client, [node(), undefined]}),
+                case make_ts_keys(CompoundKey, DDL) of
+                    {ok, PKLK} ->
+                        riak_client:delete_vclock(
+                          {Table, Table}, PKLK, VClock, Options,
+                          {riak_client, [node(), undefined]});
+                    ErrorReason ->
+                        ErrorReason
+                end,
             case Result of
                 ok ->
                     {reply, tsdelresp, State};
+                {error, {bad_key_length, Got, Need}} ->
+                    {reply, key_element_count_mismatch(Got, Need), State};
                 {error, notfound} ->
                     {reply, tsdelresp, State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(
-                              ?E_DELETE, io_lib:format("Failed to delete record: ~p", [Reason])),
+                              ?E_DELETE, flat_format("Failed to delete record: ~p", [Reason])),
                      State}
             end
-    catch error:{undef, _} ->
-            Props = riak_core_bucket:get_bucket(Table),
-            {reply, missing_helper_module(Table, Props), State}
     end;
 
+
+process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    case catch Mod:get_ddl() of
+        {_, {undef, _}} ->
+            Props = riak_core_bucket:get_bucket(Table),
+            {reply, missing_helper_module(Table, Props), State};
+        _DDL ->
+            Filter = none,
+            Result = riak_client:list_keys(
+                       Table, Filter, Timeout, Mod,
+                       {riak_client, [node(), undefined]}),
+            case Result of
+                {ok, CompoundKeys} ->
+                    Keys = riak_pb_ts_codec:encode_rows_non_strict(
+                             [tuple_to_list(A) || A <- CompoundKeys]),
+                    {reply, #tslistkeysresp{keys = Keys, done = true}, State};
+                {error, Reason} ->
+                    {reply, make_rpberrresp(
+                              ?E_LISTKEYS, flat_format("Failed to list keys: ~p", [Reason])),
+                     State}
+            end
+    end;
+
+
+process(#ddl_v1{}, State) ->
+    {reply, make_rpberrresp(?E_NOCREATE,
+                            "CREATE TABLE not supported via client interface;"
+                            " use riak-admin command instead"),
+     State};
 
 process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
@@ -279,15 +329,10 @@ process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
 %%
 submit_query(DDL, Mod, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
-        {ok, QId} ->
-            case fetch_with_patience(QId, ?FETCH_RETRIES) of
-                {ok, Data} ->
-                    {reply, make_tsqueryresp(Data, Mod), State};
-                {error, Reason} ->
-                    {reply, make_rpberrresp(?E_FETCH, to_string(Reason)), State}
-            end;
+        {ok, Data} ->
+            {reply, make_tsqueryresp(Data, Mod), State};
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
-            ErrorMessage = lists:flatten(io_lib:format("~p: ~s", [E, Reason])),
+            ErrorMessage = flat_format("~p: ~s", [E, Reason]),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
@@ -344,35 +389,40 @@ missing_helper_module(Table, BucketProps) when is_binary(Table), is_list(BucketP
 missing_type_response(BucketType) ->
     make_rpberrresp(
         ?E_MISSING_TYPE,
-        io_lib:format("Bucket type ~s is missing.", [BucketType])).
+        flat_format("Bucket type ~s is missing.", [BucketType])).
 
 %%
 -spec not_timeseries_type_response(BucketType::binary()) -> #rpberrorresp{}.
 not_timeseries_type_response(BucketType) ->
     make_rpberrresp(
         ?E_NOT_TS_TYPE,
-        io_lib:format("Attempt Time Series operation on non Time Series bucket type ~s.", [BucketType])).
+        flat_format("Attempt Time Series operation on non Time Series bucket type ~s.", [BucketType])).
 
 -spec missing_table_module_response(BucketType::binary()) -> #rpberrorresp{}.
 missing_table_module_response(BucketType) ->
     make_rpberrresp(
         ?E_MISSING_TS_MODULE,
-        io_lib:format("The compiled module for Time Series bucket ~s cannot be loaded.", [BucketType])).
+        flat_format("The compiled module for Time Series bucket ~s cannot be loaded.", [BucketType])).
+
+-spec key_element_count_mismatch(Got::integer(), Need::integer()) -> #rpberrorresp{}.
+key_element_count_mismatch(Got, Need) ->
+    make_rpberrresp(
+      ?E_BAD_KEY_LENGTH,
+      flat_format("Key element count mismatch (key has ~b elements but ~b supplied).", [Need, Got])).
 
 to_string(X) ->
-    io_lib:format("~p", [X]).
+    flat_format("~p", [X]).
 
 
 %% ---------------------------------------------------
 % functions supporting INSERT
 
-
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% @ignore return count of records we failed to put
 put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
-    lists:foldl(
-      fun(Raw, ErrorsCnt) ->
+    {ReqIds, FailReqs} = lists:foldl(
+      fun(Raw, {ReqIdsAcc, ErrorsCnt}) ->
               Obj = Mod:add_column_info(Raw),
 
               PK  = eleveldb_ts:encode_key(
@@ -386,77 +436,66 @@ put_data(Data, Table, Mod) ->
               MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
               RObj = riak_object:update_metadata(RObj0, MD2),
 
-              case riak_client:put(RObj, {riak_client, [node(), undefined]}) of
+              case riak_kv_w1c_worker:async_put(RObj, []) of
                   {error, _Why} ->
-                      ErrorsCnt + 1;
-                  _Ok ->
-                      ErrorsCnt
+                      {ReqIdsAcc, ErrorsCnt + 1};
+                  {ok, ReqId} ->
+                      {[ReqId | ReqIdsAcc], ErrorsCnt}
               end
       end,
-      0, Data).
+      {[], 0}, Data),
+    Responses = riak_kv_w1c_worker:async_put_replies(ReqIds, []),
+    length(lists:filter(fun({error, _}) -> true;
+                           (_) -> false
+                        end, Responses)) + FailReqs.
 
-
+-spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}) ->
+                          {ok, {binary(), binary()}} | {error, {bad_key_length, integer(), integer()}}.
 make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                                         fields = Fields}) ->
-
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
-    KeyAssigned = lists:zip(KeyFields, CompoundKey),
-    VoidRecord = [{F, void} || #riak_field_v1{name = F} <- Fields],
-    %% (void values will not be looked at in riak_ql_ddl:make_key;
-    %% only LK-constituent fields matter)
-    BareValues =
-        list_to_tuple(
-          [proplists:get_value(K, KeyAssigned)
-           || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
+    Got = length(CompoundKey),
+    Need = length(KeyFields),
+    case {Got, Need} of
+        {_N, _N} ->
+            KeyAssigned = lists:zip(KeyFields, CompoundKey),
+            VoidRecord = [{F, void} || #riak_field_v1{name = F} <- Fields],
+            %% (void values will not be looked at in riak_ql_ddl:make_key;
+            %% only LK-constituent fields matter)
+            BareValues =
+                list_to_tuple(
+                  [proplists:get_value(K, KeyAssigned)
+                   || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
 
-    %% 2. make the PK and LK
-    PK = eleveldb_ts:encode_key(
-           riak_ql_ddl:get_partition_key(DDL, BareValues)),
-    LK = eleveldb_ts:encode_key(
-           riak_ql_ddl:get_local_key(DDL, BareValues)),
-    {PK, LK}.
+            %% 2. make the PK and LK
+            PK = eleveldb_ts:encode_key(
+                   riak_ql_ddl:get_partition_key(DDL, BareValues)),
+            LK = eleveldb_ts:encode_key(
+                   riak_ql_ddl:get_local_key(DDL, BareValues)),
+            {ok, {PK, LK}};
+       {G, N} ->
+            {error, {bad_key_length, G, N}}
+    end.
 
 
 %% ---------------------------------------------------
 % functions supporting SELECT
 
--spec fetch_with_patience(query_id(), non_neg_integer()) ->
-                                 {ok, [{Key::binary(), riak_pb_ts_codec:ldbvalue()}]} |
-                                 {error, atom()}.
-fetch_with_patience(QId, 0) ->
-    lager:info("Query results on qid ~p not available after ~b secs", [QId, ?FETCH_RETRIES]),
-    {ok, []};
-fetch_with_patience(QId, N) ->
-    case riak_kv_qry_queue:fetch(QId) of
-        {error, in_progress} ->
-            timer:sleep(1000),
-            fetch_with_patience(QId, N-1);
-        Result ->
-            Result
-    end.
-
 -spec make_tsqueryresp([{binary(), term()}], module()) -> #tsqueryresp{}.
-make_tsqueryresp([], _Fun) ->
+make_tsqueryresp([], _Module) ->
     #tsqueryresp{columns = [], rows = []};
-make_tsqueryresp(Rows, Module) ->
+make_tsqueryresp(FetchedRows, Mod) ->
     %% as returned by fetch, we have in Rows a sequence of KV pairs,
     %% making records concatenated in a flat list
-    ColumnNames = get_column_names(Rows),
-    ColumnTypes =
-        lists:map(
-          fun(C) ->
-                  %% make column a single-element list, as
-                  %% encode_field_type requires
-                  riak_pb_ts_codec:encode_field_type(Module:get_field_type([C]))
-          end, ColumnNames),
-    Records = assemble_records(Rows, length(ColumnNames)),
+    ColumnNames = get_column_names(FetchedRows),
+    ColumnTypes = get_column_types(ColumnNames, Mod),
+    Records = assemble_records(FetchedRows, length(ColumnNames)),
     JustRows = lists:map(
                  fun(Rec) -> [C || {_K, C} <- Rec] end,
                  Records),
-    #tsqueryresp{columns = [#tscolumndescription{name = Name, type = Type}
-                            || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)],
-                 rows = riak_pb_ts_codec:encode_rows(JustRows)}.
+    #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
+                 rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
 
 get_column_names([{C1, _} | MoreRecords]) ->
     {RestOfColumns, _DiscardedValues} =
@@ -466,15 +505,29 @@ get_column_names([{C1, _} | MoreRecords]) ->
             MoreRecords)),
     [C1|RestOfColumns].
 
+-spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
+get_column_types(ColumnNames, Mod) ->
+    [Mod:get_field_type([ColumnName]) || ColumnName <- ColumnNames].
+
+-spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) ->
+                                           list(#tscolumndescription{}).
+make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
+  [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
+    || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
+
 assemble_records(Rows, RecordSize) ->
     assemble_records_(Rows, RecordSize, []).
 %% should we protect against incomplete records?
 assemble_records_([], _, Acc) ->
-    Acc;
+    lists:reverse(Acc);
 assemble_records_(RR, RSize, Acc) ->
     Remaining = lists:nthtail(RSize, RR),
     assemble_records_(
       Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
+
+
+%% ---------------------------------------------------
+% functions supporting list_keys
 
 %% Utility API to limit some of the confusion over tables vs buckets
 table_to_bucket(Table) ->
