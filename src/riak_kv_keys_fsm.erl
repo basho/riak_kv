@@ -88,6 +88,8 @@ req(Bucket, ItemFilter) ->
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
+init(From, [Bucket, ItemFilter, Timeout]) ->
+    init(From, [Bucket, ItemFilter, Timeout, none]);
 init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, DDLMod]) ->
     riak_core_dtrace:put_tag(io_lib:format("~p", [Bucket])),
     ClientNode = atom_to_list(node(ClientPid)),
