@@ -234,7 +234,7 @@ obj_outside_grace_period(RObj, TombstoneGracePeriod) ->
 	end.
 
 in_grace(MetaData, Now, TombstoneGracePeriod) ->
-    LastMod = dict:fetch(<<"X-Riak-Last-Modified">>, MetaData),
+    LastMod = dict:fetch(?MD_LASTMOD, MetaData),
     timer:now_diff(Now, LastMod) div 1000000 < TombstoneGracePeriod.
 
 successfull_sweep(Index, _FinalAcc) ->

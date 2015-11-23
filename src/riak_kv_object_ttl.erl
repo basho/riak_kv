@@ -43,7 +43,8 @@ ttl_fun() ->
                                                                          "true", dict:new())),
                     VClock = riak_object:vclock(RObj),
                     Tombstone = riak_object:set_vclock(Obj0, VClock),
-                    {mutated, Tombstone, Acc};
+                    LastModifiedTombstone = riak_object:update_last_modified(Tombstone),
+                    {mutated, LastModifiedTombstone, Acc};
                 _ ->
                     {ok, Acc}
             end

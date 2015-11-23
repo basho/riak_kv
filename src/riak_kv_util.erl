@@ -58,6 +58,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
+-include("riak_kv_wm_raw.hrl").
+
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
@@ -82,7 +84,7 @@ is_x_expired(Obj, BucketProps) ->
     end.
 
 expired(Now, MetaData, Obj, BucketProps) ->
-    case dict:find(<<"X-Riak-TTL">>, MetaData) of
+    case dict:find(?MD_TTL, MetaData) of
         {ok, TTL} ->
             expired_ttl(MetaData, TTL, Now);
         _ ->
@@ -107,7 +109,7 @@ expired_by_bucket_ttl(Metadata, _Bucket, BucketProps, Now) ->
 
 
 expired_ttl(MetaData, TTL, Now) ->
-    LastMod = dict:fetch(<<"X-Riak-Last-Modified">>, MetaData),
+    LastMod = dict:fetch(?MD_LASTMOD, MetaData),
     timer:now_diff(Now, LastMod) div 1000000 > TTL.
 
 
@@ -557,7 +559,7 @@ object_expired_test() ->
     MD = riak_object:get_metadata(ObjectTTL1),
     ObjectTTL2 = riak_object:apply_updates(
                    riak_object:update_metadata(
-                     ObjectTTL1, dict:store(<<"X-Riak-TTL">>, 0, MD))),
+                     ObjectTTL1, dict:store(?MD_TTL, 0, MD))),
     ?assertEqual(true, is_x_expired(ObjectTTL2)),
     teardown_bucket_props(pass).
 
