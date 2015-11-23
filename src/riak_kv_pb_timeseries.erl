@@ -301,6 +301,8 @@ decode_query(#tsinterpolation{ base = BaseQuery }) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
     riak_ql_parser:parse(Lexed).
 
+decoder_parse_error_resp({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
+    flat_format("~ts", [Msg]);
 decoder_parse_error_resp({Token, riak_ql_parser, _}) ->
     flat_format("Unexpected token '~p'", [Token]);
 decoder_parse_error_resp(Error) ->
