@@ -458,6 +458,7 @@ maybe_parse_table_def(BucketType, Props) ->
                 {ok, DDL} ->
                     ok = assert_type_and_table_name_same(BucketType, DDL),
                     ok = try_compile_ddl(DDL),
+                    ok = assert_primary_key_fields_non_null(DDL),
                     ok = assert_write_once_not_false(PropsNoDef),
                     ok = assert_partition_key_length(DDL),
                     ok = assert_primary_and_local_keys_match(DDL),
@@ -490,6 +491,22 @@ assert_write_once_not_false(Props) ->
             ok
     end.
 
+%% @doc Ensure all fields appearing in PRIMARY KEY are not null.
+assert_primary_key_fields_non_null(#ddl_v1{local_key = #key_v1{ast = LK},
+                                           fields = Fields}) ->
+    PKFieldNames = [N || #param_v1{name = [N]} <- LK],
+    OnlyPKFields = [F || #riak_field_v1{name = N} = F <- Fields,
+                         lists:member(N, PKFieldNames)],
+    lists:foreach(
+      fun(#riak_field_v1{optional = true}) ->
+              throw({error,
+                     {primary_key,
+                      "All fields in primary key must be not null\n"}});
+         (_) ->
+              ok
+      end,
+      OnlyPKFields),
+    ok.
 %%
 assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
     ok;
