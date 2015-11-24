@@ -173,18 +173,22 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL
            end
     catch
         error:{incomplete_where_clause, _} = E -> {error, E};
-        error:{lower_bound_specified_more_than_once, _} = E -> {error, E};
-        error:{upper_bound_specified_more_than_once, _} = E -> {error, E};
-        error:{lower_bound_must_be_less_than_upper_bound, _} = E -> {error, E};
         error:{lower_and_upper_bounds_are_equal_when_no_equals_operator, _} = E -> {error, E};
+        error:{lower_bound_must_be_less_than_upper_bound, _} = E -> {error, E};
+        error:{lower_bound_specified_more_than_once, _} = E -> {error, E};
+        error:{time_bounds_must_use_and_op, _} = E -> {error, E};
+        error:{upper_bound_specified_more_than_once, _} = E -> {error, E};
         error:Reason ->
             % if it is not a known error then return the stack trace for
             % debugging
             {error, {where_not_timeseries, Reason, erlang:get_stacktrace()}}
     end;
-check_if_timeseries(_DLL, Where) ->
-    % TODO return the SQL string
-    {error, {where_not_supported, Where}}.
+check_if_timeseries(_, [{or_, _, _}]) ->
+    {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}};
+check_if_timeseries(_, _) ->
+    % this occurs when the query does not include an AND operator which is
+    % required for time quanta bounds
+    {error, {incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED}}.
 
 %%
 has_errors(StartKey, EndKey) ->
@@ -848,32 +852,6 @@ simple_spanning_boundary_test() ->
 %% test failures
 %%
 
-no_where_clause_fail_test() ->
-    DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1'",
-    {ok, Q} = get_query(Query),
-    true = is_query_valid(DDL, Q),
-    %% now replace the where clause
-    Where = [],
-    Q2 = Q#riak_sql_v1{'WHERE' = Where},
-    ?assertEqual(
-        {error, {where_not_supported, Where}},
-        compile(DDL, Q2)
-    ).
-
-simplest_fail_test() ->
-    DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1'",
-    {ok, Q} = get_query(Query),
-    true = is_query_valid(DDL, Q),
-    Where = [{xor_, {myop, "fakefield", 22}, {notherop, "real_gucci", atombomb}}],
-    %% now replace the where clause
-    Q2 = Q#riak_sql_v1{'WHERE' = Where},
-    ?assertEqual(
-        {error, {where_not_supported, Where}},
-        compile(DDL, Q2)
-    ).
-
 simplest_compile_once_only_fail_test() ->
     DDL = get_standard_ddl(),
     Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = 'user_1' and location = 'Scotland'",
@@ -890,7 +868,7 @@ end_key_not_a_range_test() ->
     {ok, Q} = get_query(
         "SELECT weather FROM GeoCheckin "
         "WHERE time > 3000 AND time != 5000 "
-        "AND user = \"user_1\" AND location = \"derby\""),
+        "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
         {error, {incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND}},
         compile(DDL, Q)
@@ -901,7 +879,7 @@ start_key_not_a_range_test() ->
     {ok, Q} = get_query(
         "SELECT weather FROM GeoCheckin "
         "WHERE time = 3000 AND time < 5000 "
-        "AND user = \"user_1\" AND location = \"derby\""),
+        "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
         {error, {incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND}},
         compile(DDL, Q)
@@ -943,7 +921,7 @@ duplicate_lower_bound_filter_not_allowed_test() ->
     {ok, Q} = get_query(
         "SELECT weather FROM GeoCheckin "
         "WHERE time > 3000 AND  time > 3001 AND time < 5000 "
-        "AND user = \"user_1\" AND location = \"derby\""),
+        "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
         {error, {lower_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_LOWER_BOUND}},
         compile(DDL, Q)
@@ -954,7 +932,7 @@ duplicate_upper_bound_filter_not_allowed_test() ->
     {ok, Q} = get_query(
         "SELECT weather FROM GeoCheckin "
         "WHERE time > 3000 AND time < 5000 AND time < 4999 "
-        "AND user = \"user_1\" AND location = \"derby\""),
+        "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
         {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
         compile(DDL, Q)
@@ -965,7 +943,7 @@ lower_bound_is_bigger_than_upper_bound_test() ->
     {ok, Q} = get_query(
         "SELECT weather FROM GeoCheckin "
         "WHERE time > 6000 AND time < 5000"
-        "AND user = \"user_1\" AND location = \"derby\""),
+        "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
         {error, {lower_bound_must_be_less_than_upper_bound, ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND}},
         compile(DDL, Q)
@@ -976,9 +954,33 @@ lower_bound_is_same_as_upper_bound_test() ->
     {ok, Q} = get_query(
         "SELECT weather FROM GeoCheckin "
         "WHERE time > 5000 AND time < 5000"
-        "AND user = \"user_1\" AND location = \"derby\""),
+        "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
         {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR}},
+        compile(DDL, Q)
+    ).
+
+query_has_no_AND_operator_1_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where time < 5"),
+    ?assertEqual(
+        {error, {incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED}},
+        compile(DDL, Q)
+    ).
+
+query_has_no_AND_operator_2_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where time > 1 OR time < 5"),
+    ?assertEqual(
+        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
+        compile(DDL, Q)
+    ).
+
+query_has_no_AND_operator_3_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where user = 'user_1' AND time > 1 OR time < 5"),
+    ?assertEqual(
+        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
         compile(DDL, Q)
     ).
 
@@ -988,7 +990,7 @@ lower_bound_is_same_as_upper_bound_test() ->
 %     {ok, Q} = get_query(
 %         "SELECT weather FROM GeoCheckin "
 %         "WHERE time > 3000 AND time < 5000 "
-%         "AND user = \"user_1\" AND location = \"derby\" OR location = \"rottingham\""),
+%         "AND user = 'user_1' AND location = 'derby' OR location = \"rottingham\""),
 %     ?assertEqual(
 %         {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
 %         compile(DDL, Q)
@@ -1000,7 +1002,7 @@ lower_bound_is_same_as_upper_bound_test() ->
 %     {ok, Q} = get_query(
 %         "SELECT weather FROM GeoCheckin "
 %         "WHERE time > 3000 AND time < 5000 "
-%         "AND time = 3002 AND user = \"user_1\" AND location = \"derby\""),
+%         "AND time = 3002 AND user = 'user_1' AND location = 'derby'"),
 %     ?assertMatch(
 %         [#riak_sql_v1{
 %             'WHERE' = [

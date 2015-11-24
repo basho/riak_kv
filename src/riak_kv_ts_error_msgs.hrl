@@ -54,6 +54,11 @@
 ).
 
 -define(
+    E_TIME_BOUNDS_MUST_USE_AND,
+    <<"The time bounds used OR but must use AND.">>
+).
+
+-define(
     E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND,
     <<"The lower time bound is greater than the upper time bound.">>
 ).
