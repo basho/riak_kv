@@ -483,9 +483,9 @@ assert_write_once_not_false(Props) ->
     case lists:keyfind(<<"write_once">>, 1, Props) of
         {<<"write_once">>, false} ->
             throw({error,
-                "Error, the bucket type could not be the created. "
-                "The write_once property had a value of false but must be true "
-                "or left blank\n"});
+                   {write_once,
+                    "Error, the time series bucket type could not be created. "
+                    "The write_once property must be true\n"}});
         _ ->
             ok
     end.
@@ -495,9 +495,10 @@ assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
     ok;
 assert_type_and_table_name_same(BucketType1, #ddl_v1{table = BucketType2}) ->
     throw({error,
-        "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
-        "    bucket type was: " ++ binary_to_list(BucketType1) ++ "\n"
-        "    table name was:  " ++ binary_to_list(BucketType2) ++ "\n"}).
+           {table_name,
+            "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
+            "    bucket type was: " ++ binary_to_list(BucketType1) ++ "\n"
+            "    table name was:  " ++ binary_to_list(BucketType2) ++ "\n"}}).
 
 %% @doc Verify that the primary key has three components
 %%      and the first element is a quantum
