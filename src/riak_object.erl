@@ -1141,7 +1141,7 @@ update_last_modified(RObj, TS) ->
 %% Fetch the preferred vclock encoding method:
 -spec vclock_encoding_method() -> atom().
 vclock_encoding_method() ->
-    riak_core_capability:get({riak_kv, vclock_data_encoding}, encode_raw).
+    encode_raw.
 
 %% Encode a vclock in accordance with our capability setting:
 encode_vclock(VClock) ->
