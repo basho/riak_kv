@@ -160,7 +160,6 @@ process(#tsputreq2{table = Table, columns = _Columns, rows = Data}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     %% validate only the first row as we trust the client to send us
     %% perfectly uniform data wrt types and order
-    lager:error("bubba printf process, Table: ~p, Data: ~p", [Table, Data]),
     case (catch Mod:validate_obj(hd(Data))) of
         true ->
             %% however, prevent bad data to crash us
