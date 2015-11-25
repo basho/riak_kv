@@ -183,6 +183,9 @@ do_update({vnode_put, Idx, USecs}) ->
 do_update({reap_tombstone, _Index}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, vnode, reap_tombstone], 1);
+do_update({object_ttl_expired, _Index}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, vnode, object_ttl_expired], 1);
 do_update(vnode_index_refresh) ->
     P = ?PFX,
     exometer:update([P, ?APP, vnode, index, refreshes], 1);
@@ -462,6 +465,8 @@ stats() ->
                                            {max   , vnode_put_fsm_time_100}]},
      {[vnode, reap_tombstone], spiral, [], [{one  , vnode_reap_tombstone},
                                             {count, vnode_reap_tombstone_total}]},
+     {[vnode, object_ttl_expired], spiral, [], [{one  , vnode_reap_object_ttl_expired},
+                                                {count, vnode_reap_object_ttl_expired_total}]},
      {[vnode, index, refreshes], spiral, [], [{one  ,vnode_index_refreshes},
                                               {count, vnode_index_refreshes_total}]},
      {[vnode, index, reads], spiral, [], [{one  , vnode_index_reads},

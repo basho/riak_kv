@@ -192,10 +192,10 @@ handle_info({'EXIT', Pid, Reason}, #state{sweeps = Sweeps} = State) ->
             lager:error("Unknown proc ~p ~p", [Pid, Reason]),
             {noreply, State};
         {Sweep, normal} ->
-            {noreply, State#state{sweeps = finish_sweep(Sweeps, Sweep)}};
+            {noreply, finish_sweep(Sweep, State)};
         {Sweep, Reason} ->
             lager:error("Sweep crashed ~p ~p", [Sweep, Reason]),
-            {noreply, State#state{sweeps = finish_sweep(Sweeps, Sweep)}}
+            {noreply, finish_sweep(Sweep, State)}
     end;
 
 handle_info(sweep_tick, State) ->
@@ -240,15 +240,36 @@ schedule_sweep(#state{sweeps = Sweeps,
     end.
 
 sweep_request(Index, #state{sweeps = Sweeps} = State) ->
-    case concurrency_limit_reached(Sweeps) of
-        true ->
-            LastStartedSweep =
-                get_last_started_sweep(get_running_sweeps(Sweeps)),
-            stop_sweep(LastStartedSweep);
+    case maybe_restart(Index, State) of
         false ->
-            ok
-    end,
-    do_sweep(Index, State).
+            case concurrency_limit_reached(Sweeps) of
+                true ->
+                    LastStartedSweep =
+                        get_last_started_sweep(get_running_sweeps(Sweeps)),
+                    stop_sweep(LastStartedSweep);
+                false ->
+                    ok
+            end,
+            do_sweep(Index, State);
+        RestartState ->
+            RestartState
+    end.
+
+maybe_restart(Index, #state{sweeps = Sweeps} = State) ->
+    case dict:fetch(Index, Sweeps) of
+        #sweep{state = running} = Sweep ->
+            stop_sweep(Sweep),
+            %% Setup sweep for restart
+            %% When the running sweep finish it will start a new
+            Sweeps1 =
+                dict:update(Index,
+                            fun(Sweep0) ->
+                                    Sweep0#sweep{state = restart}
+                            end, Sweeps),
+            State#state{sweeps = Sweeps1};
+        _ ->
+            false
+    end.
 
 do_sweep(#sweep{index = Index}, State) ->
     do_sweep(Index, State);
@@ -412,12 +433,19 @@ update_progress(Index, SweptKeys, #state{sweeps = Sweeps} = State) ->
 
 find_expired_participant(Sweeps, Participants) ->
     ExpiredMissingSweeps =
-        [{expired_or_missing(Sweep, Participants), Sweep} || Sweep <- get_idle_sweeps(Sweeps)],
-    MostExpiredMissingSweep = hd(lists:reverse(lists:keysort(1, ExpiredMissingSweeps))),
-    case MostExpiredMissingSweep of
-        %% Non of the sweeps have a expired or missing participant.
-        {{0,0}, _} -> [];
-        {_N, Sweep} -> Sweep
+        [{expired_or_missing(Sweep, Participants), Sweep} ||
+         Sweep <- get_idle_sweeps(Sweeps)],
+    case ExpiredMissingSweeps of
+        [] ->
+            [];
+        _ ->
+            MostExpiredMissingSweep =
+                hd(lists:reverse(lists:keysort(1, ExpiredMissingSweeps))),
+            case MostExpiredMissingSweep of
+                %% Non of the sweeps have a expired or missing participant.
+                {{0,0}, _} -> [];
+                {_N, Sweep} -> Sweep
+            end
     end.
 
 expired_or_missing(#sweep{results = Results}, Participants) ->
@@ -478,11 +506,15 @@ format_result(#sa{swept_keys = SweptKeys, active_p = Succ, failed_p = Failed}) -
 format_result(SuccFail, Results) ->
     [{Module, SuccFail} || #sweep_participant{module = Module} <- Results].
 
-finish_sweep(Sweeps, #sweep{index = Index}) ->
-    dict:update(Index,
+finish_sweep(#sweep{state = restart, index = Index}, State) ->
+    do_sweep(Index, State);
+finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
+    Sweeps1 =
+        dict:update(Index,
                 fun(Sweep) ->
                         Sweep#sweep{state = idle, pid = undefind, worker_pid = undefind}
-                end, Sweeps).
+                end, Sweeps),
+    State#state{sweeps = Sweeps1}.
 
 start_sweep(Index, Pid, State) ->
     Sweeps = State#state.sweeps,
@@ -540,7 +572,6 @@ add_sweeps(MissingIdx, Sweeps) ->
 
 remove_sweeps(NotOwnerIdx, Sweeps) ->
     lists:foldl(fun(Idx, SweepsDict) ->
-                        lager:info("lixen_delete_sweep ~w", [Idx]),
                         dict:erase(Idx, SweepsDict)
                 end, Sweeps, NotOwnerIdx).
 
@@ -549,7 +580,9 @@ get_last_started_sweep(RunningSweeps) ->
     hd(lists:reverse(SortedSweeps)).
 
 get_running_sweeps(Sweeps) ->
-    [Sweep || {_Index, #sweep{state = running} = Sweep} <- dict:to_list(Sweeps)].
+    [Sweep ||
+      {_Index, #sweep{state = State} = Sweep} <- dict:to_list(Sweeps), 
+      State == running orelse State == restart].
 
 get_idle_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle} = Sweep} <- dict:to_list(Sweeps)].

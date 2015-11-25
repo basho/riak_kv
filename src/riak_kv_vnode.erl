@@ -2054,17 +2054,17 @@ failed_sweep(Failed, Index, Reason) ->
 %% @private
 make_complete_fold_req() ->
     fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweepKeys} = Acc) ->
-            maybe_throttle_sweep(Acc),
-            Acc1 =
+            Acc1 = maybe_throttle_sweep(Acc),
+            Acc2 =
                 case SweepKeys rem 1000 of
                     0 ->
                         riak_kv_sweeper:update_progress(Index, SweepKeys),
-                        maybe_receive_request(Acc);
+                        maybe_receive_request(Acc1);
                     _ ->
-                        Acc
+                        Acc1
                 end,
             RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-            fold_funs({{Bucket, Key}, RObj}, Acc1#sa{swept_keys = SweepKeys + 1})
+            fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweepKeys + 1})
     end.
 
 fold_funs(_, #sa{index = Index,
@@ -2145,19 +2145,24 @@ get_bucket_props(Bucket, BucketPropsDict) ->
             {BucketProps, BucketPropsDict1}
 	end.
 
-maybe_throttle_sweep(#sa{swept_keys = SweepKeys}) ->
+maybe_throttle_sweep(#sa{swept_keys = SweepKeys} = Acc) ->
     {Limit, Wait} = get_sweep_throttle(),
     case SweepKeys rem Limit of
         0 ->
-            timer:sleep(Wait);
+            %% We use receive after to throttle instead of sleep.
+            %% This way we can respond on requests while throtteling
+            maybe_receive_request(Acc, Wait);
         _ ->
-            ok
+            Acc
     end.
 
 get_sweep_throttle() ->
     app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE).
 
-maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
+maybe_receive_request(Acc) ->
+    maybe_receive_request(Acc, 0).
+
+maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc, Wait) ->
     receive
         {stop, From, Ref} ->
             Active1 =
@@ -2177,8 +2182,9 @@ maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
                     Acc
             end;
         Request ->
-            lager:error("receive unknown: ~p", [Request])
-    after 0 ->
+            lager:error("receive unknown: ~p", [Request]),
+            Acc
+    after Wait ->
         Acc
     end.
 
