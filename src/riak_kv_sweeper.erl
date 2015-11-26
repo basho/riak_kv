@@ -50,6 +50,11 @@
 -define(DEFAULT_SWEEP_TICK, timer:minutes(5)).
 -define(ESTIMATE_EXPIRY, 24 * 3600).    %% 1 day in s
 
+-define(MAX_SWEEP_CRASHES, 10).
+%% Throttle used when sweeping over K/V data: {Limit, Wait}.
+%% Default: 100 keys limit / 100 ms wait
+-define(DEFAULT_SWEEP_THROTTLE, {100, 100}).
+
 %% ====================================================================
 %% API functions
 %% ====================================================================
@@ -65,7 +70,8 @@
          stop_all_sweeps/0,
          disable_sweep_scheduling/0,
          enable_sweep_scheduling/0,
-         get_run_interval/1]).
+         get_run_interval/1,
+         do_sweep/8]).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -602,6 +608,39 @@ get_persistent_participants() ->
             false
     end.
 
+do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, VnodeState) ->
+    CompleteFoldReq = make_complete_fold_req(),
+    InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
+    case Mod:fold_objects(CompleteFoldReq, InitialAcc, Opts, ModState) of
+        #sa{} = Acc ->
+            inform_participants(Acc, Index),
+            {reply, Acc, VnodeState};
+        {async, Work} ->
+            FinishFun =
+                fun(Acc) ->
+                        inform_participants(Acc, Index),
+                        riak_core_vnode:reply(Sender, Acc)
+                end,
+            {async, {sweep, Work, FinishFun}, Sender, VnodeState};
+        Reason ->
+            failed_sweep(ActiveParticipants, Index, Reason),
+            {reply, Reason, VnodeState}
+    end.
+
+inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
+    successfull_sweep(Succ, Index),
+    failed_sweep(Failed, Index).
+
+successfull_sweep(Succ, Index) ->
+    [Module:successfull_sweep(Index, FinalAcc) ||
+       #sweep_participant{module = Module, acc = FinalAcc} <- Succ].
+failed_sweep(Failed, Index) ->
+    [Module:failed_sweep(Index, Reason) ||
+       #sweep_participant{module = Module, fail_reason = Reason } <- Failed].
+failed_sweep(Failed, Index, Reason) ->
+    [Module:failed_sweep(Index, Reason) ||
+       #sweep_participant{module = Module} <- Failed].
+
 sweep_file(File) ->
     PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
     SweepDir = filename:join(PDD, ?MODULE),
@@ -609,9 +648,309 @@ sweep_file(File) ->
     ok = filelib:ensure_dir(SweepFile),
     SweepFile.
 
+%% @private
+make_complete_fold_req() ->
+    fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweepKeys} = Acc) ->
+            Acc1 = maybe_throttle_sweep(Acc),
+            Acc2 =
+                case SweepKeys rem 1000 of
+                    0 ->
+                        riak_kv_sweeper:update_progress(Index, SweepKeys),
+                        maybe_receive_request(Acc1);
+                    _ ->
+                        Acc1
+                end,
+            RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+            fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweepKeys + 1})
+    end.
+
+fold_funs(_, #sa{index = Index,
+                 failed_p = FailedParticipants,
+                 active_p = [],
+                 succ_p = []} = SweepAcc) ->
+    lager:info("No more participants in sweep of Index ~p Failed: ~p", [Index, FailedParticipants]),
+    throw(SweepAcc);
+
+%%% No active participants return all succ for next key to run
+fold_funs(_, #sa{active_p = [],
+                 succ_p = Succ} = SweepAcc) ->
+    SweepAcc#sa{active_p = lists:reverse(Succ),
+                succ_p = []};
+
+%% Check if the sweep_participant have reached crash limit.
+fold_funs(KeyObj, #sa{failed_p = Failed,
+                      active_p = [#sweep_participant{errors = ?MAX_SWEEP_CRASHES,
+                                                     module = Module}
+                                      = Sweep | Rest]} = SweepAcc) ->
+    lager:error("Sweeper fun ~p crashed too many times.", [Module]),
+    fold_funs(KeyObj, SweepAcc#sa{active_p = Rest,
+                                  failed_p = [Sweep#sweep_participant{fail_reason = too_many_crashes} | Failed]});
+
+%% Key deleted nothing to do
+fold_funs(deleted, #sa{active_p = [Sweep | ActiveRest],
+                       succ_p = Succ} = SweepAcc) ->
+    fold_funs(deleted, SweepAcc#sa{active_p = ActiveRest,
+                                   succ_p = [Sweep | Succ]});
+
+%% Main function: call fun with it's acc and aptionals
+fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
+                            succ_p = Succ} = SweepAcc) ->
+    #sweep_participant{sweep_fun = Fun,
+                       acc = Acc,
+                       errors = Errors,
+                       options = Options} = Sweep,
+    {Opt, SweepAcc1} = maybe_add_opt_info({BKey, RObj}, SweepAcc, Options),
+
+    try Fun({BKey, RObj}, Acc, Opt) of
+        {deleted, NewAcc} ->
+            riak_kv_vnode:sweep_del({SweepAcc1#sa.index, node()}, BKey, RObj),
+            fold_funs(deleted,
+                      SweepAcc1#sa{active_p = ActiveRest,
+                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
+        {mutated, MutatedRObj, NewAcc} ->
+            riak_kv_vnode:local_put(SweepAcc1#sa.index, MutatedRObj),
+            fold_funs({BKey, MutatedRObj},
+                      SweepAcc1#sa{active_p = ActiveRest,
+                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
+        {ok, NewAcc} ->
+            fold_funs({BKey, RObj},
+                      SweepAcc1#sa{active_p = ActiveRest,
+                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]})
+    catch C:T ->
+              lager:error("Sweeper fun crashed ~p ~p Key: ~p", [{C, T}, Sweep, BKey]),
+              fold_funs({BKey, RObj},
+                        SweepAcc1#sa{active_p = ActiveRest,
+                                    succ_p = [Sweep#sweep_participant{errors = Errors + 1} | Succ]})
+    end.
+
+maybe_add_opt_info({BKey, RObj}, SweepAcc, Options) ->
+    lists:foldl(fun(Option, InfoSweepAcc) ->
+                        add_opt_info({BKey, RObj}, Option, InfoSweepAcc)
+                end, {[], SweepAcc}, Options).
+
+add_opt_info({{Bucket, _Key}, _RObj}, bucket_props, {OptInfo, #sa{bucket_props = BucketPropsDict} = SweepAcc}) ->
+    {BucketProps, BucketPropsDict1} = get_bucket_props(Bucket, BucketPropsDict),
+    {[{bucket_props, BucketProps} | OptInfo], SweepAcc#sa{bucket_props = BucketPropsDict1}}.
+
+get_bucket_props(Bucket, BucketPropsDict) ->
+    case dict:find(Bucket, BucketPropsDict) of
+        {ok, BucketProps} ->
+            {BucketProps, BucketPropsDict};
+        _ ->
+            BucketProps = riak_core_bucket:get_bucket(Bucket),
+            BucketPropsDict1 = dict:store(Bucket, BucketProps, BucketPropsDict),
+            {BucketProps, BucketPropsDict1}
+    end.
+
+maybe_throttle_sweep(#sa{swept_keys = SweepKeys} = Acc) ->
+    {Limit, Wait} = get_sweep_throttle(),
+    case SweepKeys rem Limit of
+        0 ->
+            %% We use receive after to throttle instead of sleep.
+            %% This way we can respond on requests while throtteling
+            maybe_receive_request(Acc, Wait);
+        _ ->
+            Acc
+    end.
+
+get_sweep_throttle() ->
+    app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE).
+
+maybe_receive_request(Acc) ->
+    maybe_receive_request(Acc, 0).
+
+maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc, Wait) ->
+    receive
+        {stop, From, Ref} ->
+            Active1 =
+                [ActiveSP#sweep_participant{fail_reason = sweep_stop } ||
+                 #sweep_participant{} = ActiveSP <- Active],
+            Acc1 = #sa{active_p = [],  failed_p = Active1 ++ Fail},
+            From ! {ack, Ref},
+            throw({stop_sweep, Acc1});
+        {{disable, Module}, From, Ref} ->
+            case lists:keytake(Module, #sweep_participant.module, Active) of
+                {value, SP, Active1} ->
+                    From ! {ack, Ref},
+                    Acc#sa{active_p = Active1,
+                           failed_p = [SP#sweep_participant{fail_reason = disable} | Fail]};
+                _ ->
+                    From ! {ack, Ref},
+                    Acc
+            end;
+        Request ->
+            lager:error("receive unknown: ~p", [Request]),
+            Acc
+    after Wait ->
+        Acc
+    end.
+
+%% Make sweep accumulator with all ActiveParticipants
+%% that will be called for each key
+make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
+    SweepsParticipants =
+        [AP ||
+         %% Sort list depening on fun typ.
+         AP <- lists:keysort(#sweep_participant.fun_type, ActiveParticipants)],
+    #sa{index = Index, active_p = SweepsParticipants, estimated_keys = EstimatedNrKeys}.
+
+
 %% ====================================================================
 %% Unit tests
 %% ====================================================================
+
+-ifdef(TEST).
+
+%% Basic sweep test. Check that callback get complete Acc when sweep finish
+sweep_delete_test() ->
+    setup_sweep(Keys = 100),
+    DeleteRem = 3,
+    {reply, Acc, _State} = do_sweep(delete_sweep(DeleteRem), 0, no_sender, [], no_index, fake_backend, [], []),
+    ?assertEqual(Keys, Acc#sa.swept_keys),
+    %% Verify acc return
+    [{_Pid,{_,_,[_,N]},ok}] = meck:history(delete_callback_module),
+    ?assertEqual(Keys div DeleteRem, N),
+    ?debugFmt("~p" ,[meck:history(delete_callback_module)]),
+    meck:unload().
+
+
+%% Verify that a sweep asking for bucket_props gets them
+sweep_delete_bucket_props_test() ->
+    setup_sweep(Keys = 100),
+    {reply, Acc, _State} = do_sweep(delete_sweep_bucket_props(), 0, no_sender, [], no_index, fake_backend, [], []),
+
+    ?assertEqual(Keys, dict:size(Acc#sa.bucket_props)),
+    ?assertEqual(Keys, Acc#sa.swept_keys),
+    meck:unload().
+
+%% Delete 1/3 of the keys the rest gets seen by the observer sweep
+sweep_observ_delete_test() ->
+    setup_sweep(Keys = 100),
+    DeleteRem = 3,
+    Sweeps = delete_sweep(DeleteRem) ++ observ_sweep(),
+    {reply, Acc, _State} = do_sweep(Sweeps, 0, no_sender, [], no_index, fake_backend, [], []),
+    ?assertEqual(Keys, Acc#sa.swept_keys),
+    %% Verify acc return
+    [{_Pid,{_,_,[_,DeleteN]},ok}] = meck:history(delete_callback_module),
+    [{_Pid,{_,_,[_,{0, ObservN}]},ok}] = meck:history(observ_callback_module),
+
+    NrDeleted = Keys div DeleteRem,
+    ?assertEqual(NrDeleted, DeleteN),
+    ?assertEqual(Keys - NrDeleted, ObservN),
+    ?assertEqual(Keys, Acc#sa.swept_keys),
+    meck:unload().
+
+%% Test including all types of sweeps. Delete 1/4 Modify 1/4 and
+sweep_modify_observ_delete_test() ->
+    setup_sweep(Keys = 100),
+    DeleteRem = 4,
+    ModifyRem = 2,
+    Sweeps = delete_sweep(DeleteRem) ++ observ_sweep() ++ modify_sweep(ModifyRem),
+    {reply, Acc, _State} = do_sweep(Sweeps, 0, no_sender, [], no_index, fake_backend, [], []),
+    %% Verify acc return
+    [{_Pid,{_,_,[_,DeleteN]},ok}] = meck:history(delete_callback_module),
+    [{_Pid,{_,_,[_,ModifyN]},ok}] = meck:history(modify_callback_module),
+    [{_Pid,{_,_,[_,{Mod, Org}]},ok}] = meck:history(observ_callback_module),
+
+    %% Delete and modify should have touched the same number of object.
+    NrDeletedModify = Keys div DeleteRem,
+    ?assertEqual(NrDeletedModify, DeleteN),
+    ?assertEqual(NrDeletedModify, ModifyN),
+
+    ?assertEqual(Mod, ModifyN),
+    ?assertEqual(Org, Keys - DeleteN - ModifyN),
+    ?assertEqual(Keys, Acc#sa.swept_keys),
+    meck:unload().
+
+sweep_delete_crash_observ_test() ->
+    setup_sweep(Keys = 100),
+    Sweeps = delete_sweep_crash() ++ observ_sweep(),
+    {reply, Acc, _State} = do_sweep(Sweeps, 0, no_sender, [], no_index, fake_backend, [], []),
+    [{_Pid,{_,_,[_,DeleteN]},ok}] = meck:history(delete_callback_module),
+    [{_Pid,{_,_,[_,ObservAcc]},ok}] = meck:history(observ_callback_module),
+
+    %% check that the delete sweep failed but observer succeed
+    ?assertEqual(too_many_crashes, DeleteN),
+    ?assertEqual({0, Keys}, ObservAcc),
+    ?assertEqual(Keys, Acc#sa.swept_keys),
+    meck:unload().
+
+make_keys(Nr) ->
+    [integer_to_binary(N) || N <- lists:seq(1, Nr)].
+
+setup_sweep(N) ->
+    meck:new(riak_kv_vnode, []),
+    meck:expect(riak_kv_vnode, local_put, fun(_, _) -> [] end),
+    meck:expect(riak_kv_vnode, sweep_del, fun(_, _, _) -> [] end),
+    meck:new(riak_core_bucket),
+    meck:expect(riak_core_bucket, get_bucket, fun(_) -> [] end),
+    [meck_callback_modules(Module)||  Module <- [delete_callback_module, modify_callback_module, observ_callback_module]],
+    meck:new(fake_backend, [non_strict]),
+    Keys = make_keys(N),
+    meck:expect(fake_backend, fold_objects,
+                fun(CompleteFoldReq, InitialAcc, _, _) ->
+                        lists:foldl(fun(NBin, Acc) ->
+                                            CompleteFoldReq(NBin, NBin, riak_object:new(NBin, NBin, <<>>), Acc)
+                                    end, InitialAcc, Keys)
+                end).
+
+meck_callback_modules(Module) ->
+    meck:new(Module, [non_strict]),
+    meck:expect(Module, failed_sweep, fun(_Index, _Reason) -> ok end),
+    meck:expect(Module, successfull_sweep, fun(_Index, _Reason) -> ok end).
+
+rem_keys(BKey, N, MatchReturn, DefaultReturn) ->
+    case binary_to_integer(BKey) rem N of
+        0 ->
+            MatchReturn;
+        _ ->
+            DefaultReturn
+    end.
+
+modify_sweep(N) ->
+    ModifyFun =
+        fun({{_Bucket, BKey}, _RObj}, Acc, _Opt) ->
+                rem_keys(BKey, N, {mutated, <<"mutated">>, Acc + 1}, {ok, Acc})
+        end,
+    [#sweep_participant{module = modify_callback_module,
+                        sweep_fun = ModifyFun,
+                        fun_type = ?MODIFY_FUN,
+                        acc = 0
+                       }].
+
+observ_sweep() ->
+    %% Keep track on nr of modified and original objects
+    ObservFun = fun({{_, _BKey}, <<"mutated">>}, {Mut, Org}, _Opt) -> {ok, {Mut + 1, Org}};
+                   ({{_, _BKey}, _RObj}, {Mut, Org}, _Opt) -> {ok, {Mut, Org + 1}} end,
+    [#sweep_participant{module = observ_callback_module,
+                       sweep_fun = ObservFun,
+                       fun_type = ?OBSERV_FUN,
+                        acc = {0,0}
+                       }].
+
+delete_sweep(N) ->
+    DeleteFun = fun({{_, BKey}, _RObj}, Acc, _Opt) -> rem_keys(BKey, N, {deleted, Acc + 1}, {ok, Acc}) end,
+    [#sweep_participant{module = delete_callback_module,
+                       sweep_fun = DeleteFun,
+                       fun_type = ?DELETE_FUN,
+                        acc = 0
+                       }].
+delete_sweep_bucket_props() ->
+    %% Check that we receive bucket_props when we ask for it
+    DeleteFun = fun({_BKey, _RObj}, Acc, [{bucket_props, _}]) -> {deleted, Acc} end,
+    [#sweep_participant{module = delete_callback_module,
+                       sweep_fun = DeleteFun,
+                       fun_type = ?DELETE_FUN,
+                       options = [bucket_props]}].
+
+delete_sweep_crash() ->
+    DeleteFun = fun({_BKey, RObj}, _Acc, _Opt) -> RObj = crash end,
+    [#sweep_participant{module = delete_callback_module,
+                        sweep_fun = DeleteFun,
+                        fun_type = ?DELETE_FUN,
+                        options = [bucket_props]}].
+
+-endif.
 
 -ifdef(EQC).
 

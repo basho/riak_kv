@@ -166,11 +166,6 @@
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
 
-
-%% Throttle used when sweeping over K/V data: {Limit, Wait}.
-%% Default: 100 keys limit / 100 ms wait
--define(DEFAULT_SWEEP_THROTTLE, {100, 100}).
-
 %% default value for `counter_lease' in `#counter_state{}'
 %% NOTE: these MUST be positive integers!
 %% @see non_neg_env/3
@@ -187,9 +182,6 @@
 %% die
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
 %%
-%% Number of crashes before a participant fun gets removed from a sweep 
--define(MAX_SWEEP_CRASHES, 10).
-
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -2016,186 +2008,12 @@ do_sweep([], _EstimatedKeys, _Sender, State=#state{idx=Index}) ->
     lager:info("No participants in sweep ~p", [Index]),
     {reply, no_participant, State};
 
-do_sweep(ActiveParticipants, EstimatedKeys, Sender, State=#state{idx=Index, mod=Mod, modstate=ModState}) ->
-    CompleteFoldReq = make_complete_fold_req(),
-    InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
-
+do_sweep(ActiveParticipants, EstimatedKeys, Sender, State) ->
     Opts = get_fold_opts([sweep_fold, {iterator_refresh, true}], State),
-    case Mod:fold_objects(CompleteFoldReq, InitialAcc, Opts, ModState) of
-        {ok, Acc} ->
-            inform_participants(Acc, Index),
-            {reply, Acc, State};
-        {async, Work} ->
-            FinishFun =
-                fun(Acc) ->
-                        inform_participants(Acc, Index),
-                        riak_core_vnode:reply(Sender, Acc)
-                end,
-            {async, {sweep, Work, FinishFun}, Sender, State};
-        Reason ->
-            failed_sweep(ActiveParticipants, Index, Reason),
-            {reply, Reason, State}
-    end.
+    do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, State).
 
-inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
-    successfull_sweep(Succ, Index),
-    failed_sweep(Failed, Index).
-
-successfull_sweep(Succ, Index) ->
-    [Module:successfull_sweep(Index, FinalAcc) ||
-       #sweep_participant{module = Module, acc = FinalAcc} <- Succ].
-failed_sweep(Failed, Index) ->
-    [Module:failed_sweep(Index, Reason) ||
-       #sweep_participant{module = Module, fail_reason = Reason } <- Failed].
-failed_sweep(Failed, Index, Reason) ->
-    [Module:failed_sweep(Index, Reason) ||
-       #sweep_participant{module = Module} <- Failed].
-
-%% @private
-make_complete_fold_req() ->
-    fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweepKeys} = Acc) ->
-            Acc1 = maybe_throttle_sweep(Acc),
-            Acc2 =
-                case SweepKeys rem 1000 of
-                    0 ->
-                        riak_kv_sweeper:update_progress(Index, SweepKeys),
-                        maybe_receive_request(Acc1);
-                    _ ->
-                        Acc1
-                end,
-            RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-            fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweepKeys + 1})
-    end.
-
-fold_funs(_, #sa{index = Index,
-                 failed_p = FailedParticipants,
-                 active_p = [],
-                 succ_p = []} = SweepAcc) ->
-    lager:info("No more participants in sweep of Index ~p Failed: ~p", [Index, FailedParticipants]),
-    throw(SweepAcc);
-
-%%% No active participants return all succ for next key to run
-fold_funs(_, #sa{active_p = [],
-                 succ_p = Succ} = SweepAcc) ->
-    SweepAcc#sa{active_p = lists:reverse(Succ),
-                succ_p = []};
-
-%% Check if the sweep_participant have reached crash limit.
-fold_funs(KeyObj, #sa{failed_p = Failed,
-                      active_p = [#sweep_participant{errors = ?MAX_SWEEP_CRASHES,
-                                                     module = Module}
-                                      = Sweep | Rest]} = SweepAcc) ->
-    lager:error("Sweeper fun ~p crashed too many times.", [Module]),
-    fold_funs(KeyObj, SweepAcc#sa{active_p = Rest,
-                                  failed_p = [Sweep#sweep_participant{fail_reason = too_many_crashes} | Failed]});
-
-%% Key deleted nothing to do
-fold_funs(deleted, #sa{active_p = [Sweep | ActiveRest],
-                       succ_p = Succ} = SweepAcc) ->
-    fold_funs(deleted, SweepAcc#sa{active_p = ActiveRest,
-                                   succ_p = [Sweep | Succ]});
-
-%% Main function: call fun with it's acc and aptionals
-fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
-                            succ_p = Succ} = SweepAcc) ->
-    #sweep_participant{sweep_fun = Fun,
-                       acc = Acc,
-                       errors = Errors,
-					   options = Options} = Sweep,
-	{Opt, SweepAcc1} = maybe_add_opt_info({BKey, RObj}, SweepAcc, Options),
-
-    try Fun({BKey, RObj}, Acc, Opt) of
-        {deleted, NewAcc} ->
-            riak_kv_vnode:sweep_del({SweepAcc1#sa.index, node()}, BKey, RObj),
-            fold_funs(deleted,
-                      SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
-        {mutated, MutatedRObj, NewAcc} ->
-            riak_kv_vnode:local_put(SweepAcc1#sa.index, MutatedRObj),
-            fold_funs({BKey, MutatedRObj},
-                      SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
-        {ok, NewAcc} ->
-            fold_funs({BKey, RObj},
-                      SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]})
-    catch C:T ->
-              lager:error("Sweeper fun crashed ~p ~p Key: ~p", [{C, T}, Sweep, BKey]),
-              fold_funs({BKey, RObj},
-                        SweepAcc1#sa{active_p = ActiveRest,
-                                    succ_p = [Sweep#sweep_participant{errors = Errors + 1} | Succ]})
-    end.
-
-maybe_add_opt_info({BKey, RObj}, SweepAcc, Options) ->
-	lists:foldl(fun(Option, InfoSweepAcc) ->
-						add_opt_info({BKey, RObj}, Option, InfoSweepAcc)
-				end, {[], SweepAcc}, Options).
-
-add_opt_info({{Bucket, _Key}, _RObj}, bucket_props, {OptInfo, #sa{bucket_props = BucketPropsDict} = SweepAcc}) ->
-	{BucketProps, BucketPropsDict1} = get_bucket_props(Bucket, BucketPropsDict),
-	{[{bucket_props, BucketProps} | OptInfo], SweepAcc#sa{bucket_props = BucketPropsDict1}}.
-
-get_bucket_props(Bucket, BucketPropsDict) ->
-	case dict:find(Bucket, BucketPropsDict) of
-		{ok, BucketProps} ->
-			{BucketProps, BucketPropsDict};
-		_ ->
-			BucketProps = riak_core_bucket:get_bucket(Bucket),
-            BucketPropsDict1 = dict:store(Bucket, BucketProps, BucketPropsDict),
-            {BucketProps, BucketPropsDict1}
-	end.
-
-maybe_throttle_sweep(#sa{swept_keys = SweepKeys} = Acc) ->
-    {Limit, Wait} = get_sweep_throttle(),
-    case SweepKeys rem Limit of
-        0 ->
-            %% We use receive after to throttle instead of sleep.
-            %% This way we can respond on requests while throtteling
-            maybe_receive_request(Acc, Wait);
-        _ ->
-            Acc
-    end.
-
-get_sweep_throttle() ->
-    app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE).
-
-maybe_receive_request(Acc) ->
-    maybe_receive_request(Acc, 0).
-
-maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc, Wait) ->
-    receive
-        {stop, From, Ref} ->
-            Active1 =
-                [ActiveSP#sweep_participant{fail_reason = sweep_stop } ||
-                 #sweep_participant{} = ActiveSP <- Active],
-            Acc1 = #sa{active_p = [],  failed_p = Active1 ++ Fail},
-            From ! {ack, Ref},
-            throw({stop_sweep, Acc1});
-        {{disable, Module}, From, Ref} ->
-            case lists:keytake(Module, #sweep_participant.module, Active) of
-                {value, SP, Active1} ->
-                    From ! {ack, Ref},
-                    Acc#sa{active_p = Active1,
-                           failed_p = [SP#sweep_participant{fail_reason = disable} | Fail]};
-                _ ->
-                    From ! {ack, Ref},
-                    Acc
-            end;
-        Request ->
-            lager:error("receive unknown: ~p", [Request]),
-            Acc
-    after Wait ->
-        Acc
-    end.
-
-%% Make sweep accumulator with all ActiveParticipants
-%% that will be called for each key
-make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
-    SweepsParticipants =
-        [AP ||
-         %% Sort list depening on fun typ.
-         AP <- lists:keysort(#sweep_participant.fun_type, ActiveParticipants)],
-    #sa{index = Index, active_p = SweepsParticipants, estimated_keys = EstimatedNrKeys}.
+do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, State=#state{idx=Index, mod=Mod, modstate=ModState}) ->
+    riak_kv_sweeper:do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, State).
 
 %% @private
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
@@ -3172,5 +2990,6 @@ flush_msgs() ->
         0 ->
             ok
     end.
+
 
 -endif.
