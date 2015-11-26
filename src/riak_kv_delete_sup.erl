@@ -77,8 +77,8 @@ add_obj_ttl_sweep_participant(RunInterval) ->
 maybe_add_reap_sweep_participant() ->
     RunIntervalFun =
         fun() -> app_helper:get_env(riak_kv, reap_sweep_interval, undefined) end,
-    case RunIntervalFun() of
-        undefined ->
+    case app_helper:get_env(riak_kv, tombstone_grace_period, false) of
+        false ->
             false;
         _ ->
             add_reap_sweep_participant(RunIntervalFun)
