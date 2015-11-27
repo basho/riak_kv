@@ -140,7 +140,7 @@ quantum_field_name(#ddl_v1{ partition_key = PK }) ->
     QFieldName.
 
 check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL,
-              [{and_, _LHS, _RHS} = W]) ->
+              [W]) ->
     try    #key_v1{ast = PartitionKeyAST} = PK,
            LocalFields     = [X || #param_v1{name = X} <- LK#key_v1.ast],
            PartitionFields = [X || #param_v1{name = X} <- PartitionKeyAST],
@@ -172,23 +172,19 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL
                {error, Errors}
            end
     catch
-        error:{incomplete_where_clause, _} = E -> {error, E};
-        error:{lower_and_upper_bounds_are_equal_when_no_equals_operator, _} = E -> {error, E};
-        error:{lower_bound_must_be_less_than_upper_bound, _} = E -> {error, E};
-        error:{lower_bound_specified_more_than_once, _} = E -> {error, E};
-        error:{time_bounds_must_use_and_op, _} = E -> {error, E};
-        error:{upper_bound_specified_more_than_once, _} = E -> {error, E};
+        error:{Reason, Description} = E when is_atom(Reason), is_binary(Description) ->
+            {error, E};
         error:Reason ->
             % if it is not a known error then return the stack trace for
             % debugging
             {error, {where_not_timeseries, Reason, erlang:get_stacktrace()}}
-    end;
-check_if_timeseries(_, [{or_, _, _}]) ->
-    {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}};
-check_if_timeseries(_, _) ->
-    % this occurs when the query does not include an AND operator which is
-    % required for time quanta bounds
-    {error, {incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED}}.
+    end.
+% check_if_timeseries(_, [{or_, _, _}]) ->
+%     {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}};
+% check_if_timeseries(_, _) ->
+%     % this occurs when the query does not include an AND operator which is
+%     % required for time quanta bounds
+%     {error, {incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED}}.
 
 %%
 has_errors(StartKey, EndKey) ->
@@ -208,8 +204,8 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
     case Type of
         timestamp ->
             case Op1 of
-            Op2 -> true;
-            _   -> false
+                Op2 -> true;
+                _   -> false
             end;
         _ ->
             includes(T, Op2, Mod)
@@ -219,8 +215,11 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
 find_timestamp_bounds(QuantumField, LocalFields) when is_binary(QuantumField) ->
     find_timestamp_bounds2(QuantumField, LocalFields, [], {undefined, undefined}).
 
+%%
 find_timestamp_bounds2(_, [], OtherFilters, BoundsAcc) ->
     {lists:reverse(OtherFilters), BoundsAcc};
+find_timestamp_bounds2(QuantumFieldName, [{or_, {_, QuantumFieldName, _}, _} | _], _, _) ->
+    error({time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND});
 find_timestamp_bounds2(QuantumFieldName, [{Op, QuantumFieldName, _} = Filter | Tail], OtherFilters, BoundsAcc1) ->
     % if there are already end bounds throw an error
     if
@@ -964,9 +963,12 @@ query_has_no_AND_operator_1_test() ->
     DDL = get_standard_ddl(),
     {ok, Q} = get_query("select * from test1 where time < 5"),
     ?assertEqual(
-        {error, {incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED}},
+        {error, {incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND}},
         compile(DDL, Q)
     ).
+
+
+%%%%%% FAILS
 
 query_has_no_AND_operator_2_test() ->
     DDL = get_standard_ddl(),
@@ -981,6 +983,14 @@ query_has_no_AND_operator_3_test() ->
     {ok, Q} = get_query("select * from test1 where user = 'user_1' AND time > 1 OR time < 5"),
     ?assertEqual(
         {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
+        compile(DDL, Q)
+    ).
+
+query_has_no_AND_operator_4_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from testtwo where time > 1 and time < 6 and user = '2' or weather = '4'"),
+    ?assertMatch(
+        [#riak_sql_v1{} | _],
         compile(DDL, Q)
     ).
 
