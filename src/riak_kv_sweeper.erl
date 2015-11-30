@@ -66,7 +66,6 @@
          report_worker_pid/2,
          sweep_result/2,
          update_started_sweep/3,
-         update_progress/2,
          stop_all_sweeps/0,
          disable_sweep_scheduling/0,
          enable_sweep_scheduling/0,
@@ -262,8 +261,8 @@ sweep_request(Index, #state{sweeps = Sweeps} = State) ->
     end.
 
 maybe_restart(Index, #state{sweeps = Sweeps} = State) ->
-    case dict:fetch(Index, Sweeps) of
-        #sweep{state = running} = Sweep ->
+    case dict:find(Index, Sweeps) of
+        {ok, #sweep{state = running} = Sweep} ->
             stop_sweep(Sweep),
             %% Setup sweep for restart
             %% When the running sweep finish it will start a new
@@ -273,8 +272,11 @@ maybe_restart(Index, #state{sweeps = Sweeps} = State) ->
                                     Sweep0#sweep{state = restart}
                             end, Sweeps),
             State#state{sweeps = Sweeps1};
+        {ok, #sweep{}} ->
+            false;
         _ ->
-            false
+            %% New index since last tick
+            sweep_request(Index, maybe_initiate_sweeps(State))
     end.
 
 do_sweep(#sweep{index = Index}, State) ->
@@ -650,18 +652,18 @@ sweep_file(File) ->
 
 %% @private
 make_complete_fold_req() ->
-    fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweepKeys} = Acc) ->
+    fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
             Acc1 = maybe_throttle_sweep(Acc),
             Acc2 =
-                case SweepKeys rem 1000 of
+                case SweptKeys rem 1000 of
                     0 ->
-                        riak_kv_sweeper:update_progress(Index, SweepKeys),
+                        update_progress(Index, SweptKeys),
                         maybe_receive_request(Acc1);
                     _ ->
                         Acc1
                 end,
             RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-            fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweepKeys + 1})
+            fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1})
     end.
 
 fold_funs(_, #sa{index = Index,
@@ -777,10 +779,7 @@ maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc, Wait) ->
                 _ ->
                     From ! {ack, Ref},
                     Acc
-            end;
-        Request ->
-            lager:error("receive unknown: ~p", [Request]),
-            Acc
+            end
     after Wait ->
         Acc
     end.
@@ -862,6 +861,7 @@ sweep_modify_observ_delete_test() ->
     ?assertEqual(Keys, Acc#sa.swept_keys),
     meck:unload().
 
+%% Verify that even if one sweep crashes for all objects the following participants still run
 sweep_delete_crash_observ_test() ->
     setup_sweep(Keys = 100),
     Sweeps = delete_sweep_crash() ++ observ_sweep(),
@@ -935,6 +935,7 @@ delete_sweep(N) ->
                        fun_type = ?DELETE_FUN,
                         acc = 0
                        }].
+%% delete sweep participant that ask for bucket props
 delete_sweep_bucket_props() ->
     %% Check that we receive bucket_props when we ask for it
     DeleteFun = fun({_BKey, _RObj}, Acc, [{bucket_props, _}]) -> {deleted, Acc} end,
@@ -942,7 +943,7 @@ delete_sweep_bucket_props() ->
                        sweep_fun = DeleteFun,
                        fun_type = ?DELETE_FUN,
                        options = [bucket_props]}].
-
+%% Crashing delete sweep participant
 delete_sweep_crash() ->
     DeleteFun = fun({_BKey, RObj}, _Acc, _Opt) -> RObj = crash end,
     [#sweep_participant{module = delete_callback_module,
