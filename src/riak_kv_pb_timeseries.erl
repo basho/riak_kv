@@ -380,9 +380,9 @@ put_data(Data, Table, Mod) ->
               Obj = Mod:add_column_info(Raw),
 
               PK  = eleveldb_ts:encode_key(
-                      riak_ql_ddl:get_partition_key(DDL, Raw)),
+                      riak_ql_ddl:get_partition_key(DDL, Raw, Mod)),
               LK  = eleveldb_ts:encode_key(
-                      riak_ql_ddl:get_local_key(DDL, Raw)),
+                      riak_ql_ddl:get_local_key(DDL, Raw, Mod)),
 
               RObj0 = riak_object:new(table_to_bucket(Table), PK, Obj),
               MD = riak_object:get_update_metadata(RObj0),
