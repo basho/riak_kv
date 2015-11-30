@@ -87,7 +87,9 @@ async_put(RObj, Options) ->
     Bucket = riak_object:bucket(RObj),
     case riak_object:get_ts_local_key(RObj) of
         {ok, LocalKey} ->
-            Key = LocalKey,
+            % Time Series keys must be tagged to tell the
+            % backend to add the appropriate prefix.
+            Key = {timeseries, LocalKey},
             EncodeFn =
                 fun(XRObj) ->
                   riak_object:to_binary(v1, XRObj, msgpack)

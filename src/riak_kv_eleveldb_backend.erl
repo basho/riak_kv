@@ -465,11 +465,11 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
     StartKey = eleveldb_ts:encode_key(StartK3),
-    StartKey2 = to_object_key(Bucket, StartKey),
+    StartKey2 = to_object_key(Bucket, {timeseries, StartKey}),
     EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
     EndKey = eleveldb_ts:encode_key(EndK3),
-    EndKey2 = to_object_key(Bucket, EndKey),
+    EndKey2 = to_object_key(Bucket, {timeseries, EndKey}),
     FoldFun = fun({K, V}, Acc) ->
 		     [{K, V} | Acc]
 	     end,
@@ -928,6 +928,11 @@ to_legacy_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
 to_legacy_first_key(Other) ->
     to_first_key(Other).
 
+%% If a key is tagged with `timeseries' then use the t prefix, this
+%% groups the objects when leveldb sorts the keys. On a range scan
+%% it means less skipping over non-timeseries keys.
+to_object_key(Bucket, {timeseries, Key}) ->
+    sext:encode({t, Bucket, Key});
 to_object_key(Bucket, Key) ->
     sext:encode({o, Bucket, Key}).
 
