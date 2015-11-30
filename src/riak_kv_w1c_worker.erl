@@ -21,7 +21,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, put/2, async_put/2, async_put_replies/2, workers/0]).
+-export([start_link/1, put/2, async_put/5, async_put_replies/2, workers/0]).
 -export([init/1,
     handle_call/3,
     handle_cast/2,
@@ -76,29 +76,28 @@ start_link(Name) ->
 %%        ok |
 %%       {error, timeout} |
 %%       {error, term()}
-put(RObj, Options) ->
-    synchronize_put(async_put(RObj, Options), Options).
+put(RObj0, Options) ->
+    Bucket = riak_object:bucket(RObj0),
+    {RObj, Key, EncodeFn} = kv_or_ts_details(RObj0,
+                                             riak_object:get_ts_local_key(RObj0)),
+    synchronize_put(async_put(RObj, Bucket, Key, EncodeFn, Options), Options).
 
--spec async_put(RObj :: riak_object:riak_object(), proplists:proplist()) ->
+-spec async_put(RObj :: riak_object:riak_object(),
+                Bucket :: binary()|{binary(), binary()},
+                Key :: binary()|{binary(), binary()}, %% {Partition, Local}
+                EncodeFn :: fun((riak_object:riak_object()) -> binary()),
+                Options ::proplists:proplist()) ->
                        {ok, {reference(), pid()}} |
                        {error, term()}.
-async_put(RObj, Options) ->
+async_put(RObj, Bucket, {PartitionKey, LocalKey}, EncodeFn, Options) ->
+    async_put(RObj, Bucket, PartitionKey, LocalKey, EncodeFn, Options);
+async_put(RObj, Bucket, Key, EncodeFn, Options) ->
+    async_put(RObj, Bucket, Key, Key, EncodeFn, Options).
+
+async_put(RObj, Bucket, PartitionKey, LocalKey, EncodeFn, Options) ->
     StartTS = os:timestamp(),
-    Bucket = riak_object:bucket(RObj),
-    case riak_object:get_ts_local_key(RObj) of
-        {ok, LocalKey} ->
-            Key = LocalKey,
-            EncodeFn =
-                fun(XRObj) ->
-                  riak_object:to_binary(v1, XRObj, msgpack)
-                end;
-        error ->
-            Key = riak_object:key(RObj),
-            EncodeFn = fun(XRObj) -> riak_object:to_binary(v1, XRObj) end
-    end,
-    BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(Bucket),
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
+    DocIdx = riak_core_util:chash_key({Bucket, PartitionKey}, BucketProps),
     NVal = proplists:get_value(n_val, BucketProps),
     Preflist =
         case proplists:get_value(sloppy_quorum, Options, true) of
@@ -115,14 +114,11 @@ async_put(RObj, Options) ->
             RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
             RObj3 = riak_object:update_last_modified(RObj2),
             RObj4 = riak_object:apply_updates(RObj3),
-            MD  = riak_object:get_metadata(RObj4),
-            MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
-            RObj5 = riak_object:update_metadata(RObj4, MD1),
-            EncodedVal = EncodeFn(RObj5),
+            EncodedVal = EncodeFn(RObj4),
 
             gen_server:cast(
                 Worker,
-                {put, Bucket, Key, EncodedVal, ReqId, Preflist,
+                {put, Bucket, LocalKey, EncodedVal, ReqId, Preflist,
                  #rec{w=W, pw=PW, n_val=NVal, from=self(),
                       start_ts=StartTS,
                       size=size(EncodedVal)}}),
@@ -336,6 +332,22 @@ get_request_record(ReqId, #state{entries=Entries} = _State) ->
         {ok, Value} -> Value;
         error -> undefined
     end.
+
+%% Utility function for put/2: is this a TS object with its special
+%% requirements or a more traditional KV object?
+%%
+%% When riak_kv_pb_timeseries is driving a put request, it can provide
+%% all of these details directly to async_put/5, but when a tombstone
+%% is being put via riak_kv_delete, these must be extracted from the
+%% object.
+kv_or_ts_details(RObj, {ok, LocalKey}) ->
+    MD  = riak_object:get_metadata(RObj),
+    MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
+    RObj1 = riak_object:update_metadata(RObj, MD1),
+    {RObj1, {riak_object:key(RObj), LocalKey},
+     fun(O) -> riak_object:to_binary(v1, O, msgpack) end};
+kv_or_ts_details(RObj, error) ->
+    {RObj, riak_object:key(RObj), fun(O) -> riak_object:to_binary(v1, O) end}.
 
 erase_request_record(ReqId, #state{entries=Entries} = State) ->
     case get_request_record(ReqId, State) of

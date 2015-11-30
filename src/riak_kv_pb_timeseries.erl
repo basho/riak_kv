@@ -384,13 +384,17 @@ put_data(Data, Table, Mod) ->
               LK  = eleveldb_ts:encode_key(
                       riak_ql_ddl:get_local_key(DDL, Raw)),
 
-              RObj0 = riak_object:new(table_to_bucket(Table), PK, Obj),
-              MD = riak_object:get_update_metadata(RObj0),
-              MD1 = dict:store(?MD_TS_LOCAL_KEY, LK, MD),
-              MD2 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD1),
-              RObj = riak_object:update_metadata(RObj0, MD2),
+              Bucket = table_to_bucket(Table),
 
-              case riak_kv_w1c_worker:async_put(RObj, []) of
+              RObj0 = riak_object:new(Bucket, PK, Obj),
+              MD = riak_object:get_update_metadata(RObj0),
+              MD1 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD),
+              RObj = riak_object:update_metadata(RObj0, MD1),
+
+              EncodeFn = fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
+
+              case riak_kv_w1c_worker:async_put(
+                     RObj, Bucket, {PK, LK}, EncodeFn, []) of
                   {error, _Why} ->
                       {ReqIdsAcc, ErrorsCnt + 1};
                   {ok, ReqId} ->
