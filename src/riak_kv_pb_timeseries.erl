@@ -371,18 +371,20 @@ to_string(X) ->
 %% ---------------------------------------------------
 % functions supporting INSERT
 
+row_to_key(Row, DDL, Mod) ->
+    eleveldb_ts:encode_key(
+      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
+
+-spec partition_data(Data :: list(term()),
+                     Bucket :: {binary(), binary()},
+                     BucketProps :: proplists:proplist(),
+                     DDL :: #ddl_v1{},
+                     Mod :: module()) ->
+                            list(tuple(non_neg_integer(), list(term()))).
 partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
     PartitionTuples =
-        lists:map(fun(R) ->
-                          {
-                       riak_core_util:chash_key(
-                         {Bucket,
-                          eleveldb_ts:encode_key(
-                            riak_ql_ddl:get_partition_key(DDL, R, Mod))},
-                         BucketProps),
-                       R
-                      } end,
-                  Data),
+        [ { riak_core_util:chash_key({Bucket, row_to_key(R, DDL, Mod)},
+                                     BucketProps), R } || R <- Data ],
     dict:to_list(
       lists:foldl(fun({Idx, R}, Dict) ->
                           dict:append(Idx, R, Dict)
@@ -395,6 +397,18 @@ add_preflists(PartitionedData, NVal, UpNodes) ->
                                    riak_core_apl:get_apl_ann(Idx, NVal, UpNodes),
                                    Rows} end,
               PartitionedData).
+
+build_object(Bucket, Mod, DDL, Row, PK) ->
+    Obj = Mod:add_column_info(Row),
+    LK  = eleveldb_ts:encode_key(
+            riak_ql_ddl:get_local_key(DDL, Row, Mod)),
+
+    RObj0 = riak_object:new(Bucket, PK, Obj),
+    MD = riak_object:get_update_metadata(RObj0),
+    MD1 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD),
+    RObj = riak_object:update_metadata(RObj0, MD1),
+    {RObj, LK}.
+
 
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% @ignore return count of records we failed to put
@@ -409,6 +423,9 @@ put_data(Data, Table, Mod) ->
     PreflistData = add_preflists(PartitionedData, NVal,
                                  riak_core_node_watcher:nodes(riak_kv)),
 
+    EncodeFn =
+        fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
+
     {ReqIds, FailReqs} = lists:foldl(
       fun({DocIdx, Preflist, Records}, {GlobalReqIds, GlobalErrorsCnt}) ->
               case riak_kv_w1c_worker:validate_options(
@@ -417,27 +434,15 @@ put_data(Data, Table, Mod) ->
                       {Ids, Errs} =
                           lists:foldl(
                             fun(Record, {PartReqIds, PartErrors}) ->
-                                    Obj = Mod:add_column_info(Record),
-                                    PK  = DocIdx,
-                                    LK  = eleveldb_ts:encode_key(
-                                            riak_ql_ddl:get_local_key(DDL, Record, Mod)),
+                                    {RObj, LK} =
+                                        build_object(Bucket, Mod, DDL,
+                                                     Record, DocIdx),
 
-                                    RObj0 = riak_object:new(Bucket, PK, Obj),
-                                    MD = riak_object:get_update_metadata(RObj0),
-                                    MD1 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD),
-                                    RObj = riak_object:update_metadata(RObj0, MD1),
-
-                                    EncodeFn =
-                                        fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
-
-                                    case riak_kv_w1c_worker:async_put(
-                                           RObj, W, PW, Bucket, NVal, LK,
-                                           EncodeFn, Preflist) of
-                                        {error, _Why} ->
-                                            {PartReqIds, PartErrors + 1};
-                                        {ok, ReqId} ->
-                                            {[ReqId | PartReqIds], PartErrors}
-                                    end
+                                    {ok, ReqId} =
+                                        riak_kv_w1c_worker:async_put(
+                                          RObj, W, PW, Bucket, NVal, LK,
+                                          EncodeFn, Preflist),
+                                    {[ReqId | PartReqIds], PartErrors}
                             end,
                         {[], 0}, Records),
                       {GlobalReqIds ++ Ids, GlobalErrorsCnt + Errs};

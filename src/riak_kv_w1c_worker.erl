@@ -110,8 +110,7 @@ put(RObj0, Options) ->
                 Key :: binary()|{binary(), binary()},
                 EncodeFn :: fun((riak_object:riak_object()) -> binary()),
                 Preflist :: term()) ->
-                       {ok, {reference(), pid()}} |
-                       {error, term()}.
+                       {ok, {reference(), atom()}}.
 
 async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) ->
     async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
@@ -366,9 +365,7 @@ erase_request_record(ReqId, #state{entries=Entries} = State) ->
 
 %% Invoked by put/2 to turn the async request into a synchronous call
 synchronize_put({ok, {_ReqId, _Worker}=ReqIdTuple}, Options) ->
-    wait_for_put_reply(ReqIdTuple, find_put_timeout(Options));
-synchronize_put(Error, _Options) ->
-    Error.
+    wait_for_put_reply(ReqIdTuple, find_put_timeout(Options)).
 
 %% Invoked by async_put_reply/2 to wait for all responses
 async_put_reply_loop([], Responses, _StartTime, _Timeout) ->
