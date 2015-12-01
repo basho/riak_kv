@@ -167,9 +167,6 @@ handle_call(status, _From, State) ->
     Sweeps =   [Sweep || {_Index, Sweep} <- dict:to_list(State#state.sweeps)],
     {reply, {Participants , Sweeps}, State};
 
-handle_call(sweeps, _From, State) ->
-    {reply, State#state.sweeps, State};
-
 handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
     [stop_sweep(Sweep) || Sweep <- get_running_sweeps(Sweeps)],
     {reply, ok, State}.
@@ -231,14 +228,14 @@ maybe_schedule_sweep(#state{sweeps = Sweeps} = State) ->
     end.
 
 schedule_sweep(#state{sweeps = Sweeps,
-                      sweep_participants = Participant} = State) ->
+                      sweep_participants = Participants} = State) ->
     case get_never_runned_sweeps(Sweeps) of
         [] ->
-            case find_expired_participant(Sweeps, Participant) of
+            case find_expired_participant(Sweeps, Participants) of
                 [] ->
                     State;
-                Index ->
-                    do_sweep(Index, State)
+                Sweep ->
+                    do_sweep(Sweep, State)
             end;
         Indices ->
             do_sweep(hd(Indices), State)
@@ -809,9 +806,7 @@ sweep_delete_test() ->
     %% Verify acc return
     [{_Pid,{_,_,[_,N]},ok}] = meck:history(delete_callback_module),
     ?assertEqual(Keys div DeleteRem, N),
-    ?debugFmt("~p" ,[meck:history(delete_callback_module)]),
     meck:unload().
-
 
 %% Verify that a sweep asking for bucket_props gets them
 sweep_delete_bucket_props_test() ->
@@ -951,6 +946,81 @@ delete_sweep_crash() ->
                         fun_type = ?DELETE_FUN,
                         options = [bucket_props]}].
 
+
+sweeper_test_() ->
+    {foreach, fun setup/0, fun cleanup/1,
+     [
+        fun initiate_sweeps/1,
+        fun find_never_sweeped/1,
+        fun find_missing_part/1
+    ]}.
+
+setup() ->
+    MyRingPart = lists:seq(1, 10),
+    Participants = [1,10,100],
+    meck:new(riak_core_ring_manager),
+    meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, ring} end),
+    meck:new(riak_core_ring),
+    meck:expect(riak_core_ring, my_indices,  fun(ring) -> MyRingPart  end),
+    State = maybe_initiate_sweeps(#state{}),
+    State1 = add_test_sweep_participant(State, Participants),
+    {MyRingPart, Participants, State1}.
+
+add_test_sweep_participant(StateIn, Participants) ->
+    Fun = fun(N, State) ->
+                  Participant = test_sweep_participant(N),
+                  {reply, ok, StateOut} = handle_call({add_sweep_participant, Participant}, nobody, State),
+                  StateOut
+          end,
+    lists:foldl(Fun, StateIn, Participants).
+
+test_sweep_participant(N) ->
+    #sweep_participant{module = get_module(N),
+                       run_interval = N
+                      }.
+get_module(N) ->
+    list_to_atom(integer_to_list(N)).
+
+initiate_sweeps({MyRingPart, _Participants, State}) ->
+    fun() ->
+            ?assertEqual(length(MyRingPart), dict:size(State#state.sweeps))
+    end.
+
+find_never_sweeped({MyRingPart, Participants, State}) ->
+    fun() ->
+            %% One sweep will not be given any results so it will be returnd by get_never_sweeped
+            [NoResult | Rest]  = MyRingPart,
+            Result = [{get_module(Part), succ} ||Part <- Participants],
+            State1 =
+                lists:foldl(fun(Index, AccState) ->
+                                    update_finished_sweep(Index, {0, Result}, AccState)
+                            end, State, Rest),
+            [NeverRunnedSweep] = get_never_runned_sweeps(State1#state.sweeps),
+            ?assertEqual(NeverRunnedSweep#sweep.index, NoResult)
+    end.
+
+find_missing_part({MyRingPart, Participants, State}) ->
+    fun() ->
+            %% Give all but one index results from all participants
+            %% The last Index will miss one result and would be prioritized
+            [NotAllResult | Rest]  = MyRingPart,
+            Result = [{get_module(Part), succ} || Part <- Participants],
+
+            State1 =
+                lists:foldl(fun(Index, AccState) ->
+                                    update_finished_sweep(Index, {0, Result}, AccState)
+                            end, State, Rest),
+
+            Result2 = [{get_module(Part), succ} || Part <- tl(Participants)],
+            State2 = update_finished_sweep(NotAllResult, {0, Result2}, State1),
+            ?assertEqual([], get_never_runned_sweeps(State2#state.sweeps)),
+            MissingPart =
+                find_expired_participant(State2#state.sweeps, State2#state.sweep_participants),
+            ?assertEqual(MissingPart#sweep.index, NotAllResult)
+    end.
+
+cleanup(_State) ->
+    meck:unload().
 -endif.
 
 -ifdef(EQC).
