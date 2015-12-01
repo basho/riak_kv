@@ -2,7 +2,7 @@
 %%
 %% riak_get_fsm: coordination of Riak GET requests
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -107,7 +107,7 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 start_link(From, Bucket, Key, GetOptions) ->
     case whereis(riak_kv_get_fsm_sj) of
         undefined ->
-            %% Overload protection disabled 
+            %% Overload protection disabled
             Args = [From, Bucket, Key, GetOptions, true],
             gen_fsm:start_link(?MODULE, Args, []);
         _ ->
@@ -157,11 +157,11 @@ init([From, Bucket, Key, Options0, Monitor]) ->
                        startnow = StartNow},
     (Monitor =:= true) andalso riak_kv_get_put_monitor:get_fsm_spawned(self()),
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
-    case Trace of 
+    case Trace of
         true ->
             riak_core_dtrace:put_tag([Bucket, $,, Key]),
             ?DTRACE(?C_GET_FSM_INIT, [], ["init"]);
-        _ -> 
+        _ ->
             ok
     end,
     {ok, prepare, StateData, 0};
@@ -180,23 +180,25 @@ init({test, Args, StateProps}) ->
     {ok, validate, TestStateData, 0}.
 
 %% @private
-prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
+prepare(timeout, StateData=#state{bkey = {Bucket, Key},
                                   options=Options,
                                   trace=Trace}) ->
     ?DTRACE(Trace, ?C_GET_FSM_PREPARE, [], ["prepare"]),
-    {ok, DefaultProps} = application:get_env(riak_core, 
+    {ok, DefaultProps} = application:get_env(riak_core,
                                              default_bucket_props),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     %% typed buckets never fall back to defaults
-    Props = 
+    Props =
         case is_tuple(Bucket) of
             false ->
-                lists:keymerge(1, lists:keysort(1, BucketProps), 
+                lists:keymerge(1, lists:keysort(1, BucketProps),
                                lists:keysort(1, DefaultProps));
             true ->
                 BucketProps
         end,
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
+
+    DocIdx = riak_core_util:chash_key({Bucket, riak_kv_pb_timeseries:pk(Key)}, BucketProps),
+
     Bucket_N = get_option(n_val, BucketProps),
     CrdtOp = get_option(crdt_op, Options),
     N = case get_option(n_val, Options) of
@@ -214,7 +216,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
             {stop, normal, StateData2};
         _ ->
             StatTracked = get_option(stat_tracked, BucketProps, false),
-            Preflist2 = 
+            Preflist2 =
                 case get_option(sloppy_quorum, Options) of
                     false ->
                         riak_core_apl:get_primary_apl(DocIdx, N, riak_kv);
@@ -223,12 +225,14 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                         riak_core_apl:get_apl_ann(DocIdx, N, UpNodes)
                 end,
             new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
-                                                n = N,
-                                                bucket_props=Props,
-                                                preflist2 = Preflist2,
-                                                tracked_bucket = StatTracked,
-                                                crdt_op = CrdtOp})
+                                                        bkey = {Bucket, riak_kv_pb_timeseries:lk(Key)},
+                                                        n = N,
+                                                        bucket_props=Props,
+                                                        preflist2 = Preflist2,
+                                                        tracked_bucket = StatTracked,
+                                                        crdt_op = CrdtOp})
     end.
+
 
 %% @private
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
@@ -343,7 +347,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = Get
             {next_state, waiting_vnode_r,  StateData#state{get_core = UpdGetCore}}
     end;
 waiting_vnode_r(request_timeout, StateData = #state{trace=Trace}) ->
-    ?DTRACE(Trace, ?C_GET_FSM_WAITING_R_TIMEOUT, [-2], 
+    ?DTRACE(Trace, ?C_GET_FSM_WAITING_R_TIMEOUT, [-2],
             ["waiting_vnode_r", "timeout"]),
     S2 = client_reply({error,timeout}, StateData),
     update_stats(timeout, S2),
@@ -358,7 +362,7 @@ waiting_read_repair({r, VnodeResult, Idx, _ReqId},
             IdxStr = integer_to_list(Idx),
             ?DTRACE(?C_GET_FSM_WAITING_RR, [ShortCode],
                     ["waiting_read_repair", IdxStr]);
-        _ -> 
+        _ ->
             ok
     end,
     UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
@@ -441,7 +445,7 @@ maybe_delete(StateData=#state{n = N, preflist2=Sent, trace=Trace,
             ?DTRACE(Trace, ?C_GET_FSM_MAYBE_DELETE, [1],
                     ["maybe_delete", "triggered"]),
             riak_kv_vnode:del(IdealNodes, BKey, ReqId);
-        _ -> 
+        _ ->
             ?DTRACE(Trace, ?C_GET_FSM_MAYBE_DELETE, [0],
                     ["maybe_delete", "nop"]),
             nop
@@ -541,7 +545,7 @@ schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
 client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid},
-                                       options = Options, 
+                                       options = Options,
                                        timing = Timing,
                                        trace = Trace}) ->
     NewTiming = riak_kv_fsm_timing:add_timing(reply, Timing),
@@ -552,22 +556,22 @@ client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid},
                   {ReqId, Reply};
               Details ->
                   {OkError, ObjReason} = Reply,
-                  Info = client_info(Details, 
-                                     StateData#state{timing = NewTiming}, 
+                  Info = client_info(Details,
+                                     StateData#state{timing = NewTiming},
                                      []),
                   {ReqId, {OkError, ObjReason, Info}}
           end,
     Pid ! Msg,
 
-    %% calculate timings here, since the trace macro needs total 
-    %% response time. Stuff the result in state so we don't 
+    %% calculate timings here, since the trace macro needs total
+    %% response time. Stuff the result in state so we don't
     %% need to calculate it again
-    {ResponseUSecs, Stages} = 
+    {ResponseUSecs, Stages} =
         riak_kv_fsm_timing:calc_timing(NewTiming),
     case Trace of
         true ->
             ShortCode = riak_kv_get_core:result_shortcode(Reply),
-            ?DTRACE(?C_GET_FSM_CLIENT_REPLY, 
+            ?DTRACE(?C_GET_FSM_CLIENT_REPLY,
                     [ShortCode, ResponseUSecs], ["client_reply"]);
         _ ->
             ok
@@ -584,14 +588,14 @@ update_stats({ok, Obj}, #state{options=Options,
     ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
     ObjSize = riak_object:approximate_size(ObjFmt, Obj),
     Bucket = riak_object:bucket(Obj),
-    ok = riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, 
+    ok = riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages,
                               NumSiblings, ObjSize, StatTracked, CRDTMod});
-update_stats(_, #state{ bkey = {Bucket, _}, 
+update_stats(_, #state{ bkey = {Bucket, _},
                         options = Options,
-                        tracked_bucket = StatTracked, 
+                        tracked_bucket = StatTracked,
                         calculated_timings={ResponseUSecs, Stages}}) ->
     CRDTMod = get_option(crdt_op, Options),
-    ok = riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, 
+    ok = riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages,
                               undefined, undefined, StatTracked, CRDTMod}).
 
 client_info(true, StateData, Acc) ->

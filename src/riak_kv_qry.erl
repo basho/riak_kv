@@ -26,17 +26,13 @@
 -module(riak_kv_qry).
 
 -export([
-         submit/2,
-         fetch/1,
-         get_active_qrys/0,
-         get_queued_qrys/0
+         submit/2
         ]).
 
--include("riak_kv_qry_queue.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -spec submit(string() | #riak_sql_v1{}, #ddl_v1{}) ->
-    {ok, query_id()} | {error, any()}.
+    {ok, [{Key::binary(), riak_pb_ts_codec:ldbvalue()}]} | {error, any()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
 %%      To get the results of running the query, use fetch/1.
 submit(SQLString, DDL) when is_list(SQLString) ->
@@ -50,38 +46,40 @@ submit(SQLString, DDL) when is_list(SQLString) ->
 submit(SQL, DDL) ->
     maybe_submit_to_queue(SQL, DDL).
 
-maybe_submit_to_queue(SQL, DDL) ->
-    case riak_ql_ddl:is_query_valid(DDL, SQL) of
+maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
+    Mod = riak_ql_ddl:make_module_name(BucketType),
+    case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
         true ->
-            Queries = riak_kv_qry_compiler:compile(DDL, SQL),
             case riak_kv_qry_compiler:compile(DDL, SQL) of
                 {error,_} = Error ->
                     Error;
                 Queries when is_list(Queries) ->
-                    riak_kv_qry_queue:put_on_queue(Queries, DDL)
+                    maybe_await_query_results(
+                        riak_kv_qry_queue:put_on_queue(self(), Queries, DDL))
             end;
-        {false, Error} ->
-            {error, {invalid_query, Error}}
+        {false, Errors} ->
+            {error, {invalid_query, format_query_syntax_errors(Errors)}}
     end.
 
--spec fetch(query_id()) -> {ok, list()} | {error, atom()}.
-%% @doc Fetch the results of execution of a previously submitted
-%%      query.
-fetch(QId) ->
-    riak_kv_qry_queue:fetch(QId).
+%%
+maybe_await_query_results({error,_} = Error) ->
+    Error;
+maybe_await_query_results(_) ->
+    % we can't use a gen_server call here because the reply needs to be
+    % from an fsm but one is not assigned if the query is queued.
+    receive
+        Result ->
+            Result
+    after
+        10000 ->
+            {error, qry_worker_timeout}
+    end.
 
-
--spec get_active_qrys() -> [query_id()].
-%% @doc Get the list of queries currently being executed.
-get_active_qrys() ->
-    riak_kv_qry_queue:get_active_qrys().
-
-
--spec get_queued_qrys() -> [query_id()].
-%% @doc Get the list of queries currently queued.
-get_queued_qrys() ->
-    riak_kv_qry_queue:get_queued_qrys().
-
+%% Format the multiple syntax errors into a multiline error
+%% message.
+format_query_syntax_errors(Errors) ->
+    iolist_to_binary(
+        [["\n", riak_ql_ddl:syntax_error_to_msg(E)] || E <- Errors]).
 
 %%%===================================================================
 %%% Unit tests

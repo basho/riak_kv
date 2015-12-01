@@ -33,12 +33,6 @@
 %% OTP API
 -export([start_link/1]).
 
-%% Developer API
--export([
-         execute/2,
-         fetch/2
-        ]).
-
 %% gen_server callbacks
 -export([
          init/1,
@@ -55,61 +49,44 @@
         ]).
 -endif.
 
--include("riak_kv_qry_queue.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
--define(SERVER, ?MODULE).
 -define(NO_SIDEEFFECTS, []).
 -define(NO_MAX_RESULTS, no_max_results).
 -define(NO_PG_SORT, undefined).
 
 -record(state, {
-          name                 :: qry_fsm_name(),
+          name                 :: atom(),
           ddl                  :: undefined | #ddl_v1{},
           qry      = none      :: none | #riak_sql_v1{},
           qid      = undefined :: undefined | {node(), non_neg_integer()},
           sub_qrys  = []       :: [integer()],
-          status    = void     :: void | accumulating_chunks | finished,
+          status    = void     :: void | accumulating_chunks,
+          receiver_pid         :: pid(),
           result    = []       :: [{non_neg_integer(), list()}] | [{binary(), term()}]
          }).
 
 %%%===================================================================
 %%% OTP API
 %%%===================================================================
-
--spec start_link(qry_fsm_name()) -> {ok, pid()} | ignore | {error, term()}.
-start_link(Name) ->
-    gen_server:start_link({local, Name}, ?MODULE, [Name], []).
-
-
-%%%===================================================================
-%%% API
-%%%===================================================================
-
--spec execute(qry_fsm_name(), {query_id(), [#riak_sql_v1{}], #ddl_v1{}}) ->
-    ok | {error, atom()}.
-execute(FSMName, {QId, SubQueries, DDL}) ->
-    gen_server:call(FSMName, {execute, {QId, SubQueries, DDL}}).
-
--spec fetch(qry_fsm_name(), query_id()) -> list() | {error, atom()}.
-fetch(FSMName, QId) ->
-    gen_server:call(FSMName, {fetch, QId}).
-
+-spec start_link(RegisteredName::atom()) -> {ok, pid()} | ignore | {error, term()}.
+start_link(RegisteredName) ->
+    gen_server:start_link({local, RegisteredName}, ?MODULE, [RegisteredName], []).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
--spec init([qry_fsm_name()]) -> {ok, #state{}}.
+-spec init([RegisteredName::atom()]) -> {ok, #state{}}.
 %% @private
-init([Name]) ->
-    {ok, #state{name = Name}}.
-
+init([RegisteredName]) ->
+    pop_next_query(),
+    {ok, new_state(RegisteredName)}.
 
 -spec handle_call(term(), {pid(), term()}, #state{}) ->
                          {reply, Reply::ok | {error, atom()} | list(), #state{}}.
 %% @private
-handle_call(Request, _From, State) ->
+handle_call(Request, _, State) ->
     case handle_req(Request, State) of
         {{error, _} = Error, _SEs, NewState} ->
             {reply, Error, NewState};
@@ -125,16 +102,23 @@ handle_cast(Msg, State) ->
     lager:info("Not handling cast message ~p", [Msg]),
     {noreply, State}.
 
-
--spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 %% @private
-%% sometimes we get finish statements after we have finished accumulating
-handle_info({{_SubQId, _QId}, done},
-            State = #state{status = finished}) ->
-    lager:debug("Received stray done on QId ~p (~p)", [_QId, _SubQId]),
-    {noreply, State};
+-spec handle_info(term(), #state{}) -> {noreply, #state{}}.
+handle_info(pop_next_query, State1) ->
+    {query, ReceivePid, QId, Qry, DDL} = riak_kv_qry_queue:blocking_pop(),
+    Request = {execute, {QId, Qry, DDL}},
+    case handle_req(Request, State1) of
+        {{error, _} = Error, _, State2} ->
+            ReceivePid ! Error,
+            {noreply, new_state(State2#state.name)};
+        {ok, SEs, State2} ->
+            ok = handle_side_effects(SEs),
+            {noreply, State2#state{ receiver_pid = ReceivePid }}
+    end;
+
 handle_info({{SubQId, QId}, done},
             State = #state{qid       = QId,
+                           receiver_pid = ReceiverPid,
                            result    = IndexedChunks,
                            sub_qrys  = SubQQ}) ->
     lager:debug("Received done on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQQ]),
@@ -142,11 +126,13 @@ handle_info({{SubQId, QId}, done},
         [] ->
             lager:debug("Done collecting on QId ~p (~p): ~p", [QId, SubQId, IndexedChunks]),
             %% sort by index, to reassemble according to coverage plan
-            {_, R2} = lists:unzip(
-                        lists:sort(IndexedChunks)),
+            {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
+            Results = lists:append(R2),
+            % send the results to the waiting client process
+            ReceiverPid ! {ok, Results},
+            pop_next_query(),
             %% drop indexes, serialize
-            {noreply, State#state{status = finished,
-                                  result = lists:append(R2)}};
+            {noreply, new_state(State#state.name)};
         _MoreSubQueriesNotDone ->
             {noreply, State}
     end;
@@ -172,26 +158,26 @@ handle_info({{SubQId, QId}, {results, Chunk}},
            end,
     {noreply, NewS};
 
-%% late chunks: warn
-handle_info({{SubQId, QId}, {results, _LateData}},
-            State = #state{qid = QId,
-                           status = finished}) ->
-    lager:debug("Discarding late chunk (~b bytes) on qid ~p (subqid ~p)",
-                [length(lists:flatten(_LateData)), QId, SubQId]),
-    {noreply, State};
+handle_info({{SubQId, QId}, {error, timeout}},
+            State = #state{receiver_pid = ReceiverPid,
+                           qid    = QId,
+                           result = IndexedChunks}) ->
+    lager:warning("Backend timed out while collecting on QId ~p (~p);"
+                  " dropping ~b chunks of data accumulated so far",
+                  [QId, SubQId, length(IndexedChunks)]),
+    ReceiverPid ! {error, backend_timeout},
+    pop_next_query(),
+    {noreply, new_state(State#state.name)};
 
-%% other error conditions
-handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2})
-  when QId1 =/= QId2 ->
+handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2}) when QId1 =/= QId2 ->
+    %% catches late results or errors such getting results for invalid QIds.
     lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
-
 
 -spec terminate(term(), #state{}) -> term().
 %% @private
 terminate(_Reason, _State) ->
     ok.
-
 
 -spec code_change(term() | {down, term()}, #state{}, term()) -> {ok, #state{}}.
 %% @private
@@ -203,13 +189,13 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+-spec new_state(RegisteredName::atom()) -> #state{}.
+new_state(RegisteredName) ->
+    #state{name = RegisteredName}.
+
 -spec handle_req({atom(), term()}, #state{}) ->
                         {ok | {ok | error, term()},
                          list(), #state{}}.
-handle_req({fetch, QId}, State = #state{qid = QId2})
-  when QId =/= QId2 ->
-    {{error, bad_query_id}, [], State};
-
 handle_req({execute, {QId, [Qry|_] = SubQueries, DDL}}, State = #state{status = void}) ->
     %% TODO make this run with multiple sub-queries
     %% limit sub-queries and throw error
@@ -223,29 +209,22 @@ handle_req({execute, {QId, _, _}}, State = #state{status = Status})
     lager:error("Qry queue manager should have cleared the status before assigning new query ~p", [QId]),
     {{error, mismanagement}, [], State};
 
-handle_req({fetch, QId}, State = #state{qid    = QId,
-                                        status = S})
-  when S =:= void orelse
-       S =:= accumulating_chunks ->
-    {{error, in_progress}, [], State};
-
-handle_req({fetch, QId}, State = #state{qid    = QId,
-                                        status = finished,
-                                        result = Result}) ->
-    {{ok, Result}, [], State};
-
 handle_req(_Request, State) ->
     {ok, ?NO_SIDEEFFECTS, State}.
 
 handle_side_effects([]) ->
     ok;
 handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
-    Bucket = Q#riak_sql_v1.'FROM',
+    Table = Q#riak_sql_v1.'FROM',
+    Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
     CoverageFn = {colocated, riak_kv_qry_coverage_plan},
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [Bucket, none, Q, Timeout, all, undefined, CoverageFn]]),
+    handle_side_effects(T);
+handle_side_effects([H | T]) ->
+    lager:warning("in riak_kv_qry:handle_side_effects not handling ~p", [H]),
     handle_side_effects(T).
 
 decode_results(KVList, SelectSpec) ->
@@ -255,8 +234,13 @@ decode_results(KVList, SelectSpec) ->
 extract_riak_object(SelectSpec, V) when is_binary(V) ->
     % don't care about bkey
     RObj = riak_object:from_binary(<<>>, <<>>, V),
-    FullRecord = riak_object:get_value(RObj),
-    filter_columns(lists:flatten(SelectSpec), FullRecord).
+    case riak_object:get_value(RObj) of
+        <<>> ->
+            %% record was deleted
+            [];
+        FullRecord ->
+            filter_columns(lists:flatten(SelectSpec), FullRecord)
+    end.
 
 %% Pull out the values we're interested in based on the select,
 %% statement, e.g. select user, geoloc returns only user and geoloc columns.
@@ -267,6 +251,10 @@ filter_columns([<<"*">>], ColValues) ->
     ColValues;
 filter_columns(SelectSpec, ColValues) ->
     [Col || {Field, _} = Col <- ColValues, lists:member(Field, SelectSpec)].
+
+%% Send a message to this process to get the next query.
+pop_next_query() ->
+    self() ! pop_next_query.
 
 %%%===================================================================
 %%% Unit tests

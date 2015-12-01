@@ -21,7 +21,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, put/2, workers/0]).
+-export([start_link/1, put/2, async_put/5, async_put_replies/2, workers/0]).
 -export([init/1,
     handle_call/3,
     handle_cast/2,
@@ -30,6 +30,7 @@
     code_change/3]).
 
 -include_lib("riak_kv_vnode.hrl").
+-include("riak_kv_wm_raw.hrl").
 
 -record(rec, {
     w, pw, n_val,
@@ -71,27 +72,32 @@ workers() ->
 start_link(Name) ->
     gen_server:start_link({local, Name}, ?MODULE, [], []).
 
-%% @spec put(RObj :: riak_object:riak_object(), riak_object:options(), riak_object:riak_client()) ->
+%% @spec put(RObj :: riak_object:riak_object(), proplists:proplist()) ->
 %%        ok |
 %%       {error, timeout} |
 %%       {error, term()}
-put(RObj, Options) ->
+put(RObj0, Options) ->
+    Bucket = riak_object:bucket(RObj0),
+    {RObj, Key, EncodeFn} = kv_or_ts_details(RObj0,
+                                             riak_object:get_ts_local_key(RObj0)),
+    synchronize_put(async_put(RObj, Bucket, Key, EncodeFn, Options), Options).
+
+-spec async_put(RObj :: riak_object:riak_object(),
+                Bucket :: binary()|{binary(), binary()},
+                Key :: binary()|{binary(), binary()}, %% {Partition, Local}
+                EncodeFn :: fun((riak_object:riak_object()) -> binary()),
+                Options ::proplists:proplist()) ->
+                       {ok, {reference(), pid()}} |
+                       {error, term()}.
+async_put(RObj, Bucket, {PartitionKey, LocalKey}, EncodeFn, Options) ->
+    async_put(RObj, Bucket, PartitionKey, LocalKey, EncodeFn, Options);
+async_put(RObj, Bucket, Key, EncodeFn, Options) ->
+    async_put(RObj, Bucket, Key, Key, EncodeFn, Options).
+
+async_put(RObj, Bucket, PartitionKey, LocalKey, EncodeFn, Options) ->
     StartTS = os:timestamp(),
-    Bucket = riak_object:bucket(RObj),
-    case riak_object:get_ts_local_key(RObj) of
-        {ok, LocalKey} ->
-            Key = LocalKey,
-            EncodeFn =
-                fun(XRObj) ->
-                    riak_object:to_binary(v1, XRObj, msgpack)
-                end;
-        error ->
-            Key = riak_object:key(RObj),
-            EncodeFn = fun(XRObj) -> riak_object:to_binary(v1, XRObj) end
-    end,
-    BKey = {Bucket, riak_object:key(RObj)},
     BucketProps = riak_core_bucket:get_bucket(Bucket),
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
+    DocIdx = riak_core_util:chash_key({Bucket, PartitionKey}, BucketProps),
     NVal = proplists:get_value(n_val, BucketProps),
     Preflist =
         case proplists:get_value(sloppy_quorum, Options, true) of
@@ -103,44 +109,30 @@ put(RObj, Options) ->
         end,
     case validate_options(NVal, Preflist, Options, BucketProps) of
         {ok, W, PW} ->
-            Workers = workers(),
-            R = random(size(Workers)),
-            Worker = element(R, workers()),
+            Worker = random_worker(),
             ReqId = erlang:monitor(process, Worker),
             RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
             RObj3 = riak_object:update_last_modified(RObj2),
             RObj4 = riak_object:apply_updates(RObj3),
             EncodedVal = EncodeFn(RObj4),
+
             gen_server:cast(
                 Worker,
-                {put, Bucket, Key, EncodedVal, ReqId, Preflist,
+                {put, Bucket, LocalKey, EncodedVal, ReqId, Preflist,
                  #rec{w=W, pw=PW, n_val=NVal, from=self(),
                       start_ts=StartTS,
                       size=size(EncodedVal)}}),
-            Timeout = case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
-                          N when is_integer(N) andalso N > 0 ->
-                              N;
-                          _ ->
-                              ?DEFAULT_TIMEOUT
-                      end,
-            % this is not direct gen_server:call because the process that
-            % replies is not the one that received the cast
-            receive
-                {'DOWN', ReqId, process, _Pid, _Reason} ->
-                    {error, riak_kv_w1c_server_crashed};
-                {ReqId, Response} ->
-                    erlang:demonitor(ReqId, [flush]),
-                    Response
-            after Timeout ->
-                gen_server:cast(Worker, {cancel, ReqId}),
-                receive
-                    {ReqId, Response} ->
-                        Response
-                end
-            end;
+            {ok, {ReqId, Worker}};
         Error ->
             Error
     end.
+
+-spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), proplists:proplist()) ->
+                                       list(term()).
+async_put_replies(ReqIdTuples, Options) ->
+    async_put_reply_loop(ReqIdTuples, [], os:timestamp(),
+                         find_put_timeout(Options)).
+
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -229,6 +221,12 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+
+random_worker() ->
+    Workers = workers(),
+    R = random(size(Workers)),
+    element(R, workers()).
 
 validate_options(NVal, Preflist, Options, BucketProps) ->
     PW = get_rw_value(pw, BucketProps, NVal, Options),
@@ -335,10 +333,73 @@ get_request_record(ReqId, #state{entries=Entries} = _State) ->
         error -> undefined
     end.
 
+%% Utility function for put/2: is this a TS object with its special
+%% requirements or a more traditional KV object?
+%%
+%% When riak_kv_pb_timeseries is driving a put request, it can provide
+%% all of these details directly to async_put/5, but when a tombstone
+%% is being put via riak_kv_delete, these must be extracted from the
+%% object.
+kv_or_ts_details(RObj, {ok, LocalKey}) ->
+    MD  = riak_object:get_metadata(RObj),
+    MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
+    RObj1 = riak_object:update_metadata(RObj, MD1),
+    {RObj1, {riak_object:key(RObj), LocalKey},
+     fun(O) -> riak_object:to_binary(v1, O, msgpack) end};
+kv_or_ts_details(RObj, error) ->
+    {RObj, riak_object:key(RObj), fun(O) -> riak_object:to_binary(v1, O) end}.
+
 erase_request_record(ReqId, #state{entries=Entries} = State) ->
     case get_request_record(ReqId, State) of
         undefined ->
             {undefined, State};
         OldValue ->
             {OldValue, State#state{entries=?DICT_TYPE:erase(ReqId, Entries)}}
+    end.
+
+%%%% Functions to handle asynchronous puts
+
+%% Invoked by put/2 to turn the async request into a synchronous call
+synchronize_put({ok, {_ReqId, _Worker}=ReqIdTuple}, Options) ->
+    wait_for_put_reply(ReqIdTuple, find_put_timeout(Options));
+synchronize_put(Error, _Options) ->
+    Error.
+
+%% Invoked by async_put_reply/2 to wait for all responses
+async_put_reply_loop([], Responses, _StartTime, _Timeout) ->
+    Responses;
+async_put_reply_loop([IdTuple|IdTuples], Responses, StartTime, Timeout) ->
+    async_put_reply_loop(IdTuples,
+                         [wait_for_put_reply(IdTuple,
+                                             remaining_put_timeout(
+                                               StartTime, Timeout))
+                          |Responses],
+                         StartTime, Timeout).
+
+wait_for_put_reply({ReqId, Worker}, Timeout) ->
+    receive
+        {'DOWN', ReqId, process, _Pid, _Reason} ->
+            {error, riak_kv_w1c_server_crashed};
+        {ReqId, Response} ->
+            erlang:demonitor(ReqId, [flush]),
+            Response
+    after Timeout ->
+            erlang:demonitor(ReqId, [flush]),
+            gen_server:cast(Worker, {cancel, ReqId}),
+            {error, timeout}
+    end.
+
+non_neg(X) ->
+    max(0, X).
+
+remaining_put_timeout(Start, Timeout) ->
+    non_neg(Timeout -
+                non_neg(trunc(timer:now_diff(os:timestamp(), Start)))).
+
+find_put_timeout(Options) ->
+    case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
+        N when is_integer(N) andalso N > 0 ->
+            N;
+        _ ->
+            ?DEFAULT_TIMEOUT
     end.

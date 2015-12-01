@@ -50,7 +50,8 @@
          request_hashtree_pid/1,
          request_hashtree_pid/2,
          reformat_object/2,
-         stop_fold/1]).
+         stop_fold/1,
+         get_modstate/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -82,6 +83,7 @@
 -include_lib("riak_kv_index.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_types.hrl").
 
 -ifdef(TEST).
@@ -95,8 +97,10 @@
 -ifdef(TEST).
 %% Use values so that test compile doesn't give 'unused vars' warning.
 -define(INDEX(A,B,C), _=element(1,{A,B,C}), ok).
+-define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
 -else.
 -define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
+-define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
 -endif.
 
 -ifdef(TEST).
@@ -140,7 +144,7 @@
                 key_buf_size :: pos_integer(),
                 async_folding :: boolean(),
                 in_handoff = false :: boolean(),
-                handoff_target :: node(),
+                handoff_target :: {integer(), node()},
                 handoffs_rejected = 0 :: integer(),
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid(),
@@ -229,6 +233,12 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
         _ ->
             State
     end.
+
+%% @doc Reveal the underlying module state for testing
+-spec(get_modstate(state()) -> {atom(), state()}).
+get_modstate(_State=#state{mod=Mod,
+                           modstate=ModState}) ->
+    {Mod, ModState}.
 
 %% API
 start_vnode(I) ->
@@ -468,10 +478,16 @@ init([Index]) ->
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
+            DoAsyncPut =  case app_helper:get_env(riak_kv, allow_async_put, true) of
+                true ->
+                    erlang:function_exported(Mod, async_put, 5);
+                _ ->
+                    false
+            end,
             State = #state{idx=Index,
                            async_folding=AsyncFolding,
                            mod=Mod,
-                           async_put = erlang:function_exported(Mod, async_put, 5),
+                           async_put = DoAsyncPut,
                            modstate=ModState,
                            vnodeid=VId,
                            counter=CounterState,
@@ -637,7 +653,12 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
             case HT of
                 undefined ->
                     State2 = maybe_create_hashtrees(State),
-                    {reply, {ok, State2#state.hashtrees}, State2};
+                    case State2#state.hashtrees of
+                        undefined ->
+                            {reply, {error, wrong_node}, State2};
+                        _ ->
+                            {reply, {ok, State2#state.hashtrees}, State2}
+                    end;
                 _ ->
                     {reply, {ok, HT}, State}
             end;
@@ -836,6 +857,7 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
+            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -888,6 +910,16 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     %% v4 == ack-based backpressure
     ResultFun = result_fun_ack(Bucket, Sender),
     Opts = [{bucket, Bucket}],
+    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+                            FilterVNodes, Sender, Opts, State);
+handle_coverage(#riak_kv_listkeys_ts_req_v1{table = Table,
+                                            item_filter = ItemFilter,
+                                            ddl_mod = Mod},
+                FilterVNodes, Sender, State) ->
+    %% ack-based backpressure, I suppose
+    Bucket = {Table, Table},
+    ResultFun = result_fun_ack(Bucket, Sender),
+    Opts = [{bucket, Bucket}, {ddl_mod, Mod}],
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
@@ -951,7 +983,7 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             %% if there was a index_query fun.
             FoldType = riak_index:return_foldtype(Query),
             handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
-                                    FilterVNodes, Sender, Opts, State);
+                                 FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
@@ -993,12 +1025,12 @@ handle_coverage_keyfold(Bucket, ItemFilter, Query,
 %% index operations, allow the ModFun for folding to be declared
 %% to support index operations that can return objects
 handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
-                        FilterVNodes, Sender, Opts0,
-                        State=#state{async_folding=AsyncFolding,
-                                     idx=Index,
-                                     key_buf_size=DefaultBufSz,
-                                     mod=Mod,
-                                     modstate=ModState}) ->
+                     FilterVNodes, Sender, Opts0,
+                     State=#state{async_folding = AsyncFolding,
+                                  idx           = Index,
+                                  key_buf_size  = DefaultBufSz,
+                                  mod           = Mod,
+                                  modstate      = ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
@@ -1006,7 +1038,20 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
     Extras = fold_extras_keys(Index, Bucket),
-    FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
+    %% if Options contain ddl_mod, then we are folding keys for
+    %% list_ts_keys
+    FoldFunSelector =
+        case proplists:get_value(ddl_mod, Opts0) of
+            undefined ->
+                keys;
+            DDLMod ->
+                #ddl_v1{table = Table,
+                        local_key = #key_v1{ast = Ast}} = DDLMod:get_ddl(),
+                LKParams = [P || #param_v1{name = [P]} <- Ast],
+                {keys,
+                 fun(Key) -> recover_ts_key(Key, Table, LKParams, Index) end}
+        end,
+    FoldFun = fold_fun(FoldFunSelector, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
@@ -1022,6 +1067,28 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
 	      _ ->
 		  {noreply, State}
 	  end.
+
+-spec recover_ts_key(Key::binary(), Table::binary(), LKParams::[binary()], index()) ->
+                            [] | tuple().
+%% @private
+%% Get the full TS record, then reconstruct the TS key from it using
+%% provided parts (extracted from DDL to common expression recomputations).
+recover_ts_key(Key, Table, LKParams, Index) ->
+    Bucket = {Table, Table},
+    {ok, RObj} = local_get(Index, {Bucket, Key}),
+    case riak_object:get_value(RObj) of
+        <<>> ->
+            [];
+        Record ->
+            list_to_tuple(
+              strip_nonlk_fields(LKParams, Record))
+    end.
+
+%% Special case of riak_ql_ddl:get_local_key/2: accepts [{Type,
+%% Value}] and consults Ast to only keep LK-constituent fields in Obj.
+strip_nonlk_fields(LKParams, Obj) ->
+    [V || {N, V} <- Obj, lists:member(N, LKParams)].
+
 
 handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
                         FilterVNodes, Sender, Opts0,
@@ -1102,8 +1169,16 @@ handle_handoff_command(Req=?KV_PUT_REQ{}, Sender, State) ->
     end;
 
 handle_handoff_command(?KV_W1C_PUT_REQ{}=Request, Sender, State) ->
-    {noreply, NewState} = handle_command(Request, Sender, State),
-    {forward, NewState};
+    NewState0 = case handle_command(Request, Sender, State) of
+        {noreply, NewState} ->
+            NewState;
+        {reply, Reply, NewState} ->
+            %% reply directly to the sender, as we will be forwarding the
+            %% the request on to the handoff node.
+            riak_core_vnode:reply(Sender, Reply),
+            NewState
+    end,
+    {forward, NewState0};
 
 %% Handle all unspecified cases locally without forwarding
 handle_handoff_command(Req, Sender, State) ->
@@ -1220,6 +1295,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
+    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
@@ -1839,9 +1915,15 @@ fold_fun(range_scan, BufferMod, none, _Extra) ->
     fun(Range, Buffer) ->
             BufferMod:add(Range, Buffer)
     end;
+
 fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
             BufferMod:add(Key, Buffer)
+    end;
+fold_fun({keys, RecoverTsFun}, BufferMod, none, undefined) ->
+    fun(_, Key, Buffer) ->
+            CompoundKey = RecoverTsFun(Key),
+            BufferMod:add(CompoundKey, Buffer)
     end;
 fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
@@ -1849,6 +1931,17 @@ fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
             case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
                 Index ->
                     BufferMod:add(Key, Buffer);
+                _ ->
+                    Buffer
+            end
+    end;
+fold_fun({keys, RecoverTsFun}, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
+    fun(_, Key, Buffer) ->
+            Hash = riak_core_util:chash_key({Bucket, Key}),
+            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
+                Index ->
+                    CompoundKey = RecoverTsFun(Key),
+                    BufferMod:add(CompoundKey, Buffer);
                 _ ->
                     Buffer
             end
@@ -1862,6 +1955,16 @@ fold_fun(keys, BufferMod, Filter, undefined) ->
                     Buffer
             end
     end;
+fold_fun({keys, RecoverTsFun}, BufferMod, Filter, undefined) ->
+    fun(_, Key, Buffer) ->
+            CompoundKey = RecoverTsFun(Key),
+            case Filter(CompoundKey) of
+                true ->
+                    BufferMod:add(CompoundKey, Buffer);
+                false ->
+                    Buffer
+            end
+    end;
 fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
             Hash = riak_core_util:chash_key({Bucket, Key}),
@@ -1870,6 +1973,22 @@ fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
                     case Filter(Key) of
                         true ->
                             BufferMod:add(Key, Buffer);
+                        false ->
+                            Buffer
+                    end;
+                _ ->
+                    Buffer
+            end
+    end;
+fold_fun({keys, RecoverTsFun}, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
+    fun(_, Key, Buffer) ->
+            Hash = riak_core_util:chash_key({Bucket, Key}),
+            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
+                Index ->
+                    CompoundKey = RecoverTsFun(Key),
+                    case Filter(CompoundKey) of
+                        true ->
+                            BufferMod:add(CompoundKey, Buffer);
                         false ->
                             Buffer
                     end;
@@ -2980,5 +3099,23 @@ flush_msgs() ->
         0 ->
             ok
     end.
+
+strip_nonlk_fields_test() ->
+    ?assertEqual(
+       [1, 3],
+       strip_nonlk_fields(
+         [<<"a">>, <<"b">>],
+         [{<<"a">>, 1}, {<<"x">>, 2}, {<<"b">>, 3}])),
+    ?assertEqual(
+       [1, 2],
+       strip_nonlk_fields(
+         [<<"a">>, <<"b">>],
+         [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
+    ?assertEqual(
+       [1, 2],
+       strip_nonlk_fields(
+         [<<"b">>, <<"a">>],
+         [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
+    ok.
 
 -endif.

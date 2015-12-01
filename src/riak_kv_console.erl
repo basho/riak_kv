@@ -2,7 +2,7 @@
 %%
 %% riak_console: interface for Riak admin commands
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -520,17 +520,14 @@ decode_json_props(JsonProps) ->
 bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
     case Fields of
         [{<<"props", _/binary>>, {struct, Props1}}] ->
-            case catch riak_kv_wm_utils:maybe_parse_table_def(Type, Props1) of
+            case catch riak_kv_ts_util:maybe_parse_table_def(Type, Props1) of
                 {ok, Props2} ->
                     Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
                     CreateTypeFn(Props3);
                 {error, ErrorMessage} when is_list(ErrorMessage) ->
-                    io:format(ErrorMessage),
-                    error;
+                    bucket_type_print_create_result(Type, {error, ErrorMessage});
                 {error, Error} ->
-                    io:format("~p~n", [Error]),
-                    error
-
+                    bucket_type_print_create_result(Type, {error, Error})
             end;
         _ ->
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
@@ -551,6 +548,9 @@ bucket_type_print_create_result(Type, ok) ->
         false ->
             ok
     end;
+bucket_type_print_create_result(Type, {error, {_LineNo, riak_ql_parser, Reason}}) ->
+    io:format("Error validating table definition for bucket type ~ts:\n~s\n", [Type, Reason]),
+    error;
 bucket_type_print_create_result(Type, {error, Reason}) ->
     io:format("Error creating bucket type ~ts:~n", [Type]),
     io:format(bucket_error_xlate(Reason)),
@@ -893,10 +893,12 @@ bucket_type_create_no_timeseries_test() ->
 bucket_type_create_with_timeseries_table_test() ->
     Ref = make_ref(),
     TableDef =
-        <<"CREATE TABLE my_type ",
-          "(time TIMESTAMP NOT NULL, ",
-	  "user varchar not null, ",
-          " PRIMARY KEY ((quantum(time, 15, m)), time, user))">>,
+        <<"CREATE TABLE my_type (",
+          "series varchar   not null, ",
+          "user   varchar   not null, ",
+          "time   timestamp not null, ",
+          "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
+          "series, user, time))">>,
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef}]),
     bucket_type_create(
@@ -912,9 +914,12 @@ bucket_type_create_with_timeseries_table_test() ->
 bucket_type_create_with_timeseries_table_is_write_once_test() ->
     Ref = make_ref(),
     TableDef =
-        <<"CREATE TABLE my_type ",
-          "(time TIMESTAMP NOT NULL, ",
-          " PRIMARY KEY (time))">>,
+        <<"CREATE TABLE my_type (",
+        "series varchar   not null, ",
+        "user   varchar   not null, ",
+        "time   timestamp not null, ",
+        "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
+        "series, user, time))">>,
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef}]),
     bucket_type_create(
@@ -930,10 +935,12 @@ bucket_type_create_with_timeseries_table_is_write_once_test() ->
 bucket_type_and_table_name_must_match_test() ->
     Ref = make_ref(),
     TableDef =
-        <<"CREATE TABLE times ",
-          "(time TIMESTAMP NOT NULL, ",
-	  "user varchar not null, ",
-          " PRIMARY KEY (time, user))">>,
+        <<"CREATE TABLE times (",
+        "series varchar   not null, ",
+        "user   varchar   not null, ",
+        "time   timestamp not null, ",
+        "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
+        "series, user, time))">>,
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef}]),
     % if this error changes slightly it is not so important, as long as
@@ -950,12 +957,75 @@ bucket_type_and_table_name_must_match_test() ->
 bucket_type_create_with_timeseries_table_error_when_write_once_set_to_false_test() ->
     Ref = make_ref(),
     TableDef =
-        <<"CREATE TABLE my_type ",
-          "(time TIMESTAMP NOT NULL, ",
-          " PRIMARY KEY (time))">>,
+        <<"CREATE TABLE my_type (",
+        "series varchar   not null, ",
+        "user   varchar   not null, ",
+        "time   timestamp not null, ",
+        "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
+        "series, user, time))">>,
     JSON = json_props([{bucket_type, my_type}, 
                        {table_def, TableDef},
                        {write_once, false}]),
+    ?assertEqual(
+        error,
+        bucket_type_create(
+            fun(Props) -> put(Ref, Props) end,
+            <<"my_type">>,
+            mochijson2:decode(JSON)
+        )
+    ).
+
+bucket_type_create_with_timeseries_table_error_with_short_primary_key_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE my_type (",
+        "user   varchar   not null, ",
+        "time   timestamp not null, ",
+        "PRIMARY KEY ((user, quantum(time, 15, m)), "
+        "user, time))">>,
+    JSON = json_props([{bucket_type, my_type},
+                       {table_def, TableDef}]),
+    ?assertEqual(
+        error,
+        bucket_type_create(
+            fun(Props) -> put(Ref, Props) end,
+            <<"my_type">>,
+            mochijson2:decode(JSON)
+        )
+    ).
+
+bucket_type_create_with_timeseries_table_error_with_misplaced_quantum_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE my_type (",
+        "time   timestamp not null, ",
+        "series varchar   not null, ",
+        "user   varchar   not null, ",
+        "PRIMARY KEY ((quantum(time, 15, m), series, user), "
+        "time, series, user, ))">>,
+    JSON = json_props([{bucket_type, my_type},
+                       {table_def, TableDef}]),
+    ?assertEqual(
+        error,
+        bucket_type_create(
+            fun(Props) -> put(Ref, Props) end,
+            <<"my_type">>,
+            mochijson2:decode(JSON)
+        )
+    ).
+
+bucket_type_and_table_error_local_key_test() ->
+    Ref = make_ref(),
+    TableDef =
+        <<"CREATE TABLE my_type (",
+        "series varchar   not null, ",
+        "user   varchar   not null, ",
+        "time   timestamp not null, ",
+        "other  varchar   not null, ",
+        "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
+        "series, user, time, other))">>,
+    JSON = json_props([{bucket_type, my_type},
+        {table_def, TableDef}]),
     ?assertEqual(
         error,
         bucket_type_create(

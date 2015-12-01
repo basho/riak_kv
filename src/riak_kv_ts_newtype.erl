@@ -101,21 +101,27 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%%% 
+%%%
 %%% Internal.
 %%%
 
 %%
+%% We rely on the claimant to not give us new DDLs after the bucket
+%% type is activated, at least until we have a system in place for
+%% managing DDL versioning
 do_new_type(BucketType) ->
-    DDL = retrieve_ddl(BucketType),
-    case riak_kv_compile_tab:get_state(BucketType) =/= compiled 
-            andalso is_record(DDL, ddl_v1) of
-        false ->
-            ok;
-        true ->
-            ok = maybe_stop_current_compilation(BucketType),
-            ok = start_compilation(BucketType, DDL)
-    end.
+    maybe_compile_ddl(BucketType, retrieve_ddl_from_metadata(BucketType),
+                      riak_kv_compile_tab:get_ddl(BucketType)).
+
+maybe_compile_ddl(_BucketType, NewDDL, NewDDL) ->
+    %% Do nothing; we're seeing a CMD update but the DDL hasn't changed
+    ok;
+maybe_compile_ddl(BucketType, NewDDL, _OldDDL) when is_record(NewDDL, ddl_v1) ->
+    ok = maybe_stop_current_compilation(BucketType),
+    ok = start_compilation(BucketType, NewDDL);
+maybe_compile_ddl(_BucketType, _NewDDL, _OldDDL) ->
+    %% We don't know what to do with this new DDL, so stop
+    ok.
 
 %%
 maybe_stop_current_compilation(BucketType) ->
@@ -181,7 +187,7 @@ ddl_ebin_directory() ->
 %% Would be nice to have a function in riak_core_bucket_type or
 %% similar to get either the prefix or the actual metadata instead
 %% of including a riak_core header file for this prefix
-retrieve_ddl(BucketType) ->
+retrieve_ddl_from_metadata(BucketType) ->
     retrieve_ddl_2(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, BucketType,
                                           [{allow_put, false}])).
 

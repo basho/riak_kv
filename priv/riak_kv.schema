@@ -9,7 +9,7 @@
 %%   information
 {mapping, "anti_entropy", "riak_kv.anti_entropy", [
   {datatype, {enum, [active, passive, 'active-debug']}},
-  {default, active}
+  {default, passive}
 ]}.
 
 {translation,
@@ -20,7 +20,7 @@
       active -> {on, []};
       'active-debug' -> {on, [debug]};
       passive -> {off, []};
-      _Default -> {on, []}
+      _Default -> {off, []}
     end
   end
 }.
@@ -42,7 +42,7 @@
       memory -> riak_kv_memory_backend;
       multi -> riak_kv_multi_backend;
       prefix_multi -> riak_kv_multi_prefix_backend;
-      _Default -> riak_kv_bitcask_backend
+      _Default -> riak_kv_eleveldb_backend
     end
  end}.
 
