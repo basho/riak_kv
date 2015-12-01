@@ -163,7 +163,7 @@ handle_call({sweep_request, Index}, _From, State) ->
     {reply, ok, State1};
 
 handle_call(status, _From, State) ->
-    Participants = dict:to_list(State#state.sweep_participants),
+    Participants = [Participant || {_Mod, Participant} <- dict:to_list(State#state.sweep_participants)],
     Sweeps =   [Sweep || {_Index, Sweep} <- dict:to_list(State#state.sweeps)],
     {reply, {Participants , Sweeps}, State};
 
@@ -237,8 +237,8 @@ schedule_sweep(#state{sweeps = Sweeps,
                 Sweep ->
                     do_sweep(Sweep, State)
             end;
-        Indices ->
-            do_sweep(hd(Indices), State)
+        NeverRunnedSweeps ->
+            do_sweep(hd(NeverRunnedSweeps), State)
     end.
 
 sweep_request(Index, #state{sweeps = Sweeps} = State) ->
@@ -517,7 +517,7 @@ finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
     Sweeps1 =
         dict:update(Index,
                 fun(Sweep) ->
-                        Sweep#sweep{state = idle, pid = undefind, worker_pid = undefind}
+                        Sweep#sweep{state = idle, pid = undefined, worker_pid = undefined}
                 end, Sweeps),
     State#state{sweeps = Sweeps1}.
 

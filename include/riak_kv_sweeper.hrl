@@ -37,7 +37,7 @@
 -record(sweep,
         {
          index,
-         state = idle :: idle | running,
+         state = idle :: idle | running | restart,
          pid :: pid() | undefined,
          worker_pid :: pid() | undefined,
          results = dict:new(),
