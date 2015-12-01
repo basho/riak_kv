@@ -68,11 +68,11 @@ maybe_await_query_results(_) ->
     % we can't use a gen_server call here because the reply needs to be
     % from an fsm but one is not assigned if the query is queued.
     receive
-        {ok, _} = Result ->
+        Result ->
             Result
     after
         10000 ->
-            {error, timeout}
+            {error, qry_worker_timeout}
     end.
 
 %% Format the multiple syntax errors into a multiline error
