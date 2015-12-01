@@ -714,7 +714,7 @@ end
 
 %% @doc Time between sweeps for object ttl
 {mapping, "obj_ttl.sweep_interval", "riak_kv.obj_ttl_sweep_interval", [
-   {default, undefined},
-   {datatype, [{duration, s}, {atom, undefined}]},
+   {default, off},
+   {datatype, [{duration, s}, flag]},
    hidden
 ]}.

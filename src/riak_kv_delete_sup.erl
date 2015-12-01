@@ -57,9 +57,9 @@ maybe_add_sweep_participant() ->
 
 maybe_add_obj_ttl_sweep_participant() ->
     RunIntervalFun =
-        fun() -> app_helper:get_env(riak_kv, obj_ttl_sweep_interval, undefined) end,
+        fun() -> app_helper:get_env(riak_kv, obj_ttl_sweep_interval, false) end,
     case RunIntervalFun() of
-        undefined ->
+        false ->
             false;
         _ ->
             add_obj_ttl_sweep_participant(RunIntervalFun)
