@@ -158,7 +158,7 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
             {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result =
-                case make_ts_keys(CompoundKey, DDL) of
+                case make_ts_keys(CompoundKey, DDL, Mod) of
                     {ok, PKLK} ->
                         riak_client:get(
                           {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]});
@@ -215,7 +215,7 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
             {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result =
-                case make_ts_keys(CompoundKey, DDL) of
+                case make_ts_keys(CompoundKey, DDL, Mod) of
                     {ok, PKLK} ->
                         riak_client:delete_vclock(
                           {Table, Table}, PKLK, VClock, Options,
@@ -380,9 +380,9 @@ put_data(Data, Table, Mod) ->
               Obj = Mod:add_column_info(Raw),
 
               PK  = eleveldb_ts:encode_key(
-                      riak_ql_ddl:get_partition_key(DDL, Raw)),
+                      riak_ql_ddl:get_partition_key(DDL, Raw, Mod)),
               LK  = eleveldb_ts:encode_key(
-                      riak_ql_ddl:get_local_key(DDL, Raw)),
+                      riak_ql_ddl:get_local_key(DDL, Raw, Mod)),
 
               Bucket = table_to_bucket(Table),
 
@@ -407,10 +407,10 @@ put_data(Data, Table, Mod) ->
                            (_) -> false
                         end, Responses)) + FailReqs.
 
--spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}) ->
+-spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}, module()) ->
                           {ok, {binary(), binary()}} | {error, {bad_key_length, integer(), integer()}}.
 make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
-                                        fields = Fields}) ->
+                                        fields = Fields}, Mod) ->
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
     Got = length(CompoundKey),
@@ -428,9 +428,9 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 
             %% 2. make the PK and LK
             PK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_partition_key(DDL, BareValues)),
+                   riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
             LK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_local_key(DDL, BareValues)),
+                   riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
             {ok, {PK, LK}};
        {G, N} ->
             {error, {bad_key_length, G, N}}
