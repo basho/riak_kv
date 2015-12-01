@@ -1075,7 +1075,7 @@ delete(State=#state{idx=Index,mod=Mod, modstate=ModState}) ->
     end,
     {ok, State#state{modstate=UpdModState,vnodeid=undefined,hashtrees=undefined}}.
 
-terminate(_Reason, #state{mod=Mod, modstate=ModState,hashtrees=Trees}) ->
+terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) ->
     Mod:stop(ModState),
 
     %% Explicitly stop the hashtree rather than relying on the process monitor
@@ -1084,6 +1084,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState,hashtrees=Trees}) ->
     %% riak_core can complete their shutdown before the hashtree is written
     %% to disk causing the hashtree to be closed dirty.
     riak_kv_index_hashtree:sync_stop(Trees),
+    riak_kv_stat:unregister_vnode_stats(Idx),
     ok.
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
