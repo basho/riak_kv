@@ -72,7 +72,7 @@ maybe_await_query_results(_) ->
             Result
     after
         10000 ->
-            {error, timeout}
+            {error, qry_worker_timeout}
     end.
 
 %% Format the multiple syntax errors into a multiline error

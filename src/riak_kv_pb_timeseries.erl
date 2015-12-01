@@ -65,6 +65,7 @@
 -define(E_GET,               1010).
 -define(E_BAD_KEY_LENGTH,    1011).
 -define(E_LISTKEYS,          1012).
+-define(E_TIMEOUT,           1013).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -286,6 +287,15 @@ submit_query(DDL, Mod, SQL, State) ->
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
             ErrorMessage = flat_format("~p: ~s", [E, Reason]),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
+        %% the following timeouts are known and distinguished:
+        {error, qry_worker_timeout} ->
+            %% the eleveldb process didn't send us any response after
+            %% 10 sec (hardcoded in riak_kv_qry), and probably died
+            {reply, make_rpberrresp(?E_TIMEOUT, "no response from backend"), State};
+        {error, backend_timeout} ->
+            %% the eleveldb process did manage to send us a timeout
+            %% response
+            {reply, make_rpberrresp(?E_TIMEOUT, "backend timeout"), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
     end.
