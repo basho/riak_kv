@@ -115,6 +115,7 @@ handle_info(pop_next_query, State1) ->
             ok = handle_side_effects(SEs),
             {noreply, State2#state{ receiver_pid = ReceivePid }}
     end;
+
 handle_info({{SubQId, QId}, done},
             State = #state{qid       = QId,
                            receiver_pid = ReceiverPid,
@@ -135,6 +136,7 @@ handle_info({{SubQId, QId}, done},
         _MoreSubQueriesNotDone ->
             {noreply, State}
     end;
+
 handle_info({{SubQId, QId}, {results, Chunk}},
             State = #state{qid      = QId,
                            qry      = Qry,
@@ -155,6 +157,18 @@ handle_info({{SubQId, QId}, {results, Chunk}},
                    State
            end,
     {noreply, NewS};
+
+handle_info({{SubQId, QId}, {error, timeout}},
+            State = #state{receiver_pid = ReceiverPid,
+                           qid    = QId,
+                           result = IndexedChunks}) ->
+    lager:warning("Backend timed out while collecting on QId ~p (~p);"
+                  " dropping ~b chunks of data accumulated so far",
+                  [QId, SubQId, length(IndexedChunks)]),
+    ReceiverPid ! {error, backend_timeout},
+    pop_next_query(),
+    {noreply, new_state(State#state.name)};
+
 handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2}) when QId1 =/= QId2 ->
     %% catches late results or errors such getting results for invalid QIds.
     lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
