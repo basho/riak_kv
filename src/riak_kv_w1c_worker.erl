@@ -21,7 +21,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, put/2, async_put/5, async_put_replies/2, workers/0]).
+-export([start_link/1, put/2, async_put/8, async_put_replies/2,
+         workers/0, validate_options/4]).
 -export([init/1,
     handle_call/3,
     handle_cast/2,
@@ -78,27 +79,11 @@ start_link(Name) ->
 %%       {error, term()}
 put(RObj0, Options) ->
     Bucket = riak_object:bucket(RObj0),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    NVal = proplists:get_value(n_val, BucketProps),
     {RObj, Key, EncodeFn} = kv_or_ts_details(RObj0,
                                              riak_object:get_ts_local_key(RObj0)),
-    synchronize_put(async_put(RObj, Bucket, Key, EncodeFn, Options), Options).
-
--spec async_put(RObj :: riak_object:riak_object(),
-                Bucket :: binary()|{binary(), binary()},
-                Key :: binary()|{binary(), binary()}, %% {Partition, Local}
-                EncodeFn :: fun((riak_object:riak_object()) -> binary()),
-                Options ::proplists:proplist()) ->
-                       {ok, {reference(), pid()}} |
-                       {error, term()}.
-async_put(RObj, Bucket, {PartitionKey, LocalKey}, EncodeFn, Options) ->
-    async_put(RObj, Bucket, PartitionKey, LocalKey, EncodeFn, Options);
-async_put(RObj, Bucket, Key, EncodeFn, Options) ->
-    async_put(RObj, Bucket, Key, Key, EncodeFn, Options).
-
-async_put(RObj, Bucket, PartitionKey, LocalKey, EncodeFn, Options) ->
-    StartTS = os:timestamp(),
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    DocIdx = riak_core_util:chash_key({Bucket, PartitionKey}, BucketProps),
-    NVal = proplists:get_value(n_val, BucketProps),
+    DocIdx = chash_key(Bucket, Key, BucketProps),
     Preflist =
         case proplists:get_value(sloppy_quorum, Options, true) of
             true ->
@@ -107,25 +92,44 @@ async_put(RObj, Bucket, PartitionKey, LocalKey, EncodeFn, Options) ->
             false ->
                 riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv)
         end,
+
     case validate_options(NVal, Preflist, Options, BucketProps) of
         {ok, W, PW} ->
-            Worker = random_worker(),
-            ReqId = erlang:monitor(process, Worker),
-            RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
-            RObj3 = riak_object:update_last_modified(RObj2),
-            RObj4 = riak_object:apply_updates(RObj3),
-            EncodedVal = EncodeFn(RObj4),
-
-            gen_server:cast(
-                Worker,
-                {put, Bucket, LocalKey, EncodedVal, ReqId, Preflist,
-                 #rec{w=W, pw=PW, n_val=NVal, from=self(),
-                      start_ts=StartTS,
-                      size=size(EncodedVal)}}),
-            {ok, {ReqId, Worker}};
+            synchronize_put(
+              async_put(
+                RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist), Options);
         Error ->
             Error
     end.
+
+-spec async_put(RObj :: riak_object:riak_object(),
+                W :: pos_integer(),
+                PW :: pos_integer(),
+                Bucket :: binary()|{binary(), binary()},
+                NVal :: pos_integer(),
+                Key :: binary()|{binary(), binary()},
+                EncodeFn :: fun((riak_object:riak_object()) -> binary()),
+                Preflist :: term()) ->
+                       {ok, {reference(), atom()}}.
+
+async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) ->
+    async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
+async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
+    StartTS = os:timestamp(),
+    Worker = random_worker(),
+    ReqId = erlang:monitor(process, Worker),
+    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
+    RObj3 = riak_object:update_last_modified(RObj2),
+    RObj4 = riak_object:apply_updates(RObj3),
+    EncodedVal = EncodeFn(RObj4),
+
+    gen_server:cast(
+      Worker,
+      {put, Bucket, LocalKey, EncodedVal, ReqId, Preflist,
+       #rec{w=W, pw=PW, n_val=NVal, from=self(),
+            start_ts=StartTS,
+            size=size(EncodedVal)}}),
+    {ok, {ReqId, Worker}}.
 
 -spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), proplists:proplist()) ->
                                        list(term()).
@@ -337,7 +341,7 @@ get_request_record(ReqId, #state{entries=Entries} = _State) ->
 %% requirements or a more traditional KV object?
 %%
 %% When riak_kv_pb_timeseries is driving a put request, it can provide
-%% all of these details directly to async_put/5, but when a tombstone
+%% all of these details directly to async_put/8, but when a tombstone
 %% is being put via riak_kv_delete, these must be extracted from the
 %% object.
 kv_or_ts_details(RObj, {ok, LocalKey}) ->
@@ -361,9 +365,7 @@ erase_request_record(ReqId, #state{entries=Entries} = State) ->
 
 %% Invoked by put/2 to turn the async request into a synchronous call
 synchronize_put({ok, {_ReqId, _Worker}=ReqIdTuple}, Options) ->
-    wait_for_put_reply(ReqIdTuple, find_put_timeout(Options));
-synchronize_put(Error, _Options) ->
-    Error.
+    wait_for_put_reply(ReqIdTuple, find_put_timeout(Options)).
 
 %% Invoked by async_put_reply/2 to wait for all responses
 async_put_reply_loop([], Responses, _StartTime, _Timeout) ->
@@ -403,3 +405,8 @@ find_put_timeout(Options) ->
         _ ->
             ?DEFAULT_TIMEOUT
     end.
+
+chash_key(Bucket, {PartitionKey, _LocalKey}, BucketProps) ->
+    riak_core_util:chash_key({Bucket, PartitionKey}, BucketProps);
+chash_key(Bucket, Key, BucketProps) ->
+    riak_core_util:chash_key({Bucket, Key}, BucketProps).
