@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_utils: Common functions used by riak_kv_wm_* modules.
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -42,11 +42,8 @@
          ensure_bucket_type/3,
          bucket_type_exists/1,
          maybe_bucket_type/2,
-         method_to_perm/1,
-         maybe_parse_table_def/2
+         method_to_perm/1
         ]).
-
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -442,98 +439,3 @@ method_to_perm('GET') ->
     "riak_kv.get";
 method_to_perm('DELETE') ->
     "riak_kv.delete".
-
-%% Given bucket properties, transform the `<<"table_def">>' property if it
-%% exists to riak_ql DDL and store it under the `<<"ddl">>' key, table_def
-%% is removed.  
--spec maybe_parse_table_def(BucketType :: binary(),
-                            Props :: list(proplists:property())) -> 
-        {ok, Props2 :: [proplists:property()]} | {error, any()}.
-maybe_parse_table_def(BucketType, Props) ->
-    case lists:keytake(<<"table_def">>, 1, Props) of
-        false ->
-            {ok, Props};
-        {value, {<<"table_def">>, TableDef}, PropsNoDef} ->
-            case riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
-                {ok, DDL} ->
-                    ok = assert_type_and_table_name_same(BucketType, DDL),
-                    ok = try_compile_ddl(DDL),
-                    ok = assert_write_once_not_false(PropsNoDef),
-                    ok = assert_partition_key_length(DDL),
-                    ok = assert_primary_and_local_keys_match(DDL),
-                    apply_timeseries_bucket_props(DDL, PropsNoDef);
-                {error, _} = E ->
-                    E
-            end
-    end.
-
-%%
--spec apply_timeseries_bucket_props(DDL::#ddl_v1{},
-                                    Props1::[proplists:property()]) -> 
-        {ok, Props2::[proplists:property()]}.
-apply_timeseries_bucket_props(DDL, Props1) ->
-    Props2 = lists:keystore(
-        <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
-    {ok, [{<<"ddl">>, DDL} | Props2]}.
-
-%% Time series must always use write_once so throw an error if the write_once
-%% property is ever set to false. This prevents a user thinking they have
-%% disabled write_once when it has been set to true internally.
-assert_write_once_not_false(Props) ->
-    case lists:keyfind(<<"write_once">>, 1, Props) of
-        {<<"write_once">>, false} ->
-            throw({error,
-                   {write_once,
-                    "Error, the time series bucket type could not be created. "
-                    "The write_once property must be true\n"}});
-        _ ->
-            ok
-    end.
-
-%%
-assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
-    ok;
-assert_type_and_table_name_same(BucketType1, #ddl_v1{table = BucketType2}) ->
-    throw({error,
-           {table_name,
-            "Error, the bucket type could not be the created. The bucket type and table name must be the same~n"
-            "    bucket type was: " ++ binary_to_list(BucketType1) ++ "\n"
-            "    table name was:  " ++ binary_to_list(BucketType2) ++ "\n"}}).
-
-%% @doc Verify that the primary key has three components
-%%      and the first element is a quantum
-assert_partition_key_length(#ddl_v1{partition_key = {key_v1, Key}}) when length(Key) == 3 ->
-    assert_third_param_is_quantum(lists:nth(3, Key));
-assert_partition_key_length(_DDL) ->
-    throw({error, {primary_key, "Primary key is too short"}}).
-
-%% @doc Verify that the first element of the primary key is a quantum
-assert_third_param_is_quantum(#hash_fn_v1{mod=riak_ql_quanta, fn=quantum}) ->
-    ok;
-assert_third_param_is_quantum(_KeyComponent) ->
-    throw({error, {primary_key, "Third element of primary key must be a quantum"}}).
-
-%% @doc Verify primary key and local partition have the same elements
-assert_primary_and_local_keys_match(#ddl_v1{partition_key = #key_v1{ast = Primary}, local_key = #key_v1{ast = Local}}) ->
-    PrimaryList = [query_field_name(F) || F <- Primary],
-    LocalList = [query_field_name(F) || F <- Local],
-    case PrimaryList == LocalList of
-        true -> ok;
-        _Else ->
-            throw({error, {primary_key, "Local key does not match primary key"}})
-    end.
-
-%% Pull the name out of the appropriate record
-query_field_name(#hash_fn_v1{args = Args}) ->
-    Param = lists:keyfind(param_v1, 1, Args),
-    query_field_name(Param);
-query_field_name(#param_v1{name = Field}) ->
-    Field.
-
-%% Attempt to compile the DDL but don't do anything with the output, this is
-%% catch failures as early as possible. Also the error messages are easy to
-%% return at this point.
-try_compile_ddl(DDL) ->
-    {_, AST} = riak_ql_ddl_compiler:compile(DDL),
-    {ok, _, _} = compile:forms(AST),
-    ok.

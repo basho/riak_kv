@@ -21,7 +21,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/1, put/2, async_put/2, async_put_replies/2, workers/0]).
+-export([start_link/1, put/2, async_put/8, async_put_replies/2,
+         workers/0, validate_options/4]).
 -export([init/1,
     handle_call/3,
     handle_cast/2,
@@ -76,30 +77,13 @@ start_link(Name) ->
 %%        ok |
 %%       {error, timeout} |
 %%       {error, term()}
-put(RObj, Options) ->
-    synchronize_put(async_put(RObj, Options), Options).
-
--spec async_put(RObj :: riak_object:riak_object(), proplists:proplist()) ->
-                       {ok, {reference(), pid()}} |
-                       {error, term()}.
-async_put(RObj, Options) ->
-    StartTS = os:timestamp(),
-    Bucket = riak_object:bucket(RObj),
-    case riak_object:get_ts_local_key(RObj) of
-        {ok, LocalKey} ->
-            Key = LocalKey,
-            EncodeFn =
-                fun(XRObj) ->
-                  riak_object:to_binary(v1, XRObj, msgpack)
-                end;
-        error ->
-            Key = riak_object:key(RObj),
-            EncodeFn = fun(XRObj) -> riak_object:to_binary(v1, XRObj) end
-    end,
-    BKey = {Bucket, riak_object:key(RObj)},
+put(RObj0, Options) ->
+    Bucket = riak_object:bucket(RObj0),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
     NVal = proplists:get_value(n_val, BucketProps),
+    {RObj, Key, EncodeFn} = kv_or_ts_details(RObj0,
+                                             riak_object:get_ts_local_key(RObj0)),
+    DocIdx = chash_key(Bucket, Key, BucketProps),
     Preflist =
         case proplists:get_value(sloppy_quorum, Options, true) of
             true ->
@@ -108,28 +92,44 @@ async_put(RObj, Options) ->
             false ->
                 riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv)
         end,
+
     case validate_options(NVal, Preflist, Options, BucketProps) of
         {ok, W, PW} ->
-            Worker = random_worker(),
-            ReqId = erlang:monitor(process, Worker),
-            RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
-            RObj3 = riak_object:update_last_modified(RObj2),
-            RObj4 = riak_object:apply_updates(RObj3),
-            MD  = riak_object:get_metadata(RObj4),
-            MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
-            RObj5 = riak_object:update_metadata(RObj4, MD1),
-            EncodedVal = EncodeFn(RObj5),
-
-            gen_server:cast(
-                Worker,
-                {put, Bucket, Key, EncodedVal, ReqId, Preflist,
-                 #rec{w=W, pw=PW, n_val=NVal, from=self(),
-                      start_ts=StartTS,
-                      size=size(EncodedVal)}}),
-            {ok, {ReqId, Worker}};
+            synchronize_put(
+              async_put(
+                RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist), Options);
         Error ->
             Error
     end.
+
+-spec async_put(RObj :: riak_object:riak_object(),
+                W :: pos_integer(),
+                PW :: pos_integer(),
+                Bucket :: binary()|{binary(), binary()},
+                NVal :: pos_integer(),
+                Key :: binary()|{binary(), binary()},
+                EncodeFn :: fun((riak_object:riak_object()) -> binary()),
+                Preflist :: term()) ->
+                       {ok, {reference(), atom()}}.
+
+async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) ->
+    async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
+async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
+    StartTS = os:timestamp(),
+    Worker = random_worker(),
+    ReqId = erlang:monitor(process, Worker),
+    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
+    RObj3 = riak_object:update_last_modified(RObj2),
+    RObj4 = riak_object:apply_updates(RObj3),
+    EncodedVal = EncodeFn(RObj4),
+
+    gen_server:cast(
+      Worker,
+      {put, Bucket, LocalKey, EncodedVal, ReqId, Preflist,
+       #rec{w=W, pw=PW, n_val=NVal, from=self(),
+            start_ts=StartTS,
+            size=size(EncodedVal)}}),
+    {ok, {ReqId, Worker}}.
 
 -spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), proplists:proplist()) ->
                                        list(term()).
@@ -337,6 +337,22 @@ get_request_record(ReqId, #state{entries=Entries} = _State) ->
         error -> undefined
     end.
 
+%% Utility function for put/2: is this a TS object with its special
+%% requirements or a more traditional KV object?
+%%
+%% When riak_kv_pb_timeseries is driving a put request, it can provide
+%% all of these details directly to async_put/8, but when a tombstone
+%% is being put via riak_kv_delete, these must be extracted from the
+%% object.
+kv_or_ts_details(RObj, {ok, LocalKey}) ->
+    MD  = riak_object:get_metadata(RObj),
+    MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
+    RObj1 = riak_object:update_metadata(RObj, MD1),
+    {RObj1, {riak_object:key(RObj), LocalKey},
+     fun(O) -> riak_object:to_binary(v1, O, msgpack) end};
+kv_or_ts_details(RObj, error) ->
+    {RObj, riak_object:key(RObj), fun(O) -> riak_object:to_binary(v1, O) end}.
+
 erase_request_record(ReqId, #state{entries=Entries} = State) ->
     case get_request_record(ReqId, State) of
         undefined ->
@@ -349,9 +365,7 @@ erase_request_record(ReqId, #state{entries=Entries} = State) ->
 
 %% Invoked by put/2 to turn the async request into a synchronous call
 synchronize_put({ok, {_ReqId, _Worker}=ReqIdTuple}, Options) ->
-    wait_for_put_reply(ReqIdTuple, find_put_timeout(Options));
-synchronize_put(Error, _Options) ->
-    Error.
+    wait_for_put_reply(ReqIdTuple, find_put_timeout(Options)).
 
 %% Invoked by async_put_reply/2 to wait for all responses
 async_put_reply_loop([], Responses, _StartTime, _Timeout) ->
@@ -391,3 +405,8 @@ find_put_timeout(Options) ->
         _ ->
             ?DEFAULT_TIMEOUT
     end.
+
+chash_key(Bucket, {PartitionKey, _LocalKey}, BucketProps) ->
+    riak_core_util:chash_key({Bucket, PartitionKey}, BucketProps);
+chash_key(Bucket, Key, BucketProps) ->
+    riak_core_util:chash_key({Bucket, Key}, BucketProps).

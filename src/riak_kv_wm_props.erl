@@ -2,7 +2,7 @@
 %%
 %% riak_kv_wm_props: Webmachine resource for listing bucket properties.
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -281,7 +281,7 @@ get_bucket_props_json(Client, Bucket) ->
 %% @doc Modify the bucket properties according to the body of the
 %%      bucket-level PUT request.
 accept_bucket_body(RD, Ctx=#ctx{bucket_type=T, bucketprops=Props1}) ->
-    case catch riak_kv_wm_utils:maybe_parse_table_def(T, Props1) of
+    case catch riak_kv_ts_util:maybe_parse_table_def(T, Props1) of
         {ok, Props2} ->
             set_bucket(RD, Ctx#ctx{ bucketprops = Props2 });
         {error, Details} when is_list(Details) ->
