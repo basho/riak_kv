@@ -65,13 +65,15 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
 maybe_await_query_results({error,_} = Error) ->
     Error;
 maybe_await_query_results(_) ->
+    Timeout = app_helper:get_env(riak_kv, timeseries_query_timeout_ms),
+
     % we can't use a gen_server call here because the reply needs to be
     % from an fsm but one is not assigned if the query is queued.
     receive
         Result ->
             Result
     after
-        10000 ->
+        Timeout ->
             {error, qry_worker_timeout}
     end.
 

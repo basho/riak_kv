@@ -677,3 +677,19 @@ end
   fun(Value) when is_integer(Value) andalso Value >= 0 -> true;
      (_) -> false
   end}.
+
+%% @doc Timeout in milliseconds for Time Series queries, after which riak
+%% will return a timeout error.
+{mapping, "timeseries_query_timeout_ms", "riak_kv.timeseries_query_timeout_ms", [
+  {default, 10000},
+  {datatype, integer}
+]}.
+
+%% @doc Maximum number of quanta that a query can span. Larger quanta spans
+%% mean the time duration for a query can be bigger. This is constrained to
+%% prevent excessively long running queries that could affect the performance
+%% of the cluster.
+{mapping, "timeseries_query_max_quanta_span", "riak_kv.timeseries_query_max_quanta_span", [
+  {default, 5},
+  {datatype, integer}
+]}.
