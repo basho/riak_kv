@@ -133,18 +133,20 @@ compile_where(DDL, Where) ->
         {true, NewW} -> NewW
     end.
 
-check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
-              [{and_, _LHS, _RHS} = W]) ->
-    try    #key_v1{ast = PAST} = PK,
-           #key_v1{ast = LAST} = LK,
-           LocalFields     = [X || #param_v1{name = X} <- LAST],
-           PartitionFields = [X || #param_v1{name = X} <- PAST],
-           [QField] = [X || #hash_fn_v1{mod  = riak_ql_quanta,
-                                        fn   = quantum,
-                                        args = [#param_v1{name = X} | _Rest]}
-                                <- PAST],
+quantum_field_name(#ddl_v1{ partition_key = PK }) ->
+    #key_v1{ ast = PartitionKeyAST } = PK,
+    [_, _, Quantum] = PartitionKeyAST,
+    #hash_fn_v1{args = [#param_v1{name = QFieldName} | _]} = Quantum,
+    QFieldName.
+
+check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL,
+              [W]) ->
+    try    #key_v1{ast = PartitionKeyAST} = PK,
+           LocalFields     = [X || #param_v1{name = X} <- LK#key_v1.ast],
+           PartitionFields = [X || #param_v1{name = X} <- PartitionKeyAST],
+           [QuantumFieldName] = quantum_field_name(DDL),
            StrippedW = strip(W, []),
-           {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QField]),
+           {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QuantumFieldName]),
            Mod = riak_ql_ddl:make_module_name(T),
            StartKey = rewrite(LK, StartW, Mod),
            EndKey = rewrite(LK, EndW, Mod),
@@ -170,16 +172,19 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK},
                {error, Errors}
            end
     catch
-        error:{incomplete_where_clause, _} = E ->
+        error:{Reason, Description} = E when is_atom(Reason), is_binary(Description) ->
             {error, E};
         error:Reason ->
             % if it is not a known error then return the stack trace for
             % debugging
             {error, {where_not_timeseries, Reason, erlang:get_stacktrace()}}
-    end;
-check_if_timeseries(_DLL, Where) ->
-    % TODO return the SQL string
-    {error, {where_not_supported, Where}}.
+    end.
+% check_if_timeseries(_, [{or_, _, _}]) ->
+%     {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}};
+% check_if_timeseries(_, _) ->
+%     % this occurs when the query does not include an AND operator which is
+%     % required for time quanta bounds
+%     {error, {incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED}}.
 
 %%
 has_errors(StartKey, EndKey) ->
@@ -199,22 +204,75 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
     case Type of
         timestamp ->
             case Op1 of
-            Op2 -> true;
-            _   -> false
+                Op2 -> true;
+                _   -> false
             end;
         _ ->
             includes(T, Op2, Mod)
     end.
 
-break_out_timeseries(Ands, LocalFields, QuantumFields) ->
-    case get_fields(QuantumFields, Ands, []) of
-        {NewAnds, [Ends, Starts]} ->
-            {Filter, Body} = get_fields(LocalFields, NewAnds, []),
-            {[Starts | Body], [Ends | Body], Filter};
-        {_, [{'>',_,_}]} ->
+% find the upper and lower bound for the time
+find_timestamp_bounds(QuantumField, LocalFields) when is_binary(QuantumField) ->
+    find_timestamp_bounds2(QuantumField, LocalFields, [], {undefined, undefined}).
+
+%%
+find_timestamp_bounds2(_, [], OtherFilters, BoundsAcc) ->
+    {lists:reverse(OtherFilters), BoundsAcc};
+find_timestamp_bounds2(QuantumFieldName, [{or_, {_, QuantumFieldName, _}, _} | _], _, _) ->
+    % if this is an or state ment, lookahead at what is being tested, the quanta
+    % cannot be tested with an OR operator
+    error({time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND});
+find_timestamp_bounds2(QuantumFieldName, [{Op, QuantumFieldName, _} = Filter | Tail], OtherFilters, BoundsAcc1) ->
+    % if there are already end bounds throw an error
+    if
+        Op == '>' orelse Op == '>=' ->
+            find_timestamp_bounds2(QuantumFieldName, Tail, OtherFilters, acc_lower_bounds(Filter, BoundsAcc1));
+        Op == '<' orelse Op == '<=' ->
+            find_timestamp_bounds2(QuantumFieldName, Tail, OtherFilters, acc_upper_bounds(Filter, BoundsAcc1));
+        Op == '=' orelse Op == '!=' ->
+            find_timestamp_bounds2(QuantumFieldName, Tail, [Filter | OtherFilters], BoundsAcc1)
+    end;
+find_timestamp_bounds2(QuantumFieldName, [Filter | Tail], OtherFilters, BoundsAcc1) ->
+    % this filter is not on the quantum
+    find_timestamp_bounds2(QuantumFieldName, Tail, [Filter | OtherFilters], BoundsAcc1).
+
+%%
+acc_lower_bounds(Filter, {undefined, U}) ->
+    {Filter, U};
+acc_lower_bounds(_Filter, {_L, _}) ->
+    error({lower_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_LOWER_BOUND}).
+
+%%
+acc_upper_bounds(Filter, {L, undefined}) ->
+    {L, Filter};
+acc_upper_bounds(_Filter, {_, _U}) ->
+    error({upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}).
+
+%%
+break_out_timeseries(Filters1, LocalFields, [QuantumFields]) ->
+    case find_timestamp_bounds(QuantumFields, Filters1) of
+        {_, {undefined, undefined}} ->
+            error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
+        {_, {_, undefined}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND});
-        {_, [{'<',_,_}]} ->
-            error({incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND})
+        {_, {undefined, _}} ->
+            error({incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND});
+        {_, {{_,_,{_,Starts}}, {_,_,{_,Ends}}}} when is_integer(Starts),
+                                                     is_integer(Ends),
+                                                     Starts > Ends ->
+            error({lower_bound_must_be_less_than_upper_bound,
+                   ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND});
+        {_, {{'>',_,{_,Starts}}, {'<',_,{_,Ends}}}} when is_integer(Starts),
+                                                         is_integer(Ends),
+                                                         Starts == Ends ->
+            % catch when the filter values for time bounds are equal but we're
+            % using greater than or less than so could never match, if >= or <=
+            % were used on either side then
+            error({lower_and_upper_bounds_are_equal_when_no_equals_operator,
+                   ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR});
+        {Filters2, {Starts, Ends}} ->
+            {Filter, Body} = get_fields(LocalFields, Filters2, []),
+            {[Starts | Body], [Ends | Body], Filter}
     end.
 
 get_fields([], Ands, Acc) ->
@@ -282,11 +340,11 @@ rew2([], _W, _Mod, _Acc) ->
 rew2([#param_v1{name = [N]} | T], W, Mod, Acc) ->
     Type = Mod:get_field_type([N]),
     case lists:keytake(N, 2, W) of
-    false                           ->
-        {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(N)}};
-    {value, {_, _, {_, Val}}, NewW} ->
-        rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
-end.
+        false                           ->
+            {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(N)}};
+        {value, {_, _, {_, Val}}, NewW} ->
+            rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
+    end.
 
 -ifdef(TEST).
 -compile(export_all).
@@ -344,16 +402,16 @@ get_long_ddl() ->
     get_ddl(SQL).
 
 get_standard_ddl() ->
-    SQL = "CREATE TABLE GeoCheckin " ++
-        "(geohash varchar not null, " ++
-        "location varchar not null, " ++
-        "user varchar not null, " ++
-        "time timestamp not null, " ++
-        "weather varchar not null, " ++
-        "temperature varchar, " ++
-        "PRIMARY KEY((location, user, quantum(time, 15, 's')), " ++
-        "location, user, time))",
-    get_ddl(SQL).
+    get_ddl(
+      "CREATE TABLE GeoCheckin "
+      "(geohash varchar not null, "
+      "location varchar not null, "
+      "user varchar not null, "
+      "time timestamp not null, "
+      "weather varchar not null, "
+      "temperature varchar, "
+      "PRIMARY KEY((location, user, quantum(time, 15, 's')), "
+      "location, user, time))").
 
 get_ddl(SQL) ->
     Lexed = riak_ql_lexer:get_tokens(SQL),
@@ -795,32 +853,6 @@ simple_spanning_boundary_test() ->
 %% test failures
 %%
 
-no_where_clause_fail_test() ->
-    DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1'",
-    {ok, Q} = get_query(Query),
-    true = is_query_valid(DDL, Q),
-    %% now replace the where clause
-    Where = [],
-    Q2 = Q#riak_sql_v1{'WHERE' = Where},
-    ?assertEqual(
-        {error, {where_not_supported, Where}},
-        compile(DDL, Q2)
-    ).
-
-simplest_fail_test() ->
-    DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1'",
-    {ok, Q} = get_query(Query),
-    true = is_query_valid(DDL, Q),
-    Where = [{xor_, {myop, "fakefield", 22}, {notherop, "real_gucci", atombomb}}],
-    %% now replace the where clause
-    Q2 = Q#riak_sql_v1{'WHERE' = Where},
-    ?assertEqual(
-        {error, {where_not_supported, Where}},
-        compile(DDL, Q2)
-    ).
-
 simplest_compile_once_only_fail_test() ->
     DDL = get_standard_ddl(),
     Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = 'user_1' and location = 'Scotland'",
@@ -831,5 +863,185 @@ simplest_compile_once_only_fail_test() ->
     Got = compile(DDL, Q2),
     Expected = {error, 'query is already compiled'},
     ?assertEqual(Expected, Got).
+
+end_key_not_a_range_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 3000 AND time != 5000 "
+        "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, {incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+start_key_not_a_range_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time = 3000 AND time < 5000 "
+        "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, {incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+key_is_all_timestamps_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE GeoCheckin ("
+        "time_a TIMESTAMP NOT NULL, "
+        "time_b TIMESTAMP NOT NULL, "
+        "time_c TIMESTAMP NOT NULL, "
+        "PRIMARY KEY("
+        " (time_a, time_b, QUANTUM(time_c, 15, 's')), time_a, time_b, time_c))"),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time_c > 2999 AND time_c < 5000 "
+        "AND time_a = 10 AND time_b = 15"),
+    ?assertMatch(
+        [#riak_sql_v1{
+            'WHERE' = [
+                {startkey, [
+                    {<<"time_a">>, timestamp, 10},
+                    {<<"time_b">>, timestamp, 15},
+                    {<<"time_c">>, timestamp, 2999}
+                ]},
+                {endkey, [
+                    {<<"time_a">>, timestamp, 10},
+                    {<<"time_b">>, timestamp, 15},
+                    {<<"time_c">>, timestamp, 5000}
+                ]},
+                {filter, []},
+                {start_inclusive, false}]
+        }],
+        compile(DDL, Q)
+    ).
+
+duplicate_lower_bound_filter_not_allowed_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 3000 AND  time > 3001 AND time < 5000 "
+        "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, {lower_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_LOWER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+duplicate_upper_bound_filter_not_allowed_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 3000 AND time < 5000 AND time < 4999 "
+        "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+lower_bound_is_bigger_than_upper_bound_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 6000 AND time < 5000"
+        "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, {lower_bound_must_be_less_than_upper_bound, ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+lower_bound_is_same_as_upper_bound_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query(
+        "SELECT weather FROM GeoCheckin "
+        "WHERE time > 5000 AND time < 5000"
+        "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR}},
+        compile(DDL, Q)
+    ).
+
+query_has_no_AND_operator_1_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where time < 5"),
+    ?assertEqual(
+        {error, {incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND}},
+        compile(DDL, Q)
+    ).
+
+query_has_no_AND_operator_2_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where time > 1 OR time < 5"),
+    ?assertEqual(
+        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
+        compile(DDL, Q)
+    ).
+
+query_has_no_AND_operator_3_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where user = 'user_1' AND time > 1 OR time < 5"),
+    ?assertEqual(
+        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
+        compile(DDL, Q)
+    ).
+
+query_has_no_AND_operator_4_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where user = 'user_1' OR time > 1 OR time < 5"),
+    ?assertEqual(
+        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
+        compile(DDL, Q)
+    ).
+
+
+% FIXME or operators
+
+
+% literal_on_left_hand_side_test() ->
+%     DDL = get_standard_ddl(),
+%     {ok, Q} = get_query("select * from testtwo where time > 1 and time < 6 and user = '2' and location = '4'"),
+%     ?assertMatch(
+%         [#riak_sql_v1{} | _],
+%         compile(DDL, Q)
+%     ).
+
+% FIXME RTS-634
+% or_on_local_key_not_allowed_test() ->
+%     DDL = get_standard_ddl(),
+%     {ok, Q} = get_query(
+%         "SELECT weather FROM GeoCheckin "
+%         "WHERE time > 3000 AND time < 5000 "
+%         "AND user = 'user_1' "
+%         "AND location = 'derby' OR location = 'rottingham'"),
+%     ?assertEqual(
+%         {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
+%         compile(DDL, Q)
+%     ).
+
+% TODO support filters on the primary key, this is not currently supported
+% filter_on_quanta_field_test() ->
+%     DDL = get_standard_ddl(),
+%     {ok, Q} = get_query(
+%         "SELECT weather FROM GeoCheckin "
+%         "WHERE time > 3000 AND time < 5000 "
+%         "AND time = 3002 AND user = 'user_1' AND location = 'derby'"),
+%     ?assertMatch(
+%         [#riak_sql_v1{
+%             'WHERE' = [
+%                 {startkey, [
+%                     {<<"time_a">>, timestamp, 10},
+%                     {<<"time_b">>, timestamp, 15},
+%                     {<<"time_c">>, timestamp, 2999}
+%                 ]},
+%                 {endkey, [
+%                     {<<"time_a">>, timestamp, 10},
+%                     {<<"time_b">>, timestamp, 15},
+%                     {<<"time_c">>, timestamp, 5000}
+%                 ]},
+%                 {filter, []},
+%                 {start_inclusive, false}]
+%         }],
+%         compile(DDL, Q)
+%     ).
 
 -endif.

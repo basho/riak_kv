@@ -34,6 +34,37 @@
 ).
 
 -define(
+    E_TSMSG_NO_BOUNDS_SPECIFIED,
+    <<"Neither upper or lower time bounds were specified in the query.">>
+).
+
+-define(
+    E_TSMSG_DUPLICATE_LOWER_BOUND,
+    <<"The lower time bound is specified more than once in the query.">>
+).
+
+-define(
+    E_TSMSG_DUPLICATE_UPPER_BOUND,
+    <<"The upper time bound is specified more than once in the query.">>
+).
+
+-define(
     E_MISSING_PARAM_IN_WHERE_CLAUSE(ParamName),
     iolist_to_binary(["Missing parameter ", ParamName, " in where clause."])
+).
+
+-define(
+    E_TIME_BOUNDS_MUST_USE_AND,
+    <<"The time bounds used OR but must use AND.">>
+).
+
+-define(
+    E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND,
+    <<"The lower time bound is greater than the upper time bound.">>
+).
+
+-define(
+    E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR,
+    <<"The upper and lower boundaries are equal but the query uses the greater and less than operators.  ",
+      "Change the bounds time or use the greater/less than or equals to on either side.">>
 ).
