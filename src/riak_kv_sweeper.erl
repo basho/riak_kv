@@ -70,6 +70,7 @@
          disable_sweep_scheduling/0,
          enable_sweep_scheduling/0,
          get_run_interval/1,
+         get_sweep_throttle/0,
          do_sweep/8]).
 
 start_link() ->
@@ -741,15 +742,15 @@ get_bucket_props(Bucket, BucketPropsDict) ->
             {BucketProps, BucketPropsDict1}
     end.
 
-maybe_throttle_sweep(#sa{swept_keys = SweepKeys} = Acc) ->
-    {Limit, Wait} = get_sweep_throttle(),
+maybe_throttle_sweep(#sa{throttle = {Limit, Wait}, swept_keys = SweepKeys} = SweepAcc) ->
     case SweepKeys rem Limit of
         0 ->
+            NewThrottle = get_sweep_throttle(),
             %% We use receive after to throttle instead of sleep.
             %% This way we can respond on requests while throtteling
-            maybe_receive_request(Acc, Wait);
+            maybe_receive_request(SweepAcc#sa{throttle = NewThrottle}, Wait);
         _ ->
-            Acc
+            SweepAcc
     end.
 
 get_sweep_throttle() ->

@@ -56,6 +56,7 @@
          failed_p = [],
          succ_p = [],
          estimated_keys = 0  :: non_neg_integer(),
-         swept_keys = 0  :: non_neg_integer()
+         swept_keys = 0  :: non_neg_integer(),
+         throttle = riak_kv_sweeper:get_sweep_throttle()
          }).
 
