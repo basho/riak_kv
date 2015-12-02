@@ -46,11 +46,11 @@ make_key(#riak_sql_v1{helper_mod    = Mod,
     {startkey, StartKey} = proplists:lookup(startkey, Where),
     StartKey2 = [{Field, Val} || {Field, _Type, Val} <- StartKey],
     Key = riak_ql_ddl:make_key(Mod, PartitionKey, StartKey2),
-    eleveldb_ts:encode_key(Key).
+    list_to_tuple([V || {_T,V} <- Key]).
 
 %%
 hash_for_nodes(NVal,
-               {_BucketType, _BucketName}=Bucket, Key) when is_binary(Key) ->
+               {_BucketType, _BucketName}=Bucket, Key) ->
     DocIdx = riak_core_util:chash_key({Bucket, Key}),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
