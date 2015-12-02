@@ -30,8 +30,6 @@
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
 
--define(MAXSUBQ, 5).
-
 -spec compile(#ddl_v1{}, #riak_sql_v1{}) ->
     [#riak_sql_v1{}] | {error, any()}.
 compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
@@ -80,12 +78,14 @@ expand_where(Where, #key_v1{ast = PAST}) ->
                      args = [#param_v1{name = X}, Y, Z]}
                  <- PAST],
     {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(Min, Max, Q, U),
+    MaxSubQueries =
+        app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
     if
-        NoSubQueries =:= 1 ->
+        NoSubQueries == 1 ->
             [Where];
-        1 < NoSubQueries andalso NoSubQueries =< ?MAXSUBQ ->
-            _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
-        ?MAXSUBQ < NoSubQueries ->
+        NoSubQueries > 1 andalso NoSubQueries =< MaxSubQueries ->
+            make_wheres(Where, QField, Min, Max, Boundaries);
+        NoSubQueries > MaxSubQueries ->
             {error, {too_many_subqueries, NoSubQueries}}
     end.
 

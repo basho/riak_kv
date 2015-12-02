@@ -78,6 +78,10 @@
          %% pipe ('true'), or serially via a helper process
          %% ('false' or undefined).  Set to 'false' or leave
          %% undefined during a rolling upgrade from 1.0.
-         {mapred_2i_pipe, true}
+         {mapred_2i_pipe, true},
+
+         {timeseries_query_timeout_ms, 10000},
+
+         {timeseries_query_max_quanta_span, 5}
         ]}
  ]}.
