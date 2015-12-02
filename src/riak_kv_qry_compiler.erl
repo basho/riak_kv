@@ -219,6 +219,8 @@ find_timestamp_bounds(QuantumField, LocalFields) when is_binary(QuantumField) ->
 find_timestamp_bounds2(_, [], OtherFilters, BoundsAcc) ->
     {lists:reverse(OtherFilters), BoundsAcc};
 find_timestamp_bounds2(QuantumFieldName, [{or_, {_, QuantumFieldName, _}, _} | _], _, _) ->
+    % if this is an or state ment, lookahead at what is being tested, the quanta
+    % cannot be tested with an OR operator
     error({time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND});
 find_timestamp_bounds2(QuantumFieldName, [{Op, QuantumFieldName, _} = Filter | Tail], OtherFilters, BoundsAcc1) ->
     % if there are already end bounds throw an error
@@ -400,16 +402,16 @@ get_long_ddl() ->
     get_ddl(SQL).
 
 get_standard_ddl() ->
-    SQL = "CREATE TABLE GeoCheckin " ++
-        "(geohash varchar not null, " ++
-        "location varchar not null, " ++
-        "user varchar not null, " ++
-        "time timestamp not null, " ++
-        "weather varchar not null, " ++
-        "temperature varchar, " ++
-        "PRIMARY KEY((location, user, quantum(time, 15, 's')), " ++
-        "location, user, time))",
-    get_ddl(SQL).
+    get_ddl(
+      "CREATE TABLE GeoCheckin "
+      "(geohash varchar not null, "
+      "location varchar not null, "
+      "user varchar not null, "
+      "time timestamp not null, "
+      "weather varchar not null, "
+      "temperature varchar, "
+      "PRIMARY KEY((location, user, quantum(time, 15, 's')), "
+      "location, user, time))").
 
 get_ddl(SQL) ->
     Lexed = riak_ql_lexer:get_tokens(SQL),
@@ -967,9 +969,6 @@ query_has_no_AND_operator_1_test() ->
         compile(DDL, Q)
     ).
 
-
-%%%%%% FAILS
-
 query_has_no_AND_operator_2_test() ->
     DDL = get_standard_ddl(),
     {ok, Q} = get_query("select * from test1 where time > 1 OR time < 5"),
@@ -988,19 +987,32 @@ query_has_no_AND_operator_3_test() ->
 
 query_has_no_AND_operator_4_test() ->
     DDL = get_standard_ddl(),
-    {ok, Q} = get_query("select * from testtwo where time > 1 and time < 6 and user = '2' or weather = '4'"),
-    ?assertMatch(
-        [#riak_sql_v1{} | _],
+    {ok, Q} = get_query("select * from test1 where user = 'user_1' OR time > 1 OR time < 5"),
+    ?assertEqual(
+        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
         compile(DDL, Q)
     ).
 
+
 % FIXME or operators
-% or_test_test() ->
+
+
+% literal_on_left_hand_side_test() ->
+%     DDL = get_standard_ddl(),
+%     {ok, Q} = get_query("select * from testtwo where time > 1 and time < 6 and user = '2' and location = '4'"),
+%     ?assertMatch(
+%         [#riak_sql_v1{} | _],
+%         compile(DDL, Q)
+%     ).
+
+% FIXME RTS-634
+% or_on_local_key_not_allowed_test() ->
 %     DDL = get_standard_ddl(),
 %     {ok, Q} = get_query(
 %         "SELECT weather FROM GeoCheckin "
 %         "WHERE time > 3000 AND time < 5000 "
-%         "AND user = 'user_1' AND location = 'derby' OR location = \"rottingham\""),
+%         "AND user = 'user_1' "
+%         "AND location = 'derby' OR location = 'rottingham'"),
 %     ?assertEqual(
 %         {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
 %         compile(DDL, Q)
