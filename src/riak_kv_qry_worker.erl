@@ -171,7 +171,7 @@ handle_info({{SubQId, QId}, {error, timeout}},
 
 handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2}) when QId1 =/= QId2 ->
     %% catches late results or errors such getting results for invalid QIds.
-    lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
+    lager:debug("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
 
 -spec terminate(term(), #state{}) -> term().
