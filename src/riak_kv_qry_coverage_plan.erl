@@ -50,11 +50,11 @@ make_key(#riak_sql_v1{helper_mod    = Mod,
     {startkey, StartKey} = proplists:lookup(startkey, Where),
     StartKey2 = [{Field, Val} || {Field, _Type, Val} <- StartKey],
     Key = riak_ql_ddl:make_key(Mod, PartitionKey, StartKey2),
-    eleveldb_ts:encode_key(Key).
+    list_to_tuple([V || {_T,V} <- Key]).
 
 %%
 hash_for_nodes(NVal,
-               {_BucketType, _BucketName}=Bucket, Key) when is_binary(Key) ->
+               {_BucketType, _BucketName}=Bucket, Key) ->
     DocIdx = riak_core_util:chash_key({Bucket, Key}),
     % Fallbacks cannot be used for query results because they may have partial
     % or empty results and the riak_kv_qry_worker currently uses the first

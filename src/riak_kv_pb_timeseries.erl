@@ -384,8 +384,7 @@ to_string(X) ->
 % functions supporting INSERT
 
 row_to_key(Row, DDL, Mod) ->
-    eleveldb_ts:encode_key(
-      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
+    list_to_tuple([V || {_T, V} <- riak_ql_ddl:get_partition_key(DDL, Row, Mod)]).
 
 -spec partition_data(Data :: list(term()),
                      Bucket :: {binary(), binary()},
@@ -412,13 +411,10 @@ add_preflists(PartitionedData, NVal, UpNodes) ->
 
 build_object(Bucket, Mod, DDL, Row, PK) ->
     Obj = Mod:add_column_info(Row),
-    LK  = eleveldb_ts:encode_key(
-            riak_ql_ddl:get_local_key(DDL, Row, Mod)),
+    LK  = list_to_tuple([V || {_T,V} <- riak_ql_ddl:get_local_key(DDL, Row, Mod)]),
 
-    RObj0 = riak_object:new(Bucket, PK, Obj),
-    MD = riak_object:get_update_metadata(RObj0),
-    MD1 = dict:store(?MD_DDL_VERSION, ?DDL_VERSION, MD),
-    RObj = riak_object:update_metadata(RObj0, MD1),
+    RObj = riak_object:newts(Bucket, PK, Obj,
+                             dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
     {RObj, LK}.
 
 
@@ -488,10 +484,8 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                    || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
 
             %% 2. make the PK and LK
-            PK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
-            LK = eleveldb_ts:encode_key(
-                   riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
+            PK  = list_to_tuple([V || {_T, V} <- riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)]),
+            LK  = list_to_tuple([V || {_T, V} <- riak_ql_ddl:get_local_key(DDL, BareValues, Mod)]),
             {ok, {PK, LK}};
        {G, N} ->
             {error, {bad_key_length, G, N}}

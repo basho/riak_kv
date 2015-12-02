@@ -106,10 +106,10 @@ new_tombstone_object(Bucket, {PK, LK}) ->
     %% TS objects have this peculiar way to use the two keys: time
     %% quanta-based partition key, for calculating coverage; and local
     %% key for actual lookups:
-    RO = new_tombstone_object(Bucket, PK),
-    MD1 = riak_object:get_update_metadata(RO),
-    MD2  = dict:store(?MD_TS_LOCAL_KEY, LK, MD1),
-    riak_object:update_metadata(RO, MD2);
+    riak_object:newts(
+      Bucket, PK, <<>>,
+      dict:from_list([{?MD_DELETED, "true"},
+                      {?MD_TS_LOCAL_KEY, LK}]));
 new_tombstone_object(Bucket, Key) ->
     riak_object:new(
       Bucket, Key, <<>>,
