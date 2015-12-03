@@ -55,6 +55,8 @@
 %% Default: 100 keys limit / 100 ms wait
 -define(DEFAULT_SWEEP_THROTTLE, {100, 100}).
 
+-define(PARTICIPANTS_FILE, "participants.dat").
+
 %% ====================================================================
 %% API functions
 %% ====================================================================
@@ -197,7 +199,7 @@ handle_info({'EXIT', Pid, Reason}, #state{sweeps = Sweeps} = State) ->
         {Sweep, normal} ->
             {noreply, finish_sweep(Sweep, State)};
         {Sweep, Reason} ->
-            lager:error("Sweep crashed ~p ~p", [Sweep, Reason]),
+            lager:error("Sweep crashed ~p ~p ~p", [Sweep, Reason, Pid]),
             {noreply, finish_sweep(Sweep, State)}
     end;
 
@@ -207,7 +209,10 @@ handle_info(sweep_tick, State) ->
     State2 = maybe_schedule_sweep(State1),
     {noreply, State2}.
 
-terminate(_Reason, _State) ->
+terminate(shutdown, _State) ->
+    delete_persistent_participants(),
+    ok;
+terminate(_, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -598,15 +603,25 @@ get_never_runned_sweeps(Sweeps) ->
                   <- dict:to_list(Sweeps), dict:size(ResDict) == 0].
 
 persist_participants(Participants) ->
-    file:write_file(sweep_file("participants.dat") , io_lib:fwrite("~p.\n",[Participants])).
+    file:write_file(sweep_file(?PARTICIPANTS_FILE) , io_lib:fwrite("~p.\n",[Participants])).
 
 get_persistent_participants() ->
-    case file:consult(sweep_file("participants.dat")) of
+    case file:consult(sweep_file(?PARTICIPANTS_FILE)) of
         {ok, [Participants]} ->
             Participants;
         _ ->
             false
     end.
+
+delete_persistent_participants() ->
+    file:delete(sweep_file(?PARTICIPANTS_FILE)).
+
+sweep_file(File) ->
+    PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
+    SweepDir = filename:join(PDD, ?MODULE),
+    SweepFile = filename:join(SweepDir, File),
+    ok = filelib:ensure_dir(SweepFile),
+    SweepFile.
 
 do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, VnodeState) ->
     CompleteFoldReq = make_complete_fold_req(),
@@ -640,13 +655,6 @@ failed_sweep(Failed, Index) ->
 failed_sweep(Failed, Index, Reason) ->
     [Module:failed_sweep(Index, Reason) ||
        #sweep_participant{module = Module} <- Failed].
-
-sweep_file(File) ->
-    PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
-    SweepDir = filename:join(PDD, ?MODULE),
-    SweepFile = filename:join(SweepDir, File),
-    ok = filelib:ensure_dir(SweepFile),
-    SweepFile.
 
 %% @private
 make_complete_fold_req() ->
