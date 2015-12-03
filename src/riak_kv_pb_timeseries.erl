@@ -84,11 +84,13 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q}->
-            case decode_query(Q) of
+            case catch decode_query(Q) of
                 {ok, DecodedQuery} ->
                     PermAndTarget = decode_query_permissions(DecodedQuery),
                     {ok, DecodedQuery, PermAndTarget};
                 {error, Error} ->
+                    {error, decoder_parse_error_resp(Error)};
+                {'EXIT', {Error, _}} ->
                     {error, decoder_parse_error_resp(Error)}
             end;
         #tsgetreq{table = Table}->
