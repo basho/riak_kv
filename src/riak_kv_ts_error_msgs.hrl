@@ -68,3 +68,10 @@
     <<"The upper and lower boundaries are equal but the query uses the greater and less than operators.  ",
       "Change the bounds time or use the greater/less than or equals to on either side.">>
 ).
+
+-define(
+    E_KEY_FIELD_NOT_IN_WHERE_CLAUSE(ParamName),
+    iolist_to_binary(
+        ["Parameter '", ParamName, "' is part the primary key but not ",
+         "specified in the where clause."])
+).
