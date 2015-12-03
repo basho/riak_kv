@@ -166,9 +166,16 @@ handle_call({sweep_request, Index}, _From, State) ->
     {reply, ok, State1};
 
 handle_call(status, _From, State) ->
-    Participants = [Participant || {_Mod, Participant} <- dict:to_list(State#state.sweep_participants)],
-    Sweeps =   [Sweep || {_Index, Sweep} <- dict:to_list(State#state.sweeps)],
-    {reply, {Participants , Sweeps}, State};
+    State1 =
+        case dict:size(State#state.sweeps) of
+            0 ->
+                maybe_initiate_sweeps(State);
+            _ ->
+                State
+        end,
+    Participants = [Participant || {_Mod, Participant} <- dict:to_list(State1#state.sweep_participants)],
+    Sweeps =   [Sweep || {_Index, Sweep} <- dict:to_list(State1#state.sweeps)],
+    {reply, {Participants , Sweeps}, State1};
 
 handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
     [stop_sweep(Sweep) || Sweep <- get_running_sweeps(Sweeps)],
