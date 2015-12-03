@@ -72,6 +72,13 @@
 -define(
     E_KEY_FIELD_NOT_IN_WHERE_CLAUSE(ParamName),
     iolist_to_binary(
-        ["Parameter '", ParamName, "' is part the primary key but not ",
+        ["The '", ParamName, "' parameter is part the primary key but not ",
          "specified in the where clause."])
+).
+
+-define(
+    E_KEY_PARAM_MUST_USE_EQUALS_OPERATOR(ParamName, Op),
+    iolist_to_binary(
+        ["The '", ParamName, "' parameter is part the primary key, and must have an ",
+         "equals clause in the query but the ", atom_to_list(Op), " operator was used."])
 ).

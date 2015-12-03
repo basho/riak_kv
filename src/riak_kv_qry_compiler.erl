@@ -284,24 +284,21 @@ split_key_from_filters2([FieldName], Filters) when is_binary(FieldName) ->
     take_key_field(FieldName, Filters, []).
 
 %%
-take_key_field(FieldName, [], _) ->
-    error({ missing_key_clause, ?E_KEY_FIELD_NOT_IN_WHERE_CLAUSE(FieldName)});
+take_key_field(FieldName, [], Acc) ->
+    % check if the field exists in the clause but used the wrong operator or
+    % it never existed at all. Give a more helpful message if the wrong op was
+    % used.
+    case lists:keyfind(FieldName, 2, Acc) of
+        false ->
+            Reason = ?E_KEY_FIELD_NOT_IN_WHERE_CLAUSE(FieldName);
+        {Op, _, _} ->
+            Reason = ?E_KEY_PARAM_MUST_USE_EQUALS_OPERATOR(FieldName, Op)
+    end,
+    error({missing_key_clause, Reason});
 take_key_field(FieldName, [{'=', FieldName, _} = Field | Tail], Acc) ->
     {Field, Acc ++ Tail};
 take_key_field(FieldName, [Field | Tail], Acc) ->
     take_key_field(FieldName, Tail, [Field | Acc]).
-
-get_fields([], Ands, Acc) ->
-    {Ands, lists:sort(Acc)};
-get_fields([[FieldName] | T], Ands, Acc) ->
-    {NewAnds, Vals} = take(FieldName, Ands, []),
-    get_fields(T, NewAnds, Vals ++ Acc).
-
-take(Key, Ands, Acc) ->
-    case lists:keytake(Key, 2, Ands) of
-        {value, Val, NewAnds} -> take(Key, NewAnds, [Val | Acc]);
-        false                 -> {Ands, lists:sort(Acc)}
-    end.
 
 strip({and_, B, C}, Acc) -> strip(C, [B | Acc]);
 strip(A, Acc)            -> [A | Acc].
@@ -1018,14 +1015,13 @@ missing_key_field_in_where_clause_test() ->
         compile(DDL, Q)
     ).
 
-
-% not_equals_can_only_be_a_filter_test() ->
-%     DDL = get_standard_ddl(),
-%     {ok, Q} = get_query("select * from test1 where time > 1 and time < 6 and user = '2' and location != '4'"),
-%     ?assertMatch(
-%         {error, {missing_key_clause, <<"Field 'location' is part the primary key but not specified in the where clause.">>}},
-%         compile(DDL, Q)
-%     ).
+not_equals_can_only_be_a_filter_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where time > 1 and time < 6 and user = '2' and location != '4'"),
+    ?assertEqual(
+        {error, {missing_key_clause, ?E_KEY_PARAM_MUST_USE_EQUALS_OPERATOR("location", '!=')}},
+        compile(DDL, Q)
+    ).
 
 % FIXME or operators
 
