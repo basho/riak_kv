@@ -82,6 +82,8 @@
 
          {timeseries_query_timeout_ms, 10000},
 
-         {timeseries_query_max_quanta_span, 5}
+         {timeseries_query_max_quanta_span, 5},
+
+         {timeseries_max_concurrent_queries, 3}
         ]}
  ]}.

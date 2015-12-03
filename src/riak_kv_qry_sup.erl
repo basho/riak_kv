@@ -58,10 +58,7 @@ init([]) ->
     Shutdown = 2000,
     Type = worker,
 
-    % {ok, NumFSMs} = application:get_env(riak_kv, concurrent_queries),
-    % {ok, MaxQ}    = application:get_env(riak_kv, query_queue_length),
-
-    NumFSMs = 3,
+    NumFSMs = app_helper:get_env(riak_kv, timeseries_max_concurrent_queries),
     MaxQ    = 3,
 
     MakeNamesFn = fun(N) ->
