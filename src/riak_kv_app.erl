@@ -229,8 +229,6 @@ prep_stop(_State) ->
     try %% wrap with a try/catch - application carries on regardless,
         %% no error message or logging about the failure otherwise.
 
-        riak_kv_sweeper:disable_sweep_scheduling(),
-
         lager:info("Stopping application riak_kv - marked service down.\n", []),
         riak_core_node_watcher:service_down(riak_kv),
 
