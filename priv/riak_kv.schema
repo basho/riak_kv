@@ -701,14 +701,21 @@ end
 {mapping, "tombstone.grace_period", "riak_kv.tombstone_grace_period", [
   {default, off},
   {datatype, [{duration, s}, flag]},
+  {validators, ["grace_period"]},
   hidden
 ]}.
+
+{validator, "grace_period", "grace period have to be between 1h and 1w",
+ fun(Value) ->
+    Value == false orelse (is_integer(Value) andalso Value >= 1 * 3600 andalso Value =< 7 * 24 * 3600)
+ end}.
 
 %% @doc Time between sweeps for reap tombstone.
 %% tombstone.grace_period needs to be defined for these to run
 {mapping, "tombstone.sweep_interval", "riak_kv.reap_sweep_interval", [
    {default, "1d"},
    {datatype, {duration, s}},
+   {validators, ["minimum_sweep_interval"]},
    hidden
 ]}.
 
@@ -716,5 +723,11 @@ end
 {mapping, "obj_ttl.sweep_interval", "riak_kv.obj_ttl_sweep_interval", [
    {default, off},
    {datatype, [{duration, s}, flag]},
+   {validators, ["minimum_sweep_interval"]},
    hidden
 ]}.
+
+{validator, "minimum_sweep_interval", "sweep interval can't be shorter then 6h",
+ fun(Value) ->
+    Value == false orelse (is_integer(Value) andalso Value >= 6 * 3600)
+ end}.
