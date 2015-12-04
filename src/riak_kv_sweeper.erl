@@ -140,6 +140,7 @@ update_progress(Index, SweptKeys) ->
 
 init([]) ->
     process_flag(trap_exit, true),
+    random:seed(erlang:now()),
     schedule_initial_sweep_tick(),
     case get_persistent_participants() of
         false ->
