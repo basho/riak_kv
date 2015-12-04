@@ -55,20 +55,20 @@ comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
     end.
 
 %% now break out the query on quantum boundaries
-expand_query(#ddl_v1{local_key = LK, partition_key = PK} = DDL, 
+expand_query(#ddl_v1{table = T, local_key = LK, partition_key = PK} = DDL,
              #riak_sql_v1{ 'SELECT' = SelectSpec1 } = Q, Where1) ->
     case expand_where(Where1, PK) of
         {error, E} ->
             {error, E};
         Where2 ->
+            Mod = riak_ql_ddl:make_module_name(T),
             SelectSpec2 = [compile_select(DDL, S) || S <- SelectSpec1],
-            [Q#riak_sql_v1{
-                   is_executable = true,
-                   type          = timeseries,
-                   'SELECT'      = SelectSpec2,
-                   'WHERE'       = X,
-                   local_key     = LK,
-                   partition_key = PK} || X <- Where2]
+            fix_subquery_order([Q#riak_sql_v1{is_executable = true,
+                                              type          = timeseries,
+                                              'SELECT'      = SelectSpec2,
+                                              'WHERE'       = fix_start_order(X, Mod, LK),
+                                              local_key     = LK,
+                                              partition_key = PK} || X <- Where2])
     end.
 
 %% Run the selection spec for all selection columns that was created by
@@ -96,6 +96,50 @@ field_index_of(Fields, [ColumnName]) ->
     #riak_field_v1{ position = Position } =
         lists:keyfind(ColumnName, 2, Fields),
     Position.
+
+fix_start_order(W, Mod, LK) ->
+    {startkey, StartKey0} = lists:keyfind(startkey, 1, W),
+    {endkey, EndKey0} = lists:keyfind(endkey, 1, W),
+    StartVals = [{N, V} || {N, _T, V} <- StartKey0],
+    EndVals = [{N, V} || {N, _T, V} <- EndKey0],
+    StartKey = riak_ql_ddl:make_key(Mod, LK,  StartVals),
+    EndKey = riak_ql_ddl:make_key(Mod, LK,  EndVals),
+    case StartKey < EndKey of
+        true ->
+            W;
+        false ->
+            %% Swap the start/end keys so that the backends will
+            %% scan over them correctly.  Likely cause is a descending
+            %% timestamp field.
+            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
+            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+            %% start inclusive defaults true, end inclusive defaults false
+            W3 = lists:keystore(start_inclusive, 1, W2,
+                                {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
+            _W4 = lists:keystore(end_inclusive, 1, W3,
+                                 {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
+    end.
+
+%% Make the subqueries appear in the same order as the keys.  The qry worker
+%% returns the results to the client in the order of the subqueries, so
+%% if timestamp is descending for equality queries on family/series then
+%% the results need to merge in the reverse order.
+%%
+%% Detect this by the implict order of the start/end keys.  Should be
+%% refactored to explicitly understand key order at some future point.
+fix_subquery_order_compare(Qa, Qb) ->
+    {startkey, Astartkey} = lists:keyfind(startkey, 1, Qa#riak_sql_v1.'WHERE'),
+    {endkey, Aendkey} = lists:keyfind(endkey, 1, Qa#riak_sql_v1.'WHERE'),
+    {startkey, Bstartkey} = lists:keyfind(startkey, 1, Qb#riak_sql_v1.'WHERE'),
+    case Astartkey < Aendkey of
+        true ->
+            Astartkey =< Bstartkey;
+        false ->
+            Bstartkey =< Astartkey
+    end.
+
+fix_subquery_order(Qs) ->
+    lists:sort(fun fix_subquery_order_compare/2, Qs).
 
 expand_where(Where, #key_v1{ast = PAST}) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
@@ -135,6 +179,8 @@ expand_where(Where, #key_v1{ast = PAST}) ->
             {error, {too_many_subqueries, NoSubQueries}}
     end.
 
+make_wheres(Where, QField, Min, Max, Boundaries) when Min > Max ->
+    make_wheres(Where, QField, Max, Min, Boundaries);
 make_wheres(Where, QField, Min, Max, Boundaries) ->
     {HeadOption, TailOption, NewWhere} = extract_options(Where),
     Starts = [Min | Boundaries],
