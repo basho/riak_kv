@@ -106,19 +106,21 @@ compile_where_clause(?DDL{} = DDL,
     end.
 
 %% now break out the query on quantum boundaries
-expand_query(?DDL{local_key = LK, partition_key = PK},
-             ?SQL_SELECT{} = Q1, Where1,
+expand_query(?DDL{table = T, local_key = LK, partition_key = PK},
+             ?SQL_SELECT{ } = Q, Where1,
              MaxSubQueries) ->
     case expand_where(Where1, PK, MaxSubQueries) of
         {error, E} ->
             {error, E};
         Where2 ->
-            Q2 = Q1?SQL_SELECT{is_executable = true,
-                               type          = timeseries,
-                               local_key     = LK,
-                               partition_key = PK},
-            SubQueries = [Q2?SQL_SELECT{ 'WHERE' = X } || X <- Where2],
-            {ok, SubQueries}
+            Mod = riak_ql_ddl:make_module_name(T),
+            SubQueries1 =
+                fix_subquery_order([Q?SQL_SELECT{is_executable = true,
+                                              type          = timeseries,
+                                              'WHERE'       = fix_start_order(X, Mod, LK),
+                                              local_key     = LK,
+                                              partition_key = PK} || X <- Where2]),
+            {ok, SubQueries1}
     end.
 
 %% Calulate the final result for an aggregate.
@@ -518,6 +520,50 @@ find_quantum_field_index_in_key2([_|Tail], Index) ->
     find_quantum_field_index_in_key2(Tail, Index+1).
 
 %%
+fix_start_order(W, Mod, LK) ->
+    {startkey, StartKey0} = lists:keyfind(startkey, 1, W),
+    {endkey, EndKey0} = lists:keyfind(endkey, 1, W),
+    StartVals = [{N, V} || {N, _T, V} <- StartKey0],
+    EndVals = [{N, V} || {N, _T, V} <- EndKey0],
+    StartKey = riak_ql_ddl:make_key(Mod, LK,  StartVals),
+    EndKey = riak_ql_ddl:make_key(Mod, LK,  EndVals),
+    case StartKey < EndKey of
+        true ->
+            W;
+        false ->
+            %% Swap the start/end keys so that the backends will
+            %% scan over them correctly.  Likely cause is a descending
+            %% timestamp field.
+            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
+            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+            %% start inclusive defaults true, end inclusive defaults false
+            W3 = lists:keystore(start_inclusive, 1, W2,
+                                {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
+            _W4 = lists:keystore(end_inclusive, 1, W3,
+                                 {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
+    end.
+
+%% Make the subqueries appear in the same order as the keys.  The qry worker
+%% returns the results to the client in the order of the subqueries, so
+%% if timestamp is descending for equality queries on family/series then
+%% the results need to merge in the reverse order.
+%%
+%% Detect this by the implict order of the start/end keys.  Should be
+%% refactored to explicitly understand key order at some future point.
+fix_subquery_order_compare(Qa, Qb) ->
+    {startkey, Astartkey} = lists:keyfind(startkey, 1, Qa?SQL_SELECT.'WHERE'),
+    {endkey, Aendkey} = lists:keyfind(endkey, 1, Qa?SQL_SELECT.'WHERE'),
+    {startkey, Bstartkey} = lists:keyfind(startkey, 1, Qb?SQL_SELECT.'WHERE'),
+    case Astartkey < Aendkey of
+        true ->
+            Astartkey =< Bstartkey;
+        false ->
+            Bstartkey =< Astartkey
+    end.
+
+fix_subquery_order(Qs) ->
+    lists:sort(fun fix_subquery_order_compare/2, Qs).
+
 hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
                            {element(3, lists:nth(QIndex, List)), E};
@@ -558,6 +604,8 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
             {error, {too_many_subqueries, ?E_TOO_MANY_SUBQUERIES(NoSubQueries)}}
     end.
 
+make_wheres(Where, QField, Min, Max, Boundaries) when Min > Max ->
+    make_wheres(Where, QField, Max, Min, Boundaries);
 make_wheres(Where, QField, Min, Max, Boundaries) ->
     {HeadOption, TailOption, NewWhere} = extract_options(Where),
     Starts = [Min | Boundaries],
