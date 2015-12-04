@@ -35,7 +35,6 @@
          cancel_exchanges/0,
          get_lock/1,
          get_lock/2,
-         hashtree_pid/1,
          requeue_poke/1,
          start_exchange_remote/3,
          exchange_status/4,
@@ -103,9 +102,6 @@ get_lock(Type) ->
 -spec get_lock(any(), pid()) -> ok | max_concurrency.
 get_lock(Type, Pid) ->
     gen_server:call(?MODULE, {get_lock, Type, Pid}, infinity).
-
-hashtree_pid(Index) ->
-    gen_server:call(?MODULE, {hashtree_pid, Index}).
 
 %% @doc Acquire the necessary locks for an entropy exchange with the specified
 %%      remote vnode. The request is sent to the remote entropy manager which
@@ -330,17 +326,6 @@ handle_call(cancel_exchanges, _From, State=#state{exchanges=Exchanges}) ->
                    Index
                end || {Index, _Ref, Pid} <- Exchanges],
     {reply, Indices, State};
-handle_call({hashtree_pid, Index}, _From, State=#state{trees=Trees}) ->
-    Reply =
-        case orddict:find(Index, Trees) of
-            {ok, Pid} ->
-                {ok, Pid};
-            _ ->
-                lager:error("tree pid not found for index: ~p", [Index]),
-                false
-        end,
-    {reply, Reply, State};
-
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
