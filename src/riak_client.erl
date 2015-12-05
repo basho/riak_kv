@@ -29,7 +29,7 @@
 -export([put/2,put/3,put/4,put/5,put/6]).
 -export([delete/3,delete/4,delete/5]).
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
--export([list_keys/2,list_keys/3,list_keys/4,list_keys/5]).
+-export([list_keys/2,list_keys/3,list_keys/4]).
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
 -export([filter_buckets/2]).
 -export([filter_keys/3,filter_keys/4]).
@@ -628,7 +628,7 @@ split_cover(SubpartitionPlan) when is_list(SubpartitionPlan) ->
 %%      out of date if called immediately after a put or delete.
 %% @equiv list_keys(Bucket, default_timeout()*8)
 list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
-    list_keys(Bucket, none, ?DEFAULT_TIMEOUT*8, none, THIS).
+    list_keys(Bucket, none, ?DEFAULT_TIMEOUT*8, THIS).
 
 -spec list_keys(riak_object:bucket(), pos_integer() | none, riak_client()) ->
                        {ok, [tuple()]} | {error, term()}.
@@ -636,23 +636,14 @@ list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
-    list_keys(Bucket, none, Timeout, none, THIS).
+    list_keys(Bucket, none, Timeout, THIS).
 
 -spec list_keys(riak_object:bucket(), function() | none, pos_integer() | none, riak_client()) ->
                        {ok, [tuple()]} | {error, term()}.
 %% @doc List the keys known to be present in Bucket.
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
-list_keys(Bucket, Filter, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
-    list_keys(Bucket, Filter, Timeout, none, THIS).
-
--spec list_keys(riak_object:bucket(), function() | none, pos_integer() | none, DDLMod::module() | none,
-                riak_client()) ->
-                       {ok, [tuple()]} | {error, term()}.
-%% @doc Lists all keys in Bucket. When DDLMod is not 'none' and
-%%      Filter is not 'none', Filter function is applied to the
-%%      recovered compound key.
-list_keys(Bucket, Filter, Timeout0, Mod, {?MODULE, [Node, _ClientId]}) ->
+list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
     Timeout =
         case Timeout0 of
             T when is_integer(T) -> T;
@@ -660,7 +651,7 @@ list_keys(Bucket, Filter, Timeout0, Mod, {?MODULE, [Node, _ClientId]}) ->
         end,
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, Mod]]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout]]),
     wait_for_listkeys(ReqId).
 
 stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
