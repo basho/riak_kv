@@ -895,12 +895,15 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
 %% that represents the starting key for the scope. For example, since
 %% we store objects under {o, Bucket, Key}, the first key for the
 %% bucket "foo" would be `sext:encode({o, <<"foo">>, <<>>}).`
+%%
+%% For starting ranges, use key undefined.  Keys are either binaries
+%% for tuples for time series.  Either of sort *after* a bare atom.
 to_first_key(undefined) ->
     %% Start at the first object in LevelDB...
-    to_object_key({<<>>, <<>>}, <<>>);
+    to_object_key({<<>>, <<>>}, undefined); 
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
-    to_object_key(Bucket, <<>>);
+    to_object_key(Bucket, undefined);
 to_first_key({index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
     %% Start at first index entry
     to_index_key(<<>>, <<>>, <<>>, <<>>);
