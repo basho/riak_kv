@@ -949,9 +949,9 @@ orig_to_object_key(Bucket, Key) ->
 %% be round-tripped (as that would then be a binary-wrapping a sext-encoded
 %% TS key - for an extra 9 bytes used).
 %%
-to_object_key({BucketType, BucketName}, {Family, Series, Timestamp}) ->
-    EncodedBucketType = sext:encode(BucketType),
-    EncodedBucketName = sext:encode(BucketName),
+to_object_key({TableName, TableName}, {Family, Series, Timestamp}) ->
+    EncodedBucketType = % sext:encode(BucketType),
+    EncodedBucketName = sext:encode(TableName),
     EncodedFamily = sext:encode(Family),
     EncodedSeries = sext:encode(Series),
     EncodedTimestamp = sext:encode(Timestamp),
