@@ -395,8 +395,10 @@ non_neg(X) ->
     max(0, X).
 
 remaining_put_timeout(Start, Timeout) ->
-    non_neg(Timeout -
-                non_neg(trunc(timer:now_diff(os:timestamp(), Start)))).
+    MicroSecondsSinceStart =
+        non_neg(trunc(timer:now_diff(os:timestamp(), Start))),
+    %% Convert to milliseconds before calculating the new timeout
+    non_neg(Timeout - (MicroSecondsSinceStart div 1000)).
 
 find_put_timeout(Options) ->
     case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
