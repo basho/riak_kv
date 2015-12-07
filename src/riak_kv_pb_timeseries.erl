@@ -250,7 +250,7 @@ process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
         _DDL ->
             Filter = none,
             Result = riak_client:list_keys(
-                       {Table, Table}, Filter, Timeout,
+                       table_to_bucket(Table), Filter, Timeout,
                        {riak_client, [node(), undefined]}),
             case Result of
                 {ok, CompoundKeys} ->
