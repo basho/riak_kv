@@ -472,7 +472,6 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     EndKey2 = to_object_key(Bucket, EndKey),
     FoldFun =
         fun({K, V}, Acc) ->
-            timer:sleep(40),
 		    [{K, V} | Acc]
 	    end,
     Options = [
