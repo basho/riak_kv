@@ -52,7 +52,9 @@ make_key(#riak_sql_v1{helper_mod    = Mod,
 hash_for_nodes(NVal,
                {_BucketType, _BucketName}=Bucket, Key) when is_binary(Key) ->
     DocIdx = riak_core_util:chash_key({Bucket, Key}),
-    UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
+    % RTS-698 For each sub-query, the query worker takes the first response from
+    % any vnode. If nodes are down and fallbacks are included in the query plan
+    % then it will return with a subset of results, or possibly an empty list.
+    Perfs = riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv),
     {VNodes, _} = lists:unzip(Perfs),
     VNodes.
