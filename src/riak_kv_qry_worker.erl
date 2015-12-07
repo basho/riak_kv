@@ -153,7 +153,7 @@ handle_info({{SubQId, QId}, {results, Chunk}},
                                sub_qrys = NSubQ};
                false ->
                    %% discard;
-                   %% Don't touch state as it may backend_timeouthave already 'finished'.
+                   %% Don't touch state as it may have already 'finished'.
                    State
            end,
     {noreply, NewS};
