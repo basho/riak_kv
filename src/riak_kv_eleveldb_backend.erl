@@ -49,7 +49,6 @@
 
 -export([data_size/1]).
 
--compile([export_all]).
 -compile({inline, [
                    to_object_key/2, from_object_key/1,
                    to_index_key/4, from_index_key/1
@@ -59,6 +58,9 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -ifdef(TEST).
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -1176,6 +1178,44 @@ setup() ->
 
 cleanup(_) ->
     ?_assertCmd("rm -rf test/eleveldb-backend").
+
+
+%%
+%% Test unrolling of sext decoder against bucket/keys from various versions of Riak.
+%%
+eqc_encoder_test() ->
+    ?assertEqual(true, eqc:quickcheck(eqc:testing_time(2, prop_object_encoder_roundtrips()))).
+
+bucket_name() -> non_empty(binary()).
+bucket_type() -> non_empty(binary()).
+binkey() -> non_empty(binary()).
+binfamily() -> non_empty(binary()).
+binseries() -> non_empty(binary()).
+timestamp() -> ?LET(X, nat(), 1449531227 + X).
+
+gen_bkey() ->
+    oneof([{riak1, {bucket_name(), binkey()}},
+           {riak2, {{bucket_name(), bucket_type()}, binkey()}},
+           {riakts, {{bucket_name(), bucket_type()},
+                     {binfamily(), binseries(), timestamp()}}}]).
+
+prop_object_encoder_roundtrips() ->
+    ?FORALL({Type, {Bucket, Key} = BKey},
+            gen_bkey(),
+            begin
+                Bin = to_object_key(Bucket, Key),
+                OrigBin = orig_to_object_key(Bucket, Key),
+                BKey2 = {Bucket2, Key2} = from_object_key(Bin),
+                ?assertEqual(Bin, OrigBin),
+                case Type of
+                    riakts ->
+                        ?assertEqual({Bucket2, sext:decode(Key2)}, BKey);
+                    _  ->
+                        ?assertEqual(BKey2, orig_from_object_key(Bin)),
+                        ?assertEqual(BKey2, BKey)
+                end,
+                true
+            end).
 
 -endif. % EQC
 
