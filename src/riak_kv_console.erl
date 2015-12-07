@@ -397,7 +397,9 @@ format_progress(#sweep{active_participants = AcitvePart, estimated_keys = {Estim
                     io_lib:format(" ~w of ~w keys swept ~n", [SweptKeys, EstimatedKeys]);
             _ ->
                 format_progress_without_estimate(SweptKeys)
-        end.
+        end;
+format_progress(_) ->
+    "".
 
 format_active_participants(AcitvePart) ->
     io_lib:format("| Running: ", []) ++
