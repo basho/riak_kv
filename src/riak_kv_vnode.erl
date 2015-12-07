@@ -3058,22 +3058,4 @@ flush_msgs() ->
             ok
     end.
 
-strip_nonlk_fields_test() ->
-    ?assertEqual(
-       [1, 3],
-       strip_nonlk_fields(
-         [<<"a">>, <<"b">>],
-         [{<<"a">>, 1}, {<<"x">>, 2}, {<<"b">>, 3}])),
-    ?assertEqual(
-       [1, 2],
-       strip_nonlk_fields(
-         [<<"a">>, <<"b">>],
-         [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
-    ?assertEqual(
-       [1, 2],
-       strip_nonlk_fields(
-         [<<"b">>, <<"a">>],
-         [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
-    ok.
-
 -endif.
