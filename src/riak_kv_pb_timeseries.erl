@@ -50,7 +50,11 @@
 %% equally.
 -export([pk/1, lk/1]).
 
--record(state, {}).
+-record(state, {
+          req,
+          req_ctx,
+          column_info
+         }).
 
 %% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
 -define(E_SUBMIT,            1001).
@@ -84,11 +88,13 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q}->
-            case decode_query(Q) of
+            case catch decode_query(Q) of
                 {ok, DecodedQuery} ->
                     PermAndTarget = decode_query_permissions(DecodedQuery),
                     {ok, DecodedQuery, PermAndTarget};
                 {error, Error} ->
+                    {error, decoder_parse_error_resp(Error)};
+                {'EXIT', {Error, _}} ->
                     {error, decoder_parse_error_resp(Error)}
             end;
         #tsgetreq{table = Table}->
@@ -239,22 +245,25 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
     end;
 
 
-process(#tslistkeysreq{table = Table, timeout = Timeout}, State) ->
+process(#tslistkeysreq{table   = Table,
+                       timeout = Timeout} = Req,
+        State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     case catch Mod:get_ddl() of
         {_, {undef, _}} ->
             Props = riak_core_bucket:get_bucket(Table),
             {reply, missing_helper_module(Table, Props), State};
-        _DDL ->
-            Filter = none,
-            Result = riak_client:list_keys(
-                       {Table, Table}, Filter, Timeout,
+        DDL ->
+            Result = riak_client:stream_list_keys(
+                       {Table, Table}, Timeout,
                        {riak_client, [node(), undefined]}),
             case Result of
-                {ok, CompoundKeys} ->
-                    Keys = riak_pb_ts_codec:encode_rows_non_strict(
-                             [tuple_to_list(sext:decode(A)) || A <- CompoundKeys]),
-                    {reply, #tslistkeysresp{keys = Keys, done = true}, State};
+                {ok, ReqId} ->
+                    ColumnInfo =
+                        [Mod:get_field_type(N)
+                         || #param_v1{name = N} <- DDL#ddl_v1.local_key#key_v1.ast],
+                    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
+                                                         column_info = ColumnInfo}};
                 {error, Reason} ->
                     {reply, make_rpberrresp(
                               ?E_LISTKEYS, flat_format("Failed to list keys: ~p", [Reason])),
@@ -300,10 +309,33 @@ submit_query(DDL, Mod, SQL, State) ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
     end.
 
+%% There is no two-tuple variants of process_stream for tslistkeysresp
+%% as TS list_keys senders always use backpressure.
+process_stream({ReqId, done}, ReqId,
+               State = #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
+    {done, #tslistkeysresp{done = true}, State};
 
-%% TODO: implement
-process_stream(_, _, State)->
-    {ignore, State}.
+process_stream({ReqId, From, {keys, []}}, ReqId,
+               State = #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
+    riak_kv_keys_fsm:ack_keys(From),
+    {ignore, State};
+
+process_stream({ReqId, From, {keys, CompoundKeys}}, ReqId,
+               State = #state{req = #tslistkeysreq{},
+                              req_ctx = ReqId,
+                              column_info = ColumnInfo}) ->
+    riak_kv_keys_fsm:ack_keys(From),
+    Keys = riak_pb_ts_codec:encode_rows(
+             ColumnInfo, [tuple_to_list(sext:decode(A)) || A <- CompoundKeys, A /= []]),
+    {reply, #tslistkeysresp{keys = Keys, done = false}, State};
+
+process_stream({ReqId, {error, Error}}, ReqId,
+               #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
+    {error, {format, Error}, #state{}};
+process_stream({ReqId, Error}, ReqId,
+               #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
+    {error, {format, Error}, #state{}}.
+
 
 -spec decode_query(Query::#tsinterpolation{}) ->
     {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{}}.
