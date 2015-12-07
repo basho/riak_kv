@@ -33,13 +33,13 @@
          local_get/2,
          local_put/2,
          local_put/3,
+         local_reap/3,
          coord_put/6,
          readrepair/6,
          list_keys/4,
          fold/3,
          fold/4,
          sweep/3,
-         sweep_del/3,
          get_vclocks/2,
          vnode_status/1,
          ack_keys/1,
@@ -271,9 +271,10 @@ del(Preflist, BKey, ReqId) ->
                                                   req_id=ReqId},
                                    riak_kv_vnode_master).
 
-sweep_del(Preflist, BKey, RObj) ->
+reap(Preflist, BKey, RObj, Sender) ->
     riak_core_vnode_master:command(Preflist,
-                                   {sweep_delete, sanitize_bkey(BKey), RObj},
+                                   {reap, sanitize_bkey(BKey), RObj},
+                                   Sender,
                                    riak_kv_vnode_master).
 
 %% Issue a put for the object to the preflist, expecting a reply
@@ -303,6 +304,23 @@ local_put(Index, Obj, Options) ->
     StartTime = riak_core_util:moment(),
     Sender = {raw, Ref, self()},
     put({Index, node()}, BKey, Obj, ReqId, StartTime, Options, Sender),
+    collect_responses(Ref, ReqId).
+
+collect_responses(Ref, ReqId) ->
+    receive
+        {Ref,{w,_, ReqId}} ->
+            collect_responses(Ref, ReqId);
+        {Ref,{dw,_, ReqId}} ->
+            ok
+    %% Short timeout since this is used by the sweeper
+    after 100 ->
+        ok
+    end.
+
+local_reap(Index, BKey, RObj) ->
+    Ref = make_ref(),
+    Sender = {raw, Ref, self()},
+    reap({Index, node()}, BKey, RObj, Sender),
     receive
         {Ref, Reply} ->
             Reply
@@ -635,7 +653,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
     end;
 handle_command(?KV_DELETE_REQ{bkey=BKey}, _Sender, State) ->
     do_delete(BKey, State);
-handle_command({sweep_delete, BKey, RObj}, _Sender, State) ->
+handle_command({reap, BKey, RObj}, _Sender, State) ->
     State1 = do_backend_delete(BKey, RObj, State),
     {reply, ok, State1};
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->

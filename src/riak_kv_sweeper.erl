@@ -702,7 +702,7 @@ fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
 
     try Fun({BKey, RObj}, Acc, Opt) of
         {deleted, NewAcc} ->
-            riak_kv_vnode:sweep_del({SweepAcc1#sa.index, node()}, BKey, RObj),
+            riak_kv_vnode:local_reap(SweepAcc1#sa.index, BKey, RObj),
             fold_funs(deleted,
                       SweepAcc1#sa{active_p = ActiveRest,
                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
@@ -719,6 +719,7 @@ fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
               lager:error("Sweeper fun crashed ~p ~p Key: ~p", [{C, T}, Sweep, BKey]),
               fold_funs({BKey, RObj},
                         SweepAcc1#sa{active_p = ActiveRest,
+                                    %% We keep the sweep in succ unil we have enough crashes.
                                     succ_p = [Sweep#sweep_participant{errors = Errors + 1} | Succ]})
     end.
 
@@ -876,7 +877,7 @@ make_keys(Nr) ->
 setup_sweep(N) ->
     meck:new(riak_kv_vnode, []),
     meck:expect(riak_kv_vnode, local_put, fun(_, _) -> [] end),
-    meck:expect(riak_kv_vnode, sweep_del, fun(_, _, _) -> [] end),
+    meck:expect(riak_kv_vnode, local_reap, fun(_, _, _) -> [] end),
     meck:new(riak_core_bucket),
     meck:expect(riak_core_bucket, get_bucket, fun(_) -> [] end),
     [meck_callback_modules(Module)||  Module <- [delete_callback_module, modify_callback_module, observ_callback_module]],
