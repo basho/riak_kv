@@ -61,7 +61,7 @@
           key :: key(),
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
-          updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
+          updatemetadata=dict:from_list([{clean, true}]) :: riak_object_dict(),
           updatevalue :: term()
          }).
 -opaque riak_object() :: #r_object{}.
@@ -129,6 +129,8 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
 newts(B, K, V, MD) ->
     new_int2(B, K, V, MD).
 
+
+
 %% internal version after all validation has been done
 new_int(B, K, V, MD) ->
     case size(K) > ?MAX_KEY_SIZE of
@@ -137,7 +139,9 @@ new_int(B, K, V, MD) ->
         false ->
             case MD of
                 no_initial_metadata ->
-                    new_int2(B, K, V, dict:new());
+                    Contents = [#r_content{metadata=dict:new(), value=V}],
+                    #r_object{bucket=B,key=K,
+                              contents=Contents,vclock=vclock:fresh()};
                 _ ->
                     new_int2(B, K, V, MD)
             end
