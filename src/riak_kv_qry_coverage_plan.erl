@@ -33,9 +33,13 @@ create_plan(NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
     Query = riak_local_index:get_query_from_req(Request),
     Key2 = make_key(Query),
     Bucket = riak_kv_util:get_bucket_from_req(Request),
-    VNodes = hash_for_nodes(NVal, Bucket, Key2),
-    NoFilters = [],
-    _CoveragePlan = {VNodes, NoFilters}.
+    case hash_for_nodes(NVal, Bucket, Key2) of
+        [] ->
+            {error, no_primaries_available};
+        VNodes when is_list(VNodes) ->
+            NoFilters = [],
+            {VNodes, NoFilters}
+    end.
 
 %% This is fugly because the physical format of the startkey
 %% which is neede by eleveldb is being used by the query
@@ -52,7 +56,9 @@ make_key(#riak_sql_v1{helper_mod    = Mod,
 hash_for_nodes(NVal,
                {_BucketType, _BucketName}=Bucket, Key) when is_binary(Key) ->
     DocIdx = riak_core_util:chash_key({Bucket, Key}),
-    UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    Perfs = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
+    % Fallbacks cannot be used for query results because they may have partial
+    % or empty results and the riak_kv_qry_worker currently uses the first
+    % result from a sub query, the primary must be used to get correct results
+    Perfs = riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv),
     {VNodes, _} = lists:unzip(Perfs),
     VNodes.

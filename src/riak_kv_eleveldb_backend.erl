@@ -470,9 +470,10 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
     EndKey = eleveldb_ts:encode_key(EndK3),
     EndKey2 = to_object_key(Bucket, EndKey),
-    FoldFun = fun({K, V}, Acc) ->
-		     [{K, V} | Acc]
-	     end,
+    FoldFun =
+        fun({K, V}, Acc) ->
+		    [{K, V} | Acc]
+	    end,
     Options = [
                {start_key,    StartKey2},
                {end_key,      EndKey2},
