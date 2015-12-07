@@ -33,9 +33,13 @@ create_plan(NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
     Query = riak_local_index:get_query_from_req(Request),
     Key2 = make_key(Query),
     Bucket = riak_kv_util:get_bucket_from_req(Request),
-    VNodes = hash_for_nodes(NVal, Bucket, Key2),
-    NoFilters = [],
-    _CoveragePlan = {VNodes, NoFilters}.
+    case hash_for_nodes(NVal, Bucket, Key2) of
+        [] ->
+            {error, no_primaries_available};
+        VNodes when is_list(VNodes) ->
+            NoFilters = [],
+            {VNodes, NoFilters}
+    end.
 
 %% This is fugly because the physical format of the startkey
 %% which is neede by eleveldb is being used by the query

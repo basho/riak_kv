@@ -153,19 +153,19 @@ handle_info({{SubQId, QId}, {results, Chunk}},
                                sub_qrys = NSubQ};
                false ->
                    %% discard;
-                   %% Don't touch state as it may have already 'finished'.
+                   %% Don't touch state as it may backend_timeouthave already 'finished'.
                    State
            end,
     {noreply, NewS};
 
-handle_info({{SubQId, QId}, {error, timeout}},
+handle_info({{SubQId, QId}, {error, Reason} = Error},
             State = #state{receiver_pid = ReceiverPid,
                            qid    = QId,
                            result = IndexedChunks}) ->
-    lager:warning("Backend timed out while collecting on QId ~p (~p);"
+    lager:warning("Error ~p while collecting on QId ~p (~p);"
                   " dropping ~b chunks of data accumulated so far",
-                  [QId, SubQId, length(IndexedChunks)]),
-    ReceiverPid ! {error, backend_timeout},
+                  [Reason, QId, SubQId, length(IndexedChunks)]),
+    ReceiverPid ! Error,
     pop_next_query(),
     {noreply, new_state(State#state.name)};
 
