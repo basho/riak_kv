@@ -192,6 +192,13 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
 process(#tsdelreq{table = Table, key = PbCompoundKey,
                   vclock = PbVClock, timeout = Timeout},
         State) ->
+    %% Pass the {dw,all} option in to the delete FSM
+    %% to make sure all tombstones are written by the
+    %% async put before the reaping get runs otherwise
+    %% if the default {dw,quorum} is used there is the
+    %% possibility that the last tombstone put overlaps
+    %% inside the KV vnode with the reaping get and
+    %% prevents the tombstone removal.
     Options =
         if Timeout == undefined -> [{dw, all}];
            true -> [{timeout, Timeout}, {dw, all}]
