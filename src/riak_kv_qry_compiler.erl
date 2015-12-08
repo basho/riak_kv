@@ -77,7 +77,19 @@ expand_where(Where, #key_v1{ast = PAST}) ->
                      fn   = quantum,
                      args = [#param_v1{name = X}, Y, Z]}
                  <- PAST],
-    {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(Min, Max, Q, U),
+    EffMin = case proplists:get_value(start_inclusive, Where, true) of
+                 true ->
+                     Min;
+                 _ ->
+                     Min + 1
+             end,
+    EffMax = case proplists:get_value(end_inclusive, Where, false) of
+                 true ->
+                     Max + 1;
+                 _ ->
+                     Max
+             end,
+    {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(EffMin, EffMax, Q, U),
     MaxSubQueries =
         app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
     if
@@ -874,6 +886,54 @@ boundary_quanta_test() ->
     %% get basic query
     Got = compile(DDL, Q),
     ?assertEqual(2, length(Got)).
+
+%% check for spanning precision (same as above except selection range
+%% is exact multiple of quantum size)
+simple_spanning_boundary_precision_test() ->
+    DDL = get_standard_ddl(),
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 30000 and user = 'user_1' and location = 'Scotland'",
+    {ok, Q} = get_query(Query),
+    true = is_query_valid(DDL, Q),
+    Got = compile(DDL, Q),
+    %% now make the result - expecting 2 queries
+    W1 = [
+        {startkey,        [
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
+            {<<"time">>, timestamp, 3000}
+        ]},
+        {endkey,          [
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
+            {<<"time">>, timestamp, 15000}
+        ]},
+      {filter,          []}
+     ],
+    W2 = [
+        {startkey,        [
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
+            {<<"time">>, timestamp, 15000}
+        ]},
+        {endkey,          [
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
+            {<<"time">>, timestamp, 30000}
+        ]},
+      {filter,          []}
+     ],
+    Expected =
+        [Q#riak_sql_v1{is_executable = true,
+                       type          = timeseries,
+                       'WHERE'       = W1,
+                       partition_key = get_standard_pk(),
+                       local_key     = get_standard_lk()},
+         Q#riak_sql_v1{is_executable = true,
+                       type          = timeseries,
+                       'WHERE'       = W2,
+                       partition_key = get_standard_pk(),
+                       local_key     = get_standard_lk()}],
+    ?assertEqual(Expected, Got).
 
 %%
 %% test failures
