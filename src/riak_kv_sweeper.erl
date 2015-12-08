@@ -205,7 +205,7 @@ handle_info({'EXIT', Pid, Reason}, #state{sweeps = Sweeps} = State) ->
         {Sweep, normal} ->
             {noreply, finish_sweep(Sweep, State)};
         {Sweep, Reason} ->
-            lager:error("Sweep crashed ~p ~p ~p", [Sweep, Reason, Pid]),
+            lager:error("Sweep crashed ~p ~p ~p", [Reason, Pid, Sweep]),
             {noreply, finish_sweep(Sweep, State)}
     end;
 

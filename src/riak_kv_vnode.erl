@@ -387,9 +387,9 @@ fold(Preflist, Fun, Acc0, Options) ->
                                               riak_kv_vnode_master).
 
 sweep(Preflist, Participants, EstimatedKeys) ->
-    riak_core_vnode_master:sync_command(Preflist,
-                                        {sweep, Participants, EstimatedKeys},
-                                        riak_kv_vnode_master).
+    riak_core_vnode_master:sync_spawn_command(Preflist,
+                                              {sweep, Participants, EstimatedKeys},
+                                              riak_kv_vnode_master).
 
 get_vclocks(Preflist, BKeyList) ->
     riak_core_vnode_master:sync_spawn_command(Preflist,
