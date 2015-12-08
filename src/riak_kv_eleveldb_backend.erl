@@ -2,7 +2,7 @@
 %%
 %% riak_kv_eleveldb_backend: Backend Driver for LevelDB
 %%
-%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -900,7 +900,7 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
 %% for tuples for time series.  Either of sort *after* a bare atom.
 to_first_key(undefined) ->
     %% Start at the first object in LevelDB...
-    to_object_key({<<>>, <<>>}, undefined); 
+    to_object_key({<<>>, <<>>}, undefined);
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
     to_object_key(Bucket, undefined);
