@@ -24,7 +24,8 @@
 
 -module(riak_kv_ts_util).
 
--export([maybe_parse_table_def/2]).
+-export([maybe_parse_table_def/2,
+         encode_typeval_key/1]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
@@ -90,3 +91,12 @@ try_compile_ddl(DDL) ->
     {_, AST} = riak_ql_ddl_compiler:compile(DDL),
     {ok, _, _} = compile:forms(AST),
     ok.
+
+
+%%
+%% Encode a time series key returned by riak_ql_ddl:get_partition_key/3,
+%% riak_ql_ddl:get_local_key/3,
+%%
+-spec encode_typeval_key(list({term(), term()})) -> tuple().
+encode_typeval_key(TypeVals) ->
+    list_to_tuple([Val || {_Type, Val} <- TypeVals]).

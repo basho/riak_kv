@@ -54,11 +54,17 @@
                    to_object_key/2, from_object_key/1,
                    to_index_key/4, from_index_key/1
                   ]}).
+%% Remove a few releases after 2.1 series, keeping
+%% around for debugging/comparison.
+-export([orig_to_object_key/2, orig_from_object_key/1]).
 
 -include("riak_kv_index.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -ifdef(TEST).
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -465,11 +471,11 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
         end,
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
-    StartK4 = list_to_tuple([Val || {_Type, Val} <- StartK3]), %% TODO: Avoid adding/removing type info
+    StartK4 = riak_kv_ts_util:encode_typeval_key(StartK3), %% TODO: Avoid adding/removing type info
     StartKey = to_object_key(Bucket, StartK4),
     EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
-    EndK4 = list_to_tuple([Val || {_Type, Val} <- EndK3]),
+    EndK4 = riak_kv_ts_util:encode_typeval_key(EndK3),
     EndKey = to_object_key(Bucket, EndK4),
     FoldFun = fun({K, V}, Acc) ->
 		     [{K, V} | Acc]
@@ -1004,17 +1010,22 @@ orig_from_object_key(LKey) ->
 %%
 from_object_key(<<16,0,0,0,3, %% 3-tuple - outer
                   12,183,128,8, %% o-atom
-                  Rest/binary>>) ->
+                  Rest/binary>>=Bin) ->
     {Bucket, Rest1} = sext:decode_next(Rest), % grabs the two-tuple of bucket type/name
     case Rest1 of
         <<16,0,0,0,3,_TSKeyElements/binary>> = TSKey ->
             {Bucket, TSKey}; % small risk not checking for junk at the end of the TSKeyElements
         _ ->
-            {Key, <<>>} = sext:decode_next(Rest1),
-            {Bucket, Key}
+            case catch sext:decode_next(Rest1) of
+                {Key, <<>>} ->
+                    {Bucket, Key};
+                _ ->
+                    lager:warning("Corrupted object key ~p, discarding", [Bin]),
+                    ignore
+            end
     end;
 from_object_key(_) -> %% If it did not start with the magic {o, ...} ignore
-    ignore.
+    undefined.
 
 to_index_key(Bucket, Key, Field, Term) ->
     sext:encode({i, Bucket, Field, Term, Key}).
@@ -1177,6 +1188,43 @@ setup() ->
 cleanup(_) ->
     ?_assertCmd("rm -rf test/eleveldb-backend").
 
--endif. % EQC
 
+%%
+%% Test unrolling of sext decoder against bucket/keys from various versions of Riak.
+%%
+eqc_encoder_test() ->
+    ?assertEqual(true, eqc:quickcheck(eqc:testing_time(2, prop_object_encoder_roundtrips()))).
+
+bucket_name() -> non_empty(binary()).
+bucket_type() -> non_empty(binary()).
+binkey() -> non_empty(binary()).
+binfamily() -> non_empty(binary()).
+binseries() -> non_empty(binary()).
+timestamp() -> ?LET(X, nat(), 1449531227 + X).
+
+gen_bkey() ->
+    oneof([{riak1, {bucket_name(), binkey()}},
+           {riak2, {{bucket_name(), bucket_type()}, binkey()}},
+           {riakts, {{bucket_name(), bucket_type()},
+                     {binfamily(), binseries(), timestamp()}}}]).
+
+prop_object_encoder_roundtrips() ->
+    ?FORALL({Type, {Bucket, Key} = BKey},
+            gen_bkey(),
+            begin
+                Bin = to_object_key(Bucket, Key),
+                OrigBin = orig_to_object_key(Bucket, Key),
+                BKey2 = {Bucket2, Key2} = from_object_key(Bin),
+                ?assertEqual(Bin, OrigBin),
+                case Type of
+                    riakts ->
+                        ?assertEqual({Bucket2, sext:decode(Key2)}, BKey);
+                    _  ->
+                        ?assertEqual(BKey2, orig_from_object_key(Bin)),
+                        ?assertEqual(BKey2, BKey)
+                end,
+                true
+            end).
+
+-endif. % EQC
 -endif.

@@ -196,9 +196,16 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
 process(#tsdelreq{table = Table, key = PbCompoundKey,
                   vclock = PbVClock, timeout = Timeout},
         State) ->
+    %% Pass the {dw,all} option in to the delete FSM
+    %% to make sure all tombstones are written by the
+    %% async put before the reaping get runs otherwise
+    %% if the default {dw,quorum} is used there is the
+    %% possibility that the last tombstone put overlaps
+    %% inside the KV vnode with the reaping get and
+    %% prevents the tombstone removal.
     Options =
-        if Timeout == undefined -> [];
-           true -> [{timeout, Timeout}]
+        if Timeout == undefined -> [{dw, all}];
+           true -> [{timeout, Timeout}, {dw, all}]
         end,
     VClock =
         case PbVClock of
@@ -414,7 +421,7 @@ to_string(X) ->
 % functions supporting INSERT
 
 row_to_key(Row, DDL, Mod) ->
-    list_to_tuple([V || {_T, V} <- riak_ql_ddl:get_partition_key(DDL, Row, Mod)]).
+    riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
 -spec partition_data(Data :: list(term()),
                      Bucket :: {binary(), binary()},
@@ -441,7 +448,7 @@ add_preflists(PartitionedData, NVal, UpNodes) ->
 
 build_object(Bucket, Mod, DDL, Row, PK) ->
     Obj = Mod:add_column_info(Row),
-    LK  = list_to_tuple([V || {_T,V} <- riak_ql_ddl:get_local_key(DDL, Row, Mod)]),
+    LK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_local_key(DDL, Row, Mod)),
 
     RObj = riak_object:newts(Bucket, PK, Obj,
                              dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
@@ -514,8 +521,8 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
                    || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
 
             %% 2. make the PK and LK
-            PK  = list_to_tuple([V || {_T, V} <- riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)]),
-            LK  = list_to_tuple([V || {_T, V} <- riak_ql_ddl:get_local_key(DDL, BareValues, Mod)]),
+            PK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
+            LK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
             {ok, {PK, LK}};
        {G, N} ->
             {error, {bad_key_length, G, N}}

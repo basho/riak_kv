@@ -158,20 +158,20 @@ handle_info({{SubQId, QId}, {results, Chunk}},
            end,
     {noreply, NewS};
 
-handle_info({{SubQId, QId}, {error, timeout}},
+handle_info({{SubQId, QId}, {error, Reason} = Error},
             State = #state{receiver_pid = ReceiverPid,
                            qid    = QId,
                            result = IndexedChunks}) ->
-    lager:warning("Backend timed out while collecting on QId ~p (~p);"
+    lager:warning("Error ~p while collecting on QId ~p (~p);"
                   " dropping ~b chunks of data accumulated so far",
-                  [QId, SubQId, length(IndexedChunks)]),
-    ReceiverPid ! {error, backend_timeout},
+                  [Reason, QId, SubQId, length(IndexedChunks)]),
+    ReceiverPid ! Error,
     pop_next_query(),
     {noreply, new_state(State#state.name)};
 
 handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2}) when QId1 =/= QId2 ->
     %% catches late results or errors such getting results for invalid QIds.
-    lager:warning("Bad query id ~p (expected ~p)", [QId1, QId2]),
+    lager:debug("Bad query id ~p (expected ~p)", [QId1, QId2]),
     {noreply, State}.
 
 -spec terminate(term(), #state{}) -> term().

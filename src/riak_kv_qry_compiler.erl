@@ -30,8 +30,6 @@
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
 
--define(MAXSUBQ, 5).
-
 -spec compile(#ddl_v1{}, #riak_sql_v1{}) ->
     [#riak_sql_v1{}] | {error, any()}.
 compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
@@ -79,13 +77,27 @@ expand_where(Where, #key_v1{ast = PAST}) ->
                      fn   = quantum,
                      args = [#param_v1{name = X}, Y, Z]}
                  <- PAST],
-    {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(Min, Max, Q, U),
+    EffMin = case proplists:get_value(start_inclusive, Where, true) of
+                 true ->
+                     Min;
+                 _ ->
+                     Min + 1
+             end,
+    EffMax = case proplists:get_value(end_inclusive, Where, false) of
+                 true ->
+                     Max + 1;
+                 _ ->
+                     Max
+             end,
+    {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(EffMin, EffMax, Q, U),
+    MaxSubQueries =
+        app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
     if
-        NoSubQueries =:= 1 ->
+        NoSubQueries == 1 ->
             [Where];
-        1 < NoSubQueries andalso NoSubQueries =< ?MAXSUBQ ->
-            _NewWs = make_wheres(Where, QField, Min, Max, Boundaries);
-        ?MAXSUBQ < NoSubQueries ->
+        NoSubQueries > 1 andalso NoSubQueries =< MaxSubQueries ->
+            make_wheres(Where, QField, Min, Max, Boundaries);
+        NoSubQueries > MaxSubQueries ->
             {error, {too_many_subqueries, NoSubQueries}}
     end.
 
@@ -179,12 +191,6 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL
             % debugging
             {error, {where_not_timeseries, Reason, erlang:get_stacktrace()}}
     end.
-% check_if_timeseries(_, [{or_, _, _}]) ->
-%     {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}};
-% check_if_timeseries(_, _) ->
-%     % this occurs when the query does not include an AND operator which is
-%     % required for time quanta bounds
-%     {error, {incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED}}.
 
 %%
 has_errors(StartKey, EndKey) ->
@@ -249,7 +255,7 @@ acc_upper_bounds(_Filter, {_, _U}) ->
     error({upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}).
 
 %%
-break_out_timeseries(Filters1, LocalFields, [QuantumFields]) ->
+break_out_timeseries(Filters1, LocalFields1, [QuantumFields]) ->
     case find_timestamp_bounds(QuantumFields, Filters1) of
         {_, {undefined, undefined}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
@@ -271,21 +277,40 @@ break_out_timeseries(Filters1, LocalFields, [QuantumFields]) ->
             error({lower_and_upper_bounds_are_equal_when_no_equals_operator,
                    ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR});
         {Filters2, {Starts, Ends}} ->
-            {Filter, Body} = get_fields(LocalFields, Filters2, []),
-            {[Starts | Body], [Ends | Body], Filter}
+            % remove the quanta from the local fields, this has alreadfy been
+            % removed from the fields
+            [F1, F2, _] = LocalFields1,
+            LocalFields2 = [F1,F2],
+            % create the keys by splitting the key filters and prepending it
+            % with the time bound.
+            {Body, Filters3} = split_key_from_filters(LocalFields2, Filters2),
+            {[Starts | Body], [Ends | Body], Filters3}
     end.
 
-get_fields([], Ands, Acc) ->
-    {Ands, lists:sort(Acc)};
-get_fields([[H] | T], Ands, Acc) ->
-    {NewAnds, Vals} = take(H, Ands, []),
-    get_fields(T, NewAnds, Vals ++ Acc).
+% separate the key fields from the other filters
+split_key_from_filters(LocalFields, Filters) ->
+    lists:mapfoldl(fun split_key_from_filters2/2, Filters, LocalFields).
 
-take(Key, Ands, Acc) ->
-    case lists:keytake(Key, 2, Ands) of
-        {value, Val, NewAnds} -> take(Key, NewAnds, [Val | Acc]);
-        false                 -> {Ands, lists:sort(Acc)}
-    end.
+%%
+split_key_from_filters2([FieldName], Filters) when is_binary(FieldName) ->
+    take_key_field(FieldName, Filters, []).
+
+%%
+take_key_field(FieldName, [], Acc) ->
+    % check if the field exists in the clause but used the wrong operator or
+    % it never existed at all. Give a more helpful message if the wrong op was
+    % used.
+    case lists:keyfind(FieldName, 2, Acc) of
+        false ->
+            Reason = ?E_KEY_FIELD_NOT_IN_WHERE_CLAUSE(FieldName);
+        {Op, _, _} ->
+            Reason = ?E_KEY_PARAM_MUST_USE_EQUALS_OPERATOR(FieldName, Op)
+    end,
+    error({missing_key_clause, Reason});
+take_key_field(FieldName, [{'=', FieldName, _} = Field | Tail], Acc) ->
+    {Field, Acc ++ Tail};
+take_key_field(FieldName, [Field | Tail], Acc) ->
+    take_key_field(FieldName, Tail, [Field | Acc]).
 
 strip({and_, B, C}, Acc) -> strip(C, [B | Acc]);
 strip(A, Acc)            -> [A | Acc].
@@ -328,22 +353,23 @@ make_ands([H | []]) ->
 make_ands([H | T]) ->
     {and_, H, make_ands(T)}.
 
+%%
 rewrite(#key_v1{ast = AST}, W, Mod) ->
-    rew2(AST, W, Mod, []).
+    rewrite2(AST, W, Mod, []).
 
-
-rew2([], [], _Mod, Acc) ->
+%%
+rewrite2([], [], _Mod, Acc) ->
    lists:reverse(Acc);
-%% the rewrite should have consumed all the passed in values
-rew2([], _W, _Mod, _Acc) ->
+rewrite2([], _W, _Mod, _Acc) ->
+    %% the rewrite should have consumed all the passed in values
     {error, {invalid_rewrite, _W}};
-rew2([#param_v1{name = [N]} | T], W, Mod, Acc) ->
-    Type = Mod:get_field_type([N]),
-    case lists:keytake(N, 2, W) of
+rewrite2([#param_v1{name = [FieldName]} | T], Where1, Mod, Acc) ->
+    Type = Mod:get_field_type([FieldName]),
+    case lists:keytake(FieldName, 2, Where1) of
         false                           ->
-            {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(N)}};
-        {value, {_, _, {_, Val}}, NewW} ->
-            rew2(T, NewW, Mod, [{N, Type, Val} | Acc])
+            {error, {missing_param, ?E_MISSING_PARAM_IN_WHERE_CLAUSE(FieldName)}};
+        {value, {_, _, {_, Val}}, Where2} ->
+            rewrite2(T, Where2, Mod, [{FieldName, Type, Val} | Acc])
     end.
 
 -ifdef(TEST).
@@ -849,6 +875,55 @@ simple_spanning_boundary_test() ->
            ],
     ?assertEqual(Expected, Got).
 
+
+%% check for spanning precision (same as above except selection range
+%% is exact multiple of quantum size)
+simple_spanning_boundary_precision_test() ->
+    DDL = get_standard_ddl(),
+    Query = "select weather from GeoCheckin where time >= 3000 and time < 30000 and user = 'user_1' and location = 'Scotland'",
+    {ok, Q} = get_query(Query),
+    true = is_query_valid(DDL, Q),
+    Got = compile(DDL, Q),
+    %% now make the result - expecting 2 queries
+    W1 = [
+        {startkey,        [
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
+            {<<"time">>, timestamp, 3000}
+        ]},
+        {endkey,          [
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
+            {<<"time">>, timestamp, 15000}
+        ]},
+      {filter,          []}
+     ],
+    W2 = [
+        {startkey,        [
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
+            {<<"time">>, timestamp, 15000}
+        ]},
+        {endkey,          [
+            {<<"location">>, varchar, <<"Scotland">>},
+            {<<"user">>, varchar,    <<"user_1">>},
+            {<<"time">>, timestamp, 30000}
+        ]},
+      {filter,          []}
+     ],
+    Expected =
+        [Q#riak_sql_v1{is_executable = true,
+                       type          = timeseries,
+                       'WHERE'       = W1,
+                       partition_key = get_standard_pk(),
+                       local_key     = get_standard_lk()},
+         Q#riak_sql_v1{is_executable = true,
+                       type          = timeseries,
+                       'WHERE'       = W2,
+                       partition_key = get_standard_pk(),
+                       local_key     = get_standard_lk()}],
+    ?assertEqual(Expected, Got).
+
 %%
 %% test failures
 %%
@@ -993,9 +1068,23 @@ query_has_no_AND_operator_4_test() ->
         compile(DDL, Q)
     ).
 
+missing_key_field_in_where_clause_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where time > 1 and time < 6 and user = '2'"),
+    ?assertEqual(
+        {error, {missing_key_clause, ?E_KEY_FIELD_NOT_IN_WHERE_CLAUSE("location")}},
+        compile(DDL, Q)
+    ).
+
+not_equals_can_only_be_a_filter_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1 where time > 1 and time < 6 and user = '2' and location != '4'"),
+    ?assertEqual(
+        {error, {missing_key_clause, ?E_KEY_PARAM_MUST_USE_EQUALS_OPERATOR("location", '!=')}},
+        compile(DDL, Q)
+    ).
 
 % FIXME or operators
-
 
 % literal_on_left_hand_side_test() ->
 %     DDL = get_standard_ddl(),
