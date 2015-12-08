@@ -50,7 +50,7 @@ make_key(#riak_sql_v1{helper_mod    = Mod,
     {startkey, StartKey} = proplists:lookup(startkey, Where),
     StartKey2 = [{Field, Val} || {Field, _Type, Val} <- StartKey],
     Key = riak_ql_ddl:make_key(Mod, PartitionKey, StartKey2),
-    list_to_tuple([V || {_T,V} <- Key]).
+    riak_kv_ts_util:encode_typeval_key(Key).
 
 %%
 hash_for_nodes(NVal,

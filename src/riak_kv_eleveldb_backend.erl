@@ -53,6 +53,9 @@
                    to_object_key/2, from_object_key/1,
                    to_index_key/4, from_index_key/1
                   ]}).
+%% Remove a few releases after 2.1 series, keeping
+%% around for debugging/comparison.
+-export([orig_to_object_key/2, orig_from_object_key/1]).
 
 -include("riak_kv_index.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
@@ -467,11 +470,11 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
         end,
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
-    StartK4 = list_to_tuple([Val || {_Type, Val} <- StartK3]), %% TODO: Avoid adding/removing type info
+    StartK4 = riak_kv_ts_util:encode_typeval_key(StartK3), %% TODO: Avoid adding/removing type info
     StartKey = to_object_key(Bucket, StartK4),
     EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
-    EndK4 = list_to_tuple([Val || {_Type, Val} <- EndK3]),
+    EndK4 = riak_kv_ts_util:encode_typeval_key(EndK3),
     EndKey = to_object_key(Bucket, EndK4),
     FoldFun = fun({K, V}, Acc) ->
 		     [{K, V} | Acc]
@@ -1218,5 +1221,4 @@ prop_object_encoder_roundtrips() ->
             end).
 
 -endif. % EQC
-
 -endif.
