@@ -77,7 +77,19 @@ expand_where(Where, #key_v1{ast = PAST}) ->
                      fn   = quantum,
                      args = [#param_v1{name = X}, Y, Z]}
                  <- PAST],
-    {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(Min, Max, Q, U),
+    EffMin = case proplists:get_value(start_inclusive, Where, true) of
+                 true ->
+                     Min;
+                 _ ->
+                     Min + 1
+             end,
+    EffMax = case proplists:get_value(end_inclusive, Where, false) of
+                 true ->
+                     Max + 1;
+                 _ ->
+                     Max
+             end,
+    {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(EffMin, EffMax, Q, U),
     MaxSubQueries =
         app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
     if
