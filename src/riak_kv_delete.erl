@@ -93,7 +93,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
                     ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
-                    Res = C2:get(Bucket, Key, all, AsyncTimeout),
+                    Res = C2:get(Bucket, Key, [{r, all}, {timeout, AsyncTimeout}]),
                     ?DTRACE(?C_DELETE_REAPER_GET_DONE, [1], [<<"reap">>]),
                     Res;
                 _ ->
@@ -106,10 +106,10 @@ new_tombstone_object(Bucket, {PK, LK}) ->
     %% TS objects have this peculiar way to use the two keys: time
     %% quanta-based partition key, for calculating coverage; and local
     %% key for actual lookups:
-    RO = new_tombstone_object(Bucket, PK),
-    MD1 = riak_object:get_update_metadata(RO),
-    MD2  = dict:store(?MD_TS_LOCAL_KEY, LK, MD1),
-    riak_object:update_metadata(RO, MD2);
+    riak_object:newts(
+      Bucket, PK, <<>>,
+      dict:from_list([{?MD_DELETED, "true"},
+                      {?MD_TS_LOCAL_KEY, LK}]));
 new_tombstone_object(Bucket, Key) ->
     riak_object:new(
       Bucket, Key, <<>>,

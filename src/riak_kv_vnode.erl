@@ -912,16 +912,6 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     Opts = [{bucket, Bucket}],
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
-handle_coverage(#riak_kv_listkeys_ts_req_v1{table = Table,
-                                            item_filter = ItemFilter,
-                                            ddl_mod = Mod},
-                FilterVNodes, Sender, State) ->
-    %% ack-based backpressure, I suppose
-    Bucket = {Table, Table},
-    ResultFun = result_fun_ack(Bucket, Sender),
-    Opts = [{bucket, Bucket}, {ddl_mod, Mod}],
-    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
-                            FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
@@ -1040,17 +1030,7 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     Extras = fold_extras_keys(Index, Bucket),
     %% if Options contain ddl_mod, then we are folding keys for
     %% list_ts_keys
-    FoldFunSelector =
-        case proplists:get_value(ddl_mod, Opts0) of
-            undefined ->
-                keys;
-            DDLMod ->
-                #ddl_v1{table = Table,
-                        local_key = #key_v1{ast = Ast}} = DDLMod:get_ddl(),
-                LKParams = [P || #param_v1{name = [P]} <- Ast],
-                {keys,
-                 fun(Key) -> recover_ts_key(Key, Table, LKParams, Index) end}
-        end,
+    FoldFunSelector = keys,
     FoldFun = fold_fun(FoldFunSelector, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
@@ -1067,28 +1047,6 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
 	      _ ->
 		  {noreply, State}
 	  end.
-
--spec recover_ts_key(Key::binary(), Table::binary(), LKParams::[binary()], index()) ->
-                            [] | tuple().
-%% @private
-%% Get the full TS record, then reconstruct the TS key from it using
-%% provided parts (extracted from DDL to common expression recomputations).
-recover_ts_key(Key, Table, LKParams, Index) ->
-    Bucket = {Table, Table},
-    {ok, RObj} = local_get(Index, {Bucket, Key}),
-    case riak_object:get_value(RObj) of
-        <<>> ->
-            [];
-        Record ->
-            list_to_tuple(
-              strip_nonlk_fields(LKParams, Record))
-    end.
-
-%% Special case of riak_ql_ddl:get_local_key/2: accepts [{Type,
-%% Value}] and consults Ast to only keep LK-constituent fields in Obj.
-strip_nonlk_fields(LKParams, Obj) ->
-    [V || {N, V} <- Obj, lists:member(N, LKParams)].
-
 
 handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
                         FilterVNodes, Sender, Opts0,
@@ -1920,28 +1878,12 @@ fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
             BufferMod:add(Key, Buffer)
     end;
-fold_fun({keys, RecoverTsFun}, BufferMod, none, undefined) ->
-    fun(_, Key, Buffer) ->
-            CompoundKey = RecoverTsFun(Key),
-            BufferMod:add(CompoundKey, Buffer)
-    end;
 fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
             Hash = riak_core_util:chash_key({Bucket, Key}),
             case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
                 Index ->
                     BufferMod:add(Key, Buffer);
-                _ ->
-                    Buffer
-            end
-    end;
-fold_fun({keys, RecoverTsFun}, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
-    fun(_, Key, Buffer) ->
-            Hash = riak_core_util:chash_key({Bucket, Key}),
-            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
-                Index ->
-                    CompoundKey = RecoverTsFun(Key),
-                    BufferMod:add(CompoundKey, Buffer);
                 _ ->
                     Buffer
             end
@@ -1955,16 +1897,6 @@ fold_fun(keys, BufferMod, Filter, undefined) ->
                     Buffer
             end
     end;
-fold_fun({keys, RecoverTsFun}, BufferMod, Filter, undefined) ->
-    fun(_, Key, Buffer) ->
-            CompoundKey = RecoverTsFun(Key),
-            case Filter(CompoundKey) of
-                true ->
-                    BufferMod:add(CompoundKey, Buffer);
-                false ->
-                    Buffer
-            end
-    end;
 fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
             Hash = riak_core_util:chash_key({Bucket, Key}),
@@ -1973,22 +1905,6 @@ fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
                     case Filter(Key) of
                         true ->
                             BufferMod:add(Key, Buffer);
-                        false ->
-                            Buffer
-                    end;
-                _ ->
-                    Buffer
-            end
-    end;
-fold_fun({keys, RecoverTsFun}, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
-    fun(_, Key, Buffer) ->
-            Hash = riak_core_util:chash_key({Bucket, Key}),
-            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
-                Index ->
-                    CompoundKey = RecoverTsFun(Key),
-                    case Filter(CompoundKey) of
-                        true ->
-                            BufferMod:add(CompoundKey, Buffer);
                         false ->
                             Buffer
                     end;
@@ -3099,23 +3015,5 @@ flush_msgs() ->
         0 ->
             ok
     end.
-
-strip_nonlk_fields_test() ->
-    ?assertEqual(
-       [1, 3],
-       strip_nonlk_fields(
-         [<<"a">>, <<"b">>],
-         [{<<"a">>, 1}, {<<"x">>, 2}, {<<"b">>, 3}])),
-    ?assertEqual(
-       [1, 2],
-       strip_nonlk_fields(
-         [<<"a">>, <<"b">>],
-         [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
-    ?assertEqual(
-       [1, 2],
-       strip_nonlk_fields(
-         [<<"b">>, <<"a">>],
-         [{<<"a">>, 1}, {<<"b">>, 2}, {<<"x">>, 3}])),
-    ok.
 
 -endif.

@@ -53,11 +53,17 @@
                    to_object_key/2, from_object_key/1,
                    to_index_key/4, from_index_key/1
                   ]}).
+%% Remove a few releases after 2.1 series, keeping
+%% around for debugging/comparison.
+-export([orig_to_object_key/2, orig_from_object_key/1]).
 
 -include("riak_kv_index.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -ifdef(TEST).
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -464,19 +470,18 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
         end,
     StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
-    StartKey = eleveldb_ts:encode_key(StartK3),
-    StartKey2 = to_object_key(Bucket, StartKey),
+    StartK4 = riak_kv_ts_util:encode_typeval_key(StartK3), %% TODO: Avoid adding/removing type info
+    StartKey = to_object_key(Bucket, StartK4),
     EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
-    EndKey = eleveldb_ts:encode_key(EndK3),
-    EndKey2 = to_object_key(Bucket, EndKey),
-    FoldFun =
-        fun({K, V}, Acc) ->
-		    [{K, V} | Acc]
-	    end,
+    EndK4 = riak_kv_ts_util:encode_typeval_key(EndK3),
+    EndKey = to_object_key(Bucket, EndK4),
+    FoldFun = fun({K, V}, Acc) ->
+		     [{K, V} | Acc]
+	     end,
     Options = [
-               {start_key,    StartKey2},
-               {end_key,      EndKey2},
+               {start_key,    StartKey},
+               {end_key,      EndKey},
                {fold_method,  streaming},
                {encoding,     msgpack} |
                AdditionalOptions2
@@ -895,12 +900,15 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
 %% that represents the starting key for the scope. For example, since
 %% we store objects under {o, Bucket, Key}, the first key for the
 %% bucket "foo" would be `sext:encode({o, <<"foo">>, <<>>}).`
+%%
+%% For starting ranges, use key undefined.  Keys are either binaries
+%% for tuples for time series.  Either of sort *after* a bare atom.
 to_first_key(undefined) ->
     %% Start at the first object in LevelDB...
-    to_object_key({<<>>, <<>>}, <<>>);
+    to_object_key({<<>>, <<>>}, undefined); 
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
-    to_object_key(Bucket, <<>>);
+    to_object_key(Bucket, undefined);
 to_first_key({index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
     %% Start at first index entry
     to_index_key(<<>>, <<>>, <<>>, <<>>);
@@ -929,10 +937,59 @@ to_legacy_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
 to_legacy_first_key(Other) ->
     to_first_key(Other).
 
-to_object_key(Bucket, Key) ->
+orig_to_object_key(Bucket, Key) ->
     sext:encode({o, Bucket, Key}).
 
-from_object_key(LKey) ->
+%%
+%% Encode the Riak Object key for storing into leveldb.
+%% Originally this was just sext:encode({o, Bucket, Key}) but has been
+%% unrolled to save re-encoding things that don't change - like the tuple
+%% sizes and atoms. The binaries are still encoded with the sext library,
+%% for an extra boost, could copy sext:encode_bin_elems to this module
+%% and use.
+%%
+%% Timeseries objects provide their keys as tuples which are sext-encoded,
+%% however, on decode they are left as sext-encoded binaries so that the
+%% rest of Riak is not affected. They can be sext-decoded, but *cannot* just
+%% be round-tripped (as that would then be a binary-wrapping a sext-encoded
+%% TS key - for an extra 9 bytes used).
+%%
+to_object_key({BucketType, BucketName}, {Family, Series, Timestamp}) ->
+    EncodedBucketType = sext:encode(BucketType),
+    EncodedBucketName = sext:encode(BucketName),
+    EncodedFamily = sext:encode(Family),
+    EncodedSeries = sext:encode(Series),
+    EncodedTimestamp = sext:encode(Timestamp),
+    <<16,0,0,0,3, %% 3-tuple - outer
+      12,183,128,8, %% o-atom
+      16,0,0,0,2, %% 2-tuple for bucket type/name
+      EncodedBucketType/binary,
+      EncodedBucketName/binary,
+      16,0,0,0,3, %% 3-tuple - for time series key
+      EncodedFamily/binary,
+      EncodedSeries/binary,
+      EncodedTimestamp/binary>>;
+to_object_key({BucketType, BucketName}, Key) -> %% Riak 2.0 keys
+    %% sext:encode({o, Bucket, Key}).
+    EncodedBucketType = sext:encode(BucketType),
+    EncodedBucketName = sext:encode(BucketName),
+    EncodedKey = sext:encode(Key),
+    <<16,0,0,0,3, %% 3-tuple - outer
+      12,183,128,8, %% o-atom
+      16,0,0,0,2, %% 2-tuple for bucket type/name
+      EncodedBucketType/binary,
+      EncodedBucketName/binary,
+      EncodedKey/binary>>;
+to_object_key(Bucket, Key) -> %% Riak 1.0 keys
+    %% sext:encode({o, Bucket, Key}).
+    EncodedBucket = sext:encode(Bucket),
+    EncodedKey = sext:encode(Key),
+    <<16,0,0,0,3, %% 3-tuple
+      12,183,128,8, %% o-atom
+      EncodedBucket/binary,
+      EncodedKey/binary>>.
+
+orig_from_object_key(LKey) ->
     case (catch sext:decode(LKey)) of
         {'EXIT', _} ->
             lager:warning("Corrupted object key, discarding"),
@@ -942,6 +999,32 @@ from_object_key(LKey) ->
         _ ->
             undefined
     end.
+
+%%
+%% Custom sext-decoder making use of the knowledge that all of our object
+%% keys are encoded as 3-tuples with the first element an 'o' atom.
+%% Deliberately returning the un-decoded key part if a time series key
+%% so that the key in the riak object structure will be a binary on decode.
+%% All support tooling/usual methods for visiting objects should still work.
+%%
+from_object_key(<<16,0,0,0,3, %% 3-tuple - outer
+                  12,183,128,8, %% o-atom
+                  Rest/binary>>=Bin) ->
+    {Bucket, Rest1} = sext:decode_next(Rest), % grabs the two-tuple of bucket type/name
+    case Rest1 of
+        <<16,0,0,0,3,_TSKeyElements/binary>> = TSKey ->
+            {Bucket, TSKey}; % small risk not checking for junk at the end of the TSKeyElements
+        _ ->
+            case catch sext:decode_next(Rest1) of
+                {Key, <<>>} ->
+                    {Bucket, Key};
+                _ ->
+                    lager:warning("Corrupted object key ~p, discarding", [Bin]),
+                    ignore
+            end
+    end;
+from_object_key(_) -> %% If it did not start with the magic {o, ...} ignore
+    undefined.
 
 to_index_key(Bucket, Key, Field, Term) ->
     sext:encode({i, Bucket, Field, Term, Key}).
@@ -1104,6 +1187,43 @@ setup() ->
 cleanup(_) ->
     ?_assertCmd("rm -rf test/eleveldb-backend").
 
--endif. % EQC
 
+%%
+%% Test unrolling of sext decoder against bucket/keys from various versions of Riak.
+%%
+eqc_encoder_test() ->
+    ?assertEqual(true, eqc:quickcheck(eqc:testing_time(2, prop_object_encoder_roundtrips()))).
+
+bucket_name() -> non_empty(binary()).
+bucket_type() -> non_empty(binary()).
+binkey() -> non_empty(binary()).
+binfamily() -> non_empty(binary()).
+binseries() -> non_empty(binary()).
+timestamp() -> ?LET(X, nat(), 1449531227 + X).
+
+gen_bkey() ->
+    oneof([{riak1, {bucket_name(), binkey()}},
+           {riak2, {{bucket_name(), bucket_type()}, binkey()}},
+           {riakts, {{bucket_name(), bucket_type()},
+                     {binfamily(), binseries(), timestamp()}}}]).
+
+prop_object_encoder_roundtrips() ->
+    ?FORALL({Type, {Bucket, Key} = BKey},
+            gen_bkey(),
+            begin
+                Bin = to_object_key(Bucket, Key),
+                OrigBin = orig_to_object_key(Bucket, Key),
+                BKey2 = {Bucket2, Key2} = from_object_key(Bin),
+                ?assertEqual(Bin, OrigBin),
+                case Type of
+                    riakts ->
+                        ?assertEqual({Bucket2, sext:decode(Key2)}, BKey);
+                    _  ->
+                        ?assertEqual(BKey2, orig_from_object_key(Bin)),
+                        ?assertEqual(BKey2, BKey)
+                end,
+                true
+            end).
+
+-endif. % EQC
 -endif.
