@@ -863,6 +863,18 @@ simple_spanning_boundary_test() ->
            ],
     ?assertEqual(Expected, Got).
 
+%% Values right at quanta edges are tricky. Make sure we're not
+%% missing them: we should be generating two queries instead of just
+%% one.
+boundary_quanta_test() ->
+    DDL = get_standard_ddl(),
+    Query = "select weather from GeoCheckin where time >= 14000 and time <= 15000 and user = 'user_1' and location = 'Scotland'",
+    {ok, Q} = get_query(Query),
+    true = is_query_valid(DDL, Q),
+    %% get basic query
+    Got = compile(DDL, Q),
+    ?assertEqual(2, length(Got)).
+
 %%
 %% test failures
 %%
