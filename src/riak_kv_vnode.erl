@@ -1878,28 +1878,12 @@ fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
             BufferMod:add(Key, Buffer)
     end;
-fold_fun({keys, RecoverTsFun}, BufferMod, none, undefined) ->
-    fun(_, Key, Buffer) ->
-            CompoundKey = RecoverTsFun(Key),
-            BufferMod:add(CompoundKey, Buffer)
-    end;
 fold_fun(keys, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
             Hash = riak_core_util:chash_key({Bucket, Key}),
             case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
                 Index ->
                     BufferMod:add(Key, Buffer);
-                _ ->
-                    Buffer
-            end
-    end;
-fold_fun({keys, RecoverTsFun}, BufferMod, none, {Bucket, Index, N, NumPartitions}) ->
-    fun(_, Key, Buffer) ->
-            Hash = riak_core_util:chash_key({Bucket, Key}),
-            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
-                Index ->
-                    CompoundKey = RecoverTsFun(Key),
-                    BufferMod:add(CompoundKey, Buffer);
                 _ ->
                     Buffer
             end
@@ -1913,16 +1897,6 @@ fold_fun(keys, BufferMod, Filter, undefined) ->
                     Buffer
             end
     end;
-fold_fun({keys, RecoverTsFun}, BufferMod, Filter, undefined) ->
-    fun(_, Key, Buffer) ->
-            CompoundKey = RecoverTsFun(Key),
-            case Filter(CompoundKey) of
-                true ->
-                    BufferMod:add(CompoundKey, Buffer);
-                false ->
-                    Buffer
-            end
-    end;
 fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
     fun(_, Key, Buffer) ->
             Hash = riak_core_util:chash_key({Bucket, Key}),
@@ -1931,22 +1905,6 @@ fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
                     case Filter(Key) of
                         true ->
                             BufferMod:add(Key, Buffer);
-                        false ->
-                            Buffer
-                    end;
-                _ ->
-                    Buffer
-            end
-    end;
-fold_fun({keys, RecoverTsFun}, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
-    fun(_, Key, Buffer) ->
-            Hash = riak_core_util:chash_key({Bucket, Key}),
-            case riak_core_ring:future_index(Hash, Index, N, NumPartitions, NumPartitions) of
-                Index ->
-                    CompoundKey = RecoverTsFun(Key),
-                    case Filter(CompoundKey) of
-                        true ->
-                            BufferMod:add(CompoundKey, Buffer);
                         false ->
                             Buffer
                     end;

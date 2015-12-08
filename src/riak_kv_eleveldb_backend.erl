@@ -1009,17 +1009,22 @@ orig_from_object_key(LKey) ->
 %%
 from_object_key(<<16,0,0,0,3, %% 3-tuple - outer
                   12,183,128,8, %% o-atom
-                  Rest/binary>>) ->
+                  Rest/binary>>=Bin) ->
     {Bucket, Rest1} = sext:decode_next(Rest), % grabs the two-tuple of bucket type/name
     case Rest1 of
         <<16,0,0,0,3,_TSKeyElements/binary>> = TSKey ->
             {Bucket, TSKey}; % small risk not checking for junk at the end of the TSKeyElements
         _ ->
-            {Key, <<>>} = sext:decode_next(Rest1),
-            {Bucket, Key}
+            case catch sext:decode_next(Rest1) of
+                {Key, <<>>} ->
+                    {Bucket, Key};
+                _ ->
+                    lager:warning("Corrupted object key ~p, discarding", [Bin]),
+                    ignore
+            end
     end;
 from_object_key(_) -> %% If it did not start with the magic {o, ...} ignore
-    ignore.
+    undefined.
 
 to_index_key(Bucket, Key, Field, Term) ->
     sext:encode({i, Bucket, Field, Term, Key}).
