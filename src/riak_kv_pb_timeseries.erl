@@ -193,8 +193,8 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
                   vclock = PbVClock, timeout = Timeout},
         State) ->
     Options =
-        if Timeout == undefined -> [];
-           true -> [{timeout, Timeout}]
+        if Timeout == undefined -> [{dw, all}];
+           true -> [{timeout, Timeout}, {dw, all}]
         end,
     VClock =
         case PbVClock of
