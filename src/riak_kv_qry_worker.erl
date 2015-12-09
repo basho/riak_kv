@@ -231,7 +231,7 @@ decode_results(KVList, SelectSpec) ->
     lists:append(
       [extract_riak_object(SelectSpec, V) || {_, V} <- KVList]).
 
-extract_riak_object(SelectSpec, V) when is_binary(V) ->
+extract_riak_object({plain_row_select, SelectSpec}, V) when is_binary(V) ->
     % don't care about bkey
     RObj = riak_object:from_binary(<<>>, <<>>, V),
     case riak_object:get_value(RObj) of
