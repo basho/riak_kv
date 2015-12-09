@@ -138,7 +138,9 @@ new_int(B, K, V, MD) ->
         false ->
             case MD of
                 no_initial_metadata ->
-                    new_int2(B, K, V, dict:new());
+                    Contents = [#r_content{metadata=dict:new(), value=V}],
+                    #r_object{bucket=B,key=K,
+                              contents=Contents,vclock=vclock:fresh()};
                 _ ->
                     new_int2(B, K, V, MD)
             end
