@@ -524,8 +524,10 @@ bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
                 {ok, Props2} ->
                     Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
                     CreateTypeFn(Props3);
-                {error, ErrorMessage} when is_list(ErrorMessage) ->
-                    bucket_type_print_create_result(Type, {error, ErrorMessage});
+                {error, ErrorMessage} when is_list(ErrorMessage) orelse is_binary(ErrorMessage) ->
+                    bucket_type_print_create_result_error_header(Type),
+                    io:format("~ts~n", [ErrorMessage]),
+                    error;
                 {error, Error} ->
                     bucket_type_print_create_result(Type, {error, Error})
             end;
@@ -548,14 +550,14 @@ bucket_type_print_create_result(Type, ok) ->
         false ->
             ok
     end;
-bucket_type_print_create_result(Type, {error, {_LineNo, riak_ql_parser, Reason}}) ->
-    io:format("Error validating table definition for bucket type ~ts:\n~s\n", [Type, Reason]),
-    error;
 bucket_type_print_create_result(Type, {error, Reason}) ->
-    io:format("Error creating bucket type ~ts:~n", [Type]),
+    bucket_type_print_create_result_error_header(Type),
     io:format(bucket_error_xlate(Reason)),
     io:format("~n"),
     error.
+
+bucket_type_print_create_result_error_header(Type) ->
+    io:format("Error creating bucket type ~ts:~n", [Type]).
 
 bucket_type_update([TypeStr, PropsStr]) ->
     Type = unicode:characters_to_binary(TypeStr, utf8, utf8),

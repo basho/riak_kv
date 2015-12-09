@@ -40,12 +40,20 @@ maybe_parse_table_def(BucketType, Props) ->
         false ->
             {ok, Props};
         {value, {<<"table_def">>, TableDef}, PropsNoDef} ->
-            case riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
+            case catch riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
                 {ok, DDL} ->
                     ok = assert_type_and_table_name_same(BucketType, DDL),
                     ok = try_compile_ddl(DDL),
                     ok = assert_write_once_not_false(PropsNoDef),
                     apply_timeseries_bucket_props(DDL, PropsNoDef);
+                {'EXIT', {Reason, _}} ->
+                    % the lexer throws exceptions, the reason should always be a
+                    % binary
+                    {error, Reason};
+                {error, {_LineNo, riak_ql_parser, Reason}} ->
+                    % the parser returns errors, the reason should always be a
+                    % binary
+                    {error, Reason};
                 {error, _} = E ->
                     E
             end
