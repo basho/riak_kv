@@ -101,7 +101,7 @@ get_standard_lk() -> #key_v1{ast = [
              "select weather from GeoCheckin where time > 3000"
              " and time < 5000 and user = 'gordon' and location = 'Lithgae'",
              [
-              #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
+              #riak_sql_v1{'SELECT'      = {plain_row_select, [[<<"weather">>]]},
                            'FROM'        = <<"GeoCheckin">>,
                            'WHERE'       = [
                                             {startkey, [
@@ -140,7 +140,7 @@ get_standard_lk() -> #key_v1{ast = [
              " time < 18000 and user = 'gordon' and location = 'Lithgae'",
 
           [
-           #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
+           #riak_sql_v1{'SELECT'      = {plain_row_select, [[<<"weather">>]]},
                         'FROM'        = <<"GeoCheckin">>,
                         'WHERE'       = [
                                          {startkey, [
@@ -164,7 +164,7 @@ get_standard_lk() -> #key_v1{ast = [
                         type          = timeseries,
                         local_key     = get_standard_lk()},
 
-           #riak_sql_v1{'SELECT'      = [[<<"weather">>]],
+           #riak_sql_v1{'SELECT'      = {plain_row_select, [[<<"weather">>]]},
                         'FROM'        = <<"GeoCheckin">>,
                         'WHERE'       = [
                                          {startkey, [
