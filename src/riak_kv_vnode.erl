@@ -913,8 +913,8 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
-                              item_filter=ItemFilter,
-                              qry=Query},
+                                      item_filter=ItemFilter,
+                                      qry=Query},
                 FilterVNodes, Sender, State) ->
     %% v1 == no backpressure
     handle_coverage_index(Bucket, ItemFilter, Query,
@@ -927,11 +927,11 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     handle_coverage_index(Bucket, ItemFilter, Query,
                           FilterVNodes, Sender, State, fun result_fun_ack/2);
 handle_coverage(#riak_kv_sql_select_req_v1{bucket=Bucket,
-					   qry=Query},
+                                           qry=Query},
                 FilterVNodes, Sender, State) ->
     ItemFilter = none,
     handle_range_scan(Bucket, ItemFilter, Query,
-		      FilterVNodes, Sender, State, fun result_fun_ack/2).
+                      FilterVNodes, Sender, State, fun result_fun_ack/2).
 
 
 -spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
@@ -979,11 +979,11 @@ handle_coverage_index(Bucket, ItemFilter, Query,
     end.
 
 handle_range_scan(Bucket, ItemFilter, Query,
-                      FilterVNodes, Sender,
-                      State=#state{mod=Mod,
-                                   key_buf_size=DefaultBufSz,
-                                   modstate=ModState},
-                      ResultFunFun) ->
+                  FilterVNodes, Sender,
+                  State=#state{mod=Mod,
+                               key_buf_size=DefaultBufSz,
+                               modstate=ModState},
+                  ResultFunFun) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
     case IndexBackend of
@@ -1006,8 +1006,8 @@ handle_range_scan(Bucket, ItemFilter, Query,
 
 %% Convenience for handling both v3 and v4 coverage-based key fold operations
 handle_coverage_keyfold(Bucket, ItemFilter, Query,
-                      FilterVNodes, Sender, State,
-                      ResultFunFun) ->
+                        FilterVNodes, Sender, State,
+                        ResultFunFun) ->
     handle_coverage_fold(fold_keys, Bucket, ItemFilter, Query,
                             FilterVNodes, Sender, State, ResultFunFun).
 
@@ -1028,8 +1028,6 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
     Extras = fold_extras_keys(Index, Bucket),
-    %% if Options contain ddl_mod, then we are folding keys for
-    %% list_ts_keys
     FoldFunSelector = keys,
     FoldFun = fold_fun(FoldFunSelector, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
@@ -1042,19 +1040,19 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                    Opts0
            end,
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
-	      {async, AsyncWork} ->
-		  {async, {fold, AsyncWork, FinishFun}, Sender, State};
-	      _ ->
-		  {noreply, State}
-	  end.
+        {async, AsyncWork} ->
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+        _ ->
+            {noreply, State}
+    end.
 
 handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
-                        FilterVNodes, Sender, Opts0,
-                        State=#state{async_folding=AsyncFolding,
-                                     idx=Index,
-                                     key_buf_size=DefaultBufSz,
-                                     mod=Mod,
-                                     modstate=ModState}) ->
+                           FilterVNodes, Sender, Opts0,
+                           State=#state{async_folding=AsyncFolding,
+                                        idx=Index,
+                                        key_buf_size=DefaultBufSz,
+                                        mod=Mod,
+                                        modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
@@ -1073,11 +1071,11 @@ handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
                    Opts0
            end,
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
-	      {async, AsyncWork} ->
-		  {async, {fold, AsyncWork, FinishFun}, Sender, State};
-	      _ ->
-		  {noreply, State}
-	  end.
+        {async, AsyncWork} ->
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+        _ ->
+            {noreply, State}
+    end.
 
 %% While in handoff, vnodes have the option of returning {forward,
 %% State}, or indeed, {forward, Req, State} which will cause riak_core

@@ -57,8 +57,7 @@
 %% keys going via get path can eventually also be of TS kind (i.e., {PK, LK})
 -define(IS_KEY(K),
         (is_binary(K)
-         orelse (is_tuple(K) andalso size(K) == 2
-                 andalso is_binary(element(1, K)) andalso is_binary(element(2, K))))).
+         orelse (is_tuple(K) andalso size(K) == 2))).
 
 %% TODO: This type needs to be better specified and validated against
 %%       any dependents on riak_kv.
