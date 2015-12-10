@@ -52,8 +52,8 @@ handle_work({fold, FoldFun, FinishFun}, _Sender, State) ->
     {noreply, State};
 
 %% @doc Perform the asynchronous fold operation.
-handle_work({sweep, FoldFun, FinishFun}, _Sender, State) ->
-    riak_kv_sweeper:report_worker_pid(State#state.index, self()),
+handle_work({sweep, FoldFun, FinishFun}, Sender, State) ->
+    riak_core_vnode:reply(Sender, self()),
     try
         FinishFun(FoldFun())
     catch

@@ -35,6 +35,8 @@
          cancel_exchanges/0,
          get_lock/1,
          get_lock/2,
+         get_lock/3,
+         release_lock/1,
          requeue_poke/1,
          start_exchange_remote/3,
          exchange_status/4,
@@ -101,7 +103,15 @@ get_lock(Type) ->
 %%      the lock with the provided pid.
 -spec get_lock(any(), pid()) -> ok | max_concurrency.
 get_lock(Type, Pid) ->
-    gen_server:call(?MODULE, {get_lock, Type, Pid}, infinity).
+    get_lock(Type, Pid, undefined).
+
+-spec get_lock(any(), pid(), non_neg_integer()) -> ok | max_concurrency.
+get_lock(Type, Pid, Index) ->
+    gen_server:call(?MODULE, {get_lock, Type, Pid, Index}, infinity).
+
+-spec release_lock(non_neg_integer()) -> ok.
+release_lock(Index) ->
+    gen_server:call(?MODULE, {release_lock, Index}, infinity).
 
 %% @doc Acquire the necessary locks for an entropy exchange with the specified
 %%      remote vnode. The request is sent to the remote entropy manager which
@@ -291,9 +301,12 @@ handle_call(disable, _From, State) ->
     application:set_env(riak_kv, anti_entropy, {off, Opts}),
     _ = [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
     {reply, ok, State};
-handle_call({get_lock, Type, Pid}, _From, State) ->
-    {Reply, State2} = do_get_lock(Type, Pid, State),
+handle_call({get_lock, Type, Pid, Index}, _From, State) ->
+    {Reply, State2} = do_get_lock(Type, Pid, Index, State),
     {reply, Reply, State2};
+handle_call({release_lock, Index}, _From, State) ->
+    State2 = maybe_release_lock(Index, State),
+    {reply, ok, State2};
 handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
     case {enabled(),
           orddict:find(Index, State#state.trees)} of
@@ -302,7 +315,7 @@ handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
         {_, error} ->
             {reply, {remote_exchange, not_built}, State};
         {_, {ok, Tree}} ->
-            case do_get_lock(exchange_remote, FsmPid, State) of
+            case do_get_lock(exchange_remote, FsmPid, Index, State) of
                 {ok, State2} ->
                     %% Concurrency lock acquired, now forward to index_hashtree
                     %% to acquire tree lock.
@@ -443,9 +456,9 @@ add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees}) ->
             State3
     end.
 
--spec do_get_lock(any(),pid(),state())
+-spec do_get_lock(any(),pid(), non_neg_integer(), state())
                  -> {ok | max_concurrency | build_limit_reached, state()}.
-do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
+do_get_lock(Type, Pid, Index, State=#state{locks=Locks}) ->
     Concurrency = app_helper:get_env(riak_kv,
                                      anti_entropy_concurrency,
                                      ?DEFAULT_CONCURRENCY),
@@ -456,7 +469,7 @@ do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
             case check_lock_type(Type, State) of
                 {ok, State2} ->
                     Ref = monitor(process, Pid),
-                    State3 = State2#state{locks=[{Pid,Ref}|Locks]},
+                    State3 = State2#state{locks=[{Pid,Ref, Index}|Locks]},
                     {ok, State3};
                 Error ->
                     {Error, State}
@@ -472,9 +485,12 @@ check_lock_type(build, State=#state{build_tokens=Tokens}) ->
 check_lock_type(_Type, State) ->
     {ok, State}.
 
--spec maybe_release_lock(reference(), state()) -> state().
-maybe_release_lock(Ref, State) ->
+-spec maybe_release_lock(reference() |non_neg_integer(), state()) -> state().
+maybe_release_lock(Ref, State) when is_reference(Ref)->
     Locks = lists:keydelete(Ref, 2, State#state.locks),
+    State#state{locks=Locks};
+maybe_release_lock(Index, State) when is_number(Index)->
+    Locks = lists:keydelete(Index, 3, State#state.locks),
     State#state{locks=Locks}.
 
 -spec maybe_clear_exchange(reference(), term(), state()) -> state().

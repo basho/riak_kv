@@ -63,7 +63,6 @@
          remove_sweep_participant/1,
          status/0,
          sweep/1,
-         report_worker_pid/2,
          sweep_result/2,
          update_started_sweep/3,
          stop_all_sweeps/0,
@@ -112,11 +111,6 @@ disable_sweep_scheduling() ->
 enable_sweep_scheduling() ->
     lager:info("Enable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, true).
-
-%% @private used by the sweeping worker to report pid to enable requests
-%% from riak_kv_sweeper.
-report_worker_pid(Index, Pid) ->
-    gen_server:cast(?MODULE, {worker_pid, Index, Pid}).
 
 update_started_sweep(Index, ActiveParticipants, Estimate) ->
     gen_server:cast(?MODULE, {update_started_sweep, Index, ActiveParticipants, Estimate}).
@@ -184,9 +178,6 @@ handle_cast({update_started_sweep, Index, ActiveParticipants, Estimate}, State) 
     State1 = update_started_sweep(Index, ActiveParticipants, Estimate, State),
     {noreply, State1};
 
-handle_cast({worker_pid, Index, Pid}, State) ->
-    {noreply, add_worker_pid(Index, Pid, State)};
-
 handle_cast({sweep_result, Index, Result}, State) ->
     {noreply, update_finished_sweep(Index, Result, State)};
 
@@ -243,11 +234,17 @@ schedule_sweep(#state{sweeps = Sweeps,
                       sweep_participants = Participants} = State) ->
     case get_never_runned_sweeps(Sweeps) of
         [] ->
-            case find_expired_participant(Sweeps, Participants) of
+            case get_queued_sweeps(Sweeps) of
                 [] ->
-                    State;
-                Sweep ->
-                    do_sweep(Sweep, State)
+                    case find_expired_participant(Sweeps, Participants) of
+                        [] ->
+                            State;
+                        Sweep ->
+                            do_sweep(Sweep, State)
+                    end;
+                QueuedSweeps ->
+                    lager:info("QueuedSweeps  ~p", [QueuedSweeps]),
+                    do_sweep(hd(QueuedSweeps), State)
             end;
         NeverRunnedSweeps ->
             do_sweep(hd(NeverRunnedSweeps), State)
@@ -258,13 +255,10 @@ sweep_request(Index, #state{sweeps = Sweeps} = State) ->
         false ->
             case concurrency_limit_reached(Sweeps) of
                 true ->
-                    LastStartedSweep =
-                        get_last_started_sweep(get_running_sweeps(Sweeps)),
-                    stop_sweep(LastStartedSweep);
+                    queue_sweep(Index, State);
                 false ->
-                    ok
-            end,
-            do_sweep(Index, State);
+                     do_sweep(Index, State)
+            end;
         RestartState ->
             RestartState
     end.
@@ -276,11 +270,11 @@ maybe_restart(Index, #state{sweeps = Sweeps} = State) ->
             %% Setup sweep for restart
             %% When the running sweep finish it will start a new
             Sweeps1 =
-                dict:update(Index,
-                            fun(Sweep0) ->
-                                    Sweep0#sweep{state = restart}
-                            end, Sweeps),
+                dict:store(Index, Sweep#sweep{state = restart}, Sweeps),
             State#state{sweeps = Sweeps1};
+        {ok, #sweep{state = restart}} ->
+            %% Already restarting
+            State;
         {ok, #sweep{}} ->
             false;
         _ ->
@@ -288,28 +282,35 @@ maybe_restart(Index, #state{sweeps = Sweeps} = State) ->
             sweep_request(Index, maybe_initiate_sweeps(State))
     end.
 
+queue_sweep(Index, #state{sweeps = Sweeps} = State) ->
+    case dict:fetch(Index, Sweeps) of
+        #sweep{queue_time = undefined} = Sweep ->
+            Sweeps1 =
+                dict:store(Index, Sweep#sweep{queue_time = os:timestamp()}, Sweeps),
+            State#state{sweeps = Sweeps1};
+        _ ->
+            State
+    end.
+
 do_sweep(#sweep{index = Index}, State) ->
     do_sweep(Index, State);
 do_sweep(Index, #state{sweep_participants = SweepParticipants, sweeps = Sweeps} = State) ->
-    SweepFun =
-        fun() ->
-                %% Ask for estimate before we ask_participants since riak_kv_index_tree
-                %% clears the trees if they are expired.
-                AAEEnabled = riak_kv_entropy_manager:enabled(),
-                Estimate = get_estimate_keys(Index, AAEEnabled, Sweeps),
-                case ask_participants(Index, SweepParticipants) of
-                    [] ->
-                        ok;
-                    ActiveParticipants ->
-                        ?MODULE:update_started_sweep(Index, ActiveParticipants, Estimate),
-                        Result = riak_kv_vnode:sweep({Index, node()},
-                                                     ActiveParticipants,
-                                                     Estimate),
-                        ?MODULE:sweep_result(Index, format_result(Result))
-                end
-        end,
-    Pid = spawn_link(SweepFun),
-    start_sweep(Index, Pid, State).
+
+    %% Ask for estimate before we ask_participants since riak_kv_index_tree
+    %% clears the trees if they are expired.
+    AAEEnabled = riak_kv_entropy_manager:enabled(),
+    Estimate = get_estimate_keys(Index, AAEEnabled, Sweeps),
+    case ask_participants(Index, SweepParticipants) of
+        [] ->
+            State;
+        ActiveParticipants ->
+            ?MODULE:update_started_sweep(Index, ActiveParticipants, Estimate),
+            Workerpid = riak_kv_vnode:sweep({Index, node()},
+                                            ActiveParticipants,
+                                            Estimate),
+            monitor(process, Workerpid),
+            start_sweep(Index, Workerpid, State)
+    end.
 
 get_estimate_keys(Index, AAEEnabled, Sweeps) ->
 	#sweep{estimated_keys = OldEstimate} = dict:fetch(Index, Sweeps),
@@ -350,20 +351,21 @@ disable_participant(Sweep, Module) ->
 stop_sweep(Sweep) ->
     send_to_sweep_worker(stop, Sweep).
 
-send_to_sweep_worker(Msg, #sweep{index = Index, worker_pid = WorkPid}) when is_pid(WorkPid)->
+send_to_sweep_worker(Msg, #sweep{index = Index, pid = Pid}) when is_pid(Pid)->
     Ref = make_ref(),
-    WorkPid ! {Msg, self(), Ref},
+    Pid ! {Msg, self(), Ref},
     receive
         {ack, Ref} ->
             ok;
         {Response, Ref} ->
             Response
     after 4000 ->
-        lager:error("No response from sweep proc index ~p ~p", [Index, WorkPid])
+        lager:error("No response from sweep proc index ~p ~p", [Index, Pid]),
+        false
     end;
-send_to_sweep_worker(Msg,  #sweep{index = Index}) ->
-    lager:info("no worker pid ~p to ~p " , [Msg, Index]),
-    false.
+send_to_sweep_worker(Msg, #sweep{index = Index}) ->
+    lager:info("no pid ~p to ~p " , [Msg, Index]),
+    no_pid.
 
 in_sweep_window() ->
     {_, {Hour, _, _}} = calendar:local_time(),
@@ -419,18 +421,10 @@ ask_participants(Index, Participants) ->
     [Participant#sweep_participant{sweep_fun = Fun, acc = InitialAcc} ||
      {Participant, {ok, Fun, InitialAcc}} <- Funs].
 
-add_worker_pid(Index, Pid, #state{sweeps = Sweeps} = State) ->
-    Sweeps1 =
-        dict:update(Index,
-                    fun(Sweep) ->
-                            Sweep#sweep{worker_pid = Pid}
-                    end, Sweeps),
-    State#state{sweeps = Sweeps1}.
-
 update_finished_sweep(Index, Result, #state{sweeps = Sweeps} = State) ->
     Sweep = dict:fetch(Index, Sweeps),
     Sweep1 = store_result(Result, Sweep),
-    State#state{sweeps = dict:store(Index, Sweep1, Sweeps)}.
+    finish_sweep(Sweep1, State#state{sweeps = dict:store(Index, Sweep1, Sweeps)}).
 
 store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
     TimeStamp = os:timestamp(),
@@ -529,17 +523,17 @@ finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
     Sweeps1 =
         dict:update(Index,
                 fun(Sweep) ->
-                        Sweep#sweep{state = idle, pid = undefined, worker_pid = undefined}
+                        Sweep#sweep{state = idle, pid = undefined}
                 end, Sweeps),
-    State#state{sweeps = Sweeps1}.
+    maybe_schedule_sweep(State#state{sweeps = Sweeps1}).
 
-start_sweep(Index, Pid, State) ->
-    Sweeps = State#state.sweeps,
+start_sweep(Index, Pid, #state{ sweeps = Sweeps} = State) ->
     Sweeps1 =
         dict:update(Index,
                     fun(Sweep) ->
                             Sweep#sweep{state = running,
-                                        pid = Pid}
+                                        pid = Pid,
+                                        queue_time = undefined}
                     end, Sweeps),
     State#state{sweeps = Sweeps1}.
 
@@ -592,14 +586,17 @@ remove_sweeps(NotOwnerIdx, Sweeps) ->
                         dict:erase(Idx, SweepsDict)
                 end, Sweeps, NotOwnerIdx).
 
-get_last_started_sweep(RunningSweeps) ->
-    SortedSweeps = lists:keysort(#sweep.start_time, RunningSweeps),
-    hd(lists:reverse(SortedSweeps)).
-
 get_running_sweeps(Sweeps) ->
     [Sweep ||
       {_Index, #sweep{state = State} = Sweep} <- dict:to_list(Sweeps), 
       State == running orelse State == restart].
+
+get_queued_sweeps(Sweeps) ->
+    QueuedSweeps =
+        [Sweep ||
+         {_Index, #sweep{queue_time = QueueTime} = Sweep} <- dict:to_list(Sweeps),
+         not (QueueTime == undefined)],
+    lists:keysort(#sweep.queue_time, QueuedSweeps).
 
 get_idle_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle} = Sweep} <- dict:to_list(Sweeps)].
@@ -614,6 +611,7 @@ persist_participants(Participants) ->
 get_persistent_participants() ->
     app_helper:get_env(riak_kv, sweep_participants).
 
+%% Used by riak_kv_vnode:sweep/3
 do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, VnodeState) ->
     CompleteFoldReq = make_complete_fold_req(),
     InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
@@ -625,7 +623,7 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, 
             FinishFun =
                 fun(Acc) ->
                         inform_participants(Acc, Index),
-                        riak_core_vnode:reply(Sender, Acc)
+                        ?MODULE:sweep_result(Index, format_result(Acc))
                 end,
             {async, {sweep, Work, FinishFun}, Sender, VnodeState};
         Reason ->

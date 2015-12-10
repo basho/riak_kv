@@ -195,6 +195,7 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                      Merged0
              end,
     {ObjState, MObj} = Merged,
+
     ReadRepairs =
         case ObjState of
             notfound ->
@@ -207,6 +208,8 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                 %% obj_outside_grace_period return false
                 %% when no grace period is defined too
                 %% keep legacy behavior
+                %% The user need to use delete_mode keep to
+                %% use the sweeper as reaper
                 case riak_kv_delete:obj_outside_grace_period(MObj) of
                     false ->
                         get_read_repairs(Results, MObj);

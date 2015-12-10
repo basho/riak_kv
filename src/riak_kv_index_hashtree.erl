@@ -234,10 +234,12 @@ participate_in_sweep(Index, Pid) ->
 
 successfull_sweep(Index, _FinalAcc) ->
     lager:info("successfull_sweep ~p", [Index]),
+    riak_kv_entropy_manager:release_lock(Index),
     lookup_tree_and_cast(Index, build_finished).
 
 failed_sweep(Index, Reason) ->
     lager:info("failed_sweep ~p ~p", [Index, Reason]),
+    riak_kv_entropy_manager:release_lock(Index),
     lookup_tree_and_cast(Index, build_failed).
 
 lookup_tree_and_call(Index, Msg) ->
@@ -986,7 +988,7 @@ close_trees(State=#state{trees=Trees}) ->
     State#state{trees=undefined}.
 
 get_all_locks(Type, Index, Pid) ->
-    case riak_kv_entropy_manager:get_lock(Type, Pid) of
+    case riak_kv_entropy_manager:get_lock(Type, Pid, Index) of
         ok ->
             case maybe_get_vnode_lock(Type, Index, Pid) of
                 ok ->

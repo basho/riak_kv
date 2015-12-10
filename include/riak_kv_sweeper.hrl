@@ -39,11 +39,11 @@
          index,
          state = idle :: idle | running | restart,
          pid :: pid() | undefined,
-         worker_pid :: pid() | undefined,
          results = dict:new(),
          active_participants,  %% Active in current run
          start_time :: erlang:timestamp(),
          end_time :: erlang:timestamp(),
+         queue_time :: erlang:timestamp(),
          estimated_keys :: {non_neg_integer(), erlang:timestamp()},
          swept_keys :: non_neg_integer() | undefined
         }).

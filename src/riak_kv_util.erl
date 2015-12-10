@@ -75,6 +75,7 @@
 is_x_expired(Obj) ->
     is_x_expired(Obj, undefined).
 
+%% Used by the sweeper that include cached bucket props.
 is_x_expired(Obj, BucketProps) ->
     Now = os:timestamp(),
     case [{M, V} || {M, V} <- riak_object:get_contents(Obj),
@@ -107,12 +108,9 @@ expired_by_bucket_ttl(Metadata, _Bucket, BucketProps, Now) ->
             expired_ttl(Metadata, TTL, Now)
     end.
 
-
 expired_ttl(MetaData, TTL, Now) ->
     LastMod = dict:fetch(?MD_LASTMOD, MetaData),
     timer:now_diff(Now, LastMod) div 1000000 > TTL.
-
-
 
 %% @spec is_x_deleted(riak_object:riak_object()) -> boolean()
 %% @doc 'true' if all contents of the input object are marked
