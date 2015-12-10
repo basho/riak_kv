@@ -49,7 +49,6 @@
 
 -export([data_size/1]).
 
--compile([export_all]).
 -compile({inline, [
                    to_object_key/2, from_object_key/1,
                    to_index_key/4, from_index_key/1
