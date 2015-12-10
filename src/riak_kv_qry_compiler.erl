@@ -190,7 +190,9 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL
             % if it is not a known error then return the stack trace for
             % debugging
             {error, {where_not_timeseries, Reason, erlang:get_stacktrace()}}
-    end.
+    end;
+check_if_timeseries(#ddl_v1{ }, []) ->
+    {error, {no_where_clause, ?E_NO_WHERE_CLAUSE}}.
 
 %%
 has_errors(StartKey, EndKey) ->
@@ -1092,6 +1094,14 @@ not_equals_can_only_be_a_filter_test() ->
     {ok, Q} = get_query("select * from test1 where time > 1 and time < 6 and user = '2' and location != '4'"),
     ?assertEqual(
         {error, {missing_key_clause, ?E_KEY_PARAM_MUST_USE_EQUALS_OPERATOR("location", '!=')}},
+        compile(DDL, Q)
+    ).
+
+no_where_clause_test() ->
+    DDL = get_standard_ddl(),
+    {ok, Q} = get_query("select * from test1"),
+    ?assertEqual(
+        {error, {no_where_clause, ?E_NO_WHERE_CLAUSE}},
         compile(DDL, Q)
     ).
 

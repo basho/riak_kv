@@ -24,6 +24,11 @@
 %%% -------------------------------------------------------------------
 
 -define(
+    E_NO_WHERE_CLAUSE,
+    <<"The query must have a where clause.">>
+).
+
+-define(
     E_TSMSG_NO_UPPER_BOUND,
     <<"Where clause has no upper bound.">>
 ).
