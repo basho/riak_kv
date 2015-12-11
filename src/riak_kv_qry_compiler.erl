@@ -1081,6 +1081,64 @@ no_where_clause_test() ->
         compile(DDL, Q)
     ).
 
+% Columns are: [geohash, location, user, time, weather, temperature]
+
+-define(ROW, [<<"geodude">>, <<"derby">>, <<"ralph">>, 10, <<"hot">>, 12.2]).
+
+testing_compile_select(DDL, QueryString) ->
+    [#riak_sql_v1{ 'SELECT' = SelectSpec } | _] =
+        compile(DDL, element(2, get_query(QueryString))),
+    SelectSpec.
+
+run_select_all_test() ->
+    DDL = get_standard_ddl(),
+    SelectSpec = testing_compile_select(DDL,
+        "SELECT * FROM GeoCheckin "
+        "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    ?assertEqual(
+        ?ROW,
+        run_select(SelectSpec, ?ROW)
+    ).
+
+run_select_first_test() ->
+    DDL = get_standard_ddl(),
+    SelectSpec = testing_compile_select(DDL,
+        "SELECT geohash FROM GeoCheckin "
+        "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    ?assertEqual(
+        [<<"geodude">>],
+        run_select(SelectSpec, ?ROW)
+    ).
+
+run_select_last_test() ->
+    DDL = get_standard_ddl(),
+    SelectSpec = testing_compile_select(DDL,
+        "SELECT temperature FROM GeoCheckin "
+        "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    ?assertEqual(
+        [12.2],
+        run_select(SelectSpec, ?ROW)
+    ).
+
+run_select_all_individually_test() ->
+    DDL = get_standard_ddl(),
+    SelectSpec = testing_compile_select(DDL,
+        "SELECT geohash, location, user, time, weather, temperature FROM GeoCheckin "
+        "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    ?assertEqual(
+        ?ROW,
+        run_select(SelectSpec, ?ROW)
+    ).
+
+run_select_some_test() ->
+    DDL = get_standard_ddl(),
+    SelectSpec = testing_compile_select(DDL,
+        "SELECT  location, weather FROM GeoCheckin "
+        "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    ?assertEqual(
+        [<<"derby">>, <<"hot">>],
+        run_select(SelectSpec, ?ROW)
+    ).
 
 % FIXME or operators
 
