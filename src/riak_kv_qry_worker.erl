@@ -239,18 +239,8 @@ extract_riak_object(SelectSpec, V) when is_binary(V) ->
             %% record was deleted
             [];
         FullRecord ->
-            filter_columns(lists:flatten(SelectSpec), FullRecord)
+            riak_kv_qry_compiler:run_select(SelectSpec, FullRecord)
     end.
-
-%% Pull out the values we're interested in based on the select,
-%% statement, e.g. select user, geoloc returns only user and geoloc columns.
--spec filter_columns(SelectSpec::[binary()],
-                     ColValues::[{Field::binary(), Value::binary()}]) ->
-        ColValues2::[{Field::binary(), Value::binary()}].
-filter_columns([<<"*">>], ColValues) ->
-    ColValues;
-filter_columns(SelectSpec, ColValues) ->
-    [Col || {Field, _} = Col <- ColValues, lists:member(Field, SelectSpec)].
 
 %% Send a message to this process to get the next query.
 pop_next_query() ->

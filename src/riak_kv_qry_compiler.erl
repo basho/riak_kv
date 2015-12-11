@@ -23,8 +23,12 @@
 -module(riak_kv_qry_compiler).
 
 -export([
-         compile/2
+         compile/2,
+         run_select/2
         ]).
+
+-type compiled_select() :: fun().
+-export_type([compiled_select/0]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_index.hrl").
@@ -51,17 +55,47 @@ comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
     end.
 
 %% now break out the query on quantum boundaries
-expand_query(#ddl_v1{local_key = LK, partition_key = PK}, Q, NewW) ->
-    case expand_where(NewW, PK) of
-    {error, E} ->
-        {error, E};
-    NewWs ->
-        [Q#riak_sql_v1{is_executable = true,
-               type          = timeseries,
-               'WHERE'       = X,
-               local_key     = LK,
-               partition_key = PK} || X <- NewWs]
+expand_query(#ddl_v1{local_key = LK, partition_key = PK} = DDL, 
+             #riak_sql_v1{ 'SELECT' = SelectSpec1 } = Q, Where1) ->
+    case expand_where(Where1, PK) of
+        {error, E} ->
+            {error, E};
+        Where2 ->
+            SelectSpec2 = [compile_select(DDL, S) || S <- SelectSpec1],
+            [Q#riak_sql_v1{
+                   is_executable = true,
+                   type          = timeseries,
+                   'SELECT'      = SelectSpec2,
+                   'WHERE'       = X,
+                   local_key     = LK,
+                   partition_key = PK} || X <- Where2]
     end.
+
+%% Run the selection spec for all selection columns that was created by
+-spec run_select(SelectionSpec::[compiled_select()], Row::riak_object:value()) ->
+        riak_object:value().
+run_select(SelectSpec, Row) ->
+    lists:flatten([Fn(Row) || Fn <- SelectSpec]).
+
+%% Compile a single selection column into a fun that can extract the cell 
+%% from the row.
+-spec compile_select(DDL::#ddl_v1{}, ColumnName::[binary()]) ->
+        compiled_select().
+compile_select(_, [<<"*">>]) ->
+    fun(Row) ->
+        Row
+    end;
+compile_select(#ddl_v1{ fields = Fields }, ColumnName) ->
+    Index = field_index_of(Fields, ColumnName),
+    fun(Row) ->
+        lists:nth(Index, Row)
+    end.
+
+%% Return the index of a field in the table definition.
+field_index_of(Fields, [ColumnName]) ->
+    #riak_field_v1{ position = Position } =
+        lists:keyfind(ColumnName, 2, Fields),
+    Position.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
@@ -983,7 +1017,7 @@ key_is_all_timestamps_test() ->
         "PRIMARY KEY("
         " (time_a, time_b, QUANTUM(time_c, 15, 's')), time_a, time_b, time_c))"),
     {ok, Q} = get_query(
-        "SELECT weather FROM GeoCheckin "
+        "SELECT time_a FROM GeoCheckin "
         "WHERE time_c > 2999 AND time_c < 5000 "
         "AND time_a = 10 AND time_b = 15"),
     ?assertMatch(
@@ -1104,6 +1138,7 @@ no_where_clause_test() ->
         {error, {no_where_clause, ?E_NO_WHERE_CLAUSE}},
         compile(DDL, Q)
     ).
+
 
 % FIXME or operators
 
