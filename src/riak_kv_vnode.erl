@@ -842,12 +842,16 @@ handle_command({get_index_entries, Opts},
 
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
-                From, State=#state{mod=Mod, async_put=true, modstate=ModState}) ->
+                From, State=#state{mod=Mod, idx=Idx, async_put=true, modstate=ModState}) ->
     StartTS = os:timestamp(),
     Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
-    case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
+    case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
-            {noreply, State#state{modstate=UpModState}};
+
+	    update_hashtree(Bucket, Key, EncodedVal, State),
+	    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+
+	    {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
     end;
