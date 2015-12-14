@@ -220,8 +220,12 @@ async_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts
 
 sync_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts}=State) ->
     StorageKey = to_object_key(Bucket, PrimaryKey),
-    eleveldb:sync_put(Ref, Context, StorageKey, Val, WriteOpts),
-    {ok, State}.
+    case eleveldb:sync_put(Ref, Context, StorageKey, Val, WriteOpts) of
+	ok ->
+	    {ok, State};
+	{error, Reason}  ->
+	    {error, Reason, State}
+    end.
 
 indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
