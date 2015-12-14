@@ -78,8 +78,6 @@ init([RegisteredName]) ->
     pop_next_query(),
     {ok, new_state(RegisteredName)}.
 
--spec handle_call(term(), {pid(), term()}, #state{}) ->
-                         {reply, Reply::ok | {error, atom()} | list(), #state{}}.
 handle_call({execute, {QId, [Qry|_] = SubQueries, DDL}}, ReceiverPid, 
             State = #state{status        = void,
                            run_sub_qs_fn = RunSubQs}) ->
@@ -109,8 +107,8 @@ handle_info(pop_next_query, State) ->
     {query, ReceiverPid, QId, Qry, DDL} = riak_kv_qry_queue:blocking_pop(),
     Request = {execute, {QId, Qry, DDL}},
     case handle_call(Request, ReceiverPid, State) of
-         {reply, ok, NewState}             -> {noreply, NewState};
-         {{error, _} = Error, _, NewState} -> ReceiverPid ! Error,
+         {reply, ok, NewState}                -> {noreply, NewState};
+         {reply, {error, _} = Error, NewState} -> ReceiverPid ! Error,
                                               {noreply, new_state(NewState#state.name)}
     end;
 handle_info({{SubQId, QId}, done},
