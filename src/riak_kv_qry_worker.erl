@@ -43,18 +43,11 @@
          code_change/3
         ]).
 
--ifdef(TEST).
--export([
-         runner_TEST/1
-        ]).
--endif.
-
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -define(NO_SIDEEFFECTS, []).
 -define(NO_MAX_RESULTS, no_max_results).
 -define(NO_PG_SORT, undefined).
-
 
 -record(state, {
           name                                :: atom(),
