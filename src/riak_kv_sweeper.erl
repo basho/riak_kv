@@ -308,7 +308,6 @@ do_sweep(Index, #state{sweep_participants = SweepParticipants, sweeps = Sweeps} 
             Workerpid = riak_kv_vnode:sweep({Index, node()},
                                             ActiveParticipants,
                                             Estimate),
-            monitor(process, Workerpid),
             start_sweep(Index, Workerpid, State)
     end.
 
@@ -416,7 +415,7 @@ ask_participants(Index, Participants) ->
     Funs =
         [{Participant, Module:participate_in_sweep(Index, self())} ||
          {Module, Participant} <- dict:to_list(Participants)],
-    
+
     %% Filter non active participants
     [Participant#sweep_participant{sweep_fun = Fun, acc = InitialAcc} ||
      {Participant, {ok, Fun, InitialAcc}} <- Funs].
@@ -525,7 +524,7 @@ finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
                 fun(Sweep) ->
                         Sweep#sweep{state = idle, pid = undefined}
                 end, Sweeps),
-    maybe_schedule_sweep(State#state{sweeps = Sweeps1}).
+    State#state{sweeps = Sweeps1}.
 
 start_sweep(Index, Pid, #state{ sweeps = Sweeps} = State) ->
     Sweeps1 =
@@ -588,7 +587,7 @@ remove_sweeps(NotOwnerIdx, Sweeps) ->
 
 get_running_sweeps(Sweeps) ->
     [Sweep ||
-      {_Index, #sweep{state = State} = Sweep} <- dict:to_list(Sweeps), 
+      {_Index, #sweep{state = State} = Sweep} <- dict:to_list(Sweeps),
       State == running orelse State == restart].
 
 get_queued_sweeps(Sweeps) ->
@@ -949,9 +948,9 @@ delete_sweep_crash() ->
 sweeper_test_() ->
     {foreach, fun setup/0, fun cleanup/1,
      [
-        fun initiate_sweeps/1,
-        fun find_never_sweeped/1,
-        fun find_missing_part/1
+        fun test_initiate_sweeps/1,
+        fun test_find_never_sweeped/1,
+        fun test_find_missing_part/1
     ]}.
 
 setup() ->
@@ -961,6 +960,8 @@ setup() ->
     meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, ring} end),
     meck:new(riak_core_ring),
     meck:expect(riak_core_ring, my_indices,  fun(ring) -> MyRingPart  end),
+    meck:new(riak_kv_vnode),
+    meck:expect(riak_kv_vnode, sweep, fun(_, _, _) -> [] end),
     State = maybe_initiate_sweeps(#state{}),
     State1 = add_test_sweep_participant(State, Participants),
     {MyRingPart, Participants, State1}.
@@ -974,18 +975,21 @@ add_test_sweep_participant(StateIn, Participants) ->
     lists:foldl(Fun, StateIn, Participants).
 
 test_sweep_participant(N) ->
-    #sweep_participant{module = get_module(N),
+    Module = get_module(N),
+    meck:new(Module, [non_strict]),
+    meck:expect(Module, participate_in_sweep, fun(_, _) -> {ok, sweepfun, acc} end),
+    #sweep_participant{module = Module,
                        run_interval = N
                       }.
 get_module(N) ->
     list_to_atom(integer_to_list(N)).
 
-initiate_sweeps({MyRingPart, _Participants, State}) ->
+test_initiate_sweeps({MyRingPart, _Participants, State}) ->
     fun() ->
             ?assertEqual(length(MyRingPart), dict:size(State#state.sweeps))
     end.
 
-find_never_sweeped({MyRingPart, Participants, State}) ->
+test_find_never_sweeped({MyRingPart, Participants, State}) ->
     fun() ->
             %% One sweep will not be given any results so it will be returnd by get_never_sweeped
             [NoResult | Rest]  = MyRingPart,
@@ -998,7 +1002,7 @@ find_never_sweeped({MyRingPart, Participants, State}) ->
             ?assertEqual(NeverRunnedSweep#sweep.index, NoResult)
     end.
 
-find_missing_part({MyRingPart, Participants, State}) ->
+test_find_missing_part({MyRingPart, Participants, State}) ->
     fun() ->
             %% Give all but one index results from all participants
             %% The last Index will miss one result and would be prioritized
