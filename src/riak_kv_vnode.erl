@@ -299,23 +299,9 @@ local_put(Index, Obj) ->
 
 local_put(Index, Obj, Options) ->
     BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
-    Ref = make_ref(),
     ReqId = erlang:phash2(erlang:now()),
     StartTime = riak_core_util:moment(),
-    Sender = {raw, Ref, self()},
-    put({Index, node()}, BKey, Obj, ReqId, StartTime, Options, Sender),
-    collect_responses(Ref, ReqId).
-
-collect_responses(Ref, ReqId) ->
-    receive
-        {Ref,{w,_, ReqId}} ->
-            collect_responses(Ref, ReqId);
-        {Ref,{dw,_, ReqId}} ->
-            ok
-    %% Short timeout since this is used by the sweeper
-    after 100 ->
-        ok
-    end.
+    put({Index, node()}, BKey, Obj, ReqId, StartTime, Options, ignore).
 
 local_reap(Index, BKey, RObj) ->
     Ref = make_ref(),
