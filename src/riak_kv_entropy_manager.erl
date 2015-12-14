@@ -71,17 +71,22 @@
                 trees          = []        :: [{index(), pid()}],
                 tree_queue     = []        :: [{index(), pid()}],
                 locks          = []        :: [{pid(), reference()}],
-                build_tokens   = 0         :: non_neg_integer(),
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}],
                 vnode_status_pid = undefined :: 'undefined' | pid(),
                 last_throttle  = undefined :: 'undefined' | non_neg_integer()
                }).
 
+-record(lock, {pid :: pid(),
+               ref :: reference(),
+               index :: non_neg_integer(),
+               type :: atom()
+              }).
+
 -type state() :: #state{}.
 
 -define(DEFAULT_CONCURRENCY, 2).
--define(DEFAULT_BUILD_LIMIT, {1, 3600000}). %% Once per hour
+-define(DEFAULT_BUILD_CONCURRENCY, 1).
 -define(AAE_THROTTLE_ENV_KEY, aae_throttle_sleep_time).
 -define(AAE_THROTTLE_KILL_ENV_KEY, aae_throttle_kill_switch).
 
@@ -272,11 +277,9 @@ init([]) ->
                    locks=[],
                    exchanges=[],
                    exchange_queue=[]},
-    State2 = reset_build_tokens(State),
-    schedule_reset_build_tokens(),
     maybe_add_sweep_participant(),
 
-    {ok, State2}.
+    {ok, State}.
 
 handle_call({set_mode, Mode}, _From, State=#state{mode=CurrentMode}) ->
     State2 = case {CurrentMode, Mode} of
@@ -354,10 +357,6 @@ handle_cast(_Msg, State) ->
 handle_info(tick, State) ->
     State1 = maybe_tick(State),
     {noreply, State1};
-handle_info(reset_build_tokens, State) ->
-    State2 = reset_build_tokens(State),
-    schedule_reset_build_tokens(),
-    {noreply, State2};
 handle_info({{hashtree_pid, Index}, Reply}, State) ->
     case Reply of
         {ok, Pid} when is_pid(Pid) ->
@@ -392,16 +391,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
-schedule_reset_build_tokens() ->
-    {_, Reset} = app_helper:get_env(riak_kv, anti_entropy_build_limit,
-                                    ?DEFAULT_BUILD_LIMIT),
-    erlang:send_after(Reset, self(), reset_build_tokens).
-
-reset_build_tokens(State) ->
-    {Tokens, _} = app_helper:get_env(riak_kv, anti_entropy_build_limit,
-                                     ?DEFAULT_BUILD_LIMIT),
-    State#state{build_tokens=Tokens}.
 
 -spec settings() -> {boolean(), proplists:proplist()}.
 settings() ->
@@ -466,31 +455,40 @@ do_get_lock(Type, Pid, Index, State=#state{locks=Locks}) ->
         true ->
             {max_concurrency, State};
         false ->
-            case check_lock_type(Type, State) of
-                {ok, State2} ->
+            case check_lock_type(Type, Locks) of
+                ok ->
                     Ref = monitor(process, Pid),
-                    State3 = State2#state{locks=[{Pid,Ref, Index}|Locks]},
-                    {ok, State3};
+                    NewLock = #lock{pid = Pid, ref = Ref, index = Index, type = Type},
+                    State2 = State#state{locks=[NewLock | Locks]},
+                    {ok, State2};
                 Error ->
                     {Error, State}
             end
     end.
 
-check_lock_type(build, State=#state{build_tokens=Tokens}) ->
-    if Tokens > 0 ->
-            {ok, State#state{build_tokens=Tokens-1}};
-       true ->
-            build_limit_reached
+check_lock_type(build, Locks) ->
+    Limit =
+        app_helper:get_env(riak_kv,
+                           anti_entropy_build_concurrency,
+                           ?DEFAULT_BUILD_CONCURRENCY),
+    case get_nr_of_locks(build, Locks) >= Limit of
+        true ->
+            build_limit_reached;
+        false ->
+            ok
     end;
-check_lock_type(_Type, State) ->
-    {ok, State}.
+check_lock_type(_Type, _Locks) ->
+    ok.
+
+get_nr_of_locks(Type, Locks) ->
+   length([Lock || Lock <- Locks, Locks#lock.type == Type]).
 
 -spec maybe_release_lock(reference() |non_neg_integer(), state()) -> state().
-maybe_release_lock(Ref, State) when is_reference(Ref)->
-    Locks = lists:keydelete(Ref, 2, State#state.locks),
+maybe_release_lock(Ref, State) when is_reference(Ref) ->
+    Locks = lists:keydelete(Ref, #lock.ref, State#state.locks),
     State#state{locks=Locks};
-maybe_release_lock(Index, State) when is_number(Index)->
-    Locks = lists:keydelete(Index, 3, State#state.locks),
+maybe_release_lock(Index, State) when is_number(Index) ->
+    Locks = lists:keydelete(Index, #lock.index, State#state.locks),
     State#state{locks=Locks}.
 
 -spec maybe_clear_exchange(reference(), term(), state()) -> state().
