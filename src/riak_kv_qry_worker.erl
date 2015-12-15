@@ -51,7 +51,6 @@
 
 -record(state, {
           name                                :: atom(),
-          ddl                                 :: undefined | #ddl_v1{},
           qry           = none                :: none | #riak_sql_v1{},
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
@@ -78,22 +77,8 @@ init([RegisteredName]) ->
     pop_next_query(),
     {ok, new_state(RegisteredName)}.
 
-handle_call({execute, {QId, [Qry|_] = SubQueries, DDL}}, ReceiverPid, 
-            State = #state{status        = void,
-                           run_sub_qs_fn = RunSubQs}) ->
-    Indices = lists:seq(1, length(SubQueries)),
-    ZQueries = lists:zip(Indices, SubQueries),
-    SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
-    ok = RunSubQs(SubQs),
-    {reply, ok, State#state{qid          = QId,
-                            receiver_pid = ReceiverPid,
-                            qry          = Qry,
-                            ddl          = DDL,
-                            sub_qrys     = Indices}};
-handle_call({execute, {QId, _, _}}, _, State = #state{status = Status}) 
-  when Status =/= void ->
-    lager:error("Qry queue manager should have cleared the status before assigning new query ~p", [QId]),
-    {reply, {error, mismanagement}, State}.
+handle_call(_, _, State) ->
+    {reply, {error, not_handled}, State}.
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 %% @private
@@ -103,56 +88,14 @@ handle_cast(Msg, State) ->
 
 %% @private
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
-handle_info(pop_next_query, State) ->
-    {query, ReceiverPid, QId, Qry, DDL} = riak_kv_qry_queue:blocking_pop(),
-    Request = {execute, {QId, Qry, DDL}},
-    case handle_call(Request, ReceiverPid, State) of
-         {reply, ok, NewState}                -> {noreply, NewState};
-         {reply, {error, _} = Error, NewState} -> ReceiverPid ! Error,
-                                              {noreply, new_state(NewState#state.name)}
-    end;
-handle_info({{SubQId, QId}, done},
-            State = #state{qid          = QId,
-                           receiver_pid = ReceiverPid,
-                           result       = IndexedChunks,
-                           sub_qrys     = SubQQ}) ->
-    lager:debug("Received done on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQQ]),
-    case SubQQ of
-        [] ->
-            lager:debug("Done collecting on QId ~p (~p): ~p", [QId, SubQId, IndexedChunks]),
-            %% sort by index, to reassemble according to coverage plan
-            {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
-            Results = lists:append(R2),
-            % send the results to the waiting client process
-            ReceiverPid ! {ok, Results},
-            pop_next_query(),
-            %% drop indexes, serialize
-            {noreply, new_state(State#state.name)};
-        _MoreSubQueriesNotDone ->
-            {noreply, State}
-    end;
-
-handle_info({{SubQId, QId}, {results, Chunk}},
-            State = #state{qid      = QId,
-                           qry      = Qry,
-                           result   = IndexedChunks,
-                           sub_qrys = SubQs}) ->
-    #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
-    NewS = case lists:member(SubQId, SubQs) of
-               true ->
-                   Decoded = decode_results(lists:flatten(Chunk), SelectSpec),
-                   lager:debug("Got chunk on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQs]),
-                   NSubQ = lists:delete(SubQId, SubQs),
-                   State#state{status   = accumulating_chunks,
-                               result   = [{SubQId, Decoded} | IndexedChunks],
-                               sub_qrys = NSubQ};
-               false ->
-                   %% discard;
-                   %% Don't touch state as it may have already 'finished'.
-                   State
-           end,
-    {noreply, NewS};
-
+handle_info(pop_next_query, State1) ->
+    {query, ReceiverPid, QId, Query, DDL} = riak_kv_qry_queue:blocking_pop(),
+    {ok, State2} = execute_query(ReceiverPid, QId, Query, State1),
+    {noreply, State2};
+handle_info({{SubQId, QId}, done}, #state{ qid = QId } = State) ->
+    {noreply, subqueries_done(SubQId, QId, State)};
+handle_info({{SubQId, QId}, {results, Chunk}}, #state{ qid = QId } = State) ->
+    {noreply, add_subquery_result(SubQId, Chunk, State)};
 handle_info({{SubQId, QId}, {error, Reason} = Error},
             State = #state{receiver_pid = ReceiverPid,
                            qid    = QId,
@@ -228,6 +171,56 @@ filter_columns(SelectSpec, ColValues) ->
 %% Send a message to this process to get the next query.
 pop_next_query() ->
     self() ! pop_next_query.
+
+%% 
+execute_query(ReceiverPid, QId, [Qry|_] = SubQueries,
+              #state{ run_sub_qs_fn = RunSubQs } = State) ->
+    Indices = lists:seq(1, length(SubQueries)),
+    ZQueries = lists:zip(Indices, SubQueries),
+    SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
+    ok = RunSubQs(SubQs),
+    {ok, State#state{qid          = QId,
+                     receiver_pid = ReceiverPid,
+                     qry          = Qry,
+                     sub_qrys     = Indices}}.
+
+%%
+add_subquery_result(SubQId, Chunk, 
+                    #state{qry      = Qry,
+                           result   = IndexedChunks,
+                           sub_qrys = SubQs} = State) ->
+    #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
+    case lists:member(SubQId, SubQs) of
+        true ->
+            Decoded = decode_results(lists:flatten(Chunk), SelectSpec),
+            NSubQ = lists:delete(SubQId, SubQs),
+            State#state{status   = accumulating_chunks,
+                        result   = [{SubQId, Decoded} | IndexedChunks],
+                        sub_qrys = NSubQ};
+        false ->
+            %% discard; Don't touch state as it may have already 'finished'.
+            State
+    end.
+
+subqueries_done(SubQId, QId,
+                #state{qid          = QId,
+                       receiver_pid = ReceiverPid,
+                       result       = IndexedChunks,
+                       sub_qrys     = SubQQ} = State) ->
+    case SubQQ of
+        [] ->
+            lager:debug("Done collecting on QId ~p (~p): ~p", [QId, SubQId, IndexedChunks]),
+            %% sort by index, to reassemble according to coverage plan
+            {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
+            Results = lists:append(R2),
+            %   send the results to the waiting client process
+            ReceiverPid ! {ok, Results},
+            pop_next_query(),
+            %% drop indexes, serialize
+            new_state(State#state.name);
+        _MoreSubQueriesNotDone ->
+            State
+    end.
 
 %%%===================================================================
 %%% Unit tests
