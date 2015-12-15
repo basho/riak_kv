@@ -89,7 +89,7 @@ handle_cast(Msg, State) ->
 %% @private
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 handle_info(pop_next_query, State1) ->
-    {query, ReceiverPid, QId, Query, DDL} = riak_kv_qry_queue:blocking_pop(),
+    {query, ReceiverPid, QId, Query, _} = riak_kv_qry_queue:blocking_pop(),
     {ok, State2} = execute_query(ReceiverPid, QId, Query, State1),
     {noreply, State2};
 handle_info({{SubQId, QId}, done}, #state{ qid = QId } = State) ->
@@ -155,18 +155,8 @@ extract_riak_object(SelectSpec, V) when is_binary(V) ->
             %% record was deleted
             [];
         FullRecord ->
-            filter_columns(lists:flatten(SelectSpec), FullRecord)
+            riak_kv_qry_compiler:run_select(SelectSpec, FullRecord)
     end.
-
-%% Pull out the values we're interested in based on the select,
-%% statement, e.g. select user, geoloc returns only user and geoloc columns.
--spec filter_columns(SelectSpec::[binary()],
-                     ColValues::[{Field::binary(), Value::binary()}]) ->
-        ColValues2::[{Field::binary(), Value::binary()}].
-filter_columns([<<"*">>], ColValues) ->
-    ColValues;
-filter_columns(SelectSpec, ColValues) ->
-    [Col || {Field, _} = Col <- ColValues, lists:member(Field, SelectSpec)].
 
 %% Send a message to this process to get the next query.
 pop_next_query() ->

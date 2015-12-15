@@ -2,7 +2,7 @@
 %%
 %% riak_kv_eleveldb_backend: Backend Driver for LevelDB
 %%
-%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -32,6 +32,7 @@
          get/3,
          put/5,
          async_put/5,
+         sync_put/5,
          delete/4,
          drop/1,
          fix_index/3,
@@ -216,6 +217,15 @@ async_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts
     StorageKey = to_object_key(Bucket, PrimaryKey),
     eleveldb:async_put(Ref, Context, StorageKey, Val, WriteOpts),
     {ok, State}.
+
+sync_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts}=State) ->
+    StorageKey = to_object_key(Bucket, PrimaryKey),
+    case eleveldb:sync_put(Ref, Context, StorageKey, Val, WriteOpts) of
+	ok ->
+	    {ok, State};
+	{error, Reason}  ->
+	    {error, Reason, State}
+    end.
 
 indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
@@ -905,7 +915,7 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
 %% for tuples for time series.  Either of sort *after* a bare atom.
 to_first_key(undefined) ->
     %% Start at the first object in LevelDB...
-    to_object_key({<<>>, <<>>}, undefined); 
+    to_object_key({<<>>, <<>>}, undefined);
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
     to_object_key(Bucket, undefined);
@@ -954,9 +964,9 @@ orig_to_object_key(Bucket, Key) ->
 %% be round-tripped (as that would then be a binary-wrapping a sext-encoded
 %% TS key - for an extra 9 bytes used).
 %%
-to_object_key({BucketType, BucketName}, {Family, Series, Timestamp}) ->
-    EncodedBucketType = sext:encode(BucketType),
-    EncodedBucketName = sext:encode(BucketName),
+to_object_key({TableName, TableName}, {Family, Series, Timestamp}) ->
+    EncodedBucketType = % sext:encode(BucketType),
+    EncodedBucketName = sext:encode(TableName),
     EncodedFamily = sext:encode(Family),
     EncodedSeries = sext:encode(Series),
     EncodedTimestamp = sext:encode(Timestamp),
