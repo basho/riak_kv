@@ -137,7 +137,7 @@ handle_info({{SubQId, QId}, {results, Chunk}},
                            qry      = Qry,
                            result   = IndexedChunks,
                            sub_qrys = SubQs}) ->
-    #riak_sql_v1{'SELECT' = {plain_row_select, SelectSpec}} = Qry,
+    #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
     NewS = case lists:member(SubQId, SubQs) of
                true ->
                    Decoded = decode_results(lists:flatten(Chunk), SelectSpec),
