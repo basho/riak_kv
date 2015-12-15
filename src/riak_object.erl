@@ -130,7 +130,6 @@ newts(B, K, V, MD) ->
     new_int2(B, K, V, MD).
 
 
-
 %% internal version after all validation has been done
 new_int(B, K, V, MD) ->
     case size(K) > ?MAX_KEY_SIZE of
