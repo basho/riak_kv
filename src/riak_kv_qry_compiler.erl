@@ -79,7 +79,7 @@ run_select(SelectSpec, Row) ->
 
 %% Compile a single selection column into a fun that can extract the cell 
 %% from the row.
--spec compile_select(DDL::#ddl_v1{}, ColumnName::[binary()]) ->
+-spec compile_select(DDL::#ddl_v1{}, ColumnSpec::{identifier,[binary()]}) ->
         compiled_select().
 compile_select(_, {identifier, [<<"*">>]}) ->
     fun(Row) ->
