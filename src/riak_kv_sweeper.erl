@@ -690,7 +690,8 @@ fold_funs(deleted, #sa{active_p = [Sweep | ActiveRest],
 
 %% Main function: call fun with it's acc and aptionals
 fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
-                            succ_p = Succ} = SweepAcc) ->
+                            succ_p = Succ,
+                            modified_objects = ModObj} = SweepAcc) ->
     #sweep_participant{sweep_fun = Fun,
                        acc = Acc,
                        errors = Errors,
@@ -702,22 +703,24 @@ fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
             riak_kv_vnode:local_reap(SweepAcc1#sa.index, BKey, RObj),
             fold_funs(deleted,
                       SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
+                                   modified_objects = ModObj + 1,
+                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
         {mutated, MutatedRObj, NewAcc} ->
             riak_kv_vnode:local_put(SweepAcc1#sa.index, MutatedRObj),
             fold_funs({BKey, MutatedRObj},
                       SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
+                                   modified_objects = ModObj + 1,
+                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
         {ok, NewAcc} ->
             fold_funs({BKey, RObj},
                       SweepAcc1#sa{active_p = ActiveRest,
-                                  succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]})
+                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]})
     catch C:T ->
               lager:error("Sweeper fun crashed ~p ~p Key: ~p", [{C, T}, Sweep, BKey]),
               fold_funs({BKey, RObj},
                         SweepAcc1#sa{active_p = ActiveRest,
-                                    %% We keep the sweep in succ unil we have enough crashes.
-                                    succ_p = [Sweep#sweep_participant{errors = Errors + 1} | Succ]})
+                                     %% We keep the sweep in succ unil we have enough crashes.
+                                     succ_p = [Sweep#sweep_participant{errors = Errors + 1} | Succ]})
     end.
 
 maybe_add_opt_info({BKey, RObj}, SweepAcc, Options) ->
@@ -739,13 +742,27 @@ get_bucket_props(Bucket, BucketPropsDict) ->
             {BucketProps, BucketPropsDict1}
     end.
 
-maybe_throttle_sweep(#sa{throttle = {Limit, Wait}, swept_keys = SweepKeys} = SweepAcc) ->
+%% Throttle depending on swept keys.
+maybe_throttle_sweep(#sa{throttle = {Limit, Wait},
+                         swept_keys = SweepKeys} = SweepAcc) ->
     case SweepKeys rem Limit of
         0 ->
             NewThrottle = get_sweep_throttle(),
             %% We use receive after to throttle instead of sleep.
-            %% This way we can respond on requests while throtteling
-            maybe_receive_request(SweepAcc#sa{throttle = NewThrottle}, Wait);
+            %% This way we can respond on requests while throttling
+            SweepAcc1 =
+                maybe_receive_request(SweepAcc#sa{throttle = NewThrottle}, Wait),
+            maybe_extra_throttle(SweepAcc1);
+        _ ->
+            maybe_extra_throttle(SweepAcc)
+    end.
+
+%% Throttle depending on how many objects the sweep modify.
+maybe_extra_throttle(#sa{throttle = {Limit, Wait},
+                         modified_objects = ModObj} = SweepAcc) ->
+    case ModObj rem Limit of
+        0 ->
+            maybe_receive_request(SweepAcc, Wait);
         _ ->
             SweepAcc
     end.
