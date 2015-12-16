@@ -46,7 +46,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% Default number of concurrent sweeps that are allowed to run.
--define(DEFAULS_SWEEP_CONCURRENCY,2).
+-define(DEFAULT_SWEEP_CONCURRENCY,1).
 -define(DEFAULT_SWEEP_TICK, timer:minutes(5)).
 -define(ESTIMATE_EXPIRY, 24 * 3600).    %% 1 day in s
 
@@ -398,7 +398,7 @@ concurrency_limit_reached(Sweeps) ->
     length(get_running_sweeps(Sweeps)) >= get_concurrency_limit().
 
 get_concurrency_limit() ->
-    app_helper:get_env(riak_kv, sweep_concurrency, ?DEFAULS_SWEEP_CONCURRENCY).
+    app_helper:get_env(riak_kv, sweep_concurrency, ?DEFAULT_SWEEP_CONCURRENCY).
 
 schedule_initial_sweep_tick() ->
     InitialTick = trunc(get_tick() * random:uniform()),
