@@ -56,7 +56,7 @@
          terminate/2, code_change/3]).
 
 -ifdef(TEST).
--export([query_and_set_aae_throttle/1]).        % for eunit twiddle-testing
+-export([query_and_set_aae_throttle/1, do_get_lock/4]).        % for eunit twiddle-testing
 -export([make_state/0, get_last_throttle/1]).   % for eunit twiddle-testing
 -include_lib("eunit/include/eunit.hrl").
 -endif.
