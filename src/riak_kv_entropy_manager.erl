@@ -67,21 +67,21 @@
 -type exchange() :: {index(), index(), index_n()}.
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
 
--record(state, {mode           = automatic :: automatic | manual,
-                trees          = []        :: [{index(), pid()}],
-                tree_queue     = []        :: [{index(), pid()}],
-                locks          = []        :: [{pid(), reference()}],
-                exchange_queue = []        :: [exchange()],
-                exchanges      = []        :: [{index(), reference(), pid()}],
-                vnode_status_pid = undefined :: 'undefined' | pid(),
-                last_throttle  = undefined :: 'undefined' | non_neg_integer()
-               }).
-
 -record(lock, {pid :: pid(),
                ref :: reference(),
                index :: non_neg_integer(),
                type :: atom()
               }).
+
+-record(state, {mode           = automatic :: automatic | manual,
+                trees          = []        :: [{index(), pid()}],
+                tree_queue     = []        :: [{index(), pid()}],
+                locks          = []        :: [#lock{}],
+                exchange_queue = []        :: [exchange()],
+                exchanges      = []        :: [{index(), reference(), pid()}],
+                vnode_status_pid = undefined :: 'undefined' | pid(),
+                last_throttle  = undefined :: 'undefined' | non_neg_integer()
+               }).
 
 -type state() :: #state{}.
 
@@ -110,7 +110,7 @@ get_lock(Type) ->
 get_lock(Type, Pid) ->
     get_lock(Type, Pid, undefined).
 
--spec get_lock(any(), pid(), non_neg_integer()) -> ok | max_concurrency.
+-spec get_lock(any(), pid(), index() | undefined) -> ok | max_concurrency.
 get_lock(Type, Pid, Index) ->
     gen_server:call(?MODULE, {get_lock, Type, Pid, Index}, infinity).
 
@@ -481,7 +481,7 @@ check_lock_type(_Type, _Locks) ->
     ok.
 
 get_nr_of_locks(Type, Locks) ->
-   length([Lock || Lock <- Locks, Locks#lock.type == Type]).
+   length([Lock || Lock <- Locks, Lock#lock.type == Type]).
 
 -spec maybe_release_lock(reference() |non_neg_integer(), state()) -> state().
 maybe_release_lock(Ref, State) when is_reference(Ref) ->
