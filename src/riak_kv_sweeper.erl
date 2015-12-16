@@ -760,7 +760,8 @@ maybe_throttle_sweep(#sa{throttle = {Limit, Wait},
 %% Throttle depending on how many objects the sweep modify.
 maybe_extra_throttle(#sa{throttle = {Limit, Wait},
                          modified_objects = ModObj} = SweepAcc) ->
-    case ModObj rem Limit of
+    %% +1 since some sweeps doesn't modify any objects
+    case ModObj + 1 rem Limit of
         0 ->
             maybe_receive_request(SweepAcc, Wait);
         _ ->
