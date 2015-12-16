@@ -81,7 +81,7 @@ run_select(SelectSpec, Row) ->
 %% from the row.
 -spec compile_select(DDL::#ddl_v1{}, ColumnName::[binary()]) ->
         compiled_select().
-compile_select(_, [<<"*">>]) ->
+compile_select(_, {identifier, [<<"*">>]}) ->
     fun(Row) ->
         Row
     end;
