@@ -61,7 +61,6 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}
     end.
 
-%%
 maybe_await_query_results({error,_} = Error) ->
     Error;
 maybe_await_query_results(_) ->
