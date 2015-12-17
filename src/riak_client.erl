@@ -518,7 +518,7 @@ get_cover(Module, Bucket, Parallelization, Target, _Client) ->
     get_cover_aux(Module, Parallelization, ReqId, N, RingSize, Target).
 
 get_cover_aux(Module, undefined, ReqId, N, _RingSize, Target) ->
-    split_cover(Module:create_plan(Target, N, 1, ReqId, riak_kv));
+    split_cover(Module:create_plan(Target, N, 1, ReqId, riak_kv, undefined));
 get_cover_aux(Module, 0, ReqId, N, RingSize, Target) ->
     split_cover(
       Module:create_subpartition_plan(Target, N,
