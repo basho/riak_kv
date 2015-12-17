@@ -70,6 +70,7 @@
 -define(E_BAD_KEY_LENGTH,    1011).
 -define(E_LISTKEYS,          1012).
 -define(E_TIMEOUT,           1013).
+-define(E_BAD_QUERY,         1014).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -296,23 +297,53 @@ process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
         DDL ->
             submit_query(DDL, Mod, SQL, State)
     end;
+%% No support yet for replacing coverage components, so replace_cover
+%% must be undefined
 process(#tscoveragereq{query = Q,
-                       min_partitions=P, replace_cover=undefined,
+                       replace_cover=undefined,
                        table = Table}, State) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
     Bucket = table_to_bucket(Table),
     Client = {riak_client, [node(), undefined]},
-    riak_kv_pb_coverage:convert_list(
-      Client:get_cover(riak_kv_qry_coverage_plan, Bucket, P, Q), State);
-process(#tscoveragereq{min_partitions=P, replace_cover=R, unavailable_cover=U,
-                       table = Table}, State) ->
-    Bucket = table_to_bucket(Table),
-    Client = {riak_client, [node(), undefined]},
-    riak_kv_pb_coverage:convert_list(
-      Client:replace_cover(riak_kv_qry_coverage_plan, Bucket, P,
-                           riak_kv_pb_coverage:checksum_binary_to_term(R),
-                           lists:map(fun riak_kv_pb_coverage:checksum_binary_to_term/1, U)),
-      State).
+    SQL = compile(Mod, Q),
 
+    case SQL of
+        {error, _Error} ->
+            {reply, make_rpberrresp(?E_BAD_QUERY,
+                                    "Failed to compile query"),
+             State};
+        _ ->
+            %% SQL is a list of queries (1 per quantum)
+            riak_kv_pb_coverage:convert_list(
+              lists:map(fun(S) ->
+                                Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
+                                                 {S, Bucket})
+                        end, SQL), State)
+    end.
+
+compile(Mod, Query) ->
+    case (catch Mod:get_ddl()) of
+        {_, {undef, _}} ->
+            {error, no_helper_module};
+        DDL ->
+            Lexed = riak_ql_lexer:get_tokens(Query),
+            case riak_ql_parser:parse(Lexed) of
+                {error, _Reason} = Error ->
+                    Error;
+                {ok, SQL} ->
+                    case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+                        true ->
+                            case riak_kv_qry_compiler:compile(DDL, SQL, undefined) of
+                                {error,_} = Error ->
+                                    Error;
+                                Queries when is_list(Queries) ->
+                                    Queries
+                            end;
+                        {false, _Errors} ->
+                            {error, invalid_query}
+                    end
+            end
+    end.
 
 %%
 submit_query(DDL, Mod, SQL, State) ->
