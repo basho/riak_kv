@@ -33,25 +33,44 @@
 create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService) ->
     create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService, undefined).
 
-create_plan({Query, Bucket}, NVal, _PVC, _ReqId, _NodeCheckService, _Request) ->
-    %% {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
-    %% RingSize = chashbin:num_partitions(CHBin),
-    %% Offset = ReqId rem NVal,
-    %% AllVnodes = list_all_vnode_ids(RingSize),
-    %% AllPartitions = lists:map(fun({vnode_id, Id, RS}) ->
-    %%                                   {partition_id, Id, RS} end,
-    %%                           AllVnodes),
-    %% UnavailableVnodes = identify_unavailable_vnodes(CHBin, RingSize,
-    %%                                                 Service, AvailNodeFun),
+%% PVC is generally 1 anyway, no support for it yet
+create_plan({Query, Bucket}, NVal, _PVC, ReqId, NodeCheckService, _Request) ->
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    RingSize = chashbin:num_partitions(CHBin),
+    UnavailableVNodes =
+        riak_core_coverage_plan:identify_unavailable_vnodes(CHBin, RingSize,
+                                                            NodeCheckService),
 
     Key = make_key(Query),
     case hash_for_nodes(NVal, Bucket, Key) of
         [] ->
             {error, no_primaries_available};
         VNodes when is_list(VNodes) ->
-            NoFilters = [],
-            {[hd(VNodes)], NoFilters}
+            AvailVNodes = filter_down_vnodes(VNodes, UnavailableVNodes, RingSize),
+            case AvailVNodes of
+                [] ->
+                    {error, no_primaries_available};
+                _ ->
+                    AvailCount = length(AvailVNodes),
+                    Offset = ReqId rem AvailCount,
+                    NoFilters = [],
+                    Which =
+                        riak_core_coverage_plan:add_offset(0, Offset, AvailCount),
+                    {[lists:nth(Which+1, AvailVNodes)], NoFilters}
+            end
     end.
+
+%% VNodes is a list of tuples:
+%%  [{91343852333181432387730302044767688728495783936, 'dev1@127.0.0.1'}]
+%% Unavail is a list of quite different tuples:
+%%  [{vnode_id, 3, 'dev1@127.0.0.1'}]
+%% where 3 is a vnode ID that maps to a longer index (value depends on ring size)
+%%
+%% Anything in the unavailable list must be removed from VNodes.
+filter_down_vnodes(VNodes, Unavail, RingSize) ->
+    RingIndexInc = chash:ring_increment(RingSize),
+    VNodes -- lists:map(fun({vnode_id, Id, Node}) -> {Id * RingIndexInc, Node} end,
+                        Unavail).
 
 %% This is fugly because the physical format of the startkey
 %% which is neede by eleveldb is being used by the query
