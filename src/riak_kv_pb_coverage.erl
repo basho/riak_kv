@@ -49,6 +49,10 @@
          term_to_checksum_binary/1
         ]).
 
+%% Useful functions for other riak_core applications that need their
+%% own coverage requests
+-export([convert_list/2]).
+
 -record(state, {client}).
 
 %% @doc init/0 callback. Returns the service internal start
@@ -79,11 +83,12 @@ process_stream(_,_,State) ->
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpbcoveragereq{type=T, bucket=B, min_partitions=P, replace_cover=undefined}, #state{client=Client} = State) ->
     Bucket = bucket_type(T, B),
-    convert_list(Client:get_cover(Bucket, P), State);
+    convert_list(Client:get_cover(riak_core_coverage_plan, Bucket, P), State);
 process(#rpbcoveragereq{type=T, bucket=B, min_partitions=P, replace_cover=R, unavailable_cover=U}, #state{client=Client} = State) ->
     Bucket = bucket_type(T, B),
     convert_list(
       Client:replace_cover(
+        riak_core_coverage_plan,
         Bucket, P,
         checksum_binary_to_term(R),
         lists:map(fun checksum_binary_to_term/1, U)),

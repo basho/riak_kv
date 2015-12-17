@@ -104,7 +104,9 @@ decode(Code, Bin) ->
         #tsdelreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_del", Table}};
         #tslistkeysreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_listkeys", Table}}
+            {ok, Msg, {"riak_kv.ts_listkeys", Table}};
+        #tscoveragereq{table = Table} ->
+            {ok, Msg, {"riak_kv.cover", {table_to_bucket(Table)}}}
     end.
 
 
@@ -293,7 +295,24 @@ process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
             {reply, missing_helper_module(Table, BucketProps), State};
         DDL ->
             submit_query(DDL, Mod, SQL, State)
-    end.
+    end;
+process(#tscoveragereq{query = Q,
+                       min_partitions=P, replace_cover=undefined,
+                       table = Table}, State) ->
+    Bucket = table_to_bucket(Table),
+    Client = {riak_client, [node(), undefined]},
+    riak_kv_pb_coverage:convert_list(
+      Client:get_cover(riak_kv_qry_coverage_plan, Bucket, P, Q), State);
+process(#tscoveragereq{min_partitions=P, replace_cover=R, unavailable_cover=U,
+                       table = Table}, State) ->
+    Bucket = table_to_bucket(Table),
+    Client = {riak_client, [node(), undefined]},
+    riak_kv_pb_coverage:convert_list(
+      Client:replace_cover(riak_kv_qry_coverage_plan, Bucket, P,
+                           riak_kv_pb_coverage:checksum_binary_to_term(R),
+                           lists:map(fun riak_kv_pb_coverage:checksum_binary_to_term/1, U)),
+      State).
+
 
 %%
 submit_query(DDL, Mod, SQL, State) ->

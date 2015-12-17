@@ -23,17 +23,15 @@
 -module(riak_kv_qry_coverage_plan).
 
 -export([
-         create_plan/5
+         create_plan/6
         ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 %%
-create_plan(NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
-    Query = riak_local_index:get_query_from_req(Request),
-    Key2 = make_key(Query),
-    Bucket = riak_kv_util:get_bucket_from_req(Request),
-    case hash_for_nodes(NVal, Bucket, Key2) of
+create_plan({Query, Bucket}, NVal, _PVC, _ReqId, _NodeCheckService, _Request) ->
+    Key = make_key(Query),
+    case hash_for_nodes(NVal, Bucket, Key) of
         [] ->
             {error, no_primaries_available};
         VNodes when is_list(VNodes) ->

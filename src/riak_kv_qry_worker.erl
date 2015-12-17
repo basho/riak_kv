@@ -138,8 +138,7 @@ run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
-    CoverageFn = {colocated, riak_kv_qry_coverage_plan},
-    Opts = [Bucket, none, Q, Timeout, all, undefined, CoverageFn],
+    Opts = [Bucket, none, Q, Timeout, all, undefined, {Q, Bucket}, riak_kv_qry_coverage_plan],
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T).
 
