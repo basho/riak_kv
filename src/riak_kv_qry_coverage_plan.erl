@@ -23,20 +23,34 @@
 -module(riak_kv_qry_coverage_plan).
 
 -export([
+         create_plan/5,
          create_plan/6
         ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 %%
+create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService) ->
+    create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService, undefined).
+
 create_plan({Query, Bucket}, NVal, _PVC, _ReqId, _NodeCheckService, _Request) ->
+    %% {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    %% RingSize = chashbin:num_partitions(CHBin),
+    %% Offset = ReqId rem NVal,
+    %% AllVnodes = list_all_vnode_ids(RingSize),
+    %% AllPartitions = lists:map(fun({vnode_id, Id, RS}) ->
+    %%                                   {partition_id, Id, RS} end,
+    %%                           AllVnodes),
+    %% UnavailableVnodes = identify_unavailable_vnodes(CHBin, RingSize,
+    %%                                                 Service, AvailNodeFun),
+
     Key = make_key(Query),
     case hash_for_nodes(NVal, Bucket, Key) of
         [] ->
             {error, no_primaries_available};
         VNodes when is_list(VNodes) ->
             NoFilters = [],
-            {VNodes, NoFilters}
+            {[hd(VNodes)], NoFilters}
     end.
 
 %% This is fugly because the physical format of the startkey

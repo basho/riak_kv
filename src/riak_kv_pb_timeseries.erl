@@ -304,8 +304,8 @@ process(#tscoveragereq{query = Q,
                        table = Table}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     Bucket = table_to_bucket(Table),
+    SQL = compile(Mod, catch decode_query(Q)),
     Client = {riak_client, [node(), undefined]},
-    SQL = compile(Mod, Q),
 
     case SQL of
         {error, _Error} ->
@@ -314,34 +314,45 @@ process(#tscoveragereq{query = Q,
              State};
         _ ->
             %% SQL is a list of queries (1 per quantum)
-            riak_kv_pb_coverage:convert_list(
-              lists:map(fun(S) ->
-                                Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
-                                                 {S, Bucket})
-                        end, SQL), State)
+            riak_kv_pb_coverage:convert_list(sql_to_cover(Client, SQL, Bucket, []), State)
     end.
 
-compile(Mod, Query) ->
+%% Result from riak_client:get_cover is a nested list of coverage plan
+%% because KV coverage requests are designed that way, but in our case
+%% all we want is the singleton head
+
+%% If any of the results from get_cover are errors, we want that tuple
+%% to be the sole return value
+sql_to_cover(_Client, [], _Bucket, Accum) ->
+    lists:reverse(Accum);
+sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
+    case Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
+                          {SQL, Bucket}) of
+        {error, Error} ->
+            {error, Error};
+        [Cover] ->
+            sql_to_cover(Client, Tail, Bucket, [Cover|Accum])
+    end.
+
+compile(_Mod, {error, Err}) ->
+    {error, decoder_parse_error_resp(Err)};
+compile(_Mod, {'EXIT', {Err, _}}) ->
+    {error, decoder_parse_error_resp(Err)};
+compile(Mod, {ok, SQL}) ->
     case (catch Mod:get_ddl()) of
         {_, {undef, _}} ->
             {error, no_helper_module};
         DDL ->
-            Lexed = riak_ql_lexer:get_tokens(Query),
-            case riak_ql_parser:parse(Lexed) of
-                {error, _Reason} = Error ->
-                    Error;
-                {ok, SQL} ->
-                    case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
-                        true ->
-                            case riak_kv_qry_compiler:compile(DDL, SQL, undefined) of
-                                {error,_} = Error ->
-                                    Error;
-                                Queries when is_list(Queries) ->
-                                    Queries
-                            end;
-                        {false, _Errors} ->
-                            {error, invalid_query}
-                    end
+            case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+                true ->
+                    case riak_kv_qry_compiler:compile(DDL, SQL, undefined) of
+                        {error,_} = Error ->
+                            Error;
+                        Queries when is_list(Queries) ->
+                            Queries
+                    end;
+                {false, _Errors} ->
+                    {error, invalid_query}
             end
     end.
 
