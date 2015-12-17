@@ -95,7 +95,7 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter),
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From}}.
+     riak_core_coverage_plan, #state{from=From}}.
 
 
 process_results({From, Bucket, Keys},
