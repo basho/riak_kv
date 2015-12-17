@@ -19,7 +19,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..99]
+%% @doc Callbacks for TS protobuf messages [codes 90..100]
 
 -module(riak_kv_pb_timeseries).
 
