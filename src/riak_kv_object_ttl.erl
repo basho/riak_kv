@@ -39,16 +39,19 @@ ttl_fun() ->
     fun({{Bucket, Key}, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             case expired(RObj, BucketProps) of
                 true ->
-                    Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
-                                                                         "true", dict:new())),
-                    VClock = riak_object:vclock(RObj),
-                    Tombstone = riak_object:set_vclock(Obj0, VClock),
-                    LastModifiedTombstone = riak_object:update_last_modified(Tombstone),
-                    {mutated, LastModifiedTombstone, Acc};
+                    Tombstone = create_tombstone(RObj, Bucket, Key),
+                    {mutated, Tombstone, Acc};
                 _ ->
                     {ok, Acc}
             end
     end.
+
+create_tombstone(RObj, Bucket, Key) ->
+    TombstoneMD = dict:store(?MD_DELETED, "true", dict:new()),
+    Obj0 = riak_object:new(Bucket, Key, <<>>, TombstoneMD),
+    VClock = riak_object:vclock(RObj),
+    Tombstone = riak_object:set_vclock(Obj0, VClock),
+    riak_object:update_last_modified(Tombstone).
 
 successfull_sweep(Index, _FinalAcc) ->
     lager:info("successfull_sweep ~p", [Index]),

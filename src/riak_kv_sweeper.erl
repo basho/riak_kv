@@ -166,7 +166,9 @@ handle_call(status, _From, State) ->
             _ ->
                 State
         end,
-    Participants = [Participant || {_Mod, Participant} <- dict:to_list(State1#state.sweep_participants)],
+    Participants =
+        [Participant ||
+         {_Mod, Participant} <- dict:to_list(State1#state.sweep_participants)],
     Sweeps =   [Sweep || {_Index, Sweep} <- dict:to_list(State1#state.sweeps)],
     {reply, {Participants , Sweeps}, State1};
 
@@ -817,7 +819,8 @@ make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
 sweep_delete_test() ->
     setup_sweep(Keys = 100),
     DeleteRem = 3,
-    {reply, Acc, _State} = do_sweep(delete_sweep(DeleteRem), 0, no_sender, [], no_index, fake_backend, [], []),
+    {reply, Acc, _State} =
+        do_sweep(delete_sweep(DeleteRem), 0, no_sender, [], no_index, fake_backend, [], []),
     ?assertEqual(Keys, Acc#sa.swept_keys),
     %% Verify acc return
     [{_Pid,{_,_,[_,N]},ok}] = meck:history(delete_callback_module),
@@ -827,7 +830,8 @@ sweep_delete_test() ->
 %% Verify that a sweep asking for bucket_props gets them
 sweep_delete_bucket_props_test() ->
     setup_sweep(Keys = 100),
-    {reply, Acc, _State} = do_sweep(delete_sweep_bucket_props(), 0, no_sender, [], no_index, fake_backend, [], []),
+    {reply, Acc, _State} =
+        do_sweep(delete_sweep_bucket_props(), 0, no_sender, [], no_index, fake_backend, [], []),
 
     ?assertEqual(Keys, dict:size(Acc#sa.bucket_props)),
     ?assertEqual(Keys, Acc#sa.swept_keys),
@@ -895,15 +899,18 @@ setup_sweep(N) ->
     meck:expect(riak_kv_vnode, local_reap, fun(_, _, _) -> [] end),
     meck:new(riak_core_bucket),
     meck:expect(riak_core_bucket, get_bucket, fun(_) -> [] end),
-    [meck_callback_modules(Module)||  Module <- [delete_callback_module, modify_callback_module, observ_callback_module]],
+    [meck_callback_modules(Module) ||
+       Module <- [delete_callback_module, modify_callback_module, observ_callback_module]],
     meck:new(fake_backend, [non_strict]),
     Keys = make_keys(N),
-    meck:expect(fake_backend, fold_objects,
-                fun(CompleteFoldReq, InitialAcc, _, _) ->
-                        lists:foldl(fun(NBin, Acc) ->
-                                            CompleteFoldReq(NBin, NBin, riak_object:new(NBin, NBin, <<>>), Acc)
-                                    end, InitialAcc, Keys)
-                end).
+    BackendFun =
+        fun(CompleteFoldReq, InitialAcc, _, _) ->
+                lists:foldl(fun(NBin, Acc) ->
+                                    InitialObj = riak_object:new(NBin, NBin, <<>>),
+                                    CompleteFoldReq(NBin, NBin, InitialObj, Acc)
+                            end, InitialAcc, Keys)
+        end,
+    meck:expect(fake_backend, fold_objects, BackendFun).
 
 meck_callback_modules(Module) ->
     meck:new(Module, [non_strict]),
@@ -940,7 +947,10 @@ observ_sweep() ->
                        }].
 
 delete_sweep(N) ->
-    DeleteFun = fun({{_, BKey}, _RObj}, Acc, _Opt) -> rem_keys(BKey, N, {deleted, Acc + 1}, {ok, Acc}) end,
+    DeleteFun =
+        fun({{_, BKey}, _RObj}, Acc, _Opt) ->
+                rem_keys(BKey, N, {deleted, Acc + 1}, {ok, Acc})
+        end,
     [#sweep_participant{module = delete_callback_module,
                        sweep_fun = DeleteFun,
                        fun_type = ?DELETE_FUN,
@@ -987,7 +997,8 @@ setup() ->
 add_test_sweep_participant(StateIn, Participants) ->
     Fun = fun(N, State) ->
                   Participant = test_sweep_participant(N),
-                  {reply, ok, StateOut} = handle_call({add_sweep_participant, Participant}, nobody, State),
+                  {reply, ok, StateOut} =
+                      handle_call({add_sweep_participant, Participant}, nobody, State),
                   StateOut
           end,
     lists:foldl(Fun, StateIn, Participants).
@@ -1009,7 +1020,8 @@ test_initiate_sweeps({MyRingPart, _Participants, State}) ->
 
 test_find_never_sweeped({MyRingPart, Participants, State}) ->
     fun() ->
-            %% One sweep will not be given any results so it will be returnd by get_never_sweeped
+            %% One sweep will not be given any results
+            %% so it will be returnd by get_never_sweeped
             [NoResult | Rest]  = MyRingPart,
             Result = [{get_module(Part), succ} ||Part <- Participants],
             State1 =
