@@ -171,7 +171,7 @@ process(#tsgetreq{table = Table, key = PbCompoundKey,
                 case make_ts_keys(CompoundKey, DDL, Mod) of
                     {ok, PKLK} ->
                         riak_client:get(
-                          {Table, Table}, PKLK, Options, {riak_client, [node(), undefined]});
+                          table_to_bucket(Table), PKLK, Options, {riak_client, [node(), undefined]});
                     ErrorReason ->
                         ErrorReason
                 end,
@@ -235,7 +235,7 @@ process(#tsdelreq{table = Table, key = PbCompoundKey,
                 case make_ts_keys(CompoundKey, DDL, Mod) of
                     {ok, PKLK} ->
                         riak_client:delete_vclock(
-                          {Table, Table}, PKLK, VClock, Options,
+                          table_to_bucket(Table), PKLK, VClock, Options,
                           {riak_client, [node(), undefined]});
                     ErrorReason ->
                         ErrorReason
@@ -265,7 +265,7 @@ process(#tslistkeysreq{table   = Table,
             {reply, missing_helper_module(Table, Props), State};
         DDL ->
             Result = riak_client:stream_list_keys(
-                       {Table, Table}, Timeout,
+                       table_to_bucket(Table), Timeout,
                        {riak_client, [node(), undefined]}),
             case Result of
                 {ok, ReqId} ->
