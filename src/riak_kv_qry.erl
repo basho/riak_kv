@@ -53,15 +53,14 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
             case riak_kv_qry_compiler:compile(DDL, SQL) of
                 {error,_} = Error ->
                     Error;
-                Queries when is_list(Queries) ->
+                {ok, InitialState, Queries} ->
                     maybe_await_query_results(
-                        riak_kv_qry_queue:put_on_queue(self(), Queries, DDL))
+                        riak_kv_qry_queue:put_on_queue(self(), InitialState, Queries, DDL))
             end;
         {false, Errors} ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}
     end.
 
-%%
 maybe_await_query_results({error,_} = Error) ->
     Error;
 maybe_await_query_results(_) ->
