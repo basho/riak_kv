@@ -132,13 +132,25 @@ new_state(RegisteredName) ->
     #state{name = RegisteredName}.
 
 run_sub_qs_fn([]) -> ok;
-run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
+run_sub_qs_fn([{{qry, #riak_sql_v1{cover_context=undefined}=Q}, {qid, QId}} | T]) ->
     Table = Q#riak_sql_v1.'FROM',
     Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
     Opts = [Bucket, none, Q, Timeout, all, undefined, {Q, Bucket}, riak_kv_qry_coverage_plan],
+    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
+    run_sub_qs_fn(T);
+%% if cover_context in the SQL record is *not* undefined, we've been
+%% given a mini coverage plan to map to a single vnode/quantum
+run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
+    Table = Q#riak_sql_v1.'FROM',
+    Cover = Q#riak_sql_v1.cover_context,
+    Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
+    %% fix these up too
+    Timeout = {timeout, 10000},
+    Me = self(),
+    Opts = [Bucket, none, Q, Timeout, all, undefined, Cover, riak_kv_qry_coverage_plan],
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T).
 

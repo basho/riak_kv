@@ -31,6 +31,7 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+%% No coverage plan for parallel requests
 -spec submit(string() | #riak_sql_v1{}, #ddl_v1{}) ->
     {ok, [{Key::binary(), riak_pb_ts_codec:ldbvalue()}]} | {error, any()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.

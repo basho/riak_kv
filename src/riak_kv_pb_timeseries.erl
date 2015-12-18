@@ -88,8 +88,8 @@ init() ->
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #tsqueryreq{query = Q}->
-            case catch decode_query(Q) of
+        #tsqueryreq{query = Q, cover_context = Cover}->
+            case catch decode_query(Q, Cover) of
                 {ok, DecodedQuery} ->
                     PermAndTarget = decode_query_permissions(DecodedQuery),
                     {ok, DecodedQuery, PermAndTarget};
@@ -288,7 +288,7 @@ process(#ddl_v1{}, State) ->
                             " use riak-admin command instead"),
      State};
 
-process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
+process(#riak_sql_v1{'FROM' = Table}=SQL, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     case (catch Mod:get_ddl()) of
         {_, {undef, _}} ->
@@ -407,9 +407,19 @@ process_stream({ReqId, Error}, ReqId,
 
 -spec decode_query(Query::#tsinterpolation{}) ->
     {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{}}.
-decode_query(#tsinterpolation{ base = BaseQuery }) ->
+decode_query(Query) ->
+    decode_query(Query, undefined).
+
+-spec decode_query(Query::#tsinterpolation{}, term()) ->
+    {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{}}.
+decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
-    riak_ql_parser:parse(Lexed).
+    case riak_ql_parser:parse(Lexed) of
+        {ok, #riak_sql_v1{}=SQL} ->
+            {ok, SQL#riak_sql_v1{cover_context=Cover}};
+        Other ->
+            Other
+    end.
 
 decoder_parse_error_resp({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
     flat_format("~ts", [Msg]);
