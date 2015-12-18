@@ -46,6 +46,7 @@
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
 -export([get_cover/3, get_cover/4, get_cover/5, replace_cover/6]).
+-export([vnode_target/1]).
 
 -include_lib("riak_core/include/riak_core_vnode.hrl").
 

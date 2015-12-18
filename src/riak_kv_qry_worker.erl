@@ -145,7 +145,9 @@ run_sub_qs_fn([{{qry, #riak_sql_v1{cover_context=undefined}=Q}, {qid, QId}} | T]
 %% given a mini coverage plan to map to a single vnode/quantum
 run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
     Table = Q#riak_sql_v1.'FROM',
-    Cover = Q#riak_sql_v1.cover_context,
+    {ok, CoverProps} =
+        riak_kv_pb_coverage:checksum_binary_to_term(Q#riak_sql_v1.cover_context),
+    Cover = riak_client:vnode_target(CoverProps),
     Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
