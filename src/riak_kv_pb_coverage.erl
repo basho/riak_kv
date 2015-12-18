@@ -45,6 +45,7 @@
          encode/1,
          process/2,
          process_stream/3,
+         node_to_pb_details/1,
          checksum_binary_to_term/1,
          term_to_checksum_binary/1
         ]).

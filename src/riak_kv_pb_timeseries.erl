@@ -314,8 +314,34 @@ process(#tscoveragereq{query = Q,
              State};
         _ ->
             %% SQL is a list of queries (1 per quantum)
-            riak_kv_pb_coverage:convert_list(sql_to_cover(Client, SQL, Bucket, []), State)
+            convert_cover_list(sql_to_cover(Client, SQL, Bucket, []), State)
     end.
+
+%% Copied and modified from riak_kv_pb_coverage:convert_list. Would
+%% be nice to collapse them back together, probably with a closure,
+%% but time and effort.
+convert_cover_list({error, Error}, State) ->
+    {error, Error, State};
+convert_cover_list(Results, State) ->
+    %% Pull hostnames & ports
+    %% Wrap each element of this list into a rpbcoverageentry
+    Resp = #rpbcoverageresp{
+              entries=
+                  lists:map(fun({P, SQLtext}) ->
+                      Node = proplists:get_value(node, P),
+                      {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
+
+                      #rpbcoverageentry{
+                         cover_context=riak_kv_pb_coverage:term_to_checksum_binary(P),
+                         ip=IP,
+                         port=Port,
+                         keyspace_desc=SQLtext
+                        }
+              end,
+              Results)
+             },
+    {reply, Resp, State}.
+
 
 %% Result from riak_client:get_cover is a nested list of coverage plan
 %% because KV coverage requests are designed that way, but in our case
@@ -331,8 +357,11 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
         {error, Error} ->
             {error, Error};
         [Cover] ->
-            sql_to_cover(Client, Tail, Bucket, [Cover|Accum])
+            sql_to_cover(Client, Tail, Bucket, [{Cover, reverse_sql(SQL)}|Accum])
     end.
+
+reverse_sql(#riak_sql_v1{}=_SQL) ->
+    <<"some SQL we must reverse engineer">>.
 
 compile(_Mod, {error, Err}) ->
     {error, decoder_parse_error_resp(Err)};
