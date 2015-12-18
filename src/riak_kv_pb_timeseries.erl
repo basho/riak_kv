@@ -121,9 +121,15 @@ process(#tsputreq{rows = []}, State) ->
 process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     Data = riak_pb_ts_codec:decode_rows(Rows),
-    %% validate only the first row as we trust the client to send us
-    %% perfectly uniform data wrt types and order
-    case (catch Mod:validate_obj(hd(Data))) of
+    
+    ValidateFn = fun(X, Acc) ->
+        case {Mod:validate_obj(X), Acc} of
+                {true, true} -> true;
+                _            -> false
+        end
+    end,
+
+    case (catch lists:foldl(ValidateFn, true, Data)) of
         true ->
             %% however, prevent bad data to crash us
             try
