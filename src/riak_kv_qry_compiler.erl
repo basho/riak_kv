@@ -35,19 +35,19 @@
 -include("riak_kv_ts_error_msgs.hrl").
 
 -spec compile(#ddl_v1{}, #riak_sql_v1{}) ->
-    [#riak_sql_v1{}] | {error, any()}.
+    {ok, InitialState::[any()], SubQueries::[#riak_sql_v1{}]} | {error, any()}.
 compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
     {error, 'query is already compiled'};
 compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = []}) ->
     {error, 'full table scan not implmented'};
 compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
                                       type          = sql} = Q) ->
-    comp2(DDL, Q).
+    compile2(DDL, Q).
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
 %% write that up in time
-comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
+compile2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
                     'WHERE'       = W} = Q) ->
     case compile_where(DDL, W) of
         {error, E} -> {error, E};
@@ -56,45 +56,143 @@ comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 
 %% now break out the query on quantum boundaries
 expand_query(#ddl_v1{local_key = LK, partition_key = PK} = DDL, 
-             #riak_sql_v1{ 'SELECT' = SelectSpec1 } = Q, Where1) ->
+             #riak_sql_v1{ 'SELECT' = SelectSpec1 } = Q1, Where1) ->
     case expand_where(Where1, PK) of
         {error, E} ->
             {error, E};
         Where2 ->
-            SelectSpec2 = [compile_select(DDL, S) || S <- SelectSpec1],
-            [Q#riak_sql_v1{
-                   is_executable = true,
-                   type          = timeseries,
-                   'SELECT'      = SelectSpec2,
-                   'WHERE'       = X,
-                   local_key     = LK,
-                   partition_key = PK} || X <- Where2]
+            {ResultType, InitialState, SelectSpec2} = compile_select(DDL, SelectSpec1),
+            Q2 = Q1#riak_sql_v1{ is_executable = true,
+                                 type          = timeseries,
+                                 'SELECT'      = SelectSpec2,
+                                 local_key     = LK,
+                                 partition_key = PK,
+                                 result_type   = ResultType },
+            SubQueries = [Q2#riak_sql_v1{ 'WHERE' = X } || X <- Where2],
+            {ok, InitialState, SubQueries}
     end.
+-include_lib("eunit/include/eunit.hrl").
 
 %% Run the selection spec for all selection columns that was created by
 -spec run_select(SelectionSpec::[compiled_select()], Row::riak_object:value()) ->
         riak_object:value().
 run_select(SelectSpec, Row) ->
-    lists:flatten([Fn(Row) || Fn <- SelectSpec]).
+    % the second argument is the state, if we're return roq query results then
+    % there is no long running state
+    run_select2(SelectSpec, Row, undefined, []).
+
+
+run_select(SelectSpec, Row, InitialState) ->
+    % the second argument is the state, if we're return roq query results then
+    % there is no long running state
+    run_select2(SelectSpec, Row, InitialState, []).
+
+%% @priv
+run_select2([], _, _, Acc) ->
+    lists:flatten(lists:reverse(Acc));
+run_select2([Fn | SelectTail], Row, [ColState1 | ColStateTail], Acc1) ->
+    ColState2 = Fn(Row, ColState1),
+    Acc2 = [ColState2 | Acc1],
+    run_select2(SelectTail, Row, ColStateTail, Acc2);
+run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
+    Value = Fn(Row, RowState),
+    Acc2 = [Value | Acc1],
+    run_select2(SelectTail, Row, RowState, Acc2).
+
+%%
+compile_select(DDL, SelectSpec1) ->
+    % compile each select column and put all the results types into a set, if
+    % any of the results are aggregate then aggregate is the result type for the
+    % whole query
+    CompileColFn = 
+        fun(ColX, {TypeSetX, InitColStatesX, SelectSpecX}) ->
+            {ColResultType, ColStateX, X} = compile_select_col(DDL, ColX),
+            {sets:add_element(ColResultType, TypeSetX), % result types
+             [ColStateX | InitColStatesX], % initial states if aggregates
+             [X | SelectSpecX]} % compiled select fun
+        end,
+    {TypeSet, InitialState, SelectSpec2} =
+        lists:foldr(CompileColFn, {sets:new(), [], []}, SelectSpec1),
+    case sets:is_element(aggregate, TypeSet) of
+        true  -> {aggregate, InitialState, SelectSpec2};
+        false -> {rows, [], SelectSpec2}
+    end.
 
 %% Compile a single selection column into a fun that can extract the cell 
 %% from the row.
--spec compile_select(DDL::#ddl_v1{}, ColumnSpec::{identifier,[binary()]}) ->
+
+%% TODO delete this sucka!
+%% <<<<<<< HEAD
+%% -spec compile_select(DDL::#ddl_v1{}, ColumnSpec::{identifier,[binary()]}) ->
+%%         compiled_select().
+%% compile_select(_, {identifier, [<<"*">>]}) ->
+%%     fun(Row) ->
+%%         Row
+%%     end;
+%% compile_select(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
+%%     Index = field_index_of(Fields, ColumnName),
+%% ========================
+
+
+-spec compile_select_col(DDL::#ddl_v1{}, ColumnSpec::{identifier,[binary()]}) ->
         compiled_select().
-compile_select(_, {identifier, [<<"*">>]}) ->
-    fun(Row) ->
-        Row
+compile_select_col(DDL, {funcall, {FnName, [Arg1]}} = Select) ->
+    Initial_state = riak_ql_window_agg_fns:start_state(FnName),
+    Compiled_arg1 = compile_select_col_stateless(DDL, Arg1),
+    case riak_ql_window_agg_fns:start_state(FnName) of
+        stateless ->
+            {rows, undefined, compile_select_col_stateless(DDL, Select)};
+        Initial_state ->
+            Fn =
+                fun(Row, State) ->
+                    riak_ql_window_agg_fns:FnName(Compiled_arg1(Row), State)
+                end,
+            {aggregate, Initial_state, Fn}
     end;
-compile_select(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
-    Index = field_index_of(Fields, ColumnName),
+compile_select_col(DDL, Select) ->
+    Fn = compile_select_col_stateless(DDL, Select),
+    % to support aggregates that have a running state all top level funs must be
+    % arity two, when we know the function is stateless wrap it in a two arity
+    % fun and ignore the state arg
+    {rows, undefined, fun(Row, _) -> Fn(Row) end}.
+
+%% Returns a one arity fun which is stateless for example pulling a field from a
+%% row.
+compile_select_col_stateless(_, {identifier, [<<"*">>]}) ->
+    fun(Row) -> Row end;
+compile_select_col_stateless(_, {Type, V})
+        when Type == integer; Type == varchar; Type == double; Type == boolean ->
+    fun(_) -> V end;
+compile_select_col_stateless(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
+    Index = column_index_of(Fields, to_column_name_binary(ColumnName)),
     fun(Row) ->
         lists:nth(Index, Row)
-    end.
+    end;
+compile_select_col_stateless(DDL, {Op, A, B}) ->
+    Arg_a = compile_select_col_stateless(DDL, A),
+    Arg_b = compile_select_col_stateless(DDL, B),
+    compile_select_col_stateless2(Op, Arg_a, Arg_b).
+
+%%
+compile_select_col_stateless2('+', A, B) ->
+    fun(Row) -> A(Row) + B(Row) end;
+compile_select_col_stateless2('*', A, B) ->
+    fun(Row) -> A(Row) * B(Row) end;
+compile_select_col_stateless2('/', A, B) ->
+    fun(Row) -> A(Row) / B(Row) end;
+compile_select_col_stateless2('-', A, B) ->
+    fun(Row) -> A(Row) - B(Row) end.
+
+%%
+to_column_name_binary([Name]) when is_binary(Name) ->
+    Name;
+to_column_name_binary(Name) when is_binary(Name) ->
+    Name.
 
 %% Return the index of a field in the table definition.
-field_index_of(Fields, [ColumnName]) ->
+column_index_of(Fields, ColumnName) ->
     #riak_field_v1{ position = Position } =
-        lists:keyfind(ColumnName, 2, Fields),
+        lists:keyfind(ColumnName, #riak_field_v1.name, Fields),
     Position.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
@@ -630,11 +728,11 @@ simplest_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-        [#riak_sql_v1{ is_executable = true,
-                       type          = timeseries,
-                       'WHERE'       = Where2,
-                       partition_key = PK,
-                       local_key     = LK }],
+        {ok, _, [#riak_sql_v1{ is_executable = true,
+                                type          = timeseries,
+                                'WHERE'       = Where2,
+                                partition_key = PK,
+                                local_key     = LK }]},
         compile(DDL, Q)
     ).
 
@@ -658,11 +756,11 @@ simple_with_filter_1_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-        [#riak_sql_v1{ is_executable = true,
-                       type          = timeseries,
-                       'WHERE'       = Where,
-                       partition_key = PK,
-                       local_key     = LK }],
+        {ok, _, [#riak_sql_v1{ is_executable = true,
+                               type          = timeseries,
+                               'WHERE'       = Where,
+                               partition_key = PK,
+                               local_key     = LK }]},
         compile(DDL, Q)
     ).
 
@@ -685,11 +783,11 @@ simple_with_filter_2_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-        [#riak_sql_v1{ is_executable = true,
-                       type          = timeseries,
-                       'WHERE'       = Where,
-                       partition_key = PK,
-                       local_key     = LK }],
+        {ok, _, [#riak_sql_v1{ is_executable = true,
+                               type          = timeseries,
+                               'WHERE'       = Where,
+                               partition_key = PK,
+                               local_key     = LK }]},
         compile(DDL, Q)
     ).
 
@@ -714,11 +812,11 @@ simple_with_filter_3_test() ->
         {end_inclusive,   true}
     ],
     ?assertMatch(
-        [#riak_sql_v1{ is_executable = true,
-                       type          = timeseries,
-                       'WHERE'       = Where,
-                       partition_key = PK,
-                       local_key     = LK }],
+        {ok, _, [#riak_sql_v1{ is_executable = true,
+                               type          = timeseries,
+                               'WHERE'       = Where,
+                               partition_key = PK,
+                               local_key     = LK }]},
         compile(DDL, Q)
     ).
 
@@ -748,11 +846,11 @@ simple_with_2_field_filter_test() ->
         {start_inclusive, false}
     ],
     ?assertMatch(
-        [#riak_sql_v1{ is_executable = true,
-                       type          = timeseries,
-                       'WHERE'       = Where,
-                       partition_key = PK,
-                       local_key     = LK }],
+        {ok, _, [#riak_sql_v1{ is_executable = true,
+                               type          = timeseries,
+                               'WHERE'       = Where,
+                               partition_key = PK,
+                               local_key     = LK }]},
         compile(DDL, Q)
     ).
 
@@ -781,11 +879,11 @@ complex_with_4_field_filter_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-        [#riak_sql_v1{ is_executable = true,
-                       type          = timeseries,
-                       'WHERE'       = Where2,
-                       partition_key = PK,
-                       local_key     = LK }],
+        {ok, _, [#riak_sql_v1{ is_executable = true,
+                               type          = timeseries,
+                               'WHERE'       = Where2,
+                               partition_key = PK,
+                               local_key     = LK }]},
         compile(DDL, Q)
     ).
 
@@ -813,12 +911,12 @@ complex_with_boolean_rewrite_filter_test() ->
         {start_inclusive, false}
     ],
     ?assertMatch(
-        [#riak_sql_v1{is_executable  = true,
-                       type          = timeseries,
-                       'WHERE'       = Where,
-                       partition_key = PK,
-                       local_key     = LK
-                     }], 
+        {ok, _, [#riak_sql_v1{ is_executable  = true,
+                               type          = timeseries,
+                               'WHERE'       = Where,
+                               partition_key = PK,
+                               local_key     = LK
+                             }]}, 
         compile(DDL, Q)
     ).
 
@@ -835,23 +933,20 @@ simple_spanning_boundary_test() ->
                                [{3000, 15000}, {15000, 30000}, {30000, 31000}]),
     PK = get_standard_pk(),
     LK = get_standard_lk(),
-    ?assertMatch([
-            #riak_sql_v1{is_executable = true,
-                      type          = timeseries,
-                      'WHERE'       = Where1,
-                      partition_key = PK,
-                      local_key     = LK},
-            #riak_sql_v1{is_executable = true,
-                      type          = timeseries,
-                      'WHERE'       = Where2,
-                      partition_key = PK,
-                      local_key     = LK},
-            #riak_sql_v1{is_executable = true,
-                      type          = timeseries,
-                      'WHERE'       = Where3,
-                      partition_key = PK,
-                      local_key     = LK}
-       ],
+    ?assertMatch({ok, _, [
+                #riak_sql_v1{
+                          'WHERE'       = Where1,
+                          partition_key = PK,
+                          local_key     = LK},
+                #riak_sql_v1{
+                          'WHERE'       = Where2,
+                          partition_key = PK,
+                          local_key     = LK},
+                #riak_sql_v1{
+                          'WHERE'       = Where3,
+                          partition_key = PK,
+                          local_key     = LK}
+           ]},
        compile(DDL, Q)
     ).
 
@@ -864,8 +959,8 @@ boundary_quanta_test() ->
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% get basic query
-    Got = compile(DDL, Q),
-    ?assertEqual(2, length(Got)).
+    Actual = compile(DDL, Q),
+    ?assertEqual(2, length(element(3, Actual))).
 
 test_data_where_clause(Family, Series, StartEndTimes) ->
     Fn =
@@ -899,17 +994,13 @@ simple_spanning_boundary_precision_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-        [#riak_sql_v1{ is_executable = true,
-                       type          = timeseries,
-                       'WHERE'       = Where1,
-                       partition_key = PK,
-                       local_key     = LK},
-         #riak_sql_v1{ is_executable = true,
-                       type          = timeseries,
-                       'WHERE'       = Where2,
-                       partition_key = PK,
-                       local_key     = LK
-                       }],
+        {ok, _, [#riak_sql_v1{ 'WHERE'       = Where1,
+                               partition_key = PK,
+                               local_key     = LK},
+                 #riak_sql_v1{ 'WHERE'       = Where2,
+                               partition_key = PK,
+                               local_key     = LK
+                               }]},
         compile(DDL, Q)
     ).
 
@@ -923,10 +1014,12 @@ simplest_compile_once_only_fail_test() ->
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% now try and compile twice
-    [Q2] = compile(DDL, Q),
+    {ok, _, [Q2]} = compile(DDL, Q),
     Got = compile(DDL, Q2),
-    Expected = {error, 'query is already compiled'},
-    ?assertEqual(Expected, Got).
+    ?assertEqual(
+        {error, 'query is already compiled'},
+        Got
+    ).
 
 end_key_not_a_range_test() ->
     DDL = get_standard_ddl(),
@@ -963,21 +1056,21 @@ key_is_all_timestamps_test() ->
         "WHERE time_c > 2999 AND time_c < 5000 "
         "AND time_a = 10 AND time_b = 15"),
     ?assertMatch(
-        [#riak_sql_v1{
-            'WHERE' = [
-                {startkey, [
-                    {<<"time_a">>, timestamp, 10},
-                    {<<"time_b">>, timestamp, 15},
-                    {<<"time_c">>, timestamp, 2999}
-                ]},
-                {endkey, [
-                    {<<"time_a">>, timestamp, 10},
-                    {<<"time_b">>, timestamp, 15},
-                    {<<"time_c">>, timestamp, 5000}
-                ]},
-                {filter, []},
-                {start_inclusive, false}]
-        }],
+        {ok, _, [#riak_sql_v1{
+                    'WHERE' = [
+                        {startkey, [
+                            {<<"time_a">>, timestamp, 10},
+                            {<<"time_b">>, timestamp, 15},
+                            {<<"time_c">>, timestamp, 2999}
+                        ]},
+                        {endkey, [
+                            {<<"time_a">>, timestamp, 10},
+                            {<<"time_b">>, timestamp, 15},
+                            {<<"time_c">>, timestamp, 5000}
+                        ]},
+                        {filter, []},
+                        {start_inclusive, false}]
+                }]},
         compile(DDL, Q)
     ).
 
@@ -1085,14 +1178,16 @@ no_where_clause_test() ->
 
 -define(ROW, [<<"geodude">>, <<"derby">>, <<"ralph">>, 10, <<"hot">>, 12.2]).
 
-testing_compile_select(DDL, QueryString) ->
-    [#riak_sql_v1{ 'SELECT' = SelectSpec } | _] =
+% this helper function is only for tests testing queries with the
+% query_result_type of 'rows' and _not_ 'aggregate'
+testing_compile_row_select(DDL, QueryString) ->
+    {ok, _, [#riak_sql_v1{ 'SELECT' = SelectSpec } | _]} =
         compile(DDL, element(2, get_query(QueryString))),
     SelectSpec.
 
 run_select_all_test() ->
     DDL = get_standard_ddl(),
-    SelectSpec = testing_compile_select(DDL,
+    SelectSpec = testing_compile_row_select(DDL,
         "SELECT * FROM GeoCheckin "
         "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     ?assertEqual(
@@ -1102,7 +1197,7 @@ run_select_all_test() ->
 
 run_select_first_test() ->
     DDL = get_standard_ddl(),
-    SelectSpec = testing_compile_select(DDL,
+    SelectSpec = testing_compile_row_select(DDL,
         "SELECT geohash FROM GeoCheckin "
         "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     ?assertEqual(
@@ -1112,7 +1207,7 @@ run_select_first_test() ->
 
 run_select_last_test() ->
     DDL = get_standard_ddl(),
-    SelectSpec = testing_compile_select(DDL,
+    SelectSpec = testing_compile_row_select(DDL,
         "SELECT temperature FROM GeoCheckin "
         "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     ?assertEqual(
@@ -1122,7 +1217,7 @@ run_select_last_test() ->
 
 run_select_all_individually_test() ->
     DDL = get_standard_ddl(),
-    SelectSpec = testing_compile_select(DDL,
+    SelectSpec = testing_compile_row_select(DDL,
         "SELECT geohash, location, user, time, weather, temperature FROM GeoCheckin "
         "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     ?assertEqual(
@@ -1132,12 +1227,33 @@ run_select_all_individually_test() ->
 
 run_select_some_test() ->
     DDL = get_standard_ddl(),
-    SelectSpec = testing_compile_select(DDL,
+    SelectSpec = testing_compile_row_select(DDL,
         "SELECT  location, weather FROM GeoCheckin "
         "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     ?assertEqual(
         [<<"derby">>, <<"hot">>],
         run_select(SelectSpec, ?ROW)
+    ).
+
+select_count_aggregation_test() ->
+    DDL = get_standard_ddl(),
+    SelectSpec = testing_compile_row_select(DDL,
+        "SELECT count(location) FROM GeoCheckin "
+        "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    ?assertEqual(
+        [1],
+        run_select(SelectSpec, ?ROW, [0])
+    ).
+
+
+select_count_aggregation_2_test() ->
+    DDL = get_standard_ddl(),
+    SelectSpec = testing_compile_row_select(DDL,
+        "SELECT count(location), count(location) FROM GeoCheckin "
+        "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    ?assertEqual(
+        [1, 10],
+        run_select(SelectSpec, ?ROW, [0, 9])
     ).
 
 % FIXME or operators

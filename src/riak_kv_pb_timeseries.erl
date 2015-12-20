@@ -557,7 +557,12 @@ get_column_names([{C1, _} | MoreRecords]) ->
 
 -spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
 get_column_types(ColumnNames, Mod) ->
-    [Mod:get_field_type([ColumnName]) || ColumnName <- ColumnNames].
+    [get_column_types2(Mod, N) || N <- ColumnNames].
+
+get_column_types2(_, <<"aggregate">>) ->
+    sint64; % FIXME hack until we get return types in
+get_column_types2(Mod, ColumnName) ->
+    Mod:get_field_type([ColumnName]).
 
 -spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) ->
                                            list(#tscolumndescription{}).
