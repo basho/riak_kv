@@ -131,7 +131,8 @@ code_change(_OldVsn, State, _Extra) ->
 new_state(RegisteredName) ->
     #state{name = RegisteredName}.
 
-run_sub_qs_fn([]) -> ok;
+run_sub_qs_fn([]) ->
+    ok;
 run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
     Table = Q#riak_sql_v1.'FROM',
     Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
@@ -215,7 +216,7 @@ subqueries_done(QId,
             %   send the results to the waiting client process
             ReceiverPid ! {ok, QueryResult2},
             pop_next_query(),
-            %% drop indexes, serialize
+            % clean the state of query specfic data, ready for the next one
             new_state(State#state.name);
         _ ->
             % more sub queries are left to run

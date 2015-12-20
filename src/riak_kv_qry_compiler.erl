@@ -142,16 +142,32 @@ compile_select_col(DDL, Select) ->
     % fun and ignore the state arg
     {rows, undefined, fun(Row, _) -> Fn(Row) end}.
 
-%%
+%% Returns a one arity fun which is stateless for example pulling a field from a
+%% row.
 compile_select_col_stateless(_, {identifier, [<<"*">>]}) ->
-    fun(Row) ->
-        Row
-    end;
+    fun(Row) -> Row end;
+compile_select_col_stateless(_, {Type, V})
+        when Type == integer; Type == varchar; Type == double; Type == boolean ->
+    fun(_) -> V end;
 compile_select_col_stateless(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
     Index = column_index_of(Fields, to_column_name_binary(ColumnName)),
     fun(Row) ->
         lists:nth(Index, Row)
-    end.
+    end;
+compile_select_col_stateless(DDL, {Op, A, B}) ->
+    Arg_a = compile_select_col_stateless(DDL, A),
+    Arg_b = compile_select_col_stateless(DDL, B),
+    compile_select_col_stateless2(Op, Arg_a, Arg_b).
+
+%%
+compile_select_col_stateless2('+', A, B) ->
+    fun(Row) -> A(Row) + B(Row) end;
+compile_select_col_stateless2('*', A, B) ->
+    fun(Row) -> A(Row) * B(Row) end;
+compile_select_col_stateless2('/', A, B) ->
+    fun(Row) -> A(Row) / B(Row) end;
+compile_select_col_stateless2('-', A, B) ->
+    fun(Row) -> A(Row) - B(Row) end.
 
 %%
 to_column_name_binary([Name]) when is_binary(Name) ->
