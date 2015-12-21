@@ -81,13 +81,13 @@ init() ->
 
 -spec decode(integer(), binary()) ->
     {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
-       | #ddl_v1{} | #riak_sql_v1{},
+       | #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{},
      {PermSpec::string(), Table::binary()}} |
     {error, _}.
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #tsqueryreq{query = Q}->
+        #tsqueryreq{query = Q} ->
             case catch decode_query(Q) of
                 {ok, DecodedQuery} ->
                     PermAndTarget = decode_query_permissions(DecodedQuery),
@@ -114,7 +114,7 @@ encode(Message) ->
 
 
 -spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
-              | #ddl_v1{} | #riak_sql_v1{}, #state{}) ->
+              | #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
@@ -286,8 +286,13 @@ process(#ddl_v1{}, State) ->
      State};
 
 process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
+    do_submit_query(SQL, Table, State);
+process(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
+    do_submit_query(SQL, Table, State).
+
+do_submit_query(SQL, Table, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
-    case (catch Mod:get_ddl()) of
+    case catch Mod:get_ddl() of
         {_, {undef, _}} ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State};
@@ -298,8 +303,10 @@ process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
 %%
 submit_query(DDL, Mod, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
-        {ok, Data} ->
+        {ok, Data} when element(1, SQL) =:= riak_sql_v1 ->
             {reply, make_tsqueryresp(Data, Mod), State};
+        {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
+            {reply, make_tsqueryresp(Data), State};
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
             ErrorMessage = flat_format("~p: ~s", [E, Reason]),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
@@ -345,7 +352,7 @@ process_stream({ReqId, Error}, ReqId,
 
 
 -spec decode_query(Query::#tsinterpolation{}) ->
-    {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{}}.
+    {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}}.
 decode_query(#tsinterpolation{ base = BaseQuery }) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
     riak_ql_parser:parse(Lexed).
@@ -370,11 +377,14 @@ make_rpberrresp(Code, Message) ->
                   errmsg = lists:flatten(Message)}.
 
 
--spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{}) -> {string(), binary()}.
+-spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}) ->
+                                      {string(), binary()}.
 decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
     {"riak_kv.ts_create_table", NewBucketType};
 decode_query_permissions(#riak_sql_v1{'FROM' = Table}) ->
-    {"riak_kv.ts_query", Table}.
+    {"riak_kv.ts_query", Table};
+decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
+    {"riak_kv.ts_describe", Table}.
 
 %%
 -spec missing_helper_module(Table::binary(),
@@ -546,6 +556,14 @@ make_tsqueryresp(FetchedRows, Mod) ->
                  Records),
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
+
+-spec make_tsqueryresp([[term()]]) -> #tsqueryresp{}.
+make_tsqueryresp(DescribeTableRows) ->
+    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
+    ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
+    #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
+                 rows = riak_pb_ts_codec:encode_rows(ColumnTypes, DescribeTableRows)}.
+
 
 get_column_names([{C1, _} | MoreRecords]) ->
     {RestOfColumns, _DiscardedValues} =
