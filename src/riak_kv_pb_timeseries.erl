@@ -121,18 +121,9 @@ process(#tsputreq{rows = []}, State) ->
 process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     Data = riak_pb_ts_codec:decode_rows(Rows),
-    
-    ValidateFn = fun(X, Acc) ->
-        case {Mod:validate_obj(X), Acc} of
-            {_, {badrow, BadRowIdx}} -> {badrow, BadRowIdx};
-            {true, Acc} -> Acc+1;
-            {false, Acc} -> {badrow, Acc};
-            _            -> Acc
-        end
-    end,
 
-    case (catch lists:foldl(ValidateFn, 0, Data)) of
-        true ->
+    case (catch validate_rows(Mod, Data)) of
+        [] ->
             try
                 case put_data(Data, Table, Mod) of
                     0 ->
@@ -147,13 +138,14 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
                     Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
                     {reply, Error, State}
             end;
-        {badrow, Idx} ->
-            {reply, make_rpberrresp(?E_IRREG, "Invalid data at row " ++ Idx), State};
+        BadRowIdxs when is_list(BadRowIdxs) ->
+            ValidationBadRowsString = string:join(lists:reverse(BadRowIdxs),", "),
+            EValidationMessage = flat_format("Invalid data found at row index(es) ~s", [ValidationBadRowsString]),
+            {reply, make_rpberrresp(?E_IRREG, EValidationMessage), State};
         {_, {undef, _}} ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State}
     end;
-
 
 process(#tsgetreq{table = Table, key = PbCompoundKey,
                   timeout = Timeout},
@@ -370,6 +362,20 @@ flat_format(Format, Args) ->
 %% ---------------------------------------------------
 %% local functions
 %% ---------------------------------------------------
+
+%% Give validate_rows/2 a DDL Module and a list of decoded rows,
+%% and it will return a list of strings that represent the invalid rows indexes.
+-spec validate_rows(module(), list(tuple())) -> list(string()).
+validate_rows(Mod, Rows) ->
+    ValidateFn = fun(X, {Acc, BadRowIdxs}) ->
+        case Mod:validate_obj(X) of
+            true -> {Acc+1, BadRowIdxs};
+            _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
+        end
+    end,
+
+    {_, BadRowIdxs} = lists:foldl(ValidateFn, {0,[]}, Rows),
+    BadRowIdxs.
 
 -spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
 make_rpberrresp(Code, Message) ->
