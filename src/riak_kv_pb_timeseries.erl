@@ -124,14 +124,15 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
     
     ValidateFn = fun(X, Acc) ->
         case {Mod:validate_obj(X), Acc} of
-                {true, true} -> true;
-                _            -> false
+            {_, {badrow, BadRowIdx}} -> {badrow, BadRowIdx};
+            {true, Acc} -> Acc+1;
+            {false, Acc} -> {badrow, Acc};
+            _            -> Acc
         end
     end,
 
-    case (catch lists:foldl(ValidateFn, true, Data)) of
+    case (catch lists:foldl(ValidateFn, 0, Data)) of
         true ->
-            %% however, prevent bad data to crash us
             try
                 case put_data(Data, Table, Mod) of
                     0 ->
@@ -146,8 +147,8 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
                     Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
                     {reply, Error, State}
             end;
-        false ->
-            {reply, make_rpberrresp(?E_IRREG, "Invalid data"), State};
+        {badrow, Idx} ->
+            {reply, make_rpberrresp(?E_IRREG, "Invalid data at row " ++ Idx), State};
         {_, {undef, _}} ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State}
