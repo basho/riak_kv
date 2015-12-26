@@ -61,7 +61,7 @@
 -define(E_FETCH,             1002).
 -define(E_IRREG,             1003).
 -define(E_PUT,               1004).
--define(E_NOCREATE,          1005).
+-define(E_NOCREATE,          1005).   %% unused
 -define(E_NOT_TS_TYPE,       1006).
 -define(E_MISSING_TYPE,      1007).
 -define(E_MISSING_TS_MODULE, 1008).
@@ -70,6 +70,7 @@
 -define(E_BAD_KEY_LENGTH,    1011).
 -define(E_LISTKEYS,          1012).
 -define(E_TIMEOUT,           1013).
+-define(E_CREATE,            1014).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 
@@ -278,17 +279,27 @@ process(#tslistkeysreq{table   = Table,
             end
     end;
 
-
-process(#ddl_v1{}, State) ->
-    {reply, make_rpberrresp(?E_NOCREATE,
-                            "CREATE TABLE not supported via client interface;"
-                            " use riak-admin command instead"),
-     State};
+process(DDL = #ddl_v1{}, State) ->
+    do_create_table(DDL, State);
 
 process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
     do_submit_query(SQL, Table, State);
+
 process(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
     do_submit_query(SQL, Table, State).
+
+
+do_create_table(DDL = #ddl_v1{table = Table}, State) ->
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
+    Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
+    case riak_core_bucket_type:create(Table, Props2) of
+        ok ->
+            {reply, #tsqueryresp{}, State};
+        {error, Reason} ->
+            {reply, make_rpberrresp(
+                      ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])),
+             State}
+    end.
 
 do_submit_query(SQL, Table, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
