@@ -478,7 +478,7 @@ get_standard_ddl() ->
 get_ddl(SQL) ->
     Lexed = riak_ql_lexer:get_tokens(SQL),
     {ok, DDL} = riak_ql_parser:parse(Lexed),
-    {module, _Module} = riak_ql_ddl_compiler:make_helper_mod(DDL),
+    {module, _Module} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     DDL.
 
 get_standard_pk() ->
