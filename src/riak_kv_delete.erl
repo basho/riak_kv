@@ -29,7 +29,8 @@
 -endif.
 -include("riak_kv_wm_raw.hrl").
 
--export([start_link/6, start_link/7, start_link/8, delete/8, obj_outside_grace_period/1]).
+-export([start_link/6, start_link/7, start_link/8, delete/8, obj_outside_grace_period/1,
+         create_tombstone/3]).
 -export([participate_in_sweep/2, successfull_sweep/2, failed_sweep/2]).
 
 -include("riak_kv_dtrace.hrl").
@@ -81,9 +82,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             ?DTRACE(?C_DELETE_INIT2, [-1], []),
             Client ! {ReqId, {error, Reason}};
         {W, PW, DW, PassThruOptions} ->
-            Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
-                                                                 "true", dict:new())),
-            Tombstone = riak_object:set_vclock(Obj0, VClock),
+            Tombstone = create_tombstone(Bucket, Key, VClock),
             {ok,C} = riak:local_client(ClientId),
             Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]++PassThruOptions),
             Client ! {ReqId, Reply},
@@ -101,6 +100,14 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
                     nop
             end
     end.
+
+create_tombstone(Bucket, Key, VClock) ->
+    Obj0 =
+        riak_object:new(Bucket, Key, <<>>,
+                        dict:store(?MD_DELETED,
+                                   "true", dict:new())),
+    riak_object:set_vclock(Obj0, VClock).
+
 
 get_r_options(Bucket, Options) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),

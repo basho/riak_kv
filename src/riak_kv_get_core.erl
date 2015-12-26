@@ -81,7 +81,7 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
 add_result(Idx, {ok, RObj} = Result, GetCore) ->
-    Dels = case riak_kv_util:is_x_deleted(RObj) orelse riak_kv_util:is_x_expired(RObj) of
+    Dels = case riak_kv_util:is_x_deleted(RObj) of
         true ->  1;
         false -> 0
     end,
@@ -275,7 +275,7 @@ merge(Replies, AllowMult) ->
             {notfound, undefined};
         _ ->
             Merged = riak_object:reconcile(RObjs, AllowMult), % include tombstones
-            case riak_kv_util:is_x_deleted(Merged) orelse riak_kv_util:is_x_expired(Merged) of
+            case riak_kv_util:is_x_deleted(Merged) of
                 true ->
                     {tombstone, Merged};
                 _ ->

@@ -216,7 +216,9 @@ key_exchange(timeout, State=#state{local=LocalVN,
     %% entropy manager if needed.
     {ok, RC} = riak:local_client(),
     AccFun = fun(KeyDiff, Acc) ->
-                     lists:foldl(fun({DiffReason, BKeyBin}, Count) ->
+                     lists:foldl(fun({tombstone_diff, _BKeyBin}, Count) ->
+                                         Count;
+                                    ({DiffReason, BKeyBin}, Count) ->
                                          {B, K} = binary_to_term(BKeyBin),
                                          T = {B, K, DiffReason},
                                          if Count rem ?LOG_BATCH_SIZE == 0 ->

@@ -48,7 +48,6 @@
          estimate_keys/1,
          estimate_keys/2,
          hash_index_data/1,
-         hash_object/2,
          update/2,
          start_exchange_remote/4,
          delete/2,
@@ -545,12 +544,17 @@ load_built(#state{trees=Trees}) ->
                   riak_object_t2b() | riak_object:riak_object()) -> binary().
 hash_object({Bucket, Key}, RObj0) ->
     try
-        RObj = case riak_object:is_robject(RObj0) of
-            true -> RObj0;
-            false -> riak_object:from_binary(Bucket, Key, RObj0)
-        end,
-        Hash = riak_object:hash(RObj),
-        term_to_binary(Hash)
+        case RObj0 of
+            tombstone ->
+                tombstone;
+            _ ->
+                RObj = case riak_object:is_robject(RObj0) of
+                           true -> RObj0;
+                           false -> riak_object:from_binary(Bucket, Key, RObj0)
+                       end,
+                Hash = riak_object:hash(RObj),
+                term_to_binary(Hash)
+        end
     catch _:_ ->
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)

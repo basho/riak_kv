@@ -199,7 +199,8 @@
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
+                  crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
+                  hash_ops = []
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -640,7 +641,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
 handle_command(?KV_DELETE_REQ{bkey=BKey}, _Sender, State) ->
     do_delete(BKey, State);
 handle_command({reap, BKey, RObj}, _Sender, State) ->
-    State1 = do_backend_delete(BKey, RObj, State),
+    State1 = do_backend_delete(BKey, RObj, tombstone, State),
     {reply, ok, State1};
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
@@ -1245,7 +1246,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
                                                          forward=Fwd}) ->
     case Fwd of
         undefined ->
-            {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
+            {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, [], State),
             Reply = case Result of
                         {dw, _Idx, _Obj, _ReqID} ->
                             Obj;
@@ -1263,7 +1264,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
     end;
 
 handle_info({raw_forward_put, Key, Obj, From}, State) ->
-    {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
+    {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, [], State),
     Reply = case Result of
                 {dw, _Idx, _Obj, _ReqID} ->
                     Obj;
@@ -1285,7 +1286,7 @@ handle_info({raw_forward_get, Key, From}, State) ->
     riak_kv_ensemble_backend:reply(From, Reply),
     {ok, State2};
 handle_info({raw_put, Key, Obj}, State) ->
-    {_, State2} = actual_put_tracked(Key, Obj, [], false, undefined, State),
+    {_, State2} = actual_put_tracked(Key, Obj, [], false, undefined, [], State),
     {ok, State2};
 
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
@@ -1311,7 +1312,7 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                    {{ok, RObj}, ModState1} ->
                        case delete_hash(RObj) of
                            RObjHash ->
-                               do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
+                               do_backend_delete(BKey, RObj, delete, State#state{modstate=ModState1});
                          _ ->
                                State#state{modstate=ModState1}
                        end;
@@ -1399,6 +1400,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                 end,
     Coord = proplists:get_value(coord, Options, false),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
+    HashOps = proplists:get_value(hashtree_action, Options, update),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
                        lww=proplists:get_value(last_write_wins, BProps, false),
@@ -1408,7 +1410,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        bprops=BProps,
                        starttime=StartTime,
                        prunetime=PruneTime,
-                       crdt_op = CRDTOp},
+                       crdt_op = CRDTOp,
+                       hash_ops = HashOps},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -1416,9 +1419,9 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
 
-do_backend_delete(BKey, RObj, State = #state{idx = Idx,
-                                             mod = Mod,
-                                             modstate = ModState}) ->
+do_backend_delete(BKey, RObj, HashtreeAction, State = #state{idx = Idx,
+                                                             mod = Mod,
+                                                             modstate = ModState}) ->
     %% object is a tombstone or all siblings are tombstones
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
@@ -1430,12 +1433,22 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
             ?INDEX(RObj, delete, Idx),
-            delete_from_hashtree(Bucket, Key, State),
+            hashtree_action(Bucket, Key, undefined, HashtreeAction, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
         {error, _Reason, UpdModState} ->
             State#state{modstate = UpdModState}
+    end.
+
+hashtree_action(Bucket, Key, EncodedVal, HashtreeAction, State) ->
+    case HashtreeAction of
+        delete ->
+            delete_from_hashtree(Bucket, Key, State);
+        tombstone ->
+            update_hashtree(Bucket, Key, tombstone, State);
+        update ->
+            update_hashtree(Bucket, Key, EncodedVal, State)
     end.
 
 %% Compute a hash of the deleted object
@@ -1618,18 +1631,19 @@ perform_put({true, Obj},
             #putargs{returnbody=RB,
                      bkey=BKey,
                      reqid=ReqID,
-                     index_specs=IndexSpecs}) ->
-    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
+                     index_specs=IndexSpecs,
+                     hash_ops = HashtreeAction}) ->
+    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, HashtreeAction, State),
     {Reply, State2}.
 
-actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
+actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, HashtreeAction,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        do_max_check) of
         {{ok, UpdModState}, EncodedVal} ->
-            update_hashtree(Bucket, Key, EncodedVal, State),
+            hashtree_action(Bucket, Key, EncodedVal, HashtreeAction, State),
             maybe_cache_object(BKey, Obj, State),
             ?INDEX(Obj, put, Idx),
             case RB of
@@ -1643,9 +1657,9 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
-actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
+actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, HashOps, State) ->
     StartTS = os:timestamp(),
-    Result = actual_put(BKey, Obj, IndexSpecs, RB, ReqId, State),
+    Result = actual_put(BKey, Obj, IndexSpecs, RB, ReqId, HashOps, State),
     update_vnode_stats(vnode_put, State#state.idx, StartTS),
     Result.
 
@@ -1729,14 +1743,36 @@ do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     StartTS = os:timestamp(),
     {Retval, ModState1} = do_get_term(BKey, Mod, ModState),
-    case Retval of
-        {ok, Obj} ->
-            maybe_cache_object(BKey, Obj, State);
-        _ ->
-            ok
-    end,
+    State1 = State#state{modstate=ModState1},
+    {Retval1, State2} =
+        case Retval of
+            {ok, Obj} ->
+                case riak_kv_util:is_x_expired(Obj) of
+                    true ->
+                        create_and_put_tombstone(BKey, Obj, State1);
+                    _ ->
+                        maybe_cache_object(BKey, Obj, State1),
+                        {Retval,State1}
+                end;
+            _ ->
+                {Retval, State1}
+        end,
     update_vnode_stats(vnode_get, Idx, StartTS),
-    {reply, {r, Retval, Idx, ReqID}, State#state{modstate=ModState1}}.
+    {reply, {r, Retval1, Idx, ReqID}, State2}.
+
+create_and_put_tombstone(BKey, Obj, State) ->
+    VClock = riak_object:vclock(Obj),
+    {Bucket, Key} = BKey,
+    Tombstone0 =
+        riak_kv_delete:create_tombstone(Bucket, Key, VClock),
+    Tombstone1 =
+        riak_object:apply_updates(riak_object:update_last_modified(Tombstone0)),
+    ReqId = erlang:phash2(erlang:now()),
+    StartTime = riak_core_util:moment(),
+    {_Reply, UpdState} =
+        do_put(ignore, BKey,  Tombstone1, ReqId, StartTime,
+               [{hashtree_action, tombstone}], State),
+    {{ok, Tombstone1}, UpdState}.
 
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
@@ -1952,7 +1988,7 @@ do_delete(BKey, State) ->
                             {reply, {fail, Idx, del_mode_keep},
                              State#state{modstate=UpdModState}};
                         immediate ->
-                            UpdState = do_backend_delete(BKey, RObj,
+                            UpdState = do_backend_delete(BKey, RObj, delete,
                                                          State#state{modstate=UpdModState}),
                             {reply, {del, Idx, del_mode_immediate}, UpdState};
                         Delay when is_integer(Delay) ->

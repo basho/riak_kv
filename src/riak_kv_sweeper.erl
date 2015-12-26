@@ -189,19 +189,6 @@ handle_cast({update_progress, Index, SweptKeys}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', Pid, Reason}, #state{sweeps = Sweeps} = State) ->
-    SweepList = get_running_sweeps(Sweeps),
-    case {lists:keyfind(Pid, #sweep.pid, SweepList), Reason} of
-        {false, _} ->
-            lager:error("Unknown proc ~p ~p", [Pid, Reason]),
-            {noreply, State};
-        {Sweep, normal} ->
-            {noreply, finish_sweep(Sweep, State)};
-        {Sweep, Reason} ->
-            lager:error("Sweep crashed ~p ~p ~p", [Reason, Pid, Sweep]),
-            {noreply, finish_sweep(Sweep, State)}
-    end;
-
 handle_info(sweep_tick, State) ->
     schedule_sweep_tick(),
     State1 = maybe_initiate_sweeps(State),
@@ -708,7 +695,7 @@ fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
                                    modified_objects = ModObj + 1,
                                    succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
         {mutated, MutatedRObj, NewAcc} ->
-            riak_kv_vnode:local_put(SweepAcc1#sa.index, MutatedRObj),
+            riak_kv_vnode:local_put(SweepAcc1#sa.index, MutatedRObj, [{hashtree_action, tombstone}]),
             fold_funs({BKey, MutatedRObj},
                       SweepAcc1#sa{active_p = ActiveRest,
                                    modified_objects = ModObj + 1,
@@ -895,7 +882,7 @@ make_keys(Nr) ->
 
 setup_sweep(N) ->
     meck:new(riak_kv_vnode, []),
-    meck:expect(riak_kv_vnode, local_put, fun(_, _) -> [] end),
+    meck:expect(riak_kv_vnode, local_put, fun(_, _, _) -> [] end),
     meck:expect(riak_kv_vnode, local_reap, fun(_, _, _) -> [] end),
     meck:new(riak_core_bucket),
     meck:expect(riak_core_bucket, get_bucket, fun(_) -> [] end),
