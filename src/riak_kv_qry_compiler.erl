@@ -79,13 +79,13 @@ run_select(SelectSpec, Row) ->
 
 %% Compile a single selection column into a fun that can extract the cell 
 %% from the row.
--spec compile_select(DDL::#ddl_v1{}, ColumnName::[binary()]) ->
+-spec compile_select(DDL::#ddl_v1{}, ColumnSpec::{identifier,[binary()]}) ->
         compiled_select().
-compile_select(_, [<<"*">>]) ->
+compile_select(_, {identifier, [<<"*">>]}) ->
     fun(Row) ->
         Row
     end;
-compile_select(#ddl_v1{ fields = Fields }, ColumnName) ->
+compile_select(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
     Index = field_index_of(Fields, ColumnName),
     fun(Row) ->
         lists:nth(Index, Row)
