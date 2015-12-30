@@ -61,7 +61,7 @@
 -define(E_FETCH,             1002).
 -define(E_IRREG,             1003).
 -define(E_PUT,               1004).
--define(E_NOCREATE,          1005).
+-define(E_NOCREATE,          1005).   %% unused
 -define(E_NOT_TS_TYPE,       1006).
 -define(E_MISSING_TYPE,      1007).
 -define(E_MISSING_TS_MODULE, 1008).
@@ -70,9 +70,13 @@
 -define(E_BAD_KEY_LENGTH,    1011).
 -define(E_LISTKEYS,          1012).
 -define(E_TIMEOUT,           1013).
+-define(E_CREATE,            1014).
+-define(E_CREATED_INACTIVE,  1015).
+-define(E_CREATED_GHOST,     1016).
+-define(E_ACTIVATE,          1017).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
-
+-define(TABLE_ACTIVATE_WAIT, 30). %% ditto
 
 -spec init() -> any().
 init() ->
@@ -275,17 +279,51 @@ process(#tslistkeysreq{table   = Table,
             end
     end;
 
-
-process(#ddl_v1{}, State) ->
-    {reply, make_rpberrresp(?E_NOCREATE,
-                            "CREATE TABLE not supported via client interface;"
-                            " use riak-admin command instead"),
-     State};
+process(DDL = #ddl_v1{}, State) ->
+    do_create_table(DDL, State);
 
 process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
     do_submit_query(SQL, Table, State);
+
 process(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
     do_submit_query(SQL, Table, State).
+
+
+do_create_table(DDL = #ddl_v1{table = Table}, State) ->
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
+    Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
+    case riak_core_bucket_type:create(Table, Props2) of
+        ok ->
+            wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
+        {error, Reason} ->
+            {reply, make_rpberrresp(
+                      ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])),
+             State}
+    end.
+
+wait_until_active(Table, State, 0) ->
+    {reply, make_rpberrresp(
+              ?E_ACTIVATE,
+              flat_format("Failed to activate table ~s", [Table])),
+     State};
+wait_until_active(Table, State, Seconds) ->
+    case riak_core_bucket_type:activate(Table) of
+        ok ->
+            {reply, #tsqueryresp{}, State};
+        {error, not_ready} ->
+            timer:sleep(1000),
+            wait_until_active(Table, State, Seconds - 1);
+        {error, undefined} ->
+            %% this is inconceivable because create(Table) has
+            %% just succeeded, so it's here mostly to pacify
+            %% the dialyzer (and of course, for the odd chance
+            %% of Erlang imps crashing nodes between create
+            %% and activate calls)
+            {reply, make_rpberrresp(
+                      ?E_CREATED_GHOST,
+                      flat_format("Table ~s has been created but found missing", [Table])),
+             State}
+    end.
 
 do_submit_query(SQL, Table, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
