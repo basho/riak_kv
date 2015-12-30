@@ -51,10 +51,14 @@ compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 %% should be a helper fun in the generated DDL module but I couldn't
 %% write that up in time
 comp2(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
-                    'WHERE'       = W} = Q, MaxSubQueries) ->
+                                    'WHERE'       = W,
+                                    cover_context = Cover} = Q, MaxSubQueries) ->
+    {RealCover, WhereModifications} = unwrap_cover(Cover),
     case compile_where(DDL, W) of
         {error, E} -> {error, E};
-        NewW       -> expand_query(DDL, Q, NewW, MaxSubQueries)
+        NewW       -> expand_query(DDL, Q#riak_sql_v1{cover_context=RealCover},
+                                   update_where_for_cover(NewW, WhereModifications),
+                                   MaxSubQueries)
     end.
 
 %% now break out the query on quantum boundaries
@@ -410,6 +414,56 @@ rewrite2([#param_v1{name = [FieldName]} | T], Where1, Mod, Acc) ->
         {value, {_, _, {_, Val}}, Where2} ->
             rewrite2(T, Where2, Mod, [{FieldName, Type, Val} | Acc])
     end.
+
+%% Functions to assist with coverage chunks that redefine quanta ranges
+unwrap_cover(undefined) ->
+    {undefined, undefined};
+unwrap_cover(Cover) ->
+    {ok, {OpaqueContext, {FieldName, RangeTuple}}} =
+        riak_kv_pb_coverage:checksum_binary_to_term(Cover),
+    {riak_kv_pb_coverage:term_to_checksum_binary(OpaqueContext),
+     {FieldName, RangeTuple}}.
+
+update_where_for_cover(Where, undefined) ->
+    Where;
+update_where_for_cover(Where, {FieldName, RangeTuple}) ->
+    update_where_for_cover(Where, FieldName, RangeTuple).
+
+update_where_for_cover(Props, Field, {{StartVal, StartInclusive},
+                                      {EndVal, EndInclusive}}) ->
+    %% Sample data structure:
+    %% 'WHERE' = [{startkey,[{<<"field1">>,varchar,<<"f1">>},
+    %%                       {<<"field2">>,varchar,<<"f2">>},
+    %%                       {<<"time">>,timestamp,15000}]},
+    %%            {endkey,[{<<"field1">>,varchar,<<"f1">>},
+    %%                     {<<"field2">>,varchar,<<"f2">>},
+    %%                     {<<"time">>,timestamp,20000}]},
+    %%            {filter,[]},
+    %%            {end_inclusive,true}],
+
+    %% Changes to apply:
+    %%   Modify the Field 3-tuple in the startkey and endkey properties
+    %%   Drop end_inclusive, start_inclusive properties
+    %%   Add new end_inclusive, start_inclusive properties based on the parameters
+    %%   Retain any other properties (currently only `filter')
+
+    NewStartKeyVal = modify_where_key(proplists:get_value(startkey, Props),
+                                     Field, StartVal),
+    NewEndKeyVal = modify_where_key(proplists:get_value(endkey, Props),
+                                   Field, EndVal),
+
+    SlimProps = proplists:delete(startkey,
+                                 proplists:delete(endkey,
+                                                  proplists:delete(end_inclusive,
+                                                                   proplists:delete(start_inclusive, Props)))),
+
+    [{startkey, NewStartKeyVal}, {endkey, NewEndKeyVal},
+     {start_inclusive, StartInclusive}, {end_inclusive, EndInclusive}] ++
+        SlimProps.
+
+modify_where_key(TupleList, Field, NewVal) ->
+    {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
+    lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
 -ifdef(TEST).
 -compile(export_all).

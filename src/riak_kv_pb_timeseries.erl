@@ -327,12 +327,12 @@ convert_cover_list(Results, State) ->
     %% Wrap each element of this list into a rpbcoverageentry
     Resp = #rpbcoverageresp{
               entries=
-                  lists:map(fun({P, SQLtext}) ->
-                      Node = proplists:get_value(node, P),
+                  lists:map(fun({{Cover, _Range}=OpaqueTerm, SQLtext}) ->
+                      Node = proplists:get_value(node, Cover),
                       {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
 
                       #rpbcoverageentry{
-                         cover_context=riak_kv_pb_coverage:term_to_checksum_binary(P),
+                         cover_context=riak_kv_pb_coverage:term_to_checksum_binary(OpaqueTerm),
                          ip=IP,
                          port=Port,
                          keyspace_desc=SQLtext
@@ -357,11 +357,64 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
         {error, Error} ->
             {error, Error};
         [Cover] ->
-            sql_to_cover(Client, Tail, Bucket, [{Cover, reverse_sql(SQL)}|Accum])
+            {Description, RangeReplacement} = reverse_sql(SQL),
+            sql_to_cover(Client, Tail, Bucket, [{{Cover, RangeReplacement},
+                                                 Description}|Accum])
     end.
 
-reverse_sql(#riak_sql_v1{}=_SQL) ->
-    <<"some SQL we must reverse engineer">>.
+%% Generate a human-readable description of the target
+%%     <<"<TABLE> / time > X and time < Y">>
+%% Generate a start/end timestamp for future replacement in a query
+reverse_sql(#riak_sql_v1{'FROM'=Table,
+                         'WHERE'=KeyProplist,
+                         partition_key=PartitionKey}) ->
+    QuantumField = identify_quantum_field(PartitionKey),
+    RangeTuple = extract_time_boundaries(QuantumField, KeyProplist),
+    Desc = derive_description(Table, QuantumField, RangeTuple),
+    ReplacementValues = {QuantumField, RangeTuple},
+    {Desc, ReplacementValues}.
+
+
+derive_description(Table, Field, {{Start, StartInclusive}, {End, EndInclusive}}) ->
+    StartOp = pick_operator(">", StartInclusive),
+    EndOp = pick_operator("<", EndInclusive),
+    unicode:characters_to_binary(
+      lists:flatten(io_lib:format("~ts / ~ts ~s ~B and ~ts ~s ~B",
+                                  [Table, Field, StartOp, Start,
+                                   Field, EndOp, End])), utf8).
+
+
+pick_operator(LGT, true) ->
+    LGT ++ "=";
+pick_operator(LGT, false) ->
+    LGT.
+
+extract_time_boundaries(FieldName, WhereList) ->
+    {FieldName, timestamp, Start} =
+        lists:keyfind(FieldName, 1, proplists:get_value(startkey, WhereList, [])),
+    {FieldName, timestamp, End} =
+        lists:keyfind(FieldName, 1, proplists:get_value(endkey, WhereList, [])),
+    StartInclusive = proplists:get_value(start_inclusive, WhereList, true),
+    EndInclusive = proplists:get_value(end_inclusive, WhereList, false),
+    {{Start, StartInclusive}, {End, EndInclusive}}.
+
+
+%%%%%%%%%%%%
+%% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
+identify_quantum_field(#key_v1{ast=KeyList}) ->
+    HashFn = find_hash_fn(KeyList),
+    P_V1 = hd(HashFn#hash_fn_v1.args),
+    hd(P_V1#param_v1.name).
+
+find_hash_fn([]) ->
+    throw(wtf);
+find_hash_fn([#hash_fn_v1{}=Hash|_T]) ->
+    Hash;
+find_hash_fn([_H|T]) ->
+    find_hash_fn(T).
+
+%%%%%%%%%%%%
+
 
 compile(_Mod, {error, Err}) ->
     {error, decoder_parse_error_resp(Err)};
