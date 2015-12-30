@@ -381,7 +381,7 @@ validate_rows(Mod, Rows) ->
         end
     end,
 
-    {_, BadRowIdxs} = lists:foldl(ValidateFn, {0,[]}, Rows),
+    {_, BadRowIdxs} = lists:foldl(ValidateFn, {1, []}, Rows),
     BadRowIdxs.
 
 -spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
