@@ -139,9 +139,7 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
                     {reply, Error, State}
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
-            ValidationBadRowsString = string:join(lists:reverse(BadRowIdxs),", "),
-            EValidationMessage = flat_format("Invalid data found at row index(es) ~s", [ValidationBadRowsString]),
-            {reply, make_rpberrresp(?E_IRREG, EValidationMessage), State};
+            {reply, validate_rows_error_response(BadRowIdxs), State};
         {_, {undef, _}} ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State}
@@ -380,9 +378,16 @@ validate_rows(Mod, Rows) ->
             _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
         end
     end,
+    {_, BadRowIdxs} = lists:foldl(ValidateFn, {1,[]}, Rows),
+    lists:reverse(BadRowIdxs).
 
-    {_, BadRowIdxs} = lists:foldl(ValidateFn, {0,[]}, Rows),
-    BadRowIdxs.
+%%
+-spec validate_rows_error_response([string()]) ->#rpberrorresp{}.
+validate_rows_error_response(BadRowIdxs) ->
+    BadRowsString = string:join(BadRowIdxs,", "),
+    ErrorMsg = flat_format(
+        "Invalid data found at row index(es) ~s", [BadRowsString]),
+    make_rpberrresp(?E_IRREG, ErrorMsg).
 
 -spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
 make_rpberrresp(Code, Message) ->
@@ -651,6 +656,59 @@ missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
         missing_helper_module(<<"mytype">>, [{ddl, #ddl_v1{}}])
+    ).
+
+test_helper_validate_rows_mod() ->
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(
+        riak_ql_parser:parse(riak_ql_lexer:get_tokens(
+            "CREATE TABLE mytable ("
+            "family VARCHAR NOT NULL,"
+            "series VARCHAR NOT NULL,"
+            "time TIMESTAMP NOT NULL,"
+            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')), family, series, time))"))).
+
+validate_rows_empty_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [])
+    ).
+
+validate_rows_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
+    ).
+
+validate_rows_bad_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        ["1"],
+        validate_rows(Mod, [{}])
+    ).
+
+validate_rows_bad_2_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        ["1", "3", "4"],
+        validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, "hithere"])
+    ).
+
+validate_rows_error_response_1_test() ->
+    Msg = "Invalid data found at row index(es) ",
+    ?assertEqual(
+        #rpberrorresp{errcode = ?E_IRREG,
+                      errmsg = Msg ++ "1" },
+        validate_rows_error_response(["1"])
+    ).
+
+validate_rows_error_response_2_test() ->
+    Msg = "Invalid data found at row index(es) ",
+    ?assertEqual(
+        #rpberrorresp{errcode = ?E_IRREG,
+                      errmsg = Msg ++ "1, 2, 3" },
+        validate_rows_error_response(["1", "2", "3"])
     ).
 
 -endif.
