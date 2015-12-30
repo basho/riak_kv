@@ -292,14 +292,14 @@ process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State};
         DDL ->
-            submit_query(DDL, Mod, SQL, State)
+            submit_query(DDL, SQL, State)
     end.
 
 %%
-submit_query(DDL, Mod, SQL, State) ->
+submit_query(DDL, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
         {ok, Data} ->
-            {reply, make_tsqueryresp(Data, Mod), State};
+            {reply, make_tsqueryresp(Data), State};
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
             ErrorMessage = flat_format("~p: ~s", [E, Reason]),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
@@ -532,37 +532,32 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 %% ---------------------------------------------------
 % functions supporting SELECT
 
--spec make_tsqueryresp([{binary(), term()}], module()) -> #tsqueryresp{}.
-make_tsqueryresp([], _Module) ->
+-spec make_tsqueryresp([{binary(), term()}]) -> #tsqueryresp{}.
+make_tsqueryresp([]) ->
     #tsqueryresp{columns = [], rows = []};
-make_tsqueryresp(FetchedRows, Mod) ->
+make_tsqueryresp(FetchedRows) ->
     %% as returned by fetch, we have in Rows a sequence of KV pairs,
     %% making records concatenated in a flat list
-    ColumnNames = get_column_names(FetchedRows),
-    ColumnTypes = get_column_types(ColumnNames, Mod),
+    NamesAndTypes = get_column_names_and_types(FetchedRows),
+    {ColumnNames, ColumnTypes} = lists:unzip(NamesAndTypes),
     Records = assemble_records(FetchedRows, length(ColumnNames)),
     JustRows = lists:map(
-                 fun(Rec) -> [C || {_K, C} <- Rec] end,
+                 fun(Rec) -> [Val || {{_Nm, _Ty}, Val} <- Rec] end,
                  Records),
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
 
-get_column_names([{C1, _} | MoreRecords]) ->
+get_column_names_and_types([{C1, _} | MoreRecords]) ->
     {RestOfColumns, _DiscardedValues} =
         lists:unzip(
           lists:takewhile(
             fun({Cn, _}) -> C1 /= Cn end,
             MoreRecords)),
-    [C1|RestOfColumns].
+    [C1 | RestOfColumns].
 
 -spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
 get_column_types(ColumnNames, Mod) ->
-    [get_column_types2(Mod, N) || N <- ColumnNames].
-
-get_column_types2(_, <<"aggregate">>) ->
-    sint64; % FIXME hack until we get return types in
-get_column_types2(Mod, ColumnName) ->
-    Mod:get_field_type([ColumnName]).
+    [{N, Mod:get_field_type(N)} || N <- ColumnNames].
 
 -spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) ->
                                            list(#tscolumndescription{}).

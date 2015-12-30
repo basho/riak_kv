@@ -29,7 +29,7 @@
 %% User API
 -export([
          blocking_pop/0,
-         put_on_queue/4
+         put_on_queue/3
         ]).
 
 %% OTP API
@@ -67,13 +67,13 @@
 %%% API
 %%%===================================================================
 
--spec put_on_queue(pid(), [qry()], any(), #ddl_v1{}) ->
+-spec put_on_queue(pid(), [qry()], #ddl_v1{}) ->
         {ok, query_id()} | {error, term()}.
 %% @doc Enqueue a prepared query for execution.  The query should be
 %%      compatible with the DDL supplied.
-put_on_queue(ReceivePid, InitialState, Qry, DDL) when is_pid(ReceivePid) ->
+put_on_queue(ReceivePid, Qry, DDL) when is_pid(ReceivePid) ->
     %% worker needs DDL to perform column filtering
-    gen_server:call(?SERVER, {push_query, ReceivePid, InitialState, Qry, DDL}).
+    gen_server:call(?SERVER, {push_query, ReceivePid, Qry, DDL}).
 
 %% Pop a query from the queue, this function will not return until a queue is
 %% read to be executed.
@@ -103,9 +103,9 @@ init([MaxQueryLength]) ->
 %% @private
 handle_call(blocking_pop, From, State) ->
     do_blocking_pop(From, State);
-handle_call({push_query, ReceivePid, InitialState, Qry, DDL}, _, State) ->
+handle_call({push_query, ReceivePid, Qry, DDL}, _, State) ->
     QId = {node(), make_ref()},
-    QueryItem = {query, ReceivePid, QId, InitialState, Qry, DDL},
+    QueryItem = {query, ReceivePid, QId, Qry, DDL},
     do_push_query(QueryItem, State).
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
