@@ -71,9 +71,12 @@
 -define(E_LISTKEYS,          1012).
 -define(E_TIMEOUT,           1013).
 -define(E_CREATE,            1014).
+-define(E_CREATED_INACTIVE,  1015).
+-define(E_CREATED_GHOST,     1016).
+-define(E_ACTIVATE,          1017).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
-
+-define(TABLE_ACTIVATE_WAIT, 30). %% ditto
 
 -spec init() -> any().
 init() ->
@@ -294,10 +297,34 @@ do_create_table(DDL = #ddl_v1{table = Table}, State) ->
     Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
     case riak_core_bucket_type:create(Table, Props2) of
         ok ->
-            {reply, #tsqueryresp{}, State};
+            wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
         {error, Reason} ->
             {reply, make_rpberrresp(
                       ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])),
+             State}
+    end.
+
+wait_until_active(Table, State, 0) ->
+    {reply, make_rpberrresp(
+              ?E_ACTIVATE,
+              flat_format("Failed to activate table ~s", [Table])),
+     State};
+wait_until_active(Table, State, Seconds) ->
+    case riak_core_bucket_type:activate(Table) of
+        ok ->
+            {reply, #tsqueryresp{}, State};
+        {error, not_ready} ->
+            timer:sleep(1000),
+            wait_until_active(Table, State, Seconds - 1);
+        {error, undefined} ->
+            %% this is inconceivable because create(Table) has
+            %% just succeeded, so it's here mostly to pacify
+            %% the dialyzer (and of course, for the odd chance
+            %% of Erlang imps crashing nodes between create
+            %% and activate calls)
+            {reply, make_rpberrresp(
+                      ?E_CREATED_GHOST,
+                      flat_format("Table ~s has been created but found missing", [Table])),
              State}
     end.
 
