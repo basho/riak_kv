@@ -325,22 +325,32 @@ convert_cover_list({error, Error}, State) ->
 convert_cover_list(Results, State) ->
     %% Pull hostnames & ports
     %% Wrap each element of this list into a rpbcoverageentry
-    Resp = #rpbcoverageresp{
+    Resp = #tscoverageresp{
               entries=
-                  lists:map(fun({{Cover, _Range}=OpaqueTerm, SQLtext}) ->
+                  lists:map(fun({{Cover, Range, SQLtext}) ->
                       Node = proplists:get_value(node, Cover),
                       {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
 
-                      #rpbcoverageentry{
-                         cover_context=riak_kv_pb_coverage:term_to_checksum_binary(OpaqueTerm),
+                      #tscoverageentry{
+                         cover_context=riak_kv_pb_coverage:term_to_checksum_binary({Cover, Range}),
                          ip=IP,
                          port=Port,
-                         keyspace_desc=SQLtext
+                         range=assemble_ts_range(Range, SQLtext)
                         }
               end,
               Results)
              },
     {reply, Resp, State}.
+
+assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text) ->
+    #tsrange{
+       field_name = FieldName,
+       lower_bound = StartVal,
+       lower_bound_inclusive = StartIncl,
+       upper_bound = EndVal,
+       upper_bound_inclusive = EndIncl,
+       desc = Text
+      }.
 
 
 %% Result from riak_client:get_cover is a nested list of coverage plan
@@ -358,8 +368,8 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
             {error, Error};
         [Cover] ->
             {Description, RangeReplacement} = reverse_sql(SQL),
-            sql_to_cover(Client, Tail, Bucket, [{{Cover, RangeReplacement},
-                                                 Description}|Accum])
+            sql_to_cover(Client, Tail, Bucket, [{{Cover, RangeReplacement,
+                                                  Description}|Accum])
     end.
 
 %% Generate a human-readable description of the target
