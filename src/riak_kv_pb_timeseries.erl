@@ -327,7 +327,7 @@ convert_cover_list(Results, State) ->
     %% Wrap each element of this list into a rpbcoverageentry
     Resp = #tscoverageresp{
               entries=
-                  lists:map(fun({{Cover, Range, SQLtext}) ->
+                  lists:map(fun({Cover, Range, SQLtext}) ->
                       Node = proplists:get_value(node, Cover),
                       {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
 
@@ -368,8 +368,8 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
             {error, Error};
         [Cover] ->
             {Description, RangeReplacement} = reverse_sql(SQL),
-            sql_to_cover(Client, Tail, Bucket, [{{Cover, RangeReplacement,
-                                                  Description}|Accum])
+            sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
+                                                 Description}|Accum])
     end.
 
 %% Generate a human-readable description of the target
