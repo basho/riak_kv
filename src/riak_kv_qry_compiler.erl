@@ -99,7 +99,7 @@ run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
     run_select2(SelectTail, Row, RowState, Acc2).
 
 %%
-compile_select_clause(DDL, #riak_sql_v1{'SELECT' = Sel} = Q) ->
+compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
     %% compile each select column and put all the calc types into a set, if
     %% any of the results are aggregate then aggregate is the calc type for the
     %% whole query
