@@ -237,7 +237,8 @@ prepare_final_results(#riak_sel_clause_v1{calc_type = rows}, IndexedChunks) ->
 prepare_final_results(#riak_sel_clause_v1{calc_type        = aggregate,
                                           col_return_types = ColTypes,
                                           col_names        = ColNames}, Aggregate) ->
-    [{{CN, CT}, V} || V <- Aggregate, CN <- ColNames, CT <- ColTypes].
+    ColInfo = lists:zip(ColNames, ColTypes),
+    lists:zip(ColInfo, Aggregate).
 
 %%%===================================================================
 %%% Unit tests
