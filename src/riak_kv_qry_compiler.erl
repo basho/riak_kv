@@ -39,7 +39,7 @@
                      {ok, InitialState::[any()], SubQueries::[#riak_sql_v1{}]} | {error, any()}.
 compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
     {error, 'query is already compiled'};
-compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = []}) ->
+compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause = [] } }) ->
     {error, 'full table scan not implmented'};
 compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
                                       type          = sql} = Q) ->
@@ -100,44 +100,60 @@ run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
 
 %%
 compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
+    CompileColFn = 
+        fun(ColX, SelClauseAcc) ->
+            select_column_clause_folder(DDL, ColX, SelClauseAcc)
+        end,
     %% compile each select column and put all the calc types into a set, if
     %% any of the results are aggregate then aggregate is the calc type for the
     %% whole query
-    CompileColFn = fun(ColX, #riak_sel_clause_v1{calc_type        = CalcTy,
-                                                 initial_state    = InitX,
-                                                 col_return_types = ColRetX,
-                                                 clause           = RunFnX,
-                                                 is_valid         = IsValid}) ->
-
-                           S = compile_select_col(DDL, ColX),
-
-                           CalcTy2 = sets:add_element(S#riak_sel_clause_v1.calc_type, CalcTy),
-                           Init2   = [S#riak_sel_clause_v1.initial_state    | InitX],
-                           ColRet2 = [S#riak_sel_clause_v1.col_return_types | ColRetX],
-                           RunFn2  = [S#riak_sel_clause_v1.clause           | RunFnX],
-                           IsV2    = merge_validation(S#riak_sel_clause_v1.is_valid, IsValid),
-
-                           %% ColTypes are messy because <<"*">> represents many
-                           %% so you need to flatten the list
-                           #riak_sel_clause_v1{calc_type        = CalcTy2,
-                                               initial_state    = Init2,
-                                               col_return_types = lists:flatten(ColRet2),
-                                               clause           = RunFn2,
-                                               is_valid         = IsV2}
-                   end,
-    Acc = #riak_sel_clause_v1{calc_type = sets:new()},
-    Q2 = lists:foldr(CompileColFn, Acc, Sel),
+    Acc = {sets:new(), #riak_sel_clause_v1{ }},
+    {ColTypeSet, Q2} = lists:foldr(CompileColFn, Acc, Sel),
     ColNames = get_col_names(DDL, Q),
     case Q2#riak_sel_clause_v1.is_valid of
-        true       -> CalcT = Q2#riak_sel_clause_v1.calc_type,
-                      case sets:is_element(aggregate, CalcT) of
-                          true  -> {ok, Q2#riak_sel_clause_v1{calc_type = aggregate,
-                                                              col_names = ColNames}};
-                          false -> {ok, Q2#riak_sel_clause_v1{calc_type = rows,
-                                                              col_names = ColNames}}
-                      end;
-        {error, E} -> {error, E}
+        true -> 
+            case sets:is_element(aggregate, ColTypeSet) of
+                true  -> CalcType = aggregate;
+                false -> CalcType = rows
+            end,
+            {ok, Q2#riak_sel_clause_v1{ calc_type = CalcType,
+                                        col_names = ColNames}};
+        {error, _} = Error ->
+            Error
     end.
+
+
+-record(single_sel_column, {
+    calc_type       :: select_result_type(),
+    initial_state   :: any(),
+    col_return_types :: [sint64 | double | boolean | varchar | timestamp],
+    col_name        :: binary(),
+    clause          :: function(),
+    is_valid        :: true | {error, [any()]}
+}).
+
+%%
+% -spec select_column_clause_folder(#ddl_v1{}, )
+select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
+    #riak_sel_clause_v1{
+        initial_state = InitX,
+        col_return_types = ColRetX,
+        clause = RunFnX,
+        is_valid = IsValid1 } = SelClause1,
+    S = compile_select_col(DDL, ColX),
+    TypeSet2 = sets:add_element(S#single_sel_column.calc_type, TypeSet1),
+    Init2   = [S#single_sel_column.initial_state | InitX],
+    ColRet2 = [S#single_sel_column.col_return_types | ColRetX],
+    RunFn2  = [S#single_sel_column.clause | RunFnX],
+    IsValid2 = merge_validation(S#single_sel_column.is_valid, IsValid1),
+    %% ColTypes are messy because <<"*">> represents many
+    %% so you need to flatten the list
+    SelClause2 = #riak_sel_clause_v1{
+        initial_state    = Init2,
+        col_return_types = lists:flatten(ColRet2),
+        clause           = RunFn2,
+        is_valid         = IsValid2},
+    {TypeSet2, SelClause2}.
 
 get_col_names(DDL, Q) ->
     case riak_ql_to_string:col_names_from_select(Q) of
@@ -147,19 +163,20 @@ get_col_names(DDL, Q) ->
 
 %% Compile a single selection column into a fun that can extract the cell
 %% from the row.
--spec compile_select_col(DDL::#ddl_v1{}, ColumnSpec::{identifier,[binary()]}) ->
-                                compiled_select().
-compile_select_col(DDL, {{window_agg_fn, FnName}, [Arg1]} = Select) ->
+% -spec compile_select_col(DDL::#ddl_v1{}, ColumnSpec::any()) ->
+%         #single_sel_column{}.
+compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
     case riak_ql_window_agg_fns:start_state(FnName) of
         stateless ->
-            {ColTypes1, IsValid1, Fn} = compile_select_col_stateless(DDL, Select),
-            #riak_sel_clause_v1{calc_type        = rows,
+            {ColTypes1, IsValid1, Fn} = compile_select_col_stateless(DDL, FnArg1),
+            #single_sel_column{ calc_type        = rows,
                                 initial_state    = undefined,
-                                col_return_types = ColTypes1,
+                                col_return_types  = ColTypes1,
                                 clause           = Fn,
                                 is_valid         = IsValid1};
         Initial_state ->
-            {ColTypes2, IsValid2, Compiled_arg1} = compile_select_col_stateless(DDL, Arg1),
+            {ColTypes2, IsValid2, Compiled_arg1} =
+                compile_select_col_stateless(DDL, FnArg1),
             %% all the windows agg fns so far are arity of 1
             %% which we have forced in this clause by matching on a single argument in the
             %% function head
@@ -170,18 +187,18 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [Arg1]} = Select) ->
             Fn = fun(Row, State) ->
                          riak_ql_window_agg_fns:FnName(Compiled_arg1(Row), State)
                  end,
-            #riak_sel_clause_v1{calc_type        = aggregate,
+            #single_sel_column{ calc_type        = aggregate,
                                 initial_state    = Initial_state,
                                 col_return_types = ColRet,
                                 clause           = Fn,
-                                is_valid         = IsValid3}
+                                is_valid         = IsValid3 }
     end;
 compile_select_col(DDL, Select) ->
     {ColTypes, IsValid, Fn} = compile_select_col_stateless(DDL, Select),
     %% to support aggregates that have a running state all top level funs must be
     %% arity two, when we know the function is stateless wrap it in a two arity
     %% fun and ignore the state arg
-    #riak_sel_clause_v1{calc_type        = rows,
+    #single_sel_column{ calc_type        = rows,
                         initial_state    = undefined,
                         col_return_types = ColTypes,
                         clause           = fun(Row, _) -> Fn(Row) end,
@@ -189,6 +206,8 @@ compile_select_col(DDL, Select) ->
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
+% -spec compile_select_col_stateless(#ddl_v1{}, selection()) ->
+%         {ColTypes::[primitive_field_type()], IsValid::true|any(), function()}.
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
     {ColTypes, true, fun(Row) -> Row end};
