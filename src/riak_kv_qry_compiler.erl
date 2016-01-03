@@ -43,10 +43,8 @@ compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause = [] } })
     {error, 'full table scan not implmented'};
 compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
                                       type          = sql} = Q) ->
-    case compile_select_clause(DDL, Q) of
-        {ok, S}    -> compile_where_clause(DDL, Q#riak_sql_v1{'SELECT' = S});
-        {error, E} -> {error, E}
-    end.
+    {ok, S} = compile_select_clause(DDL, Q),
+    compile_where_clause(DDL, Q#riak_sql_v1{'SELECT' = S}).
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -101,28 +99,23 @@ run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
 %%
 compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
     CompileColFn = 
-        fun(ColX, SelClauseAcc) ->
-            select_column_clause_folder(DDL, ColX, SelClauseAcc)
+        fun(ColX, AccX) ->
+            select_column_clause_folder(DDL, ColX, AccX)
         end,
-    %% compile each select column and put all the calc types into a set, if
-    %% any of the results are aggregate then aggregate is the calc type for the
-    %% whole query
+    % compile each select column and put all the calc types into a set, if
+    % any of the results are aggregate then aggregate is the calc type for the
+    % whole query
     Acc = {sets:new(), #riak_sel_clause_v1{ }},
+    % iterate from the right so we can append to the head of lists
     {ColTypeSet, Q2} = lists:foldr(CompileColFn, Acc, Sel),
-    ColNames = get_col_names(DDL, Q),
-    case Q2#riak_sel_clause_v1.is_valid of
-        true -> 
-            case sets:is_element(aggregate, ColTypeSet) of
-                true  -> CalcType = aggregate;
-                false -> CalcType = rows
-            end,
-            {ok, Q2#riak_sel_clause_v1{ calc_type = CalcType,
-                                        col_names = ColNames}};
-        {error, _} = Error ->
-            Error
-    end.
+    case sets:is_element(aggregate, ColTypeSet) of
+        true  -> CalcType = aggregate;
+        false -> CalcType = rows
+    end,
+    {ok, Q2#riak_sel_clause_v1{ calc_type = CalcType,
+                                col_names = get_col_names(DDL, Q) }}.
 
-
+%%
 -record(single_sel_column, {
     calc_type       :: select_result_type(),
     initial_state   :: any(),
@@ -133,7 +126,8 @@ compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause =
 }).
 
 %%
-% -spec select_column_clause_folder(#ddl_v1{}, )
+-spec select_column_clause_folder(#ddl_v1{}, selection(), {set(), #riak_sel_clause_v1{}}) ->
+        {set(), #riak_sel_clause_v1{}}.
 select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
     #riak_sel_clause_v1{
         initial_state = InitX,
@@ -163,8 +157,8 @@ get_col_names(DDL, Q) ->
 
 %% Compile a single selection column into a fun that can extract the cell
 %% from the row.
-% -spec compile_select_col(DDL::#ddl_v1{}, ColumnSpec::any()) ->
-%         #single_sel_column{}.
+-spec compile_select_col(DDL::#ddl_v1{}, ColumnSpec::any()) ->
+        #single_sel_column{}.
 compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
     case riak_ql_window_agg_fns:start_state(FnName) of
         stateless ->
@@ -206,8 +200,8 @@ compile_select_col(DDL, Select) ->
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
-% -spec compile_select_col_stateless(#ddl_v1{}, selection()) ->
-%         {ColTypes::[primitive_field_type()], IsValid::true|any(), function()}.
+-spec compile_select_col_stateless(#ddl_v1{}, selection()) ->
+       {ColTypes::[primitive_field_type()], IsValid::true|any(), function()}.
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
     {ColTypes, true, fun(Row) -> Row end};
