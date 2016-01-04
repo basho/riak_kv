@@ -72,8 +72,8 @@ expand_query(#ddl_v1{local_key = LK, partition_key = PK},
     end.
 
 %% Run the selection spec for all selection columns that was created by
--spec run_select(SelectionSpec::[compiled_select()], Row::riak_object:value()) ->
-                        riak_object:value().
+-spec run_select(SelectionSpec::[compiled_select()], Row::any()) ->
+                        any().
 run_select(Select, Row) ->
     %% the second argument is the state, if we're return row query results then
     %% there is no long running state
@@ -160,6 +160,7 @@ select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
     {TypeSet2, SelClause2}.
 
 %%
+-spec get_col_names(#ddl_v1{}, #riak_sql_v1{}) -> [binary()].
 get_col_names(DDL, Q) ->
     ColNames = riak_ql_to_string:col_names_from_select(Q),
     % flatten because * gets expanded to multiple columns
@@ -1598,22 +1599,22 @@ function_2_initial_state_test() ->
         Select
     ).
 
-% FIXME
 % basic_select_window_agg_fn_arith_1_test() ->
-%     DDL = get_sel_ddl(),
-%     SQL = "SELECT count(location) + 1 from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
-%     {ok, Rec} = get_query(SQL),
-%     {ok, Sel} = compile_select_clause(DDL, Rec),
-%     ?assertMatch(#riak_sel_clause_v1{calc_type        = aggregate,
-%                                      col_return_types = [
-%                                                          sint64
-%                                                         ],
-%                                      col_names        = [
-%                                                          <<"COUNT(location)+1">>
-%                                                         ]
-%                                     },
-%                  Sel).
+%     {ok, Rec} = get_query(
+%         "SELECT count(location) + 1 from mytab "
+%         "WHERE myfamily = 'familyX' "
+%         "AND myseries = 'seriesX' AND time > 1 AND time < 2"
+%     ),
+%     {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
+%     ?assertMatch(
+%         #riak_sel_clause_v1{
+%             calc_type = aggregate,
+%             col_return_types = [sint64],
+%             col_names = [<<"COUNT(location)+1">>] },
+%         Selection
+%     ).
 
+% FIXME
 %% basic_select_window_agg_fn_arith_2_test() ->
 %%     DDL = get_sel_ddl(),
 %%     SQL = "SELECT count(location + 1.0) from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
