@@ -156,7 +156,7 @@ select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
         col_return_types = lists:flatten(ColRet2),
         clause           = RunFn2,
         is_valid         = IsValid2,
-        finalisers       = Finalisers2},
+        finalisers       = lists:flatten(Finalisers2)},
     {TypeSet2, SelClause2}.
 
 %%
