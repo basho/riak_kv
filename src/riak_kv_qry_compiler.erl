@@ -129,7 +129,7 @@ compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause =
     col_name        :: binary(),
     clause          :: function(),
     is_valid        :: true | {error, [any()]},
-    finaliser      :: function()
+    finaliser      :: [function()]
 }).
 
 %%
@@ -147,7 +147,7 @@ select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
     Init2   = [S#single_sel_column.initial_state | InitX],
     ColRet2 = [S#single_sel_column.col_return_types | ColRetX],
     RunFn2  = [S#single_sel_column.clause | RunFnX],
-    Finalisers2 = [S#single_sel_column.finaliser | Finalisers1],
+    Finalisers2 =[S#single_sel_column.finaliser | Finalisers1],
     IsValid2 = merge_validation(S#single_sel_column.is_valid, IsValid1),
     %% ColTypes are messy because <<"*">> represents many
     %% so you need to flatten the list
@@ -156,14 +156,22 @@ select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
         col_return_types = lists:flatten(ColRet2),
         clause           = RunFn2,
         is_valid         = IsValid2,
-        finalisers       = Finalisers2},
+        finalisers       = lists:flatten(Finalisers2)},
     {TypeSet2, SelClause2}.
 
+%%
 get_col_names(DDL, Q) ->
-    case riak_ql_to_string:col_names_from_select(Q) of
-        ["*"] -> [X#riak_field_v1.name || X <- DDL#ddl_v1.fields];
-        Other -> [list_to_binary(X)    || X <- Other]
-    end.
+    ColNames = riak_ql_to_string:col_names_from_select(Q),
+    % flatten because * gets expanded to multiple columns
+    lists:flatten(
+        [get_col_names2(DDL, N) || N <- ColNames]
+    ).
+
+%%
+get_col_names2(DDL, "*") ->
+    [X#riak_field_v1.name || X <- DDL#ddl_v1.fields];
+get_col_names2(_, Name) ->
+    list_to_binary(Name).
 
 %% Compile a single selection column into a fun that can extract the cell
 %% from the row.
@@ -201,18 +209,20 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
                                 col_return_types = ColRet,
                                 clause           = SelectFn,
                                 is_valid         = IsValid3,
-                                finaliser = FinaliserFn }
+                                finaliser        = [FinaliserFn] }
     end;
 compile_select_col(DDL, Select) ->
     {ColTypes, IsValid, Fn} = compile_select_col_stateless(DDL, Select),
     %% to support aggregates that have a running state all top level funs must be
     %% arity two, when we know the function is stateless wrap it in a two arity
     %% fun and ignore the state arg
+    Finalisers = lists:duplicate(length(ColTypes), fun(State) -> State end),
     #single_sel_column{ calc_type        = rows,
                         initial_state    = undefined,
                         col_return_types = ColTypes,
                         clause           = fun(Row, _) -> Fn(Row) end,
-                        is_valid         = IsValid}.
+                        is_valid         = IsValid,
+                        finaliser        = Finalisers }.
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
@@ -221,16 +231,13 @@ compile_select_col(DDL, Select) ->
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
     {ColTypes, true, fun(Row) -> Row end};
-compile_select_col_stateless(_, {Type, V})
-  when Type == varchar; Type == boolean ->
+compile_select_col_stateless(_, {Type, V}) when Type == varchar; Type == boolean ->
     {[Type], true, fun(_) -> V end};
 %% TODO why is this integer not sint64?
-compile_select_col_stateless(_, {Type, V})
-  when Type == integer ->
+compile_select_col_stateless(_, {Type, V}) when Type == integer ->
     {[sint64], true, fun(_) -> V end};
 %% TODO ditto float and double
-compile_select_col_stateless(_, {Type, V})
-  when Type == float ->
+compile_select_col_stateless(_, {Type, V}) when Type == float ->
     {[double], true, fun(_) -> V end};
 compile_select_col_stateless(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
     {Index, Type} = col_index_and_type_of(Fields, to_column_name_binary(ColumnName)),
@@ -1486,6 +1493,38 @@ basic_select_wildcard_test() ->
                                     },
                  Sel).
 
+select_all_and_column_test() ->
+    {ok, Rec} = get_query(
+        "SELECT *, location from mytab WHERE myfamily = 'familyX' "
+        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+    {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        #riak_sel_clause_v1{
+            calc_type = rows,
+            col_return_types = [varchar, varchar, timestamp, sint64, double,
+                                boolean, varchar],
+            col_names = [<<"location">>, <<"user">>, <<"time">>,
+                         <<"mysint">>, <<"mydouble">>, <<"myboolean">>,
+                         <<"location">>]
+        },
+        Selection
+    ).
+
+select_column_and_all_test() ->
+    {ok, Rec} = get_query(
+        "SELECT location, * from mytab WHERE myfamily = 'familyX' "
+        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+    {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        #riak_sel_clause_v1{
+            calc_type = rows,
+            col_return_types = [varchar, varchar, varchar, timestamp, sint64, double,
+                                boolean],
+            col_names = [<<"location">>, <<"location">>, <<"user">>, <<"time">>,
+                         <<"mysint">>, <<"mydouble">>, <<"myboolean">>]
+        },
+        Selection
+    ).
 
 basic_select_window_agg_fn_test() ->
     SQL = "SELECT count(location), avg(mydouble), avg(mysint) from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
