@@ -294,10 +294,13 @@ to_column_name_binary(Name) when is_binary(Name) ->
 
 %% Return the index and type of a field in the table definition.
 col_index_and_type_of(Fields, ColumnName) ->
-    #riak_field_v1{ position = Position,
-                    type     = Type } =
-        lists:keyfind(ColumnName, #riak_field_v1.name, Fields),
-    {Position, Type}.
+    case lists:keyfind(ColumnName, #riak_field_v1.name, Fields) of
+      false ->
+        FieldNames = [X#riak_field_v1.name || X <- Fields],
+        error({unknown_column, {ColumnName, FieldNames}});
+      #riak_field_v1{ position = Position, type = Type } ->
+          {Position, Type}
+    end.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
@@ -1514,6 +1517,36 @@ basic_select_arith_2_test() ->
             col_return_types = [double],
             col_names = [<<"((1+2.0)-((3/4)*5))">>] },
         Sel
+    ).
+
+rows_initial_state_test() ->
+    {ok, Rec} = get_query(
+        "SELECT * FROM mytab WHERE myfamily = 'familyX' "
+        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        #riak_sel_clause_v1{ initial_state = [] },
+        Select
+    ).
+
+function_1_initial_state_test() ->
+    {ok, Rec} = get_query(
+        "SELECT SUM(mydouble) FROM mytab WHERE myfamily = 'familyX' "
+        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        #riak_sel_clause_v1{ initial_state = [0] },
+        Select
+    ).
+
+function_2_initial_state_test() ->
+    {ok, Rec} = get_query(
+        "SELECT SUM(mydouble), SUM(mydouble) FROM mytab WHERE myfamily = 'familyX' "
+        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        #riak_sel_clause_v1{ initial_state = [0, 0] },
+        Select
     ).
 
 % FIXME
