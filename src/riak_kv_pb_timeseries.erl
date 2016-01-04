@@ -598,9 +598,7 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 %% ---------------------------------------------------
 % functions supporting SELECT
 
--spec make_tsqueryresp([{binary(), term()}]) -> #tsqueryresp{}.
-make_tsqueryresp([]) ->
-    #tsqueryresp{columns = [], rows = []};
+-spec make_tsqueryresp({[binary()], [simple_field_type()], [any()]}) -> #tsqueryresp{}.
 make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}) ->
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
@@ -612,7 +610,8 @@ make_describe_response(DescribeTableRows) ->
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, DescribeTableRows)}.
 
--spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
+-spec get_column_types(list(binary()), module()) ->
+            [{binary(), riak_pb_ts_codec:tscolumntype()}].
 get_column_types(ColumnNames, Mod) ->
     [{N, Mod:get_field_type(N)} || N <- ColumnNames].
 
