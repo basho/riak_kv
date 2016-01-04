@@ -72,8 +72,8 @@ expand_query(#ddl_v1{local_key = LK, partition_key = PK},
     end.
 
 %% Run the selection spec for all selection columns that was created by
--spec run_select(SelectionSpec::[compiled_select()], Row::any()) ->
-                        any().
+-spec run_select(SelectionSpec::[compiled_select()], Row::[any()]) ->
+                        [any()].
 run_select(Select, Row) ->
     %% the second argument is the state, if we're return row query results then
     %% there is no long running state
