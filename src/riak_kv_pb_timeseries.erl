@@ -535,46 +535,19 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 -spec make_tsqueryresp([{binary(), term()}]) -> #tsqueryresp{}.
 make_tsqueryresp([]) ->
     #tsqueryresp{columns = [], rows = []};
-make_tsqueryresp(FetchedRows) ->
-    %% as returned by fetch, we have in Rows a sequence of KV pairs,
-    %% making records concatenated in a flat list
-    NamesAndTypes = get_column_names_and_types(FetchedRows),
-    {ColumnNames, ColumnTypes} = lists:unzip(NamesAndTypes),
-    Records = assemble_records(FetchedRows, length(ColumnNames)),
-    JustRows = lists:map(
-                 fun(Rec) -> [Val || {{_Nm, _Ty}, Val} <- Rec] end,
-                 Records),
+make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}) ->
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
-
-get_column_names_and_types([{C1, _} | MoreRecords]) ->
-    {RestOfColumns, _DiscardedValues} =
-        lists:unzip(
-          lists:takewhile(
-            fun({Cn, _}) -> C1 /= Cn end,
-            MoreRecords)),
-    [C1 | RestOfColumns].
 
 -spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
 get_column_types(ColumnNames, Mod) ->
     [{N, Mod:get_field_type(N)} || N <- ColumnNames].
 
--spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) ->
-                                           list(#tscolumndescription{}).
+-spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
+                                           [#tscolumndescription{}].
 make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
   [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
-
-assemble_records(Rows, RecordSize) ->
-    assemble_records_(Rows, RecordSize, []).
-%% should we protect against incomplete records?
-assemble_records_([], _, Acc) ->
-    lists:reverse(Acc);
-assemble_records_(RR, RSize, Acc) ->
-    Remaining = lists:nthtail(RSize, RR),
-    assemble_records_(
-      Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
-
 
 %% ---------------------------------------------------
 % functions supporting list_keys

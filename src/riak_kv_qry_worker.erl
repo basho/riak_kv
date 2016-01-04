@@ -155,7 +155,7 @@ extract_riak_object(V) when is_binary(V) ->
             %% record was deleted
             [];
         FullRecord ->
-            FullRecord
+            [CellValue || {_, CellValue} <- FullRecord]
     end.
 
 %% Send a message to this process to get the next query.
@@ -230,22 +230,38 @@ subqueries_done(QId,
     end.
 
 %%
-prepare_final_results(#riak_sel_clause_v1{calc_type = rows}, IndexedChunks) ->
+prepare_final_results(#riak_sel_clause_v1{calc_type = rows} = Select,
+                      IndexedChunks) ->
     %% sort by index, to reassemble according to coverage plan
     {_, [R2]} = lists:unzip(lists:sort(IndexedChunks)),
-    lists:append(R2);
-prepare_final_results(#riak_sel_clause_v1{calc_type        = aggregate,
-                                          col_return_types = ColTypes,
-                                          col_names        = ColNames}, Aggregate) ->
-    ColInfo = lists:zip(ColNames, ColTypes),
-    lists:zip(ColInfo, Aggregate).
+    prepare_final_results2(Select, R2);
+prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate } = Select,
+                      Aggregate) ->
+    prepare_final_results2(Select, [Aggregate]).
+
+%%
+prepare_final_results2(#riak_sel_clause_v1{ col_return_types = ColTypes,
+                                            col_names = ColNames}, Rows) ->
+    {ColNames, ColTypes, Rows}.
 
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
+
 -ifdef(TEST).
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
+prepare_final_results_test() ->
+    Rows = [[12, <<"windy">>], [13, <<"windy">>]],
+    IndexedChunks = [{1, Rows}],
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
+        prepare_final_results(
+            #riak_sel_clause_v1{
+                col_names = [<<"a">>, <<"b">>],
+                col_return_types = [sint64, varchar],
+                calc_type = rows }, IndexedChunks)
+    ).
 
 -endif.

@@ -109,11 +109,17 @@ compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause =
     % iterate from the right so we can append to the head of lists
     {ColTypeSet, Q2} = lists:foldr(CompileColFn, Acc, Sel),
     case sets:is_element(aggregate, ColTypeSet) of
-        true  -> CalcType = aggregate;
-        false -> CalcType = rows
+        true  ->
+            Q3 = Q2#riak_sel_clause_v1{
+                calc_type = aggregate,
+                col_names = get_col_names(DDL, Q) };
+        false ->
+            Q3 = Q2#riak_sel_clause_v1{
+                calc_type = rows,
+                initial_state = [],
+                col_names = get_col_names(DDL, Q) }
     end,
-    {ok, Q2#riak_sel_clause_v1{ calc_type = CalcType,
-                                col_names = get_col_names(DDL, Q) }}.
+    {ok, Q3}.
 
 %%
 -record(single_sel_column, {
@@ -201,7 +207,7 @@ compile_select_col(DDL, Select) ->
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
 -spec compile_select_col_stateless(#ddl_v1{}, selection()) ->
-       {ColTypes::[primitive_field_type()], IsValid::true|any(), function()}.
+       {ColTypes::[simple_field_type()], IsValid::true|any(), function()}.
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
     {ColTypes, true, fun(Row) -> Row end};
