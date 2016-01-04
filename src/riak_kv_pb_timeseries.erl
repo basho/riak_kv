@@ -297,10 +297,9 @@ process(#riak_sql_v1{'FROM' = Table}=SQL, State) ->
         DDL ->
             submit_query(DDL, Mod, SQL, State)
     end;
-%% No support yet for replacing coverage components, so replace_cover
-%% must be undefined
+%% No support yet for replacing coverage components; we'll ignore any
+%% value provided for replace_cover
 process(#tscoveragereq{query = Q,
-                       replace_cover=undefined,
                        table = Table}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     Bucket = table_to_bucket(Table),
