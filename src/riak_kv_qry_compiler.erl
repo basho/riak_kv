@@ -28,7 +28,7 @@
          run_select/3  %% what is this for?
         ]).
 
--type compiled_select() :: fun().
+-type compiled_select() :: fun((_,_) -> riak_pb_ts_codec:ldbvalue()).
 -export_type([compiled_select/0]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
@@ -123,14 +123,14 @@ compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause =
 
 %%
 -record(single_sel_column, {
-    calc_type       :: select_result_type(),
-    initial_state   :: any(),
-    col_return_types :: [sint64 | double | boolean | varchar | timestamp],
-    col_name        :: binary(),
-    clause          :: function(),
-    is_valid        :: true | {error, [any()]},
-    finaliser      :: [function()]
-}).
+          calc_type        :: select_result_type(),
+          initial_state    :: any(),
+          col_return_types :: [riak_pb_ts_codec:ldbvalue()],
+          col_name         :: riak_pb_ts_codec:tscolumnname(),
+          clause           :: function(),
+          is_valid         :: true | {error, [any()]},
+          finaliser        :: function()
+         }).
 
 %%
 -spec select_column_clause_folder(#ddl_v1{}, selection(), {set(), #riak_sel_clause_v1{}}) ->
@@ -184,9 +184,10 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
             {ColTypes1, IsValid1, Fn} = compile_select_col_stateless(DDL, FnArg1),
             #single_sel_column{ calc_type        = rows,
                                 initial_state    = undefined,
-                                col_return_types  = ColTypes1,
+                                col_return_types = ColTypes1,
                                 clause           = Fn,
-                                is_valid         = IsValid1};
+                                is_valid         = IsValid1,
+                                finaliser        = fun(X) -> X end };
         Initial_state ->
             {ColTypes2, IsValid2, Compiled_arg1} =
                 compile_select_col_stateless(DDL, FnArg1),
@@ -210,20 +211,19 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
                                 col_return_types = ColRet,
                                 clause           = SelectFn,
                                 is_valid         = IsValid3,
-                                finaliser        = [FinaliserFn] }
+                                finaliser        = FinaliserFn }
     end;
 compile_select_col(DDL, Select) ->
     {ColTypes, IsValid, Fn} = compile_select_col_stateless(DDL, Select),
     %% to support aggregates that have a running state all top level funs must be
     %% arity two, when we know the function is stateless wrap it in a two arity
     %% fun and ignore the state arg
-    Finalisers = lists:duplicate(length(ColTypes), fun(State) -> State end),
     #single_sel_column{ calc_type        = rows,
                         initial_state    = undefined,
                         col_return_types = ColTypes,
                         clause           = fun(Row, _) -> Fn(Row) end,
                         is_valid         = IsValid,
-                        finaliser        = Finalisers }.
+                        finaliser        = fun(X) -> X end }.
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
