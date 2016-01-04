@@ -25,6 +25,7 @@
 -module(riak_kv_ts_util).
 
 -export([maybe_parse_table_def/2,
+         apply_timeseries_bucket_props/2,
          encode_typeval_key/1]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").

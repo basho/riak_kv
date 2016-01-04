@@ -61,7 +61,7 @@
 -define(E_FETCH,             1002).
 -define(E_IRREG,             1003).
 -define(E_PUT,               1004).
--define(E_NOCREATE,          1005).
+-define(E_NOCREATE,          1005).   %% unused
 -define(E_NOT_TS_TYPE,       1006).
 -define(E_MISSING_TYPE,      1007).
 -define(E_MISSING_TS_MODULE, 1008).
@@ -70,9 +70,13 @@
 -define(E_BAD_KEY_LENGTH,    1011).
 -define(E_LISTKEYS,          1012).
 -define(E_TIMEOUT,           1013).
+-define(E_CREATE,            1014).
+-define(E_CREATED_INACTIVE,  1015).
+-define(E_CREATED_GHOST,     1016).
+-define(E_ACTIVATE,          1017).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
-
+-define(TABLE_ACTIVATE_WAIT, 30). %% ditto
 
 -spec init() -> any().
 init() ->
@@ -81,13 +85,13 @@ init() ->
 
 -spec decode(integer(), binary()) ->
     {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
-       | #ddl_v1{} | #riak_sql_v1{},
+       | #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{},
      {PermSpec::string(), Table::binary()}} |
     {error, _}.
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #tsqueryreq{query = Q}->
+        #tsqueryreq{query = Q} ->
             case catch decode_query(Q) of
                 {ok, DecodedQuery} ->
                     PermAndTarget = decode_query_permissions(DecodedQuery),
@@ -114,18 +118,16 @@ encode(Message) ->
 
 
 -spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
-              | #ddl_v1{} | #riak_sql_v1{}, #state{}) ->
+              | #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
 process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     Data = riak_pb_ts_codec:decode_rows(Rows),
-    %% validate only the first row as we trust the client to send us
-    %% perfectly uniform data wrt types and order
-    case (catch Mod:validate_obj(hd(Data))) of
-        true ->
-            %% however, prevent bad data to crash us
+
+    case (catch validate_rows(Mod, Data)) of
+        [] ->
             try
                 case put_data(Data, Table, Mod) of
                     0 ->
@@ -140,13 +142,12 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
                     Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
                     {reply, Error, State}
             end;
-        false ->
-            {reply, make_rpberrresp(?E_IRREG, "Invalid data"), State};
+        BadRowIdxs when is_list(BadRowIdxs) ->
+            {reply, validate_rows_error_response(BadRowIdxs), State};
         {_, {undef, _}} ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State}
     end;
-
 
 process(#tsgetreq{table = Table, key = PbCompoundKey,
                   timeout = Timeout},
@@ -278,16 +279,55 @@ process(#tslistkeysreq{table   = Table,
             end
     end;
 
-
-process(#ddl_v1{}, State) ->
-    {reply, make_rpberrresp(?E_NOCREATE,
-                            "CREATE TABLE not supported via client interface;"
-                            " use riak-admin command instead"),
-     State};
+process(DDL = #ddl_v1{}, State) ->
+    do_create_table(DDL, State);
 
 process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
+    do_submit_query(SQL, Table, State);
+
+process(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
+    do_submit_query(SQL, Table, State).
+
+
+do_create_table(DDL = #ddl_v1{table = Table}, State) ->
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
+    Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
+    case riak_core_bucket_type:create(Table, Props2) of
+        ok ->
+            wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
+        {error, Reason} ->
+            {reply, make_rpberrresp(
+                      ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])),
+             State}
+    end.
+
+wait_until_active(Table, State, 0) ->
+    {reply, make_rpberrresp(
+              ?E_ACTIVATE,
+              flat_format("Failed to activate table ~s", [Table])),
+     State};
+wait_until_active(Table, State, Seconds) ->
+    case riak_core_bucket_type:activate(Table) of
+        ok ->
+            {reply, #tsqueryresp{}, State};
+        {error, not_ready} ->
+            timer:sleep(1000),
+            wait_until_active(Table, State, Seconds - 1);
+        {error, undefined} ->
+            %% this is inconceivable because create(Table) has
+            %% just succeeded, so it's here mostly to pacify
+            %% the dialyzer (and of course, for the odd chance
+            %% of Erlang imps crashing nodes between create
+            %% and activate calls)
+            {reply, make_rpberrresp(
+                      ?E_CREATED_GHOST,
+                      flat_format("Table ~s has been created but found missing", [Table])),
+             State}
+    end.
+
+do_submit_query(SQL, Table, State) ->
     Mod = riak_ql_ddl:make_module_name(Table),
-    case (catch Mod:get_ddl()) of
+    case catch Mod:get_ddl() of
         {_, {undef, _}} ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State};
@@ -298,8 +338,10 @@ process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
 %%
 submit_query(DDL, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
-        {ok, Data} ->
+        {ok, Data} when element(1, SQL) =:= riak_sql_v1 ->
             {reply, make_tsqueryresp(Data), State};
+        {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
+            {reply, make_describe_response(Data), State};
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
             ErrorMessage = flat_format("~p: ~s", [E, Reason]),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
@@ -345,7 +387,7 @@ process_stream({ReqId, Error}, ReqId,
 
 
 -spec decode_query(Query::#tsinterpolation{}) ->
-    {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{}}.
+    {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}}.
 decode_query(#tsinterpolation{ base = BaseQuery }) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
     riak_ql_parser:parse(Lexed).
@@ -364,17 +406,41 @@ flat_format(Format, Args) ->
 %% local functions
 %% ---------------------------------------------------
 
+%% Give validate_rows/2 a DDL Module and a list of decoded rows,
+%% and it will return a list of strings that represent the invalid rows indexes.
+-spec validate_rows(module(), list(tuple())) -> list(string()).
+validate_rows(Mod, Rows) ->
+    ValidateFn = fun(X, {Acc, BadRowIdxs}) ->
+        case Mod:validate_obj(X) of
+            true -> {Acc+1, BadRowIdxs};
+            _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
+        end
+    end,
+    {_, BadRowIdxs} = lists:foldl(ValidateFn, {1,[]}, Rows),
+    lists:reverse(BadRowIdxs).
+
+%%
+-spec validate_rows_error_response([string()]) ->#rpberrorresp{}.
+validate_rows_error_response(BadRowIdxs) ->
+    BadRowsString = string:join(BadRowIdxs,", "),
+    ErrorMsg = flat_format(
+        "Invalid data found at row index(es) ~s", [BadRowsString]),
+    make_rpberrresp(?E_IRREG, ErrorMsg).
+
 -spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
 make_rpberrresp(Code, Message) ->
     #rpberrorresp{errcode = Code,
                   errmsg = lists:flatten(Message)}.
 
 
--spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{}) -> {string(), binary()}.
+-spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}) ->
+                                      {string(), binary()}.
 decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
     {"riak_kv.ts_create_table", NewBucketType};
 decode_query_permissions(#riak_sql_v1{'FROM' = Table}) ->
-    {"riak_kv.ts_query", Table}.
+    {"riak_kv.ts_query", Table};
+decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
+    {"riak_kv.ts_describe", Table}.
 
 %%
 -spec missing_helper_module(Table::binary(),
@@ -539,6 +605,13 @@ make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}) ->
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
 
+-spec make_describe_response([[term()]]) -> #tsqueryresp{}.
+make_describe_response(DescribeTableRows) ->
+    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
+    ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
+    #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
+                 rows = riak_pb_ts_codec:encode_rows(ColumnTypes, DescribeTableRows)}.
+
 -spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
 get_column_types(ColumnNames, Mod) ->
     [{N, Mod:get_field_type(N)} || N <- ColumnNames].
@@ -593,6 +666,59 @@ missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
         missing_helper_module(<<"mytype">>, [{ddl, #ddl_v1{}}])
+    ).
+
+test_helper_validate_rows_mod() ->
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(
+        riak_ql_parser:parse(riak_ql_lexer:get_tokens(
+            "CREATE TABLE mytable ("
+            "family VARCHAR NOT NULL,"
+            "series VARCHAR NOT NULL,"
+            "time TIMESTAMP NOT NULL,"
+            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')), family, series, time))"))).
+
+validate_rows_empty_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [])
+    ).
+
+validate_rows_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
+    ).
+
+validate_rows_bad_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        ["1"],
+        validate_rows(Mod, [{}])
+    ).
+
+validate_rows_bad_2_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        ["1", "3", "4"],
+        validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, "hithere"])
+    ).
+
+validate_rows_error_response_1_test() ->
+    Msg = "Invalid data found at row index(es) ",
+    ?assertEqual(
+        #rpberrorresp{errcode = ?E_IRREG,
+                      errmsg = Msg ++ "1" },
+        validate_rows_error_response(["1"])
+    ).
+
+validate_rows_error_response_2_test() ->
+    Msg = "Invalid data found at row index(es) ",
+    ?assertEqual(
+        #rpberrorresp{errcode = ?E_IRREG,
+                      errmsg = Msg ++ "1, 2, 3" },
+        validate_rows_error_response(["1", "2", "3"])
     ).
 
 -endif.
