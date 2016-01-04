@@ -332,16 +332,16 @@ do_submit_query(SQL, Table, State) ->
             BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State};
         DDL ->
-            submit_query(DDL, Mod, SQL, State)
+            submit_query(DDL, SQL, State)
     end.
 
 %%
-submit_query(DDL, Mod, SQL, State) ->
+submit_query(DDL, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
         {ok, Data} when element(1, SQL) =:= riak_sql_v1 ->
-            {reply, make_tsqueryresp(Data, Mod), State};
-        {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
             {reply, make_tsqueryresp(Data), State};
+        {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
+            {reply, make_describe_response(Data), State};
         {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
             ErrorMessage = flat_format("~p: ~s", [E, Reason]),
             {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
@@ -598,57 +598,28 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 %% ---------------------------------------------------
 % functions supporting SELECT
 
--spec make_tsqueryresp([{binary(), term()}], module()) -> #tsqueryresp{}.
-make_tsqueryresp([], _Module) ->
-    #tsqueryresp{columns = [], rows = []};
-make_tsqueryresp(FetchedRows, Mod) ->
-    %% as returned by fetch, we have in Rows a sequence of KV pairs,
-    %% making records concatenated in a flat list
-    ColumnNames = get_column_names(FetchedRows),
-    ColumnTypes = get_column_types(ColumnNames, Mod),
-    Records = assemble_records(FetchedRows, length(ColumnNames)),
-    JustRows = lists:map(
-                 fun(Rec) -> [C || {_K, C} <- Rec] end,
-                 Records),
+-spec make_tsqueryresp({[binary()], [simple_field_type()], [any()]}) -> #tsqueryresp{}.
+make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}) ->
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
 
--spec make_tsqueryresp([[term()]]) -> #tsqueryresp{}.
-make_tsqueryresp(DescribeTableRows) ->
+-spec make_describe_response([[term()]]) -> #tsqueryresp{}.
+make_describe_response(DescribeTableRows) ->
     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
     ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, DescribeTableRows)}.
 
-
-get_column_names([{C1, _} | MoreRecords]) ->
-    {RestOfColumns, _DiscardedValues} =
-        lists:unzip(
-          lists:takewhile(
-            fun({Cn, _}) -> C1 /= Cn end,
-            MoreRecords)),
-    [C1|RestOfColumns].
-
--spec get_column_types(list(binary()), module()) -> list(riak_pb_ts_codec:tscolumntype()).
+-spec get_column_types(list(binary()), module()) ->
+            [{binary(), riak_pb_ts_codec:tscolumntype()}].
 get_column_types(ColumnNames, Mod) ->
-    [Mod:get_field_type([ColumnName]) || ColumnName <- ColumnNames].
+    [{N, Mod:get_field_type(N)} || N <- ColumnNames].
 
--spec make_tscolumndescription_list(list(binary()), list(riak_pb_ts_codec:tscolumntype())) ->
-                                           list(#tscolumndescription{}).
+-spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
+                                           [#tscolumndescription{}].
 make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
   [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
-
-assemble_records(Rows, RecordSize) ->
-    assemble_records_(Rows, RecordSize, []).
-%% should we protect against incomplete records?
-assemble_records_([], _, Acc) ->
-    lists:reverse(Acc);
-assemble_records_(RR, RSize, Acc) ->
-    Remaining = lists:nthtail(RSize, RR),
-    assemble_records_(
-      Remaining, RSize, [lists:sublist(RR, RSize) | Acc]).
-
 
 %% ---------------------------------------------------
 % functions supporting list_keys
