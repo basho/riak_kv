@@ -128,7 +128,8 @@ compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause =
     col_return_types :: [sint64 | double | boolean | varchar | timestamp],
     col_name        :: binary(),
     clause          :: function(),
-    is_valid        :: true | {error, [any()]}
+    is_valid        :: true | {error, [any()]},
+    finaliser      :: function()
 }).
 
 %%
@@ -139,12 +140,14 @@ select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
         initial_state = InitX,
         col_return_types = ColRetX,
         clause = RunFnX,
-        is_valid = IsValid1 } = SelClause1,
+        is_valid = IsValid1,
+        finalisers = Finalisers1 } = SelClause1,
     S = compile_select_col(DDL, ColX),
     TypeSet2 = sets:add_element(S#single_sel_column.calc_type, TypeSet1),
     Init2   = [S#single_sel_column.initial_state | InitX],
     ColRet2 = [S#single_sel_column.col_return_types | ColRetX],
     RunFn2  = [S#single_sel_column.clause | RunFnX],
+    Finalisers2 = [S#single_sel_column.finaliser | Finalisers1],
     IsValid2 = merge_validation(S#single_sel_column.is_valid, IsValid1),
     %% ColTypes are messy because <<"*">> represents many
     %% so you need to flatten the list
@@ -152,7 +155,8 @@ select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
         initial_state    = Init2,
         col_return_types = lists:flatten(ColRet2),
         clause           = RunFn2,
-        is_valid         = IsValid2},
+        is_valid         = IsValid2,
+        finalisers       = Finalisers2},
     {TypeSet2, SelClause2}.
 
 get_col_names(DDL, Q) ->
@@ -184,14 +188,20 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
             {IsValid, ColRet} = check_types(FnName, TypeSig, ColTypes2),
 
             IsValid3 = merge_validation(IsValid2, IsValid),
-            Fn = fun(Row, State) ->
-                         riak_ql_window_agg_fns:FnName(Compiled_arg1(Row), State)
-                 end,
+            SelectFn =
+                fun(Row, State) ->
+                    riak_ql_window_agg_fns:FnName(Compiled_arg1(Row), State)
+                end,
+            FinaliserFn =
+                fun(State) ->
+                    riak_ql_window_agg_fns:finalise(FnName, State)
+                end,
             #single_sel_column{ calc_type        = aggregate,
                                 initial_state    = Initial_state,
                                 col_return_types = ColRet,
-                                clause           = Fn,
-                                is_valid         = IsValid3 }
+                                clause           = SelectFn,
+                                is_valid         = IsValid3,
+                                finaliser = FinaliserFn }
     end;
 compile_select_col(DDL, Select) ->
     {ColTypes, IsValid, Fn} = compile_select_col_stateless(DDL, Select),
