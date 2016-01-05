@@ -482,7 +482,7 @@ init([Index]) ->
                 true ->
                     erlang:function_exported(Mod, async_put, 5);
                 _ ->
-                    erlang:function_exported(Mod, sync_put, 5)
+		    false
             end,
             State = #state{idx=Index,
                            async_folding=AsyncFolding,
