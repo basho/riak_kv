@@ -129,7 +129,7 @@ compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause =
           col_name         :: riak_pb_ts_codec:tscolumnname(),
           clause           :: function(),
           is_valid         :: true | {error, [any()]},
-          finaliser        :: function()
+          finaliser        :: [function()]
          }).
 
 %%
@@ -186,8 +186,7 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
                                 initial_state    = undefined,
                                 col_return_types = ColTypes1,
                                 clause           = Fn,
-                                is_valid         = IsValid1,
-                                finaliser        = fun(X) -> X end };
+                                is_valid         = IsValid1};
         Initial_state ->
             {ColTypes2, IsValid2, Compiled_arg1} =
                 compile_select_col_stateless(DDL, FnArg1),
@@ -211,7 +210,7 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
                                 col_return_types = ColRet,
                                 clause           = SelectFn,
                                 is_valid         = IsValid3,
-                                finaliser        = FinaliserFn }
+                                finaliser        = [FinaliserFn] }
     end;
 compile_select_col(DDL, Select) ->
     {ColTypes, IsValid, Fn} = compile_select_col_stateless(DDL, Select),
@@ -222,8 +221,7 @@ compile_select_col(DDL, Select) ->
                         initial_state    = undefined,
                         col_return_types = ColTypes,
                         clause           = fun(Row, _) -> Fn(Row) end,
-                        is_valid         = IsValid,
-                        finaliser        = fun(X) -> X end }.
+                        is_valid         = IsValid}.
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
