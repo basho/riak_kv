@@ -1628,7 +1628,12 @@ select_negation_test() ->
                                                          double
                                                         ],
                                      col_names        = [
-                                                         <<"1+2.0-3/4*5">>
+                                                         <<"-1">>,
+                                                         <<"-1">>,
+                                                         <<"-1.0">>,
+                                                         <<"-1.0">>,
+                                                         <<"-mydouble">>,
+                                                         <<"-mydouble">>
                                                         ]
                                     },
                  Sel).
