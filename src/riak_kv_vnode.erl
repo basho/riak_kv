@@ -478,11 +478,11 @@ init([Index]) ->
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
-            DoAsyncPut =  case app_helper:get_env(riak_kv, allow_async_put, true) of
+            DoAsyncPut =  case app_helper:get_env(riak_kv, allow_async_put, false) of
                 true ->
                     erlang:function_exported(Mod, async_put, 5);
                 _ ->
-                    false
+                    erlang:function_exported(Mod, sync_put, 5)
             end,
             State = #state{idx=Index,
                            async_folding=AsyncFolding,
@@ -842,9 +842,19 @@ handle_command({get_index_entries, Opts},
 
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
-                From, State=#state{mod=Mod, idx=Idx, async_put=true, modstate=ModState}) ->
+                From, State=#state{mod=Mod, async_put=true, modstate=ModState}) ->
     StartTS = os:timestamp(),
     Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
+    case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
+        {ok, UpModState} ->
+            {noreply, State#state{modstate=UpModState}};
+        {error, Reason, UpModState} ->
+            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
+    end;
+handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
+	       From, State=#state{idx=Idx, mod=Mod, async_put=false, modstate=ModState}) ->
+    StartTS = os:timestamp(),
+    Context = {w1c_sync_put, From, Type, Bucket, Key, EncodedVal, StartTS},
     case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
 
@@ -852,18 +862,6 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
 	    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
 
 	    {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
-        {error, Reason, UpModState} ->
-            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
-    end;
-handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
-                _From, State=#state{idx=Idx, mod=Mod, async_put=false, modstate=ModState}) ->
-    StartTS = os:timestamp(),
-    case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
-        {ok, UpModState} ->
-            update_hashtree(Bucket, Key, EncodedVal, State),
-            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
-            update_vnode_stats(vnode_put, Idx, StartTS),
-            {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
     end.
