@@ -78,7 +78,7 @@ use_ack_backpressure() ->
 
 %% @doc Construct the correct index command record.
 -spec req(binary()|tuple(binary()), term(), term()) -> term().
-req(Bucket, _ItemFilter, #riak_sql_v1{} = Q) ->
+req(Bucket, _ItemFilter, ?SQL_SELECT{} = Q) ->
     #riak_kv_sql_select_req_v1{bucket=Bucket,
                                qry=Q};
 req(Bucket, ItemFilter, Query) ->

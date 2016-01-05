@@ -360,7 +360,7 @@ apply_continuation(Q, C) ->
 %% @doc upgrade a query to the current latest version
 upgrade_query(Q=?KV_INDEX_Q{}) ->
     Q;
-upgrade_query(Q=?KV_SQL_Q{}) ->
+upgrade_query(Q=?SQL_SELECT{}) ->
     Q;
 upgrade_query(#riak_kv_index_v2{
                 start_key=StartKey,

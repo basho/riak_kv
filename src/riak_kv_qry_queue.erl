@@ -54,7 +54,7 @@
 
 -type qry_fsm_name() :: atom().
 -type query_id()     :: {node(), integer()}.
--type qry()          :: ?KV_SQL_Q{}.
+-type qry()          :: ?SQL_SELECT{}.
 
 -record(state, {
           max_q_len ::integer(),
