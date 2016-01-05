@@ -1613,7 +1613,7 @@ function_2_initial_state_test() ->
 
 select_negation_test() ->
     DDL = get_sel_ddl(),
-    SQL = "SELECT -1, - 1, -1.0, - 1.0, -mydouble, - mydouble from mytab "
+    SQL = "SELECT -1, - 1, -1.0, - 1.0, -mydouble, - mydouble, -(1), -(1.0) from mytab "
         "WHERE myfamily = 'familyX' AND myseries = 'seriesX' "
         "AND time > 1 AND time < 2",
     {ok, Rec} = get_query(SQL),
@@ -1625,6 +1625,8 @@ select_negation_test() ->
                                                          double,
                                                          double,
                                                          double,
+                                                         double,
+                                                         sint64,
                                                          double
                                                         ],
                                      col_names        = [
@@ -1633,7 +1635,9 @@ select_negation_test() ->
                                                          <<"-1.0">>,
                                                          <<"-1.0">>,
                                                          <<"-mydouble">>,
-                                                         <<"-mydouble">>
+                                                         <<"-mydouble">>,
+                                                         <<"-1">>,
+                                                         <<"-1.0">>
                                                         ]
                                     },
                  Sel).
