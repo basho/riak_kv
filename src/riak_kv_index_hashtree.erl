@@ -544,17 +544,13 @@ load_built(#state{trees=Trees}) ->
                   riak_object_t2b() | riak_object:riak_object()) -> binary().
 hash_object({Bucket, Key}, RObj0) ->
     try
-        case RObj0 of
-            tombstone ->
-                tombstone;
-            _ ->
-                RObj = case riak_object:is_robject(RObj0) of
-                           true -> RObj0;
-                           false -> riak_object:from_binary(Bucket, Key, RObj0)
-                       end,
-                Hash = riak_object:hash(RObj),
-                term_to_binary(Hash)
-        end
+        RObj =
+            case riak_object:is_robject(RObj0) of
+                true -> RObj0;
+                false -> riak_object:from_binary(Bucket, Key, RObj0)
+            end,
+        Hash = riak_object:hash(RObj),
+        term_to_binary(Hash)
     catch _:_ ->
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)
@@ -734,6 +730,12 @@ expand_items(HasIndex, Items) ->
     lists:foldl(fun(I, Acc) ->
                         expand_item(HasIndex, I, Acc)
                 end, [], Items).
+
+expand_item(_, {object, BKey, tombstone}, Others) ->
+    IndexN = riak_kv_util:get_index_n(BKey),
+    BinBKey = term_to_binary(BKey),
+    Item0 = {IndexN, BinBKey, tombstone},
+    [Item0 | Others];
 
 expand_item(Has2ITree, {object, BKey, RObj}, Others) ->
     IndexN = riak_kv_util:get_index_n(BKey),
