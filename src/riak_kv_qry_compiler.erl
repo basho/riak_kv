@@ -98,7 +98,7 @@ run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
 
 %%
 compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
-    CompileColFn = 
+    CompileColFn =
         fun(ColX, AccX) ->
             select_column_clause_folder(DDL, ColX, AccX)
         end,
@@ -232,7 +232,19 @@ compile_select_col(DDL, Select) ->
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
     {ColTypes, true, fun(Row) -> Row end};
-compile_select_col_stateless(_, {Type, V}) when Type == varchar; Type == boolean ->
+compile_select_col_stateless(DDL, {negate, ExprToNegate}) ->
+    {TypeToNegate, ValidityToNegate, ValueToNegate} =
+        compile_select_col_stateless(DDL, ExprToNegate),
+    NegatingFun = fun(Row) -> -ValueToNegate(Row) end,
+    case ValidityToNegate of
+        true ->
+            {[TypeToNegate],
+             ValidityToNegate,
+             NegatingFun};
+        _ -> {[], ValidityToNegate, []}
+    end;
+compile_select_col_stateless(_, {Type, V})
+  when Type == varchar; Type == boolean ->
     {[Type], true, fun(_) -> V end};
 %% TODO why is this integer not sint64?
 compile_select_col_stateless(_, {Type, V}) when Type == integer ->
@@ -1562,7 +1574,7 @@ basic_select_arith_2_test() ->
     {ok, Rec} = get_query(SQL),
     {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-        #riak_sel_clause_v1{ 
+        #riak_sel_clause_v1{
             calc_type = rows,
             col_return_types = [double],
             col_names = [<<"((1+2.0)-((3/4)*5))">>] },
@@ -1598,6 +1610,37 @@ function_2_initial_state_test() ->
         #riak_sel_clause_v1{ initial_state = [0, 0] },
         Select
     ).
+
+select_negation_test() ->
+    DDL = get_sel_ddl(),
+    SQL = "SELECT -1, - 1, -1.0, - 1.0, -mydouble, - mydouble, -(1), -(1.0) from mytab "
+        "WHERE myfamily = 'familyX' AND myseries = 'seriesX' "
+        "AND time > 1 AND time < 2",
+    {ok, Rec} = get_query(SQL),
+    {ok, Sel} = compile_select_clause(DDL, Rec),
+    ?assertMatch(#riak_sel_clause_v1{calc_type        = rows,
+                                     col_return_types = [
+                                                         sint64,
+                                                         sint64,
+                                                         double,
+                                                         double,
+                                                         double,
+                                                         double,
+                                                         sint64,
+                                                         double
+                                                        ],
+                                     col_names        = [
+                                                         <<"-1">>,
+                                                         <<"-1">>,
+                                                         <<"-1.0">>,
+                                                         <<"-1.0">>,
+                                                         <<"-mydouble">>,
+                                                         <<"-mydouble">>,
+                                                         <<"-1">>,
+                                                         <<"-1.0">>
+                                                        ]
+                                    },
+                 Sel).
 
 % basic_select_window_agg_fn_arith_1_test() ->
 %     {ok, Rec} = get_query(
