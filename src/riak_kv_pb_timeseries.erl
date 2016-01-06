@@ -84,10 +84,10 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
-       | #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{},
-     {PermSpec::string(), Table::binary()}} |
-    {error, _}.
+                    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+                     | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{},
+                     {PermSpec::string(), Table::binary()}} |
+                    {error, _}.
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
@@ -118,7 +118,7 @@ encode(Message) ->
 
 
 -spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
-              | #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}, #state{}) ->
+              | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
@@ -283,7 +283,7 @@ process(#tslistkeysreq{table   = Table,
 process(DDL = #ddl_v1{}, State) ->
     do_create_table(DDL, State);
 
-process(SQL = #riak_sql_v1{'FROM' = Table}, State) ->
+process(SQL = ?SQL_SELECT{'FROM' = Table}, State) ->
     do_submit_query(SQL, Table, State);
 
 process(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
@@ -339,7 +339,7 @@ do_submit_query(SQL, Table, State) ->
 %%
 submit_query(DDL, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
-        {ok, Data} when element(1, SQL) =:= riak_sql_v1 ->
+        {ok, Data} when element(1, SQL) =:= riak_select_v1 ->
             {reply, make_tsqueryresp(Data), State};
         {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
             {reply, make_describe_response(Data), State};
@@ -388,7 +388,7 @@ process_stream({ReqId, Error}, ReqId,
 
 
 -spec decode_query(Query::#tsinterpolation{}) ->
-    {error, _} | {ok, #ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}}.
+    {error, _} | {ok, #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}}.
 decode_query(#tsinterpolation{ base = BaseQuery }) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
     riak_ql_parser:parse(Lexed).
@@ -434,11 +434,11 @@ make_rpberrresp(Code, Message) ->
                   errmsg = lists:flatten(Message)}.
 
 
--spec decode_query_permissions(#ddl_v1{} | #riak_sql_v1{} | #riak_sql_describe_v1{}) ->
+-spec decode_query_permissions(#ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}) ->
                                       {string(), binary()}.
 decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
     {"riak_kv.ts_create_table", NewBucketType};
-decode_query_permissions(#riak_sql_v1{'FROM' = Table}) ->
+decode_query_permissions(?SQL_SELECT{'FROM' = Table}) ->
     {"riak_kv.ts_query", Table};
 decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
     {"riak_kv.ts_describe", Table}.

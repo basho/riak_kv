@@ -69,6 +69,5 @@
 %% 	 }).
 
 -define(KV_INDEX_Q, #riak_kv_index_v3).
--define(KV_SQL_Q,   #riak_sql_v1).
 
 -endif.

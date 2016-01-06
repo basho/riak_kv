@@ -35,22 +35,22 @@
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
 
--spec compile(#ddl_v1{}, #riak_sql_v1{}) ->
-                     {ok, InitialState::[any()], SubQueries::[#riak_sql_v1{}]} | {error, any()}.
-compile(#ddl_v1{}, #riak_sql_v1{is_executable = true}) ->
+-spec compile(#ddl_v1{}, ?SQL_SELECT{}) ->
+                     {ok, InitialState::[any()], SubQueries::[?SQL_SELECT{}]} | {error, any()}.
+compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}) ->
     {error, 'query is already compiled'};
-compile(#ddl_v1{}, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause = [] } }) ->
+compile(#ddl_v1{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }) ->
     {error, 'full table scan not implmented'};
-compile(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
-                                      type          = sql} = Q) ->
+compile(#ddl_v1{} = DDL, ?SQL_SELECT{is_executable = false,
+                                     type          = sql} = Q) ->
     {ok, S} = compile_select_clause(DDL, Q),
-    compile_where_clause(DDL, Q#riak_sql_v1{'SELECT' = S}).
+    compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}).
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
 %% write that up in time
-compile_where_clause(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
-                                                   'WHERE'       = W} = Q) ->
+compile_where_clause(#ddl_v1{} = DDL, ?SQL_SELECT{is_executable = false,
+                                                  'WHERE'       = W} = Q) ->
     case compile_where(DDL, W) of
         {error, E} -> {error, E};
         NewW       -> expand_query(DDL, Q, NewW)
@@ -58,16 +58,16 @@ compile_where_clause(#ddl_v1{} = DDL, #riak_sql_v1{is_executable = false,
 
 %% now break out the query on quantum boundaries
 expand_query(#ddl_v1{local_key = LK, partition_key = PK},
-             #riak_sql_v1{} = Q1, Where1) ->
+             ?SQL_SELECT{} = Q1, Where1) ->
     case expand_where(Where1, PK) of
         {error, E} ->
             {error, E};
         Where2 ->
-            Q2 = Q1#riak_sql_v1{is_executable = true,
-                                type          = timeseries,
-                                local_key     = LK,
-                                partition_key = PK},
-            SubQueries = [Q2#riak_sql_v1{ 'WHERE' = X } || X <- Where2],
+            Q2 = Q1?SQL_SELECT{is_executable = true,
+                               type          = timeseries,
+                               local_key     = LK,
+                               partition_key = PK},
+            SubQueries = [Q2?SQL_SELECT{ 'WHERE' = X } || X <- Where2],
             {ok, SubQueries}
     end.
 
@@ -97,27 +97,27 @@ run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
     run_select2(SelectTail, Row, RowState, Acc2).
 
 %%
-compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
+compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
     CompileColFn = 
         fun(ColX, AccX) ->
             select_column_clause_folder(DDL, ColX, AccX)
         end,
-    % compile each select column and put all the calc types into a set, if
-    % any of the results are aggregate then aggregate is the calc type for the
-    % whole query
+    %% compile each select column and put all the calc types into a set, if
+    %% any of the results are aggregate then aggregate is the calc type for the
+    %% whole query
     Acc = {sets:new(), #riak_sel_clause_v1{ }},
-    % iterate from the right so we can append to the head of lists
+    %% iterate from the right so we can append to the head of lists
     {ColTypeSet, Q2} = lists:foldr(CompileColFn, Acc, Sel),
     case sets:is_element(aggregate, ColTypeSet) of
         true  ->
             Q3 = Q2#riak_sel_clause_v1{
-                calc_type = aggregate,
-                col_names = get_col_names(DDL, Q) };
+                   calc_type = aggregate,
+                   col_names = get_col_names(DDL, Q) };
         false ->
             Q3 = Q2#riak_sel_clause_v1{
-                calc_type = rows,
-                initial_state = [],
-                col_names = get_col_names(DDL, Q) }
+                   calc_type = rows,
+                   initial_state = [],
+                   col_names = get_col_names(DDL, Q) }
     end,
     {ok, Q3}.
 
@@ -134,14 +134,14 @@ compile_select_clause(DDL, #riak_sql_v1{'SELECT' = #riak_sel_clause_v1{ clause =
 
 %%
 -spec select_column_clause_folder(#ddl_v1{}, selection(), {set(), #riak_sel_clause_v1{}}) ->
-        {set(), #riak_sel_clause_v1{}}.
+                                         {set(), #riak_sel_clause_v1{}}.
 select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
     #riak_sel_clause_v1{
-        initial_state = InitX,
-        col_return_types = ColRetX,
-        clause = RunFnX,
-        is_valid = IsValid1,
-        finalisers = Finalisers1 } = SelClause1,
+       initial_state = InitX,
+       col_return_types = ColRetX,
+       clause = RunFnX,
+       is_valid = IsValid1,
+       finalisers = Finalisers1 } = SelClause1,
     S = compile_select_col(DDL, ColX),
     TypeSet2 = sets:add_element(S#single_sel_column.calc_type, TypeSet1),
     Init2   = [S#single_sel_column.initial_state | InitX],
@@ -152,21 +152,21 @@ select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
     %% ColTypes are messy because <<"*">> represents many
     %% so you need to flatten the list
     SelClause2 = #riak_sel_clause_v1{
-        initial_state    = Init2,
-        col_return_types = lists:flatten(ColRet2),
-        clause           = RunFn2,
-        is_valid         = IsValid2,
-        finalisers       = lists:flatten(Finalisers2)},
+                    initial_state    = Init2,
+                    col_return_types = lists:flatten(ColRet2),
+                    clause           = RunFn2,
+                    is_valid         = IsValid2,
+                    finalisers       = lists:flatten(Finalisers2)},
     {TypeSet2, SelClause2}.
 
 %%
--spec get_col_names(#ddl_v1{}, #riak_sql_v1{}) -> [binary()].
+-spec get_col_names(#ddl_v1{}, ?SQL_SELECT{}) -> [binary()].
 get_col_names(DDL, Q) ->
     ColNames = riak_ql_to_string:col_names_from_select(Q),
-    % flatten because * gets expanded to multiple columns
+    %% flatten because * gets expanded to multiple columns
     lists:flatten(
-        [get_col_names2(DDL, N) || N <- ColNames]
-    ).
+      [get_col_names2(DDL, N) || N <- ColNames]
+     ).
 
 %%
 get_col_names2(DDL, "*") ->
@@ -177,7 +177,7 @@ get_col_names2(_, Name) ->
 %% Compile a single selection column into a fun that can extract the cell
 %% from the row.
 -spec compile_select_col(DDL::#ddl_v1{}, ColumnSpec::any()) ->
-        #single_sel_column{}.
+                                #single_sel_column{}.
 compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
     case riak_ql_window_agg_fns:start_state(FnName) of
         stateless ->
@@ -199,11 +199,11 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
             IsValid3 = merge_validation(IsValid2, IsValid),
             SelectFn =
                 fun(Row, State) ->
-                    riak_ql_window_agg_fns:FnName(Compiled_arg1(Row), State)
+                        riak_ql_window_agg_fns:FnName(Compiled_arg1(Row), State)
                 end,
             FinaliserFn =
                 fun(State) ->
-                    riak_ql_window_agg_fns:finalise(FnName, State)
+                        riak_ql_window_agg_fns:finalise(FnName, State)
                 end,
             #single_sel_column{ calc_type        = aggregate,
                                 initial_state    = Initial_state,
@@ -217,11 +217,13 @@ compile_select_col(DDL, Select) ->
     %% to support aggregates that have a running state all top level funs must be
     %% arity two, when we know the function is stateless wrap it in a two arity
     %% fun and ignore the state arg
+    Finalisers = lists:duplicate(length(ColTypes), fun(State) -> State end),
     #single_sel_column{ calc_type        = rows,
                         initial_state    = undefined,
                         col_return_types = ColTypes,
                         clause           = fun(Row, _) -> Fn(Row) end,
-                        is_valid         = IsValid}.
+                        is_valid         = IsValid,
+                        finaliser        = Finalisers }.
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
@@ -230,7 +232,19 @@ compile_select_col(DDL, Select) ->
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
     {ColTypes, true, fun(Row) -> Row end};
-compile_select_col_stateless(_, {Type, V}) when Type == varchar; Type == boolean ->
+compile_select_col_stateless(DDL, {negate, ExprToNegate}) ->
+    {TypeToNegate, ValidityToNegate, ValueToNegate} =
+        compile_select_col_stateless(DDL, ExprToNegate),
+    NegatingFun = fun(Row) -> -ValueToNegate(Row) end,
+    case ValidityToNegate of
+        true ->
+            {[TypeToNegate],
+             ValidityToNegate,
+             NegatingFun};
+        _ -> {[], ValidityToNegate, []}
+    end;
+compile_select_col_stateless(_, {Type, V})
+  when Type == varchar; Type == boolean ->
     {[Type], true, fun(_) -> V end};
 %% TODO why is this integer not sint64?
 compile_select_col_stateless(_, {Type, V}) when Type == integer ->
@@ -316,11 +330,11 @@ to_column_name_binary(Name) when is_binary(Name) ->
 %% Return the index and type of a field in the table definition.
 col_index_and_type_of(Fields, ColumnName) ->
     case lists:keyfind(ColumnName, #riak_field_v1.name, Fields) of
-      false ->
-        FieldNames = [X#riak_field_v1.name || X <- Fields],
-        error({unknown_column, {ColumnName, FieldNames}});
-      #riak_field_v1{ position = Position, type = Type } ->
-          {Position, Type}
+        false ->
+            FieldNames = [X#riak_field_v1.name || X <- Fields],
+            error({unknown_column, {ColumnName, FieldNames}});
+        #riak_field_v1{ position = Position, type = Type } ->
+            {Position, Type}
     end.
 
 expand_where(Where, #key_v1{ast = PAST}) ->
@@ -480,7 +494,7 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
             includes(T, Op2, Mod)
     end.
 
-                                                % find the upper and lower bound for the time
+%% find the upper and lower bound for the time
 find_timestamp_bounds(QuantumField, LocalFields) when is_binary(QuantumField) ->
     find_timestamp_bounds2(QuantumField, LocalFields, [], {undefined, undefined}).
 
@@ -550,7 +564,7 @@ break_out_timeseries(Filters1, LocalFields1, [QuantumFields]) ->
             {[Starts | Body], [Ends | Body], Filters3}
     end.
 
-                                                % separate the key fields from the other filters
+%% separate the key fields from the other filters
 split_key_from_filters(LocalFields, Filters) ->
     lists:mapfoldl(fun split_key_from_filters2/2, Filters, LocalFields).
 
@@ -660,9 +674,9 @@ make_query(Table, Selections) ->
     make_query(Table, Selections, []).
 
 make_query(Table, Selections, Where) ->
-    #riak_sql_v1{'FROM'   = Table,
-                 'SELECT' = Selections,
-                 'WHERE'  = Where}.
+    ?SQL_SELECT{'FROM'   = Table,
+                'SELECT' = Selections,
+                'WHERE'  = Where}.
 
 -define(MIN, 60 * 1000).
 -define(NAME, "time").
@@ -857,11 +871,11 @@ simplest_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-       {ok, [#riak_sql_v1{ is_executable = true,
-                           type          = timeseries,
-                           'WHERE'       = Where2,
-                           partition_key = PK,
-                           local_key     = LK }]},
+       {ok, [?SQL_SELECT{ is_executable = true,
+                          type          = timeseries,
+                          'WHERE'       = Where2,
+                          partition_key = PK,
+                          local_key     = LK }]},
        compile(DDL, Q)
       ).
 
@@ -885,11 +899,11 @@ simple_with_filter_1_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-       {ok, [#riak_sql_v1{ is_executable = true,
-                           type          = timeseries,
-                           'WHERE'       = Where,
-                           partition_key = PK,
-                           local_key     = LK }]},
+       {ok, [?SQL_SELECT{ is_executable = true,
+                          type          = timeseries,
+                          'WHERE'       = Where,
+                          partition_key = PK,
+                          local_key     = LK }]},
        compile(DDL, Q)
       ).
 
@@ -912,11 +926,11 @@ simple_with_filter_2_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-       {ok, [#riak_sql_v1{ is_executable = true,
-                           type          = timeseries,
-                           'WHERE'       = Where,
-                           partition_key = PK,
-                           local_key     = LK }]},
+       {ok, [?SQL_SELECT{ is_executable = true,
+                          type          = timeseries,
+                          'WHERE'       = Where,
+                          partition_key = PK,
+                          local_key     = LK }]},
        compile(DDL, Q)
       ).
 
@@ -941,11 +955,11 @@ simple_with_filter_3_test() ->
              {end_inclusive,   true}
             ],
     ?assertMatch(
-       {ok, [#riak_sql_v1{ is_executable = true,
-                           type          = timeseries,
-                           'WHERE'       = Where,
-                           partition_key = PK,
-                           local_key     = LK }]},
+       {ok, [?SQL_SELECT{ is_executable = true,
+                          type          = timeseries,
+                          'WHERE'       = Where,
+                          partition_key = PK,
+                          local_key     = LK }]},
        compile(DDL, Q)
       ).
 
@@ -975,11 +989,11 @@ simple_with_2_field_filter_test() ->
              {start_inclusive, false}
             ],
     ?assertMatch(
-       {ok, [#riak_sql_v1{ is_executable = true,
-                           type          = timeseries,
-                           'WHERE'       = Where,
-                           partition_key = PK,
-                           local_key     = LK }]},
+       {ok, [?SQL_SELECT{ is_executable = true,
+                          type          = timeseries,
+                          'WHERE'       = Where,
+                          partition_key = PK,
+                          local_key     = LK }]},
        compile(DDL, Q)
       ).
 
@@ -1008,11 +1022,11 @@ complex_with_4_field_filter_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-       {ok, [#riak_sql_v1{ is_executable = true,
-                           type          = timeseries,
-                           'WHERE'       = Where2,
-                           partition_key = PK,
-                           local_key     = LK }]},
+       {ok, [?SQL_SELECT{ is_executable = true,
+                          type          = timeseries,
+                          'WHERE'       = Where2,
+                          partition_key = PK,
+                          local_key     = LK }]},
        compile(DDL, Q)
       ).
 
@@ -1040,12 +1054,12 @@ complex_with_boolean_rewrite_filter_test() ->
              {start_inclusive, false}
             ],
     ?assertMatch(
-       {ok, [#riak_sql_v1{ is_executable  = true,
-                           type          = timeseries,
-                           'WHERE'       = Where,
-                           partition_key = PK,
-                           local_key     = LK
-                         }]},
+       {ok, [?SQL_SELECT{ is_executable  = true,
+                          type          = timeseries,
+                          'WHERE'       = Where,
+                          partition_key = PK,
+                          local_key     = LK
+                        }]},
        compile(DDL, Q)
       ).
 
@@ -1063,15 +1077,15 @@ simple_spanning_boundary_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch({ok, [
-                       #riak_sql_v1{
+                       ?SQL_SELECT{
                           'WHERE'       = Where1,
                           partition_key = PK,
                           local_key     = LK},
-                       #riak_sql_v1{
+                       ?SQL_SELECT{
                           'WHERE'       = Where2,
                           partition_key = PK,
                           local_key     = LK},
-                       #riak_sql_v1{
+                       ?SQL_SELECT{
                           'WHERE'       = Where3,
                           partition_key = PK,
                           local_key     = LK}
@@ -1123,13 +1137,13 @@ simple_spanning_boundary_precision_test() ->
     PK = get_standard_pk(),
     LK = get_standard_lk(),
     ?assertMatch(
-       {ok, [#riak_sql_v1{ 'WHERE'       = Where1,
-                           partition_key = PK,
-                           local_key     = LK},
-             #riak_sql_v1{ 'WHERE'       = Where2,
-                           partition_key = PK,
-                           local_key     = LK
-                         }]},
+       {ok, [?SQL_SELECT{ 'WHERE'       = Where1,
+                          partition_key = PK,
+                          local_key     = LK},
+             ?SQL_SELECT{ 'WHERE'       = Where2,
+                          partition_key = PK,
+                          local_key     = LK
+                        }]},
        compile(DDL, Q)
       ).
 
@@ -1185,7 +1199,7 @@ key_is_all_timestamps_test() ->
                 "WHERE time_c > 2999 AND time_c < 5000 "
                 "AND time_a = 10 AND time_b = 15"),
     ?assertMatch(
-       {ok, [#riak_sql_v1{
+       {ok, [?SQL_SELECT{
                 'WHERE' = [
                            {startkey, [
                                        {<<"time_a">>, timestamp, 10},
@@ -1310,7 +1324,7 @@ no_where_clause_test() ->
 %% this helper function is only for tests testing queries with the
 %% query_result_type of 'rows' and _not_ 'aggregate'
 testing_compile_row_select(DDL, QueryString) ->
-    {ok, [#riak_sql_v1{ 'SELECT' = SelectSpec } | _]} =
+    {ok, [?SQL_SELECT{ 'SELECT' = SelectSpec } | _]} =
         compile(DDL, element(2, get_query(QueryString))),
     SelectSpec.
 
@@ -1398,7 +1412,7 @@ select_count_aggregation_2_test() ->
 %%     DDL = get_standard_ddl(),
 %%     {ok, Q} = get_query("select * from testtwo where time > 1 and time < 6 and user = '2' and location = '4'"),
 %%     ?assertMatch(
-%%         [#riak_sql_v1{} | _],
+%%         [?SQL_SELECT{} | _],
 %%         compile(DDL, Q)
 %%     ).
 
@@ -1423,7 +1437,7 @@ select_count_aggregation_2_test() ->
 %%         "WHERE time > 3000 AND time < 5000 "
 %%         "AND time = 3002 AND user = 'user_1' AND location = 'derby'"),
 %%     ?assertMatch(
-%%         [#riak_sql_v1{
+%%         [?SQL_SELECT{
 %%             'WHERE' = [
 %%                 {startkey, [
 %%                     {<<"time_a">>, timestamp, 10},
@@ -1499,36 +1513,36 @@ basic_select_wildcard_test() ->
 
 select_all_and_column_test() ->
     {ok, Rec} = get_query(
-        "SELECT *, location from mytab WHERE myfamily = 'familyX' "
-        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+                  "SELECT *, location from mytab WHERE myfamily = 'familyX' "
+                  "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-        #riak_sel_clause_v1{
-            calc_type = rows,
-            col_return_types = [varchar, varchar, timestamp, sint64, double,
-                                boolean, varchar],
-            col_names = [<<"location">>, <<"user">>, <<"time">>,
-                         <<"mysint">>, <<"mydouble">>, <<"myboolean">>,
-                         <<"location">>]
-        },
-        Selection
-    ).
+       #riak_sel_clause_v1{
+          calc_type = rows,
+          col_return_types = [varchar, varchar, timestamp, sint64, double,
+                              boolean, varchar],
+          col_names = [<<"location">>, <<"user">>, <<"time">>,
+                       <<"mysint">>, <<"mydouble">>, <<"myboolean">>,
+                       <<"location">>]
+         },
+       Selection
+      ).
 
 select_column_and_all_test() ->
     {ok, Rec} = get_query(
-        "SELECT location, * from mytab WHERE myfamily = 'familyX' "
-        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+                  "SELECT location, * from mytab WHERE myfamily = 'familyX' "
+                  "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-        #riak_sel_clause_v1{
-            calc_type = rows,
-            col_return_types = [varchar, varchar, varchar, timestamp, sint64, double,
-                                boolean],
-            col_names = [<<"location">>, <<"location">>, <<"user">>, <<"time">>,
-                         <<"mysint">>, <<"mydouble">>, <<"myboolean">>]
-        },
-        Selection
-    ).
+       #riak_sel_clause_v1{
+          calc_type = rows,
+          col_return_types = [varchar, varchar, varchar, timestamp, sint64, double,
+                              boolean],
+          col_names = [<<"location">>, <<"location">>, <<"user">>, <<"time">>,
+                       <<"mysint">>, <<"mydouble">>, <<"myboolean">>]
+         },
+       Selection
+      ).
 
 basic_select_window_agg_fn_test() ->
     SQL = "SELECT count(location), avg(mydouble), avg(mysint) from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
@@ -1553,71 +1567,102 @@ basic_select_arith_1_test() ->
     {ok, Rec} = get_query(SQL),
     {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-        #riak_sel_clause_v1{
-            calc_type        = rows,
-            col_return_types = [sint64],
-            col_names        = [<<"((1+2)-((3/4)*5))">>] },
-        Sel
-    ).
+       #riak_sel_clause_v1{
+          calc_type        = rows,
+          col_return_types = [sint64],
+          col_names        = [<<"((1+2)-((3/4)*5))">>] },
+       Sel
+      ).
 
 basic_select_arith_2_test() ->
     SQL = "SELECT 1 + 2.0 - 3 /4 * 5 from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
     {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-        #riak_sel_clause_v1{ 
-            calc_type = rows,
-            col_return_types = [double],
-            col_names = [<<"((1+2.0)-((3/4)*5))">>] },
-        Sel
-    ).
+       #riak_sel_clause_v1{ 
+          calc_type = rows,
+          col_return_types = [double],
+          col_names = [<<"((1+2.0)-((3/4)*5))">>] },
+       Sel
+      ).
 
 rows_initial_state_test() ->
     {ok, Rec} = get_query(
-        "SELECT * FROM mytab WHERE myfamily = 'familyX' "
-        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+                  "SELECT * FROM mytab WHERE myfamily = 'familyX' "
+                  "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-        #riak_sel_clause_v1{ initial_state = [] },
-        Select
-    ).
+       #riak_sel_clause_v1{ initial_state = [] },
+       Select
+      ).
 
 function_1_initial_state_test() ->
     {ok, Rec} = get_query(
-        "SELECT SUM(mydouble) FROM mytab WHERE myfamily = 'familyX' "
-        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+                  "SELECT SUM(mydouble) FROM mytab WHERE myfamily = 'familyX' "
+                  "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-        #riak_sel_clause_v1{ initial_state = [0] },
-        Select
-    ).
+       #riak_sel_clause_v1{ initial_state = [0] },
+       Select
+      ).
 
 function_2_initial_state_test() ->
     {ok, Rec} = get_query(
-        "SELECT SUM(mydouble), SUM(mydouble) FROM mytab WHERE myfamily = 'familyX' "
-        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+                  "SELECT SUM(mydouble), SUM(mydouble) FROM mytab WHERE myfamily = 'familyX' "
+                  "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-        #riak_sel_clause_v1{ initial_state = [0, 0] },
-        Select
-    ).
+       #riak_sel_clause_v1{ initial_state = [0, 0] },
+       Select
+      ).
 
-% basic_select_window_agg_fn_arith_1_test() ->
-%     {ok, Rec} = get_query(
-%         "SELECT count(location) + 1 from mytab "
-%         "WHERE myfamily = 'familyX' "
-%         "AND myseries = 'seriesX' AND time > 1 AND time < 2"
-%     ),
-%     {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
-%     ?assertMatch(
-%         #riak_sel_clause_v1{
-%             calc_type = aggregate,
-%             col_return_types = [sint64],
-%             col_names = [<<"COUNT(location)+1">>] },
-%         Selection
-%     ).
+select_negation_test() ->
+    DDL = get_sel_ddl(),
+    SQL = "SELECT -1, - 1, -1.0, - 1.0, -mydouble, - mydouble, -(1), -(1.0) from mytab "
+        "WHERE myfamily = 'familyX' AND myseries = 'seriesX' "
+        "AND time > 1 AND time < 2",
+    {ok, Rec} = get_query(SQL),
+    {ok, Sel} = compile_select_clause(DDL, Rec),
+    ?assertMatch(#riak_sel_clause_v1{calc_type        = rows,
+                                     col_return_types = [
+                                                         sint64,
+                                                         sint64,
+                                                         double,
+                                                         double,
+                                                         double,
+                                                         double,
+                                                         sint64,
+                                                         double
+                                                        ],
+                                     col_names        = [
+                                                         <<"-1">>,
+                                                         <<"-1">>,
+                                                         <<"-1.0">>,
+                                                         <<"-1.0">>,
+                                                         <<"-mydouble">>,
+                                                         <<"-mydouble">>,
+                                                         <<"-1">>,
+                                                         <<"-1.0">>
+                                                        ]
+                                    },
+                 Sel).
 
-% FIXME
+%% basic_select_window_agg_fn_arith_1_test() ->
+%%     {ok, Rec} = get_query(
+%%         "SELECT count(location) + 1 from mytab "
+%%         "WHERE myfamily = 'familyX' "
+%%         "AND myseries = 'seriesX' AND time > 1 AND time < 2"
+%%     ),
+%%     {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
+%%     ?assertMatch(
+%%         #riak_sel_clause_v1{
+%%             calc_type = aggregate,
+%%             col_return_types = [sint64],
+%%             col_names = [<<"COUNT(location)+1">>] },
+%%         Selection
+%%     ).
+
+%% FIXME
 %% basic_select_window_agg_fn_arith_2_test() ->
 %%     DDL = get_sel_ddl(),
 %%     SQL = "SELECT count(location + 1.0) from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
