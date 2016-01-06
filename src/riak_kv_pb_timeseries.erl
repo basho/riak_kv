@@ -149,6 +149,7 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
             {reply, missing_helper_module(Table, BucketProps), State}
     end;
 
+
 process(#tsgetreq{table = Table, key = PbCompoundKey,
                   timeout = Timeout},
         State) ->
@@ -598,7 +599,11 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 %% ---------------------------------------------------
 % functions supporting SELECT
 
--spec make_tsqueryresp({[binary()], [simple_field_type()], [any()]}) -> #tsqueryresp{}.
+-spec make_tsqueryresp([] | {[riak_pb_ts_codec:tscolumnname()],
+                             [riak_pb_ts_codec:tscolumntype()],
+                             [[riak_pb_ts_codec:ldbvalue()]]}) -> #tsqueryresp{}.
+make_tsqueryresp({_, _, []}) ->
+    #tsqueryresp{columns = [], rows = []};
 make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}) ->
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
@@ -610,10 +615,9 @@ make_describe_response(DescribeTableRows) ->
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, DescribeTableRows)}.
 
--spec get_column_types(list(binary()), module()) ->
-            [{binary(), riak_pb_ts_codec:tscolumntype()}].
+-spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
 get_column_types(ColumnNames, Mod) ->
-    [{N, Mod:get_field_type(N)} || N <- ColumnNames].
+    [Mod:get_field_type([N]) || N <- ColumnNames].
 
 -spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
                                            [#tscolumndescription{}].

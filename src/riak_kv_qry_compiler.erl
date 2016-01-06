@@ -28,7 +28,7 @@
          run_select/3  %% what is this for?
         ]).
 
--type compiled_select() :: fun().
+-type compiled_select() :: fun((_,_) -> riak_pb_ts_codec:ldbvalue()).
 -export_type([compiled_select/0]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
@@ -72,8 +72,8 @@ expand_query(#ddl_v1{local_key = LK, partition_key = PK},
     end.
 
 %% Run the selection spec for all selection columns that was created by
--spec run_select(SelectionSpec::[compiled_select()], Row::any()) ->
-                        any().
+-spec run_select(SelectionSpec::[compiled_select()], Row::[any()]) ->
+                        [any()].
 run_select(Select, Row) ->
     %% the second argument is the state, if we're return row query results then
     %% there is no long running state
@@ -100,7 +100,7 @@ run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
 compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
     CompileColFn = 
         fun(ColX, AccX) ->
-                select_column_clause_folder(DDL, ColX, AccX)
+            select_column_clause_folder(DDL, ColX, AccX)
         end,
     %% compile each select column and put all the calc types into a set, if
     %% any of the results are aggregate then aggregate is the calc type for the
@@ -123,13 +123,13 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
 
 %%
 -record(single_sel_column, {
-          calc_type       :: select_result_type(),
-          initial_state   :: any(),
-          col_return_types :: [sint64 | double | boolean | varchar | timestamp],
-          col_name        :: binary(),
-          clause          :: function(),
-          is_valid        :: true | {error, [any()]},
-          finaliser      :: [function()]
+          calc_type        :: select_result_type(),
+          initial_state    :: any(),
+          col_return_types :: [riak_pb_ts_codec:ldbvalue()],
+          col_name         :: riak_pb_ts_codec:tscolumnname(),
+          clause           :: function(),
+          is_valid         :: true | {error, [any()]},
+          finaliser        :: [function()]
          }).
 
 %%
@@ -184,7 +184,7 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
             {ColTypes1, IsValid1, Fn} = compile_select_col_stateless(DDL, FnArg1),
             #single_sel_column{ calc_type        = rows,
                                 initial_state    = undefined,
-                                col_return_types  = ColTypes1,
+                                col_return_types = ColTypes1,
                                 clause           = Fn,
                                 is_valid         = IsValid1};
         Initial_state ->
@@ -193,8 +193,8 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
             %% all the windows agg fns so far are arity of 1
             %% which we have forced in this clause by matching on a single argument in the
             %% function head
-            {_Arity, TypeSig} = riak_ql_window_agg_fns:get_arity_and_type_sig(FnName),
-            {IsValid, ColRet} = check_types(FnName, TypeSig, ColTypes2),
+            FnSig = riak_ql_window_agg_fns:get_arity_and_type_sig(FnName),
+            {IsValid, ColRet} = check_types(FnName, FnSig, ColTypes2),
 
             IsValid3 = merge_validation(IsValid2, IsValid),
             SelectFn =
@@ -227,8 +227,8 @@ compile_select_col(DDL, Select) ->
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
--spec compile_select_col_stateless(#ddl_v1{}, selection()) ->
-                                          {ColTypes::[simple_field_type()], IsValid::true|any(), function()}.
+-spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}) ->
+       {ColTypes::[simple_field_type()], IsValid::true|any(), function()}.
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
     {ColTypes, true, fun(Row) -> Row end};
@@ -310,7 +310,12 @@ compile_select_col_stateless2('/', A, B) ->
 compile_select_col_stateless2('-', A, B) ->
     fun(Row) -> A(Row) - B(Row) end.
 
-check_types(FnName, TypeSig, [Type]) ->
+check_types(_FnName, {_, RetType}, _Type)
+  %% functions such as COUNT taking an argument of any type have
+  %% a special signature
+  when not is_list(RetType) ->
+    {true, [RetType]};
+check_types(FnName, {_Arity, TypeSig}, [Type]) ->
     case lists:keyfind(Type, 1, TypeSig) of
         {Type, Ret} -> {true, [Ret]};
         false       -> {{error, [{fn_called_with_invalid_type, FnName, Type}]}, []}
