@@ -617,7 +617,7 @@ make_describe_response(DescribeTableRows) ->
 
 -spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
 get_column_types(ColumnNames, Mod) ->
-    [Mod:get_field_type(N) || N <- ColumnNames].
+    [Mod:get_field_type([N]) || N <- ColumnNames].
 
 -spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
                                            [#tscolumndescription{}].
