@@ -51,7 +51,7 @@
 
 -record(state, {
           name                                :: atom(),
-          qry           = none                :: none | #riak_sql_v1{},
+          qry           = none                :: none | ?SQL_SELECT{},
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
           status        = void                :: void | accumulating_chunks,
@@ -134,7 +134,7 @@ new_state(RegisteredName) ->
 run_sub_qs_fn([]) ->
     ok;
 run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
-    Table = Q#riak_sql_v1.'FROM',
+    Table = Q?SQL_SELECT.'FROM',
     Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
@@ -168,7 +168,7 @@ execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
     %% all subqueries have the same select clause
-    #riak_sql_v1{'SELECT' = Sel} = Qry,
+    ?SQL_SELECT{'SELECT' = Sel} = Qry,
     #riak_sel_clause_v1{initial_state = InitialState} = Sel,
     SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
     ok = RunSubQs(SubQs),
@@ -183,7 +183,7 @@ add_subquery_result(SubQId, Chunk,
                     #state{qry      = Qry,
                            result   = QueryResult1,
                            sub_qrys = SubQs} = State) ->
-    #riak_sql_v1{'SELECT' = Sel} = Qry,
+    ?SQL_SELECT{'SELECT' = Sel} = Qry,
     #riak_sel_clause_v1{calc_type  = CalcType,
                         clause     = SelClause} = Sel,
     case lists:member(SubQId, SubQs) of
@@ -215,7 +215,7 @@ subqueries_done(QId,
                        receiver_pid = ReceiverPid,
                        result       = QueryResult1,
                        sub_qrys     = SubQQ,
-                       qry = #riak_sql_v1{'SELECT' = Sel }} = State) ->
+                       qry          = ?SQL_SELECT{'SELECT' = Sel }} = State) ->
     case SubQQ of
         [] ->
             QueryResult2 = prepare_final_results(Sel, QueryResult1),

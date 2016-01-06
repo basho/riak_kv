@@ -44,9 +44,9 @@ create_plan(NVal, _PVC, _ReqId, _NodeCheckService, Request) ->
 %% This is fugly because the physical format of the startkey
 %% which is neede by eleveldb is being used by the query
 %% planner which should only know about a more logical format
-make_key(#riak_sql_v1{helper_mod    = Mod,
-                      partition_key = PartitionKey,
-                      'WHERE'       = Where}) ->
+make_key(?SQL_SELECT{helper_mod    = Mod,
+                     partition_key = PartitionKey,
+                     'WHERE'       = Where}) ->
     {startkey, StartKey} = proplists:lookup(startkey, Where),
     StartKey2 = [{Field, Val} || {Field, _Type, Val} <- StartKey],
     Key = riak_ql_ddl:make_key(Mod, PartitionKey, StartKey2),

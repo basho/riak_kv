@@ -31,7 +31,7 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
--spec submit(string() | #riak_sql_v1{} | #riak_sql_describe_v1{}, #ddl_v1{}) ->
+-spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #ddl_v1{}) ->
     {ok, any()} | {error, any()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
 %%      To get the results of running the query, use fetch/1.
@@ -47,7 +47,7 @@ submit(SQLString, DDL) when is_list(SQLString) ->
 submit(#riak_sql_describe_v1{}, DDL) ->
     describe_table_columns(DDL);
 
-submit(SQL = #riak_sql_v1{}, DDL) ->
+submit(SQL = ?SQL_SELECT{}, DDL) ->
     maybe_submit_to_queue(SQL, DDL).
 
 %% ---------------------
