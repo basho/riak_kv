@@ -696,10 +696,11 @@ update_where_for_cover(Props, Field, {{StartVal, StartInclusive},
     NewEndKeyVal = modify_where_key(proplists:get_value(endkey, Props),
                                    Field, EndVal),
 
-    SlimProps = proplists:delete(startkey,
-                                 proplists:delete(endkey,
-                                                  proplists:delete(end_inclusive,
-                                                                   proplists:delete(start_inclusive, Props)))),
+    SlimProps =
+        lists:foldl(
+          fun(Prop, Acc) -> proplists:delete(Prop, Acc) end,
+          Props,
+          [startkey, endkey, end_inclusive, start_inclusive]),
 
     [{startkey, NewStartKeyVal}, {endkey, NewEndKeyVal},
      {start_inclusive, StartInclusive}, {end_inclusive, EndInclusive}] ++
