@@ -491,12 +491,11 @@ consistent_delete_vclock(Bucket, Key, VClock, Options, _Timeout, {?MODULE, [Node
     end.
 
 %% @doc Retrieve a coverage plan
-%% -spec get_cover(Module :: module(),
-%%                 Bucket :: binary() | {binary(), binary()},
-%%                 riak_client()) ->
-%%                        Plan :: list({atom(), term()}) |
-%%                                {error, Err :: term()}.
-%% TODO for JohnD: fix the specs
+-spec get_cover(Module :: module(),
+                Bucket :: binary() | {binary(), binary()},
+                riak_client()) ->
+                       Plan :: list({atom(), term()}) |
+                               {error, Err :: term()}.
 get_cover(Module, Bucket, Client) ->
     get_cover(Module, Bucket, undefined, Client).
 
@@ -504,12 +503,12 @@ get_cover(Module, Bucket, Client) ->
 %%     undefined -> standard coverage plan
 %%     0         -> One coverage plan element per partition
 %%     Y>0       -> At least Y elements (will be no fewer than ring size)
-%% -spec get_cover(Module :: module(),
-%%                 Bucket :: binary() | {binary(), binary()},
-%%                 Parallelization :: 'undefined'|non_neg_integer(),
-%%                 riak_client()) ->
-%%                        Plan :: list({atom(), term()}) |
-%%                                {error, Err :: term()}.
+-spec get_cover(Module :: module(),
+                Bucket :: binary() | {binary(), binary()},
+                Parallelization :: 'undefined'|non_neg_integer(),
+                riak_client()) ->
+                       Plan :: list({atom(), term()}) |
+                               {error, Err :: term()}.
 get_cover(Module, Bucket, Parallelization, Client) ->
     get_cover(Module, Bucket, Parallelization, all, Client).
 
@@ -548,16 +547,16 @@ get_cover_aux(Module, MinPar, ReqId, N, RingSize, Target) ->
 replace_cover(_Mod, _Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
     {error, Reason};
 replace_cover(Mod, Bucket, _P, {ok, Replace}, OtherBroken, _Client) ->
-    pick_cover_replacement(Mod, proplists:get_value(subpartition, Replace),
-                           n_val(Bucket), Replace,
-                           extract_proplist_nodes(OtherBroken)).
-
-pick_cover_replacement(Mod, undefined, NVal, Replace, DownNodes) ->
-    %% If `undefined', we didn't find a subpartition filter, so this
-    %% is a traditional coverage plan chunk
-    replace_traditional_cover(Mod, NVal, Replace, DownNodes);
-pick_cover_replacement(Mod, _Subp, NVal, Replace, DownNodes) ->
-    replace_subpartition_cover(Mod, NVal, Replace, DownNodes).
+    NVal = n_val(Bucket),
+    DownNodes = extract_proplist_nodes(OtherBroken),
+    case proplists:get_value(subpartition, Replace) of
+        undefined ->
+            %% we didn't find a subpartition filter, so this
+            %% is a traditional coverage plan chunk
+            replace_traditional_cover(Mod, NVal, Replace, DownNodes);
+        _Defined ->
+            replace_subpartition_cover(Mod, NVal, Replace, DownNodes)
+    end.
 
 replace_traditional_cover(Mod, NVal, Replace, DownNodes) ->
     split_cover(
