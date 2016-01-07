@@ -249,8 +249,8 @@ subqueries_done(QId,
 prepare_final_results(#riak_sel_clause_v1{calc_type = rows} = Select,
                       IndexedChunks) ->
     %% sort by index, to reassemble according to coverage plan
-    {_, [R2]} = lists:unzip(lists:sort(IndexedChunks)),
-    prepare_final_results2(Select, R2);
+    {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
+    prepare_final_results2(Select, lists:append(R2));
 prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate,
                                            finalisers = FinaliserFns } = Select,
                       Aggregate1) ->
