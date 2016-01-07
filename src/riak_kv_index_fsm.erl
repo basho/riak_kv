@@ -106,6 +106,8 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, all]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget]) ->
+    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, riak_core_coverage_plan]);
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -120,7 +122,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, V
     end,
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter, Query),
-    {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
+    {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, PlannerMod,
      #state{from=From, max_results=MaxResults, pagination_sort=PgSort}}.
 
 plan(CoverageVNodes, State = #state{pagination_sort=true}) ->
