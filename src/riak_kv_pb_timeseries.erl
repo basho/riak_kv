@@ -19,7 +19,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..99]
+%% @doc Callbacks for TS protobuf messages [codes 90..101]
 
 -module(riak_kv_pb_timeseries).
 
@@ -74,6 +74,7 @@
 -define(E_CREATED_INACTIVE,  1015).
 -define(E_CREATED_GHOST,     1016).
 -define(E_ACTIVATE,          1017).
+-define(E_BAD_QUERY,         1018).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -91,8 +92,8 @@ init() ->
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #tsqueryreq{query = Q} ->
-            case catch decode_query(Q) of
+        #tsqueryreq{query = Q, cover_context = Cover} ->
+            case catch decode_query(Q, Cover) of
                 {ok, DecodedQuery} ->
                     PermAndTarget = decode_query_permissions(DecodedQuery),
                     {ok, DecodedQuery, PermAndTarget};
@@ -108,7 +109,9 @@ decode(Code, Bin) ->
         #tsdelreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_del", Table}};
         #tslistkeysreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_listkeys", Table}}
+            {ok, Msg, {"riak_kv.ts_listkeys", Table}};
+        #tscoveragereq{table = Table} ->
+            {ok, Msg, {"riak_kv.ts_cover", {table_to_bucket(Table)}}}
     end.
 
 
@@ -287,7 +290,26 @@ process(SQL = ?SQL_SELECT{'FROM' = Table}, State) ->
     do_submit_query(SQL, Table, State);
 
 process(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
-    do_submit_query(SQL, Table, State).
+    do_submit_query(SQL, Table, State);
+
+%% No support yet for replacing coverage components; we'll ignore any
+%% value provided for replace_cover
+process(#tscoveragereq{query = Q,
+                       table = Table}, State) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    Bucket = table_to_bucket(Table),
+    SQL = compile(Mod, catch decode_query(Q)),
+    Client = {riak_client, [node(), undefined]},
+
+    case SQL of
+        {error, _Error} ->
+            {reply, make_rpberrresp(?E_BAD_QUERY,
+                                    "Failed to compile query"),
+             State};
+        _ ->
+            %% SQL is a list of queries (1 per quantum)
+            convert_cover_list(sql_to_cover(Client, SQL, Bucket, []), State)
+    end.
 
 
 do_create_table(DDL = #ddl_v1{table = Table}, State) ->
@@ -389,9 +411,19 @@ process_stream({ReqId, Error}, ReqId,
 
 -spec decode_query(Query::#tsinterpolation{}) ->
     {error, _} | {ok, #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}}.
-decode_query(#tsinterpolation{ base = BaseQuery }) ->
+decode_query(SQL) ->
+    decode_query(SQL, undefined).
+
+-spec decode_query(Query::#tsinterpolation{}, term()) ->
+    {error, _} | {ok, #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}}.
+decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
-    riak_ql_parser:parse(Lexed).
+    case riak_ql_parser:parse(Lexed) of
+        {ok, ?SQL_SELECT{} = SQL} ->
+            {ok, SQL?SQL_SELECT{cover_context = Cover}};
+        Other ->
+            Other
+    end.
 
 decoder_parse_error_resp({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
     flat_format("~ts", [Msg]);
@@ -644,6 +676,137 @@ lk({_PK, LK}) ->
     LK;
 lk(NonTSKey) ->
     NonTSKey.
+
+
+%% function supporting coverage
+%% Copied and modified from riak_kv_pb_coverage:convert_list. Would
+%% be nice to collapse them back together, probably with a closure,
+%% but time and effort.
+convert_cover_list({error, Error}, State) ->
+    {error, Error, State};
+convert_cover_list(Results, State) ->
+    %% Pull hostnames & ports
+    %% Wrap each element of this list into a rpbcoverageentry
+    Resp = #tscoverageresp{
+              entries =
+                  [begin
+                       Node = proplists:get_value(node, Cover),
+                       {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
+                       #tscoverageentry{
+                          cover_context = riak_kv_pb_coverage:term_to_checksum_binary(
+                                            {Cover, Range}),
+                          ip = IP, port = Port,
+                          range = assemble_ts_range(Range, SQLtext)
+                         }
+                   end || {Cover, Range, SQLtext} <- Results]
+             },
+    {reply, Resp, State}.
+
+assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text) ->
+    #tsrange{
+       field_name = FieldName,
+       lower_bound = StartVal,
+       lower_bound_inclusive = StartIncl,
+       upper_bound = EndVal,
+       upper_bound_inclusive = EndIncl,
+       desc = Text
+      }.
+
+
+%% Result from riak_client:get_cover is a nested list of coverage plan
+%% because KV coverage requests are designed that way, but in our case
+%% all we want is the singleton head
+
+%% If any of the results from get_cover are errors, we want that tuple
+%% to be the sole return value
+sql_to_cover(_Client, [], _Bucket, Accum) ->
+    lists:reverse(Accum);
+sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
+    case Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
+                          {SQL, Bucket}) of
+        {error, Error} ->
+            {error, Error};
+        [Cover] ->
+            {Description, RangeReplacement} = reverse_sql(SQL),
+            sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
+                                                 Description}|Accum])
+    end.
+
+%% Generate a human-readable description of the target
+%%     <<"<TABLE> / time > X and time < Y">>
+%% Generate a start/end timestamp for future replacement in a query
+reverse_sql(?SQL_SELECT{'FROM'  = Table,
+                        'WHERE' = KeyProplist,
+                        partition_key = PartitionKey}) ->
+    QuantumField = identify_quantum_field(PartitionKey),
+    RangeTuple = extract_time_boundaries(QuantumField, KeyProplist),
+    Desc = derive_description(Table, QuantumField, RangeTuple),
+    ReplacementValues = {QuantumField, RangeTuple},
+    {Desc, ReplacementValues}.
+
+
+derive_description(Table, Field, {{Start, StartInclusive}, {End, EndInclusive}}) ->
+    StartOp = pick_operator(">", StartInclusive),
+    EndOp = pick_operator("<", EndInclusive),
+    unicode:characters_to_binary(
+      lists:flatten(io_lib:format("~ts / ~ts ~s ~B and ~ts ~s ~B",
+                                  [Table, Field, StartOp, Start,
+                                   Field, EndOp, End])), utf8).
+
+
+pick_operator(LGT, true) ->
+    LGT ++ "=";
+pick_operator(LGT, false) ->
+    LGT.
+
+extract_time_boundaries(FieldName, WhereList) ->
+    {FieldName, timestamp, Start} =
+        lists:keyfind(FieldName, 1, proplists:get_value(startkey, WhereList, [])),
+    {FieldName, timestamp, End} =
+        lists:keyfind(FieldName, 1, proplists:get_value(endkey, WhereList, [])),
+    StartInclusive = proplists:get_value(start_inclusive, WhereList, true),
+    EndInclusive = proplists:get_value(end_inclusive, WhereList, false),
+    {{Start, StartInclusive}, {End, EndInclusive}}.
+
+
+%%%%%%%%%%%%
+%% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
+identify_quantum_field(#key_v1{ast=KeyList}) ->
+    HashFn = find_hash_fn(KeyList),
+    P_V1 = hd(HashFn#hash_fn_v1.args),
+    hd(P_V1#param_v1.name).
+
+find_hash_fn([]) ->
+    throw(wtf);
+find_hash_fn([#hash_fn_v1{}=Hash|_T]) ->
+    Hash;
+find_hash_fn([_H|T]) ->
+    find_hash_fn(T).
+
+%%%%%%%%%%%%
+
+
+compile(_Mod, {error, Err}) ->
+    {error, decoder_parse_error_resp(Err)};
+compile(_Mod, {'EXIT', {Err, _}}) ->
+    {error, decoder_parse_error_resp(Err)};
+compile(Mod, {ok, SQL}) ->
+    case (catch Mod:get_ddl()) of
+        {_, {undef, _}} ->
+            {error, no_helper_module};
+        DDL ->
+            case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+                true ->
+                    case riak_kv_qry_compiler:compile(DDL, SQL, undefined) of
+                        {error,_} = Error ->
+                            Error;
+                        {ok, Queries} ->
+                            Queries
+                    end;
+                {false, _Errors} ->
+                    {error, invalid_query}
+            end
+    end.
 
 
 

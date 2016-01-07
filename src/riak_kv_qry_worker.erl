@@ -133,14 +133,27 @@ new_state(RegisteredName) ->
 
 run_sub_qs_fn([]) ->
     ok;
-run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
+run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q}, {qid, QId}} | T]) ->
     Table = Q?SQL_SELECT.'FROM',
     Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
-    CoverageFn = {colocated, riak_kv_qry_coverage_plan},
-    Opts = [Bucket, none, Q, Timeout, all, undefined, CoverageFn],
+    Opts = [Bucket, none, Q, Timeout, all, undefined, {Q, Bucket}, riak_kv_qry_coverage_plan],
+    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
+    run_sub_qs_fn(T);
+%% if cover_context in the SQL record is *not* undefined, we've been
+%% given a mini coverage plan to map to a single vnode/quantum
+run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
+    Table = Q?SQL_SELECT.'FROM',
+    {ok, CoverProps} =
+        riak_kv_pb_coverage:checksum_binary_to_term(Q?SQL_SELECT.cover_context),
+    CoverageFn = riak_client:vnode_target(CoverProps),
+    Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
+    %% fix these up too
+    Timeout = {timeout, 10000},
+    Me = self(),
+    Opts = [Bucket, none, Q, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan],
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T).
 
@@ -236,8 +249,8 @@ subqueries_done(QId,
 prepare_final_results(#riak_sel_clause_v1{calc_type = rows} = Select,
                       IndexedChunks) ->
     %% sort by index, to reassemble according to coverage plan
-    {_, [R2]} = lists:unzip(lists:sort(IndexedChunks)),
-    prepare_final_results2(Select, R2);
+    {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
+    prepare_final_results2(Select, lists:append(R2));
 prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate,
                                            finalisers = FinaliserFns } = Select,
                       Aggregate1) ->
