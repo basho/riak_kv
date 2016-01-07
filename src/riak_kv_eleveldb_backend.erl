@@ -939,7 +939,7 @@ to_first_key({index, Bucket, Q}) ->
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
 
-                                                % @doc If index query, encode key using legacy sext format.
+%% @doc If index query, encode key using legacy sext format.
 to_legacy_first_key({index, Bucket, {eq, Field, Term}}) ->
     to_legacy_first_key({index, Bucket, {range, Field, Term, Term}});
 to_legacy_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->

@@ -229,7 +229,10 @@ subqueries_done(QId,
             State
     end.
 
-%%
+-spec prepare_final_results(#riak_sel_clause_v1{}, [{non_neg_integer(), list()}]) ->
+                                   {[riak_pb_ts_codec:tscolumnname()],
+                                    [riak_pb_ts_codec:tscolumntype()],
+                                    [[riak_pb_ts_codec:ldbvalue()]]}.
 prepare_final_results(#riak_sel_clause_v1{calc_type = rows} = Select,
                       IndexedChunks) ->
     %% sort by index, to reassemble according to coverage plan
