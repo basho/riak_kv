@@ -51,7 +51,7 @@
 
 -record(state, {
           name                                :: atom(),
-          qry           = none                :: none | #riak_sql_v1{},
+          qry           = none                :: none | ?SQL_SELECT{},
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
           status        = void                :: void | accumulating_chunks,
@@ -89,11 +89,11 @@ handle_cast(Msg, State) ->
 %% @private
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 handle_info(pop_next_query, State1) ->
-    {query, ReceiverPid, QId, Query, _} = riak_kv_qry_queue:blocking_pop(),
-    {ok, State2} = execute_query(ReceiverPid, QId, Query, State1),
+    QueryWork = riak_kv_qry_queue:blocking_pop(),
+    {ok, State2} = execute_query(QueryWork, State1),
     {noreply, State2};
-handle_info({{SubQId, QId}, done}, #state{ qid = QId } = State) ->
-    {noreply, subqueries_done(SubQId, QId, State)};
+handle_info({{_, QId}, done}, #state{ qid = QId } = State) ->
+    {noreply, subqueries_done(QId, State)};
 handle_info({{SubQId, QId}, {results, Chunk}}, #state{ qid = QId } = State) ->
     {noreply, add_subquery_result(SubQId, Chunk, State)};
 handle_info({{SubQId, QId}, {error, Reason} = Error},
@@ -131,9 +131,10 @@ code_change(_OldVsn, State, _Extra) ->
 new_state(RegisteredName) ->
     #state{name = RegisteredName}.
 
-run_sub_qs_fn([]) -> ok;
-run_sub_qs_fn([{{qry, #riak_sql_v1{cover_context=undefined}=Q}, {qid, QId}} | T]) ->
-    Table = Q#riak_sql_v1.'FROM',
+run_sub_qs_fn([]) ->
+    ok;
+run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q}, {qid, QId}} | T]) ->
+    Table = Q?SQL_SELECT.'FROM',
     Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
@@ -144,93 +145,148 @@ run_sub_qs_fn([{{qry, #riak_sql_v1{cover_context=undefined}=Q}, {qid, QId}} | T]
 %% if cover_context in the SQL record is *not* undefined, we've been
 %% given a mini coverage plan to map to a single vnode/quantum
 run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
-    Table = Q#riak_sql_v1.'FROM',
+    Table = Q?SQL_SELECT.'FROM',
     {ok, CoverProps} =
-        riak_kv_pb_coverage:checksum_binary_to_term(Q#riak_sql_v1.cover_context),
-    Cover = riak_client:vnode_target(CoverProps),
+        riak_kv_pb_coverage:checksum_binary_to_term(Q?SQL_SELECT.cover_context),
+    CoverageFn = riak_client:vnode_target(CoverProps),
     Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
-    Opts = [Bucket, none, Q, Timeout, all, undefined, Cover, riak_kv_qry_coverage_plan],
+    Opts = [Bucket, none, Q, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan],
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T).
 
-decode_results(KVList, SelectSpec) ->
-    lists:append(
-      [extract_riak_object(SelectSpec, V) || {_, V} <- KVList]).
+decode_results(KVList) ->
+    [extract_riak_object(V) || {_, V} <- KVList].
 
-extract_riak_object(SelectSpec, V) when is_binary(V) ->
-    % don't care about bkey
+extract_riak_object(V) when is_binary(V) ->
+    %% don't care about bkey
     RObj = riak_object:from_binary(<<>>, <<>>, V),
     case riak_object:get_value(RObj) of
         <<>> ->
             %% record was deleted
             [];
         FullRecord ->
-            riak_kv_qry_compiler:run_select(SelectSpec, FullRecord)
+            [CellValue || {_, CellValue} <- FullRecord]
     end.
 
 %% Send a message to this process to get the next query.
 pop_next_query() ->
     self() ! pop_next_query.
 
-%% 
-execute_query(ReceiverPid, QId, [Qry|_] = SubQueries,
+%%
+execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
               #state{ run_sub_qs_fn = RunSubQs } = State) ->
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
+    %% all subqueries have the same select clause
+    ?SQL_SELECT{'SELECT' = Sel} = Qry,
+    #riak_sel_clause_v1{initial_state = InitialState} = Sel,
     SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
     ok = RunSubQs(SubQs),
     {ok, State#state{qid          = QId,
                      receiver_pid = ReceiverPid,
                      qry          = Qry,
-                     sub_qrys     = Indices}}.
+                     sub_qrys     = Indices,
+                     result       = InitialState }}.
 
 %%
-add_subquery_result(SubQId, Chunk, 
+add_subquery_result(SubQId, Chunk,
                     #state{qry      = Qry,
-                           result   = IndexedChunks,
+                           result   = QueryResult1,
                            sub_qrys = SubQs} = State) ->
-    #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
+    ?SQL_SELECT{'SELECT' = Sel} = Qry,
+    #riak_sel_clause_v1{calc_type  = CalcType,
+                        clause     = SelClause} = Sel,
     case lists:member(SubQId, SubQs) of
         true ->
-            Decoded = decode_results(lists:flatten(Chunk), SelectSpec),
+            DecodedChunk = decode_results(lists:flatten(Chunk)),
+            case CalcType of
+                rows ->
+                    IndexedChunks = [riak_kv_qry_compiler:run_select(SelClause, Row) 
+                                     || Row <- DecodedChunk],
+                    QueryResult2 = [{SubQId, IndexedChunks} | QueryResult1];
+                aggregate ->
+                    QueryResult2 = 
+                      lists:foldl(
+                          fun(E, Acc) ->
+                              riak_kv_qry_compiler:run_select(SelClause, E, Acc)
+                          end, QueryResult1, DecodedChunk)
+            end,
             NSubQ = lists:delete(SubQId, SubQs),
             State#state{status   = accumulating_chunks,
-                        result   = [{SubQId, Decoded} | IndexedChunks],
+                        result   = QueryResult2,
                         sub_qrys = NSubQ};
         false ->
             %% discard; Don't touch state as it may have already 'finished'.
             State
     end.
 
-subqueries_done(SubQId, QId,
+subqueries_done(QId,
                 #state{qid          = QId,
                        receiver_pid = ReceiverPid,
-                       result       = IndexedChunks,
-                       sub_qrys     = SubQQ} = State) ->
+                       result       = QueryResult1,
+                       sub_qrys     = SubQQ,
+                       qry          = ?SQL_SELECT{'SELECT' = Sel }} = State) ->
     case SubQQ of
         [] ->
-            lager:debug("Done collecting on QId ~p (~p): ~p", [QId, SubQId, IndexedChunks]),
-            %% sort by index, to reassemble according to coverage plan
-            {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
-            Results = lists:append(R2),
+            QueryResult2 = prepare_final_results(Sel, QueryResult1),
             %   send the results to the waiting client process
-            ReceiverPid ! {ok, Results},
+            ReceiverPid ! {ok, QueryResult2},
             pop_next_query(),
-            %% drop indexes, serialize
+            % clean the state of query specfic data, ready for the next one
             new_state(State#state.name);
-        _MoreSubQueriesNotDone ->
+        _ ->
+            % more sub queries are left to run
             State
     end.
+
+-spec prepare_final_results(#riak_sel_clause_v1{}, [{non_neg_integer(), list()}]) ->
+                                   {[riak_pb_ts_codec:tscolumnname()],
+                                    [riak_pb_ts_codec:tscolumntype()],
+                                    [[riak_pb_ts_codec:ldbvalue()]]}.
+prepare_final_results(#riak_sel_clause_v1{calc_type = rows} = Select,
+                      IndexedChunks) ->
+    %% sort by index, to reassemble according to coverage plan
+    {_, [R2]} = lists:unzip(lists:sort(IndexedChunks)),
+    prepare_final_results2(Select, R2);
+prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate,
+                                           finalisers = FinaliserFns } = Select,
+                      Aggregate1) ->
+    Aggregate2 = finalise_aggregate(Aggregate1, FinaliserFns, []),
+    prepare_final_results2(Select, [Aggregate2]).
+
+%%
+prepare_final_results2(#riak_sel_clause_v1{ col_return_types = ColTypes,
+                                            col_names = ColNames}, Rows) ->
+    {ColNames, ColTypes, Rows}.
+
+%%
+finalise_aggregate([], _, Acc) ->
+    lists:reverse(Acc);
+finalise_aggregate([Cell | Row], [CellFn | Fns], Acc) ->
+    FinalisedCell = CellFn(Cell),
+    finalise_aggregate(Row, Fns, [FinalisedCell | Acc]).
 
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
+
 -ifdef(TEST).
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
+prepare_final_results_test() ->
+    Rows = [[12, <<"windy">>], [13, <<"windy">>]],
+    IndexedChunks = [{1, Rows}],
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
+        prepare_final_results(
+            #riak_sel_clause_v1{
+                col_names = [<<"a">>, <<"b">>],
+                col_return_types = [sint64, varchar],
+                calc_type = rows }, IndexedChunks)
+    ).
 
 -endif.
