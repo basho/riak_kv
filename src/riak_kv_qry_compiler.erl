@@ -97,15 +97,21 @@ run_select(Select, Row, InitialState) ->
 
 %% @priv
 run_select2([], _, _, Acc) ->
-    lists:flatten(lists:reverse(Acc));
+    lists:reverse(Acc);
 run_select2([Fn | SelectTail], Row, [ColState1 | ColStateTail], Acc1) ->
-    ColState2 = Fn(Row, ColState1),
-    Acc2 = [ColState2 | Acc1],
+    Acc2 = prepend_select_columns(Fn(Row, ColState1), Acc1),
     run_select2(SelectTail, Row, ColStateTail, Acc2);
 run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
-    Value = Fn(Row, RowState),
-    Acc2 = [Value | Acc1],
+    Acc2 = prepend_select_columns(Fn(Row, RowState), Acc1),
     run_select2(SelectTail, Row, RowState, Acc2).
+
+%% Check if the select column is actually multiple columns, as returned by
+%% SELECT * FROM, or the corner case SELECT *, my_col FROM. This cannot simply
+%% be flattened because nulls are represented as empty lists.
+prepend_select_columns([_|_] = MultiCols, Acc) ->
+    lists:reverse(MultiCols) ++ Acc;
+prepend_select_columns(V, Acc) ->
+    [V | Acc].
 
 %%
 compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
@@ -1662,7 +1668,7 @@ function_1_initial_state_test() ->
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-       #riak_sel_clause_v1{ initial_state = [0] },
+       #riak_sel_clause_v1{ initial_state = [[]] },
        Select
       ).
 
@@ -1672,7 +1678,7 @@ function_2_initial_state_test() ->
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-       #riak_sel_clause_v1{ initial_state = [0, 0] },
+       #riak_sel_clause_v1{ initial_state = [[], []] },
        Select
       ).
 
