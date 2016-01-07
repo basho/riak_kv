@@ -688,19 +688,17 @@ convert_cover_list(Results, State) ->
     %% Pull hostnames & ports
     %% Wrap each element of this list into a rpbcoverageentry
     Resp = #tscoverageresp{
-              entries=
-                  lists:map(fun({Cover, Range, SQLtext}) ->
-                      Node = proplists:get_value(node, Cover),
-                      {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
-
-                      #tscoverageentry{
-                         cover_context=riak_kv_pb_coverage:term_to_checksum_binary({Cover, Range}),
-                         ip=IP,
-                         port=Port,
-                         range=assemble_ts_range(Range, SQLtext)
-                        }
-              end,
-              Results)
+              entries =
+                  [begin
+                       Node = proplists:get_value(node, Cover),
+                       {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
+                       #tscoverageentry{
+                          cover_context = riak_kv_pb_coverage:term_to_checksum_binary(
+                                            {Cover, Range}),
+                          ip = IP, port = Port,
+                          range = assemble_ts_range(Range, SQLtext)
+                         }
+                   end || {Cover, Range, SQLtext} <- Results]
              },
     {reply, Resp, State}.
 
