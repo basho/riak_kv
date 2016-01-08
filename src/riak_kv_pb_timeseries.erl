@@ -491,7 +491,7 @@ missing_helper_module(Table, BucketProps) when is_binary(Table), is_list(BucketP
 missing_type_response(Table) ->
     make_rpberrresp(
         ?E_MISSING_TYPE,
-        flat_format("Time Series table ~s is missing.", [Table])).
+        flat_format("Time Series table ~s does not exist.", [Table])).
 
 %%
 -spec not_timeseries_type_response(Table::binary()) -> #rpberrorresp{}.
