@@ -35,7 +35,6 @@
          cluster_info/1,
          down/1,
          aae_status/1,
-         sweep_status/1,
          repair_2i/1,
          reformat_indexes/1,
          reformat_objects/1,
@@ -54,8 +53,12 @@
          aae_repair_status/1,
          aae_tree_status/1]).
 
--include("riak_kv_sweeper.hrl").
+%% New CLI API
+-export([command/1]).
 
+-spec command([string()]) -> ok.
+command(Cmd) ->
+    clique:run(Cmd).
 
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
@@ -362,100 +365,6 @@ format_timestamp(undefined, _) ->
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
 
-sweep_status([]) ->
-    {Participants, Sweeps} = riak_kv_sweeper:status(),
-    format_participants(Participants),
-    format_sweeps(Sweeps).
-
-format_sweeps(Sweeps) ->
-    io:format("~s~n~-49s  ~-12s  ~-12s~n",
-              [string:centre(" Sweeps ", 79, $=),
-               "Index",
-               "Last (ago)",
-               "Duration"]),
-    Now = os:timestamp(),
-    SortedSweeps = lists:keysort(#sweep.index, Sweeps),
-    [begin
-         StartTime = Sweep#sweep.start_time,
-         EndTime = Sweep#sweep.end_time,
-         LastSweep = format_timestamp(Now, StartTime),
-         Duration = format_timestamp(EndTime, StartTime),
-         ResultsString = format_results(Now, Sweep#sweep.results),
-         Progress = format_progress(Sweep),
-         io:format("~-49b  ~-12s  ~-12s ~s ~n~s", [Sweep#sweep.index, LastSweep, Duration, ResultsString, Progress])
-     end
-     || Sweep <- SortedSweeps].
-
-format_progress(#sweep{state = idle}) ->
-    "";
-
-format_progress(#sweep{active_participants = AcitvePart, estimated_keys = {EstimatedKeys, _TS} , swept_keys = SweptKeys}) ->
-    format_active_participants(AcitvePart) ++
-        case EstimatedKeys of
-            EstimatedKeys when EstimatedKeys > 0 ->
-                progress(SweptKeys/EstimatedKeys, 80) ++
-                    io_lib:format(" ~w of ~w keys swept ~n", [SweptKeys, EstimatedKeys]);
-            _ ->
-                format_progress_without_estimate(SweptKeys)
-        end;
-format_progress(_) ->
-    "".
-
-format_active_participants(AcitvePart) ->
-    io_lib:format("| Running: ", []) ++
-    [io_lib:format("| ~s", [atom_to_list(Mod)])
-     || #sweep_participant{module = Mod} <- AcitvePart].
-
-format_progress_without_estimate(undefined) ->
-    "";
-format_progress_without_estimate(SweptKeys) ->
-    io_lib:format("~nRunning: no estimate swept ~p keys~n", [SweptKeys]).
-
-progress(PctDecimal, MaxSize) when PctDecimal > 1 ->
-    progress(1, MaxSize);
-
-progress(PctDecimal, MaxSize) ->
-    ProgressTotalSize = progress_size(MaxSize),
-    ProgressSize = trunc(PctDecimal * ProgressTotalSize),
-    PadSize = ProgressTotalSize - ProgressSize,
-    FormatStr = progress_fmt(ProgressSize, PadSize),
-    riak_core_format:fmt(FormatStr, ["", "", integer_to_list(trunc(PctDecimal * 100))]).
-
-progress_size(MaxSize) ->
-    MaxSize - 3. %% 3 fixed characters in progress bar
-
-progress_fmt(ArrowSize, PadSize) ->
-    riak_core_format:fmt("~n|~~~p..=s~~~p.. s| ~~3.. s%", [ArrowSize, PadSize]).
-
-format_results(Now, Results) ->
-    ResultList = dict:to_list(Results),
-    SortedResultList = lists:keysort(1, ResultList),
-    [begin
-        LastResult = format_timestamp(Now, TimeStamp),
-        OutcomeString = string:to_upper(atom_to_list(Outcome)),
-        io_lib:format("| ~s ~-4s ~-9s", [atom_to_list(Mod), OutcomeString, LastResult])
-     end
-    || {Mod, {TimeStamp, Outcome}} <- SortedResultList, lists:member(Outcome, [succ, fail])].
-
-format_participants(SweepParticipants) ->
-    io:format("~s~n~-25s  ~-20s ~-15s~n",
-              [string:centre(" Sweep Participants ", 79, $=),
-               "Module",
-               "Desciption",
-               "Run interval"]),
-    SortedSweepParticipants = lists:keysort(1, SweepParticipants),
-    [format_sweep_participant(SweepParticipant)
-     || SweepParticipant <- SortedSweepParticipants].
-
-format_sweep_participant(#sweep_participant{module = Mod,
-                                            description = Desciption,
-                                            run_interval = Interval}) ->
-    IntervalValue = riak_kv_sweeper:get_run_interval(Interval),
-    IntervalString = format_interval(IntervalValue * 1000000),
-    io:format("~-25s  ~-20s ~-15s ~n", [atom_to_list(Mod), Desciption,  IntervalString]).
-
-format_interval(Interval) ->
-    riak_core_format:human_time_fmt("~.1f", Interval).
 
 parse_int(IntStr) ->
     try
