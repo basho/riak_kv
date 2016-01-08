@@ -84,7 +84,7 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-                    {ok, #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+                    {ok, #tsputreq{} | #tsputreqttb{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
                      | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{},
                      {PermSpec::string(), Table::binary()}} |
                     {error, _}.
@@ -105,7 +105,7 @@ decode(Code, Bin) ->
             {ok, Msg, {"riak_kv.ts_get", Table}};
         #tsputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
-        #tsttbputreq{table = Table} ->
+        #tsputreqttb{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
         #tsdelreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_del", Table}};
@@ -119,7 +119,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process(atom() | #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+-spec process(atom() | #tsputreq{} | #tsputreqttb{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
               | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
@@ -151,9 +151,9 @@ process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
             {reply, missing_helper_module(Table, BucketProps), State}
     end;
 
-process(#tsttbputreq{rows = []}, State) ->
+process(#tsputreqttb{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsttbputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
+process(#tsputreqttb{table = Table, columns = _Columns, rows = Rows}, State) ->
 
     Mod = riak_ql_ddl:make_module_name(Table),
     Data = Rows,
