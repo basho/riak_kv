@@ -487,24 +487,24 @@ missing_helper_module(Table, BucketProps) when is_binary(Table), is_list(BucketP
     end.
 
 %%
--spec missing_type_response(BucketType::binary()) -> #rpberrorresp{}.
-missing_type_response(BucketType) ->
+-spec missing_type_response(Table::binary()) -> #rpberrorresp{}.
+missing_type_response(Table) ->
     make_rpberrresp(
         ?E_MISSING_TYPE,
-        flat_format("Bucket type ~s is missing.", [BucketType])).
+        flat_format("Time Series table ~s does not exist.", [Table])).
 
 %%
--spec not_timeseries_type_response(BucketType::binary()) -> #rpberrorresp{}.
-not_timeseries_type_response(BucketType) ->
+-spec not_timeseries_type_response(Table::binary()) -> #rpberrorresp{}.
+not_timeseries_type_response(Table) ->
     make_rpberrresp(
         ?E_NOT_TS_TYPE,
-        flat_format("Attempt Time Series operation on non Time Series bucket type ~s.", [BucketType])).
+        flat_format("Attempt Time Series operation on non Time Series table ~s.", [Table])).
 
--spec missing_table_module_response(BucketType::binary()) -> #rpberrorresp{}.
-missing_table_module_response(BucketType) ->
+-spec missing_table_module_response(Table::binary()) -> #rpberrorresp{}.
+missing_table_module_response(Table) ->
     make_rpberrresp(
         ?E_MISSING_TS_MODULE,
-        flat_format("The compiled module for Time Series bucket ~s cannot be loaded.", [BucketType])).
+        flat_format("The compiled module for Time Series table ~s cannot be loaded.", [Table])).
 
 -spec key_element_count_mismatch(Got::integer(), Need::integer()) -> #rpberrorresp{}.
 key_element_count_mismatch(Got, Need) ->
