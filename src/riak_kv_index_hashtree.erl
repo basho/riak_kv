@@ -560,6 +560,7 @@ hash_index_data(IndexData) when is_list(IndexData) ->
     Bin = term_to_binary(lists:usort(IndexData)),
     riak_core_util:sha(Bin).
 
+
 do_participate_in_sweep(Pid, #state{index = Index, trees = Trees} = State) ->
     Locked = get_all_locks(build, Index, Pid),
     case Locked of

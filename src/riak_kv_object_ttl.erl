@@ -36,20 +36,14 @@ participate_in_sweep(_Index, _Pid) ->
     {ok, ttl_fun(), InitialAcc}.
 
 ttl_fun() ->
-    fun({{Bucket, Key}, RObj}, Acc, [{bucket_props, BucketProps}]) ->
+    fun({{_Bucket, _Key}, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             case riak_kv_util:is_x_expired(RObj, BucketProps) of
                 true ->
-                    Tombstone = create_tombstone(RObj, Bucket, Key),
-                    {mutated, Tombstone, Acc};
+                    {deleted, Acc};
                 _ ->
                     {ok, Acc}
             end
     end.
-
-create_tombstone(RObj, Bucket, Key) ->
-    VClock = riak_object:vclock(RObj),
-    Tombstone = riak_kv_delete:create_tombstone(Bucket, Key, VClock),
-    riak_object:apply_updates(riak_object:update_last_modified(Tombstone)).
 
 successfull_sweep(Index, _FinalAcc) ->
     lager:info("successfull_sweep ~p", [Index]),

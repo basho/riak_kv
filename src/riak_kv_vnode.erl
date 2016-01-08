@@ -1744,12 +1744,13 @@ do_get(_Sender, BKey, ReqID,
     StartTS = os:timestamp(),
     {Retval, ModState1} = do_get_term(BKey, Mod, ModState),
     State1 = State#state{modstate=ModState1},
-    {Retval1, State2} =
+    {Retval1, State3} =
         case Retval of
             {ok, Obj} ->
                 case riak_kv_util:is_x_expired(Obj) of
                     true ->
-                        create_and_put_tombstone(BKey, Obj, State1);
+                        State2 = do_backend_delete(BKey, Obj, tombstone, State1),
+                        {{error, notfound}, State2};
                     _ ->
                         maybe_cache_object(BKey, Obj, State1),
                         {Retval,State1}
@@ -1758,21 +1759,7 @@ do_get(_Sender, BKey, ReqID,
                 {Retval, State1}
         end,
     update_vnode_stats(vnode_get, Idx, StartTS),
-    {reply, {r, Retval1, Idx, ReqID}, State2}.
-
-create_and_put_tombstone(BKey, Obj, State) ->
-    VClock = riak_object:vclock(Obj),
-    {Bucket, Key} = BKey,
-    Tombstone0 =
-        riak_kv_delete:create_tombstone(Bucket, Key, VClock),
-    Tombstone1 =
-        riak_object:apply_updates(riak_object:update_last_modified(Tombstone0)),
-    ReqId = erlang:phash2(erlang:now()),
-    StartTime = riak_core_util:moment(),
-    {_Reply, UpdState} =
-        do_put(ignore, BKey,  Tombstone1, ReqId, StartTime,
-               [{hashtree_action, tombstone}], State),
-    {{ok, Tombstone1}, UpdState}.
+    {reply, {r, Retval1, Idx, ReqID}, State3}.
 
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
