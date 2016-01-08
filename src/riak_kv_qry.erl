@@ -31,6 +31,7 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+%% No coverage plan for parallel requests
 -spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #ddl_v1{}) ->
     {ok, any()} | {error, any()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
@@ -89,9 +90,12 @@ count_to_position(Col, [_ | Rest], Pos) ->
 
 maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
     Mod = riak_ql_ddl:make_module_name(BucketType),
+    MaxSubQueries =
+        app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
+
     case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
         true ->
-            case riak_kv_qry_compiler:compile(DDL, SQL) of
+            case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
                 {error,_} = Error ->
                     Error;
                 {ok, Queries} ->

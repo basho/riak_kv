@@ -23,43 +23,54 @@
 -module(riak_kv_qry_compiler).
 
 -export([
-         compile/2,
+         compile/3,
          run_select/2,
          run_select/3  %% what is this for?
         ]).
 
--type compiled_select() :: fun().
+-type compiled_select() :: fun((_,_) -> riak_pb_ts_codec:ldbvalue()).
 -export_type([compiled_select/0]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
 
--spec compile(#ddl_v1{}, ?SQL_SELECT{}) ->
-                     {ok, InitialState::[any()], SubQueries::[?SQL_SELECT{}]} | {error, any()}.
-compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}) ->
+%% 3rd argument is undefined if we should not be concerned about the
+%% maximum number of quanta
+-spec compile(#ddl_v1{}, ?SQL_SELECT{}, 'undefined'|pos_integer()) ->
+    {ok, [?SQL_SELECT{}]} | {error, any()}.
+compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
     {error, 'query is already compiled'};
-compile(#ddl_v1{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }) ->
-    {error, 'full table scan not implmented'};
+compile(#ddl_v1{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }, _MaxSubQueries) ->
+    {error, 'full table scan not implemented'};
 compile(#ddl_v1{} = DDL, ?SQL_SELECT{is_executable = false,
-                                     type          = sql} = Q) ->
+                                     type          = sql} = Q,
+       MaxSubQueries) ->
     {ok, S} = compile_select_clause(DDL, Q),
-    compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}).
+    compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries).
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
 %% write that up in time
-compile_where_clause(#ddl_v1{} = DDL, ?SQL_SELECT{is_executable = false,
-                                                  'WHERE'       = W} = Q) ->
+compile_where_clause(#ddl_v1{} = DDL,
+                     ?SQL_SELECT{is_executable = false,
+                                 'WHERE'       = W,
+                                 cover_context = Cover} = Q,
+                     MaxSubQueries) ->
+    {RealCover, WhereModifications} = unwrap_cover(Cover),
     case compile_where(DDL, W) of
         {error, E} -> {error, E};
-        NewW       -> expand_query(DDL, Q, NewW)
+        NewW ->
+            expand_query(DDL, Q?SQL_SELECT{cover_context = RealCover},
+                              update_where_for_cover(NewW, WhereModifications),
+                              MaxSubQueries)
     end.
 
 %% now break out the query on quantum boundaries
 expand_query(#ddl_v1{local_key = LK, partition_key = PK},
-             ?SQL_SELECT{} = Q1, Where1) ->
-    case expand_where(Where1, PK) of
+             ?SQL_SELECT{} = Q1, Where1,
+             MaxSubQueries) ->
+    case expand_where(Where1, PK, MaxSubQueries) of
         {error, E} ->
             {error, E};
         Where2 ->
@@ -72,8 +83,8 @@ expand_query(#ddl_v1{local_key = LK, partition_key = PK},
     end.
 
 %% Run the selection spec for all selection columns that was created by
--spec run_select(SelectionSpec::[compiled_select()], Row::any()) ->
-                        any().
+-spec run_select(SelectionSpec::[compiled_select()], Row::[any()]) ->
+                        [any()].
 run_select(Select, Row) ->
     %% the second argument is the state, if we're return row query results then
     %% there is no long running state
@@ -86,21 +97,27 @@ run_select(Select, Row, InitialState) ->
 
 %% @priv
 run_select2([], _, _, Acc) ->
-    lists:flatten(lists:reverse(Acc));
+    lists:reverse(Acc);
 run_select2([Fn | SelectTail], Row, [ColState1 | ColStateTail], Acc1) ->
-    ColState2 = Fn(Row, ColState1),
-    Acc2 = [ColState2 | Acc1],
+    Acc2 = prepend_select_columns(Fn(Row, ColState1), Acc1),
     run_select2(SelectTail, Row, ColStateTail, Acc2);
 run_select2([Fn | SelectTail], Row, RowState, Acc1) ->
-    Value = Fn(Row, RowState),
-    Acc2 = [Value | Acc1],
+    Acc2 = prepend_select_columns(Fn(Row, RowState), Acc1),
     run_select2(SelectTail, Row, RowState, Acc2).
+
+%% Check if the select column is actually multiple columns, as returned by
+%% SELECT * FROM, or the corner case SELECT *, my_col FROM. This cannot simply
+%% be flattened because nulls are represented as empty lists.
+prepend_select_columns([_|_] = MultiCols, Acc) ->
+    lists:reverse(MultiCols) ++ Acc;
+prepend_select_columns(V, Acc) ->
+    [V | Acc].
 
 %%
 compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
     CompileColFn = 
         fun(ColX, AccX) ->
-                select_column_clause_folder(DDL, ColX, AccX)
+            select_column_clause_folder(DDL, ColX, AccX)
         end,
     %% compile each select column and put all the calc types into a set, if
     %% any of the results are aggregate then aggregate is the calc type for the
@@ -123,13 +140,13 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
 
 %%
 -record(single_sel_column, {
-          calc_type       :: select_result_type(),
-          initial_state   :: any(),
-          col_return_types :: [sint64 | double | boolean | varchar | timestamp],
-          col_name        :: binary(),
-          clause          :: function(),
-          is_valid        :: true | {error, [any()]},
-          finaliser      :: [function()]
+          calc_type        :: select_result_type(),
+          initial_state    :: any(),
+          col_return_types :: [riak_pb_ts_codec:ldbvalue()],
+          col_name         :: riak_pb_ts_codec:tscolumnname(),
+          clause           :: function(),
+          is_valid         :: true | {error, [any()]},
+          finaliser        :: [function()]
          }).
 
 %%
@@ -184,7 +201,7 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
             {ColTypes1, IsValid1, Fn} = compile_select_col_stateless(DDL, FnArg1),
             #single_sel_column{ calc_type        = rows,
                                 initial_state    = undefined,
-                                col_return_types  = ColTypes1,
+                                col_return_types = ColTypes1,
                                 clause           = Fn,
                                 is_valid         = IsValid1};
         Initial_state ->
@@ -193,8 +210,8 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
             %% all the windows agg fns so far are arity of 1
             %% which we have forced in this clause by matching on a single argument in the
             %% function head
-            {_Arity, TypeSig} = riak_ql_window_agg_fns:get_arity_and_type_sig(FnName),
-            {IsValid, ColRet} = check_types(FnName, TypeSig, ColTypes2),
+            FnSig = riak_ql_window_agg_fns:get_arity_and_type_sig(FnName),
+            {IsValid, ColRet} = check_types(FnName, FnSig, ColTypes2),
 
             IsValid3 = merge_validation(IsValid2, IsValid),
             SelectFn =
@@ -227,8 +244,8 @@ compile_select_col(DDL, Select) ->
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
--spec compile_select_col_stateless(#ddl_v1{}, selection()) ->
-                                          {ColTypes::[simple_field_type()], IsValid::true|any(), function()}.
+-spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}) ->
+       {ColTypes::[simple_field_type()], IsValid::true|any(), function()}.
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
     {ColTypes, true, fun(Row) -> Row end};
@@ -310,7 +327,12 @@ compile_select_col_stateless2('/', A, B) ->
 compile_select_col_stateless2('-', A, B) ->
     fun(Row) -> A(Row) - B(Row) end.
 
-check_types(FnName, TypeSig, [Type]) ->
+check_types(_FnName, {_, RetType}, _Type)
+  %% functions such as COUNT taking an argument of any type have
+  %% a special signature
+  when not is_list(RetType) ->
+    {true, [RetType]};
+check_types(FnName, {_Arity, TypeSig}, [Type]) ->
     case lists:keyfind(Type, 1, TypeSig) of
         {Type, Ret} -> {true, [Ret]};
         false       -> {{error, [{fn_called_with_invalid_type, FnName, Type}]}, []}
@@ -332,7 +354,7 @@ col_index_and_type_of(Fields, ColumnName) ->
             {Position, Type}
     end.
 
-expand_where(Where, #key_v1{ast = PAST}) ->
+expand_where(Where, #key_v1{ast = PAST}, MaxSubQueries) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
                            {element(3, lists:last(List)), E};
                       ({endkey,   List}, {S, _E}) ->
@@ -359,12 +381,11 @@ expand_where(Where, #key_v1{ast = PAST}) ->
                      Max
              end,
     {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(EffMin, EffMax, Q, U),
-    MaxSubQueries =
-        app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
     if
         NoSubQueries == 1 ->
             [Where];
-        NoSubQueries > 1 andalso NoSubQueries =< MaxSubQueries ->
+        NoSubQueries > 1 andalso (MaxSubQueries == undefined orelse
+                                  NoSubQueries =< MaxSubQueries) ->
             make_wheres(Where, QField, Min, Max, Boundaries);
         NoSubQueries > MaxSubQueries ->
             {error, {too_many_subqueries, NoSubQueries}}
@@ -644,6 +665,57 @@ rewrite2([#param_v1{name = [FieldName]} | T], Where1, Mod, Acc) ->
             rewrite2(T, Where2, Mod, [{FieldName, Type, Val} | Acc])
     end.
 
+%% Functions to assist with coverage chunks that redefine quanta ranges
+unwrap_cover(undefined) ->
+    {undefined, undefined};
+unwrap_cover(Cover) ->
+    {ok, {OpaqueContext, {FieldName, RangeTuple}}} =
+        riak_kv_pb_coverage:checksum_binary_to_term(Cover),
+    {riak_kv_pb_coverage:term_to_checksum_binary(OpaqueContext),
+     {FieldName, RangeTuple}}.
+
+update_where_for_cover(Where, undefined) ->
+    Where;
+update_where_for_cover(Where, {FieldName, RangeTuple}) ->
+    update_where_for_cover(Where, FieldName, RangeTuple).
+
+update_where_for_cover(Props, Field, {{StartVal, StartInclusive},
+                                      {EndVal, EndInclusive}}) ->
+    %% Sample data structure:
+    %% 'WHERE' = [{startkey,[{<<"field1">>,varchar,<<"f1">>},
+    %%                       {<<"field2">>,varchar,<<"f2">>},
+    %%                       {<<"time">>,timestamp,15000}]},
+    %%            {endkey,[{<<"field1">>,varchar,<<"f1">>},
+    %%                     {<<"field2">>,varchar,<<"f2">>},
+    %%                     {<<"time">>,timestamp,20000}]},
+    %%            {filter,[]},
+    %%            {end_inclusive,true}],
+
+    %% Changes to apply:
+    %%   Modify the Field 3-tuple in the startkey and endkey properties
+    %%   Drop end_inclusive, start_inclusive properties
+    %%   Add new end_inclusive, start_inclusive properties based on the parameters
+    %%   Retain any other properties (currently only `filter')
+
+    NewStartKeyVal = modify_where_key(proplists:get_value(startkey, Props),
+                                     Field, StartVal),
+    NewEndKeyVal = modify_where_key(proplists:get_value(endkey, Props),
+                                   Field, EndVal),
+
+    SlimProps =
+        lists:foldl(
+          fun(Prop, Acc) -> proplists:delete(Prop, Acc) end,
+          Props,
+          [startkey, endkey, end_inclusive, start_inclusive]),
+
+    [{startkey, NewStartKeyVal}, {endkey, NewEndKeyVal},
+     {start_inclusive, StartInclusive}, {end_inclusive, EndInclusive}] ++
+        SlimProps.
+
+modify_where_key(TupleList, Field, NewVal) ->
+    {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
+    lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
+
 -ifdef(TEST).
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
@@ -871,7 +943,7 @@ simplest_test() ->
                           'WHERE'       = Where2,
                           partition_key = PK,
                           local_key     = LK }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 simple_with_filter_1_test() ->
@@ -899,7 +971,7 @@ simple_with_filter_1_test() ->
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 simple_with_filter_2_test() ->
@@ -926,7 +998,7 @@ simple_with_filter_2_test() ->
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 simple_with_filter_3_test() ->
@@ -955,7 +1027,7 @@ simple_with_filter_3_test() ->
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 simple_with_2_field_filter_test() ->
@@ -989,7 +1061,7 @@ simple_with_2_field_filter_test() ->
                           'WHERE'       = Where,
                           partition_key = PK,
                           local_key     = LK }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 complex_with_4_field_filter_test() ->
@@ -1022,7 +1094,7 @@ complex_with_4_field_filter_test() ->
                           'WHERE'       = Where2,
                           partition_key = PK,
                           local_key     = LK }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 complex_with_boolean_rewrite_filter_test() ->
@@ -1055,7 +1127,7 @@ complex_with_boolean_rewrite_filter_test() ->
                           partition_key = PK,
                           local_key     = LK
                         }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 %% got for 3 queries to get partition ordering problems flushed out
@@ -1085,7 +1157,7 @@ simple_spanning_boundary_test() ->
                           partition_key = PK,
                           local_key     = LK}
                       ]},
-                 compile(DDL, Q)
+                 compile(DDL, Q, 5)
                 ).
 
 %% Values right at quanta edges are tricky. Make sure we're not
@@ -1097,7 +1169,7 @@ boundary_quanta_test() ->
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% get basic query
-    Actual = compile(DDL, Q),
+    Actual = compile(DDL, Q, 5),
     ?assertEqual(2, length(element(2, Actual))).
 
 test_data_where_clause(Family, Series, StartEndTimes) ->
@@ -1139,7 +1211,7 @@ simple_spanning_boundary_precision_test() ->
                           partition_key = PK,
                           local_key     = LK
                         }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 %%
@@ -1152,12 +1224,11 @@ simplest_compile_once_only_fail_test() ->
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% now try and compile twice
-    {ok, [Q2]} = compile(DDL, Q),
-    Got = compile(DDL, Q2),
+    {ok, [Q2]} = compile(DDL, Q, 5),
+    Got = compile(DDL, Q2, 5),
     ?assertEqual(
        {error, 'query is already compiled'},
-       Got
-      ).
+       Got).
 
 end_key_not_a_range_test() ->
     DDL = get_standard_ddl(),
@@ -1167,7 +1238,7 @@ end_key_not_a_range_test() ->
                 "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
        {error, {incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 start_key_not_a_range_test() ->
@@ -1178,7 +1249,7 @@ start_key_not_a_range_test() ->
                 "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
        {error, {incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 key_is_all_timestamps_test() ->
@@ -1209,7 +1280,7 @@ key_is_all_timestamps_test() ->
                            {filter, []},
                            {start_inclusive, false}]
                }]},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 duplicate_lower_bound_filter_not_allowed_test() ->
@@ -1220,7 +1291,7 @@ duplicate_lower_bound_filter_not_allowed_test() ->
                 "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
        {error, {lower_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_LOWER_BOUND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 duplicate_upper_bound_filter_not_allowed_test() ->
@@ -1231,7 +1302,7 @@ duplicate_upper_bound_filter_not_allowed_test() ->
                 "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
        {error, {upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 lower_bound_is_bigger_than_upper_bound_test() ->
@@ -1242,7 +1313,7 @@ lower_bound_is_bigger_than_upper_bound_test() ->
                 "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
        {error, {lower_bound_must_be_less_than_upper_bound, ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 lower_bound_is_same_as_upper_bound_test() ->
@@ -1253,7 +1324,7 @@ lower_bound_is_same_as_upper_bound_test() ->
                 "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
        {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 query_has_no_AND_operator_1_test() ->
@@ -1261,7 +1332,7 @@ query_has_no_AND_operator_1_test() ->
     {ok, Q} = get_query("select * from test1 where time < 5"),
     ?assertEqual(
        {error, {incomplete_where_clause, ?E_TSMSG_NO_LOWER_BOUND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 query_has_no_AND_operator_2_test() ->
@@ -1269,7 +1340,7 @@ query_has_no_AND_operator_2_test() ->
     {ok, Q} = get_query("select * from test1 where time > 1 OR time < 5"),
     ?assertEqual(
        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 query_has_no_AND_operator_3_test() ->
@@ -1277,7 +1348,7 @@ query_has_no_AND_operator_3_test() ->
     {ok, Q} = get_query("select * from test1 where user = 'user_1' AND time > 1 OR time < 5"),
     ?assertEqual(
        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 query_has_no_AND_operator_4_test() ->
@@ -1285,7 +1356,7 @@ query_has_no_AND_operator_4_test() ->
     {ok, Q} = get_query("select * from test1 where user = 'user_1' OR time > 1 OR time < 5"),
     ?assertEqual(
        {error, {time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 missing_key_field_in_where_clause_test() ->
@@ -1293,7 +1364,7 @@ missing_key_field_in_where_clause_test() ->
     {ok, Q} = get_query("select * from test1 where time > 1 and time < 6 and user = '2'"),
     ?assertEqual(
        {error, {missing_key_clause, ?E_KEY_FIELD_NOT_IN_WHERE_CLAUSE("location")}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 not_equals_can_only_be_a_filter_test() ->
@@ -1301,7 +1372,7 @@ not_equals_can_only_be_a_filter_test() ->
     {ok, Q} = get_query("select * from test1 where time > 1 and time < 6 and user = '2' and location != '4'"),
     ?assertEqual(
        {error, {missing_key_clause, ?E_KEY_PARAM_MUST_USE_EQUALS_OPERATOR("location", '!=')}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 no_where_clause_test() ->
@@ -1309,7 +1380,7 @@ no_where_clause_test() ->
     {ok, Q} = get_query("select * from test1"),
     ?assertEqual(
        {error, {no_where_clause, ?E_NO_WHERE_CLAUSE}},
-       compile(DDL, Q)
+       compile(DDL, Q, 5)
       ).
 
 %% Columns are: [geohash, location, user, time, weather, temperature]
@@ -1320,7 +1391,7 @@ no_where_clause_test() ->
 %% query_result_type of 'rows' and _not_ 'aggregate'
 testing_compile_row_select(DDL, QueryString) ->
     {ok, [?SQL_SELECT{ 'SELECT' = SelectSpec } | _]} =
-        compile(DDL, element(2, get_query(QueryString))),
+        compile(DDL, element(2, get_query(QueryString)), 5),
     SelectSpec.
 
 run_select_all_test() ->
@@ -1597,7 +1668,7 @@ function_1_initial_state_test() ->
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-       #riak_sel_clause_v1{ initial_state = [0] },
+       #riak_sel_clause_v1{ initial_state = [[]] },
        Select
       ).
 
@@ -1607,7 +1678,7 @@ function_2_initial_state_test() ->
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-       #riak_sel_clause_v1{ initial_state = [0, 0] },
+       #riak_sel_clause_v1{ initial_state = [[], []] },
        Select
       ).
 

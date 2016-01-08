@@ -45,7 +45,8 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
--export([get_cover/2, get_cover/3, replace_cover/5]).
+-export([get_cover/3, get_cover/4, get_cover/5, replace_cover/6]).
+-export([vnode_target/1]).
 
 -include_lib("riak_core/include/riak_core_vnode.hrl").
 
@@ -489,50 +490,52 @@ consistent_delete_vclock(Bucket, Key, VClock, Options, _Timeout, {?MODULE, [Node
             ok
     end.
 
-%% @spec get_cover(Bucket :: binary() | {binary(), binary()},
-%%                 riak_client()) ->
-%%       Plan :: list(atom(), term()) |
-%%       {error, Err :: term()}
 %% @doc Retrieve a coverage plan
-get_cover(Bucket, Client) ->
-    get_cover(Bucket, undefined, Client).
+%% -spec get_cover(Module :: module(),
+%%                 Bucket :: binary() | {binary(), binary()},
+%%                 riak_client()) ->
+%%                        Plan :: list({atom(), term()}) |
+%%                                {error, Err :: term()}.
+get_cover(Module, Bucket, Client) ->
+    get_cover(Module, Bucket, undefined, Client).
 
-%% The 2nd argument (minimum parallelization) values mean:
+%% The 3rd argument (minimum parallelization) values mean:
 %%     undefined -> standard coverage plan
 %%     0         -> One coverage plan element per partition
 %%     Y>0       -> At least Y elements (will be no fewer than ring size)
-get_cover(Bucket, Parallelization, _Client) ->
+%% -spec get_cover(Module :: module(),
+%%                 Bucket :: binary() | {binary(), binary()},
+%%                 Parallelization :: 'undefined'|non_neg_integer(),
+%%                 riak_client()) ->
+%%                        Plan :: list({atom(), term()}) |
+%%                                {error, Err :: term()}.
+get_cover(Module, Bucket, Parallelization, Client) ->
+    get_cover(Module, Bucket, Parallelization, all, Client).
+
+get_cover(Module, Bucket, Parallelization, Target, _Client) ->
     ReqId = mk_reqid(),
     N = n_val(Bucket),
     RingSize = ring_size(),
-    get_cover_aux(Parallelization, ReqId, N, RingSize).
+    get_cover_aux(Module, Parallelization, ReqId, N, RingSize, Target).
 
-get_cover_aux(undefined, ReqId, N, _RingSize) ->
-    split_cover(riak_core_coverage_plan:create_plan(all, N, 1, ReqId, riak_kv));
-get_cover_aux(0, ReqId, N, RingSize) ->
+get_cover_aux(Module, undefined, ReqId, N, _RingSize, Target) ->
+    split_cover(Module:create_plan(Target, N, 1, ReqId, riak_kv, undefined));
+get_cover_aux(Module, 0, ReqId, N, RingSize, Target) ->
     split_cover(
-      riak_core_coverage_plan:create_subpartition_plan(all, N,
-                                                       RingSize, 1,
-                                                       ReqId, riak_kv));
-get_cover_aux(MinPar, ReqId, N, RingSize) ->
-    ParallelTally =
-        if
-            MinPar =< RingSize ->
-                RingSize;
-            true ->
-                next_power_of_two(MinPar)
-        end,
-
+      Module:create_subpartition_plan(Target, N,
+                                      RingSize, 1,
+                                      ReqId, riak_kv));
+get_cover_aux(Module, MinPar, ReqId, N, RingSize, Target) ->
     split_cover(
-      riak_core_coverage_plan:create_subpartition_plan(all, N,
-                                                       ParallelTally, 1,
-                                                       ReqId, riak_kv)).
+      Module:create_subpartition_plan(Target, N,
+                                      {MinPar, RingSize}, 1,
+                                      ReqId, riak_kv)).
 
 %% Will ignore the number of partitions, reconstruct from the coverage
 %% plan chunk we're replacing. The `Replace' argument is an ok/error
 %% tuple because it is intended to be the result of
 %% `riak_kv_pb_coverage:checksum_binary_to_term'
--spec replace_cover(Bucket :: binary() | {binary(), binary()},
+-spec replace_cover(Mod :: module(), Bucket :: binary() | {binary(), binary()},
                     Parallelization :: undefined | non_neg_integer(),
                     Replace :: {ok, list({atom(), term()})} |
                                {error, Reason},
@@ -541,23 +544,23 @@ get_cover_aux(MinPar, ReqId, N, RingSize) ->
                       {error, Reason}),
                     riak_client()) ->
                            list(list({atom(), term()})) | {error, term()}.
-replace_cover(_Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
+replace_cover(_Mod, _Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
     {error, Reason};
-replace_cover(Bucket, _P, {ok, Replace}, OtherBroken, _Client) ->
-    pick_cover_replacement(proplists:get_value(subpartition, Replace),
-                           n_val(Bucket), Replace,
-                           extract_proplist_nodes(OtherBroken)).
+replace_cover(Mod, Bucket, _P, {ok, Replace}, OtherBroken, _Client) ->
+    NVal = n_val(Bucket),
+    DownNodes = extract_proplist_nodes(OtherBroken),
+    case proplists:get_value(subpartition, Replace) of
+        undefined ->
+            %% we didn't find a subpartition filter, so this
+            %% is a traditional coverage plan chunk
+            replace_traditional_cover(Mod, NVal, Replace, DownNodes);
+        _Defined ->
+            replace_subpartition_cover(Mod, NVal, Replace, DownNodes)
+    end.
 
-pick_cover_replacement(undefined, NVal, Replace, DownNodes) ->
-    %% If `undefined', we didn't find a subpartition filter, so this
-    %% is a traditional coverage plan chunk
-    replace_traditional_cover(NVal, Replace, DownNodes);
-pick_cover_replacement(_Subp, NVal, Replace, DownNodes) ->
-    replace_subpartition_cover(NVal, Replace, DownNodes).
-
-replace_traditional_cover(NVal, Replace, DownNodes) ->
+replace_traditional_cover(Mod, NVal, Replace, DownNodes) ->
     split_cover(
-      riak_core_coverage_plan:replace_traditional_chunk(
+      Mod:replace_traditional_chunk(
         proplists:get_value(vnode_hash, Replace),
         proplists:get_value(node, Replace),
         proplists:get_value(filters, Replace, []),
@@ -566,9 +569,9 @@ replace_traditional_cover(NVal, Replace, DownNodes) ->
         DownNodes,
         riak_kv)).
 
-replace_subpartition_cover(NVal, Replace, DownNodes) ->
+replace_subpartition_cover(Mod, NVal, Replace, DownNodes) ->
     split_cover(
-      riak_core_coverage_plan:replace_subpartition_chunk(
+      Mod:replace_subpartition_chunk(
         proplists:get_value(vnode_hash, Replace),
         proplists:get_value(node, Replace),
         proplists:get_value(subpartition, Replace),
@@ -583,13 +586,6 @@ extract_proplist_nodes(L) ->
                        ({error, _}) -> false
                     end, L).
 
-
-%% Crimes against computerkind
-next_power_of_two(X) ->
-    Next = 1 bsl length(hd(io_lib:format("~.2b", [X]))),
-    if X * 2 =:= Next -> X;
-       true -> Next
-    end.
 
 n_val(Bucket) ->
     riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)).
