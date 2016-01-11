@@ -124,7 +124,7 @@ encode(Message) ->
 
 -spec process_tsreq(atom() | #tsputreq{} | #tsttbputreq{}, term(), #state{}) ->
 {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
-process_tsreq(#tsputreq{table = Table, columns = _Columns, rows = _Rows}, Data, State) ->
+process_tsreq(Table, Data, State) ->
   Mod = riak_ql_ddl:make_module_name(Table),
 
   case (catch validate_rows(Mod, Data)) of
@@ -155,15 +155,15 @@ process_tsreq(#tsputreq{table = Table, columns = _Columns, rows = _Rows}, Data, 
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreq{rows = Rows} = Req, State) ->
+process(#tsputreq{table=Table, rows = Rows}, State) ->
     Data = riak_pb_ts_codec:decode_rows(Rows),
-    process_tsreq(Req, Data, State);
+    process_tsreq(Table, Data, State);
 
 process(#tsttbputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsttbputreq{rows = Rows} = Req, State) ->
+process(#tsttbputreq{table = Table, rows = Rows}, State) ->
     Data = Rows,
-    process_tsreq(Req, Data, State);
+    process_tsreq(Table, Data, State);
 
 process(#tsgetreq{table = Table, key = PbCompoundKey,
                   timeout = Timeout},
