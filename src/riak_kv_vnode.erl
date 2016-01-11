@@ -641,8 +641,8 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
 handle_command(?KV_DELETE_REQ{bkey=BKey}, _Sender, State) ->
     do_delete(BKey, State);
 handle_command({reap, BKey, RObj}, _Sender, State) ->
-    State1 = do_backend_delete(BKey, RObj, tombstone, State),
-    {reply, ok, State1};
+     State1 = do_backend_delete(BKey, RObj, tombstone, State),
+     {reply, ok, State1};
 handle_command(?KV_VCLOCK_REQ{bkeys=BKeys}, _Sender, State) ->
     {reply, do_get_vclocks(BKeys, State), State};
 handle_command(#riak_core_fold_req_v1{} = ReqV1,
@@ -1313,7 +1313,7 @@ handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=Mod
                        case delete_hash(RObj) of
                            RObjHash ->
                                do_backend_delete(BKey, RObj, delete, State#state{modstate=ModState1});
-                         _ ->
+                           _ ->
                                State#state{modstate=ModState1}
                        end;
                    {{error, _}, ModState1} ->
@@ -1427,13 +1427,12 @@ do_backend_delete(BKey, RObj, HashtreeAction, State = #state{idx = Idx,
     %% JDM: This should just be a tombstone by this point, but better
     %% safe than sorry.
     IndexSpecs = riak_object:diff_index_specs(undefined, RObj),
-
     %% Do the delete...
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
             ?INDEX(RObj, delete, Idx),
-            hashtree_action(Bucket, Key, undefined, HashtreeAction, State),
+            hashtree_action(Bucket, Key, RObj, HashtreeAction, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
@@ -1441,14 +1440,14 @@ do_backend_delete(BKey, RObj, HashtreeAction, State = #state{idx = Idx,
             State#state{modstate = UpdModState}
     end.
 
-hashtree_action(Bucket, Key, EncodedVal, HashtreeAction, State) ->
+hashtree_action(Bucket, Key, RObj, HashtreeAction, State) ->
     case HashtreeAction of
         delete ->
             delete_from_hashtree(Bucket, Key, State);
         tombstone ->
             update_hashtree(Bucket, Key, tombstone, State);
         update ->
-            update_hashtree(Bucket, Key, EncodedVal, State)
+            update_hashtree(Bucket, Key, RObj, State)
     end.
 
 %% Compute a hash of the deleted object
@@ -1749,11 +1748,11 @@ do_get(_Sender, BKey, ReqID,
             {ok, Obj} ->
                 case riak_kv_util:is_x_expired(Obj) of
                     true ->
-                        State2 = do_backend_delete(BKey, Obj, tombstone, State1),
+                         State2 = do_backend_delete(BKey, Obj, tombstone, State1),
                         {{error, notfound}, State2};
                     _ ->
                         maybe_cache_object(BKey, Obj, State1),
-                        {Retval,State1}
+                        {Retval, State1}
                 end;
             _ ->
                 {Retval, State1}
@@ -2131,7 +2130,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
     end.
 
 -spec update_hashtree(binary(), binary(),
-                      riak_object:riak_object() | binary(),
+                      riak_object:riak_object() | binary() | tombstone,
                       state()) -> ok.
 update_hashtree(_Bucket, _Key, _RObj, #state{hashtrees=undefined}) ->
     ok;

@@ -360,8 +360,6 @@ aae_tree_status(TreeInfo) ->
 
 format_timestamp(_Now, undefined) ->
     "--";
-format_timestamp(undefined, _) ->
-    "--";
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
 
