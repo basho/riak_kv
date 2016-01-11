@@ -19,7 +19,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..101]
+%% @doc Callbacks for TS protobuf messages [codes 90..104]
 
 -module(riak_kv_pb_timeseries).
 
@@ -85,7 +85,7 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-                    {ok, #tsputreq{} | #tsputreqttb{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+                    {ok, #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
                      | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{},
                      {PermSpec::string(), Table::binary()}} |
                     {error, _}.
@@ -106,7 +106,7 @@ decode(Code, Bin) ->
             {ok, Msg, {"riak_kv.ts_get", Table}};
         #tsputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
-        #tsputreqttb{table = Table} ->
+        #tsttbputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
         #tsdelreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_del", Table}};
@@ -122,7 +122,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process_tsreq(atom() | #tsputreq{} | #tsputreqttb{}, term(), #state{}) ->
+-spec process_tsreq(atom() | #tsputreq{} | #tsttbputreq{}, term(), #state{}) ->
 {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process_tsreq(#tsputreq{table = Table, columns = _Columns, rows = _Rows}, Data, State) ->
   Mod = riak_ql_ddl:make_module_name(Table),
@@ -150,7 +150,7 @@ process_tsreq(#tsputreq{table = Table, columns = _Columns, rows = _Rows}, Data, 
       {reply, missing_helper_module(Table, BucketProps), State}
   end.
 
--spec process(atom() | #tsputreq{} | #tsputreqttb{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+-spec process(atom() | #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
               | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
@@ -159,9 +159,9 @@ process(#tsputreq{rows = Rows} = Req, State) ->
     Data = riak_pb_ts_codec:decode_rows(Rows),
     process_tsreq(Req, Data, State);
 
-process(#tsputreqttb{rows = []}, State) ->
+process(#tsttbputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreqttb{rows = Rows} = Req, State) ->
+process(#tsttbputreq{rows = Rows} = Req, State) ->
     Data = Rows,
     process_tsreq(Req, Data, State);
 
