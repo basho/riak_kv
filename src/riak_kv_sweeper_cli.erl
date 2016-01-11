@@ -29,7 +29,7 @@
 -include("riak_kv_sweeper.hrl").
 
 -export([
-         format_sweeps/1,
+         format_sweeps/2,
          register_cli/0,
          status/3
         ]).
@@ -67,91 +67,105 @@ status_usage() ->
 
 status(_CmdBase, [], []) ->
     {Participants, Sweeps} = riak_kv_sweeper:status(),
-    ParticipantsTable = format_participants(Participants),
-    SweepsTable = format_sweeps(Sweeps),
-    ActiveSweeps = format_active_sweeps(Sweeps),
-    [ParticipantsTable,
-     SweepsTable]
-    ++ ActiveSweeps.
+    SortedParticipants = lists:keysort(1, Participants),
+    IndexedParticipants =
+        lists:zip(lists:seq(1, length(Participants)), SortedParticipants),
+    ParticipantsTable = format_participants(IndexedParticipants),
+    SweepsTable = format_sweeps(Sweeps, IndexedParticipants),
+    ActiveSweeps = format_active_sweeps(Sweeps, IndexedParticipants),
+    ParticipantsTable ++ SweepsTable ++ ActiveSweeps.
 
-format_sweeps(Sweeps) ->
+format_sweeps(Sweeps, IndexedParticipants) ->
     Now = os:timestamp(),
+    Header = io_lib:format("~s", ["Sweep results:"]),
     SortedSweeps = lists:keysort(#sweep.index, Sweeps),
     Rows =
         [begin
-         StartTime = Sweep#sweep.start_time,
-         EndTime = Sweep#sweep.end_time,
-         LastSweep = format_timestamp(Now, StartTime),
-         Duration = format_timestamp(EndTime, StartTime),
-         ResultsString = format_results(Now, Sweep#sweep.results),
-         [{"Index", Sweep#sweep.index},
-          {"Last sweep", LastSweep},
-          {"Duration", Duration},
-          {"Results", ResultsString}
-          ]
-     end
-     || Sweep <- SortedSweeps],
-    clique_status:table(Rows).
-
-format_active_sweeps(Sweeps) ->
-     Header = io_lib:format("~n~s~n", [string:centre(" Active sweeps ", 79, $=)]),
-      Rows = [begin
-             format_progress(Sweep)
+             StartTime = Sweep#sweep.start_time,
+             EndTime = Sweep#sweep.end_time,
+             LastSweep = format_timestamp(Now, StartTime),
+             Duration = format_timestamp(EndTime, StartTime),
+             ResultsColumns  =
+                 format_results(Now, Sweep#sweep.results, IndexedParticipants),
+             [{"Index", Sweep#sweep.index},
+              {"Last sweep", LastSweep},
+              {"Duration", Duration}
+             ] ++ ResultsColumns
          end
-         || #sweep{state = State} = Sweep <- Sweeps, State == running],
-     case Rows of
-         [] ->
-             [];
-         Rows ->
-             [clique_status:text(Header),
-              clique_status:table(Rows)]
-     end.
+         || Sweep <- SortedSweeps],
+    [clique_status:text(Header),
+     clique_status:table(Rows)].
+format_active_sweeps(Sweeps, IndexedParticipants) ->
+    Rows = [format_progress(Sweep, IndexedParticipants)
+              || #sweep{state = State} = Sweep <- Sweeps, State == running],
+    case Rows of
+        [] ->
+            [];
+        Rows ->
+            Header = io_lib:format("~s", ["Running sweeps:"]),
+            [clique_status:text(Header),
+             clique_status:table(Rows)]
+    end.
 
 format_progress(#sweep{index = Index,
                        active_participants = AcitvePart,
                        estimated_keys = {EstimatedKeys, _TS},
-                       swept_keys = SweptKeys}) ->
+                       swept_keys = SweptKeys},
+                IndexedParticipants) ->
     case EstimatedKeys of
         EstimatedKeys when is_integer(EstimatedKeys) andalso EstimatedKeys > 0 ->
             [{"Index", Index},
              {"Swept keys", SweptKeys},
-             {"Estimated Keys", EstimatedKeys},
-             {"Active", format_active_participants(AcitvePart)}];
+             {"Estimated Keys", EstimatedKeys}] ++
+                format_active_participants(AcitvePart, IndexedParticipants);
         _ ->
             [{"Index", Index},
-             {"Swept keys", SweptKeys},
-             {"Active", format_active_participants(AcitvePart)}]
+             {"Swept keys", SweptKeys}] ++
+                format_active_participants(AcitvePart, IndexedParticipants)
     end;
 
-format_progress(_) ->
+format_progress(_, _) ->
     "".
 
-format_active_participants(AcitvePart) ->
-    [io_lib:format("| ~s", [atom_to_list(Mod)])
-     || #sweep_participant{module = Mod} <- AcitvePart].
-
-format_results(Now, Results) ->
-    ResultList = dict:to_list(Results),
-    SortedResultList = lists:keysort(1, ResultList),
+format_active_participants(AcitvePart, IndexedParticipants) ->
     [begin
-        LastResult = format_timestamp(Now, TimeStamp),
-        OutcomeString = string:to_upper(atom_to_list(Outcome)),
-        io_lib:format(" ~s ~-4s ~-8s", [atom_to_list(Mod), OutcomeString, LastResult])
+         IndexString = integer_to_list(Index),
+         {"Active " ++ IndexString,
+          lists:keymember(Mod, #sweep_participant.module, AcitvePart)}
      end
-    || {Mod, {TimeStamp, Outcome}} <- SortedResultList, lists:member(Outcome, [succ, fail])].
+     || {Index, #sweep_participant{module = Mod}} <- IndexedParticipants].
 
-format_participants(SweepParticipants) ->
-    SortedSweepParticipants = lists:keysort(1, SweepParticipants),
-    Rows = [format_sweep_participant(SweepParticipant)
-     || SweepParticipant <- SortedSweepParticipants],
-    clique_status:table(Rows).
+format_results(Now, Results, IndexedParticipants) ->
+    lists:flatten([get_result(Index, Participant, Results, Now)
+                     || {Index, Participant} <- IndexedParticipants]).
 
-format_sweep_participant(#sweep_participant{module = Mod,
-                                            description = Desciption,
-                                            run_interval = Interval}) ->
+get_result(Index, Participant, Results, Now) ->
+    case dict:find(Participant#sweep_participant.module, Results) of
+        {ok, {TimeStamp, Outcome}} when Outcome == succ orelse Outcome == fail ->
+            LastRun = format_timestamp(Now, TimeStamp),
+            OutcomeString = string:to_upper(atom_to_list(Outcome));
+        _ ->
+            LastRun = "-",
+            OutcomeString = "-"
+    end,
+    IndexString = integer_to_list(Index),
+    [{"Last run " ++ IndexString, LastRun},
+     {"Result "   ++ IndexString, OutcomeString}].
+
+format_participants(IndexedParticipants) ->
+    Header = io_lib:format("~s", ["Sweep participants:"]),
+    Rows = [format_sweep_participant(Index, Participant)
+              || {Index, Participant} <- IndexedParticipants],
+    [clique_status:text(Header),
+     clique_status:table(Rows)].
+
+format_sweep_participant(Index, #sweep_participant{module = Mod,
+                                                   description = Desciption,
+                                                   run_interval = Interval}) ->
     IntervalValue = riak_kv_sweeper:get_run_interval(Interval),
     IntervalString = format_interval(IntervalValue * 1000000),
-    [{"Module" ,atom_to_list(Mod)},
+    [{"ID", Index},
+     {"Module" ,atom_to_list(Mod)},
      {"Desciption" ,Desciption},
      {"Interval",  IntervalString}].
 
