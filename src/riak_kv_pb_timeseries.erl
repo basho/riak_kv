@@ -122,7 +122,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process_tsreq(atom() | #tsputreq{} | #tsttbputreq{}, term(), #state{}) ->
+-spec process_tsreq(binary(), term(), #state{}) ->
 {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process_tsreq(Table, Data, State) ->
   Mod = riak_ql_ddl:make_module_name(Table),
