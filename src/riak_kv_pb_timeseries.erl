@@ -19,7 +19,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..101]
+%% @doc Callbacks for TS protobuf messages [codes 90..104]
 
 -module(riak_kv_pb_timeseries).
 
@@ -85,7 +85,7 @@ init() ->
 
 
 -spec decode(integer(), binary()) ->
-                    {ok, #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+                    {ok, #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
                      | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{},
                      {PermSpec::string(), Table::binary()}} |
                     {error, _}.
@@ -106,6 +106,8 @@ decode(Code, Bin) ->
             {ok, Msg, {"riak_kv.ts_get", Table}};
         #tsputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
+        #tsttbputreq{table = Table} ->
+            {ok, Msg, {"riak_kv.ts_put", Table}};
         #tsdelreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_del", Table}};
         #tslistkeysreq{table = Table} ->
@@ -120,38 +122,48 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
--spec process(atom() | #tsputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
+-spec process_tsreq(binary(), term(), #state{}) ->
+{reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+process_tsreq(Table, Data, State) ->
+  Mod = riak_ql_ddl:make_module_name(Table),
+
+  case (catch validate_rows(Mod, Data)) of
+    [] ->
+      try
+        case put_data(Data, Table, Mod) of
+          0 ->
+            {reply, #tsputresp{}, State};
+          ErrorCount ->
+            EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
+            {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
+        end
+      catch
+        Class:Exception ->
+          lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
+          Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
+          {reply, Error, State}
+      end;
+    BadRowIdxs when is_list(BadRowIdxs) ->
+      {reply, validate_rows_error_response(BadRowIdxs), State};
+    {_, {undef, _}} ->
+      BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
+      {reply, missing_helper_module(Table, BucketProps), State}
+  end.
+
+-spec process(atom() | #tsputreq{} | #tsttbputreq{} | #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{}
               | #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #state{}) ->
                      {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 process(#tsputreq{rows = []}, State) ->
     {reply, #tsputresp{}, State};
-process(#tsputreq{table = Table, columns = _Columns, rows = Rows}, State) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
+process(#tsputreq{table=Table, rows = Rows}, State) ->
     Data = riak_pb_ts_codec:decode_rows(Rows),
+    process_tsreq(Table, Data, State);
 
-    case (catch validate_rows(Mod, Data)) of
-        [] ->
-            try
-                case put_data(Data, Table, Mod) of
-                    0 ->
-                        {reply, #tsputresp{}, State};
-                    ErrorCount ->
-                        EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
-                        {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
-                end
-            catch
-                Class:Exception ->
-                    lager:error("error: ~p:~p~n~p", [Class,Exception,erlang:get_stacktrace()]),
-                    Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
-                    {reply, Error, State}
-            end;
-        BadRowIdxs when is_list(BadRowIdxs) ->
-            {reply, validate_rows_error_response(BadRowIdxs), State};
-        {_, {undef, _}} ->
-            BucketProps = riak_core_bucket:get_bucket(table_to_bucket(Table)),
-            {reply, missing_helper_module(Table, BucketProps), State}
-    end;
-
+process(#tsttbputreq{rows = []}, State) ->
+    {reply, #tsputresp{}, State};
+process(#tsttbputreq{table = Table, rows = Rows}, State) ->
+    Data = Rows,
+    process_tsreq(Table, Data, State);
 
 process(#tsgetreq{table = Table, key = PbCompoundKey,
                   timeout = Timeout},
