@@ -169,6 +169,7 @@ stop(#state{data_ref=DataRef,
                  {error, term(), state()}.
 get(Bucket, Key, State=#state{data_ref=DataRef,
                               index_ref=IndexRef,
+                              time_ref = TimeRef,
                               used_memory=UsedMemory,
                               max_memory=MaxMemory,
                               ttl=TTL}) ->
@@ -182,6 +183,11 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
                     %% entries blindly using match_delete.
                     ets:delete(DataRef, {Bucket, Key}),
                     ets:match_delete(IndexRef, ?DELETE_PTN(Bucket, Key)),
+                    %% prevents leak in the TimeRef table on expire
+                    case TimeRef of
+                      undefined -> ok;
+                      _ -> ets:delete(TimeRef, Timestamp)
+                    end,
                     case MaxMemory of
                         undefined ->
                             UsedMemory1 = UsedMemory;
@@ -221,7 +227,12 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
         case ets:lookup(DataRef, {Bucket, PrimaryKey}) of
             [] ->
                 0;
-            [OldObject] ->
+            [{_BKey, {{ts, OldTimestamp}, _OldVal}}=OldObject] ->
+                %% prevents leak in the TimeRef table on update
+                case TimeRef of
+                    undefined -> ok;
+                    _ -> ets:delete(TimeRef, OldTimestamp)
+                end,
                 object_size(OldObject)
         end,
     {ok, Size} = do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef),
