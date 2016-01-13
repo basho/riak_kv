@@ -2,7 +2,7 @@
 %%
 %% riak_kv_ts_util: supporting functions for timeseries code paths
 %%
-%% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2015, 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,11 +24,43 @@
 
 -module(riak_kv_ts_util).
 
--export([maybe_parse_table_def/2,
+-export([
          apply_timeseries_bucket_props/2,
-         encode_typeval_key/1]).
+         encode_typeval_key/1,
+         get_table_ddl/1,
+         maybe_parse_table_def/2,
+         queried_table/1
+        ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
+
+
+-spec queried_table(#riak_sql_describe_v1{} | ?SQL_SELECT{}) -> binary().
+%% Extract table name from various sql records.
+queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
+queried_table(?SQL_SELECT{'FROM' = Table})               -> Table.
+
+
+-spec get_table_ddl(binary()) ->
+                           {ok, module(), #ddl_v1{}} |
+                           {error, term()}.
+%% Check that Table is in good standing and ready for TS operations
+%% (its bucket type has been activated and it has a DDL in its props)
+get_table_ddl(Table) ->
+    case riak_core_claimant:bucket_type_status(Table) of
+        active ->
+            Mod = riak_ql_ddl:make_module_name(Table),
+            case catch Mod:get_ddl() of
+                {_, {undef, _}} ->
+                    {error, missing_helper_module};
+                DDL ->
+                    {ok, Mod, DDL}
+            end;
+        InappropriateState ->
+            {error, {inappropriate_bucket_state, InappropriateState}}
+    end.
+
+
 
 %% Given bucket properties, transform the `<<"table_def">>' property if it
 %% exists to riak_ql DDL and store it under the `<<"ddl">>' key, table_def
