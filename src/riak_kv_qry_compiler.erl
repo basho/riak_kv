@@ -22,11 +22,9 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_qry_compiler).
 
--export([
-         compile/3,
-         run_select/2,
-         run_select/3  %% what is this for?
-        ]).
+-export([compile/3]).
+-export([finalise_aggregate/2]).
+-export([run_select/2, run_select/3]).
 
 -type compiled_select() :: fun((_,_) -> riak_pb_ts_codec:ldbvalue()).
 -export_type([compiled_select/0]).
@@ -82,6 +80,19 @@ expand_query(#ddl_v1{local_key = LK, partition_key = PK},
             {ok, SubQueries}
     end.
 
+%%
+
+finalise_aggregate(#riak_sel_clause_v1{ finalisers = FinaliserFns }, Row) ->
+    finalise_aggregate2(FinaliserFns, Row, Row).
+
+%%
+finalise_aggregate2([], [], _) ->
+    [];
+finalise_aggregate2([skip | Fns], [_ | Row], FullRow) ->
+    finalise_aggregate2(Fns, Row, FullRow);
+finalise_aggregate2([CellFn | Fns], [Cell | Row], FullRow) ->
+    [CellFn(FullRow, Cell) | finalise_aggregate2(Fns, Row, FullRow)].
+
 %% Run the selection spec for all selection columns that was created by
 -spec run_select(SelectionSpec::[compiled_select()], Row::[any()]) ->
                         [any()].
@@ -124,7 +135,8 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     %% whole query
     Acc = {sets:new(), #riak_sel_clause_v1{ }},
     %% iterate from the right so we can append to the head of lists
-    {ColTypeSet, Q2} = lists:foldr(CompileColFn, Acc, Sel),
+    {ColTypeSet, Q2} = lists:foldl(CompileColFn, Acc, Sel),
+
     case sets:is_element(aggregate, ColTypeSet) of
         true  ->
             Q3 = Q2#riak_sel_clause_v1{
@@ -139,6 +151,21 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     {ok, Q3}.
 
 %%
+-spec get_col_names(#ddl_v1{}, ?SQL_SELECT{}) -> [binary()].
+get_col_names(DDL, Q) ->
+    ColNames = riak_ql_to_string:col_names_from_select(Q),
+    % flatten because * gets expanded to multiple columns
+    lists:flatten(
+      [get_col_names2(DDL, N) || N <- ColNames]
+    ).
+
+%%
+get_col_names2(DDL, "*") ->
+    [X#riak_field_v1.name || X <- DDL#ddl_v1.fields];
+get_col_names2(_, Name) ->
+    list_to_binary(Name).
+
+%%
 -record(single_sel_column, {
           calc_type        :: select_result_type(),
           initial_state    :: any(),
@@ -150,24 +177,51 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
          }).
 
 %%
--spec select_column_clause_folder(#ddl_v1{}, selection(), {set(), #riak_sel_clause_v1{}}) ->
-                                         {set(), #riak_sel_clause_v1{}}.
-select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
+-spec select_column_clause_folder(#ddl_v1{}, selection(),
+                                  {set(), #riak_sel_clause_v1{}}) ->
+                {set(), #riak_sel_clause_v1{}}.
+select_column_clause_folder(DDL, ColAST1, 
+                            {TypeSet1, #riak_sel_clause_v1{ finalisers = Finalisers } = SelClause}) ->
+    % extract the stateful functions then treat them as separate select columns
+    LenFinalisers = length(Finalisers),
+    case extract_stateful_functions(ColAST1, LenFinalisers) of
+        {ColAST2, []} ->
+            {_Types, _Is_valid, FinaliserFn} =
+                compile_select_col_stateless(DDL, {return_state, LenFinalisers + 1}),
+            ColAstList = [{ColAST2, FinaliserFn}];
+        {FinaliserAST, [WindowFnAST | Tail]} ->
+            {_Types, _Is_valid, FinaliserFn} =
+                compile_select_col_stateless(DDL, FinaliserAST),
+            ActualCol = {WindowFnAST, FinaliserFn},
+            TempCols = [{AST, skip} || AST <- Tail],
+            ColAstList = [ActualCol | TempCols]
+    end,
+    FolderFn =
+        fun(E, Acc) ->
+            select_column_clause_exploded_folder(DDL, E, Acc)
+        end,
+    lists:foldl(FolderFn, {TypeSet1, SelClause}, ColAstList).
+
+
+%% When the select column is "exploded" it means that multiple functions that
+%% collect state have been extracted and given their own temporary columns
+%% which will be merged by the finalisers.
+select_column_clause_exploded_folder(DDL, {ColAst, Finaliser}, {TypeSet1, SelClause1}) ->
     #riak_sel_clause_v1{
        initial_state = InitX,
        col_return_types = ColRetX,
        clause = RunFnX,
        is_valid = IsValid1,
        finalisers = Finalisers1 } = SelClause1,
-    S = compile_select_col(DDL, ColX),
+    S = compile_select_col(DDL, ColAst),
     TypeSet2 = sets:add_element(S#single_sel_column.calc_type, TypeSet1),
-    Init2   = [S#single_sel_column.initial_state | InitX],
-    ColRet2 = [S#single_sel_column.col_return_types | ColRetX],
-    RunFn2  = [S#single_sel_column.clause | RunFnX],
-    Finalisers2 =[S#single_sel_column.finaliser | Finalisers1],
+    Init2   = InitX ++ [S#single_sel_column.initial_state],
+    ColRet2 = ColRetX ++ [S#single_sel_column.col_return_types],
+    RunFn2  = RunFnX ++ [S#single_sel_column.clause],
+    Finalisers2 = Finalisers1 ++ [Finaliser],
     IsValid2 = merge_validation(S#single_sel_column.is_valid, IsValid1),
-    %% ColTypes are messy because <<"*">> represents many
-    %% so you need to flatten the list
+    % ColTypes are messy because <<"*">> represents many
+    % so you need to flatten the list
     SelClause2 = #riak_sel_clause_v1{
                     initial_state    = Init2,
                     col_return_types = lists:flatten(ColRet2),
@@ -175,21 +229,6 @@ select_column_clause_folder(DDL, ColX, {TypeSet1, SelClause1}) ->
                     is_valid         = IsValid2,
                     finalisers       = lists:flatten(Finalisers2)},
     {TypeSet2, SelClause2}.
-
-%%
--spec get_col_names(#ddl_v1{}, ?SQL_SELECT{}) -> [binary()].
-get_col_names(DDL, Q) ->
-    ColNames = riak_ql_to_string:col_names_from_select(Q),
-    %% flatten because * gets expanded to multiple columns
-    lists:flatten(
-      [get_col_names2(DDL, N) || N <- ColNames]
-     ).
-
-%%
-get_col_names2(DDL, "*") ->
-    [X#riak_field_v1.name || X <- DDL#ddl_v1.fields];
-get_col_names2(_, Name) ->
-    list_to_binary(Name).
 
 %% Compile a single selection column into a fun that can extract the cell
 %% from the row.
@@ -207,52 +246,44 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) ->
         Initial_state ->
             {ColTypes2, IsValid2, Compiled_arg1} =
                 compile_select_col_stateless(DDL, FnArg1),
-            %% all the windows agg fns so far are arity of 1
-            %% which we have forced in this clause by matching on a single argument in the
-            %% function head
             FnSig = riak_ql_window_agg_fns:get_arity_and_type_sig(FnName),
             {IsValid, ColRet} = check_types(FnName, FnSig, ColTypes2),
 
             IsValid3 = merge_validation(IsValid2, IsValid),
+            % all the windows agg fns so far are arity of 1
+            % which we have forced in this clause by matching on a single argument in the
+            % function head
             SelectFn =
                 fun(Row, State) ->
-                        riak_ql_window_agg_fns:FnName(Compiled_arg1(Row), State)
-                end,
-            FinaliserFn =
-                fun(State) ->
-                        riak_ql_window_agg_fns:finalise(FnName, State)
+                        riak_ql_window_agg_fns:FnName(Compiled_arg1(Row, State), State)
                 end,
             #single_sel_column{ calc_type        = aggregate,
                                 initial_state    = Initial_state,
                                 col_return_types = ColRet,
                                 clause           = SelectFn,
-                                is_valid         = IsValid3,
-                                finaliser        = [FinaliserFn] }
+                                is_valid         = IsValid3}
     end;
 compile_select_col(DDL, Select) ->
     {ColTypes, IsValid, Fn} = compile_select_col_stateless(DDL, Select),
-    %% to support aggregates that have a running state all top level funs must be
-    %% arity two, when we know the function is stateless wrap it in a two arity
-    %% fun and ignore the state arg
-    Finalisers = lists:duplicate(length(ColTypes), fun(State) -> State end),
+    % Finalisers = lists:duplicate(length(ColTypes), fun(State) -> State end),
     #single_sel_column{ calc_type        = rows,
                         initial_state    = undefined,
                         col_return_types = ColTypes,
-                        clause           = fun(Row, _) -> Fn(Row) end,
-                        is_valid         = IsValid,
-                        finaliser        = Finalisers }.
+                        clause           = Fn,
+                        is_valid         = IsValid}.
+
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
--spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}) ->
-       {ColTypes::[simple_field_type()], IsValid::true|any(), function()}.
+-spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}|{return_state, integer()}) ->
+       {ColTypes::[simple_field_type()], IsValid::true|any(), compiled_select()}.
 compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
     ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
-    {ColTypes, true, fun(Row) -> Row end};
+    {ColTypes, true, fun(Row, _) -> Row end};
 compile_select_col_stateless(DDL, {negate, ExprToNegate}) ->
     {TypeToNegate, ValidityToNegate, ValueToNegate} =
         compile_select_col_stateless(DDL, ExprToNegate),
-    NegatingFun = fun(Row) -> -ValueToNegate(Row) end,
+    NegatingFun = fun(Row, State) -> -ValueToNegate(Row, State) end,
     case ValidityToNegate of
         true ->
             {[TypeToNegate],
@@ -260,20 +291,22 @@ compile_select_col_stateless(DDL, {negate, ExprToNegate}) ->
              NegatingFun};
         _ -> {[], ValidityToNegate, []}
     end;
-compile_select_col_stateless(_, {Type, V})
-  when Type == varchar; Type == boolean ->
-    {[Type], true, fun(_) -> V end};
-%% TODO why is this integer not sint64?
+compile_select_col_stateless(_, {Type, V}) when Type == varchar; Type == boolean ->
+    {[Type], true, fun(_,_) -> V end};
+compile_select_col_stateless(_, {Type, V}) when Type == binary ->
+    {[varchar], true, fun(_,_) -> V end};
 compile_select_col_stateless(_, {Type, V}) when Type == integer ->
-    {[sint64], true, fun(_) -> V end};
-%% TODO ditto float and double
+    %% TODO why is this integer not sint64?
+    {[sint64], true, fun(_,_) -> V end};
 compile_select_col_stateless(_, {Type, V}) when Type == float ->
-    {[double], true, fun(_) -> V end};
+    %% TODO ditto float and double
+    {[double], true, fun(_,_) -> V end};
+compile_select_col_stateless(_, {return_state, N}) when is_integer(N) ->
+    % FIXME calculate type
+    {[sint64], true, fun(Row,_) -> lists:nth(N, Row) end};
 compile_select_col_stateless(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
     {Index, Type} = col_index_and_type_of(Fields, to_column_name_binary(ColumnName)),
-    {[Type], true, fun(Row) ->
-                           lists:nth(Index, Row)
-                   end};
+    {[Type], true, fun(Row,_) -> lists:nth(Index, Row) end};
 compile_select_col_stateless(DDL, {Op, A, B}) ->
     {Ta, IsValida, Arg_a} = compile_select_col_stateless(DDL, A),
     {Tb, IsValidb, Arg_b} = compile_select_col_stateless(DDL, B),
@@ -287,6 +320,28 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
         _ ->
             {[], IsValid2, []}
     end.
+
+%%
+-spec extract_stateful_functions(selection(), integer()) ->
+        {selection() | {return_state, integer()}, [selection_function()]}.
+extract_stateful_functions(Selection1, FinaliserLen) when is_integer(FinaliserLen) ->
+    {Selection2, Fns} = extract_stateful_functions2(Selection1, FinaliserLen, []),
+    {Selection2, lists:reverse(Fns)}.
+
+%% extract stateful functions from the selection
+-spec extract_stateful_functions2(selection(), integer(), [selection_function()]) ->
+        {selection() | {return_state, integer()}, [selection_function()]}.
+extract_stateful_functions2({Op, ArgA1, ArgB1}, FinaliserLen, Fns1) ->
+    {ArgA2, Fns2} = extract_stateful_functions2(ArgA1, FinaliserLen, Fns1),
+    {ArgB2, Fns3} = extract_stateful_functions2(ArgB1, FinaliserLen, Fns2),
+    {{Op, ArgA2, ArgB2}, Fns3};
+extract_stateful_functions2({Tag, _} = Node, _, Fns) 
+        when Tag == identifier; Tag == sint64; Tag == integer; Tag == float;
+             Tag == binary;     Tag == varchar; Tag == boolean; Tag == negate ->
+    {Node, Fns};
+extract_stateful_functions2({{window_agg_fn, _}, _} = Function, FinaliserLen, Fns1) ->
+    Fns2 = [Function | Fns1],
+    {{return_state, FinaliserLen + length(Fns2)}, Fns2}.
 
 %% TODO rewrite so that all the operators are just functions
 %% then we can eliminate the double code for creating return types
@@ -319,13 +374,13 @@ merge_validation({error, E1}, {error, E2}) -> {error, E1 ++ E2}.
 
 %%
 compile_select_col_stateless2('+', A, B) ->
-    fun(Row) -> A(Row) + B(Row) end;
+    fun(Row, State) -> A(Row, State) + B(Row, State) end;
 compile_select_col_stateless2('*', A, B) ->
-    fun(Row) -> A(Row) * B(Row) end;
+    fun(Row, State) -> A(Row, State) * B(Row, State) end;
 compile_select_col_stateless2('/', A, B) ->
-    fun(Row) -> A(Row) / B(Row) end;
+    fun(Row, State) -> A(Row, State) / B(Row, State) end;
 compile_select_col_stateless2('-', A, B) ->
-    fun(Row) -> A(Row) - B(Row) end.
+    fun(Row, State) -> A(Row, State) - B(Row, State) end.
 
 check_types(_FnName, {_, RetType}, _Type)
   %% functions such as COUNT taking an argument of any type have
@@ -717,33 +772,10 @@ modify_where_key(TupleList, Field, NewVal) ->
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
 -ifdef(TEST).
--compile(export_all).
--include_lib("eunit/include/eunit.hrl").
 
 %%
 %% Helper Fns for unit tests
 %%
-
-make_ddl(Table, Fields) when is_binary(Table) ->
-    make_ddl(Table, Fields, #key_v1{}, #key_v1{}).
-
-make_ddl(Table, Fields, PK) when is_binary(Table) ->
-    make_ddl(Table, Fields, PK, #key_v1{}).
-
-make_ddl(Table, Fields, #key_v1{} = PK, #key_v1{} = LK)
-  when is_binary(Table) ->
-    #ddl_v1{table         = Table,
-            fields        = Fields,
-            partition_key = PK,
-            local_key     = LK}.
-
-make_query(Table, Selections) ->
-    make_query(Table, Selections, []).
-
-make_query(Table, Selections, Where) ->
-    ?SQL_SELECT{'FROM'   = Table,
-                'SELECT' = Selections,
-                'WHERE'  = Where}.
 
 -define(MIN, 60 * 1000).
 -define(NAME, "time").
@@ -1640,6 +1672,39 @@ basic_select_arith_1_test() ->
        Sel
       ).
 
+varchar_literal_test() ->
+    {ok, Rec} = get_query("SELECT 'hello' from mytab"),
+    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+       #riak_sel_clause_v1{
+          calc_type        = rows,
+          col_return_types = [varchar],
+          col_names        = [<<"'hello'">>] },
+       Sel
+      ).
+
+boolean_true_literal_test() ->
+    {ok, Rec} = get_query("SELECT true from mytab"),
+    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+       #riak_sel_clause_v1{
+          calc_type        = rows,
+          col_return_types = [boolean],
+          col_names        = [<<"true">>] },
+       Sel
+      ).
+
+boolean_false_literal_test() ->
+    {ok, Rec} = get_query("SELECT false from mytab"),
+    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+       #riak_sel_clause_v1{
+          calc_type        = rows,
+          col_return_types = [boolean],
+          col_names        = [<<"false">>] },
+       Sel
+      ).
+
 basic_select_arith_2_test() ->
     SQL = "SELECT 1 + 2.0 - 3 /4 * 5 from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
@@ -1713,35 +1778,105 @@ select_negation_test() ->
                                     },
                  Sel).
 
-%% basic_select_window_agg_fn_arith_1_test() ->
-%%     {ok, Rec} = get_query(
-%%         "SELECT count(location) + 1 from mytab "
-%%         "WHERE myfamily = 'familyX' "
-%%         "AND myseries = 'seriesX' AND time > 1 AND time < 2"
-%%     ),
-%%     {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
-%%     ?assertMatch(
-%%         #riak_sel_clause_v1{
-%%             calc_type = aggregate,
-%%             col_return_types = [sint64],
-%%             col_names = [<<"COUNT(location)+1">>] },
-%%         Selection
-%%     ).
+sum_sum_finalise_test() ->
+    {ok, Rec} = get_query(
+        "SELECT mydouble, SUM(mydouble), SUM(mydouble) FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertEqual(
+        [1.0,3,7],
+        finalise_aggregate(Select, [1.0, 3, 7])
+      ).
 
-%% FIXME
-%% basic_select_window_agg_fn_arith_2_test() ->
-%%     DDL = get_sel_ddl(),
-%%     SQL = "SELECT count(location + 1.0) from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
-%%     {ok, Rec} = get_query(SQL),
-%%     {ok, Sel} = compile_select_clause(DDL, Rec),
-%%     ?assertMatch(#riak_sel_clause_v1{calc_type        = aggregate,
-%%                                      col_return_types = [
-%%                                                          double
-%%                                                         ],
-%%                                      col_names        = [
-%%                                                          <<"COUNT(location+1)">>
-%%                                                         ]
-%%                                     },
-%%                  Sel).
+extract_stateful_function_1_test() ->
+    {ok, #riak_select_v1{ 'SELECT' = #riak_sel_clause_v1{ clause = [Select] } }} =
+        get_query(
+        "SELECT COUNT(col1) + COUNT(col2) FROM mytab "
+        "WHERE myfamily = 'familyX' "
+        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+    CountFn1 = {{window_agg_fn, 'COUNT'}, [{identifier, [<<"col1">>]}]},
+    CountFn2 = {{window_agg_fn, 'COUNT'}, [{identifier, [<<"col2">>]}]},
+    ?assertEqual(
+        {{'+', {return_state, 1}, {return_state, 2}}, [CountFn1,CountFn2]},
+        extract_stateful_functions(Select, 0)
+    ).
+
+count_plus_count_test() ->
+    {ok, Rec} = get_query(
+        "SELECT COUNT(mydouble) + COUNT(mydouble) FROM mytab "
+        "WHERE myfamily = 'familyX' "
+        "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        #riak_sel_clause_v1{
+            initial_state = [0,0],
+            finalisers = [_, skip] },
+        Select
+      ).
+
+count_plus_count_finalise_test() ->
+    {ok, Rec} = get_query(
+        "SELECT COUNT(mydouble) + COUNT(mydouble) FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        [6],
+        finalise_aggregate(Select, [3,3])
+      ).
+
+count_multiplied_by_count_finalise_test() ->
+    {ok, Rec} = get_query(
+        "SELECT COUNT(mydouble) * COUNT(mydouble) FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        [9],
+        finalise_aggregate(Select, [3,3])
+      ).
+
+count_plus_seven_finalise_test() ->
+    {ok, Rec} = get_query(
+        "SELECT COUNT(mydouble) + 7 FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        [10],
+        finalise_aggregate(Select, [3])
+      ).
+
+count_plus_seven_sum__test() ->
+    {ok, Rec} = get_query(
+        "SELECT COUNT(mydouble) + 7, SUM(mydouble) FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        #riak_sel_clause_v1{
+            initial_state = [0,[]],
+            finalisers = [_, _] },
+        Select
+      ).
+
+count_plus_seven_sum_finalise_test() ->
+    {ok, Rec} = get_query(
+        "SELECT COUNT(mydouble) + 7, SUM(mydouble) FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        [10, 11.0],
+        finalise_aggregate(Select, [3, 11.0])
+      ).
+
+count_plus_seven_sum_fsinalise_test() ->
+    {ok, Rec} = get_query(
+        "SELECT COUNT(user+1) + 1 FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertEqual(
+        [2],
+        finalise_aggregate(Select, [1])
+      ).
+
+finalise_aggregate_test() ->
+    ?assertEqual(
+        [1,2,3],
+        finalise_aggregate(
+            #riak_sel_clause_v1 {
+                finalisers = lists:duplicate(3, fun(_,S) -> S end) },
+            [1,2,3]
+        )
+    ).
 
 -endif.

@@ -251,23 +251,15 @@ prepare_final_results(#riak_sel_clause_v1{calc_type = rows} = Select,
     %% sort by index, to reassemble according to coverage plan
     {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
     prepare_final_results2(Select, lists:append(R2));
-prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate,
-                                           finalisers = FinaliserFns } = Select,
+prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate } = Select,
                       Aggregate1) ->
-    Aggregate2 = finalise_aggregate(Aggregate1, FinaliserFns, []),
+    Aggregate2 = riak_kv_qry_compiler:finalise_aggregate(Select, Aggregate1),
     prepare_final_results2(Select, [Aggregate2]).
 
 %%
 prepare_final_results2(#riak_sel_clause_v1{ col_return_types = ColTypes,
                                             col_names = ColNames}, Rows) ->
     {ColNames, ColTypes, Rows}.
-
-%%
-finalise_aggregate([], _, Acc) ->
-    lists:reverse(Acc);
-finalise_aggregate([Cell | Row], [CellFn | Fns], Acc) ->
-    FinalisedCell = CellFn(Cell),
-    finalise_aggregate(Row, Fns, [FinalisedCell | Acc]).
 
 %%%===================================================================
 %%% Unit tests
