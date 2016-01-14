@@ -28,11 +28,42 @@
          apply_timeseries_bucket_props/2,
          encode_typeval_key/1,
          get_table_ddl/1,
+         lk/1,
+         make_ts_keys/3,
          maybe_parse_table_def/2,
-         queried_table/1
+         pk/1,
+         queried_table/1,
+         table_to_bucket/1
         ]).
 
+%% NOTE on table_to_bucket/1: Clients will work with table
+%% names. Those names map to a bucket type/bucket name tuple in Riak,
+%% with both the type name and the bucket name matching the table.
+%%
+%% Thus, as soon as code transitions from dealing with timeseries
+%% concepts to Riak KV concepts, the table name must be converted to a
+%% bucket tuple. This function is a convenient mechanism for doing so
+%% and making that transition more obvious.
+
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
+
+
+%% Useful key extractors for functions (e.g., in get or delete code
+%% paths) which are agnostic to whether they are dealing with TS or
+%% non-TS data
+pk({PK, _LK}) ->
+    PK;
+pk(NonTSKey) ->
+    NonTSKey.
+
+lk({_PK, LK}) ->
+    LK;
+lk(NonTSKey) ->
+    NonTSKey.
+
+%% Utility API to limit some of the confusion over tables vs buckets
+table_to_bucket(Table) ->
+    {Table, Table}.
 
 
 -spec queried_table(#riak_sql_describe_v1{} | ?SQL_SELECT{}) -> binary().
@@ -60,6 +91,15 @@ get_table_ddl(Table) ->
             {error, {inappropriate_bucket_state, InappropriateState}}
     end.
 
+
+%%
+-spec apply_timeseries_bucket_props(DDL::#ddl_v1{},
+                                    Props1::[proplists:property()]) ->
+        {ok, Props2::[proplists:property()]}.
+apply_timeseries_bucket_props(DDL, Props1) ->
+    Props2 = lists:keystore(
+        <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
+    {ok, [{<<"ddl">>, DDL} | Props2]}.
 
 
 %% Given bucket properties, transform the `<<"table_def">>' property if it
@@ -91,15 +131,6 @@ maybe_parse_table_def(BucketType, Props) ->
                     E
             end
     end.
-
-%%
--spec apply_timeseries_bucket_props(DDL::#ddl_v1{},
-                                    Props1::[proplists:property()]) ->
-        {ok, Props2::[proplists:property()]}.
-apply_timeseries_bucket_props(DDL, Props1) ->
-    Props2 = lists:keystore(
-        <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
-    {ok, [{<<"ddl">>, DDL} | Props2]}.
 
 %% Time series must always use write_once so throw an error if the write_once
 %% property is ever set to false. This prevents a user thinking they have
@@ -133,6 +164,39 @@ try_compile_ddl(DDL) ->
     {ok, _, _} = compile:forms(AST),
     ok.
 
+
+-spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}, module()) ->
+                          {ok, {binary(), binary()}} |
+                          {error, {bad_key_length, integer(), integer()}}.
+%% Given a list of values (of appropriate types) and a DDL, produce a
+%% partition and local key pair, which can be used in riak_client:get
+%% to fetch TS objects.
+make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
+                                        fields = Fields}, Mod) ->
+    %% 1. use elements in Key to form a complete data record:
+    KeyFields = [F || #param_v1{name = [F]} <- LKParams],
+    Got = length(CompoundKey),
+    Need = length(KeyFields),
+    case {Got, Need} of
+        {_N, _N} ->
+            KeyAssigned = lists:zip(KeyFields, CompoundKey),
+            VoidRecord = [{F, void} || #riak_field_v1{name = F} <- Fields],
+            %% (void values will not be looked at in riak_ql_ddl:make_key;
+            %% only LK-constituent fields matter)
+            BareValues =
+                list_to_tuple(
+                  [proplists:get_value(K, KeyAssigned)
+                   || {K, _} <- VoidRecord, lists:member(K, KeyFields)]),
+
+            %% 2. make the PK and LK
+            PK  = encode_typeval_key(
+                    riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
+            LK  = encode_typeval_key(
+                    riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
+            {ok, {PK, LK}};
+       {G, N} ->
+            {error, {bad_key_length, G, N}}
+    end.
 
 %%
 %% Encode a time series key returned by riak_ql_ddl:get_partition_key/3,

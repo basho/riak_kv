@@ -197,7 +197,7 @@ prepare(timeout, StateData=#state{bkey = {Bucket, Key},
                 BucketProps
         end,
 
-    DocIdx = riak_core_util:chash_key({Bucket, riak_kv_pb_timeseries:pk(Key)}, BucketProps),
+    DocIdx = riak_core_util:chash_key({Bucket, riak_kv_ts_util:pk(Key)}, BucketProps),
 
     Bucket_N = get_option(n_val, BucketProps),
     CrdtOp = get_option(crdt_op, Options),
@@ -225,7 +225,7 @@ prepare(timeout, StateData=#state{bkey = {Bucket, Key},
                         riak_core_apl:get_apl_ann(DocIdx, N, UpNodes)
                 end,
             new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
-                                                        bkey = {Bucket, riak_kv_pb_timeseries:lk(Key)},
+                                                        bkey = {Bucket, riak_kv_ts_util:lk(Key)},
                                                         n = N,
                                                         bucket_props=Props,
                                                         preflist2 = Preflist2,
