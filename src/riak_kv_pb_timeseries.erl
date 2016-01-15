@@ -268,19 +268,11 @@ sub_tsttbputreq(Mod, _DDL, #tsttbputreq{table = Table, rows = Data},
 sub_putreq_common(Mod, Table, Data, State) ->
     case catch validate_rows(Mod, Data) of
         [] ->
-            try
-                case put_data(Data, Table, Mod) of
-                    0 ->
-                        {reply, #tsputresp{}, State};
-                    ErrorCount ->
-                        EPutMessage = flat_format("Failed to put ~b record(s)", [ErrorCount]),
-                        {reply, make_rpberrresp(?E_PUT, EPutMessage), State}
-                end
-            catch
-                Class:Exception ->
-                    lager:error("error: ~p:~p~n~p", [Class, Exception, erlang:get_stacktrace()]),
-                    Error = make_rpberrresp(?E_IRREG, to_string({Class, Exception})),
-                    {reply, Error, State}
+            case put_data(Data, Table, Mod) of
+                0 ->
+                    {reply, #tsputresp{}, State};
+                ErrorCount ->
+                    {reply, failed_put_response(ErrorCount), State}
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
             {reply, validate_rows_error_response(BadRowIdxs), State}
