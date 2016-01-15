@@ -218,16 +218,11 @@ create_table(DDL = #ddl_v1{table = Table}, State) ->
         ok ->
             wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
         {error, Reason} ->
-            {reply, make_rpberrresp(
-                      ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])),
-             State}
+            {reply, table_create_fail_response(Table, Reason), State}
     end.
 
 wait_until_active(Table, State, 0) ->
-    {reply, make_rpberrresp(
-              ?E_ACTIVATE,
-              flat_format("Failed to activate table ~s", [Table])),
-     State};
+    {reply, table_activate_fail_response(Table), State};
 wait_until_active(Table, State, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
@@ -241,10 +236,7 @@ wait_until_active(Table, State, Seconds) ->
             %% the dialyzer (and of course, for the odd chance
             %% of Erlang imps crashing nodes between create
             %% and activate calls)
-            {reply, make_rpberrresp(
-                      ?E_CREATED_GHOST,
-                      flat_format("Table ~s has been created but found missing", [Table])),
-             State}
+            {reply, table_created_missing_response(Table), State}
     end.
 
 
@@ -468,9 +460,7 @@ sub_tsdelreq(Mod, DDL, #tsdelreq{table = Table,
         {error, notfound} ->
             {reply, tsdelresp, State};
         {error, Reason} ->
-            {reply, make_rpberrresp(
-                      ?E_DELETE, flat_format("Failed to delete record: ~p", [Reason])),
-             State}
+            {reply, failed_delete_response(Reason), State}
     end.
 
 
@@ -493,9 +483,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
                                                  column_info = ColumnInfo}};
         {error, Reason} ->
-            {reply, make_rpberrresp(
-                      ?E_LISTKEYS, flat_format("Failed to list keys: ~p", [Reason])),
-             State}
+            {reply, failed_listkeys_response(Reason), State}
     end.
 
 
@@ -704,10 +692,8 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
                             riak_kv_ts_util:table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State};
         {error, {inappropriate_bucket_state, InappropriateState}} ->
-            {reply, make_rpberrresp(
-                      ?E_TABLE_INACTIVE,
-                      flat_format("Table ~ts has not been activated (is in state '~s')",
-                                  [Table, InappropriateState])),
+            {reply, table_not_activated_response(
+                      Table, InappropriateState),
              State}
     end.
 
@@ -764,6 +750,40 @@ validate_rows_error_response(BadRowIdxs) ->
     make_rpberrresp(
       ?E_IRREG,
       flat_format("Invalid data found at row index(es) ~s", [BadRowsString])).
+
+failed_put_response(ErrorCount) ->
+    make_rpberrresp(
+      ?E_PUT,
+      flat_format("Failed to put ~b record(s)", [ErrorCount])).
+
+failed_delete_response(Reason) ->
+    make_rpberrresp(
+      ?E_DELETE,
+      flat_format("Failed to delete record: ~p", [Reason])).
+
+failed_listkeys_response(Reason) ->
+    make_rpberrresp(
+      ?E_LISTKEYS,
+      flat_format("Failed to list keys: ~p", [Reason])).
+
+table_create_fail_response(Table, Reason) ->
+    make_rpberrresp(
+      ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])).
+
+table_activate_fail_response(Table) ->
+    make_rpberrresp(
+      ?E_ACTIVATE,
+      flat_format("Failed to activate table ~s", [Table])).
+
+table_not_activated_response(Table, BadState) ->
+    make_rpberrresp(
+      ?E_TABLE_INACTIVE,
+      flat_format("Table ~ts has not been activated (is in state '~s')", [Table, BadState])).
+
+table_created_missing_response(Table) ->
+    make_rpberrresp(
+      ?E_CREATED_GHOST,
+      flat_format("Table ~s has been created but found missing", [Table])).
 
 to_string(X) ->
     flat_format("~p", [X]).
