@@ -335,7 +335,7 @@ put_data(Data, Table, Mod) ->
                      BucketProps :: proplists:proplist(),
                      DDL :: #ddl_v1{},
                      Mod :: module()) ->
-                            list(tuple(non_neg_integer(), list(term()))).
+                            list(tuple(chash:index(), list(term()))).
 partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
     PartitionTuples =
         [ { riak_core_util:chash_key({Bucket, row_to_key(R, DDL, Mod)},
