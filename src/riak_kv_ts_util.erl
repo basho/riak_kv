@@ -102,12 +102,12 @@ apply_timeseries_bucket_props(DDL, Props1) ->
     {ok, [{<<"ddl">>, DDL} | Props2]}.
 
 
-%% Given bucket properties, transform the `<<"table_def">>' property if it
-%% exists to riak_ql DDL and store it under the `<<"ddl">>' key, table_def
-%% is removed.
 -spec maybe_parse_table_def(BucketType :: binary(),
                             Props :: list(proplists:property())) ->
         {ok, Props2 :: [proplists:property()]} | {error, any()}.
+%% Given bucket properties, transform the `<<"table_def">>' property if it
+%% exists to riak_ql DDL and store it under the `<<"ddl">>' key, table_def
+%% is removed.
 maybe_parse_table_def(BucketType, Props) ->
     case lists:keytake(<<"table_def">>, 1, Props) of
         false ->
@@ -146,7 +146,7 @@ assert_write_once_not_false(Props) ->
             ok
     end.
 
-%% @doc Ensure table name in DDL and bucket type are the same.
+%% Ensure table name in DDL and bucket type are the same.
 assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
     ok;
 assert_type_and_table_name_same(BucketType1, #ddl_v1{table = BucketType2}) ->
@@ -198,10 +198,8 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
             {error, {bad_key_length, G, N}}
     end.
 
-%%
+-spec encode_typeval_key(list({term(), term()})) -> tuple().
 %% Encode a time series key returned by riak_ql_ddl:get_partition_key/3,
 %% riak_ql_ddl:get_local_key/3,
-%%
--spec encode_typeval_key(list({term(), term()})) -> tuple().
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).

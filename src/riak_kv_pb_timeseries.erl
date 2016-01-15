@@ -193,7 +193,8 @@ process_stream({ReqId, From, {keys, CompoundKeys}}, ReqId,
                               column_info = ColumnInfo}) ->
     riak_kv_keys_fsm:ack_keys(From),
     Keys = riak_pb_ts_codec:encode_rows(
-             ColumnInfo, [tuple_to_list(sext:decode(A)) || A <- CompoundKeys, A /= []]),
+             ColumnInfo, [tuple_to_list(sext:decode(A))
+                          || A <- CompoundKeys, A /= []]),
     {reply, #tslistkeysresp{keys = Keys, done = false}, State};
 
 process_stream({ReqId, {error, Error}}, ReqId,
@@ -295,7 +296,7 @@ validate_rows(Mod, Rows) ->
             _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
         end
     end,
-    {_, BadRowIdxs} = lists:foldl(ValidateFn, {1,[]}, Rows),
+    {_, BadRowIdxs} = lists:foldl(ValidateFn, {1, []}, Rows),
     lists:reverse(BadRowIdxs).
 
 
@@ -374,10 +375,12 @@ add_preflists(PartitionedData, NVal, UpNodes) ->
 
 build_object(Bucket, Mod, DDL, Row, PK) ->
     Obj = Mod:add_column_info(Row),
-    LK  = riak_kv_ts_util:encode_typeval_key(riak_ql_ddl:get_local_key(DDL, Row, Mod)),
+    LK  = riak_kv_ts_util:encode_typeval_key(
+            riak_ql_ddl:get_local_key(DDL, Row, Mod)),
 
-    RObj = riak_object:newts(Bucket, PK, Obj,
-                             dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
+    RObj = riak_object:newts(
+             Bucket, PK, Obj,
+             dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
     {RObj, LK}.
 
 
@@ -595,9 +598,9 @@ derive_description(Table, Field, {{Start, StartInclusive}, {End, EndInclusive}})
     StartOp = pick_operator(">", StartInclusive),
     EndOp = pick_operator("<", EndInclusive),
     unicode:characters_to_binary(
-      lists:flatten(io_lib:format("~ts / ~ts ~s ~B and ~ts ~s ~B",
-                                  [Table, Field, StartOp, Start,
-                                   Field, EndOp, End])), utf8).
+      flat_format("~ts / ~ts ~s ~B and ~ts ~s ~B",
+                  [Table, Field, StartOp, Start,
+                   Field, EndOp, End]), utf8).
 
 pick_operator(LGT, true) ->
     LGT ++ "=";
@@ -616,7 +619,7 @@ extract_time_boundaries(FieldName, WhereList) ->
 
 %%%%%%%%%%%%
 %% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
-identify_quantum_field(#key_v1{ast=KeyList}) ->
+identify_quantum_field(#key_v1{ast = KeyList}) ->
     HashFn = find_hash_fn(KeyList),
     P_V1 = hd(HashFn#hash_fn_v1.args),
     hd(P_V1#param_v1.name).
@@ -726,10 +729,12 @@ make_rpberrresp(Code, Message) ->
 
 %%
 -spec missing_helper_module(Table::binary(),
-                            BucketProps::{error,any()} | [proplists:property()]) -> #rpberrorresp{}.
+                            BucketProps::{error, any()} | [proplists:property()])
+                           -> #rpberrorresp{}.
 missing_helper_module(Table, {error, _}) ->
     missing_type_response(Table);
-missing_helper_module(Table, BucketProps) when is_binary(Table), is_list(BucketProps) ->
+missing_helper_module(Table, BucketProps)
+  when is_binary(Table), is_list(BucketProps) ->
     case lists:keymember(ddl, 1, BucketProps) of
         true  -> missing_table_module_response(Table);
         false -> not_timeseries_type_response(Table)
@@ -739,21 +744,21 @@ missing_helper_module(Table, BucketProps) when is_binary(Table), is_list(BucketP
 -spec missing_type_response(Table::binary()) -> #rpberrorresp{}.
 missing_type_response(Table) ->
     make_rpberrresp(
-        ?E_MISSING_TYPE,
-        flat_format("Time Series table ~s does not exist.", [Table])).
+      ?E_MISSING_TYPE,
+      flat_format("Time Series table ~s does not exist.", [Table])).
 
 %%
 -spec not_timeseries_type_response(Table::binary()) -> #rpberrorresp{}.
 not_timeseries_type_response(Table) ->
     make_rpberrresp(
-        ?E_NOT_TS_TYPE,
-        flat_format("Attempt Time Series operation on non Time Series table ~s.", [Table])).
+      ?E_NOT_TS_TYPE,
+      flat_format("Attempt Time Series operation on non Time Series table ~s.", [Table])).
 
 -spec missing_table_module_response(Table::binary()) -> #rpberrorresp{}.
 missing_table_module_response(Table) ->
     make_rpberrresp(
-        ?E_MISSING_TS_MODULE,
-        flat_format("The compiled module for Time Series table ~s cannot be loaded.", [Table])).
+      ?E_MISSING_TS_MODULE,
+      flat_format("The compiled module for Time Series table ~s cannot be loaded.", [Table])).
 
 -spec key_element_count_mismatch(Got::integer(), Need::integer()) -> #rpberrorresp{}.
 key_element_count_mismatch(Got, Need) ->
@@ -764,9 +769,9 @@ key_element_count_mismatch(Got, Need) ->
 -spec validate_rows_error_response([string()]) ->#rpberrorresp{}.
 validate_rows_error_response(BadRowIdxs) ->
     BadRowsString = string:join(BadRowIdxs,", "),
-    ErrorMsg = flat_format(
-        "Invalid data found at row index(es) ~s", [BadRowsString]),
-    make_rpberrresp(?E_IRREG, ErrorMsg).
+    make_rpberrresp(
+      ?E_IRREG,
+      flat_format("Invalid data found at row index(es) ~s", [BadRowsString])).
 
 to_string(X) ->
     flat_format("~p", [X]).
@@ -798,8 +803,8 @@ get_column_types(ColumnNames, Mod) ->
 -spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
                                            [#tscolumndescription{}].
 make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
-  [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
-    || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
+    [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
+     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
 
 
 
