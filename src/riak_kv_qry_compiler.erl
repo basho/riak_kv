@@ -524,11 +524,12 @@ quantum_field_name(#ddl_v1{ partition_key = PK }) ->
     #hash_fn_v1{args = [#param_v1{name = QFieldName} | _]} = Quantum,
     QFieldName.
 
-check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL,
+check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK0} = DDL,
                     [W]) ->
     try
+	LK = LK0#key_v1{ast = lists:sublist(LK0#key_v1.ast, 3)},
         #key_v1{ast = PartitionKeyAST} = PK,
-        LocalFields     = [X || #param_v1{name = X} <- LK#key_v1.ast],
+        LocalFields     = [X || #param_v1{name = X} <- lists:sublist(LK#key_v1.ast, 3)],
         PartitionFields = [X || #param_v1{name = X} <- PartitionKeyAST],
         [QuantumFieldName] = quantum_field_name(DDL),
         StrippedW = strip(W, []),
@@ -655,7 +656,7 @@ break_out_timeseries(Filters1, LocalFields1, [QuantumFields]) ->
         {Filters2, {Starts, Ends}} ->
             %% remove the quanta from the local fields, this has alreadfy been
             %% removed from the fields
-            [F1, F2, _] = LocalFields1,
+            [F1, F2, _] = lists:sublist(LocalFields1, 3),
             LocalFields2 = [F1,F2],
             %% create the keys by splitting the key filters and prepending it
             %% with the time bound.

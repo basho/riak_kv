@@ -454,12 +454,24 @@ fold_indexes_fun(FoldIndexFun) ->
             end
     end.
 
+build_list({_K, _V}=KV, Acc) ->
+    [KV | Acc].
+
 range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                                               ref=Ref}) ->
     {_, Bucket, Qry} = proplists:lookup(index, Opts),
     ?SQL_SELECT{'WHERE'    = W,
                 helper_mod = Mod,
                 local_key  = LK} = Qry,
+    %% Work out what the elements of the local key are after the partitioning key.
+    %% Used below to add dummy fields to pad out the StartK2/EndK2 fields.
+    LKAST = LK#key_v1.ast,
+    ExtraLK = case length(LKAST) > 3 of
+		  true ->
+		      lists:nthtail(3, LKAST);
+		  false ->
+		      []
+	      end,
     %% this is all super-fugly
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
@@ -478,17 +490,19 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
             [] -> AdditionalOptions;
             _  -> [{range_filter, Filter} | AdditionalOptions]
         end,
-    StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
+    %% Pad with missing local keys after the timestamp - use minimum erlang term value of '0' to make
+    %% sure we start the search at the beginning.
+    StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK] ++ [{N, 0} || #param_v1{name = [N]} <- ExtraLK],
     StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
     StartK4 = riak_kv_ts_util:encode_typeval_key(StartK3), %% TODO: Avoid adding/removing type info
     StartKey = to_object_key(Bucket, StartK4),
-    EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
+    %% Pad the missing end - not perfect because there could be longer bitstrings, but will have to do for prototype
+    %% TODO: FIX END KEY
+    EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK] ++ [{N, <<16#ffffffff:64>>} || #param_v1{name = [N]} <- ExtraLK],
     EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
     EndK4 = riak_kv_ts_util:encode_typeval_key(EndK3),
     EndKey = to_object_key(Bucket, EndK4),
-    FoldFun = fun({K, V}, Acc) ->
-                      [{K, V} | Acc]
-              end,
+    FoldFun = fun build_list/2,
     Options = [
                {start_key,    StartKey},
                {end_key,      EndKey},
