@@ -136,9 +136,14 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     %% whole query
     Acc = {sets:new(), #riak_sel_clause_v1{ }},
     %% iterate from the right so we can append to the head of lists
-    {ColTypeSet, Q2} = lists:foldl(CompileColFn, Acc, Sel),
+    {ResultTypeSet, Q2} = lists:foldl(CompileColFn, Acc, Sel),
 
-    case sets:is_element(aggregate, ColTypeSet) of
+    {ColTypes, Errors} = lists:mapfoldl(
+        fun(ColASTX, Errors) ->
+            infer_col_type(DDL, ColASTX, Errors)
+        end, [], Sel),
+
+    case sets:is_element(aggregate, ResultTypeSet) of
         true  ->
             Q3 = Q2#riak_sel_clause_v1{
                    calc_type = aggregate,
@@ -149,7 +154,17 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
                    initial_state = [],
                    col_names = get_col_names(DDL, Q) }
     end,
-    {ok, Q3}.
+    {ok, Q3#riak_sel_clause_v1{
+        col_names = get_col_names(DDL, Q),
+        col_return_types = lists:flatten(ColTypes),
+        is_valid = is_select_valid(Errors) }}.
+
+%%
+is_select_valid([]) ->
+    true;
+is_select_valid([_|_] = Errors) ->
+    {error, Errors}.
+
 
 %%
 -spec get_col_names(#ddl_v1{}, ?SQL_SELECT{}) -> [binary()].
@@ -187,11 +202,14 @@ select_column_clause_folder(DDL, ColAST1,
     LenFinalisers = length(Finalisers),
     case extract_stateful_functions(ColAST1, LenFinalisers) of
         {ColAST2, []} ->
-            {_Types, _Is_valid, FinaliserFn} =
+            %% the case where the column contains no functions
+            FinaliserFn =
                 compile_select_col_stateless(DDL, {return_state, LenFinalisers + 1}),
             ColAstList = [{ColAST2, FinaliserFn}];
         {FinaliserAST, [WindowFnAST | Tail]} ->
-            {_Types, _Is_valid, FinaliserFn} =
+            %% the column contains one or more functions that will be separated
+            %% into their own columns until finalisation
+            FinaliserFn =
                 compile_select_col_stateless(DDL, FinaliserAST),
             ActualCol = {WindowFnAST, FinaliserFn},
             TempCols = [{AST, skip} || AST <- Tail],
@@ -210,24 +228,18 @@ select_column_clause_folder(DDL, ColAST1,
 select_column_clause_exploded_folder(DDL, {ColAst, Finaliser}, {TypeSet1, SelClause1}) ->
     #riak_sel_clause_v1{
        initial_state = InitX,
-       col_return_types = ColRetX,
        clause = RunFnX,
-       is_valid = IsValid1,
        finalisers = Finalisers1 } = SelClause1,
     S = compile_select_col(DDL, ColAst),
     TypeSet2 = sets:add_element(S#single_sel_column.calc_type, TypeSet1),
     Init2   = InitX ++ [S#single_sel_column.initial_state],
-    ColRet2 = ColRetX ++ [S#single_sel_column.col_return_types],
     RunFn2  = RunFnX ++ [S#single_sel_column.clause],
     Finalisers2 = Finalisers1 ++ [Finaliser],
-    IsValid2 = merge_validation(S#single_sel_column.is_valid, IsValid1),
     %% ColTypes are messy because <<"*">> represents many
     %% so you need to flatten the list
     SelClause2 = #riak_sel_clause_v1{
                     initial_state    = Init2,
-                    col_return_types = lists:flatten(ColRet2),
                     clause           = RunFn2,
-                    is_valid         = IsValid2,
                     finalisers       = lists:flatten(Finalisers2)},
     {TypeSet2, SelClause2}.
 
@@ -238,19 +250,13 @@ select_column_clause_exploded_folder(DDL, {ColAst, Finaliser}, {TypeSet1, SelCla
 compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) when is_atom(FnName) ->
     case riak_ql_window_agg_fns:start_state(FnName) of
         stateless ->
-            {ColTypes1, IsValid1, Fn} = compile_select_col_stateless(DDL, FnArg1),
+            % TODO this does not run the function! nothing is stateless so far though
+            Fn = compile_select_col_stateless(DDL, FnArg1),
             #single_sel_column{ calc_type        = rows,
                                 initial_state    = undefined,
-                                col_return_types = ColTypes1,
-                                clause           = Fn,
-                                is_valid         = IsValid1};
+                                clause           = Fn };
         Initial_state ->
-            {ColTypes2, IsValid2, Compiled_arg1} =
-                compile_select_col_stateless(DDL, FnArg1),
-            FnSig = riak_ql_window_agg_fns:get_arity_and_type_sig(FnName),
-            {IsValid, ColRet} = check_types(FnName, FnSig, ColTypes2),
-
-            IsValid3 = merge_validation(IsValid2, IsValid),
+            Compiled_arg1 = compile_select_col_stateless(DDL, FnArg1),
             % all the windows agg fns so far are arity of 1
             % which we have forced in this clause by matching on a single argument in the
             % function head
@@ -260,74 +266,78 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) when is_atom(FnName
                 end,
             #single_sel_column{ calc_type        = aggregate,
                                 initial_state    = Initial_state,
-                                col_return_types = ColRet,
-                                clause           = SelectFn,
-                                is_valid         = IsValid3}
+                                clause           = SelectFn }
     end;
 compile_select_col(DDL, Select) ->
-    {ColTypes, IsValid, Fn} = compile_select_col_stateless(DDL, Select),
-    %% Finalisers = lists:duplicate(length(ColTypes), fun(State) -> State end),
-    #single_sel_column{ calc_type        = rows,
-                        initial_state    = undefined,
-                        col_return_types = ColTypes,
-                        clause           = Fn,
-                        is_valid         = IsValid}.
+    #single_sel_column{ calc_type = rows,
+                        initial_state = undefined,
+                        clause = compile_select_col_stateless(DDL, Select) }.
 
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
 -spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}|{return_state, integer()}) ->
-       {ColTypes::[simple_field_type()], IsValid::true|any(), compiled_select()}.
-compile_select_col_stateless(DDL, {identifier, [<<"*">>]}) ->
-    ColTypes = [X#riak_field_v1.type || X <- DDL#ddl_v1.fields],
-    {ColTypes, true, fun(Row, _) -> Row end};
+       compiled_select().
+compile_select_col_stateless(_, {identifier, [<<"*">>]}) ->
+    fun(Row, _) -> Row end;
 compile_select_col_stateless(DDL, {negate, ExprToNegate}) ->
-    {TypeToNegate, ValidityToNegate, ValueToNegate} =
-        compile_select_col_stateless(DDL, ExprToNegate),
-    NegatingFun = fun(Row, State) -> -ValueToNegate(Row, State) end,
-    case ValidityToNegate of
-        true ->
-            {[TypeToNegate],
-             ValidityToNegate,
-             NegatingFun};
-        _ -> {[], ValidityToNegate, []}
-    end;
-compile_select_col_stateless(_, {Type, V}) when Type == varchar; Type == boolean ->
-    {[Type], true, fun(_,_) -> V end};
-compile_select_col_stateless(_, {Type, V}) when Type == binary ->
-    {[varchar], true, fun(_,_) -> V end};
-compile_select_col_stateless(_, {Type, V}) when Type == integer ->
-    %% TODO why is this integer not sint64?
-    {[sint64], true, fun(_,_) -> V end};
-compile_select_col_stateless(_, {Type, V}) when Type == float ->
-    %% TODO ditto float and double
-    {[double], true, fun(_,_) -> V end};
+    ValueToNegate = compile_select_col_stateless(DDL, ExprToNegate),
+    fun(Row, State) -> -ValueToNegate(Row, State) end;
+compile_select_col_stateless(_, {Type, V}) when Type == varchar; Type == boolean; Type == binary; Type == integer; Type == float ->
+    fun(_,_) -> V end;
 compile_select_col_stateless(_, {return_state, N}) when is_integer(N) ->
-    %% FIXME calculate type
-    {[sint64], true, fun(Row,_) -> pull_from_row(N, Row) end};
+    fun(Row,_) -> pull_from_row(N, Row) end;
 compile_select_col_stateless(_, {finalise_aggregation, FnName, N}) ->
-    FinaliseFn =
-        fun(Row,_) ->
-            ColValue = pull_from_row(N, Row),
-            riak_ql_window_agg_fns:finalise(FnName, ColValue)
-        end,
-    {[sint64], true, FinaliseFn};
+    fun(Row,_) ->
+        ColValue = pull_from_row(N, Row),
+        riak_ql_window_agg_fns:finalise(FnName, ColValue)
+    end;
 compile_select_col_stateless(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
-    {Index, Type} = col_index_and_type_of(Fields, to_column_name_binary(ColumnName)),
-    {[Type], true, fun(Row,_) -> pull_from_row(Index, Row) end};
+    {Index, _} = col_index_and_type_of(Fields, to_column_name_binary(ColumnName)),
+    fun(Row,_) -> pull_from_row(Index, Row) end;
 compile_select_col_stateless(DDL, {Op, A, B}) ->
-    {Ta, IsValida, Arg_a} = compile_select_col_stateless(DDL, A),
-    {Tb, IsValidb, Arg_b} = compile_select_col_stateless(DDL, B),
-    IsValid2 = merge_validation(IsValida, IsValidb),
-    case IsValid2 of
-        true ->
-            [TypeA] = Ta,
-            [TypeB] = Tb,
-            {IsValid, NewType} = resolve_operator_type(Op, TypeA, TypeB),
-            {[NewType], IsValid, compile_select_col_stateless2(Op, Arg_a, Arg_b)};
-        _ ->
-            {[], IsValid2, []}
-    end.
+    Arg_a = compile_select_col_stateless(DDL, A),
+    Arg_b = compile_select_col_stateless(DDL, B),
+    compile_select_col_stateless2(Op, Arg_a, Arg_b).
+
+%%
+-spec infer_col_type(#ddl_v1{}, selection(), Errors1::[any()]) ->
+        {Type::simple_field_type(), Errors2::[any()]}.
+infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
+                                          Type == boolean; Type == double ->
+    {Type, Errors};
+infer_col_type(_, {binary, _}, Errors) ->
+    {varchar, Errors};
+infer_col_type(_, {integer, _}, Errors) ->
+    {sint64, Errors};
+infer_col_type(_, {float, _}, Errors) ->
+    {double, Errors};
+infer_col_type(#ddl_v1{ fields = Fields }, {identifier, ColName1}, Errors) ->
+    case to_column_name_binary(ColName1) of
+        <<"*">> ->
+            Type = [T || #riak_field_v1{ type = T } <- Fields];
+        ColName2 ->
+            {_, Type} = col_index_and_type_of(Fields, ColName2)
+    end,
+    {Type, Errors};
+infer_col_type(DDL, {{window_agg_fn, FnName}, [FnArg1]}, Errors1) ->
+    {ArgType, Errors2} = infer_col_type(DDL, FnArg1, Errors1),
+    ReturnType = riak_ql_window_agg_fns:fn_type_signature(FnName, [ArgType]),
+    {ReturnType, Errors2};
+infer_col_type(DDL, {Op, A, B}, Errors1) when Op == '/'; Op == '+'; Op == '-'; Op == '*' ->
+    {AType, Errors2} = infer_col_type(DDL, A, Errors1),
+    {BType, Errors3} = infer_col_type(DDL, B, Errors2),
+    case infer_op_type(Op, AType, BType) of
+        {error, Reason} ->
+            %% return error as the type for now!
+            {error, [Reason | Errors3]};
+        Type ->
+            {Type, Errors3}
+    end;
+infer_col_type(DDL, {negate, AST}, Errors) ->
+    infer_col_type(DDL, AST, Errors).
+
+%% FIXME impl negate
 
 %%
 pull_from_row(N, Row) ->
@@ -355,34 +365,18 @@ extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLe
     Fns2 = [Function | Fns1],
     {{finalise_aggregation, FnName, FinaliserLen + length(Fns2)}, Fns2}.
 
-%% TODO rewrite so that all the operators are just functions
-%% then we can eliminate the double code for creating return types
-%% and type checking and stuff 'cos this is messy
-resolve_operator_type(Op, Type, Type) when Op =:= '+' orelse
-                                           Op =:= '-' orelse
-                                           Op =:= '*',
-                                           Type =:= double orelse
-                                           Type =:= sint64 -> {true, Type};
-resolve_operator_type(Op, Type1, Type2) when Op =:= '+' orelse
-                                             Op =:= '-' orelse
-                                             Op =:= '*',
-                                             Type1 =:= double andalso
-                                             Type2 =:= sint64;
-                                             Type1 =:= sint64 andalso
-                                             Type2 =:= double -> {true, double};
-resolve_operator_type('/', Type1, Type2) when Type1 =:= double andalso
-                                              Type2 =:= double -> {true, double};
-resolve_operator_type('/', Type1, Type2) when Type1 =:= sint64 andalso
-                                              Type2 =:= sint64 -> {true, sint64};
-resolve_operator_type('/', Type1, Type2) when Type1 =:= sint64 orelse
-                                              Type1 =:= double;
-                                              Type2 =:= sint64 orelse
-                                              Type2 =:= double -> {true, double};
-resolve_operator_type(Op, Type1, Type2) -> {{error, {invalid_type, Op, Type1, Type2}}, []}.
-
-merge_validation(true,        IsValid)     -> IsValid;
-merge_validation(IsValid,     true)        -> IsValid;
-merge_validation({error, E1}, {error, E2}) -> {error, E1 ++ E2}.
+%%
+infer_op_type('/', sint64, sint64) -> sint64;
+infer_op_type('/', double, double) -> double;
+infer_op_type('/', sint64, double) -> double;
+infer_op_type('/', double, sint64) -> double;
+infer_op_type(_, T, T) when T == double orelse T == sint64 ->
+    T;
+infer_op_type(_, T1, T2) when T1 == double andalso T2 == sint64;
+                               T1 == sint64 andalso T2 == double ->
+    double;
+infer_op_type(Op, T1, T2) ->
+    {error, {invalid_type, Op, T1, T2}}.
 
 %%
 compile_select_col_stateless2('+', A, B) ->
@@ -393,17 +387,6 @@ compile_select_col_stateless2('/', A, B) ->
     fun(Row, State) -> A(Row, State) / B(Row, State) end;
 compile_select_col_stateless2('-', A, B) ->
     fun(Row, State) -> A(Row, State) - B(Row, State) end.
-
-check_types(_FnName, {_, RetType}, _Type)
-  %% functions such as COUNT taking an argument of any type have
-  %% a special signature
-  when not is_list(RetType) ->
-    {true, [RetType]};
-check_types(FnName, {_Arity, TypeSig}, [Type]) ->
-    case lists:keyfind(Type, 1, TypeSig) of
-        {Type, Ret} -> {true, [Ret]};
-        false       -> {{error, [{fn_called_with_invalid_type, FnName, Type}]}, []}
-    end.
 
 %%
 to_column_name_binary([Name]) when is_binary(Name) ->
@@ -1904,6 +1887,18 @@ finalise_aggregate_test() ->
                 finalisers = lists:duplicate(3, fun(_,S) -> S end) },
             [1,2,3]
         )
+    ).
+
+infer_col_type_1_test() ->
+    ?assertEqual(
+        {sint64, []},
+        infer_col_type(get_sel_ddl(), {integer, 5}, [])
+    ).
+
+infer_col_type_2_test() ->
+    ?assertEqual(
+        {sint64, []},
+        infer_col_type(get_sel_ddl(), {{window_agg_fn, 'SUM'}, [{integer, 4}]}, [])
     ).
 
 -endif.
