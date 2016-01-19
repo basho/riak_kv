@@ -41,11 +41,14 @@ compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
     {error, 'query is already compiled'};
 compile(#ddl_v1{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }, _MaxSubQueries) ->
     {error, 'full table scan not implemented'};
-compile(#ddl_v1{} = DDL, ?SQL_SELECT{is_executable = false,
-                                     type          = sql} = Q,
-       MaxSubQueries) ->
-    {ok, S} = compile_select_clause(DDL, Q),
-    compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries).
+compile(#ddl_v1{} = DDL,
+        ?SQL_SELECT{is_executable = false, type = sql} = Q, MaxSubQueries) ->
+    case compile_select_clause(DDL, Q) of
+        {ok, S} ->
+            compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries);
+        {error, _} = Error ->
+            Error
+    end.
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -154,17 +157,15 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
                    initial_state = [],
                    col_names = get_col_names(DDL, Q) }
     end,
-    {ok, Q3#riak_sel_clause_v1{
-        col_names = get_col_names(DDL, Q),
-        col_return_types = lists:flatten(ColTypes),
-        is_valid = is_select_valid(Errors) }}.
+    case Errors of
+      [] ->
+          {ok, Q3#riak_sel_clause_v1{
+              col_names = get_col_names(DDL, Q),
+              col_return_types = lists:flatten(ColTypes) }};
+      [_|_] ->
 
-%%
-is_select_valid([]) ->
-    true;
-is_select_valid([_|_] = Errors) ->
-    {error, Errors}.
-
+          {error, lists:reverse(Errors)}
+    end.
 
 %%
 -spec get_col_names(#ddl_v1{}, ?SQL_SELECT{}) -> [binary()].
@@ -188,7 +189,6 @@ get_col_names2(_, Name) ->
           col_return_types :: [riak_pb_ts_codec:ldbvalue()],
           col_name         :: riak_pb_ts_codec:tscolumnname(),
           clause           :: function(),
-          is_valid         :: true | {error, [any()]},
           finaliser        :: [function()]
          }).
 
@@ -250,7 +250,7 @@ select_column_clause_exploded_folder(DDL, {ColAst, Finaliser}, {TypeSet1, SelCla
 compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) when is_atom(FnName) ->
     case riak_ql_window_agg_fns:start_state(FnName) of
         stateless ->
-            % TODO this does not run the function! nothing is stateless so far though
+            %% TODO this does not run the function! nothing is stateless so far though
             Fn = compile_select_col_stateless(DDL, FnArg1),
             #single_sel_column{ calc_type        = rows,
                                 initial_state    = undefined,
@@ -321,23 +321,27 @@ infer_col_type(#ddl_v1{ fields = Fields }, {identifier, ColName1}, Errors) ->
     end,
     {Type, Errors};
 infer_col_type(DDL, {{window_agg_fn, FnName}, [FnArg1]}, Errors1) ->
-    {ArgType, Errors2} = infer_col_type(DDL, FnArg1, Errors1),
-    ReturnType = riak_ql_window_agg_fns:fn_type_signature(FnName, [ArgType]),
-    {ReturnType, Errors2};
+    case infer_col_type(DDL, FnArg1, Errors1) of
+        {error, _} = Error ->
+            Error;
+        {ArgType, Errors2} ->
+            infer_col_function_type(FnName, [ArgType], Errors2)
+    end;
 infer_col_type(DDL, {Op, A, B}, Errors1) when Op == '/'; Op == '+'; Op == '-'; Op == '*' ->
     {AType, Errors2} = infer_col_type(DDL, A, Errors1),
     {BType, Errors3} = infer_col_type(DDL, B, Errors2),
-    case infer_op_type(Op, AType, BType) of
-        {error, Reason} ->
-            %% return error as the type for now!
-            {error, [Reason | Errors3]};
-        Type ->
-            {Type, Errors3}
-    end;
+    maybe_infer_op_type(Op, AType, BType, Errors3);
 infer_col_type(DDL, {negate, AST}, Errors) ->
     infer_col_type(DDL, AST, Errors).
 
-%% FIXME impl negate
+%%
+infer_col_function_type(FnName, ArgTypes, Errors) ->
+    case riak_ql_window_agg_fns:fn_type_signature(FnName, ArgTypes) of
+        {error, Reason} ->
+            {error, [Reason | Errors]};
+        ReturnType ->
+            {ReturnType, Errors}
+    end.
 
 %%
 pull_from_row(N, Row) ->
@@ -366,6 +370,19 @@ extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLe
     {{finalise_aggregation, FnName, FinaliserLen + length(Fns2)}, Fns2}.
 
 %%
+maybe_infer_op_type(_, error, _, Errors) ->
+    {error, Errors};
+maybe_infer_op_type(_, _, error, Errors) ->
+    {error, Errors};
+maybe_infer_op_type(Op, AType, BType, Errors) ->
+    case infer_op_type(Op, AType, BType) of
+        {error, Reason} ->
+            {error, [Reason | Errors]};
+        Type ->
+            {Type, Errors}
+    end.
+
+%%
 infer_op_type('/', sint64, sint64) -> sint64;
 infer_op_type('/', double, double) -> double;
 infer_op_type('/', sint64, double) -> double;
@@ -373,20 +390,28 @@ infer_op_type('/', double, sint64) -> double;
 infer_op_type(_, T, T) when T == double orelse T == sint64 ->
     T;
 infer_op_type(_, T1, T2) when T1 == double andalso T2 == sint64;
-                               T1 == sint64 andalso T2 == double ->
+                              T1 == sint64 andalso T2 == double ->
     double;
 infer_op_type(Op, T1, T2) ->
     {error, {invalid_type, Op, T1, T2}}.
 
 %%
 compile_select_col_stateless2('+', A, B) ->
-    fun(Row, State) -> A(Row, State) + B(Row, State) end;
+    fun(Row, State) ->
+        riak_ql_window_agg_fns:add(A(Row, State), B(Row, State))
+    end;
 compile_select_col_stateless2('*', A, B) ->
-    fun(Row, State) -> A(Row, State) * B(Row, State) end;
+    fun(Row, State) ->
+        riak_ql_window_agg_fns:multiply(A(Row, State), B(Row, State))
+    end;
 compile_select_col_stateless2('/', A, B) ->
-    fun(Row, State) -> A(Row, State) / B(Row, State) end;
+    fun(Row, State) ->
+        riak_ql_window_agg_fns:divide(A(Row, State), B(Row, State))
+    end;
 compile_select_col_stateless2('-', A, B) ->
-    fun(Row, State) -> A(Row, State) - B(Row, State) end.
+    fun(Row, State) ->
+        riak_ql_window_agg_fns:subtract(A(Row, State), B(Row, State))
+    end.
 
 %%
 to_column_name_binary([Name]) when is_binary(Name) ->
@@ -1847,7 +1872,7 @@ count_plus_seven_sum__test() ->
         Select
       ).
 
-count_plus_seven_sum_finalise_test() ->
+count_plus_seven_sum_finalise_1_test() ->
     {ok, Rec} = get_query(
         "SELECT COUNT(mydouble) + 7, SUM(mydouble) FROM mytab"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
@@ -1856,9 +1881,9 @@ count_plus_seven_sum_finalise_test() ->
         finalise_aggregate(Select, [3, 11.0])
       ).
 
-count_plus_seven_sum_fsinalise_test() ->
+count_plus_seven_sum_finalise_2_test() ->
     {ok, Rec} = get_query(
-        "SELECT COUNT(user+1) + 1 FROM mytab"),
+        "SELECT COUNT(mydouble+1) + 1 FROM mytab"),
     {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertEqual(
         [2],
@@ -1899,6 +1924,58 @@ infer_col_type_2_test() ->
     ?assertEqual(
         {sint64, []},
         infer_col_type(get_sel_ddl(), {{window_agg_fn, 'SUM'}, [{integer, 4}]}, [])
+    ).
+
+compile_query_with_function_type_error_1_test() ->
+    {ok, Q} = get_query(
+          "SELECT SUM(location) FROM GeoCheckin "
+          "WHERE time > 5000 AND time < 10000"
+          "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, [{invalid_function_call,'SUM',[varchar]}]},
+        compile(get_standard_ddl(), Q, 100)
+    ).
+
+compile_query_with_function_type_error_2_test() ->
+    {ok, Q} = get_query(
+          "SELECT SUM(location), AVG(location) FROM GeoCheckin "
+          "WHERE time > 5000 AND time < 10000"
+          "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, [
+            {invalid_function_call,'SUM',[varchar]},
+            {invalid_function_call,'AVG',[varchar]}]},
+        compile(get_standard_ddl(), Q, 100)
+    ).
+
+compile_query_with_function_type_error_3_test() ->
+    {ok, Q} = get_query(
+          "SELECT AVG(location + 1) FROM GeoCheckin "
+          "WHERE time > 5000 AND time < 10000"
+          "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, [{invalid_type,'+',varchar,sint64}]},
+        compile(get_standard_ddl(), Q, 100)
+    ).
+
+compile_query_with_arithmetic_type_error_1_test() ->
+    {ok, Q} = get_query(
+          "SELECT location + 1 FROM GeoCheckin "
+          "WHERE time > 5000 AND time < 10000"
+          "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, [{invalid_type,'+',varchar,sint64}]},
+        compile(get_standard_ddl(), Q, 100)
+    ).
+
+compile_query_with_arithmetic_type_error_2_test() ->
+    {ok, Q} = get_query(
+          "SELECT 2*(location + 1) FROM GeoCheckin "
+          "WHERE time > 5000 AND time < 10000"
+          "AND user = 'user_1' AND location = 'derby'"),
+    ?assertEqual(
+        {error, [{invalid_type,'+',varchar,sint64}]},
+        compile(get_standard_ddl(), Q, 100)
     ).
 
 -endif.
