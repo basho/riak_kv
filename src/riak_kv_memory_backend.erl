@@ -184,10 +184,7 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
                     ets:delete(DataRef, {Bucket, Key}),
                     ets:match_delete(IndexRef, ?DELETE_PTN(Bucket, Key)),
                     %% prevents leak in the TimeRef table on expire
-                    case TimeRef of
-                      undefined -> ok;
-                      _ -> ets:delete(TimeRef, Timestamp)
-                    end,
+                    delete_time_entry(TimeRef, Timestamp),
                     case MaxMemory of
                         undefined ->
                             UsedMemory1 = UsedMemory;
@@ -229,10 +226,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                 0;
             [{_BKey, {{ts, OldTimestamp}, _OldVal}}=OldObject] ->
                 %% prevents leak in the TimeRef table on update
-                case TimeRef of
-                    undefined -> ok;
-                    _ -> ets:delete(TimeRef, OldTimestamp)
-                end,
+                delete_time_entry(TimeRef, OldTimestamp),
                 object_size(OldObject)
         end,
     {ok, Size} = do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef),
@@ -663,6 +657,13 @@ update_indexes(Bucket, Key, [{add, Field, Value}|Rest], IndexRef) ->
 %% @private
 time_entry(Bucket, Key, Now, TimeRef) ->
     ets:insert(TimeRef, {Now, {Bucket, Key}}).
+
+%% @private
+delete_time_entry(TimeRef, Timestamp) ->
+    case TimeRef of
+      undefined -> ok;
+      _ -> ets:delete(TimeRef, Timestamp)
+    end.
 
 %% @private
 %% @doc Dump some entries if the max memory size has
