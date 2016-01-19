@@ -227,6 +227,8 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
             [{_BKey, {{ts, OldTimestamp}, _OldVal}}=OldObject] ->
                 %% prevents leak in the TimeRef table on update
                 delete_time_entry(TimeRef, OldTimestamp),
+                object_size(OldObject);
+            [OldObject] ->
                 object_size(OldObject)
         end,
     {ok, Size} = do_put(Bucket, PrimaryKey, Val1, IndexSpecs, DataRef, IndexRef),
@@ -796,6 +798,43 @@ regression_367_key_range_test_() ->
      ?_assertEqual({ok, [<<"obj01">>]}, fold_keys(Folder, [], [{index, Bucket, {eq, <<"$key">>, <<"obj01">>}}], State1)),
      ?_assertEqual(ok, stop(State1))
     ].
+
+ttl_ets_timeref_leak_put_path_test() ->
+    Config = [{ttl, 5}, {max_memory, 1024*10}], %% Need max_memory to get Timer, thus TimeRef
+    {ok, State} = start(142, Config),
+
+    Bucket = <<"Bucket">>,
+    Key = <<"Key">>,
+    Value = <<"Value">>,
+
+
+    %% Put an object, but ignore its put_obj_size
+    {ok, State1} = put(Bucket, Key, [], Value, State),
+    {ok, #state{time_ref=TimeRef} = State2} = put(Bucket, Key, [], Value, State1),
+    ?assertEqual(1, get_time_ref_count(TimeRef)),
+    {ok, _State3} = put(Bucket, Key, [], Value, State2),
+    ?assertEqual(1, get_time_ref_count(TimeRef)).
+
+ttl_ets_timeref_leak_get_after_expiry_test() ->
+    Config = [{ttl, 1}, {max_memory, 1024*10}], %% Need max_memory to get Timer, thus TimeRef
+    {ok, State} = start(142, Config),
+
+    Bucket = <<"Bucket">>,
+    Key = <<"Key">>,
+    Value = <<"Value">>,
+
+
+    %% Put an object, but ignore its put_obj_size
+    {ok, State1} = put(Bucket, Key, [], Value, State),
+    {ok, #state{time_ref=TimeRef} = State2} = put(Bucket, Key, [], Value, State1),
+    ?assertEqual(1, get_time_ref_count(TimeRef)),
+    timer:sleep(timer:seconds(1)),
+    {error, not_found, _State3} = get(Bucket, Key, State2),
+    ?assertEqual(0, get_time_ref_count(TimeRef)).
+
+get_time_ref_count(TimeRef) ->
+    ets:info(TimeRef, size).
+
 
 -ifdef(EQC).
 
