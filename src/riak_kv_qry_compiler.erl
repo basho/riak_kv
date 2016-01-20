@@ -128,6 +128,14 @@ prepend_select_columns([_|_] = MultiCols, Acc) ->
 prepend_select_columns(V, Acc) ->
     [V | Acc].
 
+%% copy pasta mapfoldl from lists.erl, otherwise this reports
+%% a warning in dialyzer!
+my_mapfoldl(F, Accu0, [Hd|Tail]) ->
+    {R,Accu1} = F(Hd, Accu0),
+    {Rs,Accu2} = my_mapfoldl(F, Accu1, Tail),
+    {[R|Rs],Accu2};
+my_mapfoldl(F, Accu, []) when is_function(F, 2) -> {[],Accu}.
+
 %%
 compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
     CompileColFn = 
@@ -141,7 +149,7 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     %% iterate from the right so we can append to the head of lists
     {ResultTypeSet, Q2} = lists:foldl(CompileColFn, Acc, Sel),
 
-    {ColTypes, Errors} = lists:mapfoldl(
+    {ColTypes, Errors} = my_mapfoldl(
         fun(ColASTX, Errors) ->
             infer_col_type(DDL, ColASTX, Errors)
         end, [], Sel),
@@ -302,7 +310,7 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
 
 %%
 -spec infer_col_type(#ddl_v1{}, selection(), Errors1::[any()]) ->
-        {Type::simple_field_type(), Errors2::[any()]}.
+        {Type::simple_field_type() | error, Errors2::[any()]}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
     {Type, Errors};
