@@ -135,7 +135,7 @@ run_sub_qs_fn([]) ->
     ok;
 run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q}, {qid, QId}} | T]) ->
     Table = Q?SQL_SELECT.'FROM',
-    Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
+    Bucket = riak_kv_ts_util:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
@@ -149,7 +149,7 @@ run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
     {ok, CoverProps} =
         riak_kv_pb_coverage:checksum_binary_to_term(Q?SQL_SELECT.cover_context),
     CoverageFn = riak_client:vnode_target(CoverProps),
-    Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
+    Bucket = riak_kv_ts_util:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
