@@ -901,18 +901,33 @@ bucket_type_create_with_timeseries_table_test() ->
           "user   varchar   not null, ",
           "time   timestamp not null, ",
           "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
-          "series, user, time))">>,
-    JSON = json_props([{bucket_type, my_type}, 
-                       {table_def, TableDef}]),
+          "series, user, time))"
+          " with (prop1='woo', prop2 = 42)">>,
+    JSON = json_props([{bucket_type, my_type},
+                       {table_def, TableDef},
+                       {prop2, 41}]),
     bucket_type_create(
-        fun(Props) -> put(Ref, Props) end,
-        <<"my_type">>,
-        mochijson2:decode(JSON)
-    ),
+      fun(Props) -> put(Ref, Props) end,
+      <<"my_type">>,
+      mochijson2:decode(JSON)
+     ),
     ?assertMatch(
-        [{ddl, _}, {bucket_type, <<"my_type">>} | _],
-        get(Ref)
-    ).
+       {prop1, <<"woo">>},
+       lists:keyfind(prop1, 1, get(Ref))
+      ),
+    ?assertMatch(
+       {prop2, 42},  %% 42 set in query via 'with'
+       %% takes precedence over 41 from sidecar properties
+       lists:keyfind(prop2, 1, get(Ref))
+      ),
+    ?assertMatch(
+       {ddl, _},
+       lists:keyfind(ddl, 1, get(Ref))
+      ),
+    ?assertMatch(
+       {bucket_type, <<"my_type">>},
+       lists:keyfind(bucket_type, 1, get(Ref))
+      ).
 
 bucket_type_create_with_timeseries_table_is_write_once_test() ->
     Ref = make_ref(),
