@@ -202,27 +202,43 @@ add_subquery_result(SubQId, Chunk,
     case lists:member(SubQId, SubQs) of
         true ->
             DecodedChunk = decode_results(lists:flatten(Chunk)),
-            case CalcType of
-                rows ->
-                    IndexedChunks = [riak_kv_qry_compiler:run_select(SelClause, Row) 
-                                     || Row <- DecodedChunk],
-                    QueryResult2 = [{SubQId, IndexedChunks} | QueryResult1];
-                aggregate ->
-                    QueryResult2 = 
-                      lists:foldl(
-                          fun(E, Acc) ->
-                              riak_kv_qry_compiler:run_select(SelClause, E, Acc)
-                          end, QueryResult1, DecodedChunk)
-            end,
-            NSubQ = lists:delete(SubQId, SubQs),
-            State#state{status   = accumulating_chunks,
-                        result   = QueryResult2,
-                        sub_qrys = NSubQ};
+            try
+              case CalcType of
+                  rows ->
+                      IndexedChunks = [riak_kv_qry_compiler:run_select(SelClause, Row)
+                                       || Row <- DecodedChunk],
+                      QueryResult2 = [{SubQId, IndexedChunks} | QueryResult1];
+                  aggregate ->
+                      QueryResult2 =
+                        lists:foldl(
+                            fun(E, Acc) ->
+                                riak_kv_qry_compiler:run_select(SelClause, E, Acc)
+                            end, QueryResult1, DecodedChunk)
+              end,
+              NSubQ = lists:delete(SubQId, SubQs),
+              State#state{status   = accumulating_chunks,
+                          result   = QueryResult2,
+                          sub_qrys = NSubQ}
+
+            catch
+              error:divide_by_zero ->
+                  cancel_error_query(divide_by_zero, State)
+            end;
         false ->
             %% discard; Don't touch state as it may have already 'finished'.
             State
     end.
 
+%%
+-spec cancel_error_query(Error::any(), State1::#state{}) ->
+        State2::#state{}.
+cancel_error_query(Error, #state{ receiver_pid = ReceiverPid,
+                                  name = Name }) ->
+    ReceiverPid ! {error, Error},
+    pop_next_query(),
+    new_state(Name).
+
+%%
 subqueries_done(QId,
                 #state{qid          = QId,
                        receiver_pid = ReceiverPid,
@@ -251,23 +267,15 @@ prepare_final_results(#riak_sel_clause_v1{calc_type = rows} = Select,
     %% sort by index, to reassemble according to coverage plan
     {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
     prepare_final_results2(Select, lists:append(R2));
-prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate,
-                                           finalisers = FinaliserFns } = Select,
+prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate } = Select,
                       Aggregate1) ->
-    Aggregate2 = finalise_aggregate(Aggregate1, FinaliserFns, []),
+    Aggregate2 = riak_kv_qry_compiler:finalise_aggregate(Select, Aggregate1),
     prepare_final_results2(Select, [Aggregate2]).
 
 %%
 prepare_final_results2(#riak_sel_clause_v1{ col_return_types = ColTypes,
                                             col_names = ColNames}, Rows) ->
     {ColNames, ColTypes, Rows}.
-
-%%
-finalise_aggregate([], _, Acc) ->
-    lists:reverse(Acc);
-finalise_aggregate([Cell | Row], [CellFn | Fns], Acc) ->
-    FinalisedCell = CellFn(Cell),
-    finalise_aggregate(Row, Fns, [FinalisedCell | Acc]).
 
 %%%===================================================================
 %%% Unit tests
