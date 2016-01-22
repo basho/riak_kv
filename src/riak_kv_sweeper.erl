@@ -191,9 +191,14 @@ handle_cast(_Msg, State) ->
 
 handle_info(sweep_tick, State) ->
     schedule_sweep_tick(),
-    State1 = maybe_initiate_sweeps(State),
-    State2 = maybe_schedule_sweep(State1),
-    {noreply, State2}.
+    case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
+        true ->
+            State1 = maybe_initiate_sweeps(State),
+            State2 = maybe_schedule_sweep(State1),
+            {noreply, State2};
+        false ->
+            {noreply, State}
+    end.
 
 %% terminate(shutdown, _State) ->
 %%     delete_persistent_participants(),
