@@ -2,7 +2,7 @@
 %%
 %% riak_kv_ts_newtype 
 %%
-%% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2015, 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -117,7 +117,7 @@ do_new_type(BucketType) ->
 maybe_compile_ddl(_BucketType, NewDDL, NewDDL) ->
     %% Do nothing; we're seeing a CMD update but the DDL hasn't changed
     ok;
-maybe_compile_ddl(BucketType, NewDDL, _OldDDL) when is_record(NewDDL, ddl_v1) ->
+maybe_compile_ddl(BucketType, NewDDL, _OldDDL) when is_record(NewDDL, ?DDL_RECORD_NAME) ->
     ok = maybe_stop_current_compilation(BucketType),
     ok = start_compilation(BucketType, NewDDL);
 maybe_compile_ddl(_BucketType, _NewDDL, _OldDDL) ->

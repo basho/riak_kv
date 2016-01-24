@@ -35,13 +35,13 @@
 
 %% 3rd argument is undefined if we should not be concerned about the
 %% maximum number of quanta
--spec compile(#ddl_v1{}, ?SQL_SELECT{}, 'undefined'|pos_integer()) ->
+-spec compile(?DDL{}, ?SQL_SELECT{}, 'undefined'|pos_integer()) ->
     {ok, [?SQL_SELECT{}]} | {error, any()}.
-compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
+compile(?DDL{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
     {error, 'query is already compiled'};
-compile(#ddl_v1{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }, _MaxSubQueries) ->
+compile(?DDL{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }, _MaxSubQueries) ->
     {error, 'full table scan not implemented'};
-compile(#ddl_v1{} = DDL,
+compile(?DDL{} = DDL,
         ?SQL_SELECT{is_executable = false, type = sql} = Q, MaxSubQueries) ->
     case compile_select_clause(DDL, Q) of
         {ok, S} ->
@@ -53,7 +53,7 @@ compile(#ddl_v1{} = DDL,
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
 %% write that up in time
-compile_where_clause(#ddl_v1{} = DDL,
+compile_where_clause(?DDL{} = DDL,
                      ?SQL_SELECT{is_executable = false,
                                  'WHERE'       = W,
                                  cover_context = Cover} = Q,
@@ -68,7 +68,7 @@ compile_where_clause(#ddl_v1{} = DDL,
     end.
 
 %% now break out the query on quantum boundaries
-expand_query(#ddl_v1{local_key = LK, partition_key = PK},
+expand_query(?DDL{local_key = LK, partition_key = PK},
              ?SQL_SELECT{} = Q1, Where1,
              MaxSubQueries) ->
     case expand_where(Where1, PK, MaxSubQueries) of
@@ -176,7 +176,7 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     end.
 
 %%
--spec get_col_names(#ddl_v1{}, ?SQL_SELECT{}) -> [binary()].
+-spec get_col_names(?DDL{}, ?SQL_SELECT{}) -> [binary()].
 get_col_names(DDL, Q) ->
     ColNames = riak_ql_to_string:col_names_from_select(Q),
     %% flatten because * gets expanded to multiple columns
@@ -186,7 +186,7 @@ get_col_names(DDL, Q) ->
 
 %%
 get_col_names2(DDL, "*") ->
-    [X#riak_field_v1.name || X <- DDL#ddl_v1.fields];
+    [X#riak_field_v1.name || X <- DDL?DDL.fields];
 get_col_names2(_, Name) ->
     list_to_binary(Name).
 
@@ -201,7 +201,7 @@ get_col_names2(_, Name) ->
          }).
 
 %%
--spec select_column_clause_folder(#ddl_v1{}, selection(),
+-spec select_column_clause_folder(?DDL{}, selection(),
                                   {set(), #riak_sel_clause_v1{}}) ->
                 {set(), #riak_sel_clause_v1{}}.
 select_column_clause_folder(DDL, ColAST1, 
@@ -253,7 +253,7 @@ select_column_clause_exploded_folder(DDL, {ColAst, Finaliser}, {TypeSet1, SelCla
 
 %% Compile a single selection column into a fun that can extract the cell
 %% from the row.
--spec compile_select_col(DDL::#ddl_v1{}, ColumnSpec::any()) ->
+-spec compile_select_col(DDL::?DDL{}, ColumnSpec::any()) ->
                                 #single_sel_column{}.
 compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) when is_atom(FnName) ->
     case riak_ql_window_agg_fns:start_state(FnName) of
@@ -284,8 +284,10 @@ compile_select_col(DDL, Select) ->
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
--spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}|{return_state, integer()}) ->
-       compiled_select().
+-spec compile_select_col_stateless(?DDL{}, selection()
+                                   | {Op::atom(), selection(), selection()}
+                                   | {return_state, integer()}) ->
+                                          compiled_select().
 compile_select_col_stateless(_, {identifier, [<<"*">>]}) ->
     fun(Row, _) -> Row end;
 compile_select_col_stateless(DDL, {negate, ExprToNegate}) ->
@@ -300,7 +302,7 @@ compile_select_col_stateless(_, {finalise_aggregation, FnName, N}) ->
         ColValue = pull_from_row(N, Row),
         riak_ql_window_agg_fns:finalise(FnName, ColValue)
     end;
-compile_select_col_stateless(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
+compile_select_col_stateless(?DDL{ fields = Fields }, {identifier, ColumnName}) ->
     {Index, _} = col_index_and_type_of(Fields, to_column_name_binary(ColumnName)),
     fun(Row,_) -> pull_from_row(Index, Row) end;
 compile_select_col_stateless(DDL, {Op, A, B}) ->
@@ -309,7 +311,7 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
     compile_select_col_stateless2(Op, Arg_a, Arg_b).
 
 %%
--spec infer_col_type(#ddl_v1{}, selection(), Errors1::[any()]) ->
+-spec infer_col_type(?DDL{}, selection(), Errors1::[any()]) ->
         {Type::simple_field_type() | error, Errors2::[any()]}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
@@ -320,7 +322,7 @@ infer_col_type(_, {integer, _}, Errors) ->
     {sint64, Errors};
 infer_col_type(_, {float, _}, Errors) ->
     {double, Errors};
-infer_col_type(#ddl_v1{ fields = Fields }, {identifier, ColName1}, Errors) ->
+infer_col_type(?DDL{ fields = Fields }, {identifier, ColName1}, Errors) ->
     case to_column_name_binary(ColName1) of
         <<"*">> ->
             Type = [T || #riak_field_v1{ type = T } <- Fields];
@@ -518,13 +520,13 @@ compile_where(DDL, Where) ->
         {true, NewW} -> NewW
     end.
 
-quantum_field_name(#ddl_v1{ partition_key = PK }) ->
+quantum_field_name(?DDL{partition_key = PK}) ->
     #key_v1{ ast = PartitionKeyAST } = PK,
     [_, _, Quantum] = PartitionKeyAST,
     #hash_fn_v1{args = [#param_v1{name = QFieldName} | _]} = Quantum,
     QFieldName.
 
-check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL,
+check_if_timeseries(?DDL{table = T, partition_key = PK, local_key = LK} = DDL,
                     [W]) ->
     try
         #key_v1{ast = PartitionKeyAST} = PK,
@@ -565,7 +567,7 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL
             %% debugging
             {error, {where_not_timeseries, Reason, erlang:get_stacktrace()}}
     end;
-check_if_timeseries(#ddl_v1{ }, []) ->
+check_if_timeseries(?DDL{}, []) ->
     {error, {no_where_clause, ?E_NO_WHERE_CLAUSE}}.
 
 %%
@@ -809,7 +811,7 @@ modify_where_key(TupleList, Field, NewVal) ->
 -define(MIN, 60 * 1000).
 -define(NAME, "time").
 
-is_query_valid(#ddl_v1{ table = Table } = DDL, Q) ->
+is_query_valid(?DDL{table = Table} = DDL, Q) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     riak_ql_ddl:is_query_valid(Mod, DDL, Q).
 
@@ -881,7 +883,7 @@ get_standard_lk() ->
 %%
 
 simple_filter_typing_test() ->
-    #ddl_v1{table = T} = get_long_ddl(),
+    ?DDL{table = T} = get_long_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     Filter = [
               {or_,
@@ -913,7 +915,7 @@ simple_filter_typing_test() ->
 %% we have enough info to build a range scan
 %%
 simple_rewrite_test() ->
-    #ddl_v1{table = T} = get_standard_ddl(),
+    ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
@@ -937,7 +939,7 @@ simple_rewrite_test() ->
 %% local key - there is no enough info for a range scan
 %%
 simple_rewrite_fail_1_test() ->
-    #ddl_v1{table = T} = get_standard_ddl(),
+    ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
@@ -952,7 +954,7 @@ simple_rewrite_fail_1_test() ->
       ).
 
 simple_rewrite_fail_2_test() ->
-    #ddl_v1{table = T} = get_standard_ddl(),
+    ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
@@ -967,7 +969,7 @@ simple_rewrite_fail_2_test() ->
       ).
 
 simple_rewrite_fail_3_test() ->
-    #ddl_v1{table = T} = get_standard_ddl(),
+    ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
