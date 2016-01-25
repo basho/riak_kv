@@ -1246,7 +1246,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
                                                          forward=Fwd}) ->
     case Fwd of
         undefined ->
-            {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, [], State),
+            {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, update, State),
             Reply = case Result of
                         {dw, _Idx, _Obj, _ReqID} ->
                             Obj;
@@ -1264,7 +1264,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
     end;
 
 handle_info({raw_forward_put, Key, Obj, From}, State) ->
-    {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, [], State),
+    {Result, State2} = actual_put_tracked(Key, Obj, [], false, undefined, update, State),
     Reply = case Result of
                 {dw, _Idx, _Obj, _ReqID} ->
                     Obj;
@@ -1286,7 +1286,7 @@ handle_info({raw_forward_get, Key, From}, State) ->
     riak_kv_ensemble_backend:reply(From, Reply),
     {ok, State2};
 handle_info({raw_put, Key, Obj}, State) ->
-    {_, State2} = actual_put_tracked(Key, Obj, [], false, undefined, [], State),
+    {_, State2} = actual_put_tracked(Key, Obj, [], false, undefined, update, State),
     {ok, State2};
 
 handle_info(retry_create_hashtree, State=#state{hashtrees=undefined}) ->
@@ -1656,9 +1656,9 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, HashtreeAction,
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
-actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, HashOps, State) ->
+actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, HashtreeAction, State) ->
     StartTS = os:timestamp(),
-    Result = actual_put(BKey, Obj, IndexSpecs, RB, ReqId, HashOps, State),
+    Result = actual_put(BKey, Obj, IndexSpecs, RB, ReqId, HashtreeAction, State),
     update_vnode_stats(vnode_put, State#state.idx, StartTS),
     Result.
 
