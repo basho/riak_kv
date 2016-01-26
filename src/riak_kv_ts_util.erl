@@ -81,11 +81,11 @@ get_table_ddl(Table) ->
     case riak_core_claimant:bucket_type_status(Table) of
         active ->
             Mod = riak_ql_ddl:make_module_name(Table),
-            case catch Mod:get_ddl() of
+            case catch riak_ql_ddl:upgrade(Mod:get_ddl()) of
                 {_, {undef, _}} ->
                     {error, missing_helper_module};
                 DDL ->
-                    {ok, Mod, DDL}
+                    {ok, Mod, riak_ql_ddl:upgrade(DDL)}
             end;
         InappropriateState ->
             {error, {inappropriate_bucket_state, InappropriateState}}

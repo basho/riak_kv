@@ -287,7 +287,8 @@ validate_rows(Mod, Rows) ->
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% return count of records we failed to put
 put_data(Data, Table, Mod) ->
-    DDL = Mod:get_ddl(),
+    %% if a bucket was created in riak_ts-1.1, upgrade its DDL
+    DDL = riak_ql_ddl:upgrade(Mod:get_ddl()),
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -619,7 +620,7 @@ compile(_Mod, {error, Err}) ->
 compile(_Mod, {'EXIT', {Err, _}}) ->
     {error, decoder_parse_error_resp(Err)};
 compile(Mod, {ok, SQL}) ->
-    case (catch Mod:get_ddl()) of
+    case catch riak_ql_ddl:upgrade(Mod:get_ddl()) of
         {_, {undef, _}} ->
             {error, no_helper_module};
         DDL ->
