@@ -113,8 +113,11 @@ code_change(_OldVsn, State, _Extra) ->
 %% type is activated, at least until we have a system in place for
 %% managing DDL versioning
 do_new_type(BucketType) ->
-    maybe_compile_ddl(BucketType, retrieve_ddl_from_metadata(BucketType),
-                      riak_kv_compile_tab:get_ddl(BucketType)).
+    maybe_compile_ddl(
+      BucketType,
+      riak_ql_ddl:upgrade(
+        retrieve_ddl_from_metadata(BucketType)),
+      riak_kv_compile_tab:get_ddl(BucketType)).
 
 -spec maybe_compile_ddl(BucketType::binary(),
                         accepted_ddl_versions(), accepted_ddl_versions()) ->
