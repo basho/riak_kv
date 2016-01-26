@@ -63,7 +63,6 @@ new_type(BucketType) ->
 
 init([]) ->
     process_flag(trap_exit, true),
-
     % do this outside of init so that we get crash messages output to crash.log
     % if it fails
     self() ! add_ddl_ebin_to_path,

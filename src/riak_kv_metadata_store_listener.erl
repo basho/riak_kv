@@ -48,9 +48,9 @@ init(_) ->
 
 
 handle_event({metadata_stored, BucketType}, State) ->
-	% catch here because if the handler throws an exception then it is removed
-	% from the listener list.
-	(catch riak_kv_ts_newtype:new_type(BucketType)),
+    %% catch here because if the handler throws an exception then it is removed
+    %% from the listener list.
+    (catch riak_kv_ts_newtype:new_type(BucketType)),
     {ok, State};
 handle_event(_Event, State) ->
     {ok, State}.
