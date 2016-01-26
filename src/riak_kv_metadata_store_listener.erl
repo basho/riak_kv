@@ -4,7 +4,7 @@
 %% events and starts compilation of the DDL if it exists in the
 %% metadata.
 %%
-%% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2015, 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -55,9 +55,14 @@ handle_event({metadata_stored, BucketType}, State) ->
 handle_event(_Event, State) ->
     {ok, State}.
 
-handle_call({is_type_compiled, [BucketType, DDL]}, State) ->
-    IsCompiled = (riak_kv_compile_tab:get_state(BucketType) == compiled andalso
-                  riak_kv_compile_tab:get_ddl(BucketType) == DDL),
+handle_call({is_type_compiled, [BucketType]}, State) ->
+    IsCompiled = riak_kv_compile_tab:get_state(BucketType) == compiled,
+    %% andalso riak_kv_compile_tab:get_ddl(BucketType)) == DDL,
+    %%
+    %% because the AST for ddl_v1 and _v2 will differ (ddl_v2 record
+    %% contains an additional 'properties' field), comparing the DDL
+    %% bodies is not necessary (and the blobs will be different
+    %% between versions)
     {ok, IsCompiled, State};
 handle_call(_Request, State) ->
     Reply = ok,
