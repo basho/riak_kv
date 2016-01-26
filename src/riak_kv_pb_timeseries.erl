@@ -131,15 +131,15 @@ decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
             riak_kv_ts_util:build_sql_record(describe, SQL, Cover);
         {insert, SQL} ->
             riak_kv_ts_util:build_sql_record(insert, SQL, Cover);
-        {ddl, DDL} ->
-            {ok, DDL};
+        {ddl, DDL, WithProperties} ->
+            {ok, {DDL, WithProperties}};
         Other ->
             Other
     end.
 
 -spec decode_query_permissions(ts_query_types()) ->
                                       {string(), binary()}.
-decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
+decode_query_permissions({?DDL{table = NewBucketType}, _WithProps}) ->
     {"riak_kv.ts_create_table", NewBucketType};
 decode_query_permissions(?SQL_SELECT{'FROM' = Table}) ->
     {"riak_kv.ts_query", Table};
@@ -180,9 +180,9 @@ process(M = #tscoveragereq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tscoveragereq/4, M, State);
 
 %% this is tsqueryreq, subdivided per query type in its SQL
-process(DDL = #ddl_v1{}, State) ->
+process({DDL = ?DDL{}, WithProperties}, State) ->
     %% the only one that doesn't require an activated table
-    create_table(DDL, State);
+    create_table({DDL, WithProperties}, State);
 
 process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
@@ -226,10 +226,10 @@ process_stream({ReqId, Error}, ReqId,
 %% create_table, the only function for which we don't do
 %% check_table_and_call
 
--spec create_table(#ddl_v1{}, #state{}) ->
+-spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
                           {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
-create_table(DDL = #ddl_v1{table = Table}, State) ->
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
+create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, WithProps),
     Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
     case riak_core_bucket_type:create(Table, Props2) of
         ok ->
@@ -986,13 +986,16 @@ missing_helper_module_test() ->
     ).
 
 test_helper_validate_rows_mod() ->
-    riak_ql_ddl_compiler:compile_and_load_from_tmp(
-        riak_ql_parser:parse(riak_ql_lexer:get_tokens(
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
+          riak_ql_lexer:get_tokens(
             "CREATE TABLE mytable ("
             "family VARCHAR NOT NULL,"
             "series VARCHAR NOT NULL,"
             "time TIMESTAMP NOT NULL,"
-            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')), family, series, time))"))).
+            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')),"
+            " family, series, time))")),
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
 
 validate_rows_empty_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),

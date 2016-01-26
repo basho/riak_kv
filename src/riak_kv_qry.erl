@@ -139,8 +139,8 @@ format_query_syntax_errors(Errors) ->
 -include_lib("eunit/include/eunit.hrl").
 
 describe_table_columns_test() ->
-    {ok, DDL} =
-        riak_ql_parser:parse(
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
           riak_ql_lexer:get_tokens(
             "CREATE TABLE fafa ("
             " f varchar   not null,"

@@ -150,7 +150,9 @@ get_table_ddl(Table) when is_binary(Table) ->
 apply_timeseries_bucket_props(DDL, Props1) ->
     Props2 = lists:keystore(
         <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
-    {ok, [{<<"ddl">>, DDL} | Props2]}.
+    Props3 = lists:keystore(
+        <<"ddl">>, 1, Props2, {<<"ddl">>, DDL}),
+    {ok, Props3}.
 
 
 -spec maybe_parse_table_def(BucketType :: binary(),
@@ -164,8 +166,9 @@ maybe_parse_table_def(BucketType, Props) ->
         false ->
             {ok, Props};
         {value, {<<"table_def">>, TableDef}, PropsNoDef} ->
-            case catch riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
-                {ok, DDL} ->
+            case catch riak_ql_parser:ql_parse(
+                         riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
+                {ddl, DDL = ?DDL{}, WithProps} ->
                     ok = assert_type_and_table_name_same(BucketType, DDL),
                     ok = try_compile_ddl(DDL),
                     MergedProps = merge_props_with_preference(
@@ -198,6 +201,16 @@ assert_write_once_not_false(BucketType, Props) ->
         _ ->
             ok
     end.
+
+-spec merge_props_with_preference(proplists:proplist(), proplists:proplist()) ->
+                                         proplists:proplist().
+%% If same keys appear in RpbBucketProps as well as embedded in the
+%% query ("CREATE TABLE ... WITH"), we merge the two proplists giving
+%% preference to the latter.
+merge_props_with_preference(PbProps, WithProps) ->
+    lists:foldl(
+      fun({K, _} = P, Acc) -> lists:keystore(K, 1, Acc, P) end,
+      PbProps, WithProps).
 
 %% Ensure table name in DDL and bucket type are the same.
 assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
@@ -356,7 +369,7 @@ varchar_quotes(V) ->
 
 helper_compile_def_to_module(SQL) ->
     Lexed = riak_ql_lexer:get_tokens(SQL),
-    {ok, DDL} = riak_ql_parser:parse(Lexed),
+    {ok, {DDL, _Props}} = riak_ql_parser:parse(Lexed),
     {module, Mod} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     {DDL, Mod}.
 
