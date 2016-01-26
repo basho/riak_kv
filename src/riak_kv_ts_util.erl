@@ -168,8 +168,10 @@ maybe_parse_table_def(BucketType, Props) ->
                 {ok, DDL} ->
                     ok = assert_type_and_table_name_same(BucketType, DDL),
                     ok = try_compile_ddl(DDL),
-                    ok = assert_write_once_not_false(PropsNoDef),
-                    apply_timeseries_bucket_props(DDL, PropsNoDef);
+                    MergedProps = merge_props_with_preference(
+                                    PropsNoDef, WithProps),
+                    ok = assert_write_once_not_false(BucketType, MergedProps),
+                    apply_timeseries_bucket_props(DDL, MergedProps);
                 {'EXIT', {Reason, _}} ->
                     % the lexer throws exceptions, the reason should always be a
                     % binary
@@ -186,13 +188,13 @@ maybe_parse_table_def(BucketType, Props) ->
 %% Time series must always use write_once so throw an error if the write_once
 %% property is ever set to false. This prevents a user thinking they have
 %% disabled write_once when it has been set to true internally.
-assert_write_once_not_false(Props) ->
+assert_write_once_not_false(BucketType, Props) ->
     case lists:keyfind(<<"write_once">>, 1, Props) of
         {<<"write_once">>, false} ->
             throw({error,
                    {write_once,
-                    "Error, the time series bucket type could not be created. "
-                    "The write_once property must be true\n"}});
+                    flat_format(
+                      "Time series bucket type ~s has write_once == false", [BucketType])}});
         _ ->
             ok
     end.
@@ -203,9 +205,9 @@ assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
 assert_type_and_table_name_same(BucketType1, #ddl_v1{table = BucketType2}) ->
     throw({error,
            {table_name,
-            "The bucket type and table name must be the same\n"
-            "    bucket type was: " ++ binary_to_list(BucketType1) ++ "\n"
-            "     table name was: " ++ binary_to_list(BucketType2) ++ "\n"}}).
+            flat_format(
+              "Time series bucket type and table name mismatch (~s != ~s)",
+              [BucketType1, BucketType2])}}).
 
 %% Attempt to compile the DDL but don't do anything with the output, this is
 %% catch failures as early as possible. Also the error messages are easy to
@@ -254,6 +256,7 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 %% riak_ql_ddl:get_local_key/3,
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
+
 
 %% Print the query explanation to the shell.
 explain_query_print(QueryString) ->
@@ -343,6 +346,7 @@ op_to_string(Op) -> " " ++ atom_to_list(Op) ++ " ".
 varchar_quotes(V) ->
     <<"'", V/binary, "'">>.
 
+
 %%%
 %%% TESTS
 %%%
@@ -410,3 +414,6 @@ make_ts_keys_4_test() ->
     ).
 
 -endif.
+
+flat_format(F, A) ->
+    lists:flatten(io_lib:format(F, A)).
