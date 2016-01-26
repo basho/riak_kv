@@ -43,7 +43,9 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
-%%% 
+-type accepted_ddl_versions() :: #ddl_v1{} | #ddl_v2{}.
+
+%%%
 %%% API.
 %%%
 
@@ -55,7 +57,7 @@ start_link() ->
 new_type(BucketType) ->
     gen_server:cast(?MODULE, {new_type, BucketType}).
 
-%%% 
+%%%
 %%% gen_server.
 %%%
 
@@ -106,7 +108,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal.
 %%%
 
-%%
+-spec do_new_type(BucketType::binary()) -> ok.
 %% We rely on the claimant to not give us new DDLs after the bucket
 %% type is activated, at least until we have a system in place for
 %% managing DDL versioning
@@ -114,16 +116,23 @@ do_new_type(BucketType) ->
     maybe_compile_ddl(BucketType, retrieve_ddl_from_metadata(BucketType),
                       riak_kv_compile_tab:get_ddl(BucketType)).
 
+-spec maybe_compile_ddl(BucketType::binary(),
+                        accepted_ddl_versions(), accepted_ddl_versions()) ->
+                               ok.
 maybe_compile_ddl(_BucketType, NewDDL, NewDDL) ->
     %% Do nothing; we're seeing a CMD update but the DDL hasn't changed
     ok;
-maybe_compile_ddl(BucketType, NewDDL, _OldDDL) when is_record(NewDDL, ?DDL_RECORD_NAME) ->
+maybe_compile_ddl(BucketType, NewDDL, _OldDDL)
+  when is_record(NewDDL, ddl_v1);
+       %% ddl versions 1 and 2 are ok
+       is_record(NewDDL, ddl_v2) ->
     ok = maybe_stop_current_compilation(BucketType),
     ok = start_compilation(BucketType, NewDDL);
 maybe_compile_ddl(_BucketType, _NewDDL, _OldDDL) ->
     %% We don't know what to do with this new DDL, so stop
     ok.
 
+-spec maybe_stop_current_compilation(BucketType::binary()) -> ok.
 %%
 maybe_stop_current_compilation(BucketType) ->
     case riak_kv_compile_tab:is_compiling(BucketType) of
@@ -133,6 +142,7 @@ maybe_stop_current_compilation(BucketType) ->
             ok
     end.
 
+-spec stop_current_compilation(pid()) -> ok.
 %%
 stop_current_compilation(CompilerPid) ->
     case is_process_alive(CompilerPid) of
@@ -143,6 +153,7 @@ stop_current_compilation(CompilerPid) ->
             ok
     end.
 
+-spec flush_exit_message(pid()) -> ok.
 %%
 flush_exit_message(CompilerPid) ->
     receive
@@ -151,6 +162,7 @@ flush_exit_message(CompilerPid) ->
         1000 -> ok
     end.
 
+-spec start_compilation(binary(), accepted_ddl_versions()) -> ok.
 %%
 start_compilation(BucketType, DDL) ->
     Pid = proc_lib:spawn_link(
@@ -159,6 +171,7 @@ start_compilation(BucketType, DDL) ->
         end),
     ok = riak_kv_compile_tab:insert(BucketType, DDL, Pid, compiling).
 
+-spec compile_and_store(string(), accepted_ddl_versions()) -> ok.
 %%
 compile_and_store(BeamDir, DDL) ->
     case riak_ql_ddl_compiler:compile(DDL) of
@@ -169,12 +182,14 @@ compile_and_store(BeamDir, DDL) ->
             ok = store_module(BeamDir, ModuleName, Bin)
     end.
 
+-spec store_module(Dir::string(), module(), binary()) -> ok.
 %%
 store_module(Dir, Module, Bin) ->
     Filepath = beam_file_path(Dir, Module),
     ok = filelib:ensure_dir(Filepath),
     ok = file:write_file(Filepath, Bin).
 
+-spec beam_file_path(Dir::string(), module()) -> file:name_all().
 %%
 beam_file_path(BeamDir, Module) ->
     filename:join(BeamDir, [Module, ".beam"]).
