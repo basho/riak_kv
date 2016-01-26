@@ -55,14 +55,18 @@ handle_event({metadata_stored, BucketType}, State) ->
 handle_event(_Event, State) ->
     {ok, State}.
 
-handle_call({is_type_compiled, [BucketType]}, State) ->
+handle_call({is_type_compiled, [BucketType, _DDL]}, State) ->
     IsCompiled = riak_kv_compile_tab:get_state(BucketType) == compiled,
     %% andalso riak_kv_compile_tab:get_ddl(BucketType)) == DDL,
+    %% This reqiest comes from a riak_ts-1.1 node: ignore the DDL
     %%
-    %% because the AST for ddl_v1 and _v2 will differ (ddl_v2 record
-    %% contains an additional 'properties' field), comparing the DDL
-    %% bodies is not necessary (and the blobs will be different
-    %% between versions)
+    %% Because the AST for ddl_v1 and _v2 will differ (ddl_v2 record
+    %% contains an additional 'properties' field) while effectively
+    %% representing the same schema, comparing the DDL bodies is not
+    %% necessary (and the blobs will be different between versions).
+    {ok, IsCompiled, State};
+handle_call({is_type_compiled, [BucketType]}, State) ->
+    IsCompiled = riak_kv_compile_tab:get_state(BucketType) == compiled,
     {ok, IsCompiled, State};
 handle_call(_Request, State) ->
     Reply = ok,
