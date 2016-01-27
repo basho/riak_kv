@@ -462,16 +462,19 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     {_, Bucket, Qry} = proplists:lookup(index, Opts),
     ?SQL_SELECT{'WHERE'    = W,
                 helper_mod = Mod,
-                local_key  = LK} = Qry,
+                local_key  = LK,
+                partition_key = #key_v1{ast = PKAST}} = Qry,
     %% Work out what the elements of the local key are after the partitioning key.
     %% Used below to add dummy fields to pad out the StartK2/EndK2 fields.
     LKAST = LK#key_v1.ast,
-    ExtraLK = case length(LKAST) > 3 of
-		  true ->
-		      lists:nthtail(3, LKAST);
-		  false ->
-		      []
-	      end,
+    PKASTLen = length(PKAST),
+    ExtraLK =
+        case length(LKAST) > PKASTLen of
+		    true ->
+		        lists:nthtail(PKASTLen, LKAST);
+		    false ->
+		        []
+        end,
     %% this is all super-fugly
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),

@@ -520,20 +520,19 @@ compile_where(DDL, Where) ->
 
 quantum_field_name(#ddl_v1{ partition_key = PK }) ->
     #key_v1{ ast = PartitionKeyAST } = PK,
-    [_, _, Quantum] = PartitionKeyAST,
+    Quantum = lists:last(PartitionKeyAST),
     #hash_fn_v1{args = [#param_v1{name = QFieldName} | _]} = Quantum,
     QFieldName.
 
 check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK0} = DDL,
                     [W]) ->
     try
-	LK = LK0#key_v1{ast = lists:sublist(LK0#key_v1.ast, 3)},
         #key_v1{ast = PartitionKeyAST} = PK,
-        LocalFields     = [X || #param_v1{name = X} <- lists:sublist(LK#key_v1.ast, 3)],
         PartitionFields = [X || #param_v1{name = X} <- PartitionKeyAST],
+    	LK = LK0#key_v1{ast = lists:sublist(LK0#key_v1.ast, length(PartitionKeyAST))},
         [QuantumFieldName] = quantum_field_name(DDL),
         StrippedW = strip(W, []),
-        {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QuantumFieldName]),
+        {StartW, EndW, Filter} = break_out_timeseries(StrippedW, PartitionFields, [QuantumFieldName]),
         Mod = riak_ql_ddl:make_module_name(T),
         StartKey = rewrite(LK, StartW, Mod),
         EndKey = rewrite(LK, EndW, Mod),
@@ -632,7 +631,7 @@ acc_upper_bounds(_Filter, {_, _U}) ->
     error({upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}).
 
 %%
-break_out_timeseries(Filters1, LocalFields1, [QuantumFields]) ->
+break_out_timeseries(Filters1, PartitionFields1, [QuantumFields]) ->
     case find_timestamp_bounds(QuantumFields, Filters1) of
         {_, {undefined, undefined}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
@@ -654,13 +653,12 @@ break_out_timeseries(Filters1, LocalFields1, [QuantumFields]) ->
             error({lower_and_upper_bounds_are_equal_when_no_equals_operator,
                    ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR});
         {Filters2, {Starts, Ends}} ->
-            %% remove the quanta from the local fields, this has alreadfy been
+            %% remove the quanta from the local fields, this has already been
             %% removed from the fields
-            [F1, F2, _] = lists:sublist(LocalFields1, 3),
-            LocalFields2 = [F1,F2],
+            % PartitionFields2 = lists:sublist(PartitionFields1, length(PartitionFields1)), % TODO DUUUUDE
             %% create the keys by splitting the key filters and prepending it
             %% with the time bound.
-            {Body, Filters3} = split_key_from_filters(LocalFields2, Filters2),
+            {Body, Filters3} = split_key_from_filters(PartitionFields1, Filters2),
             {[Starts | Body], [Ends | Body], Filters3}
     end.
 
@@ -673,7 +671,7 @@ split_key_from_filters2([FieldName], Filters) when is_binary(FieldName) ->
     take_key_field(FieldName, Filters, []).
 
 %%
-take_key_field(FieldName, [], Acc) ->
+take_key_field(FieldName, [], Acc) when is_binary(FieldName) ->
     %% check if the field exists in the clause but used the wrong operator or
     %% it never existed at all. Give a more helpful message if the wrong op was
     %% used.
@@ -1985,6 +1983,23 @@ compile_query_with_arithmetic_type_error_2_test() ->
     ?assertEqual(
         {error, [{invalid_type,'+',varchar,sint64}]},
         compile(get_standard_ddl(), Q, 100)
+    ).
+
+%% TODO MOAR tests
+flexible_keys_1_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab4("
+        "a1 SINT64 NOT NULL, "
+        "a TIMESTAMP NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "c VARCHAR NOT NULL, "
+        "d SINT64 NOT NULL, "
+        "PRIMARY KEY  ((a1, quantum(a, 15, 's')), a1, a, b, c, d))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab4 WHERE a > 0 AND a < 1000 AND a1 = 1"),
+    ?assertEqual(
+        {ok, [#riak_select_v1{}]},
+        compile(DDL, Q, 100)
     ).
 
 -endif.
