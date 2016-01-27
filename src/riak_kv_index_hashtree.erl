@@ -187,15 +187,18 @@ get_trees({test, Pid}) ->
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
--spec get_lock(pid(), any()) -> ok | not_built | already_locked.
+-spec get_lock(pid() | non_neg_integer(), any()) -> ok | not_built | already_locked.
 get_lock(Tree, Type) ->
     get_lock(Tree, Type, self()).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
--spec get_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
-get_lock(Tree, Type, Pid) ->
-    gen_server:call(Tree, {get_lock, Type, Pid}, infinity).
+-spec get_lock(pid() | non_neg_integer(), any(), pid()) -> ok | not_built | already_locked.
+get_lock(Tree, Type, Pid) when is_pid(Tree)->
+    gen_server:call(Tree, {get_lock, Type, Pid}, infinity);
+
+get_lock(Index, Type, Pid) ->
+    lookup_tree_and_call(Index, {get_lock, Type, Pid}).
 
 %% @doc Poke the specified index_hashtree to ensure the tree is
 %%      built/rebuilt as needed. This is periodically called by the

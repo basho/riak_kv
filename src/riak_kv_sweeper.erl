@@ -311,7 +311,7 @@ get_estimate_keys(Index, AAEEnabled, Sweeps) ->
 
 %% We keep the estimate from previus sweep unless it's older then ?ESTIMATE_EXPIRY.
 maybe_estimate_keys(Index, true, undefined) ->
-	get_estimtate(Index);
+    get_estimtate(Index);
 maybe_estimate_keys(Index, true, {EstimatedNrKeys, TS}) ->
 	EstimateOutdated = elapsed_secs(os:timestamp(), TS) > ?ESTIMATE_EXPIRY,
 	case EstimateOutdated of
@@ -326,12 +326,32 @@ maybe_estimate_keys(_Index, false, _) ->
     false.
 
 get_estimtate(Index) ->
-	case riak_kv_index_hashtree:estimate_keys(Index) of
-		{ok, EstimatedNrKeys} ->
-			EstimatedNrKeys;
-		_ ->
-			0
-	end.
+    Pid = self(),
+    %% riak_kv_index_hashtree release lock when the process die
+    spawn(fun() ->
+                Estimate =
+                    case riak_kv_index_hashtree:get_lock(Index, estimate) of
+                        ok ->
+                            case riak_kv_index_hashtree:estimate_keys(Index) of
+                                {ok, EstimatedNrKeys} ->
+                                    EstimatedNrKeys;
+                                _ ->
+                                    0
+                            end;
+                        _ ->
+                            0
+                    end,
+                Pid ! {estimate, Estimate}
+        end),
+    wait_for_estimate().
+
+wait_for_estimate() ->
+    receive
+        {estimate, Estimate} ->
+            Estimate
+    after 5000 ->
+        0
+    end.
 
 disable_sweep_participant_in_running_sweep(Module, Sweeps) ->
     [disable_participant(Sweep, Module) ||
