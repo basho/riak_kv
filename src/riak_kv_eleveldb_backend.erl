@@ -30,6 +30,7 @@
          start/2,
          stop/1,
          get/3,
+         batch_put/4,
          put/5,
          async_put/5,
          sync_put/5,
@@ -179,15 +180,10 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
             {error, Reason, State}
     end.
 
-%% @doc Insert an object into the eleveldb backend.
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
--spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
-put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
-                                                write_opts=WriteOpts,
-                                                legacy_indexes=WriteLegacy,
-                                                fixed_indexes=FixedIndexes}=State) ->
+
+%% Create a list of backend put-related updates for this object
+put_operations(Bucket, PrimaryKey, IndexSpecs, Val, #state{legacy_indexes=WriteLegacy,
+                                                           fixed_indexes=FixedIndexes}) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
     Updates1 = [{put, StorageKey, Val} || Val /= undefined],
@@ -204,9 +200,38 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
                 index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value)
         end,
     Updates2 = lists:flatmap(F, IndexSpecs),
+    Updates1 ++ Updates2.
+
+%% @doc Insert an object into the eleveldb backend.
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
+                                                write_opts=WriteOpts}=State) ->
+    Operations = put_operations(Bucket, PrimaryKey, IndexSpecs, Val, State),
 
     %% Perform the write...
-    case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
+    case eleveldb:write(Ref, Operations, WriteOpts) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+%% @doc Insert a batch of objects (must contain the same index values) into the eleveldb backend.
+-spec batch_put(term(), [{{riak_object:bucket(), riak_object:key()}, binary()}], [index_spec()], state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+batch_put(Context, Values, IndexSpecs, #state{ref=Ref,
+                                              write_opts=WriteOpts}=State) ->
+    Operations = lists:flatmap(fun({{Bucket, Key}, Val}) ->
+                                       put_operations(Bucket, Key, IndexSpecs, Val, State)
+                               end,
+                               Values),
+
+    %% Perform the write...
+    case eleveldb:sync_write(Context, Ref, Operations, WriteOpts) of
         ok ->
             {ok, State};
         {error, Reason} ->

@@ -530,6 +530,8 @@ handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
 handle_overload_command(?KV_W1C_PUT_REQ{type=Type}, Sender, _Idx) ->
     riak_core_vnode:reply(Sender, ?KV_W1C_PUT_REPLY{reply={error, overload}, type=Type});
+handle_overload_command(?KV_W1C_BATCH_PUT_REQ{type=Type}, Sender, _Idx) ->
+    riak_core_vnode:reply(Sender, ?KV_W1C_BATCH_PUT_REPLY{reply={error, overload}, type=Type});
 handle_overload_command(_, Sender, _) ->
     riak_core_vnode:reply(Sender, {error, mailbox_overload}).
 
@@ -840,6 +842,24 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
+%% For now, ignore async_put
+handle_command(?KV_W1C_BATCH_PUT_REQ{objs=Objs, type=Type},
+                From, State=#state{mod=Mod, idx=Idx, modstate=ModState}) ->
+    StartTS = os:timestamp(),
+    Context = {w1c_batch_put, From, Type, Objs, StartTS},
+    case Mod:batch_put(Context, Objs, [], ModState) of
+        {ok, UpModState} ->
+            lists:foreach(
+              fun({{Bucket, Key}, EncodedVal}) ->
+                      update_hashtree(Bucket, Key, EncodedVal, State),
+                      ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx)
+              end,
+              Objs),
+            {reply, ?KV_W1C_BATCH_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
+        {error, Reason, UpModState} ->
+            {reply, ?KV_W1C_BATCH_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
+    end;
+
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
                 From, State=#state{mod=Mod, idx=Idx, async_put=true, modstate=ModState}) ->
@@ -848,10 +868,10 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
 
-	    update_hashtree(Bucket, Key, EncodedVal, State),
-	    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+            update_hashtree(Bucket, Key, EncodedVal, State),
+            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
 
-	    {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
+            {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
     end;

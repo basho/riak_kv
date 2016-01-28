@@ -61,6 +61,9 @@
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
 
+-define(MIN_PUT_BATCH_SIZE, 10).  %% TODO make it configurable somewhere
+-define(MAX_PUT_BATCH_SIZE, 200). %% ditto
+
 -record(state, {
           req,
           req_ctx,
@@ -296,6 +299,8 @@ put_data(Data, Table, Mod) ->
     PreflistData = add_preflists(PartitionedData, NVal,
                                  riak_core_node_watcher:nodes(riak_kv)),
 
+    SendFullBatches = riak_core_capability:get({riak_kv, w1c_batch_vnode}, false),
+
     EncodeFn =
         fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
 
@@ -305,21 +310,31 @@ put_data(Data, Table, Mod) ->
                   case riak_kv_w1c_worker:validate_options(
                          NVal, Preflist, [], BucketProps) of
                       {ok, W, PW} ->
-                          {Ids, Errs} =
-                              lists:foldl(
-                                fun(Record, {PartReqIds, PartErrors}) ->
-                                        {RObj, LK} =
-                                            build_object(Bucket, Mod, DDL,
-                                                         Record, DocIdx),
+                          DataForVnode =
+                              case SendFullBatches andalso length(Records) >= ?MIN_PUT_BATCH_SIZE of
+                                  true ->
+                                      {batches, create_batches(Records, ?MAX_PUT_BATCH_SIZE)};
+                                  false ->
+                                      {individual, Records}
+                              end,
 
-                                        {ok, ReqId} =
-                                            riak_kv_w1c_worker:async_put(
-                                              RObj, W, PW, Bucket, NVal, LK,
-                                              EncodeFn, Preflist),
-                                        {[ReqId | PartReqIds], PartErrors}
-                                end,
-                                {[], 0}, Records),
-                          {GlobalReqIds ++ Ids, GlobalErrorsCnt + Errs};
+                          Ids =
+                              invoke_async_put(fun(Record) ->
+                                                       build_object(Bucket, Mod, DDL,
+                                                                    Record, DocIdx)
+                                               end,
+                                               fun(RObj, LK) ->
+                                                       riak_kv_w1c_worker:async_put(
+                                                         RObj, W, PW, Bucket, NVal, LK,
+                                                         EncodeFn, Preflist)
+                                               end,
+                                               fun(RObjs) ->
+                                                       riak_kv_w1c_worker:ts_batch_put(
+                                                         RObjs, W, PW, Bucket, NVal,
+                                                         EncodeFn, Preflist)
+                                               end,
+                                               DataForVnode),
+                          {GlobalReqIds ++ Ids, GlobalErrorsCnt};
                       _Error ->
                           {GlobalReqIds, GlobalErrorsCnt + length(Records)}
                   end
@@ -350,6 +365,19 @@ partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
 row_to_key(Row, DDL, Mod) ->
     riak_kv_ts_util:encode_typeval_key(
       riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
+
+%% May be a more efficient way to do this. Take a list of arbitrary
+%% data (expected to be a list of lists for this use case) and create
+%% a list of MaxSize lists.
+create_batches(Rows, MaxSize) ->
+    create_batches(Rows, MaxSize, MaxSize, [], []).
+
+create_batches([], _Counter, _Max, ThisBatch, AllBatches) ->
+    AllBatches ++ [ThisBatch];
+create_batches(Rows, 0, Max, ThisBatch, AllBatches) ->
+    create_batches(Rows, Max, Max, [], AllBatches ++ [ThisBatch]);
+create_batches([H|T], Counter, Max, ThisBatch, AllBatches) ->
+    create_batches(T, Counter-1, Max, ThisBatch ++ [H], AllBatches).
 
 add_preflists(PartitionedData, NVal, UpNodes) ->
     lists:map(fun({Idx, Rows}) -> {Idx,
@@ -788,7 +816,21 @@ table_created_missing_response(Table) ->
 to_string(X) ->
     flat_format("~p", [X]).
 
-
+%% Returns a tuple with a list of request IDs and an error tally
+invoke_async_put(BuildRObjFun, AsyncPutFun, _BatchPutFun, {individual, Records}) ->
+    lists:map(fun(Record) ->
+                      {RObj, LK} = BuildRObjFun(Record),
+                      {ok, ReqId} = AsyncPutFun(RObj, LK),
+                      ReqId
+                end,
+              Records);
+invoke_async_put(BuildRObjFun, _AsyncPutFun, BatchPutFun, {batches, Batches}) ->
+    lists:map(fun(Batch) ->
+                      RObjs = lists:map(BuildRObjFun, Batch),
+                      {ok, ReqId} = BatchPutFun(RObjs),
+                      ReqId
+                end,
+              Batches).
 
 %% helpers to make various error responses
 
@@ -908,5 +950,17 @@ validate_rows_error_response_2_test() ->
                       errmsg = Msg ++ "1, 2, 3" },
         validate_rows_error_response(["1", "2", "3"])
     ).
+
+batch_1_test() ->
+    ?assertEqual([[1, 2, 3, 4], [5, 6, 7, 8], [9]],
+                 create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 4)).
+
+batch_2_test() ->
+    ?assertEqual([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]],
+                 create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4)).
+
+batch_3_test() ->
+    ?assertEqual([[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+                 create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)).
 
 -endif.
