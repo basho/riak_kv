@@ -737,13 +737,12 @@ end
   hidden
 ]}.
 
-
 %% @doc The number of individual queries that can run at any one time.
 %% This is the number per node in the cluster so the total number of
 %% concurrent queries per cluster is timeseries_max_concurrent_queries * nodes.
 {mapping, "riak_kv.query.timeseries.max_concurrent_queries", "riak_kv.timeseries_max_concurrent_queries", [
   {default, 3},
-  {datatype, integer}
+  {datatype, integer},
   {validators, ["validate_max_concurrent_queries"]}
 ]}.
 
