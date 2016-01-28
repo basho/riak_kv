@@ -393,7 +393,7 @@ build_object(Bucket, Mod, DDL, Row, PK) ->
     RObj = riak_object:newts(
              Bucket, PK, Obj,
              dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
-    {RObj, LK}.
+    {LK, RObj}.
 
 
 %% -----------
@@ -819,7 +819,7 @@ to_string(X) ->
 %% Returns a tuple with a list of request IDs and an error tally
 invoke_async_put(BuildRObjFun, AsyncPutFun, _BatchPutFun, {individual, Records}) ->
     lists:map(fun(Record) ->
-                      {RObj, LK} = BuildRObjFun(Record),
+                      {LK, RObj} = BuildRObjFun(Record),
                       {ok, ReqId} = AsyncPutFun(RObj, LK),
                       ReqId
                 end,
