@@ -207,7 +207,14 @@ handle_cast({cancel, ReqId}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info({ReqId, ?KV_W1C_BATCH_PUT_REPLY{reply=Reply, type=Type}}, State) ->
+    handle_put_reply(ReqId, Reply, Type, State);
 handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
+    handle_put_reply(ReqId, Reply, Type, State);
+handle_info(_Msg, State) ->
+    {noreply, State}.
+
+handle_put_reply(ReqId, Reply, Type, State) ->
     case get_request_record(ReqId, State) of
         undefined->
             % the entry was likely purged by the timeout mechanism
@@ -247,9 +254,7 @@ handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
                     {_, NewState} = store_request_record(ReqId, NewRec, State)
             end,
             {noreply, NewState}
-    end;
-handle_info(_Msg, State) ->
-    {noreply, State}.
+    end.
 
 terminate(_Reason, _State) ->
     ok.
