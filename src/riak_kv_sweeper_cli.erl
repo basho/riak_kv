@@ -160,13 +160,13 @@ format_participants(IndexedParticipants) ->
      clique_status:table(Rows)].
 
 format_sweep_participant(Index, #sweep_participant{module = Mod,
-                                                   description = Desciption,
+                                                   description = Description,
                                                    run_interval = Interval}) ->
     IntervalValue = riak_kv_sweeper:get_run_interval(Interval),
     IntervalString = format_interval(IntervalValue * 1000000),
     [{"ID", Index},
      {"Module" ,atom_to_list(Mod)},
-     {"Desciption" ,Desciption},
+     {"Description", Description},
      {"Interval",  IntervalString}].
 
 format_interval(Interval) ->
