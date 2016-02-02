@@ -42,7 +42,7 @@
 
 %% API
 -export([start_link/0, get_stats/0,
-         update/1, perform_update/1, register_stats/0, produce_stats/0,
+         update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1, produce_stats/0,
          leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
@@ -63,6 +63,10 @@ start_link() ->
 
 register_stats() ->
     riak_core_stat:register_stats(?APP, stats()).
+
+unregister_vnode_stats(Index) ->
+    unregister_per_index(gets, Index),
+    unregister_per_index(puts, Index).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
@@ -325,6 +329,12 @@ do_per_index(Op, Idx, USecs) ->
     P = riak_core_stat:prefix(),
     create_or_update([P, ?APP, vnode, Op, IdxAtom], 1, spiral),
     create_or_update([P, ?APP, vnode, Op, time, IdxAtom], USecs, histogram).
+
+unregister_per_index(Op, Idx) ->
+    IdxAtom = list_to_atom(integer_to_list(Idx)),
+    P = riak_core_stat:prefix(),
+    exometer:delete([P, ?APP, vnode, Op, IdxAtom]),
+    exometer:delete([P, ?APP, vnode, Op, time, IdxAtom]).
 
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
