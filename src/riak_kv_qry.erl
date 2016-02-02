@@ -26,7 +26,8 @@
 -module(riak_kv_qry).
 
 -export([
-         submit/2
+         submit/2,
+         format_query_syntax_errors/1
         ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
