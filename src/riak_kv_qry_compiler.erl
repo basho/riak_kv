@@ -400,7 +400,7 @@ infer_op_type(_, T1, T2) when T1 == double andalso T2 == sint64;
                               T1 == sint64 andalso T2 == double ->
     double;
 infer_op_type(Op, T1, T2) ->
-    {error, {invalid_type, Op, T1, T2}}.
+    {error, {operator_type_mismatch, Op, T1, T2}}.
 
 %%
 compile_select_col_stateless2('+', A, B) ->
@@ -1938,8 +1938,9 @@ compile_query_with_function_type_error_1_test() ->
           "SELECT SUM(location) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
+    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
-        {error, [{invalid_function_call,'SUM',[varchar]}]},
+        {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
@@ -1948,10 +1949,10 @@ compile_query_with_function_type_error_2_test() ->
           "SELECT SUM(location), AVG(location) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
+    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
-        {error, [
-            {invalid_function_call,'SUM',[varchar]},
-            {invalid_function_call,'AVG',[varchar]}]},
+        {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].\n"
+                                "Function 'AVG' called with arguments of the wrong type [varchar].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
@@ -1961,7 +1962,7 @@ compile_query_with_function_type_error_3_test() ->
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-        {error, [{invalid_type,'+',varchar,sint64}]},
+        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
@@ -1970,8 +1971,9 @@ compile_query_with_arithmetic_type_error_1_test() ->
           "SELECT location + 1 FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
+    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
-        {error, [{invalid_type,'+',varchar,sint64}]},
+        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
@@ -1980,8 +1982,9 @@ compile_query_with_arithmetic_type_error_2_test() ->
           "SELECT 2*(location + 1) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
+    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
-        {error, [{invalid_type,'+',varchar,sint64}]},
+        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
