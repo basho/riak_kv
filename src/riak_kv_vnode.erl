@@ -2,7 +2,7 @@
 %%
 %% riak_kv_vnode: VNode Implementation
 %%
-%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -1181,7 +1181,7 @@ delete(State=#state{status_mgr_pid=StatusMgr, mod=Mod, modstate=ModState}) ->
     end,
     {ok, State#state{modstate=UpdModState,vnodeid=undefined,hashtrees=undefined}}.
 
-terminate(_Reason, #state{mod=Mod, modstate=ModState,hashtrees=Trees}) ->
+terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) ->
     Mod:stop(ModState),
 
     %% Explicitly stop the hashtree rather than relying on the process monitor
@@ -1190,6 +1190,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState,hashtrees=Trees}) ->
     %% riak_core can complete their shutdown before the hashtree is written
     %% to disk causing the hashtree to be closed dirty.
     riak_kv_index_hashtree:sync_stop(Trees),
+    riak_kv_stat:unregister_vnode_stats(Idx),
     ok.
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
