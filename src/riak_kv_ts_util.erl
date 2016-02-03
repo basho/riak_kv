@@ -351,8 +351,12 @@ get_data(Key, Table, Mod0, Options) ->
         end,
     case Result of
         {ok, RObj} ->
-            Record = riak_object:get_value(RObj),
-            {ok, Record};
+            case riak_object:get_value(RObj) of
+                [] ->
+                    {error, notfound};
+                Record ->
+                    {ok, Record}
+            end;
         ErrorReason2 ->
             ErrorReason2
     end.
