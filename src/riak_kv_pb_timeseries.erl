@@ -184,7 +184,10 @@ process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
 
 process(M = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
-    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State).
+    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
+
+process(M = #riak_sql_insert_v1{table =Table}, State) ->
+    check_table_and_call(Table, fun sub_insert/4, M, State).
 
 
 %% There is no two-tuple variants of process_stream for tslistkeysresp
@@ -254,6 +257,94 @@ wait_until_active(Table, State, Seconds) ->
 %% ---------------------------------------------------
 %% functions called from check_table_and_call, one per ts* request
 %% ---------------------------------------------------
+
+
+%%
+%% INSERT statements, called from check_table_and_call.
+%%
+sub_insert(Mod, DDL, #riak_sql_insert_v1{table = Table, fields = Fields, values = Values}, State) ->
+    case lookup_insert_fields(DDL, Fields) of
+	{error, FieldReason} ->
+	    {reply, make_rpberrresp(?E_BAD_QUERY, FieldReason), State};
+	{ok, FieldDesc} ->
+	    Empty = empty(DDL),
+	    case make_putdata(Values, FieldDesc, Empty) of
+		{error, ValueReason} ->
+		    {reply, make_rpberrresp(?E_BAD_QUERY, ValueReason), State};
+		{ok, Data} ->
+		    sub_putreq_common(Mod, Table, Data, State)
+	    end
+    end.
+
+%%
+%% Return an all-null empty row ready to be populated by the values
+%%
+empty(#ddl_v1{fields = Fields}) ->
+    list_to_tuple(lists:duplicate(length(Fields), undefined)).
+
+%%
+%% Lookup the index of the field names selected to insert.  If no field names are given
+%% use the positions defined in the DDL.  This *requires* that once schema changes
+%% take place the DDL fields are left in order.
+%%
+%% TODO: Field position lookup should be implemented as part of the DDL module rather
+%%       than digging through #ddl_v1{} records to make this future proof through upgrades.
+%%
+lookup_insert_fields(#ddl_v1{fields = Fields}, undefined) ->
+    {ok, [Pos || #riak_field_v1{position = Pos} <- Fields]};
+lookup_insert_fields(#ddl_v1{fields = Fields}, FieldIdentifiers) ->
+    case lists:foldl(
+	   fun({identifier, FieldName}, {Good, Bad}) ->
+		   case lists:keyfind(FieldName, #riak_field_v1.name, Fields) of
+		       false ->
+			   {Good, [flat_format("undefined field ~s", [FieldName]) | Bad]};
+		       #riak_field_v1{position = Pos} ->
+			   {[Pos | Good], Bad}
+		   end
+	   end, {[], []}, FieldIdentifiers)
+    of
+	{Pos, []} ->
+	    {ok, lists:reverse(Pos)};
+	{_, Errors} ->
+	    %% Only returns the first error, could investigate returning multiple.
+	    {error, hd(lists:reverse(Errors))}
+    end.
+
+%%
+%% Map the list of values from statement order into the correct place in the tuple.
+%% If there are less values given than the field list the NULL will carry through
+%% and the general validation rules should pick that up.
+%% If there are too many values given for the fields it returns an error.
+%%
+make_putdata(Values, FieldsPos, Empty) ->
+    case lists:foldl(
+	   fun(RowVals, {Good, Bad, RowNum}) ->
+		   case make_row(RowVals, FieldsPos, Empty) of
+		       {ok, Row} ->
+			   {[Row | Good], Bad, RowNum + 1};
+		       {error, Reason} ->
+			   Reason1 = flat_format("~s in row index ~b",
+						 [Reason, RowNum]),
+			   {Good, [Reason1 | Bad], RowNum + 1}
+		   end
+	   end, {[], [], 1}, Values) of
+	{PutData, [], _} ->
+	    {ok, lists:reverse(PutData)};
+	{_, Errors, _} ->
+	    %% Only returns the first error, could investigate returning multiple.
+	    {error, lists:last(Errors)}
+    end.
+
+make_row([], _FieldsPos, Row) ->
+    %% Out of entries in the value - row is populated with default values
+    %% so if run out of data for implicit/explicit fieldnames can just return
+    {ok, Row};
+make_row(_, [], _Row) ->
+    %% Too many values for the field
+    {error, "too many values"};
+make_row([{_Type, Val} | Fields], [Pos | FieldsPos], Row) ->
+    make_row(Fields, FieldsPos, setelement(Pos, Row, Val)).
+
 
 %% -----------
 %% put
