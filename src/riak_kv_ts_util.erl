@@ -329,7 +329,7 @@ get_data(Key, Table, Mod) ->
     get_data(Key, Table, Mod, []).
 
 -spec get_data([riak_pb_ts_codec:ldbvalue()], binary(), module(), proplists:proplist()) ->
-                      {ok, {[binary()], [[riak_pb_ts_codec:ldbvalue()]]}} | {error, term()}.
+                      {ok, [{binary(), riak_pb_ts_codec:ldbvalue()}]} | {error, term()}.
 get_data(Key, Table, Mod0, Options) ->
     Mod =
         case Mod0 of
@@ -361,23 +361,23 @@ get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
 
 
--spec delete_data([riak_pb_ts_codec:ldbvalue()], binary()) ->
+-spec delete_data([any()], riak_object:bucket()) ->
                          ok | {error, term()}.
 delete_data(Key, Table) ->
     delete_data(Key, Table, undefined, [], undefined).
 
--spec delete_data([riak_pb_ts_codec:ldbvalue()], binary(), module()) ->
+-spec delete_data([any()], riak_object:bucket(), module()) ->
                          ok | {error, term()}.
 delete_data(Key, Table, Mod) ->
     delete_data(Key, Table, Mod, [], undefined).
 
--spec delete_data([riak_pb_ts_codec:ldbvalue()], binary(), module(), proplists:proplist()) ->
+-spec delete_data([any()], riak_object:bucket(), module(), proplists:proplist()) ->
                          ok | {error, term()}.
 delete_data(Key, Table, Mod, Options) ->
     delete_data(Key, Table, Mod, Options, undefined).
 
--spec delete_data([riak_pb_ts_codec:ldbvalue()], binary(), module(), proplists:proplist(),
-                  vclock:vclock()) ->
+-spec delete_data([any()], riak_object:bucket(), module(), proplists:proplist(),
+                  undefined | vclock:vclock()) ->
                          ok | {error, term()}.
 delete_data(Key, Table, Mod0, Options0, VClock0) ->
     Mod =
