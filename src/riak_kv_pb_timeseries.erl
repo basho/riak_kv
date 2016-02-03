@@ -471,13 +471,6 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
     end.
 
 
--spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
-                                           [#tscolumndescription{}].
-make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
-    [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
-     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
-
-
 %% -----------
 %% listkeys
 %% -----------
@@ -630,6 +623,8 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
     case riak_kv_ts_util:get_table_ddl(Table) of
         {ok, Mod, DDL} ->
             Fun(Mod, DDL, TsMessage, State);
+        {error, no_type} ->
+            {reply, table_not_activated_response(Table), State};
         {error, missing_helper_module} ->
             BucketProps = riak_core_bucket:get_bucket(
                             riak_kv_ts_util:table_to_bucket(Table)),
