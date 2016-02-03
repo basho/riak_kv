@@ -380,7 +380,6 @@ validate_rows(Mod, Rows) ->
     lists:reverse(BadRowIdxs).
 
 
-
 -spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
