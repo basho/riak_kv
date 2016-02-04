@@ -364,41 +364,22 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                                             query = Q},
                   State) ->
-    SQL = compile(Mod, catch decode_query(Q)),
     Client = {riak_client, [node(), undefined]},
-
-    case SQL of
-        {error, _Error} ->
+    case decode_query(Q) of
+        {ok, SQL} ->
+            case riak_kv_ts_util:compile_to_per_quantum_queries(Mod, SQL) of
+                {ok, Compiled} ->
+                    Bucket = riak_kv_ts_util:table_to_bucket(Table),
+                    convert_cover_list(
+                      riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, []), State);
+                {error, Reason} ->
+                    make_rpberrresp(
+                      ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason]))
+            end;
+        {error, Reason} ->
             {reply, make_rpberrresp(
-                      ?E_BAD_QUERY, "Failed to compile query"),
-             State};
-        _ ->
-            %% SQL is a list of queries (1 per quantum)
-            Bucket = riak_kv_ts_util:table_to_bucket(Table),
-            convert_cover_list(
-              riak_kv_ts_util:sql_to_cover(Client, SQL, Bucket, []), State)
-    end.
-
-compile(_Mod, {error, Err}) ->
-    {error, decoder_parse_error_resp(Err)};
-compile(_Mod, {'EXIT', {Err, _}}) ->
-    {error, decoder_parse_error_resp(Err)};
-compile(Mod, {ok, SQL}) ->
-    case (catch Mod:get_ddl()) of
-        {_, {undef, _}} ->
-            {error, no_helper_module};
-        DDL ->
-            case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
-                true ->
-                    case riak_kv_qry_compiler:compile(DDL, SQL, undefined) of
-                        {error,_} = Error ->
-                            Error;
-                        {ok, Queries} ->
-                            Queries
-                    end;
-                {false, _Errors} ->
-                    {error, invalid_query}
-            end
+                      ?E_BAD_QUERY, flat_format("Failed to parse query: ~p", [Reason])),
+             State}
     end.
 
 %% Copied and modified from riak_kv_pb_coverage:convert_list. Would

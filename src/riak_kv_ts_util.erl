@@ -26,6 +26,7 @@
 
 -export([
          apply_timeseries_bucket_props/2,
+         compile_to_per_quantum_queries/2,
          encode_typeval_key/1,
          get_column_types/2,
          get_data/2, get_data/3, get_data/4,
@@ -438,6 +439,23 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
             sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
                                                  Description}|Accum])
     end.
+
+-spec compile_to_per_quantum_queries(module(), ?SQL_SELECT{}) ->
+                                            {ok, [?SQL_SELECT{}]} | {error, any()}.
+%% @doc Break up a query into a list of per-quantum queries
+compile_to_per_quantum_queries(Mod, SQL) ->
+    case catch Mod:get_ddl() of
+        {_, {undef, _}} ->
+            {error, no_helper_module};
+        DDL ->
+            case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+                true ->
+                    riak_kv_qry_compiler:compile(DDL, SQL, undefined);
+                {false, _Errors} ->
+                    {error, invalid_query}
+            end
+    end.
+
 
 %% Generate a human-readable description of the target
 %%     <<"<TABLE> / time > X and time < Y">>
