@@ -56,6 +56,7 @@
 -define(E_BAD_QUERY,         1018).
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
+-define(E_DELETE_NOTFOUND,   1021).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -335,7 +336,7 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
-            {reply, tsdelresp, State};
+            {reply, make_rpberrresp(?E_DELETE_NOTFOUND, "notfound"), State};
         {error, Reason} ->
             {reply, failed_delete_response(Reason), State}
     end.
