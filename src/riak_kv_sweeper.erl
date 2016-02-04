@@ -435,9 +435,14 @@ ask_participants(Index, Participants) ->
      {Participant, {ok, Fun, InitialAcc}} <- Funs].
 
 update_finished_sweep(Index, Result, #state{sweeps = Sweeps} = State) ->
-    Sweep = dict:fetch(Index, Sweeps),
-    Sweep1 = store_result(Result, Sweep),
-    finish_sweep(Sweep1, State#state{sweeps = dict:store(Index, Sweep1, Sweeps)}).
+    case dict:find(Index, Sweeps) of
+        {ok, Sweep} ->
+            Sweep1 = store_result(Result, Sweep),
+            finish_sweep(Sweep1,
+                         State#state{sweeps = dict:store(Index, Sweep1, Sweeps)});
+        _ ->
+            State
+    end.
 
 store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
     TimeStamp = os:timestamp(),
@@ -451,9 +456,13 @@ store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
                 end_time = TimeStamp}.
 
 update_progress(Index, SweptKeys, #state{sweeps = Sweeps} = State) ->
-    Sweep = dict:fetch(Index, Sweeps),
-    Sweep1 = Sweep#sweep{swept_keys = SweptKeys},
-    State#state{sweeps = dict:store(Index, Sweep1, Sweeps)}.
+    case dict:find(Index, Sweeps) of
+        {ok, Sweep} ->
+            Sweep1 = Sweep#sweep{swept_keys = SweptKeys},
+            State#state{sweeps = dict:store(Index, Sweep1, Sweeps)};
+        _ ->
+            State
+    end.
 
 find_expired_participant(Sweeps, Participants) ->
     ExpiredMissingSweeps =
