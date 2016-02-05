@@ -950,7 +950,7 @@ setup_sweep(N) ->
     BackendFun =
         fun(CompleteFoldReq, InitialAcc, _, _) ->
                 lists:foldl(fun(NBin, Acc) ->
-                                    InitialObj = riak_object:new(NBin, NBin, <<>>),
+                                    InitialObj = riak_object:to_binary(v1, riak_object:new(NBin, NBin, <<>>)),
                                     CompleteFoldReq(NBin, NBin, InitialObj, Acc)
                             end, InitialAcc, Keys)
         end,
