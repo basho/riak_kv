@@ -73,7 +73,7 @@ queried_table(?SQL_SELECT{'FROM' = Table})               -> Table.
 
 
 -spec get_table_ddl(binary()) ->
-                           {ok, module(), #ddl_v1{}} |
+                           {ok, module(), ?DDL{}} |
                            {error, term()}.
 %% Check that Table is in good standing and ready for TS operations
 %% (its bucket type has been activated and it has a DDL in its props)
@@ -81,11 +81,11 @@ get_table_ddl(Table) ->
     case riak_core_claimant:bucket_type_status(Table) of
         active ->
             Mod = riak_ql_ddl:make_module_name(Table),
-            case catch Mod:get_ddl() of
+            case catch riak_ql_ddl:upgrade(Mod:get_ddl()) of
                 {_, {undef, _}} ->
                     {error, missing_helper_module};
                 DDL ->
-                    {ok, Mod, DDL}
+                    {ok, Mod, riak_ql_ddl:upgrade(DDL)}
             end;
         InappropriateState ->
             {error, {inappropriate_bucket_state, InappropriateState}}
@@ -93,13 +93,15 @@ get_table_ddl(Table) ->
 
 
 %%
--spec apply_timeseries_bucket_props(DDL::#ddl_v1{},
+-spec apply_timeseries_bucket_props(DDL::?DDL{},
                                     Props1::[proplists:property()]) ->
         {ok, Props2::[proplists:property()]}.
 apply_timeseries_bucket_props(DDL, Props1) ->
     Props2 = lists:keystore(
         <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
-    {ok, [{<<"ddl">>, DDL} | Props2]}.
+    Props3 = lists:keystore(
+        <<"ddl">>, 1, Props2, {<<"ddl">>, DDL}),
+    {ok, Props3}.
 
 
 -spec maybe_parse_table_def(BucketType :: binary(),
@@ -113,12 +115,15 @@ maybe_parse_table_def(BucketType, Props) ->
         false ->
             {ok, Props};
         {value, {<<"table_def">>, TableDef}, PropsNoDef} ->
-            case catch riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
-                {ok, DDL} ->
+            case catch riak_ql_parser:parse(
+                         riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
+                {ok, DDL = ?DDL{properties = WithProps}} ->
                     ok = assert_type_and_table_name_same(BucketType, DDL),
                     ok = try_compile_ddl(DDL),
-                    ok = assert_write_once_not_false(PropsNoDef),
-                    apply_timeseries_bucket_props(DDL, PropsNoDef);
+                    MergedProps = merge_props_with_preference(
+                                    PropsNoDef, WithProps),
+                    ok = assert_write_once_not_false(BucketType, MergedProps),
+                    apply_timeseries_bucket_props(DDL, MergedProps);
                 {'EXIT', {Reason, _}} ->
                     % the lexer throws exceptions, the reason should always be a
                     % binary
@@ -135,26 +140,36 @@ maybe_parse_table_def(BucketType, Props) ->
 %% Time series must always use write_once so throw an error if the write_once
 %% property is ever set to false. This prevents a user thinking they have
 %% disabled write_once when it has been set to true internally.
-assert_write_once_not_false(Props) ->
+assert_write_once_not_false(BucketType, Props) ->
     case lists:keyfind(<<"write_once">>, 1, Props) of
         {<<"write_once">>, false} ->
             throw({error,
                    {write_once,
-                    "Error, the time series bucket type could not be created. "
-                    "The write_once property must be true\n"}});
+                    flat_format(
+                      "Time series bucket type ~s has write_once == false", [BucketType])}});
         _ ->
             ok
     end.
 
+-spec merge_props_with_preference(proplists:proplist(), proplists:proplist()) ->
+                                         proplists:proplist().
+%% If same keys appear in RpbBucketProps as well as embedded in the
+%% query ("CREATE TABLE ... WITH"), we merge the two proplists giving
+%% preference to the latter.
+merge_props_with_preference(PbProps, WithProps) ->
+    lists:foldl(
+      fun({K, _} = P, Acc) -> lists:keystore(K, 1, Acc, P) end,
+      PbProps, WithProps).
+
 %% Ensure table name in DDL and bucket type are the same.
-assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
+assert_type_and_table_name_same(BucketType, ?DDL{table = BucketType}) ->
     ok;
-assert_type_and_table_name_same(BucketType1, #ddl_v1{table = BucketType2}) ->
+assert_type_and_table_name_same(BucketType1, ?DDL{table = BucketType2}) ->
     throw({error,
            {table_name,
-            "The bucket type and table name must be the same\n"
-            "    bucket type was: " ++ binary_to_list(BucketType1) ++ "\n"
-            "     table name was: " ++ binary_to_list(BucketType2) ++ "\n"}}).
+            flat_format(
+              "Time series bucket type and table name mismatch (~s != ~s)",
+              [BucketType1, BucketType2])}}).
 
 %% Attempt to compile the DDL but don't do anything with the output, this is
 %% catch failures as early as possible. Also the error messages are easy to
@@ -165,14 +180,14 @@ try_compile_ddl(DDL) ->
     ok.
 
 
--spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}, module()) ->
+-spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], ?DDL{}, module()) ->
                           {ok, {binary(), binary()}} |
                           {error, {bad_key_length, integer(), integer()}}.
 %% Given a list of values (of appropriate types) and a DDL, produce a
 %% partition and local key pair, which can be used in riak_client:get
 %% to fetch TS objects.
-make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
-                                        fields = Fields}, Mod) ->
+make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKParams},
+                                     fields = Fields}, Mod) ->
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
     Got = length(CompoundKey),
@@ -203,3 +218,6 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 %% riak_ql_ddl:get_local_key/3,
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
+
+flat_format(F, A) ->
+    lists:flatten(io_lib:format(F, A)).

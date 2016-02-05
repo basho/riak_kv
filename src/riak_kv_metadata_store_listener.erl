@@ -4,7 +4,7 @@
 %% events and starts compilation of the DDL if it exists in the
 %% metadata.
 %%
-%% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2015, 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -48,16 +48,25 @@ init(_) ->
 
 
 handle_event({metadata_stored, BucketType}, State) ->
-	% catch here because if the handler throws an exception then it is removed
-	% from the listener list.
-	(catch riak_kv_ts_newtype:new_type(BucketType)),
+    %% catch here because if the handler throws an exception then it is removed
+    %% from the listener list.
+    (catch riak_kv_ts_newtype:new_type(BucketType)),
     {ok, State};
 handle_event(_Event, State) ->
     {ok, State}.
 
-handle_call({is_type_compiled, [BucketType, DDL]}, State) ->
-    IsCompiled = (riak_kv_compile_tab:get_state(BucketType) == compiled andalso
-                  riak_kv_compile_tab:get_ddl(BucketType) == DDL),
+handle_call({is_type_compiled, [BucketType, _DDL]}, State) ->
+    IsCompiled = riak_kv_compile_tab:get_state(BucketType) == compiled,
+    %% andalso riak_kv_compile_tab:get_ddl(BucketType)) == DDL,
+    %% This reqiest comes from a riak_ts-1.1 node: ignore the DDL
+    %%
+    %% Because the AST for ddl_v1 and _v2 will differ (ddl_v2 record
+    %% contains an additional 'properties' field) while effectively
+    %% representing the same schema, comparing the DDL bodies is not
+    %% necessary (and the blobs will be different between versions).
+    {ok, IsCompiled, State};
+handle_call({is_type_compiled, [BucketType]}, State) ->
+    IsCompiled = riak_kv_compile_tab:get_state(BucketType) == compiled,
     {ok, IsCompiled, State};
 handle_call(_Request, State) ->
     Reply = ok,
