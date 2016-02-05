@@ -2,7 +2,7 @@
 %%
 %% riak_kv_ts_util: supporting functions for timeseries code paths
 %%
-%% Copyright (c) 2015, 2016 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
