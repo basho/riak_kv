@@ -219,7 +219,6 @@ add_subquery_result(SubQId, Chunk,
               State#state{status   = accumulating_chunks,
                           result   = QueryResult2,
                           sub_qrys = NSubQ}
-
             catch
               error:divide_by_zero ->
                   cancel_error_query(divide_by_zero, State)
@@ -242,12 +241,10 @@ cancel_error_query(Error, #state{ receiver_pid = ReceiverPid,
 subqueries_done(QId,
                 #state{qid          = QId,
                        receiver_pid = ReceiverPid,
-                       result       = QueryResult1,
-                       sub_qrys     = SubQQ,
-                       qry          = ?SQL_SELECT{'SELECT' = Sel }} = State) ->
+                       sub_qrys     = SubQQ} = State) ->
     case SubQQ of
         [] ->
-            QueryResult2 = prepare_final_results(Sel, QueryResult1),
+            QueryResult2 = prepare_final_results(State),
             %   send the results to the waiting client process
             ReceiverPid ! {ok, QueryResult2},
             pop_next_query(),
@@ -258,19 +255,26 @@ subqueries_done(QId,
             State
     end.
 
--spec prepare_final_results(#riak_sel_clause_v1{}, [{non_neg_integer(), list()}]) ->
+-spec prepare_final_results(#state{}) ->
                                    {[riak_pb_ts_codec:tscolumnname()],
                                     [riak_pb_ts_codec:tscolumntype()],
                                     [[riak_pb_ts_codec:ldbvalue()]]}.
-prepare_final_results(#riak_sel_clause_v1{calc_type = rows} = Select,
-                      IndexedChunks) ->
+prepare_final_results(#state{
+        result = IndexedChunks,
+        qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select }}) ->
     %% sort by index, to reassemble according to coverage plan
     {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
     prepare_final_results2(Select, lists:append(R2));
-prepare_final_results(#riak_sel_clause_v1{ calc_type = aggregate } = Select,
-                      Aggregate1) ->
-    Aggregate2 = riak_kv_qry_compiler:finalise_aggregate(Select, Aggregate1),
-    prepare_final_results2(Select, [Aggregate2]).
+prepare_final_results(#state{
+        result = Aggregate1,
+        qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate} = Select }} = State) ->
+    try
+        Aggregate2 = riak_kv_qry_compiler:finalise_aggregate(Select, Aggregate1),
+        prepare_final_results2(Select, [Aggregate2])
+    catch
+        error:divide_by_zero ->
+            cancel_error_query(divide_by_zero, State)
+    end.
 
 %%
 prepare_final_results2(#riak_sel_clause_v1{ col_return_types = ColTypes,
@@ -287,14 +291,20 @@ prepare_final_results2(#riak_sel_clause_v1{ col_return_types = ColTypes,
 
 prepare_final_results_test() ->
     Rows = [[12, <<"windy">>], [13, <<"windy">>]],
-    IndexedChunks = [{1, Rows}],
+    % IndexedChunks = [{1, Rows}],
     ?assertEqual(
         {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
         prepare_final_results(
-            #riak_sel_clause_v1{
-                col_names = [<<"a">>, <<"b">>],
-                col_return_types = [sint64, varchar],
-                calc_type = rows }, IndexedChunks)
+            #state{
+                qry =
+                    ?SQL_SELECT{
+                        'SELECT' = #riak_sel_clause_v1{
+                            col_names = [<<"a">>, <<"b">>],
+                            col_return_types = [sint64, varchar],
+                            calc_type = rows
+                         }
+                    },
+                result = [{1, Rows}]})
     ).
 
 -endif.
