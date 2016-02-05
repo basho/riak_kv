@@ -55,6 +55,7 @@
 -define(E_ACTIVATE,          1017).
 -define(E_BAD_QUERY,         1018).
 -define(E_TABLE_INACTIVE,    1019).
+-define(E_PARSE_ERROR,       1020).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -85,14 +86,16 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover} ->
+            %% convert error returns to ok's, this menas it will be passed into
+            %% process which will not process it and return the error.
             case catch decode_query(Q, Cover) of
                 {ok, DecodedQuery} ->
                     PermAndTarget = decode_query_permissions(DecodedQuery),
                     {ok, DecodedQuery, PermAndTarget};
                 {error, Error} ->
-                    {error, decoder_parse_error_resp(Error)};
+                    {ok, make_decoder_error_response(Error)};
                 {'EXIT', {Error, _}} ->
-                    {error, decoder_parse_error_resp(Error)}
+                    {ok, make_decoder_error_response(Error)}
             end;
         #tsgetreq{table = Table}->
             {ok, Msg, {"riak_kv.ts_get", Table}};
@@ -142,6 +145,9 @@ encode(Message) ->
 
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
                      {reply, ts_responses(), #state{}}.
+process(#rpberrorresp{} = Error, State) ->
+    {reply, Error, State};
+
 process(M = #tsputreq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tsputreq/4, M, State);
 
@@ -327,13 +333,6 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
     end.
 
 
--spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
-                                           [#tscolumndescription{}].
-make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
-    [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
-     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
-
-
 %% -----------
 %% listkeys
 %% -----------
@@ -377,8 +376,7 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                       ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason]))
             end;
         {error, Reason} ->
-            {reply, make_rpberrresp(
-                      ?E_BAD_QUERY, flat_format("Failed to parse query: ~p", [Reason])),
+            {reply, make_decoder_error_response(Reason),
              State}
     end.
 
@@ -591,13 +589,20 @@ make_describe_response(DescribeTableRows) ->
 
 
 
-decoder_parse_error_resp({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
-    flat_format("~ts", [Msg]);
-decoder_parse_error_resp({Token, riak_ql_parser, _}) ->
-    flat_format("Unexpected token '~p'", [Token]);
-decoder_parse_error_resp(Error) ->
+make_decoder_error_response({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("~ts", [Msg]));
+make_decoder_error_response({Token, riak_ql_parser, _}) when is_binary(Token) ->
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("Unexpected token '~s'", [Token]));
+make_decoder_error_response({Token, riak_ql_parser, _}) ->
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("Unexpected token '~p'", [Token]));
+make_decoder_error_response(Error) ->
     Error.
 
+-spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
+                                           [#tscolumndescription{}].
+make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
+    [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
+     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
