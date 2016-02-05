@@ -678,26 +678,77 @@ end
      (_) -> false
   end}.
 
+%% @see riak_kv.query.timeseries.timeout
 %% @doc Timeout in milliseconds for Time Series queries, after which riak
 %% will return a timeout error.
+%% This setting is DEPRECATED use riak_kv.query.timeseries.timeout instead
 {mapping, "timeseries_query_timeout_ms", "riak_kv.timeseries_query_timeout_ms", [
-  {default, 10000},
-  {datatype, integer}
+  {commented, 10000},
+  {datatype, integer},
+  hidden
+]}.
+
+%% @doc Timeout for Time Series queries, after which riak
+%% will return a timeout error - default is 10,000 miliseconds
+{mapping, "riak_kv.query.timeseries.timeout", "riak_kv.timeseries_query_timeout_ms", [
+  {default, "10000ms"},
+  {datatype, {duration, ms}}
+]}.
+
+%% @see riak_kv.query.timeseries.max_quanta_span
+%% @doc Maximum number of quanta that a query can span. Larger quanta spans
+%% mean the time duration for a query can be bigger. This is constrained to
+%% prevent excessively long running queries that could affect the performance
+%% of the cluster.
+%% This setting is DEPRECATED use riak_kv.query.timeseries.max_quanta_span
+{mapping, "timeseries_query_max_quanta_span", "riak_kv.timeseries_query_max_quanta_span", [
+  {commented, 5},
+  {datatype, integer},
+  {validators, ["validate_max_quanta_span"]},
+  hidden
 ]}.
 
 %% @doc Maximum number of quanta that a query can span. Larger quanta spans
 %% mean the time duration for a query can be bigger. This is constrained to
 %% prevent excessively long running queries that could affect the performance
 %% of the cluster.
-{mapping, "timeseries_query_max_quanta_span", "riak_kv.timeseries_query_max_quanta_span", [
+{mapping, "riak_kv.query.timeseries.max_quanta_span", "riak_kv.timeseries_query_max_quanta_span", [
   {default, 5},
-  {datatype, integer}
+  {datatype, integer},
+  {validators, ["validate_max_quanta_span"]}
+]}.
+
+{validator,
+  "validate_max_quanta_span",
+  "must be an integer > 0 and =< 256",
+  fun(Value) when is_integer(Value) andalso Value > 1 andalso Value =< 256 -> true;
+     (_) -> false
+  end}.
+
+%% @see riak_kv.query.timeseries.max_concurrent_queries
+%% @doc The number of individual queries that can run at any one time.
+%% This is the number per node in the cluster so the total number of
+%% concurrent queries per cluster is timeseries_max_concurrent_queries * nodes.
+%% This setting is DEPRECATED use riak_kv.query.timeseries.max_concurrent_queries
+{mapping, "timeseries_max_concurrent_queries", "riak_kv.timeseries_max_concurrent_queries", [
+  {commented, 3},
+  {datatype, integer},
+  {validators, ["validate_max_concurrent_queries"]},
+  hidden
 ]}.
 
 %% @doc The number of individual queries that can run at any one time.
 %% This is the number per node in the cluster so the total number of
 %% concurrent queries per cluster is timeseries_max_concurrent_queries * nodes.
-{mapping, "timeseries_max_concurrent_queries", "riak_kv.timeseries_max_concurrent_queries", [
+{mapping, "riak_kv.query.timeseries.max_concurrent_queries", "riak_kv.timeseries_max_concurrent_queries", [
   {default, 3},
-  {datatype, integer}
+  {datatype, integer},
+  {validators, ["validate_max_concurrent_queries"]}
 ]}.
+
+{validator,
+  "validate_max_concurrent_queries",
+  "must be an integer > 0 and =< 1000",
+  fun(Value) when is_integer(Value) andalso Value > 1 andalso Value =< 1000 -> true;
+     (_) -> false
+  end}.
