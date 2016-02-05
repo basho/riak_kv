@@ -58,6 +58,7 @@
          estimated_keys = 0  :: non_neg_integer(),
          swept_keys = 0  :: non_neg_integer(),
          modified_objects = 0 ::non_neg_integer(),
-         throttle = riak_kv_sweeper:get_sweep_throttle()
+         throttle = riak_kv_sweeper:get_sweep_throttle(),
+         total_obj_size = 0
          }).
 

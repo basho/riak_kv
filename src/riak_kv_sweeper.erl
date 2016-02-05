@@ -47,13 +47,13 @@
 
 %% Default number of concurrent sweeps that are allowed to run.
 -define(DEFAULT_SWEEP_CONCURRENCY,1).
--define(DEFAULT_SWEEP_TICK, timer:minutes(5)).
--define(ESTIMATE_EXPIRY, 24 * 3600).    %% 1 day in s
+-define(DEFAULT_SWEEP_TICK, timer:minutes(1)).
+-define(ESTIMATE_EXPIRY, 24 * 3600). %% 1 day in s
 
 -define(MAX_SWEEP_CRASHES, 10).
-%% Throttle used when sweeping over K/V data: {Limit, Wait}.
-%% Default: 100 keys limit / 100 ms wait
--define(DEFAULT_SWEEP_THROTTLE, {100, 100}).
+%% Throttle used when sweeping over K/V data: {Type, Limit, Wait}.
+%% Default: 1 MB limit / 100 ms wait
+-define(DEFAULT_SWEEP_THROTTLE, {obj_size, 1000000, 100}).
 
 %% ====================================================================
 %% API functions
@@ -670,7 +670,7 @@ failed_sweep(Failed, Index, Reason) ->
 %% @private
 make_complete_fold_req() ->
     fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
-            Acc1 = maybe_throttle_sweep(Acc),
+            Acc1 = maybe_throttle_sweep(RObjBin, Acc),
             Acc2 =
                 case SweptKeys rem 1000 of
                     0 ->
@@ -766,7 +766,7 @@ get_bucket_props(Bucket, BucketPropsDict) ->
     end.
 
 %% Throttle depending on swept keys.
-maybe_throttle_sweep(#sa{throttle = {Limit, Wait},
+maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, Limit, Wait},
                          swept_keys = SweepKeys} = SweepAcc) ->
     case SweepKeys rem Limit of
         0 ->
@@ -778,11 +778,34 @@ maybe_throttle_sweep(#sa{throttle = {Limit, Wait},
             maybe_extra_throttle(SweepAcc1);
         _ ->
             maybe_extra_throttle(SweepAcc)
+    end;
+
+%% Throttle depending on total obj_size.
+maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, Limit, Wait},
+                         total_obj_size = TotalObjSize} = SweepAcc) ->
+    ObjSize = byte_size(RObjBin),
+    TotalObjSize1 = ObjSize + TotalObjSize,
+    case (Limit =/= 0) andalso (TotalObjSize1 > Limit) of
+        true ->
+            NewThrottle = get_sweep_throttle(),
+            %% We use receive after to throttle instead of sleep.
+            %% This way we can respond on requests while throttling
+            SweepAcc1 =
+                maybe_receive_request(SweepAcc#sa{throttle = NewThrottle}, Wait),
+            maybe_extra_throttle(SweepAcc1#sa{total_obj_size = TotalObjSize1});
+        _ ->
+            maybe_extra_throttle(SweepAcc#sa{total_obj_size = TotalObjSize1})
     end.
 
 %% Throttle depending on how many objects the sweep modify.
-maybe_extra_throttle(#sa{throttle = {Limit, Wait},
+maybe_extra_throttle(#sa{throttle = Throttle,
                          modified_objects = ModObj} = SweepAcc) ->
+    case Throttle of
+        {pace, Limit, Wait} ->
+            ok;
+        {obj_size, _SizeLimit, Wait} ->
+            Limit = 100
+    end,
     %% +1 since some sweeps doesn't modify any objects
     case ModObj + 1 rem Limit of
         0 ->
