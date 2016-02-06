@@ -567,15 +567,9 @@ call_api_function(RD, Ctx = #ctx{api_call = query,
             handle_error({query_parse_error, Reason}, RD, Ctx)
     end;
 
-call_api_function(RD, Ctx = #ctx{api_call = list_keys,
-                                 table = Table,
-                                 client = Client, timeout = Timeout}) ->
-    F = fun() ->
-                {ok, ReqId} = Client:stream_list_keys(
-                                {Table, Table}, Timeout),
-                stream_keys(ReqId)
-        end,
-    {{stream, {[], F}}, RD, Ctx};
+call_api_function(RD, Ctx = #ctx{api_call = list_keys}) ->
+    %% the streaming function for this is set up in produce_doc_body
+    produce_doc_body(RD, Ctx);
 
 call_api_function(RD, Ctx = #ctx{api_call = coverage,
                                  query = Query,
@@ -619,19 +613,6 @@ call_api_function(RD, Ctx = #ctx{api_call = coverage,
             handle_error(inappropriate_sql_for_coverage, RD, Ctx);
         {error, Reason} ->
             handle_error({query_parse_error, Reason}, RD, Ctx)
-    end.
-
-
-%% copied here from riak_kv_wm_keylist.erl
-stream_keys(ReqId) ->
-    receive
-        {ReqId, From, {keys, Keys}} ->
-            _ = riak_kv_keys_fsm:ack_keys(From),
-            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
-        {ReqId, {keys, Keys}} ->
-            {mochijson2:encode({struct, [{<<"keys">>, Keys}]}), fun() -> stream_keys(ReqId) end};
-        {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
-        {ReqId, {error, timeout}} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.
 
 
@@ -721,6 +702,15 @@ prepare_data_in_body(RD0, Ctx0) ->
 %%      response body of the request.
 produce_doc_body(RD, Ctx = #ctx{result = ok}) ->
     {<<"ok">>, RD, Ctx};
+produce_doc_body(RD, Ctx = #ctx{api_call = list_keys,
+                                table = Table,
+                                client = Client, timeout = Timeout}) ->
+    F = fun() ->
+                {ok, ReqId} = Client:stream_list_keys(
+                                {Table, Table}, Timeout),
+                stream_keys(ReqId)
+        end,
+    {{stream, {[], F}}, RD, Ctx};
 produce_doc_body(RD, Ctx = #ctx{api_call = Call,
                                 result = {ColNames, Rows}})
   when Call == get;
@@ -732,7 +722,6 @@ produce_doc_body(RD, Ctx = #ctx{api_call = Call,
 produce_doc_body(RD, Ctx = #ctx{api_call = Call,
                                 result = CoverageDetails})
   when Call == coverage ->
-    lager:info("CoverageDetails ~p", [CoverageDetails]),
     SafeCoverageDetails =
         [{entry, armor_entry(E)} || {entry, E} <- CoverageDetails],
     {mochijson2:encode(
@@ -745,6 +734,29 @@ armor_entry(EE) ->
               {cover_context, {json, Bin}};
          (X) -> X
       end, EE).
+
+%% copied here from riak_kv_wm_keylist.erl
+stream_keys(ReqId) ->
+    receive
+        %% skip empty shipments
+        {ReqId, {keys, []}} ->
+            stream_keys(ReqId);
+        {ReqId, From, {keys, []}} ->
+            _ = riak_kv_keys_fsm:ack_keys(From),
+            stream_keys(ReqId);
+        {ReqId, From, {keys, Keys}} ->
+            _ = riak_kv_keys_fsm:ack_keys(From),
+            {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
+        {ReqId, {keys, Keys}} ->
+            {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
+        {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
+        {ReqId, {error, timeout}} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
+    end.
+
+ts_keys_to_json(Keys) ->
+    KeysTerm = [tuple_to_list(sext:decode(A))
+                || A <- Keys, A /= []],
+    mochijson2:encode({struct, [{<<"keys">>, KeysTerm}]}).
 
 
 error_out(Type, Fmt, Args, RD, Ctx) ->
