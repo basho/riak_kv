@@ -206,9 +206,7 @@ validate_extract_execute(RD, Ctx) ->
 
 -spec validate_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 validate_request(RD, Ctx) ->
-    Tokens = [{api_version, lists:nth(2, string:tokens(wrq:path(RD), "/"))}], %% = wrq:path_tokens(RD),
-    %% I love webmachine, heart and soul. wrq:path_tokens(RD) empty
-    case proplists:get_value(api_version, Tokens) of
+    case wrq:path_info(api_version, RD) of
         "v1" ->
             validate_request_v1(RD, Ctx);
         BadVersion ->
