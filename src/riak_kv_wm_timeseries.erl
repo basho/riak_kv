@@ -24,12 +24,12 @@
 %%      Copied with heavy modifications from riak_kv_wm_object.erl.
 %%
 %% ```
-%% GET    /ts/table/Table          single-key get
-%% DELETE /ts/table/Table          single-key delete
-%% PUT    /ts/table/Table          batch put
-%% GET    /ts/table/Table/keys     list_keys
-%% GET    /ts/coverage             coverage for a query
-%% POST   /ts/query                execute SQL query
+%% GET    /ts/v1/table/Table          single-key get
+%% DELETE /ts/v1/table/Table          single-key delete
+%% PUT    /ts/v1/table/Table          batch put
+%% GET    /ts/v1/table/Table/keys     list_keys
+%% GET    /ts/v1/coverage             coverage for a query
+%% GET/POST   /ts/v1/query            execute SQL query
 %% '''
 %%
 %% Request body is expected to be a JSON containing key and/or value(s).
@@ -209,7 +209,7 @@ validate_request(RD, Ctx) ->
     Tokens = [{api_version, lists:nth(2, string:tokens(wrq:path(RD), "/"))}], %% = wrq:path_tokens(RD),
     %% I love webmachine, heart and soul. wrq:path_tokens(RD) empty
     case proplists:get_value(api_version, Tokens) of
-        "1" ->
+        "v1" ->
             validate_request_v1(RD, Ctx);
         BadVersion ->
             handle_error({unsupported_version, BadVersion}, RD, Ctx)
@@ -223,52 +223,52 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
           extract_query(Json), extract_cover_context(Json)} of
         %% single-key get
         {'GET',
-         ["ts", "1", "tables", Table],
+         ["ts", "v1", "tables", Table],
          Key, undefined, undefined, undefined}
           when is_list(Table), Key /= undefined ->
             malformed_params(
-              RD, Ctx#ctx{api_version = "1", api_call = get,
+              RD, Ctx#ctx{api_version = "v1", api_call = get,
                           table = list_to_binary(Table), key = Key});
         %% single-key delete
         {'DELETE',
-         ["ts", "1", "tables", Table],
+         ["ts", "v1", "tables", Table],
          Key, undefined, undefined, undefined}
           when is_list(Table), Key /= undefined ->
             malformed_params(
-              RD, Ctx#ctx{api_version = "1", api_call = delete,
+              RD, Ctx#ctx{api_version = "v1", api_call = delete,
                           table = list_to_binary(Table), key = Key});
         %% batch put
         {'PUT',
-         ["ts", "1", "tables", Table],
+         ["ts", "v1", "tables", Table],
          undefined, Data, undefined, undefined}
           when is_list(Table), Data /= undefined ->
             malformed_params(
-              RD, Ctx#ctx{api_version = "1", api_call = put,
+              RD, Ctx#ctx{api_version = "v1", api_call = put,
                           table = list_to_binary(Table), data = Data});
         %% list_keys
         {'GET',
-         ["ts", "1", "tables", Table, "keys"],
+         ["ts", "v1", "tables", Table, "keys"],
          undefined, undefined, undefined, undefined}
           when is_list(Table) ->
             malformed_params(
-              RD, Ctx#ctx{api_version = "1", api_call = list_keys,
+              RD, Ctx#ctx{api_version = "v1", api_call = list_keys,
                           table = list_to_binary(Table)});
         %% coverage
         {'GET',
-         ["ts", "1", "coverage"],
+         ["ts", "v1", "coverage"],
          undefined, undefined, Query, undefined}
           when is_list(Query) ->
             malformed_params(
-              RD, Ctx#ctx{api_version = "1", api_call = coverage,
+              RD, Ctx#ctx{api_version = "v1", api_call = coverage,
                           query = Query});
         %% query
         {Method,
-         ["ts", "1", "query"],
+         ["ts", "v1", "query"],
          undefined, undefined, Query, CoverContext}
           when (Method == 'GET' orelse Method == 'POST' orelse Method == 'PUT')
                andalso is_list(Query) ->
             malformed_params(
-              RD, Ctx#ctx{api_version = "1", api_call = query,
+              RD, Ctx#ctx{api_version = "v1", api_call = query,
                           query = Query, cover_context = CoverContext});
         _Invalid ->
             handle_error({malformed_request, Method}, RD, Ctx)
