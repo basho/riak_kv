@@ -731,7 +731,9 @@ produce_doc_body(RD, Ctx = #ctx{api_call = Call,
 armor_entry(EE) ->
     lists:map(
       fun({cover_context, Bin}) ->
-              {cover_context, {json, Bin}};
+              %% prevent list to be read and converted by mochijson2
+              %% as utf8 binary
+              {cover_context, binary_to_list(Bin)};
          (X) -> X
       end, EE).
 
