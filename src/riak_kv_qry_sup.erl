@@ -2,7 +2,7 @@
 %%%
 %%% riak_kv_qry_sup: suprvervise the Riak query planner, etc
 %%%
-%%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
+%%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
 %%%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
