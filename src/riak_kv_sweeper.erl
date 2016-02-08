@@ -794,7 +794,7 @@ maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, Limit, Wait},
             %% This way we can respond on requests while throttling
             SweepAcc1 =
                 maybe_receive_request(SweepAcc#sa{throttle = NewThrottle}, Wait),
-            maybe_extra_throttle(SweepAcc1#sa{total_obj_size = TotalObjSize1});
+            maybe_extra_throttle(SweepAcc1#sa{total_obj_size = 0});
         _ ->
             maybe_extra_throttle(SweepAcc#sa{total_obj_size = TotalObjSize1})
     end.
