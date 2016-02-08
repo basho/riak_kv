@@ -198,7 +198,9 @@ handle_info(sweep_tick, State) ->
             {noreply, State2};
         false ->
             {noreply, State}
-    end.
+    end;
+handle_info({estimate,_}, State) ->
+    {noreply, State}.
 
 %% terminate(shutdown, _State) ->
 %%     delete_persistent_participants(),
