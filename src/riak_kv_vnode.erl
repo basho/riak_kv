@@ -143,7 +143,7 @@
                 key_buf_size :: pos_integer(),
                 async_folding :: boolean(),
                 in_handoff = false :: boolean(),
-                handoff_target :: node(),
+                handoff_target :: {integer(), node()},
                 handoffs_rejected = 0 :: integer(),
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid(),

@@ -41,7 +41,7 @@
           start_inclusive=true :: boolean(),
           end_inclusive=true :: boolean(),
           return_body=false ::boolean(), %% Note, only for riak cs bucket folds
-          term_regex :: binary() | undefined,
+          term_regex :: term(), %% binary | re:mp() but mp() not exported
           max_results :: integer() | undefined
          }).
 
