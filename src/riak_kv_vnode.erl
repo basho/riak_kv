@@ -2584,8 +2584,9 @@ maybe_new_key_epoch(true, State, LocalObj, IncomingObj) ->
                     B = riak_object:bucket(LocalObj),
                     K = riak_object:key(LocalObj),
 
-                    lager:error("Inbound clock entry for ~p in ~p/~p greater than local",
-                               [VId, B, K]),
+                    lager:warning("Inbound clock entry for ~p in ~p/~p greater than local." ++
+                                      "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
+                                  [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]),
                     new_key_epoch(State);
                 _ ->
                     %% just use local id
