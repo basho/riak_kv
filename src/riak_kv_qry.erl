@@ -2,7 +2,7 @@
 %%
 %% riak_kv_qry: Riak SQL API
 %%
-%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
+%% Copyright (C) 2015, 2016 Basho Technologies, Inc. All rights reserved
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -94,26 +94,37 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
     MaxSubQueries =
         app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
 
-    case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
-        true ->
-            case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
-                {error,_} = Error ->
-                    Error;
-                {ok, Queries} ->
-                    case maybe_await_query_results(
-                           riak_kv_qry_queue:put_on_queue(self(), Queries, DDL)) of
-                        {ok, {ColNames, ColTypes, PossiblyWithEmptyRecords}} ->
-                            %% filter out empty records
-                            {ok,
-                             {ColNames, ColTypes,
-                              [R || R <- PossiblyWithEmptyRecords,
-                                    R /= [[]]]}};
-                        {error, Reason} ->
-                            {error, Reason}
-                    end
-            end;
-        {false, Errors} ->
-            {error, {invalid_query, format_query_syntax_errors(Errors)}}
+    case riak_core_bucket:get_bucket({BucketType, BucketType}) of
+        {error, Reason} ->
+            {error, Reason};
+        _BucketProps ->
+            %% We don't actually need properties here; this call to
+            %% get_bucket only serves to make sure the bucket type has
+            %% been activated. Otherwise, proplists:get_value(n_val,
+            %% BucketProps) will eventually be called and crash some
+            %% lonely gen_fsm downstream in eleveldb, which will
+            %% trigger a backend timeout. Avoid that.
+            case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+                true ->
+                    case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
+                        {error,_} = Error ->
+                            Error;
+                        {ok, Queries} ->
+                            case maybe_await_query_results(
+                                   riak_kv_qry_queue:put_on_queue(self(), Queries, DDL)) of
+                                {ok, {ColNames, ColTypes, PossiblyWithEmptyRecords}} ->
+                                    %% filter out empty records
+                                    {ok,
+                                     {ColNames, ColTypes,
+                                      [R || R <- PossiblyWithEmptyRecords,
+                                            R /= [[]]]}};
+                                {error, Reason} ->
+                                    {error, Reason}
+                            end
+                    end;
+                {false, Errors} ->
+                    {error, {invalid_query, format_query_syntax_errors(Errors)}}
+            end
     end.
 
 maybe_await_query_results({error,_} = Error) ->

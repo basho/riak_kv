@@ -494,10 +494,12 @@ call_api_function(RD, Ctx = #ctx{api_call = put,
     case catch riak_kv_ts_util:validate_rows(Mod, Records) of
         [] ->
             case riak_kv_ts_util:put_data(Records, Table, Mod) of
-                0 ->
+                ok ->
                     prepare_data_in_body(RD, Ctx#ctx{result = ok});
-                ErrorCount ->
-                    handle_error({failed_some_puts, ErrorCount, Table}, RD, Ctx)
+                {error, {some_failed, ErrorCount}} ->
+                    handle_error({failed_some_puts, ErrorCount, Table}, RD, Ctx);
+                {error, no_ctype} ->
+                    handle_error({table_activate_fail, Table}, RD, Ctx)
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
             handle_error({invalid_data, BadRowIdxs}, RD, Ctx)
