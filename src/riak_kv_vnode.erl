@@ -1239,7 +1239,10 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     case proplists:get_value(rr, Options, false) of
         true ->
             PruneTime = undefined;
+            %% HERE!!!!!
+            %%DoingReadRepair = true;
         false ->
+            %%DoingReadRepair = false,
             PruneTime = StartTime
     end,
     Coord = proplists:get_value(coord, Options, false),
@@ -1252,6 +1255,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        reqid=ReqID,
                        bprops=BProps,
                        starttime=StartTime,
+                       %% Rename This? Add another field? If prunetime = undefined, doing read repair
                        prunetime=PruneTime,
                        crdt_op = CRDTOp},
     {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
