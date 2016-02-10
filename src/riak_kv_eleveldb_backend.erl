@@ -465,8 +465,9 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                 partition_key = #key_v1{ast = _PKAST}} = Qry,
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
-    StartKey = key_prefix(Bucket, [element(3, E) || E <- StartK], length(LKAST)),
-    EndKey1 = key_prefix(Bucket, [element(3, E) || E <- EndK], length(LKAST)),
+    LocalKeyLen = length(LKAST),
+    StartKey = key_prefix(Bucket, [element(3, E) || E <- StartK], LocalKeyLen),
+    EndKey1 = key_prefix(Bucket, [element(3, E) || E <- EndK], LocalKeyLen),
     case lists:member({end_inclusive, true}, W) of
         true  -> EndKey2 = <<EndKey1/binary, 16#ff:8>>;
         false -> EndKey2 = EndKey1

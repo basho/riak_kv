@@ -408,7 +408,7 @@ find_put_timeout(Options) ->
             ?DEFAULT_TIMEOUT
     end.
 
-chash_key(Bucket, {PartitionKey, LocalKey}, BucketProps) when is_tuple(LocalKey) ->
+chash_key(Bucket, {PartitionKey, _LocalKey}, BucketProps) ->
     riak_core_util:chash_key({Bucket, PartitionKey}, BucketProps);
 chash_key(Bucket, Key, BucketProps) ->
     riak_core_util:chash_key({Bucket, Key}, BucketProps).

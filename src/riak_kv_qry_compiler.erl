@@ -1999,7 +1999,7 @@ flexible_keys_1_test() ->
         "PRIMARY KEY  ((a1, quantum(a, 15, 's')), a1, a, b, c, d))"),
     {ok, Q} = get_query(
           "SELECT * FROM tab4 WHERE a > 0 AND a < 1000 AND a1 = 1"),
-    ?assertEqual(
+    ?assertMatch(
         {ok, [#riak_select_v1{}]},
         compile(DDL, Q, 100)
     ).
