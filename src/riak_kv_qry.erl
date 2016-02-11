@@ -2,7 +2,7 @@
 %%
 %% riak_kv_qry: Riak SQL API
 %%
-%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
+%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -26,7 +26,8 @@
 -module(riak_kv_qry).
 
 -export([
-         submit/2
+         submit/2,
+         format_query_syntax_errors/1
         ]).
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").

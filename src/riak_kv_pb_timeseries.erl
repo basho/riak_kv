@@ -2,7 +2,7 @@
 %%
 %% riak_kv_pb_timeseries.erl: Riak TS protobuf callbacks
 %%
-%% Copyright (c) 2015, 2016 Basho Technologies, Inc.
+%% Copyright (c) 2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -57,6 +57,8 @@
 -define(E_ACTIVATE,          1017).
 -define(E_BAD_QUERY,         1018).
 -define(E_TABLE_INACTIVE,    1019).
+-define(E_PARSE_ERROR,       1020).
+-define(E_DELETE_NOTFOUND,   1021).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -90,14 +92,16 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover} ->
+            %% convert error returns to ok's, this menas it will be passed into
+            %% process which will not process it and return the error.
             case catch decode_query(Q, Cover) of
                 {ok, DecodedQuery} ->
                     PermAndTarget = decode_query_permissions(DecodedQuery),
                     {ok, DecodedQuery, PermAndTarget};
                 {error, Error} ->
-                    {error, decoder_parse_error_resp(Error)};
+                    {ok, make_decoder_error_response(Error)};
                 {'EXIT', {Error, _}} ->
-                    {error, decoder_parse_error_resp(Error)}
+                    {ok, make_decoder_error_response(Error)}
             end;
         #tsgetreq{table = Table}->
             {ok, Msg, {"riak_kv.ts_get", Table}};
@@ -147,6 +151,9 @@ encode(Message) ->
 
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
                      {reply, ts_responses(), #state{}}.
+process(#rpberrorresp{} = Error, State) ->
+    {reply, Error, State};
+
 process(M = #tsputreq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tsputreq/4, M, State);
 
@@ -289,7 +296,7 @@ validate_rows(Mod, Rows) ->
 
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% return count of records we failed to put
-put_data(Data, Table, Mod) ->
+put_data(Data, Table, Mod) when is_binary(Table) ->
     DDL = Mod:get_ddl(),
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -486,7 +493,7 @@ sub_tsdelreq(Mod, DDL, #tsdelreq{table = Table,
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
-            {reply, tsdelresp, State};
+            {reply, make_rpberrresp(?E_DELETE_NOTFOUND, "notfound"), State};
         {error, Reason} ->
             {reply, failed_delete_response(Reason), State}
     end.
@@ -522,17 +529,17 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                                             query = Q},
                   State) ->
-    SQL = compile(Mod, catch decode_query(Q)),
-    Client = {riak_client, [node(), undefined]},
-
-    case SQL of
-        {error, _Error} ->
+    case compile(Mod, catch decode_query(Q)) of
+        {error, #rpberrorresp{} = Error} ->
+            {reply, Error, State};
+        {error, _} ->
             {reply, make_rpberrresp(
                       ?E_BAD_QUERY, "Failed to compile query"),
              State};
-        _ ->
+        SQL ->
             %% SQL is a list of queries (1 per quantum)
             Bucket = riak_kv_ts_util:table_to_bucket(Table),
+            Client = {riak_client, [node(), undefined]},
             convert_cover_list(sql_to_cover(Client, SQL, Bucket, []), State)
     end.
 
@@ -643,9 +650,9 @@ find_hash_fn([_H|T]) ->
 
 
 compile(_Mod, {error, Err}) ->
-    {error, decoder_parse_error_resp(Err)};
+    {error, make_decoder_error_response(Err)};
 compile(_Mod, {'EXIT', {Err, _}}) ->
-    {error, decoder_parse_error_resp(Err)};
+    {error, make_decoder_error_response(Err)};
 compile(Mod, {ok, SQL}) ->
     case (catch Mod:get_ddl()) of
         {_, {undef, _}} ->
@@ -719,9 +726,8 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
             BucketProps = riak_core_bucket:get_bucket(
                             riak_kv_ts_util:table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State};
-        {error, {inappropriate_bucket_state, InappropriateState}} ->
-            {reply, table_not_activated_response(
-                      Table, InappropriateState),
+        {error, _} ->
+            {reply, table_not_activated_response(Table),
              State}
     end.
 
@@ -803,10 +809,10 @@ table_activate_fail_response(Table) ->
       ?E_ACTIVATE,
       flat_format("Failed to activate table ~s", [Table])).
 
-table_not_activated_response(Table, BadState) ->
+table_not_activated_response(Table) ->
     make_rpberrresp(
       ?E_TABLE_INACTIVE,
-      flat_format("Table ~ts has not been activated (is in state '~s')", [Table, BadState])).
+      flat_format("~ts is not an active table.", [Table])).
 
 table_created_missing_response(Table) ->
     make_rpberrresp(
@@ -860,19 +866,17 @@ make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
     [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
      || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
 
-
-
-decoder_parse_error_resp({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
-    flat_format("~ts", [Msg]);
-decoder_parse_error_resp({Token, riak_ql_parser, _}) ->
-    flat_format("Unexpected token '~p'", [Token]);
-decoder_parse_error_resp(Error) ->
+make_decoder_error_response({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("~ts", [Msg]));
+make_decoder_error_response({Token, riak_ql_parser, _}) when is_binary(Token) ->
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("Unexpected token '~s'", [Token]));
+make_decoder_error_response({Token, riak_ql_parser, _}) ->
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("Unexpected token '~p'", [Token]));
+make_decoder_error_response(Error) ->
     Error.
-
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
-
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
