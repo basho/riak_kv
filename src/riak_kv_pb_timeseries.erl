@@ -293,7 +293,7 @@ validate_rows(Mod, Rows) ->
 
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% return count of records we failed to put
-put_data(Data, Table, Mod) ->
+put_data(Data, Table, Mod) when is_binary(Table) ->
     DDL = Mod:get_ddl(),
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -698,9 +698,8 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
             BucketProps = riak_core_bucket:get_bucket(
                             riak_kv_ts_util:table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State};
-        {error, {inappropriate_bucket_state, InappropriateState}} ->
-            {reply, table_not_activated_response(
-                      Table, InappropriateState),
+        {error, _} ->
+            {reply, table_not_activated_response(Table),
              State}
     end.
 
@@ -782,10 +781,10 @@ table_activate_fail_response(Table) ->
       ?E_ACTIVATE,
       flat_format("Failed to activate table ~s", [Table])).
 
-table_not_activated_response(Table, BadState) ->
+table_not_activated_response(Table) ->
     make_rpberrresp(
       ?E_TABLE_INACTIVE,
-      flat_format("Table ~ts has not been activated (is in state '~s')", [Table, BadState])).
+      flat_format("~ts is not an active table.", [Table])).
 
 table_created_missing_response(Table) ->
     make_rpberrresp(
