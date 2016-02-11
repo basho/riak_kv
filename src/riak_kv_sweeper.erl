@@ -52,6 +52,7 @@
 
 -define(MAX_SWEEP_CRASHES, 10).
 %% Throttle used when sweeping over K/V data: {Type, Limit, Wait}.
+%% Type can be pace or obj_size.
 %% Default: 1 MB limit / 100 ms wait
 -define(DEFAULT_SWEEP_THROTTLE, {obj_size, 1000000, 100}).
 
@@ -239,12 +240,15 @@ schedule_sweep(#state{sweeps = Sweeps,
                             do_sweep(Sweep, State)
                     end;
                 QueuedSweeps ->
-                    lager:info("QueuedSweeps  ~p", [QueuedSweeps]),
                     do_sweep(hd(QueuedSweeps), State)
             end;
         NeverRunnedSweeps ->
-            do_sweep(hd(NeverRunnedSweeps), State)
+            do_sweep(random_sweep(NeverRunnedSweeps), State)
     end.
+
+random_sweep(Sweeps) ->
+    Index = random:uniform(length(Sweeps)),
+    lists:nth(Index, Sweeps).
 
 sweep_request(Index, #state{sweeps = Sweeps} = State) ->
     case maybe_restart(Index, State) of
