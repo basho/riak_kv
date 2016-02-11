@@ -148,9 +148,10 @@ forbidden(RD, Ctx) ->
         true ->
             {true, RD, Ctx};
         false ->
-            validate_extract_execute(RD, Ctx)
+            %%preexec(RD, Ctx)
+            %%validate_request(RD, Ctx)
             %% plug in early, and just do what it takes to do the job
-            %% {false, RD, Ctx}
+            {false, RD, Ctx}
     end.
 %% Because webmachine chooses to (not) call certain callbacks
 %% depending on request method used, sometimes accept_doc_body is not
@@ -176,32 +177,28 @@ malformed_request(RD, Ctx) ->
     {false, RD, Ctx}.
 
 
--spec validate_extract_execute(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% This is an all-in-one function that does, in order:
-%%
+-spec preexec(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 %% * collect any parameters from request body or, failing that, from
 %%   POST k=v items;
 %% * check API version;
 %% * validate those parameters against URL and method;
 %% * determine which api call to do, and check permissions on that;
-%% * produce the response body, not relying on webmachine to invoke
-%%   produce_doc_body for us.
-validate_extract_execute(RD, Ctx = #ctx{api_call = Call})
+preexec(RD, Ctx = #ctx{api_call = Call})
   when Call /= undefined ->
     %% been here, figured and executed api call, stored results for
     %% shipping to client
-    {false, RD, Ctx};
-validate_extract_execute(RD, Ctx) ->
+    {true, RD, Ctx};
+preexec(RD, Ctx) ->
     case validate_request(RD, Ctx) of
-        {false, RD1, Ctx1} ->
+        {true, RD1, Ctx1} ->
             case check_permissions(RD1, Ctx1) of
                 {false, RD2, Ctx2} ->
                     call_api_function(RD2, Ctx2);
-                TrueWithDetails ->
-                    TrueWithDetails
+                FalseWithDetails ->
+                    FalseWithDetails
             end;
-        TrueWithDetails ->
-            TrueWithDetails
+        FalseWithDetails ->
+            FalseWithDetails
     end.
 
 -spec validate_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
@@ -224,7 +221,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
          ["ts", "v1", "tables", Table],
          Key, undefined, undefined, undefined}
           when is_list(Table), Key /= undefined ->
-            malformed_params(
+            valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = get,
                           table = list_to_binary(Table), key = Key});
         %% single-key delete
@@ -232,7 +229,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
          ["ts", "v1", "tables", Table],
          Key, undefined, undefined, undefined}
           when is_list(Table), Key /= undefined ->
-            malformed_params(
+            valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = delete,
                           table = list_to_binary(Table), key = Key});
         %% batch put
@@ -240,7 +237,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
          ["ts", "v1", "tables", Table],
          undefined, Data, undefined, undefined}
           when is_list(Table), Data /= undefined ->
-            malformed_params(
+            valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = put,
                           table = list_to_binary(Table), data = Data});
         %% list_keys
@@ -248,7 +245,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
          ["ts", "v1", "tables", Table, "keys"],
          undefined, undefined, undefined, undefined}
           when is_list(Table) ->
-            malformed_params(
+            valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = list_keys,
                           table = list_to_binary(Table)});
         %% coverage
@@ -256,7 +253,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
          ["ts", "v1", "coverage"],
          undefined, undefined, Query, undefined}
           when is_list(Query) ->
-            malformed_params(
+            valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = coverage,
                           query = Query});
         %% query
@@ -265,7 +262,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
          undefined, undefined, Query, CoverContext}
           when (Method == 'GET' orelse Method == 'POST' orelse Method == 'PUT')
                andalso is_list(Query) ->
-            malformed_params(
+            valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = query,
                           query = Query, cover_context = CoverContext});
         _Invalid ->
@@ -273,15 +270,15 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
     end.
 
 
--spec malformed_params(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-malformed_params(RD, Ctx) ->
+-spec valid_params(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
+valid_params(RD, Ctx) ->
     case wrq:get_qs_value("timeout", none, RD) of
         none ->
-            {false, RD, Ctx};
+            {true, RD, Ctx};
         TimeoutStr ->
             try
                 Timeout = list_to_integer(TimeoutStr),
-                {false, RD, Ctx#ctx{timeout = Timeout}}
+                {true, RD, Ctx#ctx{timeout = Timeout}}
             catch
                 _:_ ->
                     handle_error({bad_parameter, "timeout"}, RD, Ctx)
@@ -294,8 +291,8 @@ malformed_params(RD, Ctx) ->
 extract_json(RD) ->
     case proplists:get_value("json", RD#wm_reqdata.req_qs) of
         undefined ->
-            %% if it was a GET, there's no body available
-            proplists:get_value("json", mochiweb_util:parse_qs(wrq:req_body(RD)));
+            %% if it was a PUT or POST, data is in body
+            binary_to_list(wrq:req_body(RD));
         BodyInPost ->
             BodyInPost
     end.
@@ -429,7 +426,7 @@ validate_resource(RD, Ctx = #ctx{table = Table}) ->
     %% Ensure the bucket type exists, otherwise 404 early.
     case riak_kv_wm_utils:bucket_type_exists(Table) of
         true ->
-            {false, RD, Ctx};
+            {true, RD, Ctx};
         false ->
             handle_error({no_such_table, Table}, RD, Ctx)
     end.
@@ -462,8 +459,13 @@ content_types_accepted(RD, Ctx) ->
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) ->
                              {boolean(), #wm_reqdata{}, #ctx{}}.
-resource_exists(RD, Ctx) ->
-    {true, RD, Ctx}.
+resource_exists(RD0, Ctx0) ->
+    case preexec(RD0, Ctx0) of
+        {true, RD, Ctx} ->
+            call_api_function(RD, Ctx);
+        FalseWithDetails ->
+            FalseWithDetails
+    end.
 
 -spec process_post(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 %% @doc Pass through requests to allow POST to function
@@ -474,24 +476,26 @@ process_post(RD, Ctx) ->
 
 -spec accept_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 accept_doc_body(RD0, Ctx0) ->
-    case validate_extract_execute(RD0, Ctx0) of
-        {false, RD, Ctx} ->
+    case preexec(RD0, Ctx0) of
+        {true, RD, Ctx} ->
             call_api_function(RD, Ctx);
-        TrueWithDetails ->
-            TrueWithDetails
+        FalseWithDetails ->
+            FalseWithDetails
     end.
 
 -spec call_api_function(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 call_api_function(RD, Ctx = #ctx{result = Result})
   when Result /= undefined ->
     lager:debug("Function already executed", []),
-    {false, RD, Ctx};
+    {true, RD, Ctx};
 call_api_function(RD, Ctx = #ctx{api_call = put,
                                  table = Table, data = Data}) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     %% convert records to tuples, just for put
     Records = [list_to_tuple(R) || R <- Data],
     case catch riak_kv_ts_util:validate_rows(Mod, Records) of
+        {_, {undef, _}} ->
+            handle_error({no_such_table, Table}, RD, Ctx);
         [] ->
             case riak_kv_ts_util:put_data(Records, Table, Mod) of
                 ok ->
@@ -513,7 +517,9 @@ call_api_function(RD, Ctx0 = #ctx{api_call = get,
            true -> [{timeout, Timeout}]
         end,
     Mod = riak_ql_ddl:make_module_name(Table),
-    case riak_kv_ts_util:get_data(Key, Table, Mod, Options) of
+    case catch riak_kv_ts_util:get_data(Key, Table, Mod, Options) of
+        {_, {undef, _}} ->
+            handle_error({no_such_table, Table}, RD, Ctx0);
         {ok, Record} ->
             {ColumnNames, Row} = lists:unzip(Record),
             %% ColumnTypes = riak_kv_ts_util:get_column_types(ColumnNames, Mod),
@@ -524,10 +530,11 @@ call_api_function(RD, Ctx0 = #ctx{api_call = get,
             %% a uniform 'tabular' form, hence the [] around Row
             Ctx = Ctx0#ctx{result = DataOut},
             prepare_data_in_body(RD, Ctx);
+        {error, notfound} ->
+            Ctx = Ctx0#ctx{result = {[], []}},
+            prepare_data_in_body(RD, Ctx);
         {error, {bad_key_length, Got, Need}} ->
             handle_error({key_element_count_mismatch, Got, Need}, RD, Ctx0);
-        {error, notfound} ->
-            handle_error(notfound, RD, Ctx0);
         {error, Reason} ->
             handle_error({riak_error, Reason}, RD, Ctx0)
     end;
@@ -540,7 +547,9 @@ call_api_function(RD, Ctx = #ctx{api_call = delete,
            true -> [{timeout, Timeout}]
         end,
     Mod = riak_ql_ddl:make_module_name(Table),
-    case riak_kv_ts_util:delete_data(Key, Table, Mod, Options) of
+    case catch riak_kv_ts_util:delete_data(Key, Table, Mod, Options) of
+        {_, {undef, _}} ->
+            handle_error({no_such_table, Table}, RD, Ctx);
         ok ->
             prepare_data_in_body(RD, Ctx#ctx{result = ok});
         {error, {bad_key_length, Got, Need}} ->
@@ -681,7 +690,8 @@ wait_until_active(Table, RD, Ctx, 0) ->
 wait_until_active(Table, RD, Ctx, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
-            prepare_data_in_body(RD, Ctx#ctx{result = ok});
+            prepare_data_in_body(RD, Ctx#ctx{result = {[], []}});
+            %% a way for CREATE TABLE queries to return 'ok' on success
         {error, not_ready} ->
             timer:sleep(1000),
             wait_until_active(Table, RD, Ctx, Seconds - 1);
@@ -696,7 +706,7 @@ wait_until_active(Table, RD, Ctx, Seconds) ->
 
 prepare_data_in_body(RD0, Ctx0) ->
     {Json, RD1, Ctx1} = produce_doc_body(RD0, Ctx0),
-    {false, wrq:append_to_response_body(Json, RD1), Ctx1}.
+    {true, wrq:append_to_response_body(Json, RD1), Ctx1}.
 
 
 -spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
@@ -714,11 +724,11 @@ produce_doc_body(RD, Ctx = #ctx{api_call = list_keys,
         end,
     {{stream, {[], F}}, RD, Ctx};
 produce_doc_body(RD, Ctx = #ctx{api_call = Call,
-                                result = {ColNames, Rows}})
+                                result = {Columns, Rows}})
   when Call == get;
        Call == query ->
     {mochijson2:encode(
-       {struct, [{<<"columns">>, ColNames},
+       {struct, [{<<"columns">>, Columns},
                  {<<"rows">>, Rows}]}),
      RD, Ctx};
 produce_doc_body(RD, Ctx = #ctx{api_call = Call,
@@ -753,8 +763,10 @@ stream_keys(ReqId) ->
             {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
         {ReqId, {keys, Keys}} ->
             {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
-        {ReqId, done} -> {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
-        {ReqId, {error, timeout}} -> {mochijson2:encode({struct, [{error, timeout}]}), done}
+        {ReqId, done} ->
+            {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
+        {ReqId, {error, timeout}} ->
+            {mochijson2:encode({struct, [{error, timeout}]}), done}
     end.
 
 ts_keys_to_json(Keys) ->
