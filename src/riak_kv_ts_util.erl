@@ -62,7 +62,7 @@ lk(NonTSKey) ->
     NonTSKey.
 
 %% Utility API to limit some of the confusion over tables vs buckets
-table_to_bucket(Table) ->
+table_to_bucket(Table) when is_binary(Table) ->
     {Table, Table}.
 
 
@@ -77,18 +77,18 @@ queried_table(?SQL_SELECT{'FROM' = Table})               -> Table.
                            {error, term()}.
 %% Check that Table is in good standing and ready for TS operations
 %% (its bucket type has been activated and it has a DDL in its props)
-get_table_ddl(Table) ->
-    case riak_core_claimant:bucket_type_status(Table) of
-        active ->
+get_table_ddl(Table) when is_binary(Table) ->
+    case riak_core_bucket:get_bucket(table_to_bucket(Table)) of
+        {error, _} = Error ->
+            Error;
+        [_|_] ->
             Mod = riak_ql_ddl:make_module_name(Table),
             case catch Mod:get_ddl() of
                 {_, {undef, _}} ->
                     {error, missing_helper_module};
                 DDL ->
                     {ok, Mod, DDL}
-            end;
-        InappropriateState ->
-            {error, {inappropriate_bucket_state, InappropriateState}}
+            end
     end.
 
 
