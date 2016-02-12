@@ -33,6 +33,13 @@
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
 
+-type where_props() :: [{startkey, [term()]} |
+                        {endkey, [term()]} |
+                        {filter, [term()]} |
+                        {start_inclusive, boolean()} |
+                        {end_inclusive, boolean()}].
+-export_type([where_props/0]).
+
 %% 3rd argument is undefined if we should not be concerned about the
 %% maximum number of quanta
 -spec compile(#ddl_v1{}, ?SQL_SELECT{}, 'undefined'|pos_integer()) ->
@@ -436,7 +443,24 @@ col_index_and_type_of(Fields, ColumnName) ->
             {Position, Type}
     end.
 
-expand_where(Where, #key_v1{ast = PAST}, MaxSubQueries) ->
+%%
+-spec expand_where(filter(), #key_v1{}, integer()) ->
+        [where_props()] | {error, any()}.
+expand_where(Where, PartitionKey, MaxSubQueries) ->
+    case find_quanta_function_in_key(PartitionKey) of
+        [{[QField], QSize, QUnit}] ->
+            hash_timestamp_to_quanta(QField, QSize, QUnit, MaxSubQueries, Where);
+        [] ->
+            [Where]
+    end.
+
+%%
+find_quanta_function_in_key(#key_v1{ ast = PKAST }) ->
+    [{X, Y, Z} || #hash_fn_v1{mod = riak_ql_quanta, fn = quantum,
+                              args = [#param_v1{name = X}, Y, Z]} <- PKAST].
+
+%%
+hash_timestamp_to_quanta(QField, QSize, QUnit, MaxSubQueries, Where) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
                            {element(3, lists:last(List)), E};
                       ({endkey,   List}, {S, _E}) ->
@@ -445,24 +469,16 @@ expand_where(Where, #key_v1{ast = PAST}, MaxSubQueries) ->
                            {S, E}
                    end,
     {Min, Max} = lists:foldl(GetMaxMinFun, {"", ""}, Where),
-    [{[QField], Q, U}] = [{X, Y, Z}
-                          || #hash_fn_v1{mod = riak_ql_quanta,
-                                         fn   = quantum,
-                                         args = [#param_v1{name = X}, Y, Z]}
-                                 <- PAST],
     EffMin = case proplists:get_value(start_inclusive, Where, true) of
-                 true ->
-                     Min;
-                 _ ->
-                     Min + 1
+                 true  -> Min;
+                 false -> Min + 1
              end,
     EffMax = case proplists:get_value(end_inclusive, Where, false) of
-                 true ->
-                     Max + 1;
-                 _ ->
-                     Max
+                 true  -> Max + 1;
+                 false -> Max
              end,
-    {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(EffMin, EffMax, Q, U),
+    {NoSubQueries, Boundaries} =
+        riak_ql_quanta:quanta(EffMin, EffMax, QSize, QUnit),
     if
         NoSubQueries == 1 ->
             [Where];
@@ -517,11 +533,13 @@ compile_where(DDL, Where) ->
         {true, NewW} -> NewW
     end.
 
-quantum_field_name(#ddl_v1{ partition_key = PK }) ->
-    #key_v1{ ast = PartitionKeyAST } = PK,
-    Quantum = lists:last(PartitionKeyAST),
-    #hash_fn_v1{args = [#param_v1{name = QFieldName} | _]} = Quantum,
-    QFieldName.
+quantum_field_name(#ddl_v1{ partition_key = #key_v1{ ast = PKAST } }) ->
+    case lists:last(PKAST) of
+        #hash_fn_v1{args = [#param_v1{name = [QFieldName]} | _]} ->
+            QFieldName;
+        #param_v1{} ->
+            no_quanta
+    end.
 
 check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK0} = DDL,
                     [W]) ->
@@ -529,9 +547,10 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK0} = DD
         #key_v1{ast = PartitionKeyAST} = PK,
         PartitionFields = [X || #param_v1{name = X} <- PartitionKeyAST],
     	LK = LK0#key_v1{ast = lists:sublist(LK0#key_v1.ast, length(PartitionKeyAST))},
-        [QuantumFieldName] = quantum_field_name(DDL),
+        QuantumFieldName = quantum_field_name(DDL),
         StrippedW = strip(W, []),
-        {StartW, EndW, Filter} = break_out_timeseries(StrippedW, PartitionFields, [QuantumFieldName]),
+        {StartW, EndW, Filter} = 
+            break_out_timeseries(StrippedW, PartitionFields, QuantumFieldName),
         Mod = riak_ql_ddl:make_module_name(T),
         StartKey = rewrite(LK, StartW, Mod),
         EndKey = rewrite(LK, EndW, Mod),
@@ -593,7 +612,7 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
     end.
 
 %% find the upper and lower bound for the time
-find_timestamp_bounds(QuantumField, LocalFields) when is_binary(QuantumField) ->
+find_timestamp_bounds(QuantumField, LocalFields) ->
     find_timestamp_bounds2(QuantumField, LocalFields, [], {undefined, undefined}).
 
 %%
@@ -630,8 +649,11 @@ acc_upper_bounds(_Filter, {_, _U}) ->
     error({upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}).
 
 %%
-break_out_timeseries(Filters1, PartitionFields1, [QuantumFields]) ->
-    case find_timestamp_bounds(QuantumFields, Filters1) of
+break_out_timeseries(Filters1, PartitionFields1, no_quanta) ->
+    {Body, Filters2} = split_key_from_filters(PartitionFields1, Filters1),
+    {Body, Body, Filters2};
+break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(QuantumField) ->
+    case find_timestamp_bounds(QuantumField, Filters1) of
         {_, {undefined, undefined}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
         {_, {_, undefined}} ->
@@ -641,6 +663,7 @@ break_out_timeseries(Filters1, PartitionFields1, [QuantumFields]) ->
         {_, {{_,_,{_,Starts}}, {_,_,{_,Ends}}}} when is_integer(Starts),
                                                      is_integer(Ends),
                                                      Starts > Ends ->
+            %% FIXME reliance on three element key!?
             error({lower_bound_must_be_less_than_upper_bound,
                    ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND});
         {_, {{'>',_,{_,Starts}}, {'<',_,{_,Ends}}}} when is_integer(Starts),
@@ -1937,7 +1960,6 @@ compile_query_with_function_type_error_1_test() ->
           "SELECT SUM(location) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
-    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
         {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].">>}},
         compile(get_standard_ddl(), Q, 100)
@@ -1948,7 +1970,6 @@ compile_query_with_function_type_error_2_test() ->
           "SELECT SUM(location), AVG(location) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
-    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
         {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].\n"
                                 "Function 'AVG' called with arguments of the wrong type [varchar].">>}},
@@ -1970,7 +1991,6 @@ compile_query_with_arithmetic_type_error_1_test() ->
           "SELECT location + 1 FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
-    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
         {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
@@ -1981,13 +2001,11 @@ compile_query_with_arithmetic_type_error_2_test() ->
           "SELECT 2*(location + 1) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
-    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
         {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
-%% TODO MOAR tests
 flexible_keys_1_test() ->
     DDL = get_ddl(
         "CREATE TABLE tab4("
@@ -2002,6 +2020,68 @@ flexible_keys_1_test() ->
     ?assertMatch(
         {ok, [#riak_select_v1{}]},
         compile(DDL, Q, 100)
+    ).
+
+quantum_field_name_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a,quantum(b, 15, 's')), a,b))"),
+    ?assertEqual(
+        <<"b">>,
+        quantum_field_name(DDL)
+    ).
+
+quantum_field_name_no_quanta_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a,b), a,b))"),
+    ?assertEqual(
+        no_quanta,
+        quantum_field_name(DDL)
+    ).
+
+% short key, partition and local keys are the same
+no_quantum_in_query_1_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tabab("
+        "a TIMESTAMP NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "PRIMARY KEY  ((a,b), a,b))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1 AND b = 1"),
+    ?assertMatch(
+        {ok, [#riak_select_v1{ 
+            'WHERE' = 
+                [{startkey,[{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
+                 {endkey,  [{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
+                 {filter,[]},
+                 {end_inclusive,true}] }]},
+        compile(DDL, Q, 100)
+    ).
+
+no_quantum_in_query_2_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tabab("
+        "a SINT64 NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "c DOUBLE NOT NULL, "
+        "d BOOLEAN NOT NULL, "
+        "PRIMARY KEY  ((c,a,b), c,a,b,d))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1000 AND b = 'bval' AND c = 3.5"),
+    {ok, [Select]} = compile(DDL, Q, 100),
+    Key = 
+        [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>}],
+    ?assertEqual(
+        [{startkey, Key},
+         {endkey, Key},
+         {filter,[]},
+         {end_inclusive,true}],
+        Select#riak_select_v1.'WHERE'
     ).
 
 -endif.
