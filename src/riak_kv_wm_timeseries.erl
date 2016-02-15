@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_timeseris: Webmachine resource for riak TS operations.
+%% riak_kv_wm_timeseries: Webmachine resource for riak TS operations.
 %%
 %% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -21,13 +21,11 @@
 %% -------------------------------------------------------------------
 
 %% @doc Resource for Riak TS operations over HTTP.
-%%      Copied with heavy modifications from riak_kv_wm_object.erl.
 %%
 %% ```
 %% GET    /ts/v1/table/Table          single-key get
 %% DELETE /ts/v1/table/Table          single-key delete
 %% PUT    /ts/v1/table/Table          batch put
-%% GET    /ts/v1/table/Table/keys     list_keys
 %% GET    /ts/v1/coverage             coverage for a query
 %% GET/POST   /ts/v1/query            execute SQL query
 %% '''
@@ -49,6 +47,7 @@
          malformed_request/2,
          content_types_accepted/2,
          resource_exists/2,
+         delete_resource/2,
          content_types_provided/2,
          encodings_provided/2,
          produce_doc_body/2,
@@ -66,7 +65,7 @@
               security,     %% security context
               client,       %% riak_client() - the store client
               riak,         %% local | {node(), atom()} - params for riak client
-              api_call :: undefined|get|put|delete|list_keys|query|coverage,
+              api_call :: undefined|get|put|delete|query|coverage,
               table    :: undefined | binary(),
               cover_context :: undefined | binary(),
               %% data in/out: the following fields are either
@@ -77,8 +76,7 @@
               data    :: undefined | [ts_rec()], %% ditto
               query   :: undefined | string(),
               result  :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]}
-                                   | [{entry, proplists:proplist()}],
-              error   :: undefined | {Errcode::integer(), Errmsg::binary()}
+                                   | [{entry, proplists:proplist()}]
              }).
 
 -define(DEFAULT_TIMEOUT, 60000).
@@ -240,14 +238,6 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = put,
                           table = list_to_binary(Table), data = Data});
-        %% list_keys
-        {'GET',
-         ["ts", "v1", "tables", Table, "keys"],
-         undefined, undefined, undefined, undefined}
-          when is_list(Table) ->
-            valid_params(
-              RD, Ctx#ctx{api_version = "v1", api_call = list_keys,
-                          table = list_to_binary(Table)});
         %% coverage
         {'GET',
          ["ts", "v1", "coverage"],
@@ -473,6 +463,10 @@ resource_exists(RD0, Ctx0) ->
 process_post(RD, Ctx) ->
     accept_doc_body(RD, Ctx).
 
+-spec delete_resource(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
+%% same for DELETE
+delete_resource(RD, Ctx) ->
+    accept_doc_body(RD, Ctx).
 
 -spec accept_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 accept_doc_body(RD0, Ctx0) ->
@@ -531,8 +525,7 @@ call_api_function(RD, Ctx0 = #ctx{api_call = get,
             Ctx = Ctx0#ctx{result = DataOut},
             prepare_data_in_body(RD, Ctx);
         {error, notfound} ->
-            Ctx = Ctx0#ctx{result = {[], []}},
-            prepare_data_in_body(RD, Ctx);
+            handle_error(notfound, RD, Ctx0);
         {error, {bad_key_length, Got, Need}} ->
             handle_error({key_element_count_mismatch, Got, Need}, RD, Ctx0);
         {error, Reason} ->
@@ -714,15 +707,6 @@ prepare_data_in_body(RD0, Ctx0) ->
 %%      response body of the request.
 produce_doc_body(RD, Ctx = #ctx{result = ok}) ->
     {<<"ok">>, RD, Ctx};
-produce_doc_body(RD, Ctx = #ctx{api_call = list_keys,
-                                table = Table,
-                                client = Client, timeout = Timeout}) ->
-    F = fun() ->
-                {ok, ReqId} = Client:stream_list_keys(
-                                {Table, Table}, Timeout),
-                stream_keys(ReqId)
-        end,
-    {{stream, {[], F}}, RD, Ctx};
 produce_doc_body(RD, Ctx = #ctx{api_call = Call,
                                 result = {Columns, Rows}})
   when Call == get;
@@ -748,31 +732,6 @@ armor_entry(EE) ->
               {cover_context, binary_to_list(Bin)};
          (X) -> X
       end, EE).
-
-%% copied here from riak_kv_wm_keylist.erl
-stream_keys(ReqId) ->
-    receive
-        %% skip empty shipments
-        {ReqId, {keys, []}} ->
-            stream_keys(ReqId);
-        {ReqId, From, {keys, []}} ->
-            _ = riak_kv_keys_fsm:ack_keys(From),
-            stream_keys(ReqId);
-        {ReqId, From, {keys, Keys}} ->
-            _ = riak_kv_keys_fsm:ack_keys(From),
-            {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
-        {ReqId, {keys, Keys}} ->
-            {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
-        {ReqId, done} ->
-            {mochijson2:encode({struct, [{<<"keys">>, []}]}), done};
-        {ReqId, {error, timeout}} ->
-            {mochijson2:encode({struct, [{error, timeout}]}), done}
-    end.
-
-ts_keys_to_json(Keys) ->
-    KeysTerm = [tuple_to_list(sext:decode(A))
-                || A <- Keys, A /= []],
-    mochijson2:encode({struct, [{<<"keys">>, KeysTerm}]}).
 
 
 error_out(Type, Fmt, Args, RD, Ctx) ->

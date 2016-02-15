@@ -125,7 +125,11 @@ raw_dispatch(Name) ->
 
     lists:flatten(
       [
-       [{["ts", api_version, '*'], riak_kv_wm_timeseries, Props}]
+       [{["ts", api_version, "tables", table, "keys"], riak_kv_wm_timeseries_listkeys, Props},
+        {["ts", api_version, "tables", table], riak_kv_wm_timeseries, Props},
+        {["ts", api_version, "query"], riak_kv_wm_timeseries, Props},
+        {["ts", api_version, "coverage"], riak_kv_wm_timeseries, Props},
+        {}]
        || {_Prefix, Props} <- Props2]).
 
 is_post(Req) ->
