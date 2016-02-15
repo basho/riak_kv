@@ -926,11 +926,11 @@ clear_tree(State=#state{index=Index}) ->
     State3 = init_trees(IndexNs, true, State2#state{trees=orddict:new()}),
     State3#state{built=false, expired=false}.
 
-destroy_trees(State) ->
-    State2 = close_trees(State),
+destroy_trees(State=#state{trees=Trees}) ->
     {_,Tree0} = hd(State#state.trees), % deliberately using state with live db ref
+    _ = [hashtree:close(Tree) || {_IdxN, Tree} <- Trees],
     _ = hashtree:destroy(Tree0),
-    State2.
+    State#state{trees=undefined}.
 
 -spec maybe_build(state()) -> state().
 maybe_build(State=#state{built=false}) ->
