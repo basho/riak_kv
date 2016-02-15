@@ -200,7 +200,7 @@
                   prunetime :: undefined| non_neg_integer(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
-                  hash_ops = []
+                  hash_ops = no_hash_ops
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -1671,7 +1671,8 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             %% since it is assumed capabilities have been properly set
             %% to the desired version, to reformat, all we need to do
             %% is submit a new write
-            PutArgs = #putargs{returnbody=false,
+            PutArgs = #putargs{hash_ops = update,
+                               returnbody=false,
                                bkey=BKey,
                                reqid=undefined,
                                index_specs=[]},
