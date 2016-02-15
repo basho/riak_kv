@@ -89,7 +89,7 @@ remove_sweep_participant(Module) ->
 %% @doc Initiat a sweep without using scheduling. Can be used as fold replacment.
 -spec sweep(non_neg_integer()) -> ok.
 sweep(Index) ->
-    gen_server:call(?MODULE, {sweep_request, Index}).
+    gen_server:call(?MODULE, {sweep_request, Index}, infinity).
 
 %% @doc Get information about participants and all sweeps.
 -spec status() -> {[#sweep_participant{}], [#sweep{}]}.
@@ -203,9 +203,6 @@ handle_info(sweep_tick, State) ->
 handle_info({estimate,_}, State) ->
     {noreply, State}.
 
-%% terminate(shutdown, _State) ->
-%%     delete_persistent_participants(),
-%%     ok;
 terminate(_, _State) ->
     ok.
 
