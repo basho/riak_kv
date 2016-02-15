@@ -231,30 +231,30 @@ make_ts_keys_1_test() ->
     ).
 
 % a two element key, still using the table definition field order
-% make_ts_keys_2_test() ->
-%     {DDL, Mod} = helper_compile_def_to_module(
-%         "CREATE TABLE table1 ("
-%         "a SINT64 NOT NULL, "
-%         "b TIMESTAMP NOT NULL, "
-%         "c SINT64 NOT NULL, "
-%         "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
-%     ?assertEqual(
-%         {ok, {{1,0}, {1,2}}},
-%         make_ts_keys([1,2], DDL, Mod)
-%     ).
+make_ts_keys_2_test() ->
+    {DDL, Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table1 ("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
+    ?assertEqual(
+        {ok, {{1,0}, {1,2}}},
+        make_ts_keys([1,2], DDL, Mod)
+    ).
 
-% make_ts_keys_3_test() ->
-%     {DDL, Mod} = helper_compile_def_to_module(
-%         "CREATE TABLE table2 ("
-%         "a SINT64 NOT NULL, "
-%         "b SINT64 NOT NULL, "
-%         "c TIMESTAMP NOT NULL, "
-%         "d SINT64 NOT NULL, "
-%         "PRIMARY KEY  ((d,a,quantum(c, 1, 's')), d,a,c))"),
-%     ?assertEqual(
-%         {ok, {{10,20,0}, {10,20,1}}},
-%         make_ts_keys([10,20,1], DDL, Mod)
-%     ).
+make_ts_keys_3_test() ->
+    {DDL, Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table2 ("
+        "a SINT64 NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "c TIMESTAMP NOT NULL, "
+        "d SINT64 NOT NULL, "
+        "PRIMARY KEY  ((d,a,quantum(c, 1, 's')), d,a,c))"),
+    ?assertEqual(
+        {ok, {{10,20,0}, {10,20,1}}},
+        make_ts_keys([10,20,1], DDL, Mod)
+    ).
 
 make_ts_keys_4_test() ->
     {DDL, Mod} = helper_compile_def_to_module(
