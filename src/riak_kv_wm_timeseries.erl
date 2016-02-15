@@ -571,10 +571,6 @@ call_api_function(RD, Ctx = #ctx{api_call = query,
             handle_error({query_parse_error, Reason}, RD, Ctx)
     end;
 
-call_api_function(RD, Ctx = #ctx{api_call = list_keys}) ->
-    %% the streaming function for this is set up in produce_doc_body
-    produce_doc_body(RD, Ctx);
-
 call_api_function(RD, Ctx = #ctx{api_call = coverage,
                                  query = Query,
                                  client = Client}) ->
