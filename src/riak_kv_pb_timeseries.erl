@@ -123,7 +123,7 @@ decode_query(SQL) ->
     {error, _} | {ok, ts_query_types()}.
 decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
-    case riak_ql_parser:parse(Lexed) of
+    case riak_ql_parser:ql_parse(Lexed) of
         {select, SQL} ->
             riak_kv_ts_util:build_sql_record(select, SQL, Cover);
         {describe, SQL} ->
