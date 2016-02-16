@@ -84,14 +84,14 @@ compile_where_clause(#ddl_v1{} = DDL,
 %                                               local_key     = LK,
 %                                               partition_key = PK} || X <- Where2])
 
-expand_query(#ddl_v1{local_key = LK, partition_key = PK},
+expand_query(#ddl_v1{table = Table, local_key = LK, partition_key = PK},
              ?SQL_SELECT{} = Q1, Where1,
              MaxSubQueries) ->
     case expand_where(Where1, PK, MaxSubQueries) of
         {error, E} ->
             {error, E};
         Where2 ->
-            fix_start_order(X, Mod, LK)
+            Mod = riak_ql_ddl:make_module_name(Table),
             Q2 = Q1?SQL_SELECT{is_executable = true,
                                type          = timeseries,
                                local_key     = LK,
@@ -425,9 +425,9 @@ fix_start_order(W, Mod, LK) ->
 %% Detect this by the implict order of the start/end keys.  Should be
 %% refactored to explicitly understand key order at some future point.
 fix_subquery_order_compare(Qa, Qb) ->
-    {startkey, Astartkey} = lists:keyfind(startkey, 1, Qa#riak_sql_v1.'WHERE'),
-    {endkey, Aendkey} = lists:keyfind(endkey, 1, Qa#riak_sql_v1.'WHERE'),
-    {startkey, Bstartkey} = lists:keyfind(startkey, 1, Qb#riak_sql_v1.'WHERE'),
+    {startkey, Astartkey} = lists:keyfind(startkey, 1, Qa#riak_select_v1.'WHERE'),
+    {endkey, Aendkey} = lists:keyfind(endkey, 1, Qa#riak_select_v1.'WHERE'),
+    {startkey, Bstartkey} = lists:keyfind(startkey, 1, Qb#riak_select_v1.'WHERE'),
     case Astartkey < Aendkey of
         true ->
             Astartkey =< Bstartkey;
