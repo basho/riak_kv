@@ -56,6 +56,8 @@
 %% Default: 1 MB limit / 100 ms wait
 -define(DEFAULT_SWEEP_THROTTLE, {obj_size, 1000000, 100}).
 
+-define(SWEEPS_FILE, "sweeps.dat").
+
 %% ====================================================================
 %% API functions
 %% ====================================================================
@@ -135,12 +137,14 @@ init([]) ->
     process_flag(trap_exit, true),
     random:seed(erlang:now()),
     schedule_initial_sweep_tick(),
-    case get_persistent_participants() of
-        undefined ->
-            {ok, #state{}};
-        SP ->
-            {ok, #state{sweep_participants = SP}}
-    end.
+    State =
+        case get_persistent_participants() of
+            undefined ->
+                #state{};
+            SP ->
+                #state{sweep_participants = SP}
+        end,
+    {ok, State#state{sweeps = get_persistent_sweeps()}}.
 
 handle_call({add_sweep_participant, Participant}, _From, #state{sweep_participants = SP} = State) ->
     SP1 = dict:store(Participant#sweep_participant.module, Participant, SP),
@@ -170,7 +174,7 @@ handle_call(status, _From, State) ->
     Participants =
         [Participant ||
          {_Mod, Participant} <- dict:to_list(State1#state.sweep_participants)],
-    Sweeps =   [Sweep || {_Index, Sweep} <- dict:to_list(State1#state.sweeps)],
+    Sweeps = [Sweep || {_Index, Sweep} <- dict:to_list(State1#state.sweeps)],
     {reply, {Participants , Sweeps}, State1};
 
 handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
@@ -203,7 +207,8 @@ handle_info(sweep_tick, State) ->
 handle_info({estimate,_}, State) ->
     {noreply, State}.
 
-terminate(_, _State) ->
+terminate(_, #state{sweeps = Sweeps}) ->
+    persist_sweeps(Sweeps),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -635,6 +640,33 @@ persist_participants(Participants) ->
 
 get_persistent_participants() ->
     app_helper:get_env(riak_kv, sweep_participants).
+
+persist_sweeps(Sweeps) ->
+    CleanedSweep =
+        dict:map(fun(_Key, Sweep) ->
+                     #sweep{index = Sweep#sweep.index,
+                            start_time = Sweep#sweep.start_time,
+                            end_time = Sweep#sweep.end_time,
+                            results = Sweep#sweep.results
+                            }
+             end, Sweeps),
+    file:write_file(sweep_file(?SWEEPS_FILE) , io_lib:fwrite("~p.\n",[CleanedSweep])).
+
+get_persistent_sweeps() ->
+    case file:consult(sweep_file(?SWEEPS_FILE)) of
+        {ok, [Sweeps]} ->
+            io:format("Is dict ~p ~n ~n Dict ~p", [dict:size(Sweeps),Sweeps]),
+            Sweeps;
+        _ ->
+            dict:new()
+    end.
+
+sweep_file(File) ->
+     PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
+     SweepDir = filename:join(PDD, ?MODULE),
+     SweepFile = filename:join(SweepDir, File),
+     ok = filelib:ensure_dir(SweepFile),
+     SweepFile.
 
 %% Used by riak_kv_vnode:sweep/3
 do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, VnodeState) ->
