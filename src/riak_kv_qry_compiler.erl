@@ -106,21 +106,21 @@ compile_where_clause(?DDL{} = DDL,
     end.
 
 %% now break out the query on quantum boundaries
-expand_query(?DDL{table = T, local_key = LK, partition_key = PK},
-             ?SQL_SELECT{ } = Q, Where1,
+expand_query(?DDL{table = Table, local_key = LK, partition_key = PK},
+             ?SQL_SELECT{} = Q1, Where1,
              MaxSubQueries) ->
     case expand_where(Where1, PK, MaxSubQueries) of
         {error, E} ->
             {error, E};
         Where2 ->
-            Mod = riak_ql_ddl:make_module_name(T),
-            SubQueries1 =
-                fix_subquery_order([Q?SQL_SELECT{is_executable = true,
-                                              type          = timeseries,
-                                              'WHERE'       = fix_start_order(X, Mod, LK),
-                                              local_key     = LK,
-                                              partition_key = PK} || X <- Where2]),
-            {ok, SubQueries1}
+            Mod = riak_ql_ddl:make_module_name(Table),
+            Q2 = Q1?SQL_SELECT{is_executable = true,
+                               type          = timeseries,
+                               local_key     = LK,
+                               partition_key = PK},
+            SubQueries1 = [Q2?SQL_SELECT{ 'WHERE' = fix_start_order(X, Mod, LK) } || X <- Where2],
+            SubQueries2 = fix_subquery_order(SubQueries1),
+            {ok, SubQueries2}
     end.
 
 %% Calulate the final result for an aggregate.
@@ -430,6 +430,7 @@ extract_stateful_functions2({Tag, _} = Node, _, Fns)
 extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLen, Fns1) ->
     Fns2 = [Function | Fns1],
     {{finalise_aggregation, FnName, FinaliserLen + length(Fns2)}, Fns2}.
+
 
 %%
 maybe_infer_op_type(_, error, _, Errors) ->
