@@ -2,7 +2,7 @@
 %%%
 %%% riak_kv_qry_queue.erl: Riak SQL worker pool and query queue manager
 %%%
-%%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
+%%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
 %%%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -54,7 +54,7 @@
 
 -type qry_fsm_name() :: atom().
 -type query_id()     :: {node(), integer()}.
--type qry()          :: ?KV_SQL_Q{}.
+-type qry()          :: ?SQL_SELECT{}.
 
 -record(state, {
           max_q_len ::integer(),

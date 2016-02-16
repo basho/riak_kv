@@ -2,7 +2,7 @@
 %%
 %% riak_kv_ts_newtype 
 %%
-%% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -26,6 +26,7 @@
 %% API.
 -export([start_link/0]).
 -export([new_type/1]).
+-export([retrieve_ddl_from_metadata/1]).
 
 %% gen_server.
 -export([init/1]).
@@ -187,7 +188,7 @@ ddl_ebin_directory() ->
 %% Would be nice to have a function in riak_core_bucket_type or
 %% similar to get either the prefix or the actual metadata instead
 %% of including a riak_core header file for this prefix
-retrieve_ddl_from_metadata(BucketType) ->
+retrieve_ddl_from_metadata(BucketType) when is_binary(BucketType) ->
     retrieve_ddl_2(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, BucketType,
                                           [{allow_put, false}])).
 

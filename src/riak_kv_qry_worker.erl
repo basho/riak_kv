@@ -2,7 +2,7 @@
 %%%
 %%% riak_kv_qry_worker: Riak SQL per-query workers
 %%%
-%%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
+%%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
 %%%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -43,12 +43,6 @@
          code_change/3
         ]).
 
--ifdef(TEST).
--export([
-         runner_TEST/1
-        ]).
--endif.
-
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -define(NO_SIDEEFFECTS, []).
@@ -56,14 +50,14 @@
 -define(NO_PG_SORT, undefined).
 
 -record(state, {
-          name                 :: atom(),
-          ddl                  :: undefined | #ddl_v1{},
-          qry      = none      :: none | #riak_sql_v1{},
-          qid      = undefined :: undefined | {node(), non_neg_integer()},
-          sub_qrys  = []       :: [integer()],
-          status    = void     :: void | accumulating_chunks,
-          receiver_pid         :: pid(),
-          result    = []       :: [{non_neg_integer(), list()}] | [{binary(), term()}]
+          name                                :: atom(),
+          qry           = none                :: none | ?SQL_SELECT{},
+          qid           = undefined           :: undefined | {node(), non_neg_integer()},
+          sub_qrys      = []                  :: [integer()],
+          status        = void                :: void | accumulating_chunks,
+          receiver_pid                        :: pid(),
+          result        = []                  :: [{non_neg_integer(), list()}] | [{binary(), term()}],
+          run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun()
          }).
 
 %%%===================================================================
@@ -83,18 +77,8 @@ init([RegisteredName]) ->
     pop_next_query(),
     {ok, new_state(RegisteredName)}.
 
--spec handle_call(term(), {pid(), term()}, #state{}) ->
-                         {reply, Reply::ok | {error, atom()} | list(), #state{}}.
-%% @private
-handle_call(Request, _, State) ->
-    case handle_req(Request, State) of
-        {{error, _} = Error, _SEs, NewState} ->
-            {reply, Error, NewState};
-        {Reply, SEs, NewState} ->
-            ok = handle_side_effects(SEs),
-            {reply, Reply, NewState}
-    end.
-
+handle_call(_, _, State) ->
+    {reply, {error, not_handled}, State}.
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 %% @private
@@ -105,59 +89,13 @@ handle_cast(Msg, State) ->
 %% @private
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
 handle_info(pop_next_query, State1) ->
-    {query, ReceivePid, QId, Qry, DDL} = riak_kv_qry_queue:blocking_pop(),
-    Request = {execute, {QId, Qry, DDL}},
-    case handle_req(Request, State1) of
-        {{error, _} = Error, _, State2} ->
-            ReceivePid ! Error,
-            {noreply, new_state(State2#state.name)};
-        {ok, SEs, State2} ->
-            ok = handle_side_effects(SEs),
-            {noreply, State2#state{ receiver_pid = ReceivePid }}
-    end;
-
-handle_info({{SubQId, QId}, done},
-            State = #state{qid       = QId,
-                           receiver_pid = ReceiverPid,
-                           result    = IndexedChunks,
-                           sub_qrys  = SubQQ}) ->
-    lager:debug("Received done on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQQ]),
-    case SubQQ of
-        [] ->
-            lager:debug("Done collecting on QId ~p (~p): ~p", [QId, SubQId, IndexedChunks]),
-            %% sort by index, to reassemble according to coverage plan
-            {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
-            Results = lists:append(R2),
-            % send the results to the waiting client process
-            ReceiverPid ! {ok, Results},
-            pop_next_query(),
-            %% drop indexes, serialize
-            {noreply, new_state(State#state.name)};
-        _MoreSubQueriesNotDone ->
-            {noreply, State}
-    end;
-
-handle_info({{SubQId, QId}, {results, Chunk}},
-            State = #state{qid      = QId,
-                           qry      = Qry,
-                           result   = IndexedChunks,
-                           sub_qrys = SubQs}) ->
-    #riak_sql_v1{'SELECT' = SelectSpec} = Qry,
-    NewS = case lists:member(SubQId, SubQs) of
-               true ->
-                   Decoded = decode_results(lists:flatten(Chunk), SelectSpec),
-                   lager:debug("Got chunk on QId ~p (~p); SubQQ: ~p", [QId, SubQId, SubQs]),
-                   NSubQ = lists:delete(SubQId, SubQs),
-                   State#state{status   = accumulating_chunks,
-                               result   = [{SubQId, Decoded} | IndexedChunks],
-                               sub_qrys = NSubQ};
-               false ->
-                   %% discard;
-                   %% Don't touch state as it may have already 'finished'.
-                   State
-           end,
-    {noreply, NewS};
-
+    QueryWork = riak_kv_qry_queue:blocking_pop(),
+    {ok, State2} = execute_query(QueryWork, State1),
+    {noreply, State2};
+handle_info({{_, QId}, done}, #state{ qid = QId } = State) ->
+    {noreply, subqueries_done(QId, State)};
+handle_info({{SubQId, QId}, {results, Chunk}}, #state{ qid = QId } = State) ->
+    {noreply, add_subquery_result(SubQId, Chunk, State)};
 handle_info({{SubQId, QId}, {error, Reason} = Error},
             State = #state{receiver_pid = ReceiverPid,
                            qid    = QId,
@@ -193,137 +131,180 @@ code_change(_OldVsn, State, _Extra) ->
 new_state(RegisteredName) ->
     #state{name = RegisteredName}.
 
--spec handle_req({atom(), term()}, #state{}) ->
-                        {ok | {ok | error, term()},
-                         list(), #state{}}.
-handle_req({execute, {QId, [Qry|_] = SubQueries, DDL}}, State = #state{status = void}) ->
-    %% TODO make this run with multiple sub-queries
-    %% limit sub-queries and throw error
-    Indices = lists:seq(1, length(SubQueries)),
-    ZQueries = lists:zip(Indices, SubQueries),
-    SEs = [{run_sub_query, {qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
-    {ok, SEs, State#state{qid = QId, qry = Qry, ddl = DDL, sub_qrys = Indices}};
-
-handle_req({execute, {QId, _, _}}, State = #state{status = Status})
-  when Status =/= void ->
-    lager:error("Qry queue manager should have cleared the status before assigning new query ~p", [QId]),
-    {{error, mismanagement}, [], State};
-
-handle_req(_Request, State) ->
-    {ok, ?NO_SIDEEFFECTS, State}.
-
-handle_side_effects([]) ->
+run_sub_qs_fn([]) ->
     ok;
-handle_side_effects([{run_sub_query, {qry, Q}, {qid, QId}} | T]) ->
-    Table = Q#riak_sql_v1.'FROM',
-    Bucket = riak_kv_pb_timeseries:table_to_bucket(Table),
+run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q}, {qid, QId}} | T]) ->
+    Table = Q?SQL_SELECT.'FROM',
+    Bucket = riak_kv_ts_util:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
-    CoverageFn = {colocated, riak_kv_qry_coverage_plan},
-    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, [Bucket, none, Q, Timeout, all, undefined, CoverageFn]]),
-    handle_side_effects(T);
-handle_side_effects([H | T]) ->
-    lager:warning("in riak_kv_qry:handle_side_effects not handling ~p", [H]),
-    handle_side_effects(T).
+    Opts = [Bucket, none, Q, Timeout, all, undefined, {Q, Bucket}, riak_kv_qry_coverage_plan],
+    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
+    run_sub_qs_fn(T);
+%% if cover_context in the SQL record is *not* undefined, we've been
+%% given a mini coverage plan to map to a single vnode/quantum
+run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
+    Table = Q?SQL_SELECT.'FROM',
+    {ok, CoverProps} =
+        riak_kv_pb_coverage:checksum_binary_to_term(Q?SQL_SELECT.cover_context),
+    CoverageFn = riak_client:vnode_target(CoverProps),
+    Bucket = riak_kv_ts_util:table_to_bucket(Table),
+    %% fix these up too
+    Timeout = {timeout, 10000},
+    Me = self(),
+    Opts = [Bucket, none, Q, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan],
+    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
+    run_sub_qs_fn(T).
 
-decode_results(KVList, SelectSpec) ->
-    lists:append(
-      [extract_riak_object(SelectSpec, V) || {_, V} <- KVList]).
+decode_results(KVList) ->
+    [extract_riak_object(V) || {_, V} <- KVList].
 
-extract_riak_object(SelectSpec, V) when is_binary(V) ->
-    % don't care about bkey
+extract_riak_object(V) when is_binary(V) ->
+    %% don't care about bkey
     RObj = riak_object:from_binary(<<>>, <<>>, V),
     case riak_object:get_value(RObj) of
         <<>> ->
             %% record was deleted
             [];
         FullRecord ->
-            riak_kv_qry_compiler:run_select(SelectSpec, FullRecord)
+            [CellValue || {_, CellValue} <- FullRecord]
     end.
 
 %% Send a message to this process to get the next query.
 pop_next_query() ->
     self() ! pop_next_query.
 
+%%
+execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
+              #state{ run_sub_qs_fn = RunSubQs } = State) ->
+    Indices = lists:seq(1, length(SubQueries)),
+    ZQueries = lists:zip(Indices, SubQueries),
+    %% all subqueries have the same select clause
+    ?SQL_SELECT{'SELECT' = Sel} = Qry,
+    #riak_sel_clause_v1{initial_state = InitialState} = Sel,
+    SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
+    ok = RunSubQs(SubQs),
+    {ok, State#state{qid          = QId,
+                     receiver_pid = ReceiverPid,
+                     qry          = Qry,
+                     sub_qrys     = Indices,
+                     result       = InitialState }}.
+
+%%
+add_subquery_result(SubQId, Chunk,
+                    #state{qry      = Qry,
+                           result   = QueryResult1,
+                           sub_qrys = SubQs} = State) ->
+    ?SQL_SELECT{'SELECT' = Sel} = Qry,
+    #riak_sel_clause_v1{calc_type  = CalcType,
+                        clause     = SelClause} = Sel,
+    case lists:member(SubQId, SubQs) of
+        true ->
+            DecodedChunk = decode_results(lists:flatten(Chunk)),
+            try
+              case CalcType of
+                  rows ->
+                      IndexedChunks = [riak_kv_qry_compiler:run_select(SelClause, Row)
+                                       || Row <- DecodedChunk],
+                      QueryResult2 = [{SubQId, IndexedChunks} | QueryResult1];
+                  aggregate ->
+                      QueryResult2 =
+                        lists:foldl(
+                            fun(E, Acc) ->
+                                riak_kv_qry_compiler:run_select(SelClause, E, Acc)
+                            end, QueryResult1, DecodedChunk)
+              end,
+              NSubQ = lists:delete(SubQId, SubQs),
+              State#state{status   = accumulating_chunks,
+                          result   = QueryResult2,
+                          sub_qrys = NSubQ}
+            catch
+              error:divide_by_zero ->
+                  cancel_error_query(divide_by_zero, State)
+            end;
+        false ->
+            %% discard; Don't touch state as it may have already 'finished'.
+            State
+    end.
+
+%%
+-spec cancel_error_query(Error::any(), State1::#state{}) ->
+        State2::#state{}.
+cancel_error_query(Error, #state{ receiver_pid = ReceiverPid,
+                                  name = Name }) ->
+    ReceiverPid ! {error, Error},
+    pop_next_query(),
+    new_state(Name).
+
+%%
+subqueries_done(QId,
+                #state{qid          = QId,
+                       receiver_pid = ReceiverPid,
+                       sub_qrys     = SubQQ} = State) ->
+    case SubQQ of
+        [] ->
+            QueryResult2 = prepare_final_results(State),
+            %   send the results to the waiting client process
+            ReceiverPid ! {ok, QueryResult2},
+            pop_next_query(),
+            % clean the state of query specfic data, ready for the next one
+            new_state(State#state.name);
+        _ ->
+            % more sub queries are left to run
+            State
+    end.
+
+-spec prepare_final_results(#state{}) ->
+                                   {[riak_pb_ts_codec:tscolumnname()],
+                                    [riak_pb_ts_codec:tscolumntype()],
+                                    [[riak_pb_ts_codec:ldbvalue()]]}.
+prepare_final_results(#state{
+        result = IndexedChunks,
+        qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select }}) ->
+    %% sort by index, to reassemble according to coverage plan
+    {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
+    prepare_final_results2(Select, lists:append(R2));
+prepare_final_results(#state{
+        result = Aggregate1,
+        qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate} = Select }} = State) ->
+    try
+        Aggregate2 = riak_kv_qry_compiler:finalise_aggregate(Select, Aggregate1),
+        prepare_final_results2(Select, [Aggregate2])
+    catch
+        error:divide_by_zero ->
+            cancel_error_query(divide_by_zero, State)
+    end.
+
+%%
+prepare_final_results2(#riak_sel_clause_v1{ col_return_types = ColTypes,
+                                            col_names = ColNames}, Rows) ->
+    {ColNames, ColTypes, Rows}.
+
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
+
 -ifdef(TEST).
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
-%%
-%% Test runner
-%%
-
--define(NO_OUTPUTS, []).
-
-runner_TEST(Tests) -> io:format("running tests ~p~n", [Tests]),
-                      test_r2(Tests, #state{}, 1, [], [], []).
-
-test_r2([], _State, _LineNo, SideEffects, Replies, Errs) ->
-    {lists:reverse(SideEffects), lists:reverse(Replies), lists:reverse(Errs)};
-test_r2([H | T], State, LineNo, SideEffects, Replies, Errs) ->
-    io:format("Before ~p~n- SideEffects is ~p~n- Replies is ~p~n- Errors is ~p~n", [H, SideEffects, Replies, Errs]),
-    {NewSt, NewSEs, NewRs, NewE} = run(H, State, LineNo, SideEffects, Replies, Errs),
-    io:format("After ~p~n- NewSEs is ~p~n- NewRs is ~p~n- NewE is ~p~n", [H, NewSEs, NewRs, NewE]),
-    test_r2(T, NewSt, LineNo + 1, NewSEs, NewRs, NewE).
-
-run({run, {init, Arg}}, _State, _LNo, SideEffects, Replies, Errs) ->
-    {ok, NewState} = init(Arg),
-    {NewState, SideEffects, Replies, Errs};
-run({clear, side_effects}, State, _LNo, _SideEffects, Replies, Errs) ->
-    {State, [], Replies, Errs};
-run({clear, replies}, State, _LNo, SideEffects, _Replies, Errs) ->
-    {State, SideEffects, [], Errs};
-run({dump, state}, State, LNo, SideEffects, Replies, Errs) ->
-    io:format("On Line No ~p State is~n- ~p~n", [LNo, State]),
-    {State, SideEffects, Replies, Errs};
-run({dump, Replies}, State, LNo, SideEffects, Replies, Errs) ->
-    io:format("On Line No ~p Replies is~n- ~p~n", [LNo, Replies]),
-    {State, SideEffects, Replies, Errs};
-run({dump, errors}, State, LNo, SideEffects, Replies, Errs) ->
-    io:format("On Line No ~p Errs is~n- ~p~n", [LNo, Errs]),
-    {State, SideEffects, Replies, Errs};
-run({msg, Msg}, State, _LNo, SideEffects, Replies, Errs) ->
-    {Reply, SEs, NewState} = handle_req(Msg, State),
-    NewSEs = case SEs of
-                 [] -> SideEffects;
-                 _  -> lists:flatten(SEs, SideEffects)
-             end,
-    {NewState, NewSEs, [Reply | Replies], Errs};
-run({side_effect, G}, State, LNo, SEs, Replies, Errs) ->
-    {NewSE, NewErrs}
-        = case SEs of
-              []      -> Err = {error, {line_no, LNo}, {side_effect, {expected, []}, {got, G}}},
-                         {[], [Err | Errs]};
-              [G | T] -> {T, Errs};
-              [E | T] -> Err = {error, {line_no, LNo}, {side_effect, {expected, E}, {got, G}}},
-                         {T, [Err | Errs]}
-          end,
-    {State, NewSE, Replies, NewErrs};
-run({reply, G}, State, LNo, SideEffects, Replies, Errs) ->
-    {NewRs, NewErrs}
-        = case Replies of
-              []      -> Err = {error, {line_no, LNo}, {reply, {expected, []}, {got, G}}},
-                         {[], [Err | Errs]};
-              [G | T] -> {T, Errs};
-              [E | T] -> Err = {error, {line_no, LNo}, {reply, {expected, E}, {got, G}}},
-                         {T, [Err | Errs]}
-          end,
-    {State, SideEffects, NewRs, NewErrs};
-run(H, State, LNo, SideEffects, Replies, Errs) ->
-    Err = {error, {line_no, LNo}, {unknown_test_state, H}},
-    {State, SideEffects, Replies, [Err | Errs]}.
-
--define(MAX_Q_LEN, 5).
-
-simple_init_test() ->
-    Tests = [
-             {run, {init, [fms1]}}
-           ],
-    Results = runner_TEST(Tests),
-    ?assertEqual({[], [], []}, Results).
+prepare_final_results_test() ->
+    Rows = [[12, <<"windy">>], [13, <<"windy">>]],
+    % IndexedChunks = [{1, Rows}],
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
+        prepare_final_results(
+            #state{
+                qry =
+                    ?SQL_SELECT{
+                        'SELECT' = #riak_sel_clause_v1{
+                            col_names = [<<"a">>, <<"b">>],
+                            col_return_types = [sint64, varchar],
+                            calc_type = rows
+                         }
+                    },
+                result = [{1, Rows}]})
+    ).
 
 -endif.
