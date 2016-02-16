@@ -227,18 +227,32 @@ validate_rows(Mod, Rows) ->
     lists:reverse(BadRowIdxs).
 
 
--spec put_data([[riak_pb_ts_codec:ldbvalue()]], binary()) -> integer().
-%% return count of records we failed to put
+-spec put_data([[riak_pb_ts_codec:ldbvalue()]], binary()) ->
+                      ok | {error, {some_failed, integer()}} | {error, term()}.
 put_data(Data, Table) ->
     put_data(Data, Table, riak_ql_ddl:make_module_name(Table)).
 
--spec put_data([[riak_pb_ts_codec:ldbvalue()]], binary(), module()) -> integer().
+-spec put_data([[riak_pb_ts_codec:ldbvalue()]], binary(), module()) ->
+                      ok | {error, {some_failed, integer()}} | {error, term()}.
 put_data(Data, Table, Mod) ->
     DDL = Mod:get_ddl(),
     Bucket = table_to_bucket(Table),
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    NVal = proplists:get_value(n_val, BucketProps),
+    case riak_core_bucket:get_bucket(Bucket) of
+        {error, Reason} ->
+            %% happens when, for example, the table has not been
+            %% activated (Reason == no_type)
+            {error, Reason};
+        BucketProps ->
+            case put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) of
+                0 ->
+                    ok;
+                NErrors ->
+                    {error, {some_failed, NErrors}}
+            end
+    end.
 
+put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
+    NVal = proplists:get_value(n_val, BucketProps),
     PartitionedData = partition_data(Data, Bucket, BucketProps, DDL, Mod),
     PreflistData = add_preflists(PartitionedData, NVal,
                                  riak_core_node_watcher:nodes(riak_kv)),
@@ -272,11 +286,13 @@ put_data(Data, Table, Mod) ->
           end,
           {[], 0}, PreflistData),
     Responses = riak_kv_w1c_worker:async_put_replies(ReqIds, []),
-    length(
-      lists:filter(
-        fun({error, _}) -> true;
-           (_) -> false
-        end, Responses)) + FailReqs.
+    _NErrors =
+        length(
+          lists:filter(
+            fun({error, _}) -> true;
+               (_) -> false
+            end, Responses)) + FailReqs.
+
 
 
 -spec partition_data(Data :: list(term()),
