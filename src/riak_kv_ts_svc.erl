@@ -314,11 +314,15 @@ sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
              State) ->
     case catch validate_rows(Mod, Rows) of
         [] ->
-            case riak_kv_ts_api:put_data(Rows, Table, Mod) of
-                0 ->
+            case riak_kv_ts_api:put_data(Data, Table, Mod) of
+                ok ->
                     {reply, #tsputresp{}, State};
-                ErrorCount ->
-                    {reply, failed_put_response(ErrorCount), State}
+                {error, {some_failed, ErrorCount}} ->
+                    {reply, failed_put_response(ErrorCount), State};
+                {error, no_type} ->
+                    {reply, table_not_activated_response(Table), State};
+                {error, OtherReason} ->
+                    {reply, make_rpberrresp(?E_PUT, to_string(OtherReason)), State}
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
             {reply, validate_rows_error_response(BadRowIdxs), State}
@@ -352,6 +356,8 @@ sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
             {reply, #tsgetresp{columns = make_tscolumndescription_list(
                                            ColumnNames, ColumnTypes),
                                rows = Rows}, State};
+        {error, no_type} ->
+            {reply, table_not_activated_response(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
@@ -380,6 +386,8 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
            CompoundKey, Table, Mod, Options, VClock) of
         ok ->
             {reply, tsdelresp, State};
+        {error, no_type} ->
+            {reply, table_not_activated_response(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
@@ -485,14 +493,9 @@ sub_tsqueryreq(Mod, DDL, SQL, State) ->
         {ok, Data}  ->
             {reply, make_tsquery_resp(Mod, SQL, Data), State};
 
-        %% %% parser messages have a tuple for Reason:
-        %% {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
-        %%     ErrorMessage = flat_format("~p: ~s", [E, Reason]),
-        %%     {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
-        %% parser errors are now handled uniformly (will be caught
-        %% here in the last case branch)
-
         %% the following timeouts are known and distinguished:
+        {error, no_type} ->
+            {reply, table_not_activated_response(DDL#ddl_v1.table), State};
         {error, qry_worker_timeout} ->
             %% the eleveldb process didn't send us any response after
             %% 10 sec (hardcoded in riak_kv_qry), and probably died
@@ -538,10 +541,7 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
         {error, missing_helper_module} ->
             BucketProps = riak_core_bucket:get_bucket(
                             riak_kv_ts_util:table_to_bucket(Table)),
-            {reply, missing_helper_module(Table, BucketProps), State};
-        {error, _} ->
-            {reply, table_not_activated_response(Table),
-             State}
+            {reply, missing_helper_module(Table, BucketProps), State}
     end.
 
 
