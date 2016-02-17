@@ -27,7 +27,6 @@
 %% DELETE /ts/v1/table/Table          single-key delete
 %% PUT    /ts/v1/table/Table          batch put
 %% GET    /ts/v1/coverage             coverage for a query
-%% GET/POST   /ts/v1/query            execute SQL query
 %% '''
 %%
 %% Request body is expected to be a JSON containing key and/or value(s).
@@ -65,16 +64,15 @@
               security,     %% security context
               client,       %% riak_client() - the store client
               riak,         %% local | {node(), atom()} - params for riak client
-              api_call :: undefined|get|put|delete|query|coverage,
+              api_call :: undefined|get|put|delete|coverage,
               table    :: undefined | binary(),
-              cover_context :: undefined | binary(),
               %% data in/out: the following fields are either
               %% extracted from the JSON that came in the request body
               %% in case of a PUT, or filled out by retrieved values
               %% for shipping (as JSON) in response body
               key     :: undefined |  ts_rec(),  %% parsed out of JSON that came in the body
               data    :: undefined | [ts_rec()], %% ditto
-              query   :: undefined | string(),
+              query   :: string(),
               result  :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]}
                                    | [{entry, proplists:proplist()}]
              }).
@@ -161,7 +159,7 @@ forbidden(RD, Ctx) ->
     {[atom()], #wm_reqdata{}, #ctx{}}.
 %% @doc Get the list of methods this resource supports.
 allowed_methods(RD, Ctx) ->
-    {['GET', 'POST', 'PUT', 'DELETE'], RD, Ctx}.
+    {['GET', 'PUT', 'DELETE'], RD, Ctx}.
 
 
 -spec malformed_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
@@ -212,12 +210,11 @@ validate_request(RD, Ctx) ->
 validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
     Json = extract_json(RD),
     case {Method, string:tokens(wrq:path(RD), "/"),
-          extract_key(Json), extract_data(Json),
-          extract_query(Json), extract_cover_context(Json)} of
+          extract_key(Json), extract_data(Json), extract_query(Json)} of
         %% single-key get
         {'GET',
          ["ts", "v1", "tables", Table],
-         Key, undefined, undefined, undefined}
+         Key, undefined, undefined}
           when is_list(Table), Key /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = get,
@@ -225,7 +222,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
         %% single-key delete
         {'DELETE',
          ["ts", "v1", "tables", Table],
-         Key, undefined, undefined, undefined}
+         Key, undefined, undefined}
           when is_list(Table), Key /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = delete,
@@ -233,7 +230,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
         %% batch put
         {'PUT',
          ["ts", "v1", "tables", Table],
-         undefined, Data, undefined, undefined}
+         undefined, Data, undefined}
           when is_list(Table), Data /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = put,
@@ -241,20 +238,11 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
         %% coverage
         {'GET',
          ["ts", "v1", "coverage"],
-         undefined, undefined, Query, undefined}
+         undefined, undefined, Query}
           when is_list(Query) ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = coverage,
                           query = Query});
-        %% query
-        {Method,
-         ["ts", "v1", "query"],
-         undefined, undefined, Query, CoverContext}
-          when (Method == 'GET' orelse Method == 'POST' orelse Method == 'PUT')
-               andalso is_list(Query) ->
-            valid_params(
-              RD, Ctx#ctx{api_version = "v1", api_call = query,
-                          query = Query, cover_context = CoverContext});
         _Invalid ->
             handle_error({malformed_request, Method}, RD, Ctx)
     end.
@@ -289,15 +277,13 @@ extract_json(RD) ->
 
 -spec extract_key(binary()) -> term().
 extract_key(Json) ->
-    case catch mochijson2:decode(Json) of
-        {struct, [{<<"key">>, Key}]} ->
-            %% key alone (it's a get or delete)
-            validate_ts_record(Key);
-        Decoded when is_list(Decoded) ->
+    try mochijson2:decode(Json) of
+        {struct, Decoded} when is_list(Decoded) ->
             %% key and data (it's a put)
             validate_ts_record(
-              proplists:get_value(<<"key">>, Decoded));
-        _ ->
+              proplists:get_value(<<"key">>, Decoded))
+    catch
+        _:_ ->
             undefined
     end.
 
@@ -305,32 +291,24 @@ extract_key(Json) ->
 %% are well-formed, too.
 -spec extract_data(binary()) -> term().
 extract_data(Json) ->
-    case catch mochijson2:decode(Json) of
+    try mochijson2:decode(Json) of
         {struct, Decoded} when is_list(Decoded) ->
             %% key and data (it's a put)
             validate_ts_records(
-              proplists:get_value(<<"data">>, Decoded));
-        _ ->
+              proplists:get_value(<<"data">>, Decoded))
+    catch
+        _:_ ->
             undefined
     end.
 
 -spec extract_query(binary()) -> term().
 extract_query(Json) ->
-    case catch mochijson2:decode(Json) of
+    try mochijson2:decode(Json) of
         {struct, Decoded} when is_list(Decoded) ->
             validate_ts_query(
-              proplists:get_value(<<"query">>, Decoded));
-        _ ->
-            undefined
-    end.
-
--spec extract_cover_context(binary()) -> term().
-extract_cover_context(Json) ->
-    case catch mochijson2:decode(Json) of
-        Decoded when is_list(Decoded) ->
-            validate_ts_cover_context(
-              proplists:get_value(<<"coverage_context">>, Decoded));
-        _ ->
+              proplists:get_value(<<"query">>, Decoded))
+    catch
+        _:_ ->
             undefined
     end.
 
@@ -367,11 +345,6 @@ validate_ts_query(Q) when is_binary(Q) ->
 validate_ts_query(_) ->
     undefined.
 
-validate_ts_cover_context(C) when is_binary(C) ->
-    C;
-validate_ts_cover_context(_) ->
-    undefined.
-
 
 -spec check_permissions(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 %% We have to defer checking permission until we have figured which
@@ -389,7 +362,7 @@ check_permissions(RD, Ctx = #ctx{security = Security,
                                  api_call = Call,
                                  table = Table}) ->
     case riak_core_security:check_permission(
-           {api_call_to_ts_perm(Call), {Table, Table}}, Security) of
+           {api_call_to_ts_perm(Call), Table}, Security) of
         {false, Error, _} ->
             handle_error(
               {not_permitted, unicode:characters_to_binary(Error, utf8, utf8)}, RD, Ctx);
@@ -403,14 +376,12 @@ api_call_to_ts_perm(put) ->
     "riak_ts.put";
 api_call_to_ts_perm(delete) ->
     "riak_ts.delete";
-api_call_to_ts_perm(query) ->
-    "riak_ts.query".
+api_call_to_ts_perm(coverage) ->
+    "riak_ts.coverage".
 
 -spec validate_resource(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-validate_resource(RD, Ctx = #ctx{api_call = Call})
-  when Call == query;
-       Call == coverage ->
-    %% there is always a resource for queries
+validate_resource(RD, Ctx = #ctx{api_call = coverage}) ->
+    %% there is always a resource for coverage
     {false, RD, Ctx};
 validate_resource(RD, Ctx = #ctx{table = Table}) ->
     %% Ensure the bucket type exists, otherwise 404 early.
@@ -425,7 +396,6 @@ validate_resource(RD, Ctx = #ctx{table = Table}) ->
 -spec content_types_provided(#wm_reqdata{}, #ctx{}) ->
                                     {[{ContentType::string(), Producer::atom()}],
                                      #wm_reqdata{}, #ctx{}}.
-%% @doc List the content types available for representing this resource.
 content_types_provided(RD, Ctx) ->
     {[{"application/json", produce_doc_body}], RD, Ctx}.
 
@@ -433,10 +403,7 @@ content_types_provided(RD, Ctx) ->
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
                                 {[{Encoding::string(), Producer::function()}],
                                  #wm_reqdata{}, #ctx{}}.
-%% @doc List the encodings available for representing this resource.
-%%      "identity" and "gzip" are available.
 encodings_provided(RD, Ctx) ->
-    %% identity and gzip
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 
@@ -497,7 +464,7 @@ call_api_function(RD, Ctx = #ctx{api_call = put,
                 {error, {some_failed, ErrorCount}} ->
                     handle_error({failed_some_puts, ErrorCount, Table}, RD, Ctx);
                 {error, no_ctype} ->
-                    handle_error({table_activate_fail, Table}, RD, Ctx)
+                    handle_error({no_such_table, Table}, RD, Ctx)
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
             handle_error({invalid_data, BadRowIdxs}, RD, Ctx)
@@ -553,24 +520,6 @@ call_api_function(RD, Ctx = #ctx{api_call = delete,
             handle_error({riak_error, Reason}, RD, Ctx)
     end;
 
-call_api_function(RD, Ctx = #ctx{api_call = query,
-                                 method = Method,
-                                 query = Query, cover_context = CoverCtx}) ->
-    Lexed = riak_ql_lexer:get_tokens(Query),
-    case riak_ql_parser:parse(Lexed) of
-        {ok, SQL = ?SQL_SELECT{}} when Method == 'GET' ->
-            %% inject coverage context
-            process_query(SQL?SQL_SELECT{cover_context = CoverCtx}, RD, Ctx);
-        {ok, Other}
-          when (is_record(Other, ddl_v1)               andalso Method == 'POST') orelse
-               (is_record(Other, riak_sql_describe_v1) andalso Method ==  'GET') ->
-            process_query(Other, RD, Ctx);
-        {ok, _MethodMismatch} ->
-            handle_error({inappropriate_sql_for_method, Method}, RD, Ctx);
-        {error, Reason} ->
-            handle_error({query_parse_error, Reason}, RD, Ctx)
-    end;
-
 call_api_function(RD, Ctx = #ctx{api_call = coverage,
                                  query = Query,
                                  client = Client}) ->
@@ -616,104 +565,22 @@ call_api_function(RD, Ctx = #ctx{api_call = coverage,
     end.
 
 
-process_query(DDL = #ddl_v1{table = Table}, RD, Ctx) ->
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
-    Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
-    %% TODO: let's not bother collecting user properties from (say)
-    %% sidecar object in body JSON: when #ddl_v2 work is merged, we
-    %% will have a way to collect those bespoke table properties from
-    %% WITH clause.
-    case riak_core_bucket_type:create(Table, Props2) of
-        ok ->
-            wait_until_active(Table, RD, Ctx, ?TABLE_ACTIVATE_WAIT);
-        {error, Reason} ->
-            handle_error({table_create_fail, Table, Reason}, RD, Ctx)
-    end;
-
-process_query(SQL = ?SQL_SELECT{'FROM' = Table}, RD, Ctx0 = #ctx{}) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx0);
-        DDL ->
-            case riak_kv_qry:submit(SQL, DDL) of
-                {ok, Data} ->
-                    {ColumnNames, _ColumnTypes, Rows} = Data,
-                    Ctx = Ctx0#ctx{result = {ColumnNames, Rows}},
-                    prepare_data_in_body(RD, Ctx);
-                %% the following timeouts are known and distinguished:
-                {error, qry_worker_timeout} ->
-                    %% the eleveldb process didn't send us any response after
-                    %% 10 sec (hardcoded in riak_kv_qry), and probably died
-                    handle_error(query_worker_timeout, RD, Ctx0);
-                {error, backend_timeout} ->
-                    %% the eleveldb process did manage to send us a timeout
-                    %% response
-                    handle_error(backend_timeout, RD, Ctx0);
-
-                {error, Reason} ->
-                    handle_error({query_exec_error, Reason}, RD, Ctx0)
-            end
-    end;
-
-process_query(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, RD, Ctx0 = #ctx{}) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx0);
-        DDL ->
-            case riak_kv_qry:submit(SQL, DDL) of
-                {ok, Data} ->
-                    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>,
-                                   <<"Primary Key">>, <<"Local Key">>],
-                    Ctx = Ctx0#ctx{result = {ColumnNames, Data}},
-                    prepare_data_in_body(RD, Ctx);
-                {error, Reason} ->
-                    handle_error({query_exec_error, Reason}, RD, Ctx0)
-            end
-    end.
-
-
-wait_until_active(Table, RD, Ctx, 0) ->
-    handle_error({table_activate_fail, Table}, RD, Ctx);
-wait_until_active(Table, RD, Ctx, Seconds) ->
-    case riak_core_bucket_type:activate(Table) of
-        ok ->
-            prepare_data_in_body(RD, Ctx#ctx{result = {[], []}});
-            %% a way for CREATE TABLE queries to return 'ok' on success
-        {error, not_ready} ->
-            timer:sleep(1000),
-            wait_until_active(Table, RD, Ctx, Seconds - 1);
-        {error, undefined} ->
-            %% this is inconceivable because create(Table) has
-            %% just succeeded, so it's here mostly to pacify
-            %% the dialyzer (and of course, for the odd chance
-            %% of Erlang imps crashing nodes between create
-            %% and activate calls)
-            handle_error({table_created_missing, Table}, RD, Ctx)
-    end.
-
 prepare_data_in_body(RD0, Ctx0) ->
     {Json, RD1, Ctx1} = produce_doc_body(RD0, Ctx0),
     {true, wrq:append_to_response_body(Json, RD1), Ctx1}.
 
 
 -spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% @doc Extract the value of the document, and place it in the
-%%      response body of the request.
 produce_doc_body(RD, Ctx = #ctx{result = ok}) ->
     {<<"ok">>, RD, Ctx};
-produce_doc_body(RD, Ctx = #ctx{api_call = Call,
-                                result = {Columns, Rows}})
-  when Call == get;
-       Call == query ->
+produce_doc_body(RD, Ctx = #ctx{api_call = get,
+                                result = {Columns, Rows}}) ->
     {mochijson2:encode(
        {struct, [{<<"columns">>, Columns},
                  {<<"rows">>, Rows}]}),
      RD, Ctx};
-produce_doc_body(RD, Ctx = #ctx{api_call = Call,
-                                result = CoverageDetails})
-  when Call == coverage ->
+produce_doc_body(RD, Ctx = #ctx{api_call = coverage,
+                                result = CoverageDetails}) ->
     SafeCoverageDetails =
         [{entry, armor_entry(E)} || {entry, E} <- CoverageDetails],
     {mochijson2:encode(
@@ -743,6 +610,9 @@ handle_error(Error, RD, Ctx) ->
         {unsupported_version, BadVersion} ->
             error_out({halt, 412},
                       "Unsupported API version ~s", [BadVersion], RD, Ctx);
+        {not_permitted, Table} ->
+            error_out({halt, 401},
+                      "Access to table ~s not allowed", [Table], RD, Ctx);
         {malformed_request, Method} ->
             error_out({halt, 400},
                       "Malformed ~s request", [Method], RD, Ctx);
@@ -775,31 +645,7 @@ handle_error(Error, RD, Ctx) ->
                       "Inappropriate query for coverage request", [], RD, Ctx);
         query_compile_fail ->
             error_out({halt, 400},
-                      "Failed to compile query for coverage request", [], RD, Ctx);
-        {table_create_fail, Table, Reason} ->
-            error_out({halt, 500},
-                      "Failed to create table \"~ts\": ~p", [Table, Reason], RD, Ctx);
-        query_worker_timeout ->
-            error_out({halt, 503},
-                      "Query worker timeout", [], RD, Ctx);
-        backend_timeout ->
-            error_out({halt, 503},
-                      "Storage backend timeout", [], RD, Ctx);
-        {query_exec_error, Detailed} ->
-            error_out({halt, 400},
-                      "Query execution failed: ~ts", [Detailed], RD, Ctx);
-        {table_activate_fail, Table} ->
-            error_out({halt, 500},
-                      "Failed to activate bucket type for table \"~ts\"", [Table], RD, Ctx);
-        {table_created_missing, Table} ->
-            error_out({halt, 500},
-                      "Bucket type for table \"~ts\" disappeared suddenly before activation", [Table], RD, Ctx);
-        {inappropriate_sql_for_method, Method} ->
-            error_out({halt, 400},
-                      "Inappropriate method ~s for SQL query type", [Method], RD, Ctx);
-        OutOfTheBlue ->
-            error_out({halt, 418},
-                      "Phantom error: ~p", [OutOfTheBlue], RD, Ctx)
+                      "Failed to compile query for coverage request", [], RD, Ctx)
     end.
 
 flat_format(Format, Args) ->
