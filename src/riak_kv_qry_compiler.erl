@@ -39,15 +39,17 @@
     {ok, [?SQL_SELECT{}]} | {error, any()}.
 compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
     {error, 'query is already compiled'};
-compile(#ddl_v1{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }, _MaxSubQueries) ->
-    {error, 'full table scan not implemented'};
 compile(#ddl_v1{} = DDL,
-        ?SQL_SELECT{is_executable = false, type = sql} = Q, MaxSubQueries) ->
-    case compile_select_clause(DDL, Q) of
-        {ok, S} ->
-            compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries);
-        {error, _} = Error ->
-            Error
+        ?SQL_SELECT{is_executable = false, 'SELECT' = Sel} = Q, MaxSubQueries) ->
+    if Sel#riak_sel_clause_v1.clause == [] ->
+            {error, 'full table scan not implemented'};
+        el/=se ->
+            case compile_select_clause(DDL, Q) of
+                {ok, S} ->
+                    compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries);
+                {error, _} = Error ->
+                    Error
+            end
     end.
 
 %% adding the local key here is a bodge
