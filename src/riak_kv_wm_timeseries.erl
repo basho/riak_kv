@@ -215,7 +215,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
         %% single-key get
         {'GET',
          ["ts", "v1", "tables", Table],
-         Key, undefined, undefined}
+         Key, _, _}
           when is_list(Table), Key /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = get,
@@ -223,7 +223,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
         %% single-key delete
         {'DELETE',
          ["ts", "v1", "tables", Table],
-         Key, undefined, undefined}
+         Key, _, _}
           when is_list(Table), Key /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = delete,
@@ -231,7 +231,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
         %% batch put
         {'PUT',
          ["ts", "v1", "tables", Table],
-         undefined, Data, undefined}
+         _, Data, _}
           when is_list(Table), Data /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = put,
