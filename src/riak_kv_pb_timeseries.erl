@@ -27,8 +27,6 @@
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
--include("riak_kv_wm_raw.hrl").
-
 -behaviour(riak_api_pb_service).
 
 -export([init/0,
@@ -58,7 +56,7 @@
 -define(E_BAD_QUERY,         1018).
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
--define(E_DELETE_NOTFOUND,   1021).
+-define(E_NOTFOUND,          1021).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -121,7 +119,7 @@ decode_query(SQL) ->
 
 -spec decode_query(Query::#tsinterpolation{}, term()) ->
     {error, _} | {ok, ts_query_types()}.
-decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
+decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
     case riak_ql_parser:parse(Lexed) of
         {ok, ?SQL_SELECT{} = SQL} ->
@@ -265,207 +263,80 @@ sub_tsttbputreq(Mod, _DDL, #tsttbputreq{table = Table, rows = Data},
     sub_putreq_common(Mod, Table, Data, State).
 
 sub_putreq_common(Mod, Table, Data, State) ->
-    case catch validate_rows(Mod, Data) of
+    case catch riak_kv_ts_util:validate_rows(Mod, Data) of
         [] ->
-            case put_data(Data, Table, Mod) of
-                0 ->
+            case riak_kv_ts_util:put_data(Data, Table, Mod) of
+                ok ->
                     {reply, #tsputresp{}, State};
-                ErrorCount ->
-                    {reply, failed_put_response(ErrorCount), State}
+                {error, {some_failed, ErrorCount}} ->
+                    {reply, failed_put_response(ErrorCount), State};
+                {error, no_type} ->
+                    {reply, table_not_activated_response(Table), State};
+                {error, OtherReason} ->
+                    {reply, make_rpberrresp(?E_PUT, to_string(OtherReason)), State}
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
             {reply, validate_rows_error_response(BadRowIdxs), State}
     end.
-
-%% Give validate_rows/2 a DDL Module and a list of decoded rows,
-%% and it will return a list of strings that represent the invalid rows indexes.
--spec validate_rows(module(), list(tuple())) -> list(string()).
-validate_rows(Mod, Rows) ->
-    ValidateFn = fun(X, {Acc, BadRowIdxs}) ->
-        case Mod:validate_obj(X) of
-            true -> {Acc+1, BadRowIdxs};
-            _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
-        end
-    end,
-    {_, BadRowIdxs} = lists:foldl(ValidateFn, {1, []}, Rows),
-    lists:reverse(BadRowIdxs).
-
-
--spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
-%% return count of records we failed to put
-put_data(Data, Table, Mod) when is_binary(Table) ->
-    DDL = Mod:get_ddl(),
-    Bucket = riak_kv_ts_util:table_to_bucket(Table),
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    NVal = proplists:get_value(n_val, BucketProps),
-
-    PartitionedData = partition_data(Data, Bucket, BucketProps, DDL, Mod),
-    PreflistData = add_preflists(PartitionedData, NVal,
-                                 riak_core_node_watcher:nodes(riak_kv)),
-
-    EncodeFn =
-        fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
-
-    {ReqIds, FailReqs} =
-        lists:foldl(
-          fun({DocIdx, Preflist, Records}, {GlobalReqIds, GlobalErrorsCnt}) ->
-                  case riak_kv_w1c_worker:validate_options(
-                         NVal, Preflist, [], BucketProps) of
-                      {ok, W, PW} ->
-                          {Ids, Errs} =
-                              lists:foldl(
-                                fun(Record, {PartReqIds, PartErrors}) ->
-                                        {RObj, LK} =
-                                            build_object(Bucket, Mod, DDL,
-                                                         Record, DocIdx),
-
-                                        {ok, ReqId} =
-                                            riak_kv_w1c_worker:async_put(
-                                              RObj, W, PW, Bucket, NVal, LK,
-                                              EncodeFn, Preflist),
-                                        {[ReqId | PartReqIds], PartErrors}
-                                end,
-                                {[], 0}, Records),
-                          {GlobalReqIds ++ Ids, GlobalErrorsCnt + Errs};
-                      _Error ->
-                          {GlobalReqIds, GlobalErrorsCnt + length(Records)}
-                  end
-          end,
-          {[], 0}, PreflistData),
-    Responses = riak_kv_w1c_worker:async_put_replies(ReqIds, []),
-    length(lists:filter(fun({error, _}) -> true;
-                           (_) -> false
-                        end, Responses)) + FailReqs.
-
--spec partition_data(Data :: list(term()),
-                     Bucket :: {binary(), binary()},
-                     BucketProps :: proplists:proplist(),
-                     DDL :: #ddl_v1{},
-                     Mod :: module()) ->
-                            list(tuple(chash:index(), list(term()))).
-partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
-    PartitionTuples =
-        [ { riak_core_util:chash_key({Bucket, row_to_key(R, DDL, Mod)},
-                                     BucketProps), R } || R <- Data ],
-    dict:to_list(
-      lists:foldl(fun({Idx, R}, Dict) ->
-                          dict:append(Idx, R, Dict)
-                  end,
-                  dict:new(),
-                  PartitionTuples)).
-
-row_to_key(Row, DDL, Mod) ->
-    riak_kv_ts_util:encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
-
-add_preflists(PartitionedData, NVal, UpNodes) ->
-    lists:map(fun({Idx, Rows}) -> {Idx,
-                                   riak_core_apl:get_apl_ann(Idx, NVal, UpNodes),
-                                   Rows} end,
-              PartitionedData).
-
-build_object(Bucket, Mod, DDL, Row, PK) ->
-    Obj = Mod:add_column_info(Row),
-    LK  = riak_kv_ts_util:encode_typeval_key(
-            riak_ql_ddl:get_local_key(DDL, Row, Mod)),
-
-    RObj = riak_object:newts(
-             Bucket, PK, Obj,
-             dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
-    {RObj, LK}.
 
 
 %% -----------
 %% get and delete
 %% -----------
 
-sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
-                                 key    = PbCompoundKey,
-                                 timeout = Timeout},
+sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
+                                  key    = PbCompoundKey,
+                                  timeout = Timeout},
              State) ->
     Options =
         if Timeout == undefined -> [];
            true -> [{timeout, Timeout}]
         end,
-
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
-
-    Result =
-        case riak_kv_ts_util:make_ts_keys(CompoundKey, DDL, Mod) of
-            {ok, PKLK} ->
-                riak_client:get(
-                  riak_kv_ts_util:table_to_bucket(Table), PKLK, Options,
-                  {riak_client, [node(), undefined]});
-            ErrorReason ->
-                ErrorReason
-        end,
-    case Result of
-        {ok, RObj} ->
-            Record = riak_object:get_value(RObj),
+    Mod = riak_ql_ddl:make_module_name(Table),
+    case riak_kv_ts_util:get_data(
+           CompoundKey, Table, Mod, Options) of
+        {ok, Record} ->
             {ColumnNames, Row} = lists:unzip(Record),
             %% the columns stored in riak_object are just
             %% names; we need names with types, so:
-            ColumnTypes = get_column_types(ColumnNames, Mod),
+            ColumnTypes = riak_kv_ts_util:get_column_types(ColumnNames, Mod),
             Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
             {reply, #tsgetresp{columns = make_tscolumndescription_list(
                                            ColumnNames, ColumnTypes),
                                rows = Rows}, State};
+        {error, no_type} ->
+            {reply, table_not_activated_response(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
-            {reply, tsgetresp, State};
+            {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
     end.
 
 
-sub_tsdelreq(Mod, DDL, #tsdelreq{table = Table,
-                                 key    = PbCompoundKey,
-                                 vclock  = PbVClock,
-                                 timeout  = Timeout},
+sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
+                                  key    = PbCompoundKey,
+                                  vclock  = VClock,
+                                  timeout  = Timeout},
              State) ->
-    %% Pass the {dw,all} option in to the delete FSM
-    %% to make sure all tombstones are written by the
-    %% async put before the reaping get runs otherwise
-    %% if the default {dw,quorum} is used there is the
-    %% possibility that the last tombstone put overlaps
-    %% inside the KV vnode with the reaping get and
-    %% prevents the tombstone removal.
     Options =
-        if Timeout == undefined -> [{dw, all}];
-           true -> [{timeout, Timeout}, {dw, all}]
+        if Timeout == undefined -> [];
+           true -> [{timeout, Timeout}]
         end,
-    VClock =
-        case PbVClock of
-            undefined ->
-                %% this will trigger a get in riak_kv_delete:delete to
-                %% retrieve the actual vclock
-                undefined;
-            PbVClock ->
-                %% else, clients may have it already (e.g., from an
-                %% earlier riak_object:get), which will short-circuit
-                %% to avoid a separate get
-                riak_object:decode_vclock(PbVClock)
-        end,
-
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
-
-    Result =
-        case riak_kv_ts_util:make_ts_keys(CompoundKey, DDL, Mod) of
-            {ok, PKLK} ->
-                riak_client:delete_vclock(
-                  riak_kv_ts_util:table_to_bucket(Table), PKLK, VClock, Options,
-                  {riak_client, [node(), undefined]});
-            ErrorReason ->
-                ErrorReason
-        end,
-    case Result of
+    Mod = riak_ql_ddl:make_module_name(Table),
+    case riak_kv_ts_util:delete_data(
+           CompoundKey, Table, Mod, Options, VClock) of
         ok ->
             {reply, tsdelresp, State};
+        {error, no_type} ->
+            {reply, table_not_activated_response(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
-            {reply, make_rpberrresp(?E_DELETE_NOTFOUND, "notfound"), State};
+            {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
         {error, Reason} ->
             {reply, failed_delete_response(Reason), State}
     end.
@@ -501,18 +372,22 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                                             query = Q},
                   State) ->
-    case compile(Mod, catch decode_query(Q)) of
-        {error, #rpberrorresp{} = Error} ->
-            {reply, Error, State};
-        {error, _} ->
+    Client = {riak_client, [node(), undefined]},
+    case decode_query(Q) of
+        {ok, SQL} ->
+            case riak_kv_ts_util:compile_to_per_quantum_queries(Mod, SQL) of
+                {ok, Compiled} ->
+                    Bucket = riak_kv_ts_util:table_to_bucket(Table),
+                    convert_cover_list(
+                      riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, []), State);
+                {error, Reason} ->
+                    make_rpberrresp(
+                      ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason]))
+            end;
+        {error, Reason} ->
             {reply, make_rpberrresp(
-                      ?E_BAD_QUERY, "Failed to compile query"),
-             State};
-        SQL ->
-            %% SQL is a list of queries (1 per quantum)
-            Bucket = riak_kv_ts_util:table_to_bucket(Table),
-            Client = {riak_client, [node(), undefined]},
-            convert_cover_list(sql_to_cover(Client, SQL, Bucket, []), State)
+                      ?E_BAD_QUERY, flat_format("Failed to parse query: ~p", [Reason])),
+             State}
     end.
 
 %% Copied and modified from riak_kv_pb_coverage:convert_list. Would
@@ -549,101 +424,6 @@ assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text)
       }.
 
 
-%% Result from riak_client:get_cover is a nested list of coverage plan
-%% because KV coverage requests are designed that way, but in our case
-%% all we want is the singleton head
-
-%% If any of the results from get_cover are errors, we want that tuple
-%% to be the sole return value
-sql_to_cover(_Client, [], _Bucket, Accum) ->
-    lists:reverse(Accum);
-sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
-    case Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
-                          {SQL, Bucket}) of
-        {error, Error} ->
-            {error, Error};
-        [Cover] ->
-            {Description, RangeReplacement} = reverse_sql(SQL),
-            sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
-                                                 Description}|Accum])
-    end.
-
-%% Generate a human-readable description of the target
-%%     <<"<TABLE> / time > X and time < Y">>
-%% Generate a start/end timestamp for future replacement in a query
-reverse_sql(?SQL_SELECT{'FROM'  = Table,
-                        'WHERE' = KeyProplist,
-                        partition_key = PartitionKey}) ->
-    QuantumField = identify_quantum_field(PartitionKey),
-    RangeTuple = extract_time_boundaries(QuantumField, KeyProplist),
-    Desc = derive_description(Table, QuantumField, RangeTuple),
-    ReplacementValues = {QuantumField, RangeTuple},
-    {Desc, ReplacementValues}.
-
-
-derive_description(Table, Field, {{Start, StartInclusive}, {End, EndInclusive}}) ->
-    StartOp = pick_operator(">", StartInclusive),
-    EndOp = pick_operator("<", EndInclusive),
-    unicode:characters_to_binary(
-      flat_format("~ts / ~ts ~s ~B and ~ts ~s ~B",
-                  [Table, Field, StartOp, Start,
-                   Field, EndOp, End]), utf8).
-
-pick_operator(LGT, true) ->
-    LGT ++ "=";
-pick_operator(LGT, false) ->
-    LGT.
-
-extract_time_boundaries(FieldName, WhereList) ->
-    {FieldName, timestamp, Start} =
-        lists:keyfind(FieldName, 1, proplists:get_value(startkey, WhereList, [])),
-    {FieldName, timestamp, End} =
-        lists:keyfind(FieldName, 1, proplists:get_value(endkey, WhereList, [])),
-    StartInclusive = proplists:get_value(start_inclusive, WhereList, true),
-    EndInclusive = proplists:get_value(end_inclusive, WhereList, false),
-    {{Start, StartInclusive}, {End, EndInclusive}}.
-
-
-%%%%%%%%%%%%
-%% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
-identify_quantum_field(#key_v1{ast = KeyList}) ->
-    HashFn = find_hash_fn(KeyList),
-    P_V1 = hd(HashFn#hash_fn_v1.args),
-    hd(P_V1#param_v1.name).
-
-find_hash_fn([]) ->
-    throw(wtf);
-find_hash_fn([#hash_fn_v1{}=Hash|_T]) ->
-    Hash;
-find_hash_fn([_H|T]) ->
-    find_hash_fn(T).
-
-%%%%%%%%%%%%
-
-
-compile(_Mod, {error, Err}) ->
-    {error, make_decoder_error_response(Err)};
-compile(_Mod, {'EXIT', {Err, _}}) ->
-    {error, make_decoder_error_response(Err)};
-compile(Mod, {ok, SQL}) ->
-    case (catch Mod:get_ddl()) of
-        {_, {undef, _}} ->
-            {error, no_helper_module};
-        DDL ->
-            case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
-                true ->
-                    case riak_kv_qry_compiler:compile(DDL, SQL, undefined) of
-                        {error,_} = Error ->
-                            Error;
-                        {ok, Queries} ->
-                            Queries
-                    end;
-                {false, _Errors} ->
-                    {error, invalid_query}
-            end
-    end.
-
-
 %% query
 %%
 
@@ -654,12 +434,9 @@ sub_tsqueryreq(_Mod, DDL, SQL, State) ->
         {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
             {reply, make_describe_response(Data), State};
 
-        %% parser messages have a tuple for Reason:
-        {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
-            ErrorMessage = flat_format("~p: ~s", [E, Reason]),
-            {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
-
         %% the following timeouts are known and distinguished:
+        {error, no_type} ->
+            {reply, table_not_activated_response(DDL#ddl_v1.table), State};
         {error, qry_worker_timeout} ->
             %% the eleveldb process didn't send us any response after
             %% 10 sec (hardcoded in riak_kv_qry), and probably died
@@ -694,13 +471,12 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
     case riak_kv_ts_util:get_table_ddl(Table) of
         {ok, Mod, DDL} ->
             Fun(Mod, DDL, TsMessage, State);
+        {error, no_type} ->
+            {reply, table_not_activated_response(Table), State};
         {error, missing_helper_module} ->
             BucketProps = riak_core_bucket:get_bucket(
                             riak_kv_ts_util:table_to_bucket(Table)),
-            {reply, missing_helper_module(Table, BucketProps), State};
-        {error, _} ->
-            {reply, table_not_activated_response(Table),
-             State}
+            {reply, missing_helper_module(Table, BucketProps), State}
     end.
 
 
@@ -814,10 +590,6 @@ make_describe_response(DescribeTableRows) ->
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, DescribeTableRows)}.
 
--spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
-get_column_types(ColumnNames, Mod) ->
-    [Mod:get_field_type([N]) || N <- ColumnNames].
-
 -spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
                                            [#tscolumndescription{}].
 make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
@@ -873,28 +645,28 @@ validate_rows_empty_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),
     ?assertEqual(
         [],
-        validate_rows(Mod, [])
+        riak_kv_ts_util:validate_rows(Mod, [])
     ).
 
 validate_rows_1_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),
     ?assertEqual(
         [],
-        validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
+        riak_kv_ts_util:validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
     ).
 
 validate_rows_bad_1_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),
     ?assertEqual(
         ["1"],
-        validate_rows(Mod, [{}])
+        riak_kv_ts_util:validate_rows(Mod, [{}])
     ).
 
 validate_rows_bad_2_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),
     ?assertEqual(
         ["1", "3", "4"],
-        validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, "hithere"])
+        riak_kv_ts_util:validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, "hithere"])
     ).
 
 validate_rows_error_response_1_test() ->
