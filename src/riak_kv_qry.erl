@@ -30,7 +30,7 @@
          format_query_syntax_errors/1
         ]).
 
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 
 %% No coverage plan for parallel requests
 -spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #ddl_v1{}) ->
@@ -94,7 +94,7 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
     MaxSubQueries =
         app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
 
-    case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+    case riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(SQL)) of
         true ->
             case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
                 {error,_} = Error ->

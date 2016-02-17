@@ -33,7 +33,9 @@
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
-         table_to_bucket/1
+         table_to_bucket/1,
+         build_sql_record/3,
+         sql_record_to_tuple/1
         ]).
 
 %% NOTE on table_to_bucket/1: Clients will work with table
@@ -46,6 +48,36 @@
 %% and making that transition more obvious.
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
+
+%% riak_ql_ddl:is_query_valid expects a tuple, not a SQL record
+sql_record_to_tuple(?SQL_SELECT{'FROM'=From,
+                                'SELECT'=#riak_sel_clause_v1{clause=Select},
+                                'WHERE'=Where}) ->
+    {From, Select, Where}.
+
+%% Convert the proplist obtained from the QL parser
+build_sql_record(select, SQL, Cover) ->
+    T = proplists:get_value(tables, SQL),
+    F = proplists:get_value(fields, SQL),
+    L = proplists:get_value(limit, SQL),
+    W = proplists:get_value(where, SQL),
+    case is_binary(T) of
+        true ->
+            {ok,
+             ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
+                         'FROM'     = T,
+                         'WHERE'    = W,
+                         'LIMIT'    = L,
+                         helper_mod = riak_ql_ddl:make_module_name(T),
+                         cover_context = Cover}
+            };
+        false ->
+            {error, <<"Must provide exactly one table name">>}
+    end;
+build_sql_record(describe, SQL, _Cover) ->
+    D = proplists:get_value(identifier, SQL),
+    {ok, #riak_sql_describe_v1{'DESCRIBE' = D}}.
 
 
 %% Useful key extractors for functions (e.g., in get or delete code
