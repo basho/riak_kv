@@ -977,7 +977,7 @@ bucket_type_create_with_timeseries_table_error_when_write_once_set_to_false_test
         )
     ).
 
-bucket_type_create_with_timeseries_table_error_with_short_primary_key_test() ->
+bucket_type_create_with_timeseries_table_with_two_element_key_test() ->
     TableDef =
         <<"CREATE TABLE my_type (",
           "user   varchar   not null, ",

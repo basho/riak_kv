@@ -49,10 +49,10 @@
          callback/3]).
 -export([data_size/1]).
 
-% -compile({inline, [
-%                    to_object_key/2, from_object_key/1,
-%                    to_index_key/4, from_index_key/1
-%                   ]}).
+-compile({inline, [
+                   to_object_key/2, from_object_key/1,
+                   to_index_key/4, from_index_key/1
+                  ]}).
 %% Remove a few releases after 2.1 series, keeping
 %% around for debugging/comparison.
 -export([orig_to_object_key/2, orig_from_object_key/1]).
@@ -466,8 +466,8 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
     LocalKeyLen = length(LKAST),
-    StartKey = key_prefix(Bucket, [element(3, E) || E <- StartK], LocalKeyLen),
-    EndKey1 = key_prefix(Bucket, [element(3, E) || E <- EndK], LocalKeyLen),
+    StartKey = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- StartK], LocalKeyLen),
+    EndKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- EndK], LocalKeyLen),
     case lists:member({end_inclusive, true}, W) of
         true  -> EndKey2 = <<EndKey1/binary, 16#ff:8>>;
         false -> EndKey2 = EndKey1
@@ -978,14 +978,14 @@ orig_to_object_key(Bucket, Key) ->
 %%
 to_object_key({TableName, TableName}, LocalKey) when is_tuple(LocalKey) ->
     EncodedBucketType = EncodedBucketName = sext:encode(TableName),
-    EncodedFamily = sext:encode(LocalKey),
+    EncodedLocalKey = sext:encode(LocalKey),
     % format like {'o', {TableName,TableName}, LocalKeyTuple}
     <<16,0,0,0,3, %% 3-tuple - outer
       12,183,128,8, %% o-atom
       16,0,0,0,2, %% 2-tuple for bucket type/name
       EncodedBucketType/binary,
       EncodedBucketName/binary,
-      EncodedFamily/binary>>;
+      EncodedLocalKey/binary>>;
 to_object_key({BucketType, BucketName}, Key) -> %% Riak 2.0 keys
     %% sext:encode({o, Bucket, Key}).
     EncodedBucketType = sext:encode(BucketType),

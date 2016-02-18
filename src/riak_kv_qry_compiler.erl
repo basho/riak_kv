@@ -663,7 +663,6 @@ break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(Qu
         {_, {{_,_,{_,Starts}}, {_,_,{_,Ends}}}} when is_integer(Starts),
                                                      is_integer(Ends),
                                                      Starts > Ends ->
-            %% FIXME reliance on three element key!?
             error({lower_bound_must_be_less_than_upper_bound,
                    ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND});
         {_, {{'>',_,{_,Starts}}, {'<',_,{_,Ends}}}} when is_integer(Starts),
@@ -675,9 +674,6 @@ break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(Qu
             error({lower_and_upper_bounds_are_equal_when_no_equals_operator,
                    ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR});
         {Filters2, {Starts, Ends}} ->
-            %% remove the quanta from the local fields, this has already been
-            %% removed from the fields
-            % PartitionFields2 = lists:sublist(PartitionFields1, length(PartitionFields1)), % TODO DUUUUDE
             %% create the keys by splitting the key filters and prepending it
             %% with the time bound.
             {Body, Filters3} = split_key_from_filters(PartitionFields1, Filters2),
@@ -2017,6 +2013,23 @@ flexible_keys_1_test() ->
         "PRIMARY KEY  ((a1, quantum(a, 15, 's')), a1, a, b, c, d))"),
     {ok, Q} = get_query(
           "SELECT * FROM tab4 WHERE a > 0 AND a < 1000 AND a1 = 1"),
+    {ok, [Select]} = compile(DDL, Q, 100),
+    ?assertEqual(
+        [{startkey,[{<<"a1">>,sint64,1}, {<<"a">>,timestamp,0}]},
+          {endkey, [{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1000}]},
+          {filter,[]},
+          {start_inclusive,false}],
+        Select#riak_select_v1.'WHERE'
+    ).
+
+%% two element key with quantum
+flexible_keys_2_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab4("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((quantum(a, 15, 's')), a))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab4 WHERE a > 0 AND a < 1000"),
     ?assertMatch(
         {ok, [#riak_select_v1{}]},
         compile(DDL, Q, 100)
@@ -2105,6 +2118,36 @@ no_quantum_in_query_3_test() ->
          {filter,{'=',{field,<<"d">>,boolean},{const, true}}},
          {end_inclusive,true}],
         Select#riak_select_v1.'WHERE'
+    ).
+
+%% one element key
+no_quantum_in_query_4_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a), a))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1000"),
+    {ok, [Select]} = compile(DDL, Q, 100),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,timestamp,1000}]},
+          {endkey,[{<<"a">>,timestamp,1000}]},
+          {filter,[]},
+          {end_inclusive,true}],
+        Select#riak_select_v1.'WHERE'
+    ).
+
+two_element_key_range_cannot_match_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tabab("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY  ((a,quantum(b, 15, 's')), a,b))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1 AND b > 1 AND b < 1"),
+    ?assertMatch(
+        {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, <<_/binary>>}},
+        compile(DDL, Q, 100)
     ).
 
 -endif.
