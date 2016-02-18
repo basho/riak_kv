@@ -25,8 +25,8 @@
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+-include("riak_kv_ts.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -behaviour(riak_api_pb_service).
@@ -126,9 +126,13 @@ decode_query(SQL) ->
     {error, _} | {ok, ts_query_types()}.
 decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
-    case riak_ql_parser:parse(Lexed) of
-        {ok, ?SQL_SELECT{} = SQL} ->
-            {ok, SQL?SQL_SELECT{cover_context = Cover}};
+    case riak_ql_parser:ql_parse(Lexed) of
+        {select, SQL} ->
+            riak_kv_ts_util:build_sql_record(select, SQL, Cover);
+        {describe, SQL} ->
+            riak_kv_ts_util:build_sql_record(describe, SQL, Cover);
+        {ddl, DDL} ->
+            {ok, DDL};
         Other ->
             Other
     end.
@@ -653,12 +657,13 @@ compile(_Mod, {error, Err}) ->
     {error, make_decoder_error_response(Err)};
 compile(_Mod, {'EXIT', {Err, _}}) ->
     {error, make_decoder_error_response(Err)};
-compile(Mod, {ok, SQL}) ->
+compile(Mod, {ok, ?SQL_SELECT{}=SQL}) ->
     case (catch Mod:get_ddl()) of
         {_, {undef, _}} ->
             {error, no_helper_module};
         DDL ->
-            case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+            case riak_ql_ddl:is_query_valid(Mod, DDL,
+                                            riak_kv_ts_util:sql_record_to_tuple(SQL)) of
                 true ->
                     case riak_kv_qry_compiler:compile(DDL, SQL, undefined) of
                         {error,_} = Error ->

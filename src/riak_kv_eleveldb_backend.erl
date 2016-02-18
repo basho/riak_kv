@@ -60,7 +60,7 @@
 -export([orig_to_object_key/2, orig_from_object_key/1]).
 
 -include("riak_kv_index.hrl").
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 
 -ifdef(TEST).
 -ifdef(EQC).

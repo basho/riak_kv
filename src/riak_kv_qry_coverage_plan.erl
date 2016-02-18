@@ -27,7 +27,7 @@
          create_plan/6
         ]).
 
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 
 %%
 create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService) ->

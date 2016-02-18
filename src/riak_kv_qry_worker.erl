@@ -43,7 +43,7 @@
          code_change/3
         ]).
 
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 
 -define(NO_SIDEEFFECTS, []).
 -define(NO_MAX_RESULTS, no_max_results).
