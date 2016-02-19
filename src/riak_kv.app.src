@@ -84,6 +84,15 @@
 
          {timeseries_query_max_quanta_span, 5},
 
-         {timeseries_max_concurrent_queries, 3}
+         {timeseries_max_concurrent_queries, 3},
+
+         %% Max batch size (in bytes) of data distributed between
+         %% nodes during a put operation. Highly recommended that you
+         %% not increase this above 1MB.
+         %%
+         %% This is not a hard cap; the number of records to generate
+         %% a batch under this value will be estimated based on the
+         %% size of the first record.
+         {timeseries_max_batch_size, 1048576}
         ]}
  ]}.

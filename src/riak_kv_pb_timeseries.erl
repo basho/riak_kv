@@ -63,9 +63,6 @@
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
 
--define(MIN_PUT_BATCH_SIZE, 10).  %% TODO make it configurable somewhere
--define(MAX_PUT_BATCH_SIZE, 200). %% ditto
-
 -record(state, {
           req,
           req_ctx,
@@ -311,6 +308,9 @@ put_data(Data, Table, Mod) when is_binary(Table) ->
                                  riak_core_node_watcher:nodes(riak_kv)),
 
     SendFullBatches = riak_core_capability:get({riak_kv, w1c_batch_vnode}, false),
+    %% Default to 1MB for a max batch size to not overwhelm disterl
+    CappedBatchSize = app_helper:get_env(riak_kv, timeseries_max_batch_size,
+                                         1024 * 1024),
 
     EncodeFn =
         fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
@@ -321,14 +321,11 @@ put_data(Data, Table, Mod) when is_binary(Table) ->
                   case riak_kv_w1c_worker:validate_options(
                          NVal, Preflist, [], BucketProps) of
                       {ok, W, PW} ->
-                          DataForVnode =
-                              case SendFullBatches andalso length(Records) >= ?MIN_PUT_BATCH_SIZE of
-                                  true ->
-                                      {batches, create_batches(Records, ?MAX_PUT_BATCH_SIZE)};
-                                  false ->
-                                      {individual, Records}
-                              end,
-
+                          DataForVnode = pick_batch_option(SendFullBatches,
+                                                           CappedBatchSize,
+                                                           Records,
+                                                           termsize(hd(Records)),
+                                                           length(Records)),
                           Ids =
                               invoke_async_put(fun(Record) ->
                                                        build_object(Bucket, Mod, DDL,
@@ -377,6 +374,25 @@ row_to_key(Row, DDL, Mod) ->
     riak_kv_ts_util:encode_typeval_key(
       riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
+%%%%%%%%
+%% Utility functions for batch delivery of records
+termsize(Term) ->
+    size(term_to_binary(Term)).
+
+pick_batch_option(_, _, Records, _, 1) ->
+    {individual, Records};
+pick_batch_option(true, MaxBatch, Records, SampleSize, _NumRecs) ->
+    {batches, create_batches(Records,
+                             estimated_row_count(SampleSize, MaxBatch))};
+pick_batch_option(false, _, Records, _, _) ->
+    {individual, Records}.
+
+estimated_row_count(SampleRowSize, MaxBatchSize) ->
+    %% Assume some rows will be larger, so introduce a fudge factor of
+    %% roughly 10 percent.
+    RowSizeFudged = (SampleRowSize * 10) div 9,
+    MaxBatchSize div RowSizeFudged.
+
 %% May be a more efficient way to do this. Take a list of arbitrary
 %% data (expected to be a list of lists for this use case) and create
 %% a list of MaxSize lists.
@@ -389,6 +405,7 @@ create_batches(Rows, 0, Max, ThisBatch, AllBatches) ->
     create_batches(Rows, Max, Max, [], AllBatches ++ [ThisBatch]);
 create_batches([H|T], Counter, Max, ThisBatch, AllBatches) ->
     create_batches(T, Counter-1, Max, ThisBatch ++ [H], AllBatches).
+%%%%%%%%
 
 add_preflists(PartitionedData, NVal, UpNodes) ->
     lists:map(fun({Idx, Rows}) -> {Idx,
