@@ -393,6 +393,8 @@ estimated_row_count(SampleRowSize, MaxBatchSize) ->
     RowSizeFudged = (SampleRowSize * 10) div 9,
     MaxBatchSize div RowSizeFudged.
 
+create_batches(Rows, MaxSize) when length(Rows) =< MaxSize ->
+    [Rows];
 %% May be a more efficient way to do this. Take a list of arbitrary
 %% data (expected to be a list of lists for this use case) and create
 %% a list of MaxSize lists.
@@ -989,4 +991,15 @@ batch_3_test() ->
     ?assertEqual([[1, 2, 3], [4, 5, 6], [7, 8, 9]],
                  create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)).
 
+batch_undersized1_test() ->
+    ?assertEqual([[1, 2, 3, 4, 5, 6]],
+                 create_batches([1, 2, 3, 4, 5, 6], 6)).
+
+batch_undersized2_test() ->
+    ?assertEqual([[1, 2, 3, 4, 5, 6]],
+                 create_batches([1, 2, 3, 4, 5, 6], 7)).
+
+batch_almost_undersized_test() ->
+    ?assertEqual([[1, 2, 3, 4, 5], [6]],
+                 create_batches([1, 2, 3, 4, 5, 6], 5)).
 -endif.
