@@ -650,6 +650,13 @@ end
   hidden
 ]}.
 
+%% @doc Limit how many sweeps can happen concurrently.
+{mapping, "sweeper.concurrency_limit", "riak_kv.sweep_concurrency", [
+  {default, 1},
+  {datatype, integer},
+  hidden
+]}.
+
 
 %% @doc Lets you specify when during the day sweeps are
 %% allowed to be triggered. Valid options are:
