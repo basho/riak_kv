@@ -204,7 +204,8 @@ handle_info(sweep_tick, State) ->
         false ->
             {noreply, State}
     end;
-handle_info({estimate,_}, State) ->
+handle_info(Msg, State) ->
+    lager:error("riak_kv_sweeper received unexpected message ~p", [Msg]),
     {noreply, State}.
 
 terminate(_, #state{sweeps = Sweeps}) ->
