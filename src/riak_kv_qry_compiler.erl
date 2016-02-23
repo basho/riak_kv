@@ -447,24 +447,36 @@ col_index_and_type_of(Fields, ColumnName) ->
 -spec expand_where(filter(), #key_v1{}, integer()) ->
         [where_props()] | {error, any()}.
 expand_where(Where, PartitionKey, MaxSubQueries) ->
-    case find_quanta_function_in_key(PartitionKey) of
-        [{[QField], QSize, QUnit}] ->
-            hash_timestamp_to_quanta(QField, QSize, QUnit, MaxSubQueries, Where);
-        [] ->
+    case find_quantum_field_index_in_key(PartitionKey) of
+        {QField, QSize, QUnit, QIndex} ->
+            hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where);
+        notfound ->
             [Where]
     end.
 
-%%
-find_quanta_function_in_key(#key_v1{ ast = PKAST }) ->
-    [{X, Y, Z} || #hash_fn_v1{mod = riak_ql_quanta, fn = quantum,
-                              args = [#param_v1{name = X}, Y, Z]} <- PKAST].
+%% Return the parameters for the quantum function and it's index in the
+%% partition key fields.
+-spec find_quantum_field_index_in_key(#key_v1{}) ->
+    {QName::binary(), QSize::integer(), QUnit::atom(), QIndex::integer()}.
+find_quantum_field_index_in_key(#key_v1{ ast = PKAST }) ->
+    find_quantum_field_index_in_key2(PKAST, 1).
 
 %%
-hash_timestamp_to_quanta(QField, QSize, QUnit, MaxSubQueries, Where) ->
+find_quantum_field_index_in_key2([], _) ->
+    notfound;
+find_quantum_field_index_in_key2([#hash_fn_v1{ mod = riak_ql_quanta,
+                                               fn = quantum,
+                                               args = [#param_v1{name = [X]}, Y, Z] }|_], Index) ->
+    {X,Y,Z,Index};
+find_quantum_field_index_in_key2([_|Tail], Index) ->
+    find_quantum_field_index_in_key2(Tail, Index+1).
+
+%%
+hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
-                           {element(3, lists:last(List)), E};
+                           {element(3, lists:nth(QIndex, List)), E};
                       ({endkey,   List}, {S, _E}) ->
-                           {S, element(3, lists:last(List))};
+                           {S, element(3, lists:nth(QIndex, List))};
                       (_, {S, E})  ->
                            {S, E}
                    end,
@@ -533,13 +545,24 @@ compile_where(DDL, Where) ->
         {true, NewW} -> NewW
     end.
 
-quantum_field_name(#ddl_v1{ partition_key = #key_v1{ ast = PKAST } }) ->
-    case lists:last(PKAST) of
-        #hash_fn_v1{args = [#param_v1{name = [QFieldName]} | _]} ->
+%%
+quantum_field_name(DDL) ->
+    case find_quantum_fields(DDL) of
+        [QFieldName] ->
             QFieldName;
-        #param_v1{} ->
+        [] ->
             no_quanta
     end.
+
+%%
+find_quantum_fields(#ddl_v1{ partition_key = #key_v1{ ast = PKAST } }) ->
+    [quantum_fn_to_field_name(QuantumFunc) || #hash_fn_v1{ } = QuantumFunc <- PKAST].
+
+%%
+quantum_fn_to_field_name(#hash_fn_v1{ mod = riak_ql_quanta,
+                                      fn = quantum,
+                                      args = [#param_v1{name = [Name]}|_ ] }) ->
+    Name.
 
 check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK0} = DDL,
                     [W]) ->
@@ -2148,6 +2171,34 @@ two_element_key_range_cannot_match_test() ->
     ?assertMatch(
         {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, <<_/binary>>}},
         compile(DDL, Q, 100)
+    ).
+
+quantum_is_not_last_element_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY  ((a,quantum(b,1,'s'),c), a,b,c))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE b >= 1000 AND b < 3000 AND a = 10 AND c = 20"),
+    {ok, SubQueries} = compile(DDL, Q, 100),
+    SubQueryWheres = [S#riak_select_v1.'WHERE' || S <- SubQueries],
+    ?assertEqual(
+        [
+            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,1000},{<<"c">>,sint64,20}]},
+             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
+             {filter,[]}],
+            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
+             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
+             {filter,[]}],
+            %% FIXME  this key should already be covered
+            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
+             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
+             {filter,[]},
+             {end_inclusive,true}]
+        ],
+        SubQueryWheres
     ).
 
 -endif.
