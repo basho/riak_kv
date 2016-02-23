@@ -69,7 +69,7 @@ add_obj_ttl_sweep_participant(RunInterval) ->
     riak_kv_sweeper:add_sweep_participant(
       #sweep_participant{ description = "Object TTL",
                           module = riak_kv_object_ttl,
-                          fun_type = ?MODIFY_FUN,
+                          fun_type = ?DELETE_FUN,
                           run_interval = RunInterval,
                           options = [bucket_props]
                         }).
