@@ -370,9 +370,12 @@ extract_stateful_functions2({Op, ArgA1, ArgB1}, FinaliserLen, Fns1) ->
     {ArgA2, Fns2} = extract_stateful_functions2(ArgA1, FinaliserLen, Fns1),
     {ArgB2, Fns3} = extract_stateful_functions2(ArgB1, FinaliserLen, Fns2),
     {{Op, ArgA2, ArgB2}, Fns3};
+extract_stateful_functions2({negate, Arg1}, FinaliserLen, Fns1) ->
+    {Arg2, Fns2} = extract_stateful_functions2(Arg1, FinaliserLen, Fns1),
+    {{negate, Arg2}, Fns2};
 extract_stateful_functions2({Tag, _} = Node, _, Fns)
         when Tag == identifier; Tag == sint64; Tag == integer; Tag == float;
-             Tag == binary;     Tag == varchar; Tag == boolean; Tag == negate ->
+             Tag == binary;     Tag == varchar; Tag == boolean ->
     {Node, Fns};
 extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLen, Fns1) ->
     Fns2 = [Function | Fns1],
@@ -1990,5 +1993,14 @@ compile_query_with_arithmetic_type_error_2_test() ->
         {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
+
+negate_an_aggregation_function_test() ->
+    {ok, Rec} = get_query(
+        "SELECT -COUNT(*) FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        [-3],
+        finalise_aggregate(Select, [3])
+      ).
 
 -endif.
