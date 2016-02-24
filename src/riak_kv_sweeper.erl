@@ -56,6 +56,10 @@
 %% Default: 1 MB limit / 100 ms wait
 -define(DEFAULT_SWEEP_THROTTLE, {obj_size, 1000000, 100}).
 
+%% Default value for how much faster the sweeper throttle should be during
+%% sweep window.
+-define(SWEEP_WINDOW_THROTTLE_DIV, 1).
+
 -define(SWEEPS_FILE, "sweeps.dat").
 
 %% ====================================================================
@@ -656,7 +660,6 @@ persist_sweeps(Sweeps) ->
 get_persistent_sweeps() ->
     case file:consult(sweep_file(?SWEEPS_FILE)) of
         {ok, [Sweeps]} ->
-            io:format("Is dict ~p ~n ~n Dict ~p", [dict:size(Sweeps),Sweeps]),
             Sweeps;
         _ ->
             dict:new()
@@ -851,7 +854,16 @@ maybe_extra_throttle(#sa{throttle = Throttle,
     end.
 
 get_sweep_throttle() ->
-    app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE).
+    {Type, Limit, Sleep} =
+        app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE),
+    case in_sweep_window() of
+        true ->
+            Div = app_helper:get_env(riak_kv, sweep_window_throttle_div,
+                                     ?SWEEP_WINDOW_THROTTLE_DIV),
+            {Type, Limit, Sleep div Div};
+        false ->
+            {Type, Limit, Sleep}
+    end.
 
 maybe_receive_request(Acc) ->
     maybe_receive_request(Acc, 0).

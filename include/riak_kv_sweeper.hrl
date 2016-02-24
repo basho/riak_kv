@@ -23,7 +23,7 @@
          sweep_fun :: fun(),        %%
          run_interval :: integer() | fun(), %% Defines how often participant wants to run.
          acc :: any(),
-         options = [] :: list(),
+         options = [] :: list(),    %% optional values that will be added during sweep
          errors = 0 :: integer(),
          fail_reason
         }).
