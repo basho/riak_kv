@@ -278,7 +278,9 @@ prepare_final_results(#state{
 %%
 prepare_final_results2(#riak_sel_clause_v1{ col_return_types = ColTypes,
                                             col_names = ColNames}, Rows) ->
-    {ColNames, ColTypes, Rows}.
+    %% filter out empty records
+    FinalRows = [R || R <- Rows, R /= [[]]],
+    {ColNames, ColTypes, FinalRows}.
 
 %%%===================================================================
 %%% Unit tests
