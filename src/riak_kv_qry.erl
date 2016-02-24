@@ -100,17 +100,8 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
                 {error,_} = Error ->
                     Error;
                 {ok, Queries} ->
-                    case maybe_await_query_results(
-                           riak_kv_qry_queue:put_on_queue(self(), Queries, DDL)) of
-                        {ok, {ColNames, ColTypes, PossiblyWithEmptyRecords}} ->
-                            %% filter out empty records
-                            {ok,
-                             {ColNames, ColTypes,
-                              [R || R <- PossiblyWithEmptyRecords,
-                                    R /= [[]]]}};
-                        {error, Reason} ->
-                            {error, Reason}
-                    end
+                    maybe_await_query_results(
+                      riak_kv_qry_queue:put_on_queue(self(), Queries, DDL))
             end;
         {false, Errors} ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}
