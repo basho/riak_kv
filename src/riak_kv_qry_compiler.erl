@@ -457,7 +457,7 @@ expand_where(Where, PartitionKey, MaxSubQueries) ->
 %% Return the parameters for the quantum function and it's index in the
 %% partition key fields.
 -spec find_quantum_field_index_in_key(#key_v1{}) ->
-    {QName::binary(), QSize::integer(), QUnit::atom(), QIndex::integer()}.
+    {QName::binary(), QSize::integer(), QUnit::atom(), QIndex::integer()} | notfound.
 find_quantum_field_index_in_key(#key_v1{ ast = PKAST }) ->
     find_quantum_field_index_in_key2(PKAST, 1).
 
@@ -577,17 +577,17 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK0} = DD
         Mod = riak_ql_ddl:make_module_name(T),
         StartKey = rewrite(LK, StartW, Mod),
         EndKey = rewrite(LK, EndW, Mod),
-        %% defaults on startkey and endkey are different
-        IncStart = case includes(StartW, '>', Mod) of
-                       true  -> [{start_inclusive, false}];
-                       false -> []
-                   end,
-        IncEnd = case includes(EndW, '<', Mod) of
-                     true  -> [];
-                     false -> [{end_inclusive, true}]
-                 end,
         case has_errors(StartKey, EndKey) of
             [] ->
+                %% defaults on startkey and endkey are different
+                IncStart = case includes(StartW, '>', Mod) of
+                               true  -> [{start_inclusive, false}];
+                               false -> []
+                           end,
+                IncEnd = case includes(EndW, '<', Mod) of
+                             true  -> [];
+                             false -> [{end_inclusive, true}]
+                         end,
                 RewrittenFilter = add_types_to_filter(Filter, Mod),
                 {true, lists:flatten([
                                       {startkey, StartKey},
@@ -2181,7 +2181,7 @@ quantum_is_not_last_element_test() ->
         "c SINT64 NOT NULL, "
         "PRIMARY KEY  ((a,quantum(b,1,'s'),c), a,b,c))"),
     {ok, Q} = get_query(
-          "SELECT * FROM tab1 WHERE b >= 1000 AND b < 3000 AND a = 10 AND c = 20"),
+          "SELECT * FROM tab1 WHERE b >= 1000 AND b <= 3000 AND a = 10 AND c = 20"),
     {ok, SubQueries} = compile(DDL, Q, 100),
     SubQueryWheres = [S#riak_select_v1.'WHERE' || S <- SubQueries],
     ?assertEqual(
@@ -2192,7 +2192,6 @@ quantum_is_not_last_element_test() ->
             [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
              {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
              {filter,[]}],
-            %% FIXME  this key should already be covered
             [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
              {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
              {filter,[]},

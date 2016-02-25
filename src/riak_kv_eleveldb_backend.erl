@@ -466,15 +466,19 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
     LocalKeyLen = length(LKAST),
-    StartKey = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- StartK], LocalKeyLen),
+    StartKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- StartK], LocalKeyLen),
     EndKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- EndK], LocalKeyLen),
+    case lists:member({start_inclusive, false}, W) of
+        true  -> StartKey2 = <<StartKey1/binary, 16#ff:8>>;
+        false -> StartKey2 = StartKey1
+    end,
     case lists:member({end_inclusive, true}, W) of
         true  -> EndKey2 = <<EndKey1/binary, 16#ff:8>>;
         false -> EndKey2 = EndKey1
     end,
     FoldFun = fun build_list/2,
     Options = [
-               {start_key,   StartKey},
+               {start_key,   StartKey2},
                {end_key,     EndKey2},
                {fold_method, streaming},
                {encoding,    msgpack} | range_scan_additional_options(W)
