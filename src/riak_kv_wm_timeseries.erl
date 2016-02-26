@@ -68,9 +68,10 @@
               api_call :: undefined|get|put|delete|coverage,
               table    :: undefined | binary(),
               %% data in/out: the following fields are either
-              %% extracted from the JSON that came in the request body
-              %% in case of a PUT, or filled out by retrieved values
-              %% for shipping (as JSON) in response body
+              %% extracted from the JSON/path elements that came in
+              %% the request body in case of a PUT, or filled out by
+              %% retrieved values for shipping (as JSON) in response
+              %% body
               key     :: undefined |  ts_rec(),  %% parsed out of JSON that came in the body
               data    :: undefined | [ts_rec()], %% ditto
               query   :: string(),
@@ -223,27 +224,11 @@ validate_request_v1(RD, Ctx) ->
 validate_request_v1_with(json, RD, Ctx = #ctx{method = Method}) ->
     Json = extract_json(RD),
     case {Method, string:tokens(wrq:path(RD), "/"),
-          extract_key(Json), extract_data(Json), extract_query(Json)} of
-        %% single-key get
-        {'GET',
-         ["ts", "v1", "tables", Table, "keys"],
-         Key, _, _}
-          when is_list(Table), Key /= undefined ->
-            valid_params(
-              RD, Ctx#ctx{api_version = "v1", api_call = get,
-                          table = list_to_binary(Table), key = Key});
-        %% single-key delete
-        {'DELETE',
-         ["ts", "v1", "tables", Table, "keys"],
-         Key, _, _}
-          when is_list(Table), Key /= undefined ->
-            valid_params(
-              RD, Ctx#ctx{api_version = "v1", api_call = delete,
-                          table = list_to_binary(Table), key = Key});
+          extract_data(Json), extract_query(Json)} of
         %% batch put
         {'PUT',
          ["ts", "v1", "tables", Table, "keys"],
-         _, Data, _}
+         Data, _}
           when is_list(Table), Data /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = put,
@@ -251,7 +236,7 @@ validate_request_v1_with(json, RD, Ctx = #ctx{method = Method}) ->
         %% coverage
         {'GET',
          ["ts", "v1", "coverage"],
-         undefined, undefined, Query}
+         undefined, Query}
           when is_list(Query) ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = coverage,
@@ -390,18 +375,6 @@ extract_json(RD) ->
             binary_to_list(wrq:req_body(RD));
         BodyInPost ->
             BodyInPost
-    end.
-
--spec extract_key(binary()) -> term().
-extract_key(Json) ->
-    try mochijson2:decode(Json) of
-        {struct, Decoded} when is_list(Decoded) ->
-            %% key and data (it's a put)
-            validate_ts_record(
-              proplists:get_value(<<"key">>, Decoded))
-    catch
-        _:_ ->
-            undefined
     end.
 
 %% because, techically, key and data are 'arguments', we check they
