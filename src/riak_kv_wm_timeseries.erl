@@ -208,13 +208,25 @@ validate_request(RD, Ctx) ->
     end.
 
 -spec validate_request_v1(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
+validate_request_v1(RD, Ctx) ->
+    case string:tokens(wrq:path(RD), "/") of
+        ["ts", "v1", "tables", Table, "keys" | KeysInUrl]
+          when KeysInUrl /= [] ->
+            KeysInUrlUnquoted = lists:map(fun mochiweb_util:unquote/1, KeysInUrl),
+            validate_request_v1_with({Table, KeysInUrlUnquoted}, RD, Ctx);
+        _ ->
+            validate_request_v1_with(json, RD, Ctx)
+    end.
+
+-spec validate_request_v1_with(json | {string(), [string()]}, #wm_reqdata{}, #ctx{}) ->
+                                      ?CB_RV_SPEC.
+validate_request_v1_with(json, RD, Ctx = #ctx{method = Method}) ->
     Json = extract_json(RD),
     case {Method, string:tokens(wrq:path(RD), "/"),
           extract_key(Json), extract_data(Json), extract_query(Json)} of
         %% single-key get
         {'GET',
-         ["ts", "v1", "tables", Table],
+         ["ts", "v1", "tables", Table, "keys"],
          Key, _, _}
           when is_list(Table), Key /= undefined ->
             valid_params(
@@ -222,7 +234,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
                           table = list_to_binary(Table), key = Key});
         %% single-key delete
         {'DELETE',
-         ["ts", "v1", "tables", Table],
+         ["ts", "v1", "tables", Table, "keys"],
          Key, _, _}
           when is_list(Table), Key /= undefined ->
             valid_params(
@@ -230,7 +242,7 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
                           table = list_to_binary(Table), key = Key});
         %% batch put
         {'PUT',
-         ["ts", "v1", "tables", Table],
+         ["ts", "v1", "tables", Table, "keys"],
          _, Data, _}
           when is_list(Table), Data /= undefined ->
             valid_params(
@@ -246,8 +258,112 @@ validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
                           query = Query});
         _Invalid ->
             handle_error({malformed_request, Method}, RD, Ctx)
+    end;
+
+validate_request_v1_with({Table, KeysInUrl}, RD, Ctx = #ctx{method = Method}) ->
+    %% only get and delete can have keys in url
+    case {Method,
+          path_elements_to_key(Table, KeysInUrl)} of
+        {'GET', {ok, Key}} ->
+            valid_params(
+              RD, Ctx#ctx{api_version = "v1", api_call = get,
+                          table = list_to_binary(Table), key = Key});
+        %% single-key delete
+        {'DELETE', {ok, Key}} ->
+            valid_params(
+              RD, Ctx#ctx{api_version = "v1", api_call = delete,
+                          table = list_to_binary(Table), key = Key});
+        {_, {error, Reason}} ->
+            handle_error(Reason, RD, Ctx);
+        {'PUT', _} ->
+            handle_error(url_key_with_put, RD, Ctx)
     end.
 
+%% extract keys from path elements in the URL (.../K1/V1/K2/V2 ->
+%% [{K1, V1}, {K2, V2}]), check with Table's DDL to make sure keys are
+%% correct and values are of (convertible to) appropriate types, and
+%% return the KV list
+-spec path_elements_to_key(string(), [string()]) ->
+                                  {ok, [{string(), riak_pb_ts_codec:ldbvalue()}]} |
+                                  {error, atom()|tuple()}.
+path_elements_to_key(Table, PEList) ->
+    Mod = riak_ql_ddl:make_module_name(list_to_binary(Table)),
+    try
+        DDL = Mod:get_ddl(),
+        #ddl_v1{local_key = #key_v1{ast = LK}} = DDL,
+        TableKeyLength = length(LK),
+        if TableKeyLength * 2 == length(PEList) ->
+                %% values with field names:  "f1/v1/f2/v2/f3/v3"
+                %% 1. check that supplied key fields exist and values
+                %% supplied are convertible to their types
+                FVList =
+                    [convert_fv(Table, Mod, K, V)
+                     || {K, V} <- empair(PEList, [])],
+                %% 2. possibly reorder field-value pairs to match the LK order
+                OrderedKeyValues =
+                    ensure_lk_order_and_strip(DDL, FVList),
+                {ok, OrderedKeyValues};
+           TableKeyLength == length(PEList) ->
+                %% bare values: "v1/v2/v3"
+                %% 1. retrieve field values from the DDL
+                Fields = [F || #param_v1{name = F} <- LK],
+                FVList =
+                    [convert_fv(Table, Mod, K, V)
+                     || {K, V} <- lists:zip(Fields, PEList)],
+                {_, OrderedKeyValues} =
+                    lists:unzip(FVList),
+                {ok, OrderedKeyValues};
+           el/=se ->
+                {error, url_unpaired_keys}
+        end
+    catch
+        error:undef ->
+            {error, {no_such_table, Table}};
+        throw:ConvertFailed ->
+            {error, ConvertFailed}
+    end.
+
+empair([], Q) -> lists:reverse(Q);
+empair([K, V | T], Q) -> empair(T, [{K, V}|Q]).
+
+convert_fv(Table, Mod, FieldRaw, V) ->
+    Field = [list_to_binary(X) || X <- string:tokens(FieldRaw, ".")],
+    try
+        case Mod:is_field_valid(Field) of
+            true ->
+                case Mod:get_field_type(Field) of
+                    varchar ->
+                        {Field, list_to_binary(V)};
+                    sint64 ->
+                        {Field, list_to_integer(V)};
+                    double ->
+                        %% list_to_float("42") will fail, so
+                        try
+                            {Field, list_to_float(V)}
+                        catch
+                            error:badarg ->
+                                {Field, float(list_to_integer(V))}
+                        end;
+                    timestamp ->
+                        case list_to_integer(V) of
+                            BadValue when BadValue < 1 ->
+                                throw({url_key_bad_value, Table, Field});
+                            GoodValue ->
+                                {Field, GoodValue}
+                        end
+                end;
+            false ->
+                throw({url_key_bad_key, Table, Field})
+        end
+    catch
+        error:badarg ->
+            %% rethrow with key, for more informative reporting
+            throw({url_key_bad_value, Table, Field})
+    end.
+
+ensure_lk_order_and_strip(#ddl_v1{local_key = #key_v1{ast = LK}}, FVList) ->
+    [proplists:get_value(F, FVList)
+     || #param_v1{name = F} <- LK].
 
 -spec valid_params(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 valid_params(RD, Ctx) ->
@@ -617,6 +733,9 @@ handle_error(Error, RD, Ctx) ->
         {malformed_request, Method} ->
             error_out({halt, 400},
                       "Malformed ~s request", [Method], RD, Ctx);
+        url_key_with_put ->
+            error_out({halt, 400},
+                      "Malformed PUT request (did you mean a GET with keys in URL?)", [], RD, Ctx);
         {bad_parameter, Param} ->
             error_out({halt, 400},
                       "Bad value for parameter \"~s\"", [Param], RD, Ctx);
@@ -632,6 +751,15 @@ handle_error(Error, RD, Ctx) ->
         {key_element_count_mismatch, Got, Need} ->
             error_out({halt, 400},
                       "Incorrect number of elements (~b) for key of length ~b", [Need, Got], RD, Ctx);
+        {url_key_bad_key, Table, Key} ->
+            error_out({halt, 400},
+                      "Table \"~ts\" has no field named \"~s\"", [Table, Key], RD, Ctx);
+        {url_key_bad_value, Table, Key} ->
+            error_out({halt, 400},
+                      "Bad value for field \"~s\" in table \"~ts\"", [Key, Table], RD, Ctx);
+        url_unpaired_keys ->
+            error_out({halt, 400},
+                      "Unpaired field/value for key spec in URL", [], RD, Ctx);
         notfound ->
             error_out({halt, 404},
                       "Key not found", [], RD, Ctx);
