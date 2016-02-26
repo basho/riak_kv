@@ -161,7 +161,7 @@ forbidden(RD, Ctx) ->
     {[atom()], #wm_reqdata{}, #ctx{}}.
 %% @doc Get the list of methods this resource supports.
 allowed_methods(RD, Ctx) ->
-    {['GET', 'PUT', 'DELETE'], RD, Ctx}.
+    {['GET', 'POST', 'DELETE'], RD, Ctx}.
 
 
 -spec malformed_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
@@ -226,7 +226,7 @@ validate_request_v1_with(json, RD, Ctx = #ctx{method = Method}) ->
     case {Method, string:tokens(wrq:path(RD), "/"),
           extract_data(Json), extract_query(Json)} of
         %% batch put
-        {'PUT',
+        {'POST',
          ["ts", "v1", "tables", Table, "keys"],
          Data, _}
           when is_list(Table), Data /= undefined ->
@@ -260,7 +260,7 @@ validate_request_v1_with({Table, KeysInUrl}, RD, Ctx = #ctx{method = Method}) ->
                           table = list_to_binary(Table), key = Key});
         {_, {error, Reason}} ->
             handle_error(Reason, RD, Ctx);
-        {'PUT', _} ->
+        {'POST', _} ->
             handle_error(url_key_with_put, RD, Ctx)
     end.
 
@@ -708,7 +708,7 @@ handle_error(Error, RD, Ctx) ->
                       "Malformed ~s request", [Method], RD, Ctx);
         url_key_with_put ->
             error_out({halt, 400},
-                      "Malformed PUT request (did you mean a GET with keys in URL?)", [], RD, Ctx);
+                      "Malformed POST request (did you mean a GET with keys in URL?)", [], RD, Ctx);
         {bad_parameter, Param} ->
             error_out({halt, 400},
                       "Bad value for parameter \"~s\"", [Param], RD, Ctx);
