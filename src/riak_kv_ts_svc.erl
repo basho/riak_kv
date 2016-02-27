@@ -345,7 +345,7 @@ sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
         end,
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
     Mod = riak_ql_ddl:make_module_name(Table),
-    case riak_kv_ts_util:get_data(
+    case riak_kv_ts_api:get_data(
            CompoundKey, Table, Mod, Options) of
         {ok, Record} ->
             {ColumnNames, Row} = lists:unzip(Record),
@@ -430,7 +430,7 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
     Client = {riak_client, [node(), undefined]},
     case decode_query(Q, tscoveragereq) of
         {ok, SQL} ->
-            case riak_kv_ts_util:compile_to_per_quantum_queries(Mod, SQL) of
+            case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
                 {ok, Compiled} ->
                     Bucket = riak_kv_ts_util:table_to_bucket(Table),
                     convert_cover_list(
@@ -482,16 +482,18 @@ assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text)
 %% query
 %% NB: since this method deals with PB and TTB messages, the message must be fully
 %% decoded before sub_tsqueryreq is called
--spec sub_tsqueryreq(module(), #ddl_v1{},
+-spec sub_tsqueryreq(module(), ?DDL{},
                      ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{},
                      #state{}) ->
                      {reply,
                       ts_query_responses() | #rpberrorresp{},
                       #state{}}.
-sub_tsqueryreq(Mod, DDL, SQL, State) ->
-    case riak_kv_qry:submit(SQL, DDL) of
-        {ok, Data}  ->
-            {reply, make_tsquery_resp(Mod, SQL, Data), State};
+sub_tsqueryreq(_Mod, DDL, SQL, State) ->
+    case riak_kv_ts_api:query(SQL, DDL) of
+        {ok, Data} when element(1, SQL) =:= ?SQL_SELECT_RECORD_NAME ->
+            {reply, make_tsqueryresp(Data), State};
+        {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
+            {reply, make_describe_response(Data), State};
 
         %% the following timeouts are known and distinguished:
         {error, no_type} ->
