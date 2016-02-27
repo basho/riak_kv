@@ -548,7 +548,7 @@ call_api_function(RD, Ctx = #ctx{api_call = put,
         {_, {undef, _}} ->
             handle_error({no_such_table, Table}, RD, Ctx);
         [] ->
-            case riak_kv_ts_util:put_data(Records, Table, Mod) of
+            case riak_kv_ts_api:put_data(Records, Table, Mod) of
                 ok ->
                     prepare_data_in_body(RD, Ctx#ctx{result = ok});
                 {error, {some_failed, ErrorCount}} ->
@@ -568,7 +568,7 @@ call_api_function(RD, Ctx0 = #ctx{api_call = get,
            true -> [{timeout, Timeout}]
         end,
     Mod = riak_ql_ddl:make_module_name(Table),
-    case catch riak_kv_ts_util:get_data(Key, Table, Mod, Options) of
+    case catch riak_kv_ts_api:get_data(Key, Table, Mod, Options) of
         {_, {undef, _}} ->
             handle_error({no_such_table, Table}, RD, Ctx0);
         {ok, Record} ->
@@ -597,7 +597,7 @@ call_api_function(RD, Ctx = #ctx{api_call = delete,
            true -> [{timeout, Timeout}]
         end,
     Mod = riak_ql_ddl:make_module_name(Table),
-    case catch riak_kv_ts_util:delete_data(Key, Table, Mod, Options) of
+    case catch riak_kv_ts_api:delete_data(Key, Table, Mod, Options) of
         {_, {undef, _}} ->
             handle_error({no_such_table, Table}, RD, Ctx);
         ok ->
@@ -617,7 +617,7 @@ call_api_function(RD, Ctx = #ctx{api_call = coverage,
     case riak_ql_parser:parse(Lexed) of
         {ok, SQL = ?SQL_SELECT{'FROM' = Table}} ->
             Mod = riak_ql_ddl:make_module_name(Table),
-            case riak_kv_ts_util:compile_to_per_quantum_queries(Mod, SQL) of
+            case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
                 {ok, Compiled} ->
                     Bucket = riak_kv_ts_util:table_to_bucket(Table),
                     Results =
