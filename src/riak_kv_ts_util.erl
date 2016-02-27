@@ -27,17 +27,13 @@
 -export([
          apply_timeseries_bucket_props/2,
          build_sql_record/3,
-         compile_to_per_quantum_queries/2,
-         delete_data/2, delete_data/3, delete_data/4, delete_data/5,
          encode_typeval_key/1,
          get_column_types/2,
-         get_data/2, get_data/3, get_data/4,
          get_table_ddl/1,
          lk/1,
          make_ts_keys/3,
          maybe_parse_table_def/2,
          pk/1,
-         put_data/2, put_data/3,
          queried_table/1,
          sql_record_to_tuple/1,
          sql_to_cover/4,
@@ -54,7 +50,7 @@
 %% bucket tuple. This function is a convenient mechanism for doing so
 %% and making that transition more obvious.
 
--include("riak_kv_wm_raw.hrl").
+%%-include("riak_kv_wm_raw.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_ts.hrl").
 
@@ -259,218 +255,9 @@ validate_rows(Mod, Rows) ->
     lists:reverse(BadRowIdxs).
 
 
--spec put_data([[riak_pb_ts_codec:ldbvalue()]], binary()) ->
-                      ok | {error, {some_failed, integer()}} | {error, term()}.
-put_data(Data, Table) ->
-    put_data(Data, Table, riak_ql_ddl:make_module_name(Table)).
-
--spec put_data([[riak_pb_ts_codec:ldbvalue()]], binary(), module()) ->
-                      ok | {error, {some_failed, integer()}} | {error, term()}.
-put_data(Data, Table, Mod) ->
-    DDL = Mod:get_ddl(),
-    Bucket = table_to_bucket(Table),
-    case riak_core_bucket:get_bucket(Bucket) of
-        {error, Reason} ->
-            %% happens when, for example, the table has not been
-            %% activated (Reason == no_type)
-            {error, Reason};
-        BucketProps ->
-            case put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) of
-                0 ->
-                    ok;
-                NErrors ->
-                    {error, {some_failed, NErrors}}
-            end
-    end.
-
-put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
-    NVal = proplists:get_value(n_val, BucketProps),
-    PartitionedData = partition_data(Data, Bucket, BucketProps, DDL, Mod),
-    PreflistData = add_preflists(PartitionedData, NVal,
-                                 riak_core_node_watcher:nodes(riak_kv)),
-    EncodeFn =
-        fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
-
-    {ReqIds, FailReqs} =
-        lists:foldl(
-          fun({DocIdx, Preflist, Records}, {GlobalReqIds, GlobalErrorsCnt}) ->
-                  case riak_kv_w1c_worker:validate_options(
-                         NVal, Preflist, [], BucketProps) of
-                      {ok, W, PW} ->
-                          {Ids, Errs} =
-                              lists:foldl(
-                                fun(Record, {PartReqIds, PartErrors}) ->
-                                        {RObj, LK} =
-                                            build_object(Bucket, Mod, DDL,
-                                                         Record, DocIdx),
-
-                                        {ok, ReqId} =
-                                            riak_kv_w1c_worker:async_put(
-                                              RObj, W, PW, Bucket, NVal, LK,
-                                              EncodeFn, Preflist),
-                                        {[ReqId | PartReqIds], PartErrors}
-                                end,
-                                {[], 0}, Records),
-                          {GlobalReqIds ++ Ids, GlobalErrorsCnt + Errs};
-                      _Error ->
-                          {GlobalReqIds, GlobalErrorsCnt + length(Records)}
-                  end
-          end,
-          {[], 0}, PreflistData),
-    Responses = riak_kv_w1c_worker:async_put_replies(ReqIds, []),
-    _NErrors =
-        length(
-          lists:filter(
-            fun({error, _}) -> true;
-               (_) -> false
-            end, Responses)) + FailReqs.
-
-
-
--spec partition_data(Data :: list(term()),
-                     Bucket :: {binary(), binary()},
-                     BucketProps :: proplists:proplist(),
-                     DDL :: #ddl_v1{},
-                     Mod :: module()) ->
-                            list(tuple(chash:index(), list(term()))).
-partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
-    PartitionTuples =
-        [ { riak_core_util:chash_key({Bucket, row_to_key(R, DDL, Mod)},
-                                     BucketProps), R } || R <- Data ],
-    dict:to_list(
-      lists:foldl(fun({Idx, R}, Dict) ->
-                          dict:append(Idx, R, Dict)
-                  end,
-                  dict:new(),
-                  PartitionTuples)).
-
-row_to_key(Row, DDL, Mod) ->
-    encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
-
-add_preflists(PartitionedData, NVal, UpNodes) ->
-    lists:map(fun({Idx, Rows}) -> {Idx,
-                                   riak_core_apl:get_apl_ann(Idx, NVal, UpNodes),
-                                   Rows} end,
-              PartitionedData).
-
-build_object(Bucket, Mod, DDL, Row, PK) ->
-    Obj = Mod:add_column_info(Row),
-    LK  = encode_typeval_key(
-            riak_ql_ddl:get_local_key(DDL, Row, Mod)),
-
-    RObj = riak_object:newts(
-             Bucket, PK, Obj,
-             dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
-    {RObj, LK}.
-
-
-
-
--spec get_data([riak_pb_ts_codec:ldbvalue()], binary()) ->
-                      {ok, {[binary()], [[riak_pb_ts_codec:ldbvalue()]]}} | {error, term()}.
-get_data(Key, Table) ->
-    get_data(Key, Table, undefined, []).
-
--spec get_data([riak_pb_ts_codec:ldbvalue()], binary(), module()) ->
-                      {ok, {[binary()], [[riak_pb_ts_codec:ldbvalue()]]}} | {error, term()}.
-get_data(Key, Table, Mod) ->
-    get_data(Key, Table, Mod, []).
-
--spec get_data([riak_pb_ts_codec:ldbvalue()], binary(), module(), proplists:proplist()) ->
-                      {ok, [{binary(), riak_pb_ts_codec:ldbvalue()}]} | {error, term()}.
-get_data(Key, Table, Mod0, Options) ->
-    Mod =
-        case Mod0 of
-            undefined ->
-                riak_ql_ddl:make_module_name(Table);
-            Mod0 ->
-                Mod0
-        end,
-    DDL = Mod:get_ddl(),
-    Result =
-        case make_ts_keys(Key, DDL, Mod) of
-            {ok, PKLK} ->
-                riak_client:get(
-                  table_to_bucket(Table), PKLK, Options,
-                  {riak_client, [node(), undefined]});
-            ErrorReason ->
-                ErrorReason
-        end,
-    case Result of
-        {ok, RObj} ->
-            case riak_object:get_value(RObj) of
-                [] ->
-                    {error, notfound};
-                Record ->
-                    {ok, Record}
-            end;
-        ErrorReason2 ->
-            ErrorReason2
-    end.
-
 -spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
-
-
--spec delete_data([any()], riak_object:bucket()) ->
-                         ok | {error, term()}.
-delete_data(Key, Table) ->
-    delete_data(Key, Table, undefined, [], undefined).
-
--spec delete_data([any()], riak_object:bucket(), module()) ->
-                         ok | {error, term()}.
-delete_data(Key, Table, Mod) ->
-    delete_data(Key, Table, Mod, [], undefined).
-
--spec delete_data([any()], riak_object:bucket(), module(), proplists:proplist()) ->
-                         ok | {error, term()}.
-delete_data(Key, Table, Mod, Options) ->
-    delete_data(Key, Table, Mod, Options, undefined).
-
--spec delete_data([any()], riak_object:bucket(), module(), proplists:proplist(),
-                  undefined | vclock:vclock()) ->
-                         ok | {error, term()}.
-delete_data(Key, Table, Mod0, Options0, VClock0) ->
-    Mod =
-        case Mod0 of
-            undefined ->
-                riak_ql_ddl:make_module_name(Table);
-            Mod0 ->
-                Mod0
-        end,
-    %% Pass the {dw,all} option in to the delete FSM
-    %% to make sure all tombstones are written by the
-    %% async put before the reaping get runs otherwise
-    %% if the default {dw,quorum} is used there is the
-    %% possibility that the last tombstone put overlaps
-    %% inside the KV vnode with the reaping get and
-    %% prevents the tombstone removal.
-    Options = lists:keystore(dw, 1, Options0, {dw, all}),
-    DDL = Mod:get_ddl(),
-    VClock =
-        case VClock0 of
-            undefined ->
-                %% this will trigger a get in riak_kv_delete:delete to
-                %% retrieve the actual vclock
-                undefined;
-            VClock0 ->
-                %% else, clients may have it already (e.g., from an
-                %% earlier riak_object:get), which will short-circuit
-                %% to avoid a separate get
-                riak_object:decode_vclock(VClock0)
-        end,
-    Result =
-        case make_ts_keys(Key, DDL, Mod) of
-            {ok, PKLK} ->
-                riak_client:delete_vclock(
-                  table_to_bucket(Table), PKLK, VClock, Options,
-                  {riak_client, [node(), undefined]});
-            ErrorReason ->
-                ErrorReason
-        end,
-    Result.
 
 
 %% Result from riak_client:get_cover is a nested list of coverage plan
@@ -490,23 +277,6 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
             {Description, RangeReplacement} = reverse_sql(SQL),
             sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
                                                  Description}|Accum])
-    end.
-
--spec compile_to_per_quantum_queries(module(), ?SQL_SELECT{}) ->
-                                            {ok, [?SQL_SELECT{}]} | {error, any()}.
-%% @doc Break up a query into a list of per-quantum queries
-compile_to_per_quantum_queries(Mod, SQL) ->
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            {error, no_helper_module};
-        DDL ->
-            case riak_ql_ddl:is_query_valid(
-                   Mod, DDL, sql_record_to_tuple(SQL)) of
-                true ->
-                    riak_kv_qry_compiler:compile(DDL, SQL, undefined);
-                {false, _Errors} ->
-                    {error, invalid_query}
-            end
     end.
 
 

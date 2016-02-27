@@ -269,7 +269,7 @@ sub_tsttbputreq(Mod, _DDL, #tsttbputreq{table = Table, rows = Data},
 sub_putreq_common(Mod, Table, Data, State) ->
     case catch riak_kv_ts_util:validate_rows(Mod, Data) of
         [] ->
-            case riak_kv_ts_util:put_data(Data, Table, Mod) of
+            case riak_kv_ts_api:put_data(Data, Table, Mod) of
                 ok ->
                     {reply, #tsputresp{}, State};
                 {error, {some_failed, ErrorCount}} ->
@@ -298,7 +298,7 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
         end,
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
     Mod = riak_ql_ddl:make_module_name(Table),
-    case riak_kv_ts_util:get_data(
+    case riak_kv_ts_api:get_data(
            CompoundKey, Table, Mod, Options) of
         {ok, Record} ->
             {ColumnNames, Row} = lists:unzip(Record),
@@ -331,7 +331,7 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
         end,
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
     Mod = riak_ql_ddl:make_module_name(Table),
-    case riak_kv_ts_util:delete_data(
+    case riak_kv_ts_api:delete_data(
            CompoundKey, Table, Mod, Options, VClock) of
         ok ->
             {reply, tsdelresp, State};
@@ -379,7 +379,7 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
     Client = {riak_client, [node(), undefined]},
     case decode_query(Q) of
         {ok, SQL} ->
-            case riak_kv_ts_util:compile_to_per_quantum_queries(Mod, SQL) of
+            case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
                 {ok, Compiled} ->
                     Bucket = riak_kv_ts_util:table_to_bucket(Table),
                     convert_cover_list(
@@ -431,7 +431,7 @@ assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text)
 %%
 
 sub_tsqueryreq(_Mod, DDL, SQL, State) ->
-    case riak_kv_qry:submit(SQL, DDL) of
+    case riak_kv_ts_api:query(SQL, DDL) of
         {ok, Data} when element(1, SQL) =:= ?SQL_SELECT_RECORD_NAME ->
             {reply, make_tsqueryresp(Data), State};
         {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
