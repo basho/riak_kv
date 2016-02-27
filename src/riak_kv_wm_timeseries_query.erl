@@ -376,7 +376,7 @@ process_query(SQL = ?SQL_SELECT{'FROM' = Table}, RD, Ctx0 = #ctx{}) ->
         {_, {undef, _}} ->
             handle_error({no_such_table, Table}, RD, Ctx0);
         DDL ->
-            case riak_kv_qry:submit(SQL, DDL) of
+            case riak_kv_ts_api:query(SQL, DDL) of
                 {ok, Data} ->
                     {ColumnNames, _ColumnTypes, Rows} = Data,
                     Ctx = Ctx0#ctx{result = {ColumnNames, Rows}},
@@ -402,7 +402,7 @@ process_query(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, RD, Ctx0 = #ctx{}
         {_, {undef, _}} ->
             handle_error({no_such_table, Table}, RD, Ctx0);
         DDL ->
-            case riak_kv_qry:submit(SQL, DDL) of
+            case riak_kv_ts_api:query(SQL, DDL) of
                 {ok, Data} ->
                     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>,
                                    <<"Primary Key">>, <<"Local Key">>],

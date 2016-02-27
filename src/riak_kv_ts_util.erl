@@ -52,7 +52,7 @@
 %% bucket tuple. This function is a convenient mechanism for doing so
 %% and making that transition more obvious.
 
--include("riak_kv_wm_raw.hrl").
+%%-include("riak_kv_wm_raw.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_ts.hrl").
 
@@ -383,7 +383,6 @@ validate_rows(Mod, Rows) ->
 -spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
-
 
 
 %% Result from riak_client:get_cover is a nested list of coverage plan
