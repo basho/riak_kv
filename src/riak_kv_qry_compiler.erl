@@ -431,6 +431,59 @@ extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLe
     Fns2 = [Function | Fns1],
     {{finalise_aggregation, FnName, FinaliserLen + length(Fns2)}, Fns2}.
 
+fix_start_order(W, Mod, LK) ->
+    {startkey, StartKey0} = lists:keyfind(startkey, 1, W),
+    {endkey, EndKey0} = lists:keyfind(endkey, 1, W),
+    StartVals = [{N, V} || {N, _T, V} <- StartKey0],
+    EndVals = [{N, V} || {N, _T, V} <- EndKey0],
+    StartKey = riak_ql_ddl:make_key(Mod, LK,  StartVals),
+    EndKey = riak_ql_ddl:make_key(Mod, LK,  EndVals),
+    case StartKey < EndKey of
+        true ->
+            W;
+        false ->
+            %% Swap the start/end keys so that the backends will
+            %% scan over them correctly.  Likely cause is a descending
+            %% timestamp field.
+            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
+            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+
+            %% start inclusive defaults true, end inclusive defaults false
+            case proplists:get_value(end_inclusive, W) of
+                undefined -> W3 = W;
+                Vx         -> W3 = lists:keystore(end_inclusive, 1, W2, {end_inclusive, Vx})
+            end,
+            case proplists:get_value(start_inclusive, W2) of
+                undefined -> W3;
+                Vz         -> lists:keystore(end_inclusive, 1, W3, {end_inclusive, Vz})
+            end
+
+            % W3 = lists:keystore(start_inclusive, 1, W2,
+            %                     {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
+            % _W4 = lists:keystore(end_inclusive, 1, W3,
+            %                      {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
+    end.
+
+%% Make the subqueries appear in the same order as the keys.  The qry worker
+%% returns the results to the client in the order of the subqueries, so
+%% if timestamp is descending for equality queries on family/series then
+%% the results need to merge in the reverse order.
+%%
+%% Detect this by the implict order of the start/end keys.  Should be
+%% refactored to explicitly understand key order at some future point.
+fix_subquery_order_compare(Qa, Qb) ->
+    {startkey, Astartkey} = lists:keyfind(startkey, 1, Qa?SQL_SELECT.'WHERE'),
+    {endkey, Aendkey} = lists:keyfind(endkey, 1, Qa?SQL_SELECT.'WHERE'),
+    {startkey, Bstartkey} = lists:keyfind(startkey, 1, Qb?SQL_SELECT.'WHERE'),
+    case Astartkey < Aendkey of
+        true ->
+            Astartkey =< Bstartkey;
+        false ->
+            Bstartkey =< Astartkey
+    end.
+
+fix_subquery_order(Qs) ->
+    lists:sort(fun fix_subquery_order_compare/2, Qs).
 
 %%
 maybe_infer_op_type(_, error, _, Errors) ->
@@ -519,51 +572,6 @@ find_quantum_field_index_in_key2([#hash_fn_v1{ mod = riak_ql_quanta,
     {X,Y,Z,Index};
 find_quantum_field_index_in_key2([_|Tail], Index) ->
     find_quantum_field_index_in_key2(Tail, Index+1).
-
-%%
-fix_start_order(W, Mod, LK) ->
-    {startkey, StartKey0} = lists:keyfind(startkey, 1, W),
-    {endkey, EndKey0} = lists:keyfind(endkey, 1, W),
-    StartVals = [{N, V} || {N, _T, V} <- StartKey0],
-    EndVals = [{N, V} || {N, _T, V} <- EndKey0],
-    StartKey = riak_ql_ddl:make_key(Mod, LK,  StartVals),
-    EndKey = riak_ql_ddl:make_key(Mod, LK,  EndVals),
-    case StartKey < EndKey of
-        true ->
-            W;
-        false ->
-            %% Swap the start/end keys so that the backends will
-            %% scan over them correctly.  Likely cause is a descending
-            %% timestamp field.
-            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
-            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
-            %% start inclusive defaults true, end inclusive defaults false
-            W3 = lists:keystore(start_inclusive, 1, W2,
-                                {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
-            _W4 = lists:keystore(end_inclusive, 1, W3,
-                                 {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
-    end.
-
-%% Make the subqueries appear in the same order as the keys.  The qry worker
-%% returns the results to the client in the order of the subqueries, so
-%% if timestamp is descending for equality queries on family/series then
-%% the results need to merge in the reverse order.
-%%
-%% Detect this by the implict order of the start/end keys.  Should be
-%% refactored to explicitly understand key order at some future point.
-fix_subquery_order_compare(Qa, Qb) ->
-    {startkey, Astartkey} = lists:keyfind(startkey, 1, Qa?SQL_SELECT.'WHERE'),
-    {endkey, Aendkey} = lists:keyfind(endkey, 1, Qa?SQL_SELECT.'WHERE'),
-    {startkey, Bstartkey} = lists:keyfind(startkey, 1, Qb?SQL_SELECT.'WHERE'),
-    case Astartkey < Aendkey of
-        true ->
-            Astartkey =< Bstartkey;
-        false ->
-            Bstartkey =< Astartkey
-    end.
-
-fix_subquery_order(Qs) ->
-    lists:sort(fun fix_subquery_order_compare/2, Qs).
 
 hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
@@ -1427,18 +1435,21 @@ simple_spanning_boundary_precision_test() ->
     %% now make the result - expecting 2 queries
     [Where1, Where2] =
         test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 15000}, {15000, 30000}]),
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ 'WHERE'       = Where1,
-                          partition_key = PK,
-                          local_key     = LK},
-             ?SQL_SELECT{ 'WHERE'       = Where2,
-                          partition_key = PK,
-                          local_key     = LK
-                        }]},
-       compile(DDL, Q, 5)
-      ).
+    _PK = get_standard_pk(),
+    _LK = get_standard_lk(),
+    {ok, [Select1, Select2]} = compile(DDL, Q, 5),
+    ?assertEqual(
+        [Where1, Where2],
+        [Select1?SQL_SELECT.'WHERE', Select2?SQL_SELECT.'WHERE']
+    ),
+    ?assertEqual(
+        [get_standard_pk(), get_standard_pk()],
+        [Select1?SQL_SELECT.partition_key, Select2?SQL_SELECT.partition_key]
+    ),
+    ?assertEqual(
+        [get_standard_lk(), get_standard_lk()],
+        [Select1?SQL_SELECT.local_key, Select2?SQL_SELECT.local_key]
+    ).
 
 %%
 %% test failures
@@ -2229,14 +2240,13 @@ no_quantum_in_query_1_test() ->
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q} = get_query(
           "SELECT * FROM tab1 WHERE a = 1 AND b = 1"),
-    ?assertMatch(
-        {ok, [?SQL_SELECT{
-            'WHERE' =
-                [{startkey,[{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
-                 {endkey,  [{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
-                 {filter,[]},
-                 {end_inclusive,true}] }]},
-        compile(DDL, Q, 100)
+    {ok, [?SQL_SELECT{ 'WHERE' = Where }]} = compile(DDL, Q, 100),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
+         {endkey,  [{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
+         {filter,[]},
+         {end_inclusive,true}],
+        Where
     ).
 
 %% partition and local key are different
