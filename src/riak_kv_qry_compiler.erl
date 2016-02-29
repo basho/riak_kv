@@ -77,22 +77,6 @@ compile_where_clause(#ddl_v1{} = DDL,
     end.
 
 %% now break out the query on quantum boundaries
-% <<<<<<< HEAD
-% expand_query(#ddl_v1{table = T, local_key = LK, partition_key = PK} = DDL,
-%              #riak_sql_v1{ 'SELECT' = SelectSpec1 } = Q, Where1) ->
-%     case expand_where(Where1, PK) of
-%         {error, E} ->
-%             {error, E};
-%         Where2 ->
-%             Mod = riak_ql_ddl:make_module_name(T),
-%             SelectSpec2 = [compile_select(DDL, S) || S <- SelectSpec1],
-%             fix_subquery_order([Q#riak_sql_v1{is_executable = true,
-%                                               type          = timeseries,
-%                                               'SELECT'      = SelectSpec2,
-%                                               'WHERE'       = fix_start_order(X, Mod, LK),
-%                                               local_key     = LK,
-%                                               partition_key = PK} || X <- Where2])
-
 expand_query(#ddl_v1{table = Table, local_key = LK, partition_key = PK},
              ?SQL_SELECT{} = Q1, Where1,
              MaxSubQueries) ->
@@ -422,11 +406,21 @@ fix_start_order(W, Mod, LK) ->
             %% timestamp field.
             W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
             W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+
             %% start inclusive defaults true, end inclusive defaults false
-            W3 = lists:keystore(start_inclusive, 1, W2,
-                                {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
-            _W4 = lists:keystore(end_inclusive, 1, W3,
-                                 {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
+            case proplists:get_value(end_inclusive, W) of
+                undefined -> W3 = W;
+                Vx         -> W3 = lists:keystore(end_inclusive, 1, W2, {end_inclusive, Vx})
+            end,
+            case proplists:get_value(start_inclusive, W2) of
+                undefined -> W3;
+                Vz         -> lists:keystore(end_inclusive, 1, W3, {end_inclusive, Vz})
+            end
+
+            % W3 = lists:keystore(start_inclusive, 1, W2,
+            %                     {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
+            % _W4 = lists:keystore(end_inclusive, 1, W3,
+            %                      {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
     end.
 
 %% Make the subqueries appear in the same order as the keys.  The qry worker
@@ -1372,18 +1366,21 @@ simple_spanning_boundary_precision_test() ->
     %% now make the result - expecting 2 queries
     [Where1, Where2] =
         test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 15000}, {15000, 30000}]),
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ 'WHERE'       = Where1,
-                          partition_key = PK,
-                          local_key     = LK},
-             ?SQL_SELECT{ 'WHERE'       = Where2,
-                          partition_key = PK,
-                          local_key     = LK
-                        }]},
-       compile(DDL, Q, 5)
-      ).
+    _PK = get_standard_pk(),
+    _LK = get_standard_lk(),
+    {ok, [Select1, Select2]} = compile(DDL, Q, 5),
+    ?assertEqual(
+        [Where1, Where2],
+        [Select1#riak_select_v1.'WHERE', Select2#riak_select_v1.'WHERE']
+    ),
+    ?assertEqual(
+        [get_standard_pk(), get_standard_pk()],
+        [Select1#riak_select_v1.partition_key, Select2#riak_select_v1.partition_key]
+    ),
+    ?assertEqual(
+        [get_standard_lk(), get_standard_lk()],
+        [Select1#riak_select_v1.local_key, Select2#riak_select_v1.local_key]
+    ).
 
 %%
 %% test failures
@@ -2159,14 +2156,13 @@ no_quantum_in_query_1_test() ->
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q} = get_query(
           "SELECT * FROM tab1 WHERE a = 1 AND b = 1"),
-    ?assertMatch(
-        {ok, [#riak_select_v1{ 
-            'WHERE' = 
+    {ok, [#riak_select_v1{ 'WHERE' = Where }]} = compile(DDL, Q, 100),
+    ?assertEqual(
                 [{startkey,[{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
                  {endkey,  [{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
                  {filter,[]},
-                 {end_inclusive,true}] }]},
-        compile(DDL, Q, 100)
+                 {end_inclusive,true}],
+        Where
     ).
 
 %% partition and local key are different
