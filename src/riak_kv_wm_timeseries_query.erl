@@ -61,7 +61,6 @@
               security,     %% security context
               client,       %% riak_client() - the store client
               riak,         %% local | {node(), atom()} - params for riak client
-              table          :: undefined | binary(),
               query          :: undefined | string(),
               compiled_query :: undefined | #ddl_v1{} | #riak_sql_describe_v1{} | ?SQL_SELECT{},
               result         :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]} |
@@ -71,7 +70,7 @@
 -define(DEFAULT_TIMEOUT, 60000).
 -define(TABLE_ACTIVATE_WAIT, 30).   %% wait until table's bucket type is activated
 
--define(CB_RV_SPEC, {boolean(), #wm_reqdata{}, #ctx{}}).
+-define(CB_RV_SPEC, {boolean()|atom()|tuple(), #wm_reqdata{}, #ctx{}}).
 -type ts_rec() :: [riak_pb_ts_codec:ldbvalue()].
 
 
@@ -96,36 +95,24 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
             {true, RD,
              Ctx#ctx{api_version = wrq:path_info(api_version, RD),
                      method = wrq:method(RD),
-                     client = C,
-                     table =
-                         case wrq:path_info(table, RD) of
-                             undefined -> undefined;
-                             B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
-                         end
+                     client = C
                     }};
-        Error ->
-            {false, wrq:set_resp_body(
-                      flat_format("Unable to connect to Riak: ~p", [Error]),
-                      wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx}
+        {error, Reason} ->
+            handle_error({riak_client_error, Reason}, RD, Ctx)
     end.
 
 
-is_authorized(ReqData, Ctx) ->
-    case riak_api_web_security:is_authorized(ReqData) of
+is_authorized(RD, Ctx) ->
+    case riak_api_web_security:is_authorized(RD) of
         false ->
-            {"Basic realm=\"Riak\"", ReqData, Ctx};
+            {"Basic realm=\"Riak\"", RD, Ctx};
         {true, SecContext} ->
-            {true, ReqData, Ctx#ctx{security = SecContext}};
+            {true, RD, Ctx#ctx{security = SecContext}};
         insecure ->
             %% XXX 301 may be more appropriate here, but since the http and
             %% https port are different and configurable, it is hard to figure
             %% out the redirect URL to serve.
-            {{halt, 426},
-             wrq:append_to_resp_body(
-               <<"Security is enabled and "
-                 "Riak does not accept credentials over HTTP. Try HTTPS instead.">>, ReqData),
-             Ctx}
+            handle_error(insecure_connection, RD, Ctx)
     end.
 
 
@@ -135,7 +122,8 @@ forbidden(RD, Ctx) ->
         true ->
             {true, RD, Ctx};
         false ->
-            %% plug in early, and just do what it takes to do the job
+            %% depends on query type, we will check this later; pass
+            %% for now
             {false, RD, Ctx}
     end.
 %% Because webmachine chooses to (not) call certain callbacks
@@ -168,7 +156,7 @@ preexec(RD, Ctx) ->
     case validate_request(RD, Ctx) of
         {true, RD1, Ctx1} ->
             case check_permissions(RD1, Ctx1) of
-                {false, RD2, Ctx2} ->
+                {true, RD2, Ctx2} ->
                     call_api_function(RD2, Ctx2);
                 FalseWithDetails ->
                     FalseWithDetails
@@ -189,10 +177,8 @@ validate_request(RD, Ctx) ->
 -spec validate_request_v1(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
     Json = extract_json(RD),
-    case {Method, string:tokens(wrq:path(RD), "/"),
-          extract_query(Json), extract_cover_context(Json)} of
-        {Method, ["ts", "v1", "query"],
-         Query, CoverContext}
+    case {Method, extract_query(Json), extract_cover_context(Json)} of
+        {Method, Query, CoverContext}
           when (Method == 'GET' orelse Method == 'POST')
                andalso is_list(Query) ->
             case riak_ql_parser:ql_parse(
@@ -271,24 +257,24 @@ validate_ts_cover_context(_) ->
 
 -spec check_permissions(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 check_permissions(RD, Ctx = #ctx{security = undefined}) ->
-    {false, RD, Ctx};
+    {true, RD, Ctx};
 check_permissions(RD, Ctx = #ctx{security = Security,
                                  compiled_query = CompiledQry}) ->
     case riak_core_security:check_permission(
            decode_query_permissions(CompiledQry), Security) of
         {false, Error, _} ->
             handle_error(
-              {not_permitted, unicode:characters_to_binary(Error, utf8, utf8)}, RD, Ctx);
+              {not_permitted, utf8_to_binary(Error)}, RD, Ctx);
         _ ->
-            {false, RD, Ctx}
+            {true, RD, Ctx}
     end.
 
 decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
-    {"riak_kv.ts_create_table", NewBucketType};
+    {riak_kv_ts_util:api_call_to_perm(query_create_table), NewBucketType};
 decode_query_permissions(?SQL_SELECT{'FROM' = Table}) ->
-    {"riak_kv.ts_query", Table};
+    {riak_kv_ts_util:api_call_to_perm(query_select), Table};
 decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
-    {"riak_kv.ts_describe", Table}.
+    {riak_kv_ts_util:api_call_to_perm(query_describe), Table}.
 
 
 -spec content_types_provided(#wm_reqdata{}, #ctx{}) ->
@@ -458,12 +444,19 @@ error_out(Type, Fmt, Args, RD, Ctx) ->
 -spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
 handle_error(Error, RD, Ctx) ->
     case Error of
+        {riak_client_error, Reason} ->
+            error_out(false,
+                      "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
+        insecure_connection ->
+            error_out({halt, 426},
+                      "Security is enabled and Riak does not"
+                      " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
         {unsupported_version, BadVersion} ->
             error_out({halt, 412},
                       "Unsupported API version ~s", [BadVersion], RD, Ctx);
         {not_permitted, Table} ->
             error_out({halt, 401},
-                      "Access to table ~s not allowed", [Table], RD, Ctx);
+                      "Access to table ~ts not allowed", [Table], RD, Ctx);
         {malformed_request, Method} ->
             error_out({halt, 400},
                       "Malformed ~s request", [Method], RD, Ctx);
@@ -498,3 +491,6 @@ handle_error(Error, RD, Ctx) ->
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
+
+utf8_to_binary(S) ->
+    unicode:characters_to_binary(S, utf8, utf8).
