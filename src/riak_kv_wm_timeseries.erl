@@ -23,10 +23,10 @@
 %% @doc Resource for Riak TS operations over HTTP.
 %%
 %% ```
-%% GET    /ts/v1/table/Table          single-key get
-%% DELETE /ts/v1/table/Table          single-key delete
-%% PUT    /ts/v1/table/Table          batch put
-%% GET    /ts/v1/coverage             coverage for a query
+%% GET     /ts/v1/table/Table/keys/K1/V1/...  single-key get
+%% DELETE  /ts/v1/table/Table/keys/K1/V1/...  single-key delete
+%% POST    /ts/v1/table/Table/keys            singe-key or batch put depending
+%%                                            on the body
 %% '''
 %%
 %% Request body is expected to be a JSON containing key and/or value(s).
@@ -65,7 +65,7 @@
               security,     %% security context
               client,       %% riak_client() - the store client
               riak,         %% local | {node(), atom()} - params for riak client
-              api_call :: undefined|get|put|delete|coverage,
+              api_call :: undefined|get|put|delete,
               table    :: undefined | binary(),
               %% data in/out: the following fields are either
               %% extracted from the JSON/path elements that came in
@@ -74,15 +74,13 @@
               %% body
               key     :: undefined |  ts_rec(),  %% parsed out of JSON that came in the body
               data    :: undefined | [ts_rec()], %% ditto
-              query   :: string(),
               result  :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]}
-                                   | [{entry, proplists:proplist()}]
              }).
 
 -define(DEFAULT_TIMEOUT, 60000).
 -define(TABLE_ACTIVATE_WAIT, 30).   %% wait until table's bucket type is activated
 
--define(CB_RV_SPEC, {boolean(), #wm_reqdata{}, #ctx{}}).
+-define(CB_RV_SPEC, {boolean()|atom()|tuple(), #wm_reqdata{}, #ctx{}}).
 -type ts_rec() :: [riak_pb_ts_codec:ldbvalue()].
 
 
@@ -97,9 +95,8 @@ init(Props) ->
     {boolean(), #wm_reqdata{}, #ctx{}}.
 %% @doc Determine whether or not a connection to Riak
 %%      can be established.  This function also takes this
-%%      opportunity to extract the 'bucket' and 'key' path
-%%      bindings from the dispatch, as well as any vtag
-%%      query parameter.
+%%      opportunity to extract the 'table' and 'key' path
+%%      bindings from the dispatch.
 service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
     case riak_kv_wm_utils:get_riak_client(
            RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
@@ -108,35 +105,23 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
              Ctx#ctx{api_version = wrq:path_info(api_version, RD),
                      method = wrq:method(RD),
                      client = C,
-                     table =
-                         case wrq:path_info(table, RD) of
-                             undefined -> undefined;
-                             B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
-                         end
+                     table = utf8_to_binary(
+                               mochiweb_util:unquote(
+                                 wrq:path_info(table, RD)))
                     }};
-        Error ->
-            {false, wrq:set_resp_body(
-                      flat_format("Unable to connect to Riak: ~p", [Error]),
-                      wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx}
+        {error, Reason} ->
+            handle_error({riak_client_error, Reason}, RD, Ctx)
     end.
 
 
-is_authorized(ReqData, Ctx) ->
-    case riak_api_web_security:is_authorized(ReqData) of
+is_authorized(RD, Ctx) ->
+    case riak_api_web_security:is_authorized(RD) of
         false ->
-            {"Basic realm=\"Riak\"", ReqData, Ctx};
+            {"Basic realm=\"Riak\"", RD, Ctx};
         {true, SecContext} ->
-            {true, ReqData, Ctx#ctx{security = SecContext}};
+            {true, RD, Ctx#ctx{security = SecContext}};
         insecure ->
-            %% XXX 301 may be more appropriate here, but since the http and
-            %% https port are different and configurable, it is hard to figure
-            %% out the redirect URL to serve.
-            {{halt, 426},
-             wrq:append_to_resp_body(
-               <<"Security is enabled and "
-                 "Riak does not accept credentials over HTTP. Try HTTPS instead.">>, ReqData),
-             Ctx}
+            handle_error(insecure_connection, RD, Ctx)
     end.
 
 
@@ -151,10 +136,6 @@ forbidden(RD, Ctx) ->
             %% plug in early, and just do what it takes to do the job
             {false, RD, Ctx}
     end.
-%% Because webmachine chooses to (not) call certain callbacks
-%% depending on request method used, sometimes accept_doc_body is not
-%% called at all, and we arrive at produce_doc_body empty-handed.
-%% This is the case when curl is executed with -X GET and --data.
 
 
 -spec allowed_methods(#wm_reqdata{}, #ctx{}) ->
@@ -190,7 +171,7 @@ preexec(RD, Ctx) ->
     case validate_request(RD, Ctx) of
         {true, RD1, Ctx1} ->
             case check_permissions(RD1, Ctx1) of
-                {false, RD2, Ctx2} ->
+                {true, RD2, Ctx2} ->
                     call_api_function(RD2, Ctx2);
                 FalseWithDetails ->
                     FalseWithDetails
@@ -210,69 +191,108 @@ validate_request(RD, Ctx) ->
 
 -spec validate_request_v1(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 validate_request_v1(RD, Ctx) ->
-    case string:tokens(wrq:path(RD), "/") of
-        ["ts", "v1", "tables", Table, "keys" | KeysInUrl]
+    case wrq:path_tokens(RD) of
+        KeysInUrl
           when KeysInUrl /= [] ->
             KeysInUrlUnquoted = lists:map(fun mochiweb_util:unquote/1, KeysInUrl),
-            validate_request_v1_with({Table, KeysInUrlUnquoted}, RD, Ctx);
+            validate_request_v1_with(KeysInUrlUnquoted, RD, Ctx);
         _ ->
             validate_request_v1_with(json, RD, Ctx)
     end.
 
--spec validate_request_v1_with(json | {string(), [string()]}, #wm_reqdata{}, #ctx{}) ->
+-spec validate_request_v1_with(json | [string()], #wm_reqdata{}, #ctx{}) ->
                                       ?CB_RV_SPEC.
 validate_request_v1_with(json, RD, Ctx = #ctx{method = Method}) ->
     Json = extract_json(RD),
-    case {Method, string:tokens(wrq:path(RD), "/"),
-          extract_data(Json), extract_query(Json)} of
+    case {Method, extract_data(Json)} of
         %% batch put
-        {'POST',
-         ["ts", "v1", "tables", Table, "keys"],
-         Data, _}
-          when is_list(Table), Data /= undefined ->
+        {'POST', Data}
+          when Data /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = put,
-                          table = list_to_binary(Table), data = Data});
-        %% coverage
-        {'GET',
-         ["ts", "v1", "coverage"],
-         undefined, Query}
-          when is_list(Query) ->
-            valid_params(
-              RD, Ctx#ctx{api_version = "v1", api_call = coverage,
-                          query = Query});
+                          data = Data});
         _Invalid ->
             handle_error({malformed_request, Method}, RD, Ctx)
     end;
 
-validate_request_v1_with({Table, KeysInUrl}, RD, Ctx = #ctx{method = Method}) ->
-    %% only get and delete can have keys in url
-    case {Method,
-          path_elements_to_key(Table, KeysInUrl)} of
+validate_request_v1_with(KeysInUrl, RD, Ctx = #ctx{method = Method,
+                                                   table = Table}) ->
+    case {Method, path_elements_to_key(Table, KeysInUrl)} of
         {'GET', {ok, Key}} ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = get,
-                          table = list_to_binary(Table), key = Key});
-        %% single-key delete
+                          key = Key});
         {'DELETE', {ok, Key}} ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = delete,
-                          table = list_to_binary(Table), key = Key});
+                          key = Key});
         {_, {error, Reason}} ->
             handle_error(Reason, RD, Ctx);
-        {'POST', _} ->
-            handle_error(url_key_with_put, RD, Ctx)
+        {BadMethod, _} ->
+            handle_error({url_key_bad_method, BadMethod}, RD, Ctx)
     end.
+
+extract_json(RD) ->
+    case proplists:get_value("json", RD#wm_reqdata.req_qs) of
+        undefined ->
+            %% if it was a PUT or POST, data is in body
+            binary_to_list(wrq:req_body(RD));
+        BodyInPost ->
+            BodyInPost
+    end.
+
+%% because, techically, key and data are 'arguments', we check they
+%% are well-formed, too.
+-spec extract_data(binary()) -> term().
+extract_data(Json) ->
+    try mochijson2:decode(Json) of
+        {struct, Decoded} when is_list(Decoded) ->
+            %% key and data (it's a put)
+            validate_ts_records(
+              proplists:get_value(<<"data">>, Decoded))
+    catch
+        _:_ ->
+            undefined
+    end.
+
+
+validate_ts_record(undefined) ->
+    undefined;
+validate_ts_record(R) when is_list(R) ->
+    case lists:all(
+           %% check that all list elements are TS types
+           fun(X) -> is_integer(X) orelse is_float(X) orelse is_binary(X) end,
+           R) of
+        true ->
+            R;
+        false ->
+            undefined
+    end;
+validate_ts_record(_) ->
+    undefined.
+
+validate_ts_records(undefined) ->
+    undefined;
+validate_ts_records(RR) when is_list(RR) ->
+    case lists:all(fun(R) -> validate_ts_record(R) /= undefined end, RR) of
+        true ->
+            RR;
+        false ->
+            undefined
+    end;
+validate_ts_records(_) ->
+    undefined.
+
 
 %% extract keys from path elements in the URL (.../K1/V1/K2/V2 ->
 %% [{K1, V1}, {K2, V2}]), check with Table's DDL to make sure keys are
 %% correct and values are of (convertible to) appropriate types, and
 %% return the KV list
--spec path_elements_to_key(string(), [string()]) ->
+-spec path_elements_to_key(binary(), [string()]) ->
                                   {ok, [{string(), riak_pb_ts_codec:ldbvalue()}]} |
                                   {error, atom()|tuple()}.
 path_elements_to_key(Table, PEList) ->
-    Mod = riak_ql_ddl:make_module_name(list_to_binary(Table)),
+    Mod = riak_ql_ddl:make_module_name(Table),
     try
         DDL = Mod:get_ddl(),
         #ddl_v1{local_key = #key_v1{ast = LK}} = DDL,
@@ -365,114 +385,23 @@ valid_params(RD, Ctx) ->
             end
     end.
 
-%% This is a special case for curl -G.  `curl -G host --data $data`
-%% will send the $data in URL instead of in the body, so we try to
-%% look for it in req_qs.
-extract_json(RD) ->
-    case proplists:get_value("json", RD#wm_reqdata.req_qs) of
-        undefined ->
-            %% if it was a PUT or POST, data is in body
-            binary_to_list(wrq:req_body(RD));
-        BodyInPost ->
-            BodyInPost
-    end.
-
-%% because, techically, key and data are 'arguments', we check they
-%% are well-formed, too.
--spec extract_data(binary()) -> term().
-extract_data(Json) ->
-    try mochijson2:decode(Json) of
-        {struct, Decoded} when is_list(Decoded) ->
-            %% key and data (it's a put)
-            validate_ts_records(
-              proplists:get_value(<<"data">>, Decoded))
-    catch
-        _:_ ->
-            undefined
-    end.
-
--spec extract_query(binary()) -> term().
-extract_query(Json) ->
-    try mochijson2:decode(Json) of
-        {struct, Decoded} when is_list(Decoded) ->
-            validate_ts_query(
-              proplists:get_value(<<"query">>, Decoded))
-    catch
-        _:_ ->
-            undefined
-    end.
-
-
-validate_ts_record(undefined) ->
-    undefined;
-validate_ts_record(R) when is_list(R) ->
-    case lists:all(
-           %% check that all list elements are TS types
-           fun(X) -> is_integer(X) orelse is_float(X) orelse is_binary(X) end,
-           R) of
-        true ->
-            R;
-        false ->
-            undefined
-    end;
-validate_ts_record(_) ->
-    undefined.
-
-validate_ts_records(undefined) ->
-    undefined;
-validate_ts_records(RR) when is_list(RR) ->
-    case lists:all(fun(R) -> validate_ts_record(R) /= undefined end, RR) of
-        true ->
-            RR;
-        false ->
-            undefined
-    end;
-validate_ts_records(_) ->
-    undefined.
-
-validate_ts_query(Q) when is_binary(Q) ->
-    binary_to_list(Q);
-validate_ts_query(_) ->
-    undefined.
-
-
--spec check_permissions(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% We have to defer checking permission until we have figured which
-%% api call it is, which is done in validate_request, which also needs
-%% body, which happens to not be available in Ctx when webmachine
-%% would normally call a forbidden callback. I *may* be missing
-%% something, but given the extent we have bent the REST rules here,
-%% checking permissions at a stage later than webmachine would have
-%% done is not a big deal.
+-spec check_permissions(#wm_reqdata{}, #ctx{}) -> {term(), #wm_reqdata{}, #ctx{}}.
 check_permissions(RD, Ctx = #ctx{security = undefined}) ->
     validate_resource(RD, Ctx);
-check_permissions(RD, Ctx = #ctx{table = undefined}) ->
-    {false, RD, Ctx};
 check_permissions(RD, Ctx = #ctx{security = Security,
                                  api_call = Call,
                                  table = Table}) ->
     case riak_core_security:check_permission(
-           {api_call_to_ts_perm(Call), Table}, Security) of
+           {riak_kv_ts_util:api_call_to_perm(Call), Table}, Security) of
         {false, Error, _} ->
             handle_error(
-              {not_permitted, unicode:characters_to_binary(Error, utf8, utf8)}, RD, Ctx);
+              {not_permitted, utf8_to_binary(Error)}, RD, Ctx);
         _ ->
             validate_resource(RD, Ctx)
     end.
 
-api_call_to_ts_perm(get) ->
-    "riak_ts.get";
-api_call_to_ts_perm(put) ->
-    "riak_ts.put";
-api_call_to_ts_perm(delete) ->
-    "riak_ts.delete";
-api_call_to_ts_perm(coverage) ->
-    "riak_ts.coverage".
 
 -spec validate_resource(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-validate_resource(RD, Ctx = #ctx{api_call = coverage}) ->
-    %% there is always a resource for coverage
-    {false, RD, Ctx};
 validate_resource(RD, Ctx = #ctx{table = Table}) ->
     %% Ensure the bucket type exists, otherwise 404 early.
     case riak_kv_wm_utils:bucket_type_exists(Table) of
@@ -544,9 +473,7 @@ call_api_function(RD, Ctx = #ctx{api_call = put,
     Mod = riak_ql_ddl:make_module_name(Table),
     %% convert records to tuples, just for put
     Records = [list_to_tuple(R) || R <- Data],
-    case catch riak_kv_ts_util:validate_rows(Mod, Records) of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx);
+    case riak_kv_ts_util:validate_rows(Mod, Records) of
         [] ->
             case riak_kv_ts_api:put_data(Records, Table, Mod) of
                 ok ->
@@ -568,9 +495,7 @@ call_api_function(RD, Ctx0 = #ctx{api_call = get,
            true -> [{timeout, Timeout}]
         end,
     Mod = riak_ql_ddl:make_module_name(Table),
-    case catch riak_kv_ts_api:get_data(Key, Table, Mod, Options) of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx0);
+    case riak_kv_ts_api:get_data(Key, Table, Mod, Options) of
         {ok, Record} ->
             {ColumnNames, Row} = lists:unzip(Record),
             %% ColumnTypes = riak_kv_ts_util:get_column_types(ColumnNames, Mod),
@@ -597,9 +522,7 @@ call_api_function(RD, Ctx = #ctx{api_call = delete,
            true -> [{timeout, Timeout}]
         end,
     Mod = riak_ql_ddl:make_module_name(Table),
-    case catch riak_kv_ts_api:delete_data(Key, Table, Mod, Options) of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx);
+    case riak_kv_ts_api:delete_data(Key, Table, Mod, Options) of
         ok ->
             prepare_data_in_body(RD, Ctx#ctx{result = ok});
         {error, {bad_key_length, Got, Need}} ->
@@ -608,50 +531,6 @@ call_api_function(RD, Ctx = #ctx{api_call = delete,
             handle_error(notfound, RD, Ctx);
         {error, Reason} ->
             handle_error({riak_error, Reason}, RD, Ctx)
-    end;
-
-call_api_function(RD, Ctx = #ctx{api_call = coverage,
-                                 query = Query,
-                                 client = Client}) ->
-    Lexed = riak_ql_lexer:get_tokens(Query),
-    case riak_ql_parser:parse(Lexed) of
-        {ok, SQL = ?SQL_SELECT{'FROM' = Table}} ->
-            Mod = riak_ql_ddl:make_module_name(Table),
-            case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
-                {ok, Compiled} ->
-                    Bucket = riak_kv_ts_util:table_to_bucket(Table),
-                    Results =
-                        [begin
-                             Node = proplists:get_value(node, Cover),
-                             {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
-                             {entry,
-                              [
-                               {cover_context,
-                                riak_kv_pb_coverage:term_to_checksum_binary({Cover, Range})},
-                               {ip, IP},
-                               {port, Port},
-                               {range,
-                                [
-                                 {field_name, FieldName},
-                                 {lower_bound, StartVal},
-                                 {lower_bound_inclusive, StartIncl},
-                                 {upper_bound, EndVal},
-                                 {upper_bound_inclusive, EndIncl},
-                                 {desc, SQLtext}
-                                ]}
-                              ]}
-                         end || {Cover,
-                                 Range = {FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}},
-                                 SQLtext}
-                                    <- riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, [])],
-                    prepare_data_in_body(RD, Ctx#ctx{result = Results});
-                {error, _Reason} ->
-                    handle_error(query_compile_fail, RD, Ctx)
-            end;
-        {ok, _NonSelectQuery} ->
-            handle_error(inappropriate_sql_for_coverage, RD, Ctx);
-        {error, Reason} ->
-            handle_error({query_parse_error, Reason}, RD, Ctx)
     end.
 
 
@@ -668,23 +547,7 @@ produce_doc_body(RD, Ctx = #ctx{api_call = get,
     {mochijson2:encode(
        {struct, [{<<"columns">>, Columns},
                  {<<"rows">>, Rows}]}),
-     RD, Ctx};
-produce_doc_body(RD, Ctx = #ctx{api_call = coverage,
-                                result = CoverageDetails}) ->
-    SafeCoverageDetails =
-        [{entry, armor_entry(E)} || {entry, E} <- CoverageDetails],
-    {mochijson2:encode(
-       {struct, [{<<"coverage">>, SafeCoverageDetails}]}),
      RD, Ctx}.
-
-armor_entry(EE) ->
-    lists:map(
-      fun({cover_context, Bin}) ->
-              %% prevent list to be read and converted by mochijson2
-              %% as utf8 binary
-              {cover_context, binary_to_list(Bin)};
-         (X) -> X
-      end, EE).
 
 
 error_out(Type, Fmt, Args, RD, Ctx) ->
@@ -697,18 +560,25 @@ error_out(Type, Fmt, Args, RD, Ctx) ->
 -spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
 handle_error(Error, RD, Ctx) ->
     case Error of
+        {riak_client_error, Reason} ->
+            error_out(false,
+                      "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
+        insecure_connection ->
+            error_out({halt, 426},
+                      "Security is enabled and Riak does not"
+                      " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
         {unsupported_version, BadVersion} ->
             error_out({halt, 412},
                       "Unsupported API version ~s", [BadVersion], RD, Ctx);
         {not_permitted, Table} ->
             error_out({halt, 401},
-                      "Access to table ~s not allowed", [Table], RD, Ctx);
+                      "Access to table ~ts not allowed", [Table], RD, Ctx);
         {malformed_request, Method} ->
             error_out({halt, 400},
                       "Malformed ~s request", [Method], RD, Ctx);
-        url_key_with_put ->
+        {url_key_bad_method, Method} ->
             error_out({halt, 400},
-                      "Malformed POST request (did you mean a GET with keys in URL?)", [], RD, Ctx);
+                      "Inappropriate ~s request", [Method], RD, Ctx);
         {bad_parameter, Param} ->
             error_out({halt, 400},
                       "Bad value for parameter \"~s\"", [Param], RD, Ctx);
@@ -738,17 +608,11 @@ handle_error(Error, RD, Ctx) ->
                       "Key not found", [], RD, Ctx);
         {riak_error, Detailed} ->
             error_out({halt, 500},
-                      "Internal riak error: ~p", [Detailed], RD, Ctx);
-        {query_parse_error, Detailed} ->
-            error_out({halt, 400},
-                      "Malformed query: ~ts", [Detailed], RD, Ctx);
-        inappropriate_sql_for_coverage ->
-            error_out({halt, 400},
-                      "Inappropriate query for coverage request", [], RD, Ctx);
-        query_compile_fail ->
-            error_out({halt, 400},
-                      "Failed to compile query for coverage request", [], RD, Ctx)
+                      "Internal riak error: ~p", [Detailed], RD, Ctx)
     end.
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
+
+utf8_to_binary(S) ->
+    unicode:characters_to_binary(S, utf8, utf8).

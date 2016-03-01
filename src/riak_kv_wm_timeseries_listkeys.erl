@@ -40,6 +40,7 @@
          allowed_methods/2,
          is_authorized/2,
          forbidden/2,
+         malformed_request/2,
          resource_exists/2,
          content_types_provided/2,
          encodings_provided/2,
@@ -56,7 +57,7 @@
               table    :: undefined | binary()
              }).
 
--define(CB_RV_SPEC, {boolean(), #wm_reqdata{}, #ctx{}}).
+-define(CB_RV_SPEC, {boolean()|atom()|tuple(), #wm_reqdata{}, #ctx{}}).
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -71,10 +72,7 @@ init(Props) ->
 -spec service_available(#wm_reqdata{}, #ctx{}) ->
     {boolean(), #wm_reqdata{}, #ctx{}}.
 %% @doc Determine whether or not a connection to Riak
-%%      can be established.  This function also takes this
-%%      opportunity to extract the 'bucket' and 'key' path
-%%      bindings from the dispatch, as well as any vtag
-%%      query parameter.
+%%      can be established.
 service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
     case riak_kv_wm_utils:get_riak_client(
            RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
@@ -82,32 +80,23 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
             {true, RD,
              Ctx#ctx{api_version = wrq:path_info(api_version, RD),
                      client = C,
-                     table =
-                         case wrq:path_info(table, RD) of
-                             undefined -> undefined;
-                             B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
-                         end
+                     table = utf8_to_binary(
+                               mochiweb_util:unquote(
+                                 wrq:path_info(table, RD)))
                     }};
-        Error ->
-            {false, wrq:set_resp_body(
-                      flat_format("Unable to connect to Riak: ~p", [Error]),
-                      wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx}
+        {error, Reason} ->
+            handle_error({riak_client_error, Reason}, RD, Ctx)
     end.
 
 
-is_authorized(ReqData, Ctx) ->
-    case riak_api_web_security:is_authorized(ReqData) of
+is_authorized(RD, Ctx) ->
+    case riak_api_web_security:is_authorized(RD) of
         false ->
-            {"Basic realm=\"Riak\"", ReqData, Ctx};
+            {"Basic realm=\"Riak\"", RD, Ctx};
         {true, SecContext} ->
-            {true, ReqData, Ctx#ctx{security = SecContext}};
+            {true, RD, Ctx#ctx{security = SecContext}};
         insecure ->
-            {{halt, 426},
-             wrq:append_to_resp_body(
-               <<"Security is enabled and "
-                 "Riak does not accept credentials over HTTP. Try HTTPS instead.">>, ReqData),
-             Ctx}
+            handle_error(insecure_connection, RD, Ctx)
     end.
 
 
@@ -117,8 +106,35 @@ forbidden(RD, Ctx) ->
         true ->
             {true, RD, Ctx};
         false ->
-            {false, RD, Ctx}
+            case check_permissions(RD, Ctx) of
+                {true, RD1, Ctx1} ->
+                    {false, RD1, Ctx1};
+                ErrorAlreadyReported ->
+                    ErrorAlreadyReported
+            end
     end.
+
+-spec check_permissions(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
+check_permissions(RD, Ctx = #ctx{security = undefined}) ->
+    {true, RD, Ctx};
+check_permissions(RD, Ctx = #ctx{security = Security,
+                                 table = Table}) ->
+    case riak_core_security:check_permission(
+           {riak_kv_ts_util:api_call_to_perm(listkeys), Table}, Security) of
+        {false, Error, _} ->
+            handle_error(
+              {not_permitted, utf8_to_binary(Error)}, RD, Ctx);
+        _ ->
+            {true, RD, Ctx}
+    end.
+
+
+-spec malformed_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
+malformed_request(RD, Ctx = #ctx{api_version = "v1"}) ->
+    {false, RD, Ctx};
+malformed_request(RD, Ctx = #ctx{api_version = UnsupportedVersion}) ->
+    handle_error({unsupported_version, UnsupportedVersion}, RD, Ctx).
+
 
 -spec allowed_methods(#wm_reqdata{}, #ctx{}) ->
     {[atom()], #wm_reqdata{}, #ctx{}}.
@@ -130,7 +146,13 @@ allowed_methods(RD, Ctx) ->
 -spec resource_exists(#wm_reqdata{}, #ctx{}) ->
                              {boolean(), #wm_reqdata{}, #ctx{}}.
 resource_exists(RD, #ctx{table = Table} = Ctx) ->
-    {riak_kv_wm_utils:bucket_type_exists(Table), RD, Ctx}.
+    Mod = riak_ql_ddl:make_module_name(Table),
+    case catch Mod:get_ddl() of
+        {_, {undef, _}} ->
+            handle_error({no_such_table, Table}, RD, Ctx);
+        _ ->
+            {true, RD, Ctx}
+    end.
 
 
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
@@ -182,5 +204,37 @@ ts_keys_to_json(Keys) ->
                 || A <- Keys, A /= []],
     mochijson2:encode({struct, [{<<"keys">>, KeysTerm}]}).
 
+
+error_out(Type, Fmt, Args, RD, Ctx) ->
+    {Type,
+     wrq:set_resp_header(
+       "Content-Type", "text/plain", wrq:append_to_response_body(
+                                       flat_format(Fmt, Args), RD)),
+     Ctx}.
+
+-spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
+handle_error(Error, RD, Ctx) ->
+    case Error of
+        {riak_client_error, Reason} ->
+            error_out(false,
+                      "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
+        insecure_connection ->
+            error_out({halt, 426},
+                      "Security is enabled and Riak does not"
+                      " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
+        {unsupported_version, BadVersion} ->
+            error_out({halt, 412},
+                      "Unsupported API version ~s", [BadVersion], RD, Ctx);
+        {not_permitted, Table} ->
+            error_out({halt, 401},
+                      "Access to table ~ts not allowed", [Table], RD, Ctx);
+        {no_such_table, Table} ->
+            error_out({halt, 404},
+                      "Table \"~ts\" does not exist", [Table], RD, Ctx)
+    end.
+
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
+
+utf8_to_binary(S) ->
+    unicode:characters_to_binary(S, utf8, utf8).
