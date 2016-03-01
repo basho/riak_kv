@@ -242,10 +242,8 @@ extract_json(RD) ->
 -spec extract_data(binary()) -> term().
 extract_data(Json) ->
     try mochijson2:decode(Json) of
-        {struct, Decoded} when is_list(Decoded) ->
-            %% (columns and) data for put
-            validate_ts_records(
-              proplists:get_value(<<"data">>, Decoded))
+        Decoded when is_list(Decoded) ->
+            validate_ts_records(Decoded)
     catch
         _:_ ->
             undefined
@@ -267,8 +265,6 @@ validate_ts_record(R) when is_list(R) ->
 validate_ts_record(_) ->
     undefined.
 
-validate_ts_records(undefined) ->
-    undefined;
 validate_ts_records(RR) when is_list(RR) ->
     case lists:all(fun(R) -> validate_ts_record(R) /= undefined end, RR) of
         true ->
