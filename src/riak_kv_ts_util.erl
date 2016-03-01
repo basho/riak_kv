@@ -26,6 +26,7 @@
 
 -export([
          apply_timeseries_bucket_props/2,
+         build_sql_record/3,
          encode_typeval_key/1,
          get_table_ddl/1,
          lk/1,
@@ -33,9 +34,9 @@
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
+         sql_record_to_tuple/1,
          table_to_bucket/1,
-         build_sql_record/3,
-         sql_record_to_tuple/1
+         responsible_row_preflists/2
         ]).
 
 %% NOTE on table_to_bucket/1: Clients will work with table
@@ -235,6 +236,22 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 %% riak_ql_ddl:get_local_key/3,
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
+
+%%
+% -spec responsible_row_preflists(binary(), [term()], riak_core_ring()) ->
+%         [index_n()].
+responsible_row_preflists(Table, Row) when is_binary(Table), is_list(Row) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    Key = row_to_key(Row, Mod:get_ddl(), Mod),
+    Bucket = table_to_bucket(Table),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    <<Index:160/integer>>  = riak_core_util:chash_key({Bucket, Key}, BucketProps),
+    riak_kv_util:responsible_preflists(Index).
+
+%%
+row_to_key(Row, DDL, Mod) ->
+    riak_kv_ts_util:encode_typeval_key(
+      riak_ql_ddl:get_partition_key(DDL, list_to_tuple(Row), Mod)).
 
 %%%
 %%% TESTS

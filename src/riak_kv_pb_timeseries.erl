@@ -814,8 +814,8 @@ make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}) ->
 
 -spec make_describe_response([[term()]]) -> #tsqueryresp{}.
 make_describe_response(DescribeTableRows) ->
-    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
-    ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
+    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>, <<"Storage Order">>],
+    ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64 ,    varchar],
     #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, DescribeTableRows)}.
 

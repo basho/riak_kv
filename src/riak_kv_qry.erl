@@ -57,16 +57,28 @@ submit(SQL = ?SQL_SELECT{}, DDL) ->
 
 -spec describe_table_columns(#ddl_v1{}) ->
                                     {ok, [[binary() | boolean() | integer() | undefined]]}.
-describe_table_columns(#ddl_v1{fields = FieldSpecs,
-                               partition_key = #key_v1{ast = PKSpec},
-                               local_key     = #key_v1{ast = LKSpec}}) ->
-    {ok,
-     [[Name, list_to_binary(atom_to_list(Type)), Nullable,
-       column_pk_position_or_blank(Name, PKSpec),
-       column_lk_position_or_blank(Name, LKSpec)]
-      || #riak_field_v1{name = Name,
-                        type = Type,
-                        optional = Nullable} <- FieldSpecs]}.
+describe_table_columns(#ddl_v1{ fields = FieldSpecs } = DDL) ->
+    Cols = [describe_table_column(DDL, F) || F <- FieldSpecs],
+    {ok, Cols}.
+
+describe_table_column(#ddl_v1{ partition_key = #key_v1{ast = PKSpec},
+                               local_key     = #key_v1{ast = LKSpec}},
+                      #riak_field_v1{ name = Name,
+                                      type = Type,
+                                      optional = Nullable}) ->
+    case lists:keyfind([Name], #riak_field_v1.name, LKSpec) of
+        #param_v1{ ordering = descending } ->
+            Ordering = <<"DESC">>;
+        #param_v1{ ordering = ParamOrder } when ParamOrder == ascending;
+                                                ParamOrder == undefined ->
+            Ordering = <<"ASC">>
+    end,
+    [Name, 
+     list_to_binary(atom_to_list(Type)),
+     Nullable,
+     column_pk_position_or_blank(Name, PKSpec),
+     column_lk_position_or_blank(Name, LKSpec),
+     Ordering].
 
 %% the following two functions are identical, for the way fields and
 %% keys are represented as of 2015-12-18; duplication here is a hint

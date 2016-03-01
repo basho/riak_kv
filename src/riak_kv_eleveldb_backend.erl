@@ -469,11 +469,11 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     StartKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- StartK], LocalKeyLen),
     EndKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- EndK], LocalKeyLen),
     case lists:member({start_inclusive, false}, W) of
-        true  -> StartKey2 = <<StartKey1/binary, 16#ff:8>>;
+        true  -> StartKey2 = <<StartKey1/binary>>;
         false -> StartKey2 = StartKey1
     end,
     case lists:member({end_inclusive, true}, W) of
-        true  -> EndKey2 = <<EndKey1/binary, 16#ff:8>>;
+        true  -> EndKey2 = <<EndKey1/binary>>;
         false -> EndKey2 = EndKey1
     end,
     FoldFun = fun build_list/2,

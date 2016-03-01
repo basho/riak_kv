@@ -116,7 +116,7 @@ run_select(Select, Row) ->
     %% there is no long running state
     run_select2(Select, Row, undefined, []).
 
-run_select(Select, Row, InitialState) ->
+run_select(Select,  Row, InitialState) ->
     %% the second argument is the state, if we're return row query results then
     %% there is no long running state
     run_select2(Select, Row, InitialState, []).
@@ -404,23 +404,24 @@ fix_start_order(W, Mod, LK) ->
             %% Swap the start/end keys so that the backends will
             %% scan over them correctly.  Likely cause is a descending
             %% timestamp field.
-            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
-            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey}),
+            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey}),
 
             %% start inclusive defaults true, end inclusive defaults false
-            case proplists:get_value(end_inclusive, W) of
-                undefined -> W3 = W;
-                Vx         -> W3 = lists:keystore(end_inclusive, 1, W2, {end_inclusive, Vx})
-            end,
-            case proplists:get_value(start_inclusive, W2) of
-                undefined -> W3;
-                Vz         -> lists:keystore(end_inclusive, 1, W3, {end_inclusive, Vz})
-            end
+            % case proplists:get_value(end_inclusive, W) of
+            %     undefined -> W3 = W2;
+            %     Vx         -> W3 = lists:keystore(end_inclusive, 1, W2, {end_inclusive, Vx})
+            % end,
+            % case proplists:get_value(start_inclusive, W2) of
+            %     undefined -> W3;
+            %     Vz         -> lists:keystore(end_inclusive, 1, W3, {end_inclusive, Vz})
+            % end
 
-            % W3 = lists:keystore(start_inclusive, 1, W2,
-            %                     {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
-            % _W4 = lists:keystore(end_inclusive, 1, W3,
-            %                      {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
+
+            W3 = lists:keystore(start_inclusive, 1, W2,
+                                {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
+            _W4 = lists:keystore(end_inclusive, 1, W3,
+                                 {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
     end.
 
 %% Make the subqueries appear in the same order as the keys.  The qry worker
