@@ -67,6 +67,8 @@
               riak,         %% local | {node(), atom()} - params for riak client
               api_call :: undefined|get|put|delete,
               table    :: undefined | binary(),
+              mod      :: undefined | module(),
+              ddl      :: undefined | #ddl_v1{},
               %% data in/out: the following fields are either
               %% extracted from the JSON/path elements that came in
               %% the request body in case of a PUT, or filled out by
@@ -189,47 +191,41 @@ validate_request(RD, Ctx) ->
             handle_error({unsupported_version, BadVersion}, RD, Ctx)
     end.
 
--spec validate_request_v1(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-validate_request_v1(RD, Ctx) ->
-    case wrq:path_tokens(RD) of
-        KeysInUrl
-          when KeysInUrl /= [] ->
-            KeysInUrlUnquoted = lists:map(fun mochiweb_util:unquote/1, KeysInUrl),
-            validate_request_v1_with(KeysInUrlUnquoted, RD, Ctx);
-        _ ->
-            validate_request_v1_with(json, RD, Ctx)
-    end.
-
--spec validate_request_v1_with(json | [string()], #wm_reqdata{}, #ctx{}) ->
-                                      ?CB_RV_SPEC.
-validate_request_v1_with(json, RD, Ctx = #ctx{method = Method}) ->
+-spec validate_request_v1(#wm_reqdata{}, #ctx{}) ->
+                                 ?CB_RV_SPEC.
+validate_request_v1(RD, Ctx = #ctx{method = 'POST'}) ->
     Json = extract_json(RD),
-    case {Method, extract_data(Json)} of
-        %% batch put
-        {'POST', Data}
-          when Data /= undefined ->
+    case extract_data(Json) of
+        Data when Data /= undefined ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = put,
                           data = Data});
         _Invalid ->
-            handle_error({malformed_request, Method}, RD, Ctx)
+            handle_error({malformed_request, 'POST'}, RD, Ctx)
     end;
 
-validate_request_v1_with(KeysInUrl, RD, Ctx = #ctx{method = Method,
-                                                   table = Table}) ->
-    case {Method, path_elements_to_key(Table, KeysInUrl)} of
-        {'GET', {ok, Key}} ->
+validate_request_v1(RD, Ctx = #ctx{method = 'GET', table = Table,
+                                   mod = Mod, ddl = DDL}) ->
+    KeysInUrl = lists:map(fun mochiweb_util:unquote/1, wrq:path_tokens(RD)),
+    case path_elements_to_key(Table, KeysInUrl, Mod, DDL) of
+        {ok, Key} ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = get,
                           key = Key});
-        {'DELETE', {ok, Key}} ->
+        {error, Reason} ->
+            handle_error(Reason, RD, Ctx)
+    end;
+
+validate_request_v1(RD, Ctx = #ctx{method = 'DELETE', table = Table,
+                                  mod = Mod, ddl = DDL}) ->
+    KeysInUrl = lists:map(fun mochiweb_util:unquote/1, wrq:path_tokens(RD)),
+    case path_elements_to_key(Table, KeysInUrl, Mod, DDL) of
+        {ok, Key} ->
             valid_params(
               RD, Ctx#ctx{api_version = "v1", api_call = delete,
                           key = Key});
-        {_, {error, Reason}} ->
-            handle_error(Reason, RD, Ctx);
-        {BadMethod, _} ->
-            handle_error({url_key_bad_method, BadMethod}, RD, Ctx)
+        {error, Reason} ->
+            handle_error(Reason, RD, Ctx)
     end.
 
 extract_json(RD) ->
@@ -247,7 +243,7 @@ extract_json(RD) ->
 extract_data(Json) ->
     try mochijson2:decode(Json) of
         {struct, Decoded} when is_list(Decoded) ->
-            %% key and data (it's a put)
+            %% (columns and) data for put
             validate_ts_records(
               proplists:get_value(<<"data">>, Decoded))
     catch
@@ -288,14 +284,12 @@ validate_ts_records(_) ->
 %% [{K1, V1}, {K2, V2}]), check with Table's DDL to make sure keys are
 %% correct and values are of (convertible to) appropriate types, and
 %% return the KV list
--spec path_elements_to_key(binary(), [string()]) ->
+-spec path_elements_to_key(binary(), [string()], module(), #ddl_v1{}) ->
                                   {ok, [{string(), riak_pb_ts_codec:ldbvalue()}]} |
                                   {error, atom()|tuple()}.
-path_elements_to_key(Table, PEList) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
+path_elements_to_key(Table, PEList, Mod,
+                     #ddl_v1{local_key = #key_v1{ast = LK}}) ->
     try
-        DDL = Mod:get_ddl(),
-        #ddl_v1{local_key = #key_v1{ast = LK}} = DDL,
         TableKeyLength = length(LK),
         if TableKeyLength * 2 == length(PEList) ->
                 %% values with field names:  "f1/v1/f2/v2/f3/v3"
@@ -306,7 +300,7 @@ path_elements_to_key(Table, PEList) ->
                      || {K, V} <- empair(PEList, [])],
                 %% 2. possibly reorder field-value pairs to match the LK order
                 OrderedKeyValues =
-                    ensure_lk_order_and_strip(DDL, FVList),
+                    ensure_lk_order_and_strip(LK, FVList),
                 {ok, OrderedKeyValues};
            TableKeyLength == length(PEList) ->
                 %% bare values: "v1/v2/v3"
@@ -322,8 +316,6 @@ path_elements_to_key(Table, PEList) ->
                 {error, url_unpaired_keys}
         end
     catch
-        error:undef ->
-            {error, {no_such_table, Table}};
         throw:ConvertFailed ->
             {error, ConvertFailed}
     end.
@@ -333,9 +325,9 @@ empair([K, V | T], Q) -> empair(T, [{K, V}|Q]).
 
 convert_fv(Table, Mod, FieldRaw, V) ->
     Field = [list_to_binary(X) || X <- string:tokens(FieldRaw, ".")],
-    try
-        case Mod:is_field_valid(Field) of
-            true ->
+    case Mod:is_field_valid(Field) of
+        true ->
+            try
                 case Mod:get_field_type(Field) of
                     varchar ->
                         {Field, list_to_binary(V)};
@@ -356,17 +348,17 @@ convert_fv(Table, Mod, FieldRaw, V) ->
                             GoodValue ->
                                 {Field, GoodValue}
                         end
-                end;
+                end
+            catch
+                error:badarg ->
+                    %% rethrow with key, for more informative reporting
+                    throw({url_key_bad_value, Table, Field});
             false ->
                 throw({url_key_bad_key, Table, Field})
         end
-    catch
-        error:badarg ->
-            %% rethrow with key, for more informative reporting
-            throw({url_key_bad_value, Table, Field})
     end.
 
-ensure_lk_order_and_strip(#ddl_v1{local_key = #key_v1{ast = LK}}, FVList) ->
+ensure_lk_order_and_strip(LK, FVList) ->
     [proplists:get_value(F, FVList)
      || #param_v1{name = F} <- LK].
 
@@ -387,7 +379,7 @@ valid_params(RD, Ctx) ->
 
 -spec check_permissions(#wm_reqdata{}, #ctx{}) -> {term(), #wm_reqdata{}, #ctx{}}.
 check_permissions(RD, Ctx = #ctx{security = undefined}) ->
-    validate_resource(RD, Ctx);
+    {true, RD, Ctx};
 check_permissions(RD, Ctx = #ctx{security = Security,
                                  api_call = Call,
                                  table = Table}) ->
@@ -397,18 +389,7 @@ check_permissions(RD, Ctx = #ctx{security = Security,
             handle_error(
               {not_permitted, utf8_to_binary(Error)}, RD, Ctx);
         _ ->
-            validate_resource(RD, Ctx)
-    end.
-
-
--spec validate_resource(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-validate_resource(RD, Ctx = #ctx{table = Table}) ->
-    %% Ensure the bucket type exists, otherwise 404 early.
-    case riak_kv_wm_utils:bucket_type_exists(Table) of
-        true ->
-            {true, RD, Ctx};
-        false ->
-            handle_error({no_such_table, Table}, RD, Ctx)
+            {true, RD, Ctx}
     end.
 
 
@@ -435,12 +416,14 @@ content_types_accepted(RD, Ctx) ->
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) ->
                              {boolean(), #wm_reqdata{}, #ctx{}}.
-resource_exists(RD0, Ctx0) ->
-    case preexec(RD0, Ctx0) of
-        {true, RD, Ctx} ->
-            call_api_function(RD, Ctx);
-        FalseWithDetails ->
-            FalseWithDetails
+resource_exists(RD, Ctx = #ctx{table = Table}) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    try
+        DDL = Mod:get_ddl(),
+        {true, RD, Ctx#ctx{mod = Mod, ddl = DDL}}
+    catch
+        error:undef ->
+            handle_error({no_such_table, Table}, RD, Ctx)
     end.
 
 -spec process_post(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
@@ -488,13 +471,12 @@ call_api_function(RD, Ctx = #ctx{api_call = put,
     end;
 
 call_api_function(RD, Ctx0 = #ctx{api_call = get,
-                                  table = Table, key = Key,
+                                  table = Table, key = Key, mod = Mod,
                                   timeout = Timeout}) ->
     Options =
         if Timeout == undefined -> [];
            true -> [{timeout, Timeout}]
         end,
-    Mod = riak_ql_ddl:make_module_name(Table),
     case riak_kv_ts_api:get_data(Key, Table, Mod, Options) of
         {ok, Record} ->
             {ColumnNames, Row} = lists:unzip(Record),
@@ -516,12 +498,12 @@ call_api_function(RD, Ctx0 = #ctx{api_call = get,
 
 call_api_function(RD, Ctx = #ctx{api_call = delete,
                                  table = Table, key = Key,
+                                 mod = Mod,
                                  timeout = Timeout}) ->
     Options =
         if Timeout == undefined -> [];
            true -> [{timeout, Timeout}]
         end,
-    Mod = riak_ql_ddl:make_module_name(Table),
     case riak_kv_ts_api:delete_data(Key, Table, Mod, Options) of
         ok ->
             prepare_data_in_body(RD, Ctx#ctx{result = ok});
@@ -540,6 +522,18 @@ prepare_data_in_body(RD0, Ctx0) ->
 
 
 -spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
+produce_doc_body(RD0, Ctx0 = #ctx{result = undefined}) ->
+    case preexec(RD0, Ctx0) of
+        {true, RD1, Ctx1} ->
+            case call_api_function(RD1, Ctx1) of
+                {true, RD2, Ctx2} ->
+                    produce_doc_body(RD2, Ctx2);
+                FalseWithDetails ->
+                    FalseWithDetails
+            end;
+        FalseWithDetails ->
+            FalseWithDetails
+    end;
 produce_doc_body(RD, Ctx = #ctx{result = ok}) ->
     {<<"ok">>, RD, Ctx};
 produce_doc_body(RD, Ctx = #ctx{api_call = get,
