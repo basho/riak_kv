@@ -328,27 +328,7 @@ convert_fv(Table, Mod, FieldRaw, V) ->
     case Mod:is_field_valid(Field) of
         true ->
             try
-                case Mod:get_field_type(Field) of
-                    varchar ->
-                        {Field, list_to_binary(V)};
-                    sint64 ->
-                        {Field, list_to_integer(V)};
-                    double ->
-                        %% list_to_float("42") will fail, so
-                        try
-                            {Field, list_to_float(V)}
-                        catch
-                            error:badarg ->
-                                {Field, float(list_to_integer(V))}
-                        end;
-                    timestamp ->
-                        case list_to_integer(V) of
-                            BadValue when BadValue < 1 ->
-                                throw({url_key_bad_value, Table, Field});
-                            GoodValue ->
-                                {Field, GoodValue}
-                        end
-                end
+                convert_field(Table, Field, Mod:get_field_type(Field), V)
             catch
                 error:badarg ->
                     %% rethrow with key, for more informative reporting
@@ -357,6 +337,27 @@ convert_fv(Table, Mod, FieldRaw, V) ->
                 throw({url_key_bad_key, Table, Field})
         end
     end.
+
+convert_field(_T, F, varchar, V) ->
+    {F, list_to_binary(V)};
+convert_field(_T, F, sint64, V) ->
+    {F, list_to_integer(V)};
+convert_field(_T, F, double, V) ->
+    %% list_to_float("42") will fail, so
+    try
+        {F, list_to_float(V)}
+    catch
+        error:badarg ->
+            {F, float(list_to_integer(V))}
+    end;
+convert_field(T, F, timestamp, V) ->
+    case list_to_integer(V) of
+        BadValue when BadValue < 1 ->
+            throw({url_key_bad_value, T, F});
+        GoodValue ->
+            {F, GoodValue}
+    end.
+
 
 ensure_lk_order_and_strip(LK, FVList) ->
     [proplists:get_value(F, FVList)
