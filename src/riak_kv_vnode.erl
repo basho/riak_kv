@@ -147,6 +147,7 @@
                   bprops :: maybe_improper_list(),
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
+                  readrepair=false :: boolean(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
                  }).
@@ -1238,12 +1239,11 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     end,
     case proplists:get_value(rr, Options, false) of
         true ->
-            PruneTime = undefined;
-            %% HERE!!!!!
-            %%DoingReadRepair = true;
+            PruneTime = undefined,
+            ReadRepair = true;
         false ->
-            %%DoingReadRepair = false,
-            PruneTime = StartTime
+            PruneTime = StartTime,
+            ReadRepair = false
     end,
     Coord = proplists:get_value(coord, Options, false),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
@@ -1255,7 +1255,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        reqid=ReqID,
                        bprops=BProps,
                        starttime=StartTime,
-                       %% Rename This? Add another field? If prunetime = undefined, doing read repair
+                       readrepair = ReadRepair,
                        prunetime=PruneTime,
                        crdt_op = CRDTOp},
     {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
@@ -1463,16 +1463,26 @@ perform_put({true, Obj},
             #putargs{returnbody=RB,
                      bkey=BKey,
                      reqid=ReqID,
-                     index_specs=IndexSpecs}) ->
-    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
+                     index_specs=IndexSpecs,
+                     readrepair=ReadRepair}) ->
+    case ReadRepair of
+      true ->
+        MaxCheckFlag = no_max_check;
+      false ->
+        MaxCheckFlag = do_max_check
+    end,
+    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
     {Reply, State2}.
 
-actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
+actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State) ->
+    actual_put(BKey, Obj, IndexSpecs, RB, ReqID, do_max_check, State).
+
+actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
-                       do_max_check) of
+                       MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
