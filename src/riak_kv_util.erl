@@ -223,7 +223,7 @@ preflist_siblings(Index, N, Ring) ->
     lists:reverse(Pred) ++ Succ.
 
 -spec responsible_preflists(index()) -> [index_n()].
-responsible_preflists(Index) ->
+responsible_preflists(Index) when is_integer(Index) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     responsible_preflists(Index, Ring).
 

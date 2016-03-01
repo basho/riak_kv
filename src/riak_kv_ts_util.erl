@@ -37,6 +37,7 @@
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
+         responsible_row_preflists/2,
          row_to_key/3,
          sql_record_to_tuple/1,
          sql_to_cover/6,
@@ -410,7 +411,6 @@ build_dummy_object_from_keyed_values(LK, AllFields) ->
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
 
-
 -spec lk_to_pk(tuple(), ?DDL{}, module()) -> tuple().
 %% A simplified version of make_key/3 which only returns the PK.
 lk_to_pk(LKVals, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
@@ -686,6 +686,14 @@ find_hash_fn([_H|T]) ->
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
+
+responsible_row_preflists(Table, Row) when is_binary(Table), is_list(Row) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    Key = row_to_key(Row, Mod:get_ddl(), Mod),
+    Bucket = table_to_bucket(Table),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    <<Index:160/integer>>  = riak_core_util:chash_key({Bucket, Key}, BucketProps),
+    riak_kv_util:responsible_preflists(Index).
 
 %%%
 %%% TESTS
