@@ -100,17 +100,17 @@ decode(Code, Bin) ->
                     {ok, make_decoder_error_response(Error)}
             end;
         #tsgetreq{table = Table}->
-            {ok, Msg, {"riak_kv.ts_get", Table}};
+            {ok, Msg, {riak_kv_ts_util:api_call_to_perm(get), Table}};
         #tsputreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_put", Table}};
+            {ok, Msg, {riak_kv_ts_util:api_call_to_perm(put), Table}};
         #tsttbputreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_put", Table}};
+            {ok, Msg, {riak_kv_ts_util:api_call_to_perm(put), Table}};
         #tsdelreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_del", Table}};
+            {ok, Msg, {riak_kv_ts_util:api_call_to_perm(delete), Table}};
         #tslistkeysreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_listkeys", Table}};
+            {ok, Msg, {riak_kv_ts_util:api_call_to_perm(listkeys), Table}};
         #tscoveragereq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_cover", Table}}
+            {ok, Msg, {riak_kv_ts_util:api_call_to_perm(coverage), Table}}
     end.
 
 -spec decode_query(Query::#tsinterpolation{}) ->

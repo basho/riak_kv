@@ -25,6 +25,7 @@
 -module(riak_kv_ts_util).
 
 -export([
+         api_call_to_perm/1,
          apply_timeseries_bucket_props/2,
          build_sql_record/3,
          encode_typeval_key/1,
@@ -42,6 +43,27 @@
         ]).
 -export([explain_query/1, explain_query/2]).
 -export([explain_query_print/1]).
+
+-type api_call() :: get | put | delete | listkeys | coverage |
+                    query_create_table | query_select | query_describe.
+-spec api_call_to_perm(api_call()) -> string().
+api_call_to_perm(get) ->
+    "riak_ts.get";
+api_call_to_perm(put) ->
+    "riak_ts.put";
+api_call_to_perm(delete) ->
+    "riak_ts.delete";
+api_call_to_perm(listkeys) ->
+    "riak_ts.listkeys";
+api_call_to_perm(coverage) ->
+    "riak_ts.coverage";
+api_call_to_perm(query_create_table) ->
+    "riak_ts.query_create_table";
+api_call_to_perm(query_select) ->
+    "riak_ts.query_select";
+api_call_to_perm(query_describe) ->
+    "riak_ts.query_describe".
+
 
 %% NOTE on table_to_bucket/1: Clients will work with table
 %% names. Those names map to a bucket type/bucket name tuple in Riak,
