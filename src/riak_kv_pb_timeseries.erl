@@ -2,7 +2,7 @@
 %%
 %% riak_kv_pb_timeseries.erl: Riak TS protobuf callbacks
 %%
-%% Copyright (c) 2015, 2016 Basho Technologies, Inc.
+%% Copyright (c) 2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -25,8 +25,8 @@
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+-include("riak_kv_ts.hrl").
 -include("riak_kv_wm_raw.hrl").
 
 -behaviour(riak_api_pb_service).
@@ -58,6 +58,7 @@
 -define(E_BAD_QUERY,         1018).
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
+-define(E_DELETE_NOTFOUND,   1021).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -122,9 +123,13 @@ decode_query(SQL) ->
     {error, _} | {ok, ts_query_types()}.
 decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
-    case riak_ql_parser:parse(Lexed) of
-        {ok, ?SQL_SELECT{} = SQL} ->
-            {ok, SQL?SQL_SELECT{cover_context = Cover}};
+    case riak_ql_parser:ql_parse(Lexed) of
+        {select, SQL} ->
+            riak_kv_ts_util:build_sql_record(select, SQL, Cover);
+        {describe, SQL} ->
+            riak_kv_ts_util:build_sql_record(describe, SQL, Cover);
+        {ddl, DDL} ->
+            {ok, DDL};
         Other ->
             Other
     end.
@@ -383,7 +388,7 @@ validate_rows(Mod, Rows) ->
 
 -spec put_data([riak_pb_ts_codec:tsrow()], binary(), module()) -> integer().
 %% return count of records we failed to put
-put_data(Data, Table, Mod) ->
+put_data(Data, Table, Mod) when is_binary(Table) ->
     DDL = Mod:get_ddl(),
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -555,7 +560,7 @@ sub_tsdelreq(Mod, DDL, #tsdelreq{table = Table,
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
-            {reply, tsdelresp, State};
+            {reply, make_rpberrresp(?E_DELETE_NOTFOUND, "notfound"), State};
         {error, Reason} ->
             {reply, failed_delete_response(Reason), State}
     end.
@@ -715,12 +720,13 @@ compile(_Mod, {error, Err}) ->
     {error, make_decoder_error_response(Err)};
 compile(_Mod, {'EXIT', {Err, _}}) ->
     {error, make_decoder_error_response(Err)};
-compile(Mod, {ok, SQL}) ->
+compile(Mod, {ok, ?SQL_SELECT{}=SQL}) ->
     case (catch Mod:get_ddl()) of
         {_, {undef, _}} ->
             {error, no_helper_module};
         DDL ->
-            case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+            case riak_ql_ddl:is_query_valid(Mod, DDL,
+                                            riak_kv_ts_util:sql_record_to_tuple(SQL)) of
                 true ->
                     case riak_kv_qry_compiler:compile(DDL, SQL, undefined) of
                         {error,_} = Error ->
@@ -788,9 +794,8 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
             BucketProps = riak_core_bucket:get_bucket(
                             riak_kv_ts_util:table_to_bucket(Table)),
             {reply, missing_helper_module(Table, BucketProps), State};
-        {error, {inappropriate_bucket_state, InappropriateState}} ->
-            {reply, table_not_activated_response(
-                      Table, InappropriateState),
+        {error, _} ->
+            {reply, table_not_activated_response(Table),
              State}
     end.
 
@@ -872,10 +877,10 @@ table_activate_fail_response(Table) ->
       ?E_ACTIVATE,
       flat_format("Failed to activate table ~s", [Table])).
 
-table_not_activated_response(Table, BadState) ->
+table_not_activated_response(Table) ->
     make_rpberrresp(
       ?E_TABLE_INACTIVE,
-      flat_format("Table ~ts has not been activated (is in state '~s')", [Table, BadState])).
+      flat_format("~ts is not an active table.", [Table])).
 
 table_created_missing_response(Table) ->
     make_rpberrresp(

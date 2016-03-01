@@ -2,7 +2,7 @@
 %%%
 %%% riak_kv_qry_queue.erl: Riak SQL worker pool and query queue manager
 %%%
-%%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
+%%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
 %%%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -48,7 +48,7 @@
         ]).
 
 -include("riak_kv_index.hrl").
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 
 -define(SERVER, ?MODULE).
 

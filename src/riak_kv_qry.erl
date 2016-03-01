@@ -2,7 +2,7 @@
 %%
 %% riak_kv_qry: Riak SQL API
 %%
-%% Copyright (C) 2015 Basho Technologies, Inc. All rights reserved
+%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -26,10 +26,11 @@
 -module(riak_kv_qry).
 
 -export([
-         submit/2
+         submit/2,
+         format_query_syntax_errors/1
         ]).
 
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 
 %% No coverage plan for parallel requests
 -spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #ddl_v1{}) ->
@@ -93,7 +94,7 @@ maybe_submit_to_queue(SQL, #ddl_v1{table = BucketType} = DDL) ->
     MaxSubQueries =
         app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
 
-    case riak_ql_ddl:is_query_valid(Mod, DDL, SQL) of
+    case riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(SQL)) of
         true ->
             case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
                 {error,_} = Error ->

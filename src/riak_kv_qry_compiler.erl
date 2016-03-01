@@ -3,7 +3,7 @@
 %% riak_kv_qry_compiler: generate the coverage for a hashed query
 %%
 %%
-%% Copyright (c) 2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -29,7 +29,7 @@
 -type compiled_select() :: fun((_,_) -> riak_pb_ts_codec:ldbvalue()).
 -export_type([compiled_select/0]).
 
--include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_ts.hrl").
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
 
@@ -39,15 +39,17 @@
     {ok, [?SQL_SELECT{}]} | {error, any()}.
 compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
     {error, 'query is already compiled'};
-compile(#ddl_v1{}, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = [] } }, _MaxSubQueries) ->
-    {error, 'full table scan not implemented'};
 compile(#ddl_v1{} = DDL,
-        ?SQL_SELECT{is_executable = false, type = sql} = Q, MaxSubQueries) ->
-    case compile_select_clause(DDL, Q) of
-        {ok, S} ->
-            compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries);
-        {error, _} = Error ->
-            Error
+        ?SQL_SELECT{is_executable = false, 'SELECT' = Sel} = Q, MaxSubQueries) ->
+    if Sel#riak_sel_clause_v1.clause == [] ->
+            {error, 'full table scan not implemented'};
+        el/=se ->
+            case compile_select_clause(DDL, Q) of
+                {ok, S} ->
+                    compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries);
+                {error, _} = Error ->
+                    Error
+            end
     end.
 
 %% adding the local key here is a bodge
@@ -138,7 +140,7 @@ my_mapfoldl(F, Accu, []) when is_function(F, 2) -> {[],Accu}.
 
 %%
 compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
-    CompileColFn = 
+    CompileColFn =
         fun(ColX, AccX) ->
             select_column_clause_folder(DDL, ColX, AccX)
         end,
@@ -171,14 +173,13 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
               col_names = get_col_names(DDL, Q),
               col_return_types = lists:flatten(ColTypes) }};
       [_|_] ->
-
-          {error, lists:reverse(Errors)}
+          {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
     end.
 
 %%
 -spec get_col_names(#ddl_v1{}, ?SQL_SELECT{}) -> [binary()].
-get_col_names(DDL, Q) ->
-    ColNames = riak_ql_to_string:col_names_from_select(Q),
+get_col_names(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{clause = Select}}) ->
+    ColNames = riak_ql_to_string:col_names_from_select(Select),
     %% flatten because * gets expanded to multiple columns
     lists:flatten(
       [get_col_names2(DDL, N) || N <- ColNames]
@@ -204,7 +205,7 @@ get_col_names2(_, Name) ->
 -spec select_column_clause_folder(#ddl_v1{}, selection(),
                                   {set(), #riak_sel_clause_v1{}}) ->
                 {set(), #riak_sel_clause_v1{}}.
-select_column_clause_folder(DDL, ColAST1, 
+select_column_clause_folder(DDL, ColAST1,
                             {TypeSet1, #riak_sel_clause_v1{ finalisers = Finalisers } = SelClause}) ->
     %% extract the stateful functions then treat them as separate select columns
     LenFinalisers = length(Finalisers),
@@ -369,9 +370,12 @@ extract_stateful_functions2({Op, ArgA1, ArgB1}, FinaliserLen, Fns1) ->
     {ArgA2, Fns2} = extract_stateful_functions2(ArgA1, FinaliserLen, Fns1),
     {ArgB2, Fns3} = extract_stateful_functions2(ArgB1, FinaliserLen, Fns2),
     {{Op, ArgA2, ArgB2}, Fns3};
-extract_stateful_functions2({Tag, _} = Node, _, Fns) 
+extract_stateful_functions2({negate, Arg1}, FinaliserLen, Fns1) ->
+    {Arg2, Fns2} = extract_stateful_functions2(Arg1, FinaliserLen, Fns1),
+    {{negate, Arg2}, Fns2};
+extract_stateful_functions2({Tag, _} = Node, _, Fns)
         when Tag == identifier; Tag == sint64; Tag == integer; Tag == float;
-             Tag == binary;     Tag == varchar; Tag == boolean; Tag == negate ->
+             Tag == binary;     Tag == varchar; Tag == boolean ->
     {Node, Fns};
 extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLen, Fns1) ->
     Fns2 = [Function | Fns1],
@@ -401,7 +405,7 @@ infer_op_type(_, T1, T2) when T1 == double andalso T2 == sint64;
                               T1 == sint64 andalso T2 == double ->
     double;
 infer_op_type(Op, T1, T2) ->
-    {error, {invalid_type, Op, T1, T2}}.
+    {error, {operator_type_mismatch, Op, T1, T2}}.
 
 %%
 compile_select_col_stateless2('+', A, B) ->
@@ -811,11 +815,12 @@ modify_where_key(TupleList, Field, NewVal) ->
 
 is_query_valid(#ddl_v1{ table = Table } = DDL, Q) ->
     Mod = riak_ql_ddl:make_module_name(Table),
-    riak_ql_ddl:is_query_valid(Mod, DDL, Q).
+    riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(Q)).
 
 get_query(String) ->
     Lexed = riak_ql_lexer:get_tokens(String),
-    {ok, _Q} = riak_ql_parser:parse(Lexed).
+    {ok, Q} = riak_ql_parser:parse(Lexed),
+    riak_kv_ts_util:build_sql_record(select, Q, undefined).
 
 get_long_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++
@@ -1739,7 +1744,7 @@ basic_select_arith_2_test() ->
     {ok, Rec} = get_query(SQL),
     {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
-       #riak_sel_clause_v1{ 
+       #riak_sel_clause_v1{
           calc_type = rows,
           col_return_types = [double],
           col_names = [<<"((1+2.0)-((3/4)*5))">>] },
@@ -1939,8 +1944,9 @@ compile_query_with_function_type_error_1_test() ->
           "SELECT SUM(location) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
+    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
-        {error, [{invalid_function_call,'SUM',[varchar]}]},
+        {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
@@ -1949,10 +1955,10 @@ compile_query_with_function_type_error_2_test() ->
           "SELECT SUM(location), AVG(location) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
+    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
-        {error, [
-            {invalid_function_call,'SUM',[varchar]},
-            {invalid_function_call,'AVG',[varchar]}]},
+        {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].\n"
+                                "Function 'AVG' called with arguments of the wrong type [varchar].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
@@ -1962,7 +1968,7 @@ compile_query_with_function_type_error_3_test() ->
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-        {error, [{invalid_type,'+',varchar,sint64}]},
+        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
@@ -1971,8 +1977,9 @@ compile_query_with_arithmetic_type_error_1_test() ->
           "SELECT location + 1 FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
+    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
-        {error, [{invalid_type,'+',varchar,sint64}]},
+        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
 
@@ -1981,9 +1988,19 @@ compile_query_with_arithmetic_type_error_2_test() ->
           "SELECT 2*(location + 1) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
+    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
-        {error, [{invalid_type,'+',varchar,sint64}]},
+        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
     ).
+
+negate_an_aggregation_function_test() ->
+    {ok, Rec} = get_query(
+        "SELECT -COUNT(*) FROM mytab"),
+    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        [-3],
+        finalise_aggregate(Select, [3])
+      ).
 
 -endif.
