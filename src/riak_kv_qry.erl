@@ -33,7 +33,7 @@
 -include("riak_kv_ts.hrl").
 
 %% No coverage plan for parallel requests
--spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{}, #ddl_v1{}) ->
+-spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{}, #ddl_v1{}) ->
     {ok, any()} | {error, any()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
 %%      To get the results of running the query, use fetch/1.
@@ -48,6 +48,9 @@ submit(SQLString, DDL) when is_list(SQLString) ->
 
 submit(#riak_sql_describe_v1{}, DDL) ->
     describe_table_columns(DDL);
+
+submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
+    {ok, SQL};
 
 submit(SQL = ?SQL_SELECT{}, DDL) ->
     maybe_submit_to_queue(SQL, DDL).

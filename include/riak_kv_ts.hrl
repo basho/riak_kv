@@ -26,7 +26,7 @@
 %% For dialyzer types
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
-%% the result type of a query, rows means to return all mataching rows, aggregate
+%% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
 -type select_result_type() :: rows | aggregate.
 
@@ -59,7 +59,14 @@
 
 -record(riak_sql_describe_v1,
         {
-          'DESCRIBE' = <<>>  :: binary()
+          'DESCRIBE'    = <<>>  :: binary()
+        }).
+
+-record(riak_sql_insert_v1,
+        {
+          'INSERT'      = <<>>  :: binary(),
+          fields                :: [{identifier, binary()}],
+          values                :: list(list(term()))
         }).
 
 -define(SQL_SELECT, #riak_select_v1).

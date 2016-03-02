@@ -79,7 +79,15 @@ build_sql_record(select, SQL, Cover) ->
     end;
 build_sql_record(describe, SQL, _Cover) ->
     D = proplists:get_value(identifier, SQL),
-    {ok, #riak_sql_describe_v1{'DESCRIBE' = D}}.
+    {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
+build_sql_record(insert, SQL, _Cover) ->
+    T = proplists:get_value(table, SQL),
+    F = proplists:get_value(fields, SQL),
+    V = proplists:get_value(values, SQL),
+    {ok, #riak_sql_insert_v1{'INSERT' = T,
+                             fields   = F,
+                             values   = V
+    }}.
 
 
 %% Useful key extractors for functions (e.g., in get or delete code
@@ -100,10 +108,11 @@ table_to_bucket(Table) when is_binary(Table) ->
     {Table, Table}.
 
 
--spec queried_table(#riak_sql_describe_v1{} | ?SQL_SELECT{}) -> binary().
+-spec queried_table(#riak_sql_describe_v1{} | ?SQL_SELECT{} | #riak_sql_insert_v1{}) -> binary().
 %% Extract table name from various sql records.
 queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
-queried_table(?SQL_SELECT{'FROM' = Table})               -> Table.
+queried_table(?SQL_SELECT{'FROM' = Table})               -> Table;
+queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table.
 
 
 -spec get_table_ddl(binary()) ->
