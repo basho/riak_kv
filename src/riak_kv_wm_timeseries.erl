@@ -194,7 +194,7 @@ validate_request(RD, Ctx) ->
 -spec validate_request_v1(#wm_reqdata{}, #ctx{}) ->
                                  ?CB_RV_SPEC.
 validate_request_v1(RD, Ctx = #ctx{method = 'POST'}) ->
-    Json = extract_json(RD),
+    Json = binary_to_list(wrq:req_body(RD)),
     case extract_data(Json) of
         Data when Data /= undefined ->
             valid_params(
@@ -228,18 +228,8 @@ validate_request_v1(RD, Ctx = #ctx{method = 'DELETE', table = Table,
             handle_error(Reason, RD, Ctx)
     end.
 
-extract_json(RD) ->
-    case proplists:get_value("json", RD#wm_reqdata.req_qs) of
-        undefined ->
-            %% if it was a PUT or POST, data is in body
-            binary_to_list(wrq:req_body(RD));
-        BodyInPost ->
-            BodyInPost
-    end.
 
-%% because, techically, key and data are 'arguments', we check they
-%% are well-formed, too.
--spec extract_data(binary()) -> term().
+-spec extract_data([byte()]) -> undefined|any().
 extract_data(Json) ->
     try mochijson2:decode(Json) of
         Decoded when is_list(Decoded) ->
@@ -354,10 +344,10 @@ convert_field(T, F, timestamp, V) ->
             {F, GoodValue}
     end.
 
-
 ensure_lk_order_and_strip(LK, FVList) ->
     [proplists:get_value(F, FVList)
      || #param_v1{name = F} <- LK].
+
 
 -spec valid_params(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
 valid_params(RD, Ctx) ->
@@ -373,6 +363,7 @@ valid_params(RD, Ctx) ->
                     handle_error({bad_parameter, "timeout"}, RD, Ctx)
             end
     end.
+
 
 -spec check_permissions(#wm_reqdata{}, #ctx{}) -> {term(), #wm_reqdata{}, #ctx{}}.
 check_permissions(RD, Ctx = #ctx{security = undefined}) ->
