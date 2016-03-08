@@ -1,5 +1,5 @@
 %% -------------------------------------------------------------------
-%% Copyright (c) 2015 Basho Technologies, Inc. All Rights Reserved.
+%% Copyright (c) 2015, 2016 Basho Technologies, Inc. All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -79,27 +79,31 @@ start_link(Name) ->
 %%       {error, term()}
 put(RObj0, Options) ->
     Bucket = riak_object:bucket(RObj0),
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    NVal = proplists:get_value(n_val, BucketProps),
-    {RObj, Key, EncodeFn} = kv_or_ts_details(RObj0,
-                                             riak_object:get_ts_local_key(RObj0)),
-    DocIdx = chash_key(Bucket, Key, BucketProps),
-    Preflist =
-        case proplists:get_value(sloppy_quorum, Options, true) of
-            true ->
-                UpNodes = riak_core_node_watcher:nodes(riak_kv),
-                riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes);
-            false ->
-                riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv)
-        end,
+    case riak_core_bucket:get_bucket(Bucket) of
+        {error, Reason} ->
+            {error, Reason};
+        BucketProps ->
+            NVal = proplists:get_value(n_val, BucketProps),
+            {RObj, Key, EncodeFn} =
+                kv_or_ts_details(RObj0, riak_object:get_ts_local_key(RObj0)),
+            DocIdx = chash_key(Bucket, Key, BucketProps),
+            Preflist =
+                case proplists:get_value(sloppy_quorum, Options, true) of
+                    true ->
+                        UpNodes = riak_core_node_watcher:nodes(riak_kv),
+                        riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes);
+                    false ->
+                        riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv)
+                end,
 
-    case validate_options(NVal, Preflist, Options, BucketProps) of
-        {ok, W, PW} ->
-            synchronize_put(
-              async_put(
-                RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist), Options);
-        Error ->
-            Error
+            case validate_options(NVal, Preflist, Options, BucketProps) of
+                {ok, W, PW} ->
+                    synchronize_put(
+                      async_put(
+                        RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist), Options);
+                Error ->
+                    Error
+            end
     end.
 
 -spec async_put(RObj :: riak_object:riak_object(),
