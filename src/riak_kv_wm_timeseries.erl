@@ -22,6 +22,11 @@
 
 %% @doc Resource for Riak TS operations over HTTP.
 %%
+%% This resource is responsible for everything under
+%% ```
+%% ts/v1/table/Table/keys
+%% ```
+%% Specific operations supported:
 %% ```
 %% GET     /ts/v1/table/Table/keys/K1/V1/...  single-key get
 %% DELETE  /ts/v1/table/Table/keys/K1/V1/...  single-key delete
@@ -29,62 +34,51 @@
 %%                                            on the body
 %% '''
 %%
-%% Request body is expected to be a JSON containing key and/or value(s).
-%% Response is a JSON containing data rows with column headers.
+%% Request body is expected to be a JSON containing a struct or structs for the
+%% POST. GET and DELETE have no body.
+%%
+%% Response is a JSON containing full records.
 %%
 
 -module(riak_kv_wm_timeseries).
 
 %% webmachine resource exports
--export([
-         init/1,
+-export([init/1,
          service_available/2,
+         allowed_methods/2,
+         malformed_request/2,
          is_authorized/2,
          forbidden/2,
-         allowed_methods/2,
-         process_post/2,
-         malformed_request/2,
-         content_types_accepted/2,
-         resource_exists/2,
-         delete_resource/2,
          content_types_provided/2,
+         content_types_accepted/2,
          encodings_provided/2,
-         produce_doc_body/2,
-         accept_doc_body/2
-        ]).
+         post_is_create/2,
+         process_post/2,
+         delete_resource/2,
+         resource_exists/2]).
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_ts.hrl").
 
--record(ctx, {api_version,
-              method  :: atom(),
-              prefix,       %% string() - prefix for resource uris
-              timeout,      %% integer() - passed-in timeout value in ms
-              security,     %% security context
-              client,       %% riak_client() - the store client
-              riak,         %% local | {node(), atom()} - params for riak client
-              api_call :: undefined|get|put|delete,
-              table    :: undefined | binary(),
-              mod      :: undefined | module(),
-              ddl      :: undefined | #ddl_v1{},
-              %% data in/out: the following fields are either
-              %% extracted from the JSON/path elements that came in
-              %% the request body in case of a PUT, or filled out by
-              %% retrieved values for shipping (as JSON) in response
-              %% body
-              key     :: undefined |  ts_rec(),  %% parsed out of JSON that came in the body
-              data    :: undefined | [ts_rec()], %% ditto
-              result  :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]}
-             }).
+-record(ctx,
+        {api_call    :: 'undefined' | 'get' | 'put' | 'delete',
+         table       :: 'undefined' | binary(),
+         mod         :: 'undefined' | module(),
+         key         :: 'undefined' | ts_rec(),
+         object,
+         timeout :: 'undefined' | integer(),
+         options,  %% for the call towards riak.
+         prefix,
+         riak}).
 
 -define(DEFAULT_TIMEOUT, 60000).
 -define(TABLE_ACTIVATE_WAIT, 30).   %% wait until table's bucket type is activated
 
--define(CB_RV_SPEC, {boolean()|atom()|tuple(), #wm_reqdata{}, #ctx{}}).
+-type cb_rv_spec(T) :: {T, #wm_reqdata{}, #ctx{}}.
+-type halt() :: {'halt', 200..599} | {'error' , term()}.
 -type ts_rec() :: [riak_pb_ts_codec:ldbvalue()].
-
 
 -spec init(proplists:proplist()) -> {ok, #ctx{}}.
 %% @doc Initialize this resource.  This function extracts the
@@ -93,299 +87,232 @@ init(Props) ->
     {ok, #ctx{prefix = proplists:get_value(prefix, Props),
               riak = proplists:get_value(riak, Props)}}.
 
--spec service_available(#wm_reqdata{}, #ctx{}) ->
-    {boolean(), #wm_reqdata{}, #ctx{}}.
+-spec service_available(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean() | halt()).
 %% @doc Determine whether or not a connection to Riak
-%%      can be established.  This function also takes this
-%%      opportunity to extract the 'table' and 'key' path
-%%      bindings from the dispatch.
-service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
+%%      can be established.
+%%      Convert the table name from the part of the URL.
+service_available(RD, #ctx{riak = RiakProps}=Ctx) ->
     case riak_kv_wm_utils:get_riak_client(
            RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
-        {ok, C} ->
-            {true, RD,
-             Ctx#ctx{api_version = wrq:path_info(api_version, RD),
-                     method = wrq:method(RD),
-                     client = C,
-                     table = utf8_to_binary(
-                               mochiweb_util:unquote(
-                                 wrq:path_info(table, RD)))
-                    }};
+        {ok, _C} ->
+            Table = table(RD),
+            Mod = riak_ql_ddl:make_module_name(Table),
+            {true, RD, Ctx#ctx{table=Table, mod=Mod}};
         {error, Reason} ->
-            handle_error({riak_client_error, Reason}, RD, Ctx)
+            ErrorMsg = flat_format("Unable to connect to Riak: ~p", [Reason]),
+            Resp = set_text_resp_header(ErrorMsg, RD),
+            {false, Resp, Ctx}
     end.
 
-
-is_authorized(RD, Ctx) ->
+is_authorized(RD, #ctx{table=Table}=Ctx) ->
+    Call = api_call(wrq:path_tokens(RD), wrq:method(RD)),
     case riak_api_web_security:is_authorized(RD) of
         false ->
             {"Basic realm=\"Riak\"", RD, Ctx};
         {true, SecContext} ->
-            {true, RD, Ctx#ctx{security = SecContext}};
-        insecure ->
-            handle_error(insecure_connection, RD, Ctx)
-    end.
-
-
--spec forbidden(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-forbidden(RD, Ctx) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
-        true ->
-            {true, RD, Ctx};
-        false ->
-            %%preexec(RD, Ctx)
-            %%validate_request(RD, Ctx)
-            %% plug in early, and just do what it takes to do the job
-            {false, RD, Ctx}
-    end.
-
-
--spec allowed_methods(#wm_reqdata{}, #ctx{}) ->
-    {[atom()], #wm_reqdata{}, #ctx{}}.
-%% @doc Get the list of methods this resource supports.
-allowed_methods(RD, Ctx) ->
-    {['GET', 'POST', 'DELETE'], RD, Ctx}.
-
-
--spec malformed_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% @doc Determine whether query parameters, request headers,
-%%      and request body are badly-formed.
-malformed_request(RD, Ctx) ->
-    %% this is plugged because requests are validated against
-    %% effective parameters contained in the body (and hence, we need
-    %% accept_doc_body to parse and extract things out of JSON in the
-    %% body)
-    {false, RD, Ctx}.
-
-
--spec preexec(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% * collect any parameters from request body or, failing that, from
-%%   POST k=v items;
-%% * check API version;
-%% * validate those parameters against URL and method;
-%% * determine which api call to do, and check permissions on that;
-preexec(RD, Ctx = #ctx{api_call = Call})
-  when Call /= undefined ->
-    %% been here, figured and executed api call, stored results for
-    %% shipping to client
-    {true, RD, Ctx};
-preexec(RD, Ctx) ->
-    case validate_request(RD, Ctx) of
-        {true, RD1, Ctx1} ->
-            case check_permissions(RD1, Ctx1) of
-                {true, RD2, Ctx2} ->
-                    call_api_function(RD2, Ctx2);
-                FalseWithDetails ->
-                    FalseWithDetails
+            case riak_core_security:check_permission(
+                   {riak_kv_ts_util:api_call_to_perm(Call), Table}, SecContext) of
+                 {false, Error, _} ->
+                    {utf8_to_binary(Error), RD, Ctx};
+                _ ->
+                    {true, RD, Ctx#ctx{api_call=Call}}
             end;
-        FalseWithDetails ->
-            FalseWithDetails
+        insecure ->
+            ErrorMsg = "Security is enabled and Riak does not" ++
+                " accept credentials over HTTP. Try HTTPS instead.",
+            Resp = set_text_resp_header(ErrorMsg, RD),
+            {{halt, 426}, Resp, Ctx}
     end.
 
--spec validate_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-validate_request(RD, Ctx) ->
-    case wrq:path_info(api_version, RD) of
-        "v1" ->
-            validate_request_v1(RD, Ctx);
-        BadVersion ->
-            handle_error({unsupported_version, BadVersion}, RD, Ctx)
+-spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+forbidden(RD, Ctx) ->
+    Result = riak_kv_wm_utils:is_forbidden(RD),
+    {Result, RD, Ctx}.
+
+-spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
+allowed_methods(RD, Ctx) ->
+    allowed_methods(wrq:path_tokens(RD), RD, Ctx).
+
+allowed_methods([], RD, Ctx) ->
+    {['POST'], RD, Ctx};
+allowed_methods(_KeyInURL, RD, Ctx) ->
+    {['GET', 'DELETE'], RD, Ctx}.
+
+-spec malformed_request(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+malformed_request(RD, Ctx) ->
+    try
+        Ctx2 = extract_params(wrq:req_qs(RD), Ctx),
+        malformed_request(wrq:path_tokens(RD), RD, Ctx2)
+    catch
+        throw:ParameterError ->
+            ErrorMsg = flat_format("parameter error: ~p", [ParameterError]),
+            Resp = set_text_resp_header(ErrorMsg, RD),
+            {true, Resp, Ctx}
     end.
 
--spec validate_request_v1(#wm_reqdata{}, #ctx{}) ->
-                                 ?CB_RV_SPEC.
-validate_request_v1(RD, Ctx = #ctx{method = 'POST'}) ->
-    Json = binary_to_list(wrq:req_body(RD)),
-    case extract_data(Json) of
-        Data when Data /= undefined ->
-            valid_params(
-              RD, Ctx#ctx{api_version = "v1", api_call = put,
-                          data = Data});
-        _Invalid ->
-            handle_error({malformed_request, 'POST'}, RD, Ctx)
-    end;
+malformed_request([], RD, Ctx) ->
+    %% NOTE: if the supplied JSON body is wrong a malformed requset may be
+    %% issued later.
+    %% @todo: should the validation of the JSON happen here???
+    {false, RD, Ctx};
+malformed_request(KeyInUrl, RD, Ctx) when length(KeyInUrl) rem 2 == 0 ->
+    {false, RD, Ctx};
+malformed_request(_, RD, Ctx) ->
+    {true, RD, Ctx}.
 
-validate_request_v1(RD, Ctx = #ctx{method = 'GET', table = Table,
-                                   mod = Mod, ddl = DDL}) ->
-    KeysInUrl = lists:map(fun mochiweb_util:unquote/1, wrq:path_tokens(RD)),
-    case path_elements_to_key(Table, KeysInUrl, Mod, DDL) of
-        {ok, Key} ->
-            valid_params(
-              RD, Ctx#ctx{api_version = "v1", api_call = get,
-                          key = Key});
-        {error, Reason} ->
-            handle_error(Reason, RD, Ctx)
-    end;
-
-validate_request_v1(RD, Ctx = #ctx{method = 'DELETE', table = Table,
-                                  mod = Mod, ddl = DDL}) ->
-    KeysInUrl = lists:map(fun mochiweb_util:unquote/1, wrq:path_tokens(RD)),
-    case path_elements_to_key(Table, KeysInUrl, Mod, DDL) of
-        {ok, Key} ->
-            valid_params(
-              RD, Ctx#ctx{api_version = "v1", api_call = delete,
-                          key = Key});
-        {error, Reason} ->
-            handle_error(Reason, RD, Ctx)
-    end.
-
-
--spec extract_data([byte()]) -> undefined|any().
-extract_data(Json) ->
-    try mochijson2:decode(Json) of
-        Decoded when is_list(Decoded) ->
-            validate_ts_records(Decoded)
+-spec extract_params([{string(), string()}], #ctx{}) -> #ctx{} .
+%% @doc right now we only allow a timeout parameter or nothing.
+extract_params([], Ctx) ->
+    Ctx#ctx{options=[]};
+extract_params([{"timeout", TimeoutStr}], Ctx) ->
+    try
+        Timeout = list_to_integer(TimeoutStr),
+        Ctx#ctx{timeout = Timeout,
+                options = [{timeout, Timeout}]}
     catch
         _:_ ->
-            undefined
+            throw(flat_format("timeout not an integer value: ~s", [TimeoutStr]))
+    end;
+extract_params(Params, _Ctx) ->
+    throw(flat_format("incorrect paramters: ~p", [Params])).
+
+-spec content_types_provided(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([{string(), atom()}]).
+content_types_provided(RD, Ctx) ->
+    {[{"application/json", to_json}],
+     RD, Ctx}.
+
+-spec content_types_accepted(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([{string(), atom()}]).
+content_types_accepted(RD, Ctx) ->
+    content_types_accepted(wrq:path_tokens(RD), RD, Ctx).
+
+content_types_accepted([], RD, Ctx) ->
+    %% the JSON in the POST will be handled by process_post,
+    %% so this handler will never be called.
+    {[{"application/json", undefined}], RD, Ctx};
+content_types_accepted(_, RD, Ctx) ->
+    {[], RD, Ctx}.
+
+-spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean() | halt()).
+resource_exists(RD, #ctx{mod=Mod} = Ctx) ->
+    try table_module_exists(Mod) of
+        true ->
+            Path = wrq:path_tokens(RD),
+            Key = validate_key(Path, Mod),
+            resource_exists(Path, wrq:method(RD), RD, Ctx#ctx{key=Key});
+        false ->
+            Resp = set_error_message("table ~p not created", [Mod], RD),
+            {false, Resp, Ctx}
+    catch
+        throw:{key_problem, Reason} ->
+            Resp = set_error_message("wrong path to element: ~p", [Reason], RD),
+            {{halt, 400}, Resp, Ctx}
     end.
 
+validate_key(Path, Mod) ->
+    UnquotedPath = lists:map(fun mochiweb_util:unquote/1, Path),
+    FVList = path_elements_to_key(Mod, UnquotedPath),
+    ensure_lk_order_and_strip(Mod, FVList).
 
-validate_ts_record(undefined) ->
-    undefined;
-validate_ts_record(R) when is_list(R) ->
-    case lists:all(
-           %% check that all list elements are TS types
-           fun(X) -> is_integer(X) orelse is_float(X) orelse is_binary(X) end,
-           R) of
-        true ->
-            R;
-        false ->
-            undefined
+resource_exists([], 'POST', RD, Ctx) ->
+    {true, RD, Ctx};
+resource_exists(Path, 'GET', RD,
+                #ctx{table=Table,
+                     mod=Mod,
+                     key=Key,
+                     options=Options}=Ctx) ->
+    %% Would be nice if something cheaper than using get_data existed to check
+    %% if a key is present.
+    try riak_kv_ts_util:get_data(Key, Table, Mod, Options) of
+        {ok, Record} ->
+            {true, RD, Ctx#ctx{object=Record}};
+        {error, Reason} ->
+            Resp = set_error_message("Internal error: ~p", Reason, RD),
+            {{halt, 500}, Resp, Ctx}
+    catch
+        _:Reason ->
+            Resp = set_error_message("lookup on ~p failed due to ~p",
+                                     [Path, Reason],
+                                     RD),
+            {false, Resp, Ctx}
     end;
-validate_ts_record(_) ->
-    undefined.
-
-validate_ts_records(RR) when is_list(RR) ->
-    case lists:all(fun(R) -> validate_ts_record(R) /= undefined end, RR) of
-        true ->
-            RR;
-        false ->
-            undefined
-    end;
-validate_ts_records(_) ->
-    undefined.
-
+resource_exists(_Path, 'DELETE', RD, Ctx) ->
+    %% Since reading the object is expensive we will assume for now that the
+    %% object exists for a delete, but if it turns out that it does not then the
+    %% processing of the delete will return 404 at that point.
+    {true, RD, Ctx}.
 
 %% extract keys from path elements in the URL (.../K1/V1/K2/V2 ->
 %% [{K1, V1}, {K2, V2}]), check with Table's DDL to make sure keys are
 %% correct and values are of (convertible to) appropriate types, and
 %% return the KV list
--spec path_elements_to_key(binary(), [string()], module(), #ddl_v1{}) ->
-                                  {ok, [{string(), riak_pb_ts_codec:ldbvalue()}]} |
-                                  {error, atom()|tuple()}.
-path_elements_to_key(Table, PEList, Mod,
-                     #ddl_v1{local_key = #key_v1{ast = LK}}) ->
-    try
-        TableKeyLength = length(LK),
-        if TableKeyLength * 2 == length(PEList) ->
-                %% values with field names:  "f1/v1/f2/v2/f3/v3"
-                %% 1. check that supplied key fields exist and values
-                %% supplied are convertible to their types
-                FVList =
-                    [convert_fv(Table, Mod, K, V)
-                     || {K, V} <- empair(PEList, [])],
-                %% 2. possibly reorder field-value pairs to match the LK order
-                OrderedKeyValues =
-                    ensure_lk_order_and_strip(LK, FVList),
-                {ok, OrderedKeyValues};
-           TableKeyLength == length(PEList) ->
-                %% bare values: "v1/v2/v3"
-                %% 1. retrieve field values from the DDL
-                Fields = [F || #param_v1{name = F} <- LK],
-                FVList =
-                    [convert_fv(Table, Mod, K, V)
-                     || {K, V} <- lists:zip(Fields, PEList)],
-                {_, OrderedKeyValues} =
-                    lists:unzip(FVList),
-                {ok, OrderedKeyValues};
-           el/=se ->
-                {error, url_unpaired_keys}
-        end
-    catch
-        throw:ConvertFailed ->
-            {error, ConvertFailed}
-    end.
+%% @private
+-spec path_elements_to_key(module(), [string()]) ->
+                                   [{string(), riak_pb_ts_codec:ldbvalue()}].
+path_elements_to_key(_Mod, []) ->
+    [];
+path_elements_to_key(Mod, [F,V|Rest]) ->
+    [convert_fv(Mod, F, V)|path_elements_to_key(Mod, Rest)].
 
-empair([], Q) -> lists:reverse(Q);
-empair([K, V | T], Q) -> empair(T, [{K, V}|Q]).
-
-convert_fv(Table, Mod, FieldRaw, V) ->
+%% @private
+convert_fv(Mod, FieldRaw, V) ->
     Field = [list_to_binary(X) || X <- string:tokens(FieldRaw, ".")],
-    case Mod:is_field_valid(Field) of
-        true ->
-            try
-                convert_field(Table, Field, Mod:get_field_type(Field), V)
-            catch
-                error:badarg ->
-                    %% rethrow with key, for more informative reporting
-                    throw({url_key_bad_value, Table, Field});
-            false ->
-                throw({url_key_bad_key, Table, Field})
-        end
+    try
+        true = Mod:is_field_valid(Field),
+        convert_field_value(Mod:get_field_type(Field), V)
+    catch
+        _:_ ->
+           throw({url_key_bad_value, Field})
     end.
 
-convert_field(_T, F, varchar, V) ->
-    {F, list_to_binary(V)};
-convert_field(_T, F, sint64, V) ->
-    {F, list_to_integer(V)};
-convert_field(_T, F, double, V) ->
-    %% list_to_float("42") will fail, so
+%% @private
+convert_field_value(varchar, V) ->
+    list_to_binary(V);
+convert_field_value(sint64, V) ->
+    list_to_integer(V);
+convert_field_value(double, V) ->
     try
-        {F, list_to_float(V)}
+        list_to_float(V)
     catch
         error:badarg ->
-            {F, float(list_to_integer(V))}
+            float(list_to_integer(V))
     end;
-convert_field(T, F, timestamp, V) ->
+convert_field_value(timestamp, V) ->
     case list_to_integer(V) of
-        BadValue when BadValue < 1 ->
-            throw({url_key_bad_value, T, F});
-        GoodValue ->
-            {F, GoodValue}
+        GoodValue when GoodValue > 0 ->
+            GoodValue;
+        _ ->
+            throw(url_key_bad_value)
     end.
+
+
+%% validate_ts_record(undefined) ->
+%%     undefined;
+%% validate_ts_record(R) when is_list(R) ->
+%%     case lists:all(
+%%            %% check that all list elements are TS types
+%%            fun(X) -> is_integer(X) orelse is_float(X) orelse is_binary(X) end,
+%%            R) of
+%%         true ->
+%%             R;
+%%         false ->
+%%             undefined
+%%     end;
+%% validate_ts_record(_) ->
+%%     undefined.
+
+%% validate_ts_records(RR) when is_list(RR) ->
+%%     case lists:all(fun(R) -> validate_ts_record(R) /= undefined end, RR) of
+%%         true ->
+%%             RR;
+%%         false ->
+%%             undefined
+%%     end;
+%% validate_ts_records(_) ->
+%%     undefined.
 
 ensure_lk_order_and_strip(LK, FVList) ->
     [proplists:get_value(F, FVList)
      || #param_v1{name = F} <- LK].
-
-
--spec valid_params(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-valid_params(RD, Ctx) ->
-    case wrq:get_qs_value("timeout", none, RD) of
-        none ->
-            {true, RD, Ctx};
-        TimeoutStr ->
-            try
-                Timeout = list_to_integer(TimeoutStr),
-                {true, RD, Ctx#ctx{timeout = Timeout}}
-            catch
-                _:_ ->
-                    handle_error({bad_parameter, "timeout"}, RD, Ctx)
-            end
-    end.
-
-
--spec check_permissions(#wm_reqdata{}, #ctx{}) -> {term(), #wm_reqdata{}, #ctx{}}.
-check_permissions(RD, Ctx = #ctx{security = undefined}) ->
-    {true, RD, Ctx};
-check_permissions(RD, Ctx = #ctx{security = Security,
-                                 api_call = Call,
-                                 table = Table}) ->
-    case riak_core_security:check_permission(
-           {riak_kv_ts_util:api_call_to_perm(Call), Table}, Security) of
-        {false, Error, _} ->
-            handle_error(
-              {not_permitted, utf8_to_binary(Error)}, RD, Ctx);
-        _ ->
-            {true, RD, Ctx}
-    end.
-
-
--spec content_types_provided(#wm_reqdata{}, #ctx{}) ->
-                                    {[{ContentType::string(), Producer::atom()}],
-                                     #wm_reqdata{}, #ctx{}}.
-content_types_provided(RD, Ctx) ->
-    {[{"application/json", produce_doc_body}], RD, Ctx}.
 
 
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
@@ -394,207 +321,123 @@ content_types_provided(RD, Ctx) ->
 encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
-
--spec content_types_accepted(#wm_reqdata{}, #ctx{}) ->
-                                    {[{ContentType::string(), Acceptor::atom()}],
-                                     #wm_reqdata{}, #ctx{}}.
-content_types_accepted(RD, Ctx) ->
-    {[{"application/json", accept_doc_body}], RD, Ctx}.
-
-
--spec resource_exists(#wm_reqdata{}, #ctx{}) ->
-                             {boolean(), #wm_reqdata{}, #ctx{}}.
-resource_exists(RD, Ctx = #ctx{table = Table}) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    try
-        DDL = Mod:get_ddl(),
-        {true, RD, Ctx#ctx{mod = Mod, ddl = DDL}}
+-spec table_module_exists(module()) -> boolean().
+table_module_exists(Mod) ->
+    try Mod:get_dll() of
+        #ddl_v1{} ->
+            true
     catch
-        error:undef ->
-            handle_error({no_such_table, Table}, RD, Ctx)
+        _:_ ->
+            false
     end.
 
--spec process_post(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% @doc Pass through requests to allow POST to function
-%%      as PUT for clients that do not support PUT.
-process_post(RD, Ctx) ->
-    accept_doc_body(RD, Ctx).
+-spec post_is_create(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+post_is_create(RD, Ctx) ->
+    {false, RD, Ctx}.
 
--spec delete_resource(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% same for DELETE
-delete_resource(RD, Ctx) ->
-    accept_doc_body(RD, Ctx).
-
--spec accept_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-accept_doc_body(RD0, Ctx0) ->
-    case preexec(RD0, Ctx0) of
-        {true, RD, Ctx} ->
-            call_api_function(RD, Ctx);
-        FalseWithDetails ->
-            FalseWithDetails
+-spec process_post(#wm_reqdata{}, #ctx{}) ->  cb_rv_spec(boolean()).
+process_post(RD, #ctx{mod=Mod,
+                     table=Table}=Ctx) ->
+    try extract_data(RD) of
+        Data ->
+            Records = [list_to_tuple(R) || R <- Data],
+            case riak_kv_ts_util:validate_rows(Mod, Records) of
+                [] ->
+                    case riak_kv_ts_api:put_data(Records, Table, Mod) of
+                        ok ->
+                            Json = result_to_json(ok),
+                            Resp = set_json_response(Json, RD),
+                            {true, Resp, Ctx};
+                        {error, {some_failed, ErrorCount}} ->
+                            Resp = set_error_message("failed some puts ~p ~p",
+                                                     [ErrorCount, Table],
+                                                     RD),
+                            {{halt, 400}, Resp, Ctx}
+                    end;
+                BadRowIdxs when is_list(BadRowIdxs) ->
+                    Resp = set_error_message("invalid data: ~p",
+                                             [BadRowIdxs],
+                                             RD),
+                    {{halt, 400}, Resp, Ctx}
+            end
+    catch
+        throw:{data_problem,Reason} ->
+            Resp = set_error_message("wrong body: ~p", Reason, RD),
+            {{halt, 400}, Resp, Ctx}
     end.
 
--spec call_api_function(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-call_api_function(RD, Ctx = #ctx{result = Result})
-  when Result /= undefined ->
-    lager:debug("Function already executed", []),
-    {true, RD, Ctx};
-call_api_function(RD, Ctx = #ctx{api_call = put,
-                                 table = Table, data = Data}) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    %% convert records to tuples, just for put
-    Records = [list_to_tuple(R) || R <- Data],
-    case riak_kv_ts_util:validate_rows(Mod, Records) of
-        [] ->
-            case riak_kv_ts_api:put_data(Records, Table, Mod) of
-                ok ->
-                    prepare_data_in_body(RD, Ctx#ctx{result = ok});
-                {error, {some_failed, ErrorCount}} ->
-                    handle_error({failed_some_puts, ErrorCount, Table}, RD, Ctx);
-                {error, no_ctype} ->
-                    handle_error({no_such_table, Table}, RD, Ctx)
-            end;
-        BadRowIdxs when is_list(BadRowIdxs) ->
-            handle_error({invalid_data, BadRowIdxs}, RD, Ctx)
-    end;
-
-call_api_function(RD, Ctx0 = #ctx{api_call = get,
-                                  table = Table, key = Key, mod = Mod,
-                                  timeout = Timeout}) ->
-    Options =
-        if Timeout == undefined -> [];
-           true -> [{timeout, Timeout}]
-        end,
-    case riak_kv_ts_api:get_data(Key, Table, Mod, Options) of
-        {ok, Record} ->
-            {ColumnNames, Row} = lists:unzip(Record),
-            %% ColumnTypes = riak_kv_ts_util:get_column_types(ColumnNames, Mod),
-            %% We don't need column types here as well (for the PB interface, we
-            %% needed them in order to properly construct tscells)
-            DataOut = {ColumnNames, [Row]},
-            %% all results (from get as well as query) are returned in
-            %% a uniform 'tabular' form, hence the [] around Row
-            Ctx = Ctx0#ctx{result = DataOut},
-            prepare_data_in_body(RD, Ctx);
-        {error, notfound} ->
-            handle_error(notfound, RD, Ctx0);
-        {error, {bad_key_length, Got, Need}} ->
-            handle_error({key_element_count_mismatch, Got, Need}, RD, Ctx0);
-        {error, Reason} ->
-            handle_error({riak_error, Reason}, RD, Ctx0)
-    end;
-
-call_api_function(RD, Ctx = #ctx{api_call = delete,
-                                 table = Table, key = Key,
-                                 mod = Mod,
-                                 timeout = Timeout}) ->
-    Options =
-        if Timeout == undefined -> [];
-           true -> [{timeout, Timeout}]
-        end,
-    case riak_kv_ts_api:delete_data(Key, Table, Mod, Options) of
+-spec delete_resource(#wm_reqdata{}, #ctx{}) ->  cb_rv_spec(boolean()|halt()).
+delete_resource(RD,  #ctx{table=Table,
+                          mod=Mod,
+                          key=Key,
+                          options=Options}=Ctx) ->
+     try riak_kv_ts_api:delete_data(Key, Table, Mod, Options) of
         ok ->
-            prepare_data_in_body(RD, Ctx#ctx{result = ok});
-        {error, {bad_key_length, Got, Need}} ->
-            handle_error({key_element_count_mismatch, Got, Need}, RD, Ctx);
+             Json = result_to_json(ok),
+             Resp = set_json_response(Json, RD),
+             {true, Resp, Ctx};
         {error, notfound} ->
-            handle_error(notfound, RD, Ctx);
-        {error, Reason} ->
-            handle_error({riak_error, Reason}, RD, Ctx)
+             Resp = set_error_message("object not found", [], RD),
+             {{halt, 404}, Resp, Ctx}
+    catch
+        _:Reason ->
+            Resp = set_error_message("Internal error: ~p", Reason, RD),
+            {{halt, 500}, Resp, Ctx}
     end.
 
-
-prepare_data_in_body(RD0, Ctx0) ->
-    {Json, RD1, Ctx1} = produce_doc_body(RD0, Ctx0),
-    {true, wrq:append_to_response_body(Json, RD1), Ctx1}.
-
-
--spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-produce_doc_body(RD0, Ctx0 = #ctx{result = undefined}) ->
-    case preexec(RD0, Ctx0) of
-        {true, RD1, Ctx1} ->
-            case call_api_function(RD1, Ctx1) of
-                {true, RD2, Ctx2} ->
-                    produce_doc_body(RD2, Ctx2);
-                FalseWithDetails ->
-                    FalseWithDetails
-            end;
-        FalseWithDetails ->
-            FalseWithDetails
-    end;
-produce_doc_body(RD, Ctx = #ctx{result = ok}) ->
-    {<<"ok">>, RD, Ctx};
-produce_doc_body(RD, Ctx = #ctx{api_call = get,
-                                result = {Columns, Rows}}) ->
-    {mochijson2:encode(
-       {struct, [{<<"columns">>, Columns},
-                 {<<"rows">>, Rows}]}),
-     RD, Ctx}.
-
-
-error_out(Type, Fmt, Args, RD, Ctx) ->
-    {Type,
-     wrq:set_resp_header(
-       "Content-Type", "text/plain", wrq:append_to_response_body(
-                                       flat_format(Fmt, Args), RD)),
-     Ctx}.
-
--spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
-handle_error(Error, RD, Ctx) ->
-    case Error of
-        {riak_client_error, Reason} ->
-            error_out(false,
-                      "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
-        insecure_connection ->
-            error_out({halt, 426},
-                      "Security is enabled and Riak does not"
-                      " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
-        {unsupported_version, BadVersion} ->
-            error_out({halt, 412},
-                      "Unsupported API version ~s", [BadVersion], RD, Ctx);
-        {not_permitted, Table} ->
-            error_out({halt, 401},
-                      "Access to table ~ts not allowed", [Table], RD, Ctx);
-        {malformed_request, Method} ->
-            error_out({halt, 400},
-                      "Malformed ~s request", [Method], RD, Ctx);
-        {url_key_bad_method, Method} ->
-            error_out({halt, 400},
-                      "Inappropriate ~s request", [Method], RD, Ctx);
-        {bad_parameter, Param} ->
-            error_out({halt, 400},
-                      "Bad value for parameter \"~s\"", [Param], RD, Ctx);
-        {no_such_table, Table} ->
-            error_out({halt, 404},
-                      "Table \"~ts\" does not exist", [Table], RD, Ctx);
-        {failed_some_puts, NoOfFailures, Table} ->
-            error_out({halt, 400},
-                      "Failed to put ~b records to table \"~ts\"", [NoOfFailures, Table], RD, Ctx);
-        {invalid_data, BadRowIdxs} ->
-            error_out({halt, 400},
-                      "Invalid record #~s", [hd(BadRowIdxs)], RD, Ctx);
-        {key_element_count_mismatch, Got, Need} ->
-            error_out({halt, 400},
-                      "Incorrect number of elements (~b) for key of length ~b", [Need, Got], RD, Ctx);
-        {url_key_bad_key, Table, Key} ->
-            error_out({halt, 400},
-                      "Table \"~ts\" has no field named \"~s\"", [Table, Key], RD, Ctx);
-        {url_key_bad_value, Table, Key} ->
-            error_out({halt, 400},
-                      "Bad value for field \"~s\" in table \"~ts\"", [Key, Table], RD, Ctx);
-        url_unpaired_keys ->
-            error_out({halt, 400},
-                      "Unpaired field/value for key spec in URL", [], RD, Ctx);
-        notfound ->
-            error_out({halt, 404},
-                      "Key not found", [], RD, Ctx);
-        {riak_error, Detailed} ->
-            error_out({halt, 500},
-                      "Internal riak error: ~p", [Detailed], RD, Ctx)
+extract_data(RD) ->
+    try
+        JsonStr = binary_to_list(wrq:req_body(RD)),
+        mochijson2:decode(JsonStr)
+    catch
+        _:Reason ->
+            throw({data_problem, Reason})
     end.
+
+%% -spec extract_data([byte()]) -> undefined|any().
+%% extract_data(Json) ->
+%%     try mochijson2:decode(Json) of
+%%         Decoded when is_list(Decoded) ->
+%%             validate_ts_records(Decoded)
+%%     catch
+%%         _:_ ->
+%%             undefined
+%%     end.
+
+
+result_to_json(ok) ->
+    mochijson2:encode([{success, true}]);
+result_to_json(_) ->
+    mochijson2:encode([{some_record, one_day}]).
+
+set_json_response(Json, RD) ->
+     wrq:set_resp_header("Content-Type", "application/json",
+                         wrq:append_to_response_body(Json, RD)).
+
+%% @private
+table(RD) ->
+    utf8_to_binary(
+      mochiweb_util:unquote(
+        wrq:path_info(table, RD))).
+
+%% @private
+api_call([], 'POST') ->
+    put;
+api_call(_KeyInURL, 'GET') ->
+    get;
+api_call(_KeyInURL, 'DELETE') ->
+    delete.
+
+%% move to util module.
+utf8_to_binary(S) ->
+    unicode:characters_to_binary(S, utf8, utf8).
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
 
-utf8_to_binary(S) ->
-    unicode:characters_to_binary(S, utf8, utf8).
+set_text_resp_header(IoList, RD) ->
+       wrq:set_resp_header(
+       "Content-Type", "text/plain", wrq:append_to_response_body(IoList,RD)).
+
+set_error_message(Format, Args, RD) ->
+    set_text_resp_header(flat_format(Format, Args), RD).
