@@ -125,8 +125,11 @@ raw_dispatch(Name) ->
 
     lists:flatten(
       [
+       %% Right now we only have version 1. When we get version 2 we have to
+       %% decide if we want to dispatch to separate resource modules or handle
+       %% the different versions inside the same resource handler module.
        [{["ts", api_version, "tables", table, "list_keys"], riak_kv_wm_timeseries_listkeys, Props},
-        {["ts", api_version, "tables", table, "keys", '*'], riak_kv_wm_timeseries, Props},
+        {["ts", "v1", "tables", table, "keys", '*'], riak_kv_wm_timeseries, Props},
         {["ts", api_version, "query"], riak_kv_wm_timeseries_query, Props}
        ] || {_Prefix, Props} <- Props2]).
 
