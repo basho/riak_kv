@@ -238,6 +238,7 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
 
+%% Print the query explanation to the shell.
 explain_query_print(QueryString) ->
     explain_query_print2(1, explain_query(QueryString)).
 
@@ -248,7 +249,8 @@ explain_query_print2(Index, [{Start, End, Filter}|Tail]) ->
         [Index,Start,filter_to_string(Filter),End]),
     explain_query_print2(Index+1, Tail).
 
-%%
+%% Show some debug info about how a query is compiled into sub queries
+%% and what key ranges are created.
 explain_query(QueryString) ->
     {ok, ?SQL_SELECT{ 'FROM' = Table } = Select} =
         explain_compile_query(QueryString),
@@ -272,19 +274,14 @@ explain_compile_query(QueryString) ->
     build_sql_record(select, Q, undefined).
 
 %%
-explain_sub_query(#riak_select_v1{ 'WHERE' = SubQueryWhere } = _SubQuery) ->
-    %% LOCAL KEY
-    %% a:sint64/b:timestamp/c:sint64/
-    %% SUB QUERY 1
-    %% >  10/1000/20 d = 10 OR e = 12
-    %% <= 10/2000/20
+explain_sub_query(#riak_select_v1{ 'WHERE' = SubQueryWhere }) ->
     {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
     {_, EndKey1} = lists:keyfind(endkey, 1, SubQueryWhere),
-    {_, Filters} = lists:keyfind(filter, 1, SubQueryWhere),
-    explain_query_keys(StartKey1, EndKey1, Filters).
+    {_, Filter} = lists:keyfind(filter, 1, SubQueryWhere),
+    explain_query_keys(StartKey1, EndKey1, Filter).
 
 %%
-explain_query_keys(StartKey1, EndKey1, Filters) ->
+explain_query_keys(StartKey1, EndKey1, Filter) ->
     StartKey2 = [[key_element_to_string(V), $/] || {_,_,V} <- StartKey1],
     EndKey2 = [[key_element_to_string(V), $/] || {_,_,V} <- EndKey1],
     case lists:keyfind(start_inclusive, 1, StartKey1) of
@@ -299,7 +296,7 @@ explain_query_keys(StartKey1, EndKey1, Filters) ->
         _ ->
             EndKey3 = ["<  ", EndKey2]
     end,
-    {StartKey3, EndKey3, Filters}.
+    {StartKey3, EndKey3, Filter}.
 
 %%
 key_element_to_string(V) when is_binary(V) -> varchar_quotes(V);
