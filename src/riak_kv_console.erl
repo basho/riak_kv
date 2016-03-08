@@ -977,23 +977,23 @@ bucket_type_create_with_timeseries_table_error_when_write_once_set_to_false_test
         )
     ).
 
-bucket_type_create_with_timeseries_table_error_with_short_primary_key_test() ->
-    Ref = make_ref(),
+bucket_type_create_with_timeseries_table_with_two_element_key_test() ->
     TableDef =
         <<"CREATE TABLE my_type (",
-        "user   varchar   not null, ",
-        "time   timestamp not null, ",
-        "PRIMARY KEY ((user, quantum(time, 15, m)), "
-        "user, time))">>,
+          "user   varchar   not null, ",
+          "time   timestamp not null, ",
+          "PRIMARY KEY ((user, quantum(time, 15, m)), user, time))">>,
     JSON = json_props([{bucket_type, my_type},
                        {table_def, TableDef}]),
-    ?assertEqual(
-        error,
-        bucket_type_create(
-            fun(Props) -> put(Ref, Props) end,
-            <<"my_type">>,
-            mochijson2:decode(JSON)
-        )
+    Result = bucket_type_create(
+        fun(Props) -> Props end,
+        <<"my_type">>,
+        mochijson2:decode(JSON)
+    ),
+    % just assert that this returns a ddl prop
+    ?assertMatch(
+        [{ddl, _}|_],
+        Result
     ).
 
 bucket_type_create_with_timeseries_table_error_with_misplaced_quantum_test() ->
@@ -1024,10 +1024,9 @@ bucket_type_and_table_error_local_key_test() ->
         "user   varchar   not null, ",
         "time   timestamp not null, ",
         "other  varchar   not null, ",
-        "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
-        "series, user, time, other))">>,
+        "PRIMARY KEY ((series, user, quantum(time, 15, m)), seriesd, user, time, other))">>,
     JSON = json_props([{bucket_type, my_type},
-        {table_def, TableDef}]),
+                       {table_def, TableDef}]),
     ?assertEqual(
         error,
         bucket_type_create(

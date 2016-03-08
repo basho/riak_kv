@@ -47,7 +47,6 @@
          is_empty/1,
          status/1,
          callback/3]).
-
 -export([data_size/1]).
 
 -compile({inline, [
@@ -454,53 +453,70 @@ fold_indexes_fun(FoldIndexFun) ->
             end
     end.
 
+build_list({_K, _V}=KV, Acc) ->
+    [KV | Acc].
+
 range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                                               ref=Ref}) ->
     {_, Bucket, Qry} = proplists:lookup(index, Opts),
     ?SQL_SELECT{'WHERE'    = W,
-                helper_mod = Mod,
-                local_key  = LK} = Qry,
-    %% this is all super-fugly
+                helper_mod = _Mod,
+                local_key  =  #key_v1{ast = LKAST},
+                partition_key = #key_v1{ast = _PKAST}} = Qry,
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
-    {filter,   Filter} = proplists:lookup(filter, W),
-    StartInclusive = case proplists:lookup(start_inclusive, W) of
-                         none  -> [];
-                         STuple -> [STuple]
-                     end,
-    EndInclusive = case proplists:lookup(end_inclusive, W) of
-                       none  -> [];
-                       ETuple -> [ETuple]
-                   end,
-    AdditionalOptions = lists:flatten(StartInclusive ++ EndInclusive),
-    AdditionalOptions2 =
-        case Filter of
-            [] -> AdditionalOptions;
-            _  -> [{range_filter, Filter} | AdditionalOptions]
-        end,
-    StartK2 = [{Field, Val} || {Field, _Type, Val} <- StartK],
-    StartK3 = riak_ql_ddl:make_key(Mod, LK, StartK2),
-    StartK4 = riak_kv_ts_util:encode_typeval_key(StartK3), %% TODO: Avoid adding/removing type info
-    StartKey = to_object_key(Bucket, StartK4),
-    EndK2 = [{Field, Val} || {Field, _Type, Val} <- EndK],
-    EndK3 = riak_ql_ddl:make_key(Mod, LK, EndK2),
-    EndK4 = riak_kv_ts_util:encode_typeval_key(EndK3),
-    EndKey = to_object_key(Bucket, EndK4),
-    FoldFun = fun({K, V}, Acc) ->
-                      [{K, V} | Acc]
-              end,
+    LocalKeyLen = length(LKAST),
+    StartKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- StartK], LocalKeyLen),
+    EndKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- EndK], LocalKeyLen),
+    case lists:member({start_inclusive, false}, W) of
+        true  -> StartKey2 = <<StartKey1/binary, 16#ff:8>>;
+        false -> StartKey2 = StartKey1
+    end,
+    case lists:member({end_inclusive, true}, W) of
+        true  -> EndKey2 = <<EndKey1/binary, 16#ff:8>>;
+        false -> EndKey2 = EndKey1
+    end,
+    FoldFun = fun build_list/2,
     Options = [
-               {start_key,    StartKey},
-               {end_key,      EndKey},
-               {fold_method,  streaming},
-               {encoding,     msgpack} |
-               AdditionalOptions2
+               {start_key,   StartKey2},
+               {end_key,     EndKey2},
+               {fold_method, streaming},
+               {encoding,    msgpack} | range_scan_additional_options(W)
               ],
     KeyFolder = fun() ->
                         Vals = eleveldb:fold(Ref, FoldFun, [], Options),
                         FoldIndexFun(lists:reverse(Vals), Buffer)
                 end,
     {async, KeyFolder}.
+
+%%
+range_scan_additional_options(Where) ->
+    Options1 =
+        case proplists:lookup(start_inclusive, Where) of
+             none   -> [];
+             STuple -> [STuple]
+         end,
+    Options2 =
+        case proplists:lookup(end_inclusive, Where) of
+            none   -> Options1;
+            ETuple -> [ETuple | Options1]
+        end,
+    case proplists:lookup(filter, Where) of
+        {filter, []} -> Options2;
+        {filter, Filter} -> [{range_filter, Filter} | Options2]
+    end.
+
+%%
+key_prefix({TableName,_}, PK2, LocalKeyLen) ->
+    PK3 = PK2 ++ lists:duplicate(LocalKeyLen - length(PK2), '_'),
+    PKPrefix = sext:prefix(list_to_tuple(PK3)),
+    EncodedBucketType = EncodedBucketName = sext:encode(TableName),
+    <<16,0,0,0,3, %% 3-tuple - outer
+      12,183,128,8, %% o-atom
+      16,0,0,0,2, %% 2-tuple for bucket type/name
+      EncodedBucketType/binary,
+      EncodedBucketName/binary,
+      PKPrefix/binary>>.
 
 legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
     {_, FirstKey} = lists:keyfind(first_key, 1, FoldOpts0),
@@ -964,21 +980,16 @@ orig_to_object_key(Bucket, Key) ->
 %% be round-tripped (as that would then be a binary-wrapping a sext-encoded
 %% TS key - for an extra 9 bytes used).
 %%
-to_object_key({TableName, TableName}, {Family, Series, Timestamp}) ->
-    EncodedBucketType = % sext:encode(BucketType),
-        EncodedBucketName = sext:encode(TableName),
-    EncodedFamily = sext:encode(Family),
-    EncodedSeries = sext:encode(Series),
-    EncodedTimestamp = sext:encode(Timestamp),
+to_object_key({TableName, TableName}, LocalKey) when is_tuple(LocalKey) ->
+    EncodedBucketType = EncodedBucketName = sext:encode(TableName),
+    EncodedLocalKey = sext:encode(LocalKey),
+    % format like {'o', {TableName,TableName}, LocalKeyTuple}
     <<16,0,0,0,3, %% 3-tuple - outer
       12,183,128,8, %% o-atom
       16,0,0,0,2, %% 2-tuple for bucket type/name
       EncodedBucketType/binary,
       EncodedBucketName/binary,
-      16,0,0,0,3, %% 3-tuple - for time series key
-      EncodedFamily/binary,
-      EncodedSeries/binary,
-      EncodedTimestamp/binary>>;
+      EncodedLocalKey/binary>>;
 to_object_key({BucketType, BucketName}, Key) -> %% Riak 2.0 keys
     %% sext:encode({o, Bucket, Key}).
     EncodedBucketType = sext:encode(BucketType),
