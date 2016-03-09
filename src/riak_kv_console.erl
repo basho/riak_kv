@@ -875,6 +875,7 @@ bucket_error_xlate(X) ->
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 json_props(Props) ->
     lists:flatten(mochijson2:encode([{props, Props}])).
@@ -991,9 +992,10 @@ bucket_type_create_with_timeseries_table_with_two_element_key_test() ->
         mochijson2:decode(JSON)
     ),
     % just assert that this returns a ddl prop
+    HaveDDL = proplists:get_value(ddl, Result),
     ?assertMatch(
-        [{ddl, _}|_],
-        Result
+        ?DDL{},
+        HaveDDL
     ).
 
 bucket_type_create_with_timeseries_table_error_with_misplaced_quantum_test() ->
