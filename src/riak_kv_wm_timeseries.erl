@@ -57,6 +57,9 @@
          delete_resource/2,
          resource_exists/2]).
 
+%% webmachine body-producing functions
+-export([to_json/2]).
+
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -86,6 +89,9 @@
 init(Props) ->
     {ok, #ctx{prefix = proplists:get_value(prefix, Props),
               riak = proplists:get_value(riak, Props)}}.
+    %% {{trace, "/tmp"}, #ctx{prefix = proplists:get_value(prefix, Props),
+    %%                        riak = proplists:get_value(riak, Props)}}.
+%% wmtrace_resource:add_dispatch_rule("wmtrace", "/tmp").
 
 -spec service_available(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean() | halt()).
 %% @doc Determine whether or not a connection to Riak
@@ -112,7 +118,6 @@ is_authorized(RD, #ctx{table=Table}=Ctx) ->
         {true, undefined} -> %% @todo: why is this returned during testing?
             {true, RD, Ctx#ctx{api_call=Call}};
         {true, SecContext} ->
-            io:format("SecContext ~p",SecContext),
             case riak_core_security:check_permission(
                    {riak_kv_ts_util:api_call_to_perm(Call), Table}, SecContext) of
                  {false, Error, _} ->
@@ -197,40 +202,41 @@ content_types_accepted(_, RD, Ctx) ->
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean() | halt()).
 resource_exists(RD, #ctx{mod=Mod} = Ctx) ->
-    try table_module_exists(Mod) of
+    case table_module_exists(Mod) of
         true ->
-            Path = wrq:path_tokens(RD),
-            Key = validate_key(Path, Mod),
-            resource_exists(Path, wrq:method(RD), RD, Ctx#ctx{key=Key});
+            resource_exists(wrq:path_tokens(RD), wrq:method(RD), RD, Ctx);
         false ->
             Resp = set_error_message("table ~p not created", [Mod], RD),
             {false, Resp, Ctx}
-    catch
-        throw:{key_problem, Reason} ->
-            Resp = set_error_message("wrong path to element: ~p", [Reason], RD),
-            {{halt, 400}, Resp, Ctx}
     end.
 
 validate_key(Path, Mod) ->
     UnquotedPath = lists:map(fun mochiweb_util:unquote/1, Path),
-    FVList = path_elements_to_key(Mod, UnquotedPath),
-    ensure_lk_order_and_strip(Mod, FVList).
+    path_elements(Mod, UnquotedPath).
+%%    ensure_lk_order_and_strip(Mod, FVList).
 
 resource_exists([], 'POST', RD, Ctx) ->
     {true, RD, Ctx};
 resource_exists(Path, 'GET', RD,
                 #ctx{table=Table,
                      mod=Mod,
-                     key=Key,
                      options=Options}=Ctx) ->
     %% Would be nice if something cheaper than using get_data existed to check
     %% if a key is present.
-    try riak_kv_ts_util:get_data(Key, Table, Mod, Options) of
-        {ok, Record} ->
-            {true, RD, Ctx#ctx{object=Record}};
-        {error, Reason} ->
-            Resp = set_error_message("Internal error: ~p", Reason, RD),
-            {{halt, 500}, Resp, Ctx}
+    try
+        lager:log(info, self(), "resource_exists(~p, 'GET')", [Path]),
+        Key = validate_key(Path, Mod),
+        lager:log(info, self(), "resource_exists: Key=~p", [Key]),
+        case riak_kv_ts_api:get_data(Key, Table, Mod, Options) of
+            {ok, Record} ->
+                {true, RD, Ctx#ctx{object=Record,
+                                   key=Key}};
+            {error, notfound} ->
+                {{halt, 404}, RD, Ctx};
+            {error, InternalReason} ->
+                InternalResp = set_error_message("Internal error: ~p", [InternalReason], RD),
+                {{halt, 500}, InternalResp, Ctx}
+        end
     catch
         _:Reason ->
             Resp = set_error_message("lookup on ~p failed due to ~p",
@@ -238,34 +244,44 @@ resource_exists(Path, 'GET', RD,
                                      RD),
             {false, Resp, Ctx}
     end;
-resource_exists(_Path, 'DELETE', RD, Ctx) ->
+resource_exists(Path, 'DELETE', RD, #ctx{mod=Mod}=Ctx) ->
     %% Since reading the object is expensive we will assume for now that the
     %% object exists for a delete, but if it turns out that it does not then the
     %% processing of the delete will return 404 at that point.
-    {true, RD, Ctx}.
+    try
+        Key = validate_key(Path, Mod),
+        {true, RD, Ctx#ctx{key=Key}}
+    catch
+        _:Reason ->
+            Resp = set_error_message("lookup on ~p failed due to ~p",
+                                     [Path, Reason],
+                                     RD),
+            {false, Resp, Ctx}
+    end.
 
-%% extract keys from path elements in the URL (.../K1/V1/K2/V2 ->
-%% [{K1, V1}, {K2, V2}]), check with Table's DDL to make sure keys are
+%% extract keys from path elements in the URL (.../K1/V1/K2/V2/... ->
+%% [V1, V2, ...]), check with Table's DDL to make sure keys are
 %% correct and values are of (convertible to) appropriate types, and
 %% return the KV list
 %% @private
--spec path_elements_to_key(module(), [string()]) ->
-                                   [{string(), riak_pb_ts_codec:ldbvalue()}].
-path_elements_to_key(_Mod, []) ->
-    [];
-path_elements_to_key(Mod, [F,V|Rest]) ->
-    [convert_fv(Mod, F, V)|path_elements_to_key(Mod, Rest)].
+-spec path_elements(module(), [string()]) ->
+                       [riak_pb_ts_codec:ldbvalue()].
+path_elements(Mod, Path) ->
+    LK = local_key(Mod),
+    lager:log(info, self(), "path_elements: LK=~p", [LK]),
+    Types = [Mod:get_field_type([F]) || F <- LK ],
+    lager:log(info, self(), "path_elements: Types=~p", [Types]),
+    LKStr = [ binary_to_list(F) || F <- LK ],
+    KeyTypes = lists:zip(LKStr, Types),
+    lager:log(info, self(), "path_elements: KeyTypes=~p, Path=~p", [KeyTypes, Path]),
+    match_path(Path, KeyTypes).
 
-%% @private
-convert_fv(Mod, FieldRaw, V) ->
-    Field = [list_to_binary(X) || X <- string:tokens(FieldRaw, ".")],
-    try
-        true = Mod:is_field_valid(Field),
-        convert_field_value(Mod:get_field_type(Field), V)
-    catch
-        _:_ ->
-           throw({url_key_bad_value, Field})
-    end.
+match_path([], []) ->
+    [];
+match_path([F,V|Path], [{F, Type}|KeyTypes]) ->
+    [convert_field_value(Type, V)|match_path(Path, KeyTypes)];
+match_path(Path, _KeyTypes) ->
+    throw(io_lib:format("incorrect path ~p", [Path])).
 
 %% @private
 convert_field_value(varchar, V) ->
@@ -287,37 +303,6 @@ convert_field_value(timestamp, V) ->
             throw(url_key_bad_value)
     end.
 
-
-%% validate_ts_record(undefined) ->
-%%     undefined;
-%% validate_ts_record(R) when is_list(R) ->
-%%     case lists:all(
-%%            %% check that all list elements are TS types
-%%            fun(X) -> is_integer(X) orelse is_float(X) orelse is_binary(X) end,
-%%            R) of
-%%         true ->
-%%             R;
-%%         false ->
-%%             undefined
-%%     end;
-%% validate_ts_record(_) ->
-%%     undefined.
-
-%% validate_ts_records(RR) when is_list(RR) ->
-%%     case lists:all(fun(R) -> validate_ts_record(R) /= undefined end, RR) of
-%%         true ->
-%%             RR;
-%%         false ->
-%%             undefined
-%%     end;
-%% validate_ts_records(_) ->
-%%     undefined.
-
-ensure_lk_order_and_strip(LK, FVList) ->
-    [proplists:get_value(F, FVList)
-     || #param_v1{name = F} <- LK].
-
-
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
                                 {[{Encoding::string(), Producer::function()}],
                                  #wm_reqdata{}, #ctx{}}.
@@ -326,8 +311,8 @@ encodings_provided(RD, Ctx) ->
 
 -spec table_module_exists(module()) -> boolean().
 table_module_exists(Mod) ->
-    try Mod:get_dll() of
-        _ -> %#ddl_v1{} ->
+    try Mod:get_ddl() of
+        #ddl_v1{} ->
             true
     catch
         _:_ ->
@@ -341,9 +326,9 @@ post_is_create(RD, Ctx) ->
 -spec process_post(#wm_reqdata{}, #ctx{}) ->  cb_rv_spec(boolean()).
 process_post(RD, #ctx{mod=Mod,
                      table=Table}=Ctx) ->
-    try extract_data(RD) of
-        Data ->
-            Records = [list_to_tuple(R) || R <- Data],
+    try extract_data(RD, Mod) of
+        Records ->
+            %Records = [], %[list_to_tuple(R) || R <- Data],
             case riak_kv_ts_util:validate_rows(Mod, Records) of
                 [] ->
                     case riak_kv_ts_api:put_data(Records, Table, Mod) of
@@ -365,7 +350,7 @@ process_post(RD, #ctx{mod=Mod,
             end
     catch
         throw:{data_problem,Reason} ->
-            Resp = set_error_message("wrong body: ~p", Reason, RD),
+            Resp = set_error_message("wrong body: ~p", [Reason], RD),
             {{halt, 400}, Resp, Ctx}
     end.
 
@@ -380,38 +365,88 @@ delete_resource(RD,  #ctx{table=Table,
              Resp = set_json_response(Json, RD),
              {true, Resp, Ctx};
         {error, notfound} ->
-             Resp = set_error_message("object not found", [], RD),
-             {{halt, 404}, Resp, Ctx}
+%             Resp = set_error_message("object not found", [], RD),
+             {{halt, 404}, RD, Ctx}
     catch
         _:Reason ->
-            Resp = set_error_message("Internal error: ~p", Reason, RD),
+            Resp = set_error_message("Internal error: ~p", [Reason], RD),
             {{halt, 500}, Resp, Ctx}
     end.
 
-extract_data(RD) ->
+extract_data(RD, Mod) ->
     try
         JsonStr = binary_to_list(wrq:req_body(RD)),
-        mochijson2:decode(JsonStr)
+        Json = mochijson2:decode(JsonStr),
+        lager:log(info, self(), "extract_data: Json=~p", [Json]),
+        DDLFields = ddl_fields(Mod),
+        lager:log(info, self(), "extract_data: DDLFields=~p", [DDLFields]),
+        extract_records(Json, DDLFields)
     catch
-        _:Reason ->
+        Error:Reason ->
+            lager:log(info, self(), "extract_data: ~p:~p", [Error, Reason]),
             throw({data_problem, Reason})
     end.
 
-%% -spec extract_data([byte()]) -> undefined|any().
-%% extract_data(Json) ->
-%%     try mochijson2:decode(Json) of
-%%         Decoded when is_list(Decoded) ->
-%%             validate_ts_records(Decoded)
-%%     catch
-%%         _:_ ->
-%%             undefined
-%%     end.
+extract_records({struct, _}=Struct, Fields) ->
+    [json_struct_to_obj(Struct, Fields)];
+extract_records(Structs, Fields) when is_list(Structs) ->
+    [json_struct_to_obj(S, Fields) || S <- Structs].
 
+json_struct_to_obj({struct, FieldValueList}, Fields) ->
+    List = [ extract_field_value(Field, FieldValueList)
+             || Field <- Fields],
+    list_to_tuple(List).
+
+extract_field_value(#riak_field_v1{name=Name, type=Type}, FVList) ->
+    case proplists:get_value(Name, FVList) of
+        undefined ->
+            throw({data_problem, {missing_field, Name}});
+        Value ->
+           check_field_value(Type, Value)
+    end.
+
+local_key(Mod) ->
+    ddl_local_key(Mod:get_ddl()).
+
+-spec ddl_local_key(#ddl_v1{}) -> [binary()].
+ddl_local_key(#ddl_v1{local_key=LK}) ->
+    #key_v1{ast=Ast} = LK,
+    [ param_name(P) || P <- Ast].
+
+param_name(#param_v1{name=[Name]}) ->
+    Name.
+
+check_field_value(varchar, V) when is_binary(V) ->
+    V;
+check_field_value(sint64, V) when is_integer(V) ->
+    V;
+check_field_value(double, V) when is_number(V) ->
+    V;
+check_field_value(timestamp, V) when is_integer(V), V>0 ->
+    V;
+check_field_value(boolean, V) when is_boolean(V) ->
+    V;
+check_field_value(Type, V) ->
+    throw({data_problem, {wrong_type, Type, V}}).
+
+ddl_fields(Mod) ->
+    #ddl_v1{fields=Fields} = Mod:get_ddl(),
+    Fields.
 
 result_to_json(ok) ->
     mochijson2:encode([{success, true}]);
 result_to_json(_) ->
     mochijson2:encode([{some_record, one_day}]).
+
+to_json(RD, #ctx{api_call=get, object=Object}=Ctx) ->
+    try
+        Json = mochijson2:encode(Object),
+        {Json, RD, Ctx}
+    catch
+        _:Reason ->
+            Resp = set_error_message("object error ~p", [Reason], RD),
+            {{halt, 500}, Resp, Ctx}
+    end.
 
 set_json_response(Json, RD) ->
      wrq:set_resp_header("Content-Type", "application/json",
