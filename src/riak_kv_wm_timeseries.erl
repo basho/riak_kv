@@ -369,6 +369,7 @@ delete_resource(RD,  #ctx{table=Table,
              {{halt, 404}, RD, Ctx}
     catch
         _:Reason ->
+            lager:log(info, self(), "delete_resource failed: ~p", Reason),
             Resp = set_error_message("Internal error: ~p", [Reason], RD),
             {{halt, 500}, Resp, Ctx}
     end.
@@ -377,10 +378,8 @@ extract_data(RD, Mod) ->
     try
         JsonStr = binary_to_list(wrq:req_body(RD)),
         Json = mochijson2:decode(JsonStr),
-        lager:log(info, self(), "extract_data: Json=~p", [Json]),
-        DDLFields = ddl_fields(Mod),
-        lager:log(info, self(), "extract_data: DDLFields=~p", [DDLFields]),
-        extract_records(Json, DDLFields)
+        DDLFieldTypes = ddl_fields_and_types(Mod),
+        extract_records(Json, DDLFieldTypes)
     catch
         Error:Reason ->
             lager:log(info, self(), "extract_data: ~p:~p", [Error, Reason]),
@@ -397,7 +396,7 @@ json_struct_to_obj({struct, FieldValueList}, Fields) ->
              || Field <- Fields],
     list_to_tuple(List).
 
-extract_field_value(#riak_field_v1{name=Name, type=Type}, FVList) ->
+extract_field_value({Name, Type}, FVList) ->
     case proplists:get_value(Name, FVList) of
         undefined ->
             throw({data_problem, {missing_field, Name}});
@@ -408,6 +407,7 @@ extract_field_value(#riak_field_v1{name=Name, type=Type}, FVList) ->
 local_key(Mod) ->
     ddl_local_key(Mod:get_ddl()).
 
+%% this should be in the DDL helper module.
 -spec ddl_local_key(#ddl_v1{}) -> [binary()].
 ddl_local_key(#ddl_v1{local_key=LK}) ->
     #key_v1{ast=Ast} = LK,
@@ -416,22 +416,21 @@ ddl_local_key(#ddl_v1{local_key=LK}) ->
 param_name(#param_v1{name=[Name]}) ->
     Name.
 
-check_field_value(varchar, V) when is_binary(V) ->
-    V;
-check_field_value(sint64, V) when is_integer(V) ->
-    V;
-check_field_value(double, V) when is_number(V) ->
-    V;
-check_field_value(timestamp, V) when is_integer(V), V>0 ->
-    V;
-check_field_value(boolean, V) when is_boolean(V) ->
-    V;
+%% @todo: might be better if the DDL helper module had a
+%% valid_field_value(Field, Value) -> boolean() function.
+check_field_value(varchar, V) when is_binary(V)         -> V;
+check_field_value(sint64, V) when is_integer(V)         -> V;
+check_field_value(double, V) when is_number(V)          -> V;
+check_field_value(timestamp, V) when is_integer(V), V>0 -> V;
+check_field_value(boolean, V) when is_boolean(V)        -> V;
 check_field_value(Type, V) ->
     throw({data_problem, {wrong_type, Type, V}}).
 
-ddl_fields(Mod) ->
+%% @todo: this should be in the DDL helper module, so that the records don't
+%% leak out of riak_ql.
+ddl_fields_and_types(Mod) ->
     #ddl_v1{fields=Fields} = Mod:get_ddl(),
-    Fields.
+    [ {Name, Type} || #riak_field_v1{name=Name, type=Type} <- Fields ].
 
 result_to_json(ok) ->
     mochijson2:encode([{success, true}]);
