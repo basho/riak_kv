@@ -402,7 +402,7 @@ create_batches(Rows, MaxSize) ->
     create_batches(Rows, MaxSize, MaxSize, [], []).
 
 create_batches([], _Counter, _Max, ThisBatch, AllBatches) ->
-    AllBatches ++ [ThisBatch];
+    [ThisBatch|AllBatches];
 create_batches(Rows, 0, Max, ThisBatch, AllBatches) ->
     create_batches(Rows, Max, Max, [], AllBatches ++ [ThisBatch]);
 create_batches([H|T], Counter, Max, ThisBatch, AllBatches) ->
