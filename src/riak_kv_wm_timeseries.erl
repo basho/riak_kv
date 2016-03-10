@@ -100,12 +100,12 @@ service_available(RD, #ctx{riak = RiakProps}=Ctx) ->
     case riak_kv_wm_utils:get_riak_client(
            RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, _C} ->
-            Table = table(RD),
+            Table = riak_kv_wm_ts_util:table_from_request(RD),
             Mod = riak_ql_ddl:make_module_name(Table),
             {true, RD, Ctx#ctx{table=Table, mod=Mod}};
         {error, Reason} ->
-            ErrorMsg = flat_format("Unable to connect to Riak: ~p", [Reason]),
-            Resp = set_text_resp_header(ErrorMsg, RD),
+            ErrorMsg = riak_kv_wm_ts_util:flat_format("Unable to connect to Riak: ~p", [Reason]),
+            Resp = riak_kv_wm_ts_util:set_text_resp_header(ErrorMsg, RD),
             {false, Resp, Ctx}
     end.
 
@@ -120,14 +120,14 @@ is_authorized(RD, #ctx{table=Table}=Ctx) ->
             case riak_core_security:check_permission(
                    {riak_kv_ts_util:api_call_to_perm(Call), Table}, SecContext) of
                  {false, Error, _} ->
-                    {utf8_to_binary(Error), RD, Ctx};
-                _ ->
-                    {true, RD, Ctx#ctx{api_call=Call}}
+                    {riak_kv_wm_ts_util:utf8_to_binary(Error), RD, Ctx};
+                 _ ->
+                     {true, RD, Ctx#ctx{api_call=Call}}
             end;
         insecure ->
             ErrorMsg = "Security is enabled and Riak does not" ++
                 " accept credentials over HTTP. Try HTTPS instead.",
-            Resp = set_text_resp_header(ErrorMsg, RD),
+            Resp = riak_kv_wm_ts_util:set_text_resp_header(ErrorMsg, RD),
             {{halt, 426}, Resp, Ctx}
     end.
 
@@ -152,7 +152,7 @@ malformed_request(RD, Ctx) ->
         malformed_request(wrq:path_tokens(RD), RD, Ctx2)
     catch
         throw:ParameterError ->
-            Resp = set_error_message("parameter error: ~p", [ParameterError], RD),
+            Resp = riak_kv_wm_ts_util:set_error_message("parameter error: ~p", [ParameterError], RD),
             {true, Resp, Ctx}
     end.
 
@@ -188,7 +188,7 @@ resource_exists(RD, #ctx{mod=Mod} = Ctx) ->
         true ->
             resource_exists(wrq:path_tokens(RD), wrq:method(RD), RD, Ctx);
         false ->
-            Resp = set_error_message("table ~p not created", [Mod], RD),
+            Resp = riak_kv_wm_ts_util:set_error_message("table ~p not created", [Mod], RD),
             {false, Resp, Ctx}
     end.
 
@@ -209,14 +209,14 @@ resource_exists(Path, 'GET', RD,
             {error, notfound} ->
                 {{halt, 404}, RD, Ctx};
             {error, InternalReason} ->
-                InternalResp = set_error_message("Internal error: ~p", [InternalReason], RD),
+                InternalResp = riak_kv_wm_ts_util:set_error_message("Internal error: ~p", [InternalReason], RD),
                 {{halt, 500}, InternalResp, Ctx}
         end
     catch
         _:Reason ->
-            Resp = set_error_message("lookup on ~p failed due to ~p",
-                                     [Path, Reason],
-                                     RD),
+            Resp = riak_kv_wm_ts_util:set_error_message("lookup on ~p failed due to ~p",
+                                                        [Path, Reason],
+                                                        RD),
             {false, Resp, Ctx}
     end;
 resource_exists(Path, 'DELETE', RD, #ctx{mod=Mod}=Ctx) ->
@@ -228,9 +228,9 @@ resource_exists(Path, 'DELETE', RD, #ctx{mod=Mod}=Ctx) ->
         {true, RD, Ctx#ctx{key=Key}}
     catch
         _:Reason ->
-            Resp = set_error_message("lookup on ~p failed due to ~p",
-                                     [Path, Reason],
-                                     RD),
+            Resp = riak_kv_wm_ts_util:set_error_message("lookup on ~p failed due to ~p",
+                                                        [Path, Reason],
+                                                        RD),
             {false, Resp, Ctx}
     end.
 
@@ -253,23 +253,23 @@ process_post(RD, #ctx{mod=Mod,
                     case riak_kv_ts_api:put_data(Records, Table, Mod) of
                         ok ->
                             Json = result_to_json(ok),
-                            Resp = set_json_response(Json, RD),
+                            Resp = riak_kv_wm_ts_util:set_json_response(Json, RD),
                             {true, Resp, Ctx};
                         {error, {some_failed, ErrorCount}} ->
-                            Resp = set_error_message("failed some puts ~p ~p",
-                                                     [ErrorCount, Table],
-                                                     RD),
+                            Resp = riak_kv_wm_ts_util:set_error_message("failed some puts ~p ~p",
+                                                                        [ErrorCount, Table],
+                                                                        RD),
                             {{halt, 400}, Resp, Ctx}
                     end;
                 BadRowIdxs when is_list(BadRowIdxs) ->
-                    Resp = set_error_message("invalid data: ~p",
-                                             [BadRowIdxs],
-                                             RD),
+                    Resp = riak_kv_wm_ts_util:set_error_message("invalid data: ~p",
+                                                                [BadRowIdxs],
+                                                                RD),
                     {{halt, 400}, Resp, Ctx}
             end
     catch
         throw:{data_problem,Reason} ->
-            Resp = set_error_message("wrong body: ~p", [Reason], RD),
+            Resp = riak_kv_wm_ts_util:set_error_message("wrong body: ~p", [Reason], RD),
             {{halt, 400}, Resp, Ctx}
     end.
 
@@ -281,16 +281,16 @@ delete_resource(RD,  #ctx{table=Table,
      try riak_kv_ts_api:delete_data(Key, Table, Mod, Options) of
         ok ->
              Json = result_to_json(ok),
-             Resp = set_json_response(Json, RD),
-             {true, Resp, Ctx};
-        {error, notfound} ->
-             {{halt, 404}, RD, Ctx}
-    catch
-        _:Reason ->
-            lager:log(info, self(), "delete_resource failed: ~p", Reason),
-            Resp = set_error_message("Internal error: ~p", [Reason], RD),
-            {{halt, 500}, Resp, Ctx}
-    end.
+              Resp = riak_kv_wm_ts_util:set_json_response(Json, RD),
+              {true, Resp, Ctx};
+         {error, notfound} ->
+              {{halt, 404}, RD, Ctx}
+     catch
+         _:Reason ->
+             lager:log(info, self(), "delete_resource failed: ~p", Reason),
+             Resp = riak_kv_wm_ts_util:set_error_message("Internal error: ~p", [Reason], RD),
+             {{halt, 500}, Resp, Ctx}
+     end.
 
 -spec to_json(#wm_reqdata{}, #ctx{}) ->  cb_rv_spec(iolist()|halt()).
 to_json(RD, #ctx{api_call=get, object=Object}=Ctx) ->
@@ -299,7 +299,7 @@ to_json(RD, #ctx{api_call=get, object=Object}=Ctx) ->
         {Json, RD, Ctx}
     catch
         _:Reason ->
-            Resp = set_error_message("object error ~p", [Reason], RD),
+            Resp = riak_kv_wm_ts_util:set_error_message("object error ~p", [Reason], RD),
             {{halt, 500}, Resp, Ctx}
     end.
 
@@ -328,10 +328,10 @@ extract_params([{"timeout", TimeoutStr}], Ctx) ->
                 options = [{timeout, Timeout}]}
     catch
         _:_ ->
-            throw(flat_format("timeout not an integer value: ~s", [TimeoutStr]))
+            throw(riak_kv_wm_ts_util:flat_format("timeout not an integer value: ~s", [TimeoutStr]))
     end;
 extract_params(Params, _Ctx) ->
-    throw(flat_format("incorrect paramters: ~p", [Params])).
+    throw(riak_kv_wm_ts_util:flat_format("incorrect paramters: ~p", [Params])).
 
 validate_key(Path, Mod) ->
     UnquotedPath = lists:map(fun mochiweb_util:unquote/1, Path),
@@ -441,13 +441,6 @@ ddl_fields_and_types(Mod) ->
     #ddl_v1{fields=Fields} = Mod:get_ddl(),
     [ {Name, Type} || #riak_field_v1{name=Name, type=Type} <- Fields ].
 
-
-%% @private
-table(RD) ->
-    utf8_to_binary(
-      mochiweb_util:unquote(
-        wrq:path_info(table, RD))).
-
 %% @private
 api_call([]       , 'POST')   -> put;
 api_call(_KeyInURL, 'GET')    -> get;
@@ -456,21 +449,3 @@ api_call(_KeyInURL, 'DELETE') -> delete.
 %% @private
 result_to_json(ok) ->
     mochijson2:encode([{success, true}]).
-
-%% move to util module.
-utf8_to_binary(S) ->
-    unicode:characters_to_binary(S, utf8, utf8).
-
-flat_format(Format, Args) ->
-    lists:flatten(io_lib:format(Format, Args)).
-
-set_text_resp_header(IoList, RD) ->
-       wrq:set_resp_header(
-       "Content-Type", "text/plain", wrq:append_to_response_body(IoList,RD)).
-
-set_error_message(Format, Args, RD) ->
-    set_text_resp_header(flat_format(Format, Args), RD).
-
-set_json_response(Json, RD) ->
-     wrq:set_resp_header("Content-Type", "application/json",
-                         wrq:append_to_response_body(Json, RD)).
