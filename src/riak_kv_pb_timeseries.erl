@@ -393,20 +393,16 @@ estimated_row_count(SampleRowSize, MaxBatchSize) ->
     RowSizeFudged = (SampleRowSize * 10) div 9,
     MaxBatchSize div RowSizeFudged.
 
-create_batches(Rows, MaxSize) when length(Rows) =< MaxSize ->
-    [Rows];
-%% May be a more efficient way to do this. Take a list of arbitrary
-%% data (expected to be a list of lists for this use case) and create
-%% a list of MaxSize lists.
 create_batches(Rows, MaxSize) ->
-    create_batches(Rows, MaxSize, MaxSize, [], []).
+    create_batches(Rows, MaxSize, []).
 
-create_batches([], _Counter, _Max, ThisBatch, AllBatches) ->
-    [ThisBatch|AllBatches];
-create_batches(Rows, 0, Max, ThisBatch, AllBatches) ->
-    create_batches(Rows, Max, Max, [], AllBatches ++ [ThisBatch]);
-create_batches([H|T], Counter, Max, ThisBatch, AllBatches) ->
-    create_batches(T, Counter-1, Max, ThisBatch ++ [H], AllBatches).
+create_batches([], _MaxSize, Accum) ->
+    Accum;
+create_batches(Rows, MaxSize, Accum) when length(Rows) < MaxSize ->
+    [Rows|Accum];
+create_batches(Rows, MaxSize, Accum) ->
+    {First, Rest} = lists:split(MaxSize, Rows),
+    create_batches(Rest, MaxSize, [First|Accum]).
 %%%%%%%%
 
 add_preflists(PartitionedData, NVal, UpNodes) ->
@@ -980,15 +976,15 @@ validate_rows_error_response_2_test() ->
     ).
 
 batch_1_test() ->
-    ?assertEqual([[1, 2, 3, 4], [5, 6, 7, 8], [9]],
+    ?assertEqual(lists:reverse([[1, 2, 3, 4], [5, 6, 7, 8], [9]]),
                  create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 4)).
 
 batch_2_test() ->
-    ?assertEqual([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]],
+    ?assertEqual(lists:reverse([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]]),
                  create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4)).
 
 batch_3_test() ->
-    ?assertEqual([[1, 2, 3], [4, 5, 6], [7, 8, 9]],
+    ?assertEqual(lists:reverse([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
                  create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)).
 
 batch_undersized1_test() ->
@@ -1000,6 +996,6 @@ batch_undersized2_test() ->
                  create_batches([1, 2, 3, 4, 5, 6], 7)).
 
 batch_almost_undersized_test() ->
-    ?assertEqual([[1, 2, 3, 4, 5], [6]],
+    ?assertEqual(lists:reverse([[1, 2, 3, 4, 5], [6]]),
                  create_batches([1, 2, 3, 4, 5, 6], 5)).
 -endif.
