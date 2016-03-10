@@ -77,7 +77,6 @@
          riak}).
 
 -define(DEFAULT_TIMEOUT, 60000).
--define(TABLE_ACTIVATE_WAIT, 30).   %% wait until table's bucket type is activated
 
 -type cb_rv_spec(T) :: {T, #wm_reqdata{}, #ctx{}}.
 -type halt() :: {'halt', 200..599} | {'error' , term()}.
