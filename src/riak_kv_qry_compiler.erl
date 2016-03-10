@@ -477,7 +477,7 @@ find_quantum_field_index_in_key2([_|Tail], Index) ->
     find_quantum_field_index_in_key2(Tail, Index+1).
 
 %%
-hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where) ->
+hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
                            {element(3, lists:nth(QIndex, List)), E};
                       ({endkey,   List}, {S, _E}) ->
@@ -485,23 +485,37 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where) ->
                       (_, {S, E})  ->
                            {S, E}
                    end,
-    {Min, Max} = lists:foldl(GetMaxMinFun, {"", ""}, Where),
-    EffMin = case proplists:get_value(start_inclusive, Where, true) of
-                 true  -> Min;
-                 false -> Min + 1
-             end,
-    EffMax = case proplists:get_value(end_inclusive, Where, false) of
-                 true  -> Max + 1;
-                 false -> Max
-             end,
+    {Min1, Max1} = lists:foldl(GetMaxMinFun, {"", ""}, Where1),
+    %% if the start range is not inclusive then add one and remove the
+    %% start_inclusive flag. This is so that the query start key hashes to the
+    %% correct quanta when it is on the boundary since the start_inclusive flag
+    %% is not taken into account in the partition hashing. For example given a
+    %% one second quantum `mytime > 1999` should return keys with mytime greater
+    %% than 2000 but will hash to the quantum before 2000 and receive no results
+    %% from it.
+    case lists:keytake(start_inclusive, 1, Where1) of
+        {value, {start_inclusive, false}, WhereX}  ->
+            Where2 = WhereX,
+            Min2 = Min1 + 1;
+        _ ->
+            Where2 = Where1,
+            Min2 = Min1
+    end,
+    Max2 =
+        case proplists:get_value(end_inclusive, Where2, false) of
+            true  -> Max1 + 1;
+            false -> Max1
+        end,
     {NoSubQueries, Boundaries} =
-        riak_ql_quanta:quanta(EffMin, EffMax, QSize, QUnit),
+        riak_ql_quanta:quanta(Min2, Max2, QSize, QUnit),
     if
         NoSubQueries == 1 ->
-            [Where];
+            [Where2];
         NoSubQueries > 1 andalso (MaxSubQueries == undefined orelse
                                   NoSubQueries =< MaxSubQueries) ->
-            make_wheres(Where, QField, Min, Max, Boundaries);
+            %% use the maximum value that has not been incremented, we still use
+            %% the end_inclusive flag because the end key is not used to hash
+            make_wheres(Where2, QField, Min2, Max1, Boundaries);
         NoSubQueries > MaxSubQueries ->
             {error, {too_many_subqueries, NoSubQueries}}
     end.
