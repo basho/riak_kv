@@ -173,7 +173,7 @@ content_types_accepted(_, RD, Ctx) ->
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean() | halt()).
 resource_exists(RD, #ctx{mod=Mod} = Ctx) ->
-    case table_module_exists(Mod) of
+    case riak_kv_wm_ts_util:table_module_exists(Mod) of
         true ->
             resource_exists(wrq:path_tokens(RD), wrq:method(RD), RD, Ctx);
         false ->
@@ -290,20 +290,6 @@ to_json(RD, #ctx{api_call=get, object=Object}=Ctx) ->
         _:Reason ->
             Resp = riak_kv_wm_ts_util:set_error_message("object error ~p", [Reason], RD),
             {{halt, 500}, Resp, Ctx}
-    end.
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% helper functions
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% @todo: this should be in riak_ql_ddl and should probably check deeper.
--spec table_module_exists(module()) -> boolean().
-table_module_exists(Mod) ->
-    try Mod:get_ddl() of
-        #ddl_v1{} ->
-            true
-    catch
-        _:_ ->
-            false
     end.
 
 -spec extract_params([{string(), string()}], #ctx{}) -> #ctx{} .
