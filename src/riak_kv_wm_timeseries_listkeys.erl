@@ -81,7 +81,8 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
                      table = Table,
                      mod = Mod}};
         {error, Reason} ->
-            handle_error({riak_client_error, Reason}, RD, Ctx)
+            Resp = riak_kv_wm_ts_util:set_error_message("Unable to connect to Riak: ~p", [Reason], RD),
+            {false, Resp, Ctx}
     end.
 
 
@@ -162,35 +163,3 @@ ts_keys_to_json(Keys) ->
     KeysTerm = [tuple_to_list(sext:decode(A))
                 || A <- Keys, A /= []],
     mochijson2:encode({struct, [{<<"keys">>, KeysTerm}]}).
-
-
-error_out(Type, Fmt, Args, RD, Ctx) ->
-    {Type,
-     wrq:set_resp_header(
-       "Content-Type", "text/plain", wrq:append_to_response_body(
-                                       flat_format(Fmt, Args), RD)),
-     Ctx}.
-
--spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
-handle_error(Error, RD, Ctx) ->
-    case Error of
-        {riak_client_error, Reason} ->
-            error_out(false,
-                      "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
-        insecure_connection ->
-            error_out({halt, 426},
-                      "Security is enabled and Riak does not"
-                      " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
-        {unsupported_version, BadVersion} ->
-            error_out({halt, 412},
-                      "Unsupported API version ~s", [BadVersion], RD, Ctx);
-        {not_permitted, Table} ->
-            error_out({halt, 401},
-                      "Access to table ~ts not allowed", [Table], RD, Ctx);
-        {no_such_table, Table} ->
-            error_out({halt, 404},
-                      "Table \"~ts\" does not exist", [Table], RD, Ctx)
-    end.
-
-flat_format(Format, Args) ->
-    lists:flatten(io_lib:format(Format, Args)).
