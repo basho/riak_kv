@@ -50,11 +50,11 @@
 -include("riak_kv_wm_raw.hrl").
 -include_lib("webmachine/include/webmachine.hrl").
 
--record(ctx, {api_version,
-              riak,
+-record(ctx, {riak,
               security,
               client,
-              table    :: undefined | binary()
+              table    :: undefined | binary(),
+              mod :: module()
              }).
 
 -define(CB_RV_SPEC, {boolean()|atom()|tuple(), #wm_reqdata{}, #ctx{}}).
@@ -65,9 +65,7 @@
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
-    {ok, #ctx{api_version = proplists:get_value(api_version, Props),
-              riak = proplists:get_value(riak, Props),
-              table = proplists:get_value(table, Props)}}.
+    {ok, #ctx{riak = proplists:get_value(riak, Props)}}.
 
 -spec service_available(#wm_reqdata{}, #ctx{}) ->
     {boolean(), #wm_reqdata{}, #ctx{}}.
@@ -77,27 +75,27 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
     case riak_kv_wm_utils:get_riak_client(
            RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
+            Table = riak_kv_wm_ts_util:table_from_request(RD),
+            Mod = riak_ql_ddl:make_module_name(Table),
             {true, RD,
-             Ctx#ctx{api_version = wrq:path_info(api_version, RD),
-                     client = C,
-                     table = utf8_to_binary(
-                               mochiweb_util:unquote(
-                                 wrq:path_info(table, RD)))
-                    }};
+             Ctx#ctx{client = C,
+                     table = Table,
+                     mod = Mod}};
         {error, Reason} ->
             handle_error({riak_client_error, Reason}, RD, Ctx)
     end.
 
 
-is_authorized(RD, Ctx) ->
-    case riak_api_web_security:is_authorized(RD) of
-        false ->
-            {"Basic realm=\"Riak\"", RD, Ctx};
-        {true, SecContext} ->
-            {true, RD, Ctx#ctx{security = SecContext}};
-        insecure ->
-            handle_error(insecure_connection, RD, Ctx)
+is_authorized(RD, #ctx{table=Table}=Ctx) ->
+    case riak_kv_wm_ts_util:authorize(listkeys, Table, RD) of
+        ok ->
+            {true, RD, Ctx};
+        {error, ErrorMsg} ->
+            {ErrorMsg, RD, Ctx};
+        {insecure, Halt, Resp} ->
+            {Halt, Resp, Ctx}
     end.
+
 
 
 -spec forbidden(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
@@ -130,10 +128,12 @@ check_permissions(RD, Ctx = #ctx{security = Security,
 
 
 -spec malformed_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-malformed_request(RD, Ctx = #ctx{api_version = "v1"}) ->
-    {false, RD, Ctx};
-malformed_request(RD, Ctx = #ctx{api_version = UnsupportedVersion}) ->
-    handle_error({unsupported_version, UnsupportedVersion}, RD, Ctx).
+malformed_request(RD, Ctx) ->
+    {false, RD, Ctx}.
+%% malformed_request(RD, Ctx = #ctx{api_version = "v1"}) ->
+%%     {false, RD, Ctx};
+%% malformed_request(RD, Ctx = #ctx{api_version = UnsupportedVersion}) ->
+%%     handle_error({unsupported_version, UnsupportedVersion}, RD, Ctx).
 
 
 -spec allowed_methods(#wm_reqdata{}, #ctx{}) ->

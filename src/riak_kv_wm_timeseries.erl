@@ -111,24 +111,13 @@ service_available(RD, #ctx{riak = RiakProps}=Ctx) ->
 
 is_authorized(RD, #ctx{table=Table}=Ctx) ->
     Call = api_call(wrq:path_tokens(RD), wrq:method(RD)),
-    case riak_api_web_security:is_authorized(RD) of
-        false ->
-            {"Basic realm=\"Riak\"", RD, Ctx};
-        {true, undefined} -> %% @todo: why is this returned during testing?
+    case riak_kv_wm_ts_util:authorize(Call, Table, RD) of
+        ok ->
             {true, RD, Ctx#ctx{api_call=Call}};
-        {true, SecContext} ->
-            case riak_core_security:check_permission(
-                   {riak_kv_ts_util:api_call_to_perm(Call), Table}, SecContext) of
-                 {false, Error, _} ->
-                    {riak_kv_wm_ts_util:utf8_to_binary(Error), RD, Ctx};
-                 _ ->
-                     {true, RD, Ctx#ctx{api_call=Call}}
-            end;
-        insecure ->
-            ErrorMsg = "Security is enabled and Riak does not" ++
-                " accept credentials over HTTP. Try HTTPS instead.",
-            Resp = riak_kv_wm_ts_util:set_text_resp_header(ErrorMsg, RD),
-            {{halt, 426}, Resp, Ctx}
+        {error, ErrorMsg} ->
+            {ErrorMsg, RD, Ctx};
+        {insecure, Halt, Resp} ->
+            {Halt, Resp, Ctx}
     end.
 
 -spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
