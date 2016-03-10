@@ -40,7 +40,6 @@
          allowed_methods/2,
          is_authorized/2,
          forbidden/2,
-         malformed_request/2,
          resource_exists/2,
          content_types_provided/2,
          encodings_provided/2,
@@ -57,7 +56,7 @@
               mod :: module()
              }).
 
--define(CB_RV_SPEC, {boolean()|atom()|tuple(), #wm_reqdata{}, #ctx{}}).
+-type cb_rv_spec(T) :: {T, #wm_reqdata{}, #ctx{}}.
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -98,53 +97,21 @@ is_authorized(RD, #ctx{table=Table}=Ctx) ->
 
 
 
--spec forbidden(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
+-spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 forbidden(RD, Ctx) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
-        true ->
-            {true, RD, Ctx};
-        false ->
-            case check_permissions(RD, Ctx) of
-                {true, RD1, Ctx1} ->
-                    {false, RD1, Ctx1};
-                ErrorAlreadyReported ->
-                    ErrorAlreadyReported
-            end
-    end.
-
--spec check_permissions(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-check_permissions(RD, Ctx = #ctx{security = undefined}) ->
-    {true, RD, Ctx};
-check_permissions(RD, Ctx = #ctx{security = Security,
-                                 table = Table}) ->
-    case riak_core_security:check_permission(
-           {riak_kv_ts_util:api_call_to_perm(listkeys), Table}, Security) of
-        {false, Error, _} ->
-            handle_error(
-              {not_permitted, utf8_to_binary(Error)}, RD, Ctx);
-        _ ->
-            {true, RD, Ctx}
-    end.
+   Result = riak_kv_wm_utils:is_forbidden(RD),
+    {Result, RD, Ctx}.
 
 
--spec malformed_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-malformed_request(RD, Ctx) ->
-    {false, RD, Ctx}.
-%% malformed_request(RD, Ctx = #ctx{api_version = "v1"}) ->
-%%     {false, RD, Ctx};
-%% malformed_request(RD, Ctx = #ctx{api_version = UnsupportedVersion}) ->
-%%     handle_error({unsupported_version, UnsupportedVersion}, RD, Ctx).
 
 
--spec allowed_methods(#wm_reqdata{}, #ctx{}) ->
-    {[atom()], #wm_reqdata{}, #ctx{}}.
+-spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
 %% @doc Get the list of methods this resource supports.
 allowed_methods(RD, Ctx) ->
     {['GET'], RD, Ctx}.
 
 
--spec resource_exists(#wm_reqdata{}, #ctx{}) ->
-                             {boolean(), #wm_reqdata{}, #ctx{}}.
+-spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 resource_exists(RD, #ctx{table = Table} = Ctx) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     case catch Mod:get_ddl() of
@@ -156,16 +123,14 @@ resource_exists(RD, #ctx{table = Table} = Ctx) ->
 
 
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
-                                {[{Encoding::string(), Producer::function()}],
-                                 #wm_reqdata{}, #ctx{}}.
+                                cb_rv_spec([{Encoding::string(), Producer::function()}]).
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available.
 encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 -spec content_types_provided(#wm_reqdata{}, #ctx{}) ->
-                                    {[{ContentType::string(), Producer::atom()}],
-                                     #wm_reqdata{}, #ctx{}}.
+                                    cb_rv_spec([{ContentType::string(), Producer::atom()}]).
 %% @doc List the content types available for representing this resource.
 content_types_provided(RD, Ctx) ->
     {[{"application/json", produce_doc_body}], RD, Ctx}.
@@ -235,6 +200,3 @@ handle_error(Error, RD, Ctx) ->
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
-
-utf8_to_binary(S) ->
-    unicode:characters_to_binary(S, utf8, utf8).
