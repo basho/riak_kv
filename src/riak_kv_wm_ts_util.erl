@@ -31,6 +31,8 @@
 
 -export([authorize/3]).
 
+-export([table_module_exists/1]).
+
 
 %% @private
 table_from_request(RD) ->
@@ -78,3 +80,17 @@ authorize(Call, Table, RD) ->
              Resp = set_text_resp_header(ErrorMsg, RD),
              {insecure, {halt, 426}, Resp}
      end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% helper functions
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% @todo: this should be in riak_ql_ddl and should probably check deeper.
+-spec table_module_exists(module()) -> boolean().
+table_module_exists(Mod) ->
+    try Mod:get_ddl() of
+        _DDL -> %#ddl_v1{} ->
+            true
+    catch
+        _:_ ->
+            false
+    end.

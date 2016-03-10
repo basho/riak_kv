@@ -112,14 +112,8 @@ allowed_methods(RD, Ctx) ->
 
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
-resource_exists(RD, #ctx{table = Table} = Ctx) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx);
-        _ ->
-            {true, RD, Ctx}
-    end.
+resource_exists(RD, #ctx{mod=Mod} = Ctx) ->
+    {riak_kv_wm_utils:table_module_exists(Mod), RD, Ctx}.
 
 
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
