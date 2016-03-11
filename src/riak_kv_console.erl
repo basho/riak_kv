@@ -522,8 +522,13 @@ bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
         [{<<"props", _/binary>>, {struct, Props1}}] ->
             case catch riak_kv_ts_util:maybe_parse_table_def(Type, Props1) of
                 {ok, Props2} ->
-                    Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
-                    CreateTypeFn(Props3);
+                    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2] of
+                        {bad_bucket_property, BadProp} ->
+                            io:format("Invalid bucket type property: ~ts\n", [BadProp]),
+                            error;
+                        Props3 ->
+                            CreateTypeFn(Props3)
+                    end;
                 {error, ErrorMessage} when is_list(ErrorMessage) orelse is_binary(ErrorMessage) ->
                     bucket_type_print_create_result_error_header(Type),
                     io:format("~ts~n", [ErrorMessage]),
@@ -566,8 +571,13 @@ bucket_type_update([TypeStr, PropsStr]) ->
 bucket_type_update(Type, {struct, Fields}) ->
     case proplists:get_value(<<"props">>, Fields) of
         {struct, Props} ->
-            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
-            bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, ErlProps));
+            case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props] of
+                {bad_bucket_property, BadProp} ->
+                    io:format("Invalid bucket type property: ~ts\n", [BadProp]),
+                    error;
+                ErlProps ->
+                    bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, ErlProps))
+            end;
         _ ->
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
@@ -902,23 +912,19 @@ bucket_type_create_with_timeseries_table_test() ->
           "time   timestamp not null, ",
           "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
           "series, user, time))"
-          " with (prop1='woo', prop2 = 42)">>,
+          " with (n_val=42)">>,
     JSON = json_props([{bucket_type, my_type},
                        {table_def, TableDef},
-                       {prop2, 41}]),
+                       {n_val, 41}]),
     bucket_type_create(
       fun(Props) -> put(Ref, Props) end,
       <<"my_type">>,
       mochijson2:decode(JSON)
      ),
     ?assertMatch(
-       {prop1, <<"woo">>},
-       lists:keyfind(prop1, 1, get(Ref))
-      ),
-    ?assertMatch(
-       {prop2, 42},  %% 42 set in query via 'with'
+       {n_val, 42},  %% 42 set in query via 'with'
        %% takes precedence over 41 from sidecar properties
-       lists:keyfind(prop2, 1, get(Ref))
+       lists:keyfind(n_val, 1, get(Ref))
       ),
     ?assertMatch(
        {ddl, _},

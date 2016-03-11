@@ -398,7 +398,19 @@ erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
 erlify_bucket_prop({<<"ddl">>, Value}) ->
     {ddl, Value};
 erlify_bucket_prop({Prop, Value}) ->
-    {list_to_existing_atom(binary_to_list(Prop)), Value}.
+    {validate_bucket_property(binary_to_list(Prop)), Value}.
+
+%% this serves to narrow the property name check to a set of
+%% known properties, rather than use list_to_existing_atom which
+%% is too broad, and also to report a meaningful exception, for
+%% callers to deal with and report further.
+validate_bucket_property(P) ->
+    case riak_kv_bucket:is_valid_property(P) of
+        true ->
+            list_to_atom(P);
+        false ->
+            throw({bad_bucket_property, P})
+    end.
 
 %% @doc Populates the resource's context/state with the bucket type
 %% from the path info, if not already set.

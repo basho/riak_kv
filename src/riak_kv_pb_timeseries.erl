@@ -230,12 +230,18 @@ process_stream({ReqId, Error}, ReqId,
                           {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, WithProps),
-    Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
-    case riak_core_bucket_type:create(Table, Props2) of
-        ok ->
-            wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
-        {error, Reason} ->
-            {reply, table_create_fail_response(Table, Reason), State}
+    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
+        {bad_bucket_property, BadProp} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format("Invalid bucket type property: ~ts", [BadProp])),
+             State};
+        Props2 ->
+            case riak_core_bucket_type:create(Table, Props2) of
+                ok ->
+                    wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
+                {error, Reason} ->
+                    {reply, table_create_fail_response(Table, Reason), State}
+            end
     end.
 
 wait_until_active(Table, State, 0) ->
