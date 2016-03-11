@@ -124,7 +124,7 @@ queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table.
 
 
 -spec get_table_ddl(binary()) ->
-                           {ok, module(), #ddl_v1{}} |
+                           {ok, module(), ?DDL{}} |
                            {error, term()}.
 %% Check that Table is in good standing and ready for TS operations
 %% (its bucket type has been activated and it has a DDL in its props)
@@ -144,7 +144,7 @@ get_table_ddl(Table) when is_binary(Table) ->
 
 
 %%
--spec apply_timeseries_bucket_props(DDL::#ddl_v1{},
+-spec apply_timeseries_bucket_props(DDL::?DDL{},
                                     Props1::[proplists:property()]) ->
         {ok, Props2::[proplists:property()]}.
 apply_timeseries_bucket_props(DDL, Props1) ->
@@ -213,9 +213,9 @@ merge_props_with_preference(PbProps, WithProps) ->
       PbProps, WithProps).
 
 %% Ensure table name in DDL and bucket type are the same.
-assert_type_and_table_name_same(BucketType, #ddl_v1{table = BucketType}) ->
+assert_type_and_table_name_same(BucketType, ?DDL{table = BucketType}) ->
     ok;
-assert_type_and_table_name_same(BucketType1, #ddl_v1{table = BucketType2}) ->
+assert_type_and_table_name_same(BucketType1, ?DDL{table = BucketType2}) ->
     throw({error,
            {table_name,
             flat_format(
@@ -231,14 +231,14 @@ try_compile_ddl(DDL) ->
     ok.
 
 
--spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], #ddl_v1{}, module()) ->
+-spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], ?DDL{}, module()) ->
                           {ok, {binary(), binary()}} |
                           {error, {bad_key_length, integer(), integer()}}.
 %% Given a list of values (of appropriate types) and a DDL, produce a
 %% partition and local key pair, which can be used in riak_client:get
 %% to fetch TS objects.
-make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
-                                        fields = Fields}, Mod) ->
+make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKParams},
+                                     fields = Fields}, Mod) ->
     %% 1. use elements in Key to form a complete data record:
     KeyFields = [F || #param_v1{name = [F]} <- LKParams],
     Got = length(CompoundKey),
