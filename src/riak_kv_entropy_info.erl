@@ -158,6 +158,28 @@ exchanges(Index, IndexN) ->
 %% store the new info back into the ETS table.
 -spec update_index_info({atom(), index()}, term()) -> ok.
 update_index_info(Key, Cmd) ->
+    Id = {{?MODULE, Key}, self()},
+    TransFun = fun() -> update_index_info_impl(Key, Cmd) end,
+    global:trans(Id, TransFun, [node()]).
+
+update_index_info_impl(Key, Cmd) ->
+    %% There used to be a race condition bug in this function, triggered
+    %% by two processes updating data for the same index at the same time.
+    %% We are fixing it by wrapping this code in a call to global:trans,
+    %% which feels like a quick and dirty fix, but works great and seems
+    %% to have fine enough performance characteristics from our tests.
+    %% We'll need to look out for any additional future use of the global
+    %% module though, since all calls to set_lock/trans on a given node
+    %% use the same ETS table behind the scenes, which could lead to
+    %% contention if lots of different pieces of code are all relying on
+    %% it at once.
+    %%
+    %% If we do ever want to remove the call to global:trans and replace
+    %% it with something better, I think we could come up with some code
+    %% to allow concurrent updates by writing multiple versions of the
+    %% record to ETS, and then we could detect that on read and resolve
+    %% the conflict based on how we want the stats to be calculated. This
+    %% would be trickier to implement, but should yield great performance.
     Info = case ets:lookup(?ETS, {index, Key}) of
                [] ->
                    #index_info{};
