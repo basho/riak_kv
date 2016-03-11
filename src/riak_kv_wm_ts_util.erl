@@ -33,6 +33,15 @@
 
 -export([table_module_exists/1]).
 
+-export([local_key/1]).
+
+-export([local_key_fields_and_types/1]).
+
+-include_lib("webmachine/include/webmachine.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
+-include("riak_kv_wm_raw.hrl").
+-include("riak_kv_ts.hrl").
+
 
 %% @private
 table_from_request(RD) ->
@@ -81,9 +90,6 @@ authorize(Call, Table, RD) ->
              {insecure, {halt, 426}, Resp}
      end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% helper functions
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% @todo: this should be in riak_ql_ddl and should probably check deeper.
 -spec table_module_exists(module()) -> boolean().
 table_module_exists(Mod) ->
@@ -94,3 +100,22 @@ table_module_exists(Mod) ->
         _:_ ->
             false
     end.
+
+
+local_key(Mod) ->
+    ddl_local_key(Mod:get_ddl()).
+
+%% this should be in the DDL helper module.
+-spec ddl_local_key(#ddl_v1{}) -> [binary()].
+ddl_local_key(#ddl_v1{local_key=LK}) ->
+    #key_v1{ast=Ast} = LK,
+    [ param_name(P) || P <- Ast].
+
+param_name(#param_v1{name=[Name]}) ->
+    Name.
+
+local_key_fields_and_types(Mod) ->
+    LK = local_key(Mod),
+    Types = [Mod:get_field_type([F]) || F <- LK ],
+    LKStr = [ binary_to_list(F) || F <- LK ],
+    lists:zip(LKStr, Types).
