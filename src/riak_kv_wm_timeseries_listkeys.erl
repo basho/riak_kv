@@ -42,9 +42,10 @@
          forbidden/2,
          resource_exists/2,
          content_types_provided/2,
-         encodings_provided/2,
-         produce_doc_body/2
-        ]).
+         encodings_provided/2]).
+
+%% webmachine body-producing functions
+-export([produce_doc_body/2]).
 
 -include("riak_kv_wm_raw.hrl").
 -include_lib("webmachine/include/webmachine.hrl").
@@ -85,7 +86,6 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
             {false, Resp, Ctx}
     end.
 
-
 is_authorized(RD, #ctx{table=Table}=Ctx) ->
     case riak_kv_wm_ts_util:authorize(listkeys, Table, RD) of
         ok ->
@@ -96,26 +96,19 @@ is_authorized(RD, #ctx{table=Table}=Ctx) ->
             {Halt, Resp, Ctx}
     end.
 
-
-
 -spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 forbidden(RD, Ctx) ->
    Result = riak_kv_wm_utils:is_forbidden(RD),
     {Result, RD, Ctx}.
-
-
-
 
 -spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
 %% @doc Get the list of methods this resource supports.
 allowed_methods(RD, Ctx) ->
     {['GET'], RD, Ctx}.
 
-
 -spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 resource_exists(RD, #ctx{mod=Mod} = Ctx) ->
-    {riak_kv_wm_utils:table_module_exists(Mod), RD, Ctx}.
-
+    {riak_kv_wm_ts_util:table_module_exists(Mod), RD, Ctx}.
 
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
                                 cb_rv_spec([{Encoding::string(), Producer::function()}]).
@@ -128,38 +121,65 @@ encodings_provided(RD, Ctx) ->
                                     cb_rv_spec([{ContentType::string(), Producer::atom()}]).
 %% @doc List the content types available for representing this resource.
 content_types_provided(RD, Ctx) ->
-    {[{"application/json", produce_doc_body}], RD, Ctx}.
+      {[{"text/html", produce_doc_body}], RD, Ctx}.
 
-
-produce_doc_body(RD, Ctx = #ctx{table = Table,
+produce_doc_body(RD, Ctx = #ctx{table = Table, mod=Mod,
                                 client = Client}) ->
-    F = fun() ->
-                {ok, ReqId} = riak_client:stream_list_keys(
-                                {Table, Table}, undefined, Client),
-                stream_keys(ReqId)
-        end,
-    {{stream, {<<>>, F}}, RD, Ctx}.
+    {ok, ReqId} = riak_client:stream_list_keys(
+                    {Table, Table}, undefined, Client),
+    lager:log(info, self(), "in produce_doc_body ~p", [Table]),
+    {{halt, 200}, wrq:set_resp_body({stream, prepare_stream(ReqId, Table, Mod)}, RD), Ctx}.
 
-stream_keys(ReqId) ->
+prepare_stream(ReqId, Table, Mod) ->
+    {<<"<html>">>, fun() -> stream_keys(ReqId, Table, Mod) end}.
+
+stream_keys(ReqId, Table, Mod) ->
     receive
         %% skip empty shipments
         {ReqId, {keys, []}} ->
-            stream_keys(ReqId);
+            stream_keys(ReqId, Table, Mod);
         {ReqId, From, {keys, []}} ->
             _ = riak_kv_keys_fsm:ack_keys(From),
-            stream_keys(ReqId);
+            stream_keys(ReqId, Table, Mod);
         {ReqId, From, {keys, Keys}} ->
             _ = riak_kv_keys_fsm:ack_keys(From),
-            {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
+            {ts_keys_to_html(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, {keys, Keys}} ->
-            {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
+            {ts_keys_to_html(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, done} ->
-            {<<>>, done};
+            {<<"</html>">>, done};
         {ReqId, {error, timeout}} ->
-            {mochijson2:encode({struct, [{error, timeout}]}), done}
+            {mochijson2:encode({struct, [{error, timeout}]}), done};
+        Weird ->
+            lager:log(info, self(), "stream_keys got totally Weird=~p", [Weird]),
+            stream_keys(ReqId, Table, Mod)
     end.
 
-ts_keys_to_json(Keys) ->
-    KeysTerm = [tuple_to_list(sext:decode(A))
-                || A <- Keys, A /= []],
-    mochijson2:encode({struct, [{<<"keys">>, KeysTerm}]}).
+ts_keys_to_html(EncodedKeys, Table, Mod) ->
+    BaseUrl = base_url(Table),
+    Keys = decode_keys(EncodedKeys),
+    KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
+    URLs = [io_lib:format("~s~s", [BaseUrl, key_to_string(Key, KeyTypes)])
+            || Key <- Keys],
+    Hrefs = [ io_lib:format("<a href=\"~s\">~s</a>", [URL, URL])
+              || URL <- URLs],
+    list_to_binary(lists:flatten(Hrefs)).
+
+decode_keys(Keys) ->
+    [tuple_to_list(sext:decode(A))
+     || A <- Keys, A /= []].
+
+key_to_string([], []) ->
+    "";
+key_to_string([Key|Keys], [{Field, Type}|KeyTypes]) ->
+    Field ++ "/" ++ value_to_url_string(Key, Type) ++ "/" ++ key_to_string(Keys, KeyTypes).
+
+value_to_url_string(V, varchar) ->
+    binary_to_list(V);
+value_to_url_string(V, timestamp) ->
+    erlang:integer_to_list(V).
+
+base_url(Table) ->
+    {ok, [{Server, Port}]} = application:get_env(riak_api, http),
+    io_lib:format("http://~s:~B/ts/v1/tables/~s/keys/",
+              [Server, Port, Table]).
