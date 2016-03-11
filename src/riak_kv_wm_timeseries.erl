@@ -104,8 +104,7 @@ service_available(RD, #ctx{riak = RiakProps}=Ctx) ->
             Mod = riak_ql_ddl:make_module_name(Table),
             {true, RD, Ctx#ctx{table=Table, mod=Mod}};
         {error, Reason} ->
-            ErrorMsg = riak_kv_wm_ts_util:flat_format("Unable to connect to Riak: ~p", [Reason]),
-            Resp = riak_kv_wm_ts_util:set_text_resp_header(ErrorMsg, RD),
+            Resp = riak_kv_wm_ts_util:set_error_message("Unable to connect to Riak: ~p", [Reason], RD),
             {false, Resp, Ctx}
     end.
 
@@ -276,7 +275,7 @@ delete_resource(RD,  #ctx{table=Table,
               {{halt, 404}, RD, Ctx}
      catch
          _:Reason ->
-             lager:log(info, self(), "delete_resource failed: ~p", Reason),
+             lager:log(info, self(), "delete_resource failed: ~p", [Reason]),
              Resp = riak_kv_wm_ts_util:set_error_message("Internal error: ~p", [Reason], RD),
              {{halt, 500}, Resp, Ctx}
      end.
@@ -320,14 +319,8 @@ validate_key(Path, Mod) ->
 -spec path_elements(module(), [string()]) ->
                        [riak_pb_ts_codec:ldbvalue()].
 path_elements(Mod, Path) ->
-    KeyTypes = local_key_fields_and_types(Mod),
+    KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
     match_path(Path, KeyTypes).
-
-local_key_fields_and_types(Mod) ->
-    LK = local_key(Mod),
-    Types = [Mod:get_field_type([F]) || F <- LK ],
-    LKStr = [ binary_to_list(F) || F <- LK ],
-    lists:zip(LKStr, Types).
 
 match_path([], []) ->
     [];
@@ -385,18 +378,6 @@ extract_field_value({Name, Type}, FVList) ->
         Value ->
            check_field_value(Type, Value)
     end.
-
-local_key(Mod) ->
-    ddl_local_key(Mod:get_ddl()).
-
-%% this should be in the DDL helper module.
--spec ddl_local_key(#ddl_v1{}) -> [binary()].
-ddl_local_key(#ddl_v1{local_key=LK}) ->
-    #key_v1{ast=Ast} = LK,
-    [ param_name(P) || P <- Ast].
-
-param_name(#param_v1{name=[Name]}) ->
-    Name.
 
 %% @todo: might be better if the DDL helper module had a
 %% valid_field_value(Field, Value) -> boolean() function.
