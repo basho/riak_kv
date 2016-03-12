@@ -22,7 +22,7 @@
 
 %% API
 -export([start_link/1, put/2, async_put/8, async_put_replies/2,
-         ts_batch_put/7,
+         ts_batch_put/8, ts_batch_put_encoded/2,
          workers/0, validate_options/4]).
 -export([init/1,
     handle_call/3,
@@ -113,9 +113,7 @@ put(RObj0, Options) ->
                 Preflist :: term()) ->
                        {ok, {reference(), atom()}}.
 
-async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) ->
-    async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
-async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
+async_put(RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist) ->
     StartTS = os:timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
@@ -123,7 +121,7 @@ async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
 
     gen_server:cast(
       Worker,
-      {put, Bucket, LocalKey, EncodedVal, ReqId, Preflist,
+      {put, Bucket, Key, EncodedVal, ReqId, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
             size=size(EncodedVal)}}),
@@ -135,10 +133,11 @@ async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
                    Bucket :: binary()|{binary(), binary()},
                    NVal :: pos_integer(),
                    EncodeFn :: fun((riak_object:riak_object()) -> binary()),
+                   DocIdx :: chash:index(),
                    Preflist :: term()) ->
                           {ok, {reference(), atom()}}.
 
-ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, Preflist) ->
+ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, DocIdx, Preflist) ->
     StartTS = os:timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
@@ -149,11 +148,36 @@ ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, Preflist) ->
 
     gen_server:cast(
       Worker,
-      {batch_put, EncodedVals, ReqId, Preflist,
+      {batch_put, Bucket, EncodedVals, ReqId, DocIdx, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
             size=Size}}),
     {ok, {ReqId, Worker}}.
+
+%% Primarily for repl support. Put a list of objects represented as
+%% tuple({Bucket, LocalKey}, msgpack-encoded riak object) into the
+%% correct partition
+ts_batch_put_encoded([{{Bucket, _LK}, _RObj0}|_Rest]=RObjs, DocIdx) ->
+    StartTS = os:timestamp(),
+    Worker = random_worker(),
+    ReqId = erlang:monitor(process, Worker),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    NVal = proplists:get_value(n_val, BucketProps),
+    W = proplists:get_value(w, BucketProps),
+    PW = proplists:get_value(pw, BucketProps),
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    Preflist = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
+    Size = lists:sum(lists:map(fun({_BK, O}) -> size(O) end, RObjs)),
+    gen_server:cast(
+      Worker,
+      {batch_put, Bucket, RObjs, ReqId, DocIdx, Preflist,
+       #rec{w=W, pw=PW, n_val=NVal, from=self(),
+            start_ts=StartTS,
+            size=Size}}),
+    {ok, {ReqId, Worker}}.
+
+
+
 
 w1c_vclock(RObj) ->
     RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
@@ -179,20 +203,25 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
     NewState = case store_request_record(ReqId, Rec, State) of
-        {undefined, S} ->
-            S#state{proxies=send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId)};
-        {_, S} ->
-            reply(From, ReqId, {error, request_id_already_defined}),
-            S
+                   {undefined, S} ->
+                       UpdProxies = send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId),
+                       postcommit(data_type_by_key(Key), Bucket,
+                                  maybe_add_pk(Key, EncodedVal)),
+                       S#state{proxies=UpdProxies};
+                   {_, S} ->
+                       reply(From, ReqId, {error, request_id_already_defined}),
+                       S
     end,
     {noreply, NewState};
-handle_cast({batch_put, EncodedVals, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
+handle_cast({batch_put, Bucket, EncodedVals, ReqId, PK, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
     NewState = case store_request_record(ReqId, Rec, State) of
-        {undefined, S} ->
-            S#state{proxies=batch_send_vnodes(Preflist, Proxies, EncodedVals, ReqId)};
-        {_, S} ->
-            reply(From, ReqId, {error, request_id_already_defined}),
-            S
+                   {undefined, S} ->
+                       UpdProxies = batch_send_vnodes(Preflist, Proxies, EncodedVals, ReqId),
+                       postcommit(ts, Bucket, {PK, EncodedVals}),
+                       S#state{proxies=UpdProxies};
+                   {_, S} ->
+                       reply(From, ReqId, {error, request_id_already_defined}),
+                       S
     end,
     {noreply, NewState};
 handle_cast({cancel, ReqId}, State) ->
@@ -269,6 +298,21 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+maybe_add_pk({PK, _LK}, Val) ->
+    {PK, Val};
+maybe_add_pk(_Key, Val) ->
+    Val.
+
+data_type_by_key({_PK, _LK}) ->
+    ts;
+data_type_by_key(_Key) ->
+    kv.
+
+postcommit(kv, _Bucket, _ValTuple) ->
+    %% No plans for general w1c hooks yet
+    ok;
+postcommit(ts, Bucket, ValTuple) ->
+    riak_repl2_ts:postcommit(ValTuple, Bucket).
 
 random_worker() ->
     Workers = workers(),
@@ -299,6 +343,8 @@ validate_options(NVal, Preflist, Options, BucketProps) ->
             {ok, W, PW}
     end.
 
+send_vnodes(Preflist, Proxies, Bucket, {_PK, LK}, EncodedVal, ReqId) ->
+    send_vnodes(Preflist, Proxies, Bucket, LK, EncodedVal, ReqId);
 send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
 send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId) ->

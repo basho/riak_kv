@@ -339,7 +339,7 @@ put_data(Data, Table, Mod) when is_binary(Table) ->
                                                fun(RObjs) ->
                                                        riak_kv_w1c_worker:ts_batch_put(
                                                          RObjs, W, PW, Bucket, NVal,
-                                                         EncodeFn, Preflist)
+                                                         EncodeFn, DocIdx, Preflist)
                                                end,
                                                DataForVnode),
                           {GlobalReqIds ++ Ids, GlobalErrorsCnt};

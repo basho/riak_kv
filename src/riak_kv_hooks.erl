@@ -31,7 +31,6 @@
 -type hook()      :: {module(), atom()}.
 -type hook_type() :: conditional_postcommit.
 -type bucket() :: riak_object:bucket().
--type key()    :: riak_object:key().
 -type bucket_props() :: riak_kv_bucket:props().
 
 %%%===================================================================
@@ -67,8 +66,8 @@ del_conditional_postcommit(Hook) ->
 %% This function invokes each registered conditional postcommit
 %% hook. Each hook will return either `false' or a list of active
 %% hooks. This function then returns the combined list of active hooks.
--spec get_conditional_postcommit({bucket(), key()}, bucket_props()) -> [any()].
-get_conditional_postcommit({{BucketType, Bucket}, _Key}, BucketProps) ->
+-spec get_conditional_postcommit(bucket(), bucket_props()) -> [any()].
+get_conditional_postcommit({BucketType, Bucket}, BucketProps) ->
     Hooks = get_hooks(conditional_postcommit),
     ActiveHooks =
         [ActualHook || {Mod, Fun} <- Hooks,

@@ -46,6 +46,7 @@
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
+-export([get_hooks/2, get_hooks/3]).
 
 -type detail_info() :: timing.
 -type detail() :: true |
@@ -394,6 +395,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       robj = RObj0,
                                       n=N, bucket_props = BucketProps,
                                       trace = Trace,
+                                      bkey = {Bucket, _Key},
                                       preflist2 = Preflist2}) ->
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
     PW0 = get_option(pw, Options0, default),
@@ -446,7 +448,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                 end,
             Postcommit =
                 if Disable -> [];
-                   true -> get_hooks(postcommit, BucketProps, StateData0)
+                   true -> get_hooks(postcommit, BucketProps, Bucket)
                 end,
             {VNodeOpts0, ReturnBody} =
                 case get_option(returnbody, Options) of
@@ -980,9 +982,9 @@ get_hooks(HookType, BucketProps) ->
             Hooks
     end.
 
-get_hooks(postcommit, BucketProps, #state{bkey=BKey}) ->
+get_hooks(postcommit, BucketProps, Bucket) ->
     BaseHooks = get_hooks(postcommit, BucketProps),
-    CondHooks = riak_kv_hooks:get_conditional_postcommit(BKey, BucketProps),
+    CondHooks = riak_kv_hooks:get_conditional_postcommit(Bucket, BucketProps),
     BaseHooks ++ (CondHooks -- BaseHooks).
 
 get_option(Name, Options) ->
