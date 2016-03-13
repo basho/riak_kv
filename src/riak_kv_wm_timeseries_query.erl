@@ -37,16 +37,17 @@
          init/1,
          service_available/2,
          is_authorized/2,
+         malformed_request/2,
          forbidden/2,
          allowed_methods/2,
+         post_is_create/2,
          process_post/2,
-         malformed_request/2,
          content_types_accepted/2,
-         resource_exists/2,
          content_types_provided/2,
-         encodings_provided/2,
-         produce_doc_body/2,
-         accept_doc_body/2
+         encodings_provided/2
+        ]).
+
+-export([produce_doc_body/2
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -54,23 +55,25 @@
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_ts.hrl").
 
--record(ctx, {api_version,
-              method  :: atom(),
-              prefix,       %% string() - prefix for resource uris
-              timeout,      %% integer() - passed-in timeout value in ms
-              security,     %% security context
-              client,       %% riak_client() - the store client
-              riak,         %% local | {node(), atom()} - params for riak client
-              query          :: undefined | string(),
-              compiled_query :: undefined | #ddl_v1{} | #riak_sql_describe_v1{} | ?SQL_SELECT{},
-              result         :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]} |
-                                [{entry, proplists:proplist()}]
-             }).
+-record(ctx, {
+          table :: 'undefined' | string(),
+          mod   :: 'undefined' | module(),
+          method  :: atom(),
+          prefix,       %% string() - prefix for resource uris
+          timeout,      %% integer() - passed-in timeout value in ms
+          security,     %% security context
+          riak,         %% local | {node(), atom()} - params for riak client
+          sql_type,
+          compiled_query :: undefined | #ddl_v1{} | #riak_sql_describe_v1{} | #riak_select_v1{},
+          result         :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]} |
+                            [{entry, proplists:proplist()}]
+         }).
 
 -define(DEFAULT_TIMEOUT, 60000).
 -define(TABLE_ACTIVATE_WAIT, 30).   %% wait until table's bucket type is activated
 
--define(CB_RV_SPEC, {boolean()|atom()|tuple(), #wm_reqdata{}, #ctx{}}).
+-type cb_rv_spec(T) :: {T, #wm_reqdata{}, #ctx{}}.
+-type halt() :: {'halt', 200..599} | {'error' , term()}.
 -type ts_rec() :: [riak_pb_ts_codec:ldbvalue()].
 
 
@@ -81,42 +84,62 @@ init(Props) ->
     {ok, #ctx{prefix = proplists:get_value(prefix, Props),
               riak = proplists:get_value(riak, Props)}}.
 
--spec service_available(#wm_reqdata{}, #ctx{}) ->
-    {boolean(), #wm_reqdata{}, #ctx{}}.
+-spec service_available(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 %% @doc Determine whether or not a connection to Riak
-%%      can be established.  This function also takes this
-%%      opportunity to extract the 'bucket' and 'key' path
-%%      bindings from the dispatch, as well as any vtag
-%%      query parameter.
+%%      can be established.
 service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
+    checkpoint("service_available: RD=~p", [RD]),
     case riak_kv_wm_utils:get_riak_client(
            RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
-        {ok, C} ->
-            {true, RD,
-             Ctx#ctx{api_version = wrq:path_info(api_version, RD),
-                     method = wrq:method(RD),
-                     client = C
-                    }};
+        {ok, _C} ->
+            {true, RD, Ctx};
         {error, Reason} ->
-            handle_error({riak_client_error, Reason}, RD, Ctx)
+            Resp = riak_kv_wm_ts_util:set_error_message("Unable to connect to Riak: ~p",
+                                                        [Reason], RD),
+            {false, Resp, Ctx}
     end.
 
 
-is_authorized(RD, Ctx) ->
-    case riak_api_web_security:is_authorized(RD) of
-        false ->
-            {"Basic realm=\"Riak\"", RD, Ctx};
-        {true, SecContext} ->
-            {true, RD, Ctx#ctx{security = SecContext}};
-        insecure ->
-            %% XXX 301 may be more appropriate here, but since the http and
-            %% https port are different and configurable, it is hard to figure
-            %% out the redirect URL to serve.
-            handle_error(insecure_connection, RD, Ctx)
+malformed_request(RD, Ctx) ->
+    try
+        {SqlType, SQL} = query_from_request(RD),
+        Table = table_from_sql(SQL),
+        Mod = riak_ql_ddl:make_module_name(Table),
+        {false, RD, Ctx#ctx{sql_type=SqlType,
+                            compiled_query=SQL,
+                            table=Table,
+                            mod=Mod}}
+    catch
+        throw:{query, Reason} ->
+            lager:log(info, self(), "try in malformed_request backfired: ~p", [Reason]),
+            Response = riak_kv_wm_ts_util:set_error_message("bad query: ~p", [Reason], RD),
+            {true, Response, Ctx}
+    end.
+
+-spec is_authorized(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()|halt()).
+is_authorized(RD, #ctx{sql_type=SqlType, table=Table}=Ctx) ->
+    checkpoint("is_authorized", RD),
+    Call = call_from_sql_type(SqlType),
+    lager:log(info, self(), "is_authorized type:~p", [SqlType]),
+    case riak_kv_wm_ts_util:authorize(Call, Table, RD) of
+        ok ->
+            {true, RD, Ctx};
+        {error, ErrorMsg} ->
+            {ErrorMsg, RD, Ctx};
+        {insecure, Halt, Resp} ->
+            {Halt, Resp, Ctx}
     end.
 
 
--spec forbidden(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
+%% method_to_intended_api_call('POST') ->
+%%     query_create_table;
+%% method_to_intended_api_call('PUT') ->
+%%     query_select;
+%% method_to_intended_api_call('GET') ->
+%%     query_describe.
+
+
+-spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 forbidden(RD, Ctx) ->
     case riak_kv_wm_utils:is_forbidden(RD) of
         true ->
@@ -126,305 +149,224 @@ forbidden(RD, Ctx) ->
             %% for now
             {false, RD, Ctx}
     end.
-%% Because webmachine chooses to (not) call certain callbacks
-%% depending on request method used, sometimes accept_doc_body is not
-%% called at all, and we arrive at produce_doc_body empty-handed.
-%% This is the case when curl is executed with -G and --data.
 
 
--spec allowed_methods(#wm_reqdata{}, #ctx{}) ->
-    {[atom()], #wm_reqdata{}, #ctx{}}.
+-spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
 allowed_methods(RD, Ctx) ->
     {['GET', 'POST'], RD, Ctx}.
 
 
--spec malformed_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-malformed_request(RD, Ctx) ->
-    %% this is plugged because requests are validated against
-    %% effective query contained in the body (and hence, we need
-    %% accept_doc_body to parse and extract things out of JSON first)
-    {false, RD, Ctx}.
 
+query_from_request(RD) ->
+    QueryStr = query_string_from_request(RD),
+    lager:log(info, self(), "query_from_request: ~p", [QueryStr]),
+    compile_query(QueryStr).
 
--spec preexec(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% * extract query from request body or, failing that, from
-%%   POST k=v items, try to compile it;
-%% * check API version;
-%% * validate query type against HTTP method;
-%% * check permissions on the query type.
-preexec(RD, Ctx) ->
-    case validate_request(RD, Ctx) of
-        {true, RD1, Ctx1} ->
-            case check_permissions(RD1, Ctx1) of
-                {true, RD2, Ctx2} ->
-                    call_api_function(RD2, Ctx2);
-                FalseWithDetails ->
-                    FalseWithDetails
-            end;
-        FalseWithDetails ->
-            FalseWithDetails
-    end.
-
--spec validate_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-validate_request(RD, Ctx) ->
-    case wrq:path_info(api_version, RD) of
-        "v1" ->
-            validate_request_v1(RD, Ctx);
-        BadVersion ->
-            handle_error({unsupported_version, BadVersion}, RD, Ctx)
-    end.
-
--spec validate_request_v1(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-validate_request_v1(RD, Ctx = #ctx{method = Method}) ->
-    Json = extract_json(RD),
-    case {Method, extract_query(Json), extract_cover_context(Json)} of
-        {Method, Query, CoverContext}
-          when (Method == 'GET' orelse Method == 'POST')
-               andalso is_list(Query) ->
-            case riak_ql_parser:ql_parse(
-                   riak_ql_lexer:get_tokens(Query)) of
-                {error, Reason} ->
-                    handle_error({query_parse_error, Reason}, RD, Ctx);
-                {ddl, DDL} ->
-                    valid_params(
-                      RD, Ctx#ctx{api_version = "v1",
-                                  query = Query,
-                                  compiled_query = DDL});
-                {Type, Compiled} when Type == select;
-                                      Type == describe ->
-                    {ok, SQL} = riak_kv_ts_util:build_sql_record(
-                                  Type, Compiled, CoverContext),
-                    valid_params(
-                      RD, Ctx#ctx{api_version = "v1",
-                                  query = Query,
-                                  compiled_query = SQL})
-            end;
-        _Invalid ->
-            handle_error({malformed_request, Method}, RD, Ctx)
-    end.
-
-
--spec valid_params(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-valid_params(RD, Ctx) ->
-    %% no params currently for query
-    {true, RD, Ctx}.
-
-%% This is a special case for curl -G.  `curl -G host --data $data`
-%% will send the $data in URL instead of in the body, so we try to
-%% look for it in req_qs.
-extract_json(RD) ->
-    case proplists:get_value("json", RD#wm_reqdata.req_qs) of
+query_string_from_request(RD) ->
+    case wrq:get_qs_value("query", RD) of
         undefined ->
-            %% if it was a PUT or POST, data is in body
-            binary_to_list(wrq:req_body(RD));
-        BodyInPost ->
-            BodyInPost
+            throw({query, "no query key in query string"});
+        Str ->
+            Str
     end.
 
--spec extract_query(binary()) -> term().
-extract_query(Json) ->
-    try mochijson2:decode(Json) of
-        {struct, Decoded} when is_list(Decoded) ->
-            validate_ts_query(
-              proplists:get_value(<<"query">>, Decoded))
-    catch
-        _:_ ->
-            undefined
-    end.
-
--spec extract_cover_context(binary()) -> term().
-extract_cover_context(Json) ->
-    try mochijson2:decode(Json) of
-        {struct, Decoded} when is_list(Decoded) ->
-            validate_ts_cover_context(
-              proplists:get_value(<<"coverage_context">>, Decoded))
-    catch
-        _:_ ->
-            undefined
+compile_query(QueryStr) ->
+    case riak_ql_parser:ql_parse(
+           riak_ql_lexer:get_tokens(QueryStr)) of
+        {error, Reason} ->
+            ErrorMsg = lists:flatten(io_lib:format("parse error: ~p", [Reason])),
+            throw({query, ErrorMsg});
+        ValidRes ->
+                ValidRes
     end.
 
 
-validate_ts_query(Q) when is_binary(Q) ->
-    binary_to_list(Q);
-validate_ts_query(_) ->
-    undefined.
 
-validate_ts_cover_context(C) when is_binary(C) ->
-    C;
-validate_ts_cover_context(_) ->
-    undefined.
+%% @todo: should really be in riak_ql somewhere
+table_from_sql(#ddl_v1{table=Table})                    -> Table;
+table_from_sql(#riak_select_v1{'FROM'=Table})               -> Table;
+table_from_sql(#riak_sql_describe_v1{'DESCRIBE'=Table}) -> Table.
 
+call_from_sql_type(ddl)      -> query_create_table;
+call_from_sql_type(select)   -> query_select;
+call_from_sql_type(describe) -> query_describe.
 
--spec check_permissions(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-check_permissions(RD, Ctx = #ctx{security = undefined}) ->
-    {true, RD, Ctx};
-check_permissions(RD, Ctx = #ctx{security = Security,
-                                 compiled_query = CompiledQry}) ->
-    case riak_core_security:check_permission(
-           decode_query_permissions(CompiledQry), Security) of
-        {false, Error, _} ->
-            handle_error(
-              {not_permitted, utf8_to_binary(Error)}, RD, Ctx);
-        _ ->
-            {true, RD, Ctx}
-    end.
-
-decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
-    {riak_kv_ts_util:api_call_to_perm(query_create_table), NewBucketType};
-decode_query_permissions(?SQL_SELECT{'FROM' = Table}) ->
-    {riak_kv_ts_util:api_call_to_perm(query_select), Table};
-decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
-    {riak_kv_ts_util:api_call_to_perm(query_describe), Table}.
 
 
 -spec content_types_provided(#wm_reqdata{}, #ctx{}) ->
-                                    {[{ContentType::string(), Producer::atom()}],
-                                     #wm_reqdata{}, #ctx{}}.
+                                    cb_rv_spec([{ContentType::string(), Producer::atom()}]).
 content_types_provided(RD, Ctx) ->
     {[{"application/json", produce_doc_body}], RD, Ctx}.
 
 
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
-                                {[{Encoding::string(), Producer::function()}],
-                                 #wm_reqdata{}, #ctx{}}.
+                                cb_rv_spec([{Encoding::string(), Producer::function()}]).
 encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 
 -spec content_types_accepted(#wm_reqdata{}, #ctx{}) ->
-                                    {[{ContentType::string(), Acceptor::atom()}],
-                                     #wm_reqdata{}, #ctx{}}.
+                                    cb_rv_spec([{ContentType::string(), Acceptor::atom()}]).
 content_types_accepted(RD, Ctx) ->
-    {[{"application/json", accept_doc_body}], RD, Ctx}.
+%    {[{"application/json", accept_doc_body}], RD, Ctx}.
+%% @todo: if we end up without a body in the request this function should be deleted.
+    {[], RD, Ctx}.
 
 
--spec resource_exists(#wm_reqdata{}, #ctx{}) ->
-                             {boolean(), #wm_reqdata{}, #ctx{}}.
-resource_exists(RD0, Ctx0) ->
-    case preexec(RD0, Ctx0) of
-        {true, RD, Ctx} ->
-            call_api_function(RD, Ctx);
-        FalseWithDetails ->
-            FalseWithDetails
+-spec post_is_create(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+post_is_create(RD, Ctx) ->
+    {false, RD, Ctx}.
+
+-spec process_post(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+process_post(RD, #ctx{sql_type=ddl, compiled_query=SQL}=Ctx) ->
+    case create_table(SQL) of
+        ok ->
+            Result =  [{success, true}],  %% represents ok
+            Json = to_json(Result),
+            {true, wrq:append_to_response_body(Json, RD), Ctx};
+        {error, Reason} ->
+            Resp = riak_kv_wm_ts_util:set_error_message("query error: ~p",
+                                                        [Reason],
+                                                        RD),
+            {{halt, 500}, Resp, Ctx}
     end.
 
--spec process_post(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-%% @doc Pass through requests to allow POST to function
-%%      as PUT for clients that do not support PUT.
-process_post(RD, Ctx) ->
-    accept_doc_body(RD, Ctx).
+%% -spec accept_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+%% accept_doc_body(RD0, Ctx0) ->
+%%     {true, RD0, Ctx0}.
 
--spec accept_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-accept_doc_body(RD0, Ctx0) ->
-    case preexec(RD0, Ctx0) of
-        {true, RD, Ctx} ->
-            call_api_function(RD, Ctx);
-        FalseWithDetails ->
-            FalseWithDetails
-    end.
-
--spec call_api_function(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-call_api_function(RD, Ctx = #ctx{result = Result})
-  when Result /= undefined ->
-    lager:debug("Function already executed", []),
-    {true, RD, Ctx};
-call_api_function(RD, Ctx = #ctx{method = Method,
-                                 compiled_query = CompiledQry}) ->
-    case CompiledQry of
-        SQL = ?SQL_SELECT{} when Method == 'GET' ->
-            %% inject coverage context
-            process_query(SQL, RD, Ctx);
-        Other when (is_record(Other, ddl_v1)               andalso Method == 'POST') orelse
-                   (is_record(Other, riak_sql_describe_v1) andalso Method ==  'GET') ->
-            process_query(Other, RD, Ctx);
-        _Other ->
-            handle_error({inappropriate_sql_for_method, Method}, RD, Ctx)
-    end.
+%% -spec call_api_function(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+%% call_api_function(RD, Ctx = #ctx{result = Result})
+%%   when Result /= undefined ->
+%%     lager:debug("Function already executed", []),
+%%     {true, RD, Ctx};
+%% call_api_function(RD, Ctx = #ctx{method = Method,
+%%                                  compiled_query = CompiledQry}) ->
+%%     case CompiledQry of
+%%         SQL = #riak_select_v1{} when Method == 'GET' ->
+%%             %% inject coverage context
+%%             process_query(SQL, RD, Ctx);
+%%         Other when (is_record(Other, ddl_v1)               andalso Method == 'POST') orelse
+%%                    (is_record(Other, riak_sql_describe_v1) andalso Method ==  'GET') ->
+%%             process_query(Other, RD, Ctx);
+%%         _Other ->
+%%             handle_error({inappropriate_sql_for_method, Method}, RD, Ctx)
+%%     end.
 
 
-process_query(DDL = #ddl_v1{table = Table}, RD, Ctx) ->
+create_table(DDL = #ddl_v1{table = Table}) ->
+    %% would be better to use a function to get the table out.
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
     Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
-    %% TODO: let's not bother collecting user properties from (say)
-    %% sidecar object in body JSON: when #ddl_v2 work is merged, we
-    %% will have a way to collect those bespoke table properties from
-    %% WITH clause.
     case riak_core_bucket_type:create(Table, Props2) of
         ok ->
-            wait_until_active(Table, RD, Ctx, ?TABLE_ACTIVATE_WAIT);
+            wait_until_active(Table, ?TABLE_ACTIVATE_WAIT);
         {error, Reason} ->
-            handle_error({table_create_fail, Table, Reason}, RD, Ctx)
-    end;
-
-process_query(SQL = ?SQL_SELECT{'FROM' = Table}, RD, Ctx0 = #ctx{}) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx0);
-        DDL ->
-            case riak_kv_ts_api:query(SQL, DDL) of
-                {ok, Data} ->
-                    {ColumnNames, _ColumnTypes, Rows} = Data,
-                    Ctx = Ctx0#ctx{result = {ColumnNames, Rows}},
-                    prepare_data_in_body(RD, Ctx);
-                %% the following timeouts are known and distinguished:
-                {error, qry_worker_timeout} ->
-                    %% the eleveldb process didn't send us any response after
-                    %% 10 sec (hardcoded in riak_kv_qry), and probably died
-                    handle_error(query_worker_timeout, RD, Ctx0);
-                {error, backend_timeout} ->
-                    %% the eleveldb process did manage to send us a timeout
-                    %% response
-                    handle_error(backend_timeout, RD, Ctx0);
-
-                {error, Reason} ->
-                    handle_error({query_exec_error, Reason}, RD, Ctx0)
-            end
-    end;
-
-process_query(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, RD, Ctx0 = #ctx{}) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx0);
-        DDL ->
-            case riak_kv_ts_api:query(SQL, DDL) of
-                {ok, Data} ->
-                    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>,
-                                   <<"Primary Key">>, <<"Local Key">>],
-                    Ctx = Ctx0#ctx{result = {ColumnNames, Data}},
-                    prepare_data_in_body(RD, Ctx);
-                {error, Reason} ->
-                    handle_error({query_exec_error, Reason}, RD, Ctx0)
-            end
+            {error,{table_create_fail, Table, Reason}}
     end.
 
+%% process_query(DDL = #ddl_v1{table = Table}, RD, Ctx) ->
+%%     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
+%%     Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
+%%     %% TODO: let's not bother collecting user properties from (say)
+%%     %% sidecar object in body JSON: when #ddl_v2 work is merged, we
+%%     %% will have a way to collect those bespoke table properties from
+%%     %% WITH clause.
+%%     case riak_core_bucket_type:create(Table, Props2) of
+%%         ok ->
+%%             wait_until_active(Table, RD, Ctx, ?TABLE_ACTIVATE_WAIT);
+%%         {error, Reason} ->
+%%             handle_error({table_create_fail, Table, Reason}, RD, Ctx)
+%%     end;
 
-wait_until_active(Table, RD, Ctx, 0) ->
-    handle_error({table_activate_fail, Table}, RD, Ctx);
-wait_until_active(Table, RD, Ctx, Seconds) ->
+%% process_query(SQL = #riak_select_v1{'FROM' = Table}, RD, Ctx0 = #ctx{}) ->
+%%     Mod = riak_ql_ddl:make_module_name(Table),
+%%     case catch Mod:get_ddl() of
+%%         {_, {undef, _}} ->
+%%             handle_error({no_such_table, Table}, RD, Ctx0);
+%%         DDL ->
+%%             case riak_kv_ts_api:query(SQL, DDL) of
+%%                 {ok, Data} ->
+%%                     {ColumnNames, _ColumnTypes, Rows} = Data,
+%%                     Ctx = Ctx0#ctx{result = {ColumnNames, Rows}},
+%%                     prepare_data_in_body(RD, Ctx);
+%%                 %% the following timeouts are known and distinguished:
+%%                 {error, qry_worker_timeout} ->
+%%                     %% the eleveldb process didn't send us any response after
+%%                     %% 10 sec (hardcoded in riak_kv_qry), and probably died
+%%                     handle_error(query_worker_timeout, RD, Ctx0);
+%%                 {error, backend_timeout} ->
+%%                     %% the eleveldb process did manage to send us a timeout
+%%                     %% response
+%%                     handle_error(backend_timeout, RD, Ctx0);
+
+%%                 {error, Reason} ->
+%%                     handle_error({query_exec_error, Reason}, RD, Ctx0)
+%%             end
+%%     end;
+
+%% process_query(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, RD, Ctx0 = #ctx{}) ->
+%%     Mod = riak_ql_ddl:make_module_name(Table),
+%%     case catch Mod:get_ddl() of
+%%         {_, {undef, _}} ->
+%%             handle_error({no_such_table, Table}, RD, Ctx0);
+%%         DDL ->
+%%             case riak_kv_ts_api:query(SQL, DDL) of
+%%                 {ok, Data} ->
+%%                     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>,
+%%                                    <<"Primary Key">>, <<"Local Key">>],
+%%                     Ctx = Ctx0#ctx{result = {ColumnNames, Data}},
+%%                     prepare_data_in_body(RD, Ctx);
+%%                 {error, Reason} ->
+%%                     handle_error({query_exec_error, Reason}, RD, Ctx0)
+%%             end
+%%     end.
+
+
+wait_until_active(Table, 0) ->
+    {error, {table_activate_fail, Table}};
+wait_until_active(Table, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
-            prepare_data_in_body(RD, Ctx#ctx{result = {[],[]}});
-            %% a way for CREATE TABLE queries to return 'ok' on success
+            ok;
         {error, not_ready} ->
             timer:sleep(1000),
-            wait_until_active(Table, RD, Ctx, Seconds - 1);
+            wait_until_active(Table, Seconds - 1);
         {error, undefined} ->
             %% this is inconceivable because create(Table) has
             %% just succeeded, so it's here mostly to pacify
             %% the dialyzer (and of course, for the odd chance
             %% of Erlang imps crashing nodes between create
             %% and activate calls)
-            handle_error({table_created_missing, Table}, RD, Ctx)
+            {error, {table_created_missing, Table}}
     end.
 
-prepare_data_in_body(RD0, Ctx0) ->
-    {Json, RD1, Ctx1} = produce_doc_body(RD0, Ctx0),
-    {true, wrq:append_to_response_body(Json, RD1), Ctx1}.
+
+%% wait_until_active(Table, RD, Ctx, 0) ->
+%%     handle_error({table_activate_fail, Table}, RD, Ctx);
+%% wait_until_active(Table, RD, Ctx, Seconds) ->
+%%     case riak_core_bucket_type:activate(Table) of
+%%         ok ->
+%%             prepare_data_in_body(RD, Ctx#ctx{result = {[],[]}});
+%%             %% a way for CREATE TABLE queries to return 'ok' on success
+%%         {error, not_ready} ->
+%%             timer:sleep(1000),
+%%             wait_until_active(Table, RD, Ctx, Seconds - 1);
+%%         {error, undefined} ->
+%%             %% this is inconceivable because create(Table) has
+%%             %% just succeeded, so it's here mostly to pacify
+%%             %% the dialyzer (and of course, for the odd chance
+%%             %% of Erlang imps crashing nodes between create
+%%             %% and activate calls)
+%%             handle_error({table_created_missing, Table}, RD, Ctx)
+%%     end.
+
+%% prepare_data_in_body(RD0, Ctx0) ->
+%%     {Json, RD1, Ctx1} = produce_doc_body(RD0, Ctx0),
+%%     {true, wrq:append_to_response_body(Json, RD1), Ctx1}.
 
 
--spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
+-spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(iolist()).
 %% @doc Extract the value of the document, and place it in the
 %%      response body of the request.
 produce_doc_body(RD, Ctx = #ctx{result = {Columns, Rows}}) ->
@@ -433,64 +375,68 @@ produce_doc_body(RD, Ctx = #ctx{result = {Columns, Rows}}) ->
                  {<<"rows">>, Rows}]}),
      RD, Ctx}.
 
+to_json({Columns, Rows}) when is_list(Columns), is_list(Rows) ->
+    mochijson2:encode(
+      {struct, [{<<"columns">>, Columns},
+                {<<"rows">>, Rows}]});
+to_json(Other) ->
+    mochijson2:encode(Other).
 
-error_out(Type, Fmt, Args, RD, Ctx) ->
-    {Type,
-     wrq:set_resp_header(
-       "Content-Type", "text/plain", wrq:append_to_response_body(
-                                       flat_format(Fmt, Args), RD)),
-     Ctx}.
 
--spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
-handle_error(Error, RD, Ctx) ->
-    case Error of
-        {riak_client_error, Reason} ->
-            error_out(false,
-                      "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
-        insecure_connection ->
-            error_out({halt, 426},
-                      "Security is enabled and Riak does not"
-                      " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
-        {unsupported_version, BadVersion} ->
-            error_out({halt, 412},
-                      "Unsupported API version ~s", [BadVersion], RD, Ctx);
-        {not_permitted, Table} ->
-            error_out({halt, 401},
-                      "Access to table ~ts not allowed", [Table], RD, Ctx);
-        {malformed_request, Method} ->
-            error_out({halt, 400},
-                      "Malformed ~s request", [Method], RD, Ctx);
-        {no_such_table, Table} ->
-            error_out({halt, 404},
-                      "Table \"~ts\" does not exist", [Table], RD, Ctx);
-        {query_parse_error, Detailed} ->
-            error_out({halt, 400},
-                      "Malformed query: ~ts", [Detailed], RD, Ctx);
-        {table_create_fail, Table, Reason} ->
-            error_out({halt, 500},
-                      "Failed to create table \"~ts\": ~p", [Table, Reason], RD, Ctx);
-        query_worker_timeout ->
-            error_out({halt, 503},
-                      "Query worker timeout", [], RD, Ctx);
-        backend_timeout ->
-            error_out({halt, 503},
-                      "Storage backend timeout", [], RD, Ctx);
-        {query_exec_error, Detailed} ->
-            error_out({halt, 400},
-                      "Query execution failed: ~ts", [Detailed], RD, Ctx);
-        {table_activate_fail, Table} ->
-            error_out({halt, 500},
-                      "Failed to activate bucket type for table \"~ts\"", [Table], RD, Ctx);
-        {table_created_missing, Table} ->
-            error_out({halt, 500},
-                      "Bucket type for table \"~ts\" disappeared suddenly before activation", [Table], RD, Ctx);
-        {inappropriate_sql_for_method, Method} ->
-            error_out({halt, 400},
-                      "Inappropriate method ~s for SQL query type", [Method], RD, Ctx)
-    end.
 
-flat_format(Format, Args) ->
-    lists:flatten(io_lib:format(Format, Args)).
+%% -spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
+%% handle_error(Error, RD, Ctx) ->
+%%     case Error of
+%%         {riak_client_error, Reason} ->
+%%             error_out(false,
+%%                       "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
+%%         insecure_connection ->
+%%             error_out({halt, 426},
+%%                       "Security is enabled and Riak does not"
+%%                       " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
+%%         {unsupported_version, BadVersion} ->
+%%             error_out({halt, 412},
+%%                       "Unsupported API version ~s", [BadVersion], RD, Ctx);
+%%         {not_permitted, Table} ->
+%%             error_out({halt, 401},
+%%                       "Access to table ~ts not allowed", [Table], RD, Ctx);
+%%         {malformed_request, Method} ->
+%%             error_out({halt, 400},
+%%                       "Malformed ~s request", [Method], RD, Ctx);
+%%         {no_such_table, Table} ->
+%%             error_out({halt, 404},
+%%                       "Table \"~ts\" does not exist", [Table], RD, Ctx);
+%%         {query_parse_error, Detailed} ->
+%%             error_out({halt, 400},
+%%                       "Malformed query: ~ts", [Detailed], RD, Ctx);
+%%         {table_create_fail, Table, Reason} ->
+%%             error_out({halt, 500},
+%%                       "Failed to create table \"~ts\": ~p", [Table, Reason], RD, Ctx);
+%%         query_worker_timeout ->
+%%             error_out({halt, 503},
+%%                       "Query worker timeout", [], RD, Ctx);
+%%         backend_timeout ->
+%%             error_out({halt, 503},
+%%                       "Storage backend timeout", [], RD, Ctx);
+%%         {query_exec_error, Detailed} ->
+%%             error_out({halt, 400},
+%%                       "Query execution failed: ~ts", [Detailed], RD, Ctx);
+%%         {table_activate_fail, Table} ->
+%%             error_out({halt, 500},
+%%                       "Failed to activate bucket type for table \"~ts\"", [Table], RD, Ctx);
+%%         {table_created_missing, Table} ->
+%%             error_out({halt, 500},
+%%                       "Bucket type for table \"~ts\" disappeared suddenly before activation", [Table], RD, Ctx);
+%%         {inappropriate_sql_for_method, Method} ->
+%%             error_out({halt, 400},
+%%                       "Inappropriate method ~s for SQL query type", [Method], RD, Ctx)
+%%     end.
 
-utf8_to_binary(S) ->
-    unicode:characters_to_binary(S, utf8, utf8).
+%% flat_format(Format, Args) ->
+%%     lists:flatten(io_lib:format(Format, Args)).
+
+%% utf8_to_binary(S) ->
+%%     unicode:characters_to_binary(S, utf8, utf8).
+
+checkpoint(Format, Args) ->
+    lager:log(info, self(), Format, Args).
