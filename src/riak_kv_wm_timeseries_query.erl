@@ -103,6 +103,7 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
 malformed_request(RD, Ctx) ->
     try
         {SqlType, SQL} = query_from_request(RD),
+        checkpoint("malformed_request SqlType=~p, SQL=~p", [SqlType, SQL]),
         Table = table_from_sql(SQL),
         Mod = riak_ql_ddl:make_module_name(Table),
         {false, RD, Ctx#ctx{sql_type=SqlType,
@@ -176,8 +177,12 @@ compile_query(QueryStr) ->
         {error, Reason} ->
             ErrorMsg = lists:flatten(io_lib:format("parse error: ~p", [Reason])),
             throw({query, ErrorMsg});
-        ValidRes ->
-                ValidRes
+        {ddl, _ } = Res ->
+            Res;
+        {Type, Compiled} when Type==select; Type==describe ->
+            {ok, SQL} =  riak_kv_ts_util:build_sql_record(
+                           Type, Compiled, undefined),
+            {Type, SQL}
     end.
 
 
@@ -229,7 +234,23 @@ process_post(RD, #ctx{sql_type=ddl, compiled_query=SQL}=Ctx) ->
                                                         [Reason],
                                                         RD),
             {{halt, 500}, Resp, Ctx}
+    end;
+process_post(RD, #ctx{sql_type=describe,
+                      compiled_query=SQL,
+                      mod=Mod}=Ctx) ->
+    DDL = Mod:get_ddl(), %% might be faster to store this earlier on
+    case riak_kv_ts_api:query(SQL, DDL) of
+        {ok, Data} ->
+            ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>,
+                           <<"Primary Key">>, <<"Local Key">>],
+            Json = to_json({ColumnNames, Data}),
+            {true, wrq:append_to_response_body(Json, RD), Ctx};
+        {error, Reason} ->
+            Resp = riak_kv_wm_ts_util:set_error_message(
+                     "describe failed: ~p", [Reason], RD),
+            {{halt, 500}, Resp, Ctx}
     end.
+
 
 %% -spec accept_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 %% accept_doc_body(RD0, Ctx0) ->
