@@ -131,15 +131,6 @@ is_authorized(RD, #ctx{sql_type=SqlType, table=Table}=Ctx) ->
             {Halt, Resp, Ctx}
     end.
 
-
-%% method_to_intended_api_call('POST') ->
-%%     query_create_table;
-%% method_to_intended_api_call('PUT') ->
-%%     query_select;
-%% method_to_intended_api_call('GET') ->
-%%     query_describe.
-
-
 -spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 forbidden(RD, Ctx) ->
     case riak_kv_wm_utils:is_forbidden(RD) of
@@ -155,8 +146,6 @@ forbidden(RD, Ctx) ->
 -spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
 allowed_methods(RD, Ctx) ->
     {['GET', 'POST'], RD, Ctx}.
-
-
 
 query_from_request(RD) ->
     QueryStr = query_string_from_request(RD),
@@ -184,8 +173,6 @@ compile_query(QueryStr) ->
                            Type, Compiled, undefined),
             {Type, SQL}
     end.
-
-
 
 %% @todo: should really be in riak_ql somewhere
 table_from_sql(#ddl_v1{table=Table})                    -> Table;
@@ -278,31 +265,6 @@ process_post(RD, #ctx{sql_type=select,
             {false, Resp, Ctx}
     end.
 
-
-
-%% -spec accept_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
-%% accept_doc_body(RD0, Ctx0) ->
-%%     {true, RD0, Ctx0}.
-
-%% -spec call_api_function(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
-%% call_api_function(RD, Ctx = #ctx{result = Result})
-%%   when Result /= undefined ->
-%%     lager:debug("Function already executed", []),
-%%     {true, RD, Ctx};
-%% call_api_function(RD, Ctx = #ctx{method = Method,
-%%                                  compiled_query = CompiledQry}) ->
-%%     case CompiledQry of
-%%         SQL = #riak_select_v1{} when Method == 'GET' ->
-%%             %% inject coverage context
-%%             process_query(SQL, RD, Ctx);
-%%         Other when (is_record(Other, ddl_v1)               andalso Method == 'POST') orelse
-%%                    (is_record(Other, riak_sql_describe_v1) andalso Method ==  'GET') ->
-%%             process_query(Other, RD, Ctx);
-%%         _Other ->
-%%             handle_error({inappropriate_sql_for_method, Method}, RD, Ctx)
-%%     end.
-
-
 create_table(DDL = #ddl_v1{table = Table}) ->
     %% would be better to use a function to get the table out.
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
@@ -313,64 +275,6 @@ create_table(DDL = #ddl_v1{table = Table}) ->
         {error, Reason} ->
             {error,{table_create_fail, Table, Reason}}
     end.
-
-%% process_query(DDL = #ddl_v1{table = Table}, RD, Ctx) ->
-%%     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
-%%     Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
-%%     %% TODO: let's not bother collecting user properties from (say)
-%%     %% sidecar object in body JSON: when #ddl_v2 work is merged, we
-%%     %% will have a way to collect those bespoke table properties from
-%%     %% WITH clause.
-%%     case riak_core_bucket_type:create(Table, Props2) of
-%%         ok ->
-%%             wait_until_active(Table, RD, Ctx, ?TABLE_ACTIVATE_WAIT);
-%%         {error, Reason} ->
-%%             handle_error({table_create_fail, Table, Reason}, RD, Ctx)
-%%     end;
-
-%% process_query(SQL = #riak_select_v1{'FROM' = Table}, RD, Ctx0 = #ctx{}) ->
-%%     Mod = riak_ql_ddl:make_module_name(Table),
-%%     case catch Mod:get_ddl() of
-%%         {_, {undef, _}} ->
-%%             handle_error({no_such_table, Table}, RD, Ctx0);
-%%         DDL ->
-%%             case riak_kv_ts_api:query(SQL, DDL) of
-%%                 {ok, Data} ->
-%%                     {ColumnNames, _ColumnTypes, Rows} = Data,
-%%                     Ctx = Ctx0#ctx{result = {ColumnNames, Rows}},
-%%                     prepare_data_in_body(RD, Ctx);
-%%                 %% the following timeouts are known and distinguished:
-%%                 {error, qry_worker_timeout} ->
-%%                     %% the eleveldb process didn't send us any response after
-%%                     %% 10 sec (hardcoded in riak_kv_qry), and probably died
-%%                     handle_error(query_worker_timeout, RD, Ctx0);
-%%                 {error, backend_timeout} ->
-%%                     %% the eleveldb process did manage to send us a timeout
-%%                     %% response
-%%                     handle_error(backend_timeout, RD, Ctx0);
-
-%%                 {error, Reason} ->
-%%                     handle_error({query_exec_error, Reason}, RD, Ctx0)
-%%             end
-%%     end;
-
-%% process_query(SQL = #riak_sql_describe_v1{'DESCRIBE' = Table}, RD, Ctx0 = #ctx{}) ->
-%%     Mod = riak_ql_ddl:make_module_name(Table),
-%%     case catch Mod:get_ddl() of
-%%         {_, {undef, _}} ->
-%%             handle_error({no_such_table, Table}, RD, Ctx0);
-%%         DDL ->
-%%             case riak_kv_ts_api:query(SQL, DDL) of
-%%                 {ok, Data} ->
-%%                     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>,
-%%                                    <<"Primary Key">>, <<"Local Key">>],
-%%                     Ctx = Ctx0#ctx{result = {ColumnNames, Data}},
-%%                     prepare_data_in_body(RD, Ctx);
-%%                 {error, Reason} ->
-%%                     handle_error({query_exec_error, Reason}, RD, Ctx0)
-%%             end
-%%     end.
-
 
 wait_until_active(Table, 0) ->
     {error, {table_activate_fail, Table}};
@@ -390,31 +294,6 @@ wait_until_active(Table, Seconds) ->
             {error, {table_created_missing, Table}}
     end.
 
-
-%% wait_until_active(Table, RD, Ctx, 0) ->
-%%     handle_error({table_activate_fail, Table}, RD, Ctx);
-%% wait_until_active(Table, RD, Ctx, Seconds) ->
-%%     case riak_core_bucket_type:activate(Table) of
-%%         ok ->
-%%             prepare_data_in_body(RD, Ctx#ctx{result = {[],[]}});
-%%             %% a way for CREATE TABLE queries to return 'ok' on success
-%%         {error, not_ready} ->
-%%             timer:sleep(1000),
-%%             wait_until_active(Table, RD, Ctx, Seconds - 1);
-%%         {error, undefined} ->
-%%             %% this is inconceivable because create(Table) has
-%%             %% just succeeded, so it's here mostly to pacify
-%%             %% the dialyzer (and of course, for the odd chance
-%%             %% of Erlang imps crashing nodes between create
-%%             %% and activate calls)
-%%             handle_error({table_created_missing, Table}, RD, Ctx)
-%%     end.
-
-%% prepare_data_in_body(RD0, Ctx0) ->
-%%     {Json, RD1, Ctx1} = produce_doc_body(RD0, Ctx0),
-%%     {true, wrq:append_to_response_body(Json, RD1), Ctx1}.
-
-
 -spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(iolist()).
 %% @doc Extract the value of the document, and place it in the
 %%      response body of the request.
@@ -430,62 +309,6 @@ to_json({Columns, Rows}) when is_list(Columns), is_list(Rows) ->
                 {<<"rows">>, Rows}]});
 to_json(Other) ->
     mochijson2:encode(Other).
-
-
-
-%% -spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
-%% handle_error(Error, RD, Ctx) ->
-%%     case Error of
-%%         {riak_client_error, Reason} ->
-%%             error_out(false,
-%%                       "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
-%%         insecure_connection ->
-%%             error_out({halt, 426},
-%%                       "Security is enabled and Riak does not"
-%%                       " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
-%%         {unsupported_version, BadVersion} ->
-%%             error_out({halt, 412},
-%%                       "Unsupported API version ~s", [BadVersion], RD, Ctx);
-%%         {not_permitted, Table} ->
-%%             error_out({halt, 401},
-%%                       "Access to table ~ts not allowed", [Table], RD, Ctx);
-%%         {malformed_request, Method} ->
-%%             error_out({halt, 400},
-%%                       "Malformed ~s request", [Method], RD, Ctx);
-%%         {no_such_table, Table} ->
-%%             error_out({halt, 404},
-%%                       "Table \"~ts\" does not exist", [Table], RD, Ctx);
-%%         {query_parse_error, Detailed} ->
-%%             error_out({halt, 400},
-%%                       "Malformed query: ~ts", [Detailed], RD, Ctx);
-%%         {table_create_fail, Table, Reason} ->
-%%             error_out({halt, 500},
-%%                       "Failed to create table \"~ts\": ~p", [Table, Reason], RD, Ctx);
-%%         query_worker_timeout ->
-%%             error_out({halt, 503},
-%%                       "Query worker timeout", [], RD, Ctx);
-%%         backend_timeout ->
-%%             error_out({halt, 503},
-%%                       "Storage backend timeout", [], RD, Ctx);
-%%         {query_exec_error, Detailed} ->
-%%             error_out({halt, 400},
-%%                       "Query execution failed: ~ts", [Detailed], RD, Ctx);
-%%         {table_activate_fail, Table} ->
-%%             error_out({halt, 500},
-%%                       "Failed to activate bucket type for table \"~ts\"", [Table], RD, Ctx);
-%%         {table_created_missing, Table} ->
-%%             error_out({halt, 500},
-%%                       "Bucket type for table \"~ts\" disappeared suddenly before activation", [Table], RD, Ctx);
-%%         {inappropriate_sql_for_method, Method} ->
-%%             error_out({halt, 400},
-%%                       "Inappropriate method ~s for SQL query type", [Method], RD, Ctx)
-%%     end.
-
-%% flat_format(Format, Args) ->
-%%     lists:flatten(io_lib:format(Format, Args)).
-
-%% utf8_to_binary(S) ->
-%%     unicode:characters_to_binary(S, utf8, utf8).
 
 checkpoint(Format, Args) ->
     lager:log(info, self(), Format, Args).
