@@ -249,7 +249,35 @@ process_post(RD, #ctx{sql_type=describe,
             Resp = riak_kv_wm_ts_util:set_error_message(
                      "describe failed: ~p", [Reason], RD),
             {{halt, 500}, Resp, Ctx}
+    end;
+process_post(RD, #ctx{sql_type=select,
+                      compiled_query=SQL,
+                      mod=Mod}=Ctx) ->
+    DDL = Mod:get_ddl(), %% might be faster to store this earlier on
+    case riak_kv_ts_api:query(SQL, DDL) of
+        {ok, Data} ->
+            {ColumnNames, _ColumnTypes, Rows} = Data,
+            Json = to_json({ColumnNames, Rows}),
+            {true, wrq:append_to_response_body(Json, RD), Ctx};
+        %% the following timeouts are known and distinguished:
+        {error, qry_worker_timeout} ->
+            %% the eleveldb process didn't send us any response after
+            %% 10 sec (hardcoded in riak_kv_qry), and probably died
+            Resp = riak_kv_wm_ts_util:set_error_message(
+                     "qry_worker_timeout", [], RD),
+            {false, Resp, Ctx};
+        {error, backend_timeout} ->
+            %% the eleveldb process did manage to send us a timeout
+            %% response
+            Resp = riak_kv_wm_ts_util:set_error_message(
+                     "backend_timeout", [], RD),
+            {false, Resp, Ctx};
+        {error, Reason} ->
+            Resp = riak_kv_wm_ts_util:set_error_message(
+                     "select query execution error: ~p", [Reason], RD),
+            {false, Resp, Ctx}
     end.
+
 
 
 %% -spec accept_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
