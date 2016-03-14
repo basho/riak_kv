@@ -29,6 +29,7 @@
 %% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
 -type select_result_type() :: rows | aggregate.
+-type value_type() :: binary() | float() | integer() | boolean().
 
 -record(riak_sel_clause_v1,
         {
@@ -65,8 +66,9 @@
 -record(riak_sql_insert_v1,
         {
           'INSERT'      = <<>>  :: binary(),
-          fields                :: [{identifier, binary()}],
-          values                :: list(list(term()))
+          fields                :: [identifier()],
+          values                :: [[value_type()]],
+          helper_mod            :: atom()
         }).
 
 -define(SQL_SELECT, #riak_select_v1).

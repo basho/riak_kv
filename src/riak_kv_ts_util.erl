@@ -82,12 +82,20 @@ build_sql_record(describe, SQL, _Cover) ->
     {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
 build_sql_record(insert, SQL, _Cover) ->
     T = proplists:get_value(table, SQL),
-    F = proplists:get_value(fields, SQL),
-    V = proplists:get_value(values, SQL),
-    {ok, #riak_sql_insert_v1{'INSERT' = T,
-                             fields   = F,
-                             values   = V
-    }}.
+    case is_binary(T) of
+        true ->
+            Mod = riak_ql_ddl:make_module_name(T),
+            %% If columns are not specified, all columns are implied
+            F = riak_ql_ddl:insert_sql_columns(Mod, proplists:get_value(fields, SQL, [])),
+            V = proplists:get_value(values, SQL),
+            {ok, #riak_sql_insert_v1{'INSERT'   = T,
+                                     fields     = F,
+                                     values     = V,
+                                     helper_mod = Mod
+                                    }};
+        false ->
+            {error, <<"Must provide exactly one table name">>}
+    end.
 
 
 %% Useful key extractors for functions (e.g., in get or delete code

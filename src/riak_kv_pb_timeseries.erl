@@ -269,24 +269,30 @@ wait_until_active(Table, State, Seconds) ->
                            #tsqueryresp{} | #rpberrorresp{}.
 make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields, values = Values}) ->
     case lookup_field_positions(Mod, Fields) of
-	{error, FieldReason} ->
-	    make_rpberrresp(?E_BAD_QUERY, FieldReason);
-	{ok, Positions} ->
+    {ok, Positions} ->
         Empty = make_empty_row(Mod),
         case xlate_insert_to_putdata(Values, Positions, Empty) of
             {error, ValueReason} ->
                 make_rpberrresp(?E_BAD_QUERY, ValueReason);
             {ok, Data} ->
-                Response = sub_putreq_common(Mod, Table, Data, #state{}),
-                xlate_put_to_qry_resp(Response)
-	    end
+                insert_putreqs(Mod, Table, Data)
+	    end;
+    {error, FieldReason} ->
+        make_rpberrresp(?E_BAD_QUERY, FieldReason)
     end.
 
-xlate_put_to_qry_resp({reply, #tsputresp{}, _State}) ->
-    #tsqueryresp{};
-xlate_put_to_qry_resp({reply, Err, _State}) ->
-    Err.
-
+insert_putreqs(Mod, Table, Data) ->
+    case catch validate_rows(Mod, Data) of
+        [] ->
+            case put_data(Data, Table, Mod) of
+                0 ->
+                    #tsqueryresp{};
+                ErrorCount ->
+                    failed_put_response(ErrorCount)
+            end;
+        BadRowIdxs when is_list(BadRowIdxs) ->
+            validate_rows_error_response(BadRowIdxs)
+    end.
 
 %%
 %% Return an all-null empty row ready to be populated by the values
@@ -301,24 +307,24 @@ make_empty_row(Mod) ->
 %%
 %% This *requires* that once schema changes take place the DDL fields are left in order.
 %%
--spec lookup_field_positions(module(), [identifier()]) ->
+-spec lookup_field_positions(module(), [field_identifier()]) ->
                            {ok, [pos_integer()]} | {error, string()}.
 lookup_field_positions(Mod, FieldIdentifiers) ->
     case lists:foldl(
 	   fun({identifier, FieldName}, {Good, Bad}) ->
 		   case Mod:is_field_valid(FieldName) of
                false ->
-                   {Good, [flat_format("undefined field ~s", [FieldName]) | Bad]};
+                   {Good, [FieldName | Bad]};
                true ->
                    {[Mod:get_field_position(FieldName) | Good], Bad}
 		   end
 	   end, {[], []}, FieldIdentifiers)
     of
-	{Positions, []} ->
-	    {ok, lists:reverse(Positions)};
-	{_, Errors} ->
-	    %% Only returns the first error, could investigate returning multiple.
-	    {error, hd(lists:reverse(Errors))}
+        {Positions, []} ->
+            {ok, lists:reverse(Positions)};
+        {_, Errors} ->
+            {error, flat_format("undefined fields: ~s",
+                                [string:join(lists:reverse(Errors), ", ")])}
     end.
 
 %%
@@ -334,10 +340,8 @@ xlate_insert_to_putdata(Values, Positions, Empty) ->
                  case make_insert_row(RowVals, Positions, Empty) of
                      {ok, Row} ->
                          {[Row | Good], Bad, RowNum + 1};
-                     {error, Reason} ->
-                         Reason1 = flat_format("~s in row index ~b",
-                                               [Reason, RowNum]),
-                         {Good, [Reason1 | Bad], RowNum + 1}
+                     {error, _Reason} ->
+                         {Good, [integer_to_list(RowNum) | Bad], RowNum + 1}
                  end
              end,
     Converted = lists:foldl(ConvFn, {[], [], 1}, Values),
@@ -345,21 +349,21 @@ xlate_insert_to_putdata(Values, Positions, Empty) ->
         {PutData, [], _} ->
             {ok, lists:reverse(PutData)};
         {_, Errors, _} ->
-            %% Only returns the first error, could investigate returning multiple.
-            {error, lists:last(Errors)}
+            {error, flat_format("too many values in row index(es) ~s",
+                                [string:join(lists:reverse(Errors), ", ")])}
     end.
 
--spec make_insert_row([] | [riak_ql_ddl:data_value()], [pos_integer()], tuple()) ->
+-spec make_insert_row([] | [riak_ql_ddl:data_value()], [] | [pos_integer()], tuple()) ->
                       {ok, tuple()} | {error, string()}.
-make_insert_row([], _Positions, Row) ->
+make_insert_row([], _Positions, Row) when is_tuple(Row) ->
     %% Out of entries in the value - row is populated with default values
     %% so if we run out of data for implicit/explicit fieldnames can just return
     {ok, Row};
-make_insert_row(_, [], _Row) ->
+make_insert_row(_, [], Row) when is_tuple(Row) ->
     %% Too many values for the field
     {error, "too many values"};
 %% Make sure the types match
-make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) ->
+make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(Row) ->
     make_insert_row(Values, Positions, setelement(Pos, Row, Val)).
 
 
@@ -1074,7 +1078,7 @@ validate_xlate_insert_to_putdata_too_many_values_test() ->
     Positions = [3, 1, 2, 4],
     Result = xlate_insert_to_putdata(Values, Positions, Empty),
     ?assertEqual(
-        {error,"too many values in row index 1"},
+        {error,"too many values in row index(es) 1"},
         Result
     ).
 
