@@ -37,7 +37,8 @@
 %% Request body is expected to be a JSON containing a struct or structs for the
 %% POST. GET and DELETE have no body.
 %%
-%% Response is a JSON containing full records.
+%% Response is a JSON containing full records or {"success": true} for POST and
+%% DELETE.
 %%
 
 -module(riak_kv_wm_timeseries).
