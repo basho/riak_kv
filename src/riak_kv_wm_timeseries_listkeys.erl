@@ -159,11 +159,22 @@ ts_keys_to_html(EncodedKeys, Table, Mod) ->
     BaseUrl = base_url(Table),
     Keys = decode_keys(EncodedKeys),
     KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
-    URLs = [io_lib:format("~s~s", [BaseUrl, key_to_string(Key, KeyTypes)])
+    URLs = [format_url(BaseUrl, KeyTypes, Key)
             || Key <- Keys],
-    Hrefs = [ io_lib:format("<a href=\"~s\">~s</a>", [URL, URL])
-              || URL <- URLs],
+    %% Dialyzer does not like the list_comprehension, if you want to avoid the
+    %% dialyzer error you have to write it like this:
+    %% URLs = lists:map(fun(Key) ->
+    %%                          format_url(BaseUrl, KeyTypes, Key)
+    %%                  end,
+    %%                  Keys),
+    Hrefs = [format_href(URL) || URL <- URLs],
     list_to_binary(lists:flatten(Hrefs)).
+
+format_href(URL) ->
+    io_lib:format("<a href=\"~s\">~s</a>", [URL, URL]).
+
+format_url(BaseUrl, KeyTypes, Key) ->
+    io_lib:format("~s~s", [BaseUrl, key_to_string(Key, KeyTypes)]).
 
 decode_keys(Keys) ->
     [tuple_to_list(sext:decode(A))
@@ -181,5 +192,5 @@ value_to_url_string(V, timestamp) ->
 
 base_url(Table) ->
     {ok, [{Server, Port}]} = application:get_env(riak_api, http),
-    io_lib:format("http://~s:~B/ts/v1/tables/~s/keys/",
-              [Server, Port, Table]).
+    lists:flatten(io_lib:format("http://~s:~B/ts/v1/tables/~s/keys/",
+                                [Server, Port, Table])).
