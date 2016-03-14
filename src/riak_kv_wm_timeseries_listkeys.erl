@@ -24,11 +24,10 @@
 %% @doc Resource for Riak TS operations over HTTP.
 %%
 %% ```
-%% GET    /ts/v1/table/Table/keys     list_keys
+%% GET    /ts/v1/table/Table/list_keys
 %% '''
 %%
-%% Request body is expected to be a JSON containing key and/or value(s).
-%% Response is a JSON containing data rows with column headers.
+%% Response is HTML URLs for the entries in the table.
 %%
 
 -module(riak_kv_wm_timeseries_listkeys).

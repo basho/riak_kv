@@ -23,10 +23,9 @@
 %% @doc Resource for Riak TS operations over HTTP.
 %%
 %% ```
-%% GET/POST   /ts/v1/query   execute SQL query
+%% POST   /ts/v1/query?query="query string"   execute SQL query
 %% '''
 %%
-%% Request body is expected to be a JSON containing key and/or value(s).
 %% Response is a JSON containing data rows with column headers.
 %%
 
