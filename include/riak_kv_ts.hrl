@@ -66,8 +66,8 @@
 -record(riak_sql_insert_v1,
         {
           'INSERT'      = <<>>  :: binary(),
-          fields                :: [identifier()],
-          values                :: [[value_type()]],
+          fields                :: [field_identifier()],
+          values                :: [[riak_ql_ddl:data_value()]],
           helper_mod            :: atom()
         }).
 
