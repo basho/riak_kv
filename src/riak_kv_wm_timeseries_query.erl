@@ -56,7 +56,7 @@
 -include("riak_kv_ts.hrl").
 
 -record(ctx, {
-          table :: 'undefined' | string(),
+          table :: 'undefined' | binary(),
           mod   :: 'undefined' | module(),
           method  :: atom(),
           prefix,       %% string() - prefix for resource uris
@@ -99,7 +99,11 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
             {false, Resp, Ctx}
     end.
 
+-spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
+allowed_methods(RD, Ctx) ->
+    {['GET', 'POST'], RD, Ctx}.
 
+-spec malformed_request(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 malformed_request(RD, Ctx) ->
     try
         {SqlType, SQL} = query_from_request(RD),
@@ -117,16 +121,16 @@ malformed_request(RD, Ctx) ->
             {true, Response, Ctx}
     end.
 
--spec is_authorized(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()|halt()).
+-spec is_authorized(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()|string()|halt()).
 is_authorized(RD, #ctx{sql_type=SqlType, table=Table}=Ctx) ->
-    checkpoint("is_authorized", RD),
     Call = call_from_sql_type(SqlType),
     lager:log(info, self(), "is_authorized type:~p", [SqlType]),
     case riak_kv_wm_ts_util:authorize(Call, Table, RD) of
         ok ->
             {true, RD, Ctx};
         {error, ErrorMsg} ->
-            {ErrorMsg, RD, Ctx};
+            ErrorStr = lists:flatten(io_lib:format("~p", [ErrorMsg])),
+            {ErrorStr, RD, Ctx};
         {insecure, Halt, Resp} ->
             {Halt, Resp, Ctx}
     end.
@@ -143,45 +147,6 @@ forbidden(RD, Ctx) ->
     end.
 
 
--spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
-allowed_methods(RD, Ctx) ->
-    {['GET', 'POST'], RD, Ctx}.
-
-query_from_request(RD) ->
-    QueryStr = query_string_from_request(RD),
-    lager:log(info, self(), "query_from_request: ~p", [QueryStr]),
-    compile_query(QueryStr).
-
-query_string_from_request(RD) ->
-    case wrq:get_qs_value("query", RD) of
-        undefined ->
-            throw({query, "no query key in query string"});
-        Str ->
-            Str
-    end.
-
-compile_query(QueryStr) ->
-    case riak_ql_parser:ql_parse(
-           riak_ql_lexer:get_tokens(QueryStr)) of
-        {error, Reason} ->
-            ErrorMsg = lists:flatten(io_lib:format("parse error: ~p", [Reason])),
-            throw({query, ErrorMsg});
-        {ddl, _ } = Res ->
-            Res;
-        {Type, Compiled} when Type==select; Type==describe ->
-            {ok, SQL} =  riak_kv_ts_util:build_sql_record(
-                           Type, Compiled, undefined),
-            {Type, SQL}
-    end.
-
-%% @todo: should really be in riak_ql somewhere
-table_from_sql(#ddl_v1{table=Table})                    -> Table;
-table_from_sql(#riak_select_v1{'FROM'=Table})               -> Table;
-table_from_sql(#riak_sql_describe_v1{'DESCRIBE'=Table}) -> Table.
-
-call_from_sql_type(ddl)      -> query_create_table;
-call_from_sql_type(select)   -> query_select;
-call_from_sql_type(describe) -> query_describe.
 
 
 
@@ -200,7 +165,6 @@ encodings_provided(RD, Ctx) ->
 -spec content_types_accepted(#wm_reqdata{}, #ctx{}) ->
                                     cb_rv_spec([{ContentType::string(), Acceptor::atom()}]).
 content_types_accepted(RD, Ctx) ->
-%    {[{"application/json", accept_doc_body}], RD, Ctx}.
 %% @todo: if we end up without a body in the request this function should be deleted.
     {[], RD, Ctx}.
 
@@ -265,6 +229,45 @@ process_post(RD, #ctx{sql_type=select,
             {false, Resp, Ctx}
     end.
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Helper functions
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+query_from_request(RD) ->
+    QueryStr = query_string_from_request(RD),
+    lager:log(info, self(), "query_from_request: ~p", [QueryStr]),
+    compile_query(QueryStr).
+
+query_string_from_request(RD) ->
+    case wrq:get_qs_value("query", RD) of
+        undefined ->
+            throw({query, "no query key in query string"});
+        Str ->
+            Str
+    end.
+
+compile_query(QueryStr) ->
+    case riak_ql_parser:ql_parse(
+           riak_ql_lexer:get_tokens(QueryStr)) of
+        {error, Reason} ->
+            ErrorMsg = lists:flatten(io_lib:format("parse error: ~p", [Reason])),
+            throw({query, ErrorMsg});
+        {ddl, _ } = Res ->
+            Res;
+        {Type, Compiled} when Type==select; Type==describe ->
+            {ok, SQL} =  riak_kv_ts_util:build_sql_record(
+                           Type, Compiled, undefined),
+            {Type, SQL}
+    end.
+
+%% @todo: should really be in riak_ql somewhere
+table_from_sql(#ddl_v1{table=Table})                    -> Table;
+table_from_sql(#riak_select_v1{'FROM'=Table})               -> Table;
+table_from_sql(#riak_sql_describe_v1{'DESCRIBE'=Table}) -> Table.
+
+call_from_sql_type(ddl)      -> query_create_table;
+call_from_sql_type(select)   -> query_select;
+call_from_sql_type(describe) -> query_describe.
+
 create_table(DDL = #ddl_v1{table = Table}) ->
     %% would be better to use a function to get the table out.
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
@@ -295,8 +298,6 @@ wait_until_active(Table, Seconds) ->
     end.
 
 -spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(iolist()).
-%% @doc Extract the value of the document, and place it in the
-%%      response body of the request.
 produce_doc_body(RD, Ctx = #ctx{result = {Columns, Rows}}) ->
     {mochijson2:encode(
        {struct, [{<<"columns">>, Columns},
