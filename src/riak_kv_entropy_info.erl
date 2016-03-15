@@ -174,12 +174,10 @@ update_index_info_impl(Key, Cmd) ->
     %% contention if lots of different pieces of code are all relying on
     %% it at once.
     %%
-    %% If we do ever want to remove the call to global:trans and replace
-    %% it with something better, I think we could come up with some code
-    %% to allow concurrent updates by writing multiple versions of the
-    %% record to ETS, and then we could detect that on read and resolve
-    %% the conflict based on how we want the stats to be calculated. This
-    %% would be trickier to implement, but should yield great performance.
+    %% If we find that the call to global:trans is a bottleneck, we can
+    %% explore other options (probably either synchronizing updates through
+    %% a pool of workers, or maybe some sort of CRDT-style conflict
+    %% resolution mechanism).
     Info = case ets:lookup(?ETS, {index, Key}) of
                [] ->
                    #index_info{};
