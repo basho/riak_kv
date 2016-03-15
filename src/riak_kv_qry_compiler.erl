@@ -38,6 +38,18 @@
                         {filter, [term()]} |
                         {start_inclusive, boolean()} |
                         {end_inclusive, boolean()}].
+-type combinator()       :: [binary()].
+-type limit()            :: any().
+-type operator()         :: [binary()].
+-type sorter()           :: term().
+
+
+-export_type([
+    combinator/0,
+    limit/0,
+    operator/0,
+    sorter/0
+]).
 -export_type([where_props/0]).
 
 %% 3rd argument is undefined if we should not be concerned about the
@@ -209,7 +221,7 @@ get_col_names2(_, Name) ->
          }).
 
 %%
--spec select_column_clause_folder(#ddl_v1{}, selection(),
+-spec select_column_clause_folder(#ddl_v1{}, riak_ql_ddl:selection(),
                                   {set(), #riak_sel_clause_v1{}}) ->
                 {set(), #riak_sel_clause_v1{}}.
 select_column_clause_folder(DDL, ColAST1,
@@ -292,7 +304,7 @@ compile_select_col(DDL, Select) ->
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
--spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}|{return_state, integer()}) ->
+-spec compile_select_col_stateless(#ddl_v1{}, riak_ql_ddl:selection()|{Op::atom(), riak_ql_ddl:selection(), riak_ql_ddl:selection()}|{return_state, integer()}) ->
        compiled_select().
 compile_select_col_stateless(_, {identifier, [<<"*">>]}) ->
     fun(Row, _) -> Row end;
@@ -317,8 +329,8 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
     compile_select_col_stateless2(Op, Arg_a, Arg_b).
 
 %%
--spec infer_col_type(#ddl_v1{}, selection(), Errors1::[any()]) ->
-        {Type::simple_field_type() | error, Errors2::[any()]}.
+-spec infer_col_type(#ddl_v1{}, riak_ql_ddl:selection(), Errors1::[any()]) ->
+        {riak_ql_ddl:simple_field_type() | error, Errors2::[any()]}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
     {Type, Errors};
@@ -364,15 +376,15 @@ pull_from_row(N, Row) ->
     lists:nth(N, Row).
 
 %%
--spec extract_stateful_functions(selection(), integer()) ->
-        {selection() | {return_state, integer()}, [selection_function()]}.
+-spec extract_stateful_functions(riak_ql_ddl:selection(), integer()) ->
+        {riak_ql_ddl:selection() | {return_state, integer()}, [riak_ql_ddl:selection_function()]}.
 extract_stateful_functions(Selection1, FinaliserLen) when is_integer(FinaliserLen) ->
     {Selection2, Fns} = extract_stateful_functions2(Selection1, FinaliserLen, []),
     {Selection2, lists:reverse(Fns)}.
 
 %% extract stateful functions from the selection
--spec extract_stateful_functions2(selection(), integer(), [selection_function()]) ->
-        {selection() | {finalise_aggregation, FnName::atom(), integer()}, [selection_function()]}.
+-spec extract_stateful_functions2(riak_ql_ddl:selection(), integer(), [riak_ql_ddl:selection_function()]) ->
+        {riak_ql_ddl:selection() | {finalise_aggregation, FnName::atom(), integer()}, [riak_ql_ddl:selection_function()]}.
 extract_stateful_functions2({Op, ArgA1, ArgB1}, FinaliserLen, Fns1) ->
     {ArgA2, Fns2} = extract_stateful_functions2(ArgA1, FinaliserLen, Fns1),
     {ArgB2, Fns3} = extract_stateful_functions2(ArgB1, FinaliserLen, Fns2),
@@ -449,7 +461,7 @@ col_index_and_type_of(Fields, ColumnName) ->
     end.
 
 %%
--spec expand_where(filter(), #key_v1{}, integer()) ->
+-spec expand_where(riak_ql_ddl:filter(), #key_v1{}, integer()) ->
         [where_props()] | {error, any()}.
 expand_where(Where, PartitionKey, MaxSubQueries) ->
     case find_quantum_field_index_in_key(PartitionKey) of
