@@ -307,7 +307,7 @@ make_empty_row(Mod) ->
 %%
 %% This *requires* that once schema changes take place the DDL fields are left in order.
 %%
--spec lookup_field_positions(module(), [field_identifier()]) ->
+-spec lookup_field_positions(module(), [riak_ql_ddl:field_identifier()]) ->
                            {ok, [pos_integer()]} | {error, string()}.
 lookup_field_positions(Mod, FieldIdentifiers) ->
     case lists:foldl(
