@@ -49,8 +49,37 @@
 %% @doc The application:start callback for riak.
 %%      Arguments are ignored as all configuration is done via the erlenv file.
 start(_Type, _StartArgs) ->
-    riak_core_util:start_app_deps(riak_kv),
+    ok = start_dependent_apps(),
+    ok = start_sidejobs(),
+    ok = check_epoch(),
+    ok = add_user_paths(),
+    ok = append_bucket_defaults(),
+    ok = check_storage_backend(),
 
+    %% Register our cluster_info app callback modules, with catch if
+    %% the app is missing or packaging is broken.
+    catch cluster_info:register_app(riak_kv_cinfo),
+
+    %% print out critical env limits for support/debugging purposes
+    catch riak_kv_env:doc_env(),
+
+    %% Spin up supervisor
+    %% TODO isn't this a problem? the capabilities should be registered BEFORE
+    %% the top sup starts, surely?
+    %% (don't call me Shirley)
+    case riak_kv_sup:start_link() of
+        {ok, Pid} ->
+            ok = register_capabilities(),
+            ok = add_webmachine_routes(),
+            {ok, Pid};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+start_dependent_apps() ->
+    ok = riak_core_util:start_app_deps(riak_kv).
+
+start_sidejobs() ->
     FSM_Limit = app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT),
     Status = case FSM_Limit of
                  undefined ->
@@ -74,40 +103,169 @@ start(_Type, _StartArgs) ->
         false ->
             sidejob:new_resource(riak_kv_stat_sj, riak_kv_stat_worker, 10000)
     end,
+    ok.
 
-    %% Look at the epoch and generating an error message if it doesn't match up
-    %% to our expectations
-    check_epoch(),
-
+add_user_paths() ->
     %% Append user-provided code paths
     case app_helper:get_env(riak_kv, add_paths) of
         List when is_list(List) ->
             ok = code:add_paths(List);
         _ ->
             ok
-    end,
+    end.
 
-    %% Append defaults for riak_kv buckets to the bucket defaults
+append_bucket_defaults() ->
+        %% Append defaults for riak_kv buckets to the bucket defaults
     %% TODO: Need to revisit this. Buckets are typically created
     %% by a specific entity; seems lame to append a bunch of unused
     %% metadata to buckets that may not be appropriate for the bucket.
-    riak_core_bucket:append_bucket_defaults(
-      [{linkfun, {modfun, riak_kv_wm_link_walker, mapreduce_linkfun}},
-       {old_vclock, 86400},
-       {young_vclock, 20},
-       {big_vclock, 50},
-       {small_vclock, 50},
-       {pr, 0},
-       {r, quorum},
-       {w, quorum},
-       {pw, 0},
-       {dw, quorum},
-       {rw, quorum},
-       {basic_quorum, false},
-       {notfound_ok, true},
-       {write_once, false}
-   ]),
+    ok = riak_core_bucket:append_bucket_defaults(
+           [{linkfun,      {modfun, riak_kv_wm_link_walker, mapreduce_linkfun}},
+            {old_vclock,   86400},
+            {young_vclock, 20},
+            {big_vclock,   50},
+            {small_vclock, 50},
+            {pr,           0},
+            {r,            quorum},
+            {w,            quorum},
+            {pw,           0},
+            {dw,           quorum},
+            {rw,           quorum},
+            {basic_quorum, false},
+            {notfound_ok,  true},
+            {write_once,   false}
+           ]).
 
+register_capabilities() ->    
+    %% Register capabilities
+    riak_core_capability:register({riak_kv, vnode_vclocks},
+                                  [true, false],
+                                  false,
+                                  {riak_kv,
+                                   vnode_vclocks,
+                                   [{true, true}, {false, false}]}),
+    
+    riak_core_capability:register({riak_kv, legacy_keylisting},
+                                  [false],
+                                  false,
+                                  {riak_kv,
+                                   legacy_keylisting,
+                                   [{false, false}]}),
+    
+    riak_core_capability:register({riak_kv, listkeys_backpressure},
+                                  [true, false],
+                                  false,
+                                  {riak_kv,
+                                   listkeys_backpressure,
+                                   [{true, true}, {false, false}]}),
+    
+    riak_core_capability:register({riak_kv, index_backpressure},
+                                  [true, false],
+                                  false),
+    
+    %% mapred_system should remain until no nodes still exist
+    %% that would propose 'legacy' as the default choice
+    riak_core_capability:register({riak_kv, mapred_system},
+                                  [pipe],
+                                  pipe,
+                                  {riak_kv,
+                                   mapred_system,
+                                   [{pipe, pipe}]}),
+    
+    riak_core_capability:register({riak_kv, mapred_2i_pipe},
+                                  [true, false],
+                                  false,
+                                  {riak_kv,
+                                   mapred_2i_pipe,
+                                   [{true, true}, {false, false}]}),
+    
+    riak_core_capability:register({riak_kv, anti_entropy},
+                                  [enabled_v1, disabled],
+                                  disabled),
+    
+    riak_core_capability:register({riak_kv, handoff_data_encoding},
+                                  [encode_raw, encode_zlib],
+                                  encode_zlib),
+    
+    riak_core_capability:register({riak_kv, object_format},
+                                  get_object_format_modes(),
+                                  v0),
+    
+    riak_core_capability:register({riak_kv, secondary_index_version},
+                                  [v3, v2, v1],
+                                  v1),
+    
+    riak_core_capability:register({riak_kv, vclock_data_encoding},
+                                  [encode_zlib, encode_raw],
+                                  encode_raw),
+    
+    riak_core_capability:register({riak_kv, crdt},
+                                  [?TOP_LEVEL_TYPES, [pncounter], []],
+                                  []),
+    
+    riak_core_capability:register({riak_kv, crdt_epoch_versions},
+                                  [?E2_DATATYPE_VERSIONS, ?E1_DATATYPE_VERSIONS],
+                                  ?E1_DATATYPE_VERSIONS),
+    
+    riak_core_capability:register({riak_kv, put_fsm_ack_execute},
+                                  [enabled, disabled],
+                                  disabled),
+    
+%    %% register the pipeline capabilities
+    riak_core_capability:register({query_pipeline, create_table},
+                                  [riak_ql_create_table_pipeline:get_version()],
+                                  "1.2"),
+
+    riak_core_capability:register({query_pipeline, ddl_compiler},
+                                  [riak_ql_ddl_compiler:get_version()],
+                                  "1.2"),
+
+    riak_core_capability:register({query_pipeline, ddl_validate},
+                                  [riak_ql_ddl_validate_pipeline:get_version()],
+                                  "1.2"),
+
+    riak_core_capability:register({query_pipeline, describe},
+                                  [riak_ql_describe_pipeline:get_version()],
+                                  "1.2"),
+
+    riak_core_capability:register({query_pipeline, insert},
+                                  [riak_ql_insert_pipeline:get_version()],
+                                  "1.2"),
+
+    riak_core_capability:register({query_pipeline, parser},
+                                  [riak_ql_parser:get_version()],
+                                  "1.2"),
+
+    riak_core_capability:register({query_pipeline, select},
+                                  [riak_ql_select_pipeline:get_version()],
+                                  "1.2"),
+
+    riak_core_capability:register({query_pipeline, where},
+                                  [riak_ql_where_pipeline:get_version()],
+                                  "1.2"),
+
+    HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
+    %% Go ahead and mark the riak_kv service as up in the node watcher.
+    %% The riak_core_ring_handler blocks until all vnodes have been started
+    %% synchronously.
+    riak_core:register(riak_kv, [
+                                 {vnode_module, riak_kv_vnode},
+                                 {bucket_validator, riak_kv_bucket},
+                                 {stat_mod, riak_kv_stat},
+                                 {permissions, [get, put, delete, list_keys, list_buckets,
+                                                mapreduce, index, get_preflist]}
+                                ]
+                       ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
+    
+    ok = riak_api_pb_service:register(?SERVICES).
+
+add_webmachine_routes() ->
+    %% Add routes to webmachine
+    [ ok = webmachine_router:add_route(R)
+                || R <- lists:reverse(riak_kv_web:dispatch_table()) ],
+    ok.
+
+check_storage_backend() ->
     %% Check the storage backend
     StorageBackend = app_helper:get_env(riak_kv, storage_backend),
     case code:ensure_loaded(StorageBackend) of
@@ -117,113 +275,6 @@ start(_Type, _StartArgs) ->
             throw({error, invalid_storage_backend});
         _ ->
             ok
-    end,
-
-    %% Register our cluster_info app callback modules, with catch if
-    %% the app is missing or packaging is broken.
-    catch cluster_info:register_app(riak_kv_cinfo),
-
-    %% print out critical env limits for support/debugging purposes
-    catch riak_kv_env:doc_env(),
-
-    %% Spin up supervisor
-    case riak_kv_sup:start_link() of
-        {ok, Pid} ->
-            %% Register capabilities
-            riak_core_capability:register({riak_kv, vnode_vclocks},
-                                          [true, false],
-                                          false,
-                                          {riak_kv,
-                                           vnode_vclocks,
-                                           [{true, true}, {false, false}]}),
-
-            riak_core_capability:register({riak_kv, legacy_keylisting},
-                                          [false],
-                                          false,
-                                          {riak_kv,
-                                           legacy_keylisting,
-                                           [{false, false}]}),
-
-            riak_core_capability:register({riak_kv, listkeys_backpressure},
-                                          [true, false],
-                                          false,
-                                          {riak_kv,
-                                           listkeys_backpressure,
-                                           [{true, true}, {false, false}]}),
-
-            riak_core_capability:register({riak_kv, index_backpressure},
-                                          [true, false],
-                                          false),
-
-            %% mapred_system should remain until no nodes still exist
-            %% that would propose 'legacy' as the default choice
-            riak_core_capability:register({riak_kv, mapred_system},
-                                          [pipe],
-                                          pipe,
-                                          {riak_kv,
-                                           mapred_system,
-                                           [{pipe, pipe}]}),
-
-            riak_core_capability:register({riak_kv, mapred_2i_pipe},
-                                          [true, false],
-                                          false,
-                                          {riak_kv,
-                                           mapred_2i_pipe,
-                                           [{true, true}, {false, false}]}),
-
-            riak_core_capability:register({riak_kv, anti_entropy},
-                                          [enabled_v1, disabled],
-                                          disabled),
-
-            riak_core_capability:register({riak_kv, handoff_data_encoding},
-                                          [encode_raw, encode_zlib],
-                                          encode_zlib),
-
-            riak_core_capability:register({riak_kv, object_format},
-                                          get_object_format_modes(),
-                                          v0),
-
-            riak_core_capability:register({riak_kv, secondary_index_version},
-                                          [v3, v2, v1],
-                                          v1),
-
-            riak_core_capability:register({riak_kv, vclock_data_encoding},
-                                          [encode_zlib, encode_raw],
-                                          encode_raw),
-
-            riak_core_capability:register({riak_kv, crdt},
-                                          [?TOP_LEVEL_TYPES, [pncounter], []],
-                                          []),
-
-            riak_core_capability:register({riak_kv, crdt_epoch_versions},
-                                          [?E2_DATATYPE_VERSIONS, ?E1_DATATYPE_VERSIONS],
-                                          ?E1_DATATYPE_VERSIONS),
-
-            riak_core_capability:register({riak_kv, put_fsm_ack_execute},
-                                          [enabled, disabled],
-                                          disabled),
-
-            HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
-            %% Go ahead and mark the riak_kv service as up in the node watcher.
-            %% The riak_core_ring_handler blocks until all vnodes have been started
-            %% synchronously.
-            riak_core:register(riak_kv, [
-                {vnode_module, riak_kv_vnode},
-                {bucket_validator, riak_kv_bucket},
-                {stat_mod, riak_kv_stat},
-                {permissions, [get, put, delete, list_keys, list_buckets,
-                               mapreduce, index, get_preflist]}
-            ]
-            ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
-
-            ok = riak_api_pb_service:register(?SERVICES),
-
-            %% Add routes to webmachine
-            [ webmachine_router:add_route(R)
-              || R <- lists:reverse(riak_kv_web:dispatch_table()) ],
-            {ok, Pid};
-        {error, Reason} ->
-            {error, Reason}
     end.
 
 %% @doc Prepare to stop - called before the supervisor tree is shutdown
@@ -261,7 +312,8 @@ stop(_State) ->
 -define(SEC_TO_EPOCH, 62167219200).
 
 %% @spec check_epoch() -> ok
-%% @doc
+%% @doc Look at the epoch and generating an error message if it doesn't match up
+%% to our expectations
 check_epoch() ->
     %% doc for erlang:now/0 says return value is platform-dependent
     %% -> let's emit an error if this platform doesn't think the epoch
