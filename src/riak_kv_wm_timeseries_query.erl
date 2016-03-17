@@ -39,6 +39,7 @@
          malformed_request/2,
          forbidden/2,
          allowed_methods/2,
+         resource_exists/2,
          post_is_create/2,
          process_post/2,
          content_types_accepted/2,
@@ -167,6 +168,18 @@ content_types_accepted(RD, Ctx) ->
 %% @todo: if we end up without a body in the request this function should be deleted.
     {[], RD, Ctx}.
 
+
+-spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+resource_exists(RD, #ctx{sql_type=ddl}=Ctx) ->
+    {true, RD, Ctx};
+resource_exists(RD, #ctx{sql_type=Type,
+                         mod=Mod}=Ctx) when Type == describe;
+                                                Type == select    ->
+    Res = riak_kv_wm_ts_util:table_module_exists(Mod),
+    {Res, RD, Ctx};
+resource_exists(RD, Ctx) ->
+    lager:log(info, self(), "resource_exists default case Ctx=~p", [Ctx]),
+    {false, RD, Ctx}.
 
 -spec post_is_create(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 post_is_create(RD, Ctx) ->
