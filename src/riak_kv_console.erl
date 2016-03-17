@@ -523,8 +523,14 @@ bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
             case catch riak_kv_ts_util:maybe_parse_table_def(Type, Props1) of
                 {ok, Props2} ->
                     case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2] of
-                        {bad_bucket_property, BadProp} ->
-                            io:format("Invalid bucket type property: ~ts\n", [BadProp]),
+                        {bad_linkfun_modfun, {M, F}} ->
+                            io:format("Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F]),
+                            error;
+                        {bad_linkfun_bkey, {B, K}} ->
+                            io:format("Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K]),
+                            error;
+                        {bad_chash_keyfun, {M, F}} ->
+                            io:format("Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F]),
                             error;
                         Props3 ->
                             CreateTypeFn(Props3)

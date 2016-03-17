@@ -44,7 +44,7 @@
 
 -export_type([props/0]).
 
--define(VALID_PROPERTIES,
+-define(COMMON_BUCKET_PROPERTIES,
         ["allow_mult",
          "basic_quorum",
          "big_vclock",
@@ -73,10 +73,10 @@
         ]).
 
 -spec is_valid_property(string() | binary()) -> boolean().
-%% @doc Checks whether a given binary or string is a valid bucket type
+%% @doc Checks whether a given binary or string is a common bucket type
 %%      property.
 is_valid_property(P) when is_list(P) ->
-    lists:member(P, ?VALID_PROPERTIES);
+    lists:member(P, ?COMMON_BUCKET_PROPERTIES);
 is_valid_property(P) when is_binary(P) ->
     is_valid_property(binary_to_list(P)).
 

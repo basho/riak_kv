@@ -231,9 +231,20 @@ process_stream({ReqId, Error}, ReqId,
 create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, WithProps),
     case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
-        {bad_bucket_property, BadProp} ->
+        {bad_linkfun_modfun, {M, F}} ->
             {reply, table_create_fail_response(
-                      Table, flat_format("Invalid bucket type property: ~ts", [BadProp])),
+                      Table, flat_format(
+                               "Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F])),
+             State};
+        {bad_linkfun_bkey, {B, K}} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format(
+                               "Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K])),
+             State};
+        {bad_chash_keyfun, {M, F}} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format(
+                               "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F])),
              State};
         Props2 ->
             case riak_core_bucket_type:create(Table, Props2) of
