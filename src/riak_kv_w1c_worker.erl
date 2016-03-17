@@ -118,10 +118,11 @@ async_put(RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist) ->
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
     EncodedVal = EncodeFn(w1c_vclock(RObj)),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
 
     gen_server:cast(
       Worker,
-      {put, Bucket, Key, EncodedVal, ReqId, Preflist,
+      {put, Bucket, BucketProps, Key, EncodedVal, ReqId, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
             size=size(EncodedVal)}}),
@@ -141,6 +142,7 @@ ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, DocIdx, Preflist) ->
     StartTS = os:timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
     EncodedVals =
         lists:map(fun({K, O}) -> {{Bucket, K}, EncodeFn(w1c_vclock(O))} end,
                   RObjs),
@@ -148,7 +150,7 @@ ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, DocIdx, Preflist) ->
 
     gen_server:cast(
       Worker,
-      {batch_put, Bucket, EncodedVals, ReqId, DocIdx, Preflist,
+      {batch_put, Bucket, BucketProps, EncodedVals, ReqId, DocIdx, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
             size=Size}}),
@@ -170,7 +172,7 @@ ts_batch_put_encoded([{{Bucket, _LK}, _RObj0}|_Rest]=RObjs, DocIdx) ->
     Size = lists:sum(lists:map(fun({_BK, O}) -> size(O) end, RObjs)),
     gen_server:cast(
       Worker,
-      {batch_put, Bucket, RObjs, ReqId, DocIdx, Preflist,
+      {batch_put, Bucket, BucketProps, RObjs, ReqId, DocIdx, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
             size=Size}}),
@@ -201,23 +203,23 @@ init(_) ->
 handle_call(_Request, _From, State) ->
     {reply, undefined, State}.
 
-handle_cast({put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
+handle_cast({put, Bucket, BucketProps, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
     NewState = case store_request_record(ReqId, Rec, State) of
                    {undefined, S} ->
                        UpdProxies = send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId),
                        postcommit(data_type_by_key(Key), Bucket,
-                                  maybe_add_pk(Key, EncodedVal)),
+                                  maybe_add_pk(Key, EncodedVal), BucketProps),
                        S#state{proxies=UpdProxies};
                    {_, S} ->
                        reply(From, ReqId, {error, request_id_already_defined}),
                        S
     end,
     {noreply, NewState};
-handle_cast({batch_put, Bucket, EncodedVals, ReqId, PK, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
+handle_cast({batch_put, Bucket, BucketProps, EncodedVals, ReqId, PK, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
     NewState = case store_request_record(ReqId, Rec, State) of
                    {undefined, S} ->
                        UpdProxies = batch_send_vnodes(Preflist, Proxies, EncodedVals, ReqId),
-                       postcommit(ts, Bucket, {PK, EncodedVals}),
+                       postcommit(ts, Bucket, {PK, EncodedVals}, BucketProps),
                        S#state{proxies=UpdProxies};
                    {_, S} ->
                        reply(From, ReqId, {error, request_id_already_defined}),
@@ -308,11 +310,11 @@ data_type_by_key({_PK, _LK}) ->
 data_type_by_key(_Key) ->
     kv.
 
-postcommit(kv, _Bucket, _ValTuple) ->
+postcommit(kv, _Bucket, _ValTuple, _BucketProps) ->
     %% No plans for general w1c hooks yet
     ok;
-postcommit(ts, Bucket, ValTuple) ->
-    riak_repl2_ts:postcommit(ValTuple, Bucket).
+postcommit(ts, Bucket, ValTuple, BucketProps) ->
+    riak_kv_hooks:call_timeseries_postcommit(ValTuple, Bucket, BucketProps).
 
 random_worker() ->
     Workers = workers(),
