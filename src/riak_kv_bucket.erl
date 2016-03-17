@@ -24,7 +24,6 @@
 -module(riak_kv_bucket).
 
 -export([validate/4]).
--export([is_valid_property/1]).
 
 -include("riak_kv_types.hrl").
 
@@ -43,43 +42,6 @@
 -type errors() :: [error()].
 
 -export_type([props/0]).
-
--define(COMMON_BUCKET_PROPERTIES,
-        ["allow_mult",
-         "basic_quorum",
-         "big_vclock",
-         "bucket_type",
-         "chash_keyfun",
-         "dvv_enabled",
-         "dw",
-         "last_write_wins",
-         "linkfun",
-         "n_val",
-         "notfound_ok",
-         "old_vclock",
-         "postcommit",
-         "pr",
-         "precommit",
-         "pw",
-         "r",
-         "rw",
-         "small_vclock",
-         "w",
-         "write_once",
-         "young_vclock",
-         %% TS-specific ones:
-         "ddl",
-         "table_def"
-        ]).
-
--spec is_valid_property(string() | binary()) -> boolean().
-%% @doc Checks whether a given binary or string is a common bucket type
-%%      property.
-is_valid_property(P) when is_list(P) ->
-    lists:member(P, ?COMMON_BUCKET_PROPERTIES);
-is_valid_property(P) when is_binary(P) ->
-    is_valid_property(binary_to_list(P)).
-
 
 %% @doc called by riak_core in a few places to ensure bucket
 %%  properties are sane. The arguments combinations have the following

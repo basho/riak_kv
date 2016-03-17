@@ -413,11 +413,12 @@ erlify_bucket_prop({Prop, Value}) ->
     {validate_bucket_property(binary_to_list(Prop)), Value}.
 
 validate_bucket_property(P) ->
-    case riak_kv_bucket:is_valid_property(P) of
-        true ->
-            list_to_atom(P);
-        false ->
-            lager:info("setting custom bucket property: ~s", [P]),
+    %% there's no validation; free-form properties are all allowed
+    try
+        list_to_existing_atom(P)
+    catch
+        error:badarg ->
+            lager:info("Setting new custom bucket type property '~s'", [P]),
             list_to_atom(P)
     end.
 
