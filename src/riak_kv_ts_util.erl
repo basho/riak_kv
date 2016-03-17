@@ -219,7 +219,7 @@ assert_type_and_table_name_same(BucketType1, ?DDL{table = BucketType2}) ->
     throw({error,
            {table_name,
             flat_format(
-              "Time series bucket type and table name mismatch (~s != ~s)",
+              "Time series bucket type and table name do not match (~s != ~s)",
               [BucketType1, BucketType2])}}).
 
 %% Attempt to compile the DDL but don't do anything with the output, this is
