@@ -24,8 +24,9 @@
 -module(riak_kv_bucket).
 
 -export([validate/4]).
+-compile([export_all]).
 
--include("riak_kv_types.hrl").
+-include_lib("riak_kv_types.hrl").
 
 -ifdef(TEST).
 -ifdef(EQC).
@@ -35,13 +36,35 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--type prop() :: {PropName::atom(), PropValue::any()}.
+-type propvalue() :: PropValue::any().
+-type prop() :: {PropName::atom(), propvalue()}.
 -type error_reason() :: atom() | string().
 -type error() :: {PropName::atom(), ErrorReason::error_reason()}.
 -type props() :: [prop()].
 -type errors() :: [error()].
+-type datatype_names() :: [map|set|counter|pncounter|register|flag|hll|
+                           string()].
 
 -export_type([props/0]).
+
+-define(ERROR_ALLOW_MULT_CREATE, "Data Type buckets must be" ++
+            " allow_mult=true").
+-define(ERROR_ALLOW_MULT_UPDATE, "Cannot change datatype bucket from" ++
+            " allow_mult=true").
+-define(ERROR_DT_UPDATE, "Cannot update datatype on existing bucket").
+-define(DT_PROPS_CHECK_CREATE, [{datatype, fun datatype/2,
+                                fun error_dt_create/1},
+                                {allow_mult, fun allow_mult/3,
+                                 ?ERROR_ALLOW_MULT_CREATE},
+                                {hll_precision, fun hll_precision/3,
+                                 fun error_hll_precision/1}]).
+-define(DT_PROPS_CHECK_UPDATE, [{datatype, fun datatype/2,
+                                 ?ERROR_DT_UPDATE},
+                                {allow_mult, fun allow_mult/3,
+                                 ?ERROR_ALLOW_MULT_UPDATE},
+                                {hll_precision, fun hll_precision/3,
+                                 fun error_hll_precision/1}]).
+
 
 %% @doc called by riak_core in a few places to ensure bucket
 %%  properties are sane. The arguments combinations have the following
@@ -88,7 +111,9 @@
 %%
 %% There is no way to _remove_ a property
 %%
-%% @see validate_dt_props/3
+%% @see validate_create_dt_props/1
+%% @see validate_udpate_dt_props/2
+%% @see validate_dt_props/2
 %% @see assert_no_datatype/1
 -spec validate(create | update,
                {riak_core_bucket_type:bucket_type(), undefined | binary()} | binary(),
@@ -111,21 +136,26 @@ validate(update, _Bucket, Existing, New) when is_list(Existing),
 %% @private bucket creation time validation
 -spec validate_create_bucket_type(props()) -> {props(), errors()}.
 validate_create_bucket_type(BucketProps) ->
-    case proplists:get_value(consistent, BucketProps) of
-        %% type is explicitly or implicitly not intended to be consistent
-        Consistent when Consistent =:= false orelse
-                        Consistent =:= undefined ->
-            {Unvalidated, Valid, Errors} = case get_boolean(write_once, BucketProps) of
-                true ->
-                    validate_create_w1c_props(BucketProps);
-                _ ->
-                    validate_create_dt_props(BucketProps)
-            end;
-        %% type may be consistent (the value may not be valid)
-        Consistent ->
-            {Unvalidated, Valid, Errors} = validate_create_consistent_props(Consistent, BucketProps)
-    end,
-    {Good, Bad} = validate(Unvalidated, Valid, Errors),
+    {Good, Bad} = case proplists:get_value(consistent, BucketProps) of
+                      %% type is explicitly or implicitly not intended to be
+                      %% consistent
+                      Consistent when Consistent =:= false orelse
+                                      Consistent =:= undefined ->
+                          {Unvalidated, Valid, Errors} =
+                              case get_boolean(write_once, BucketProps) of
+                                  true ->
+                                      validate_create_w1c_props(BucketProps);
+                                  _ ->
+                                      validate_create_dt_props(BucketProps)
+                              end,
+                          validate(Unvalidated, Valid, Errors);
+                      %% type may be consistent (the value may not be valid)
+                      Consistent ->
+                          {Unvalidated, Valid, Errors} =
+                              validate_create_consistent_props(Consistent,
+                                                               BucketProps),
+                          validate(Unvalidated, Valid, Errors)
+                  end,
     validate_post_merge(Good, Bad).
 
 %% @private update phase of bucket type. Merges properties from
@@ -324,7 +354,8 @@ validate_create_consistent_props(Invalid, New) ->
 
 %% @private riak datatype support requires a bucket type of `datatype'
 %% and `allow_mult' set to `true'. These function enforces those
-%% properties.
+%% properties, as well as specific ones for certain datatypes, e.g.
+%% hll_precision for hll (hyperloglog) datatypes.
 %%
 %% We take the presence of a `datatype' property as indication that
 %% this bucket type is a special type, somewhere to store CRDTs. I
@@ -339,40 +370,50 @@ validate_create_consistent_props(Invalid, New) ->
 %% validate the correctness of the type, since it assumes that was
 %% done at creation, only that it is either the same as existing or
 %% not present.
-
 -spec validate_create_dt_props(props()) -> {props(), props(), errors()}.
 validate_create_dt_props(New) ->
-    validate_create_dt_props(proplists:get_value(datatype, New), New).
-
-%% @private validate the datatype, if present
--spec validate_create_dt_props(undefined | atom(), props()) -> {props(), props(), errors()}.
-validate_create_dt_props(undefined, New) ->
-    {New, [], []};
-validate_create_dt_props(DataType, New) ->
-    Unvalidated = lists:keydelete(datatype, 1, New),
-    Mod = riak_kv_crdt:to_mod(DataType),
-    case lists:member(Mod, ?V2_TOP_LEVEL_TYPES) of
-        true ->
-            validate_create_dt_props(Unvalidated, [{datatype, DataType}], []);
-        false ->
-            Err = lists:flatten(io_lib:format("~p not supported for bucket datatype property", [DataType])),
-            validate_create_dt_props(Unvalidated, [], [{datatype, Err}])
-    end.
-
-%% @private validate the boolean property, if `datatype' was present,
-%% require `allow_mult=true' even if `datatype' was invalid, as we
-%% assume the user meant to create `datatype' bucket
--spec validate_create_dt_props(props(), props(), errors()) -> {props(), props(), errors()}.
-validate_create_dt_props(Unvalidated0, Valid, Invalid) ->
-    Unvalidated = lists:keydelete(allow_mult, 1, Unvalidated0),
-    case allow_mult(Unvalidated0) of
-        true ->
-            {Unvalidated, [{allow_mult, true} | Valid], Invalid};
+    case proplists:get_value(datatype, New) of
+        undefined -> {New, [], []};
         _ ->
-            Err = io_lib:format("Data Type buckets must be allow_mult=true", []),
-            {Unvalidated, Valid, [{allow_mult, Err} | Invalid]}
+            {Unvalidated, Valid, Errors, _} =
+                lists:foldl(fun validate_dt_props/2, {New, [], [], []},
+                            ?DT_PROPS_CHECK_CREATE),
+            {Unvalidated, Valid, Errors}
     end.
 
+%% @private generalized validation function for checking multiple datatype
+%%          properties.
+validate_dt_props(PropCheck, {Unvalidated0, Valid, Errors, Existing}) ->
+    {Prop, Fun, Err0} = PropCheck,
+    PropVal = proplists:get_value(Prop, Unvalidated0),
+    ExistingVal = proplists:get_value(Prop, Existing),
+    Unvalidated1 = lists:keydelete(Prop, 1, Unvalidated0),
+    FunVal = case Prop == datatype of
+                 true ->
+                     Fun(PropVal, ExistingVal);
+                 false ->
+                     DataTypeMod = riak_kv_crdt:to_mod(
+                                     proplists:get_value(
+                                       datatype, Valid,
+                                       proplists:get_value(datatype, Existing))
+                                    ),
+                     Fun(PropVal, ExistingVal, DataTypeMod)
+             end,
+    case {FunVal==ok orelse FunVal==undefined,
+          FunVal==error orelse FunVal==false} of
+        {true, _} ->
+            {Unvalidated1, Valid, Errors, Existing};
+        {_, false} ->
+            {Unvalidated1, [{Prop, FunVal} | Valid], Errors, Existing};
+        {_, true} ->
+            Err1 = case is_function(Err0) of
+                       true ->
+                           Err0(PropVal);
+                       false ->
+                           Err0
+                   end,
+            {Unvalidated1, Valid, [{Prop, Err1} | Errors], Existing}
+    end.
 
 %% @private Riak write_once support requires a bucket type where
 %% write_once is set to true.  This function validates that when
@@ -430,32 +471,15 @@ validate_update_consistent_props(Existing, New) ->
             {Unvalidated, [], [{n_val, NErr}, {consistent, CErr}]}
     end.
 
-%% @private somewhat duplicates the create path, but easier to read
-%% this way, and chars are free
+%% @private Check specifically against existing vs "new" datatype updates,
+%%          which are not allowed, then call validate_dt_props/2 for the
+%%          dt-property fold over.
 -spec validate_update_dt_props(props(), props()) -> {props(), props(), errors()}.
-validate_update_dt_props(Existing, New0) ->
-    New = lists:keydelete(datatype, 1, New0),
-    case {proplists:get_value(datatype, Existing), proplists:get_value(datatype, New0)} of
-        {_Datatype, undefined} ->
-            validate_update_dt_props(New, [] , []);
-        {Datatype, Datatype} ->
-            validate_update_dt_props(New, [{datatype, Datatype}] , []);
-        {_Datatype, _Datatype2} ->
-            validate_update_dt_props(New, [] , [{datatype, "Cannot update datatype on existing bucket"}])
-    end.
-
-%% @private check that allow_mult is correct
--spec validate_update_dt_props(props(), props(), errors()) -> {props(), props(), errors()}.
-validate_update_dt_props(New, Valid, Invalid) ->
-    Unvalidated = lists:keydelete(allow_mult, 1, New),
-    case allow_mult(New) of
-        undefined ->
-            {Unvalidated, Valid, Invalid};
-        true ->
-            {Unvalidated, [{allow_mult, true} | Valid], Invalid};
-        _ ->
-            {Unvalidated, Valid, [{allow_mult, "Cannot change datatype bucket from allow_mult=true"} | Invalid]}
-end.
+validate_update_dt_props(Existing, New) ->
+    {Unvalidated, Valid, Errors, _} =
+        lists:foldl(fun validate_dt_props/2, {New, [], [], Existing},
+                    ?DT_PROPS_CHECK_CREATE),
+    {Unvalidated, Valid, Errors}.
 
 %% @private
 %% precondition: Existing contains {write_once, true}
@@ -540,15 +564,94 @@ validate_last_write_wins_implies_not_dvv_enabled({Props, Errors}) ->
             {Props, Errors}
     end.
 
-%% @private just grab the allow_mult value if it exists
--spec allow_mult(props()) -> boolean() | 'undefined' | 'error'.
-allow_mult(Props) ->
-    case proplists:get_value(allow_mult, Props) of
+%% @doc See if datatype is valid, if so return the datatype, otherwise
+%%      false for handling.
+-spec datatype(props()|datatype_names(), props()|datatype_names()) ->
+                      datatype_names() | false.
+datatype(PropsNew, PropsOld) when is_list(PropsOld), is_list(PropsNew) ->
+    datatype(proplists:get_value(datatype, PropsNew),
+             proplists:get_value(datatype, PropsOld));
+datatype(DataTypeNew, undefined) ->
+    case lists:member(riak_kv_crdt:to_mod(DataTypeNew), ?V2_TOP_LEVEL_TYPES) of
+        true ->
+            DataTypeNew;
+        false ->
+            false
+    end;
+datatype(undefined, DataTypeOld) ->
+    DataTypeOld;
+datatype(DataTypeNew, DataTypeOld) ->
+    case DataTypeNew =:= DataTypeOld of
+        true -> DataTypeNew;
+        false -> false
+    end.
+
+%% @doc Just grab the allow_mult value if it exists
+-spec allow_mult(props()) -> boolean() | undefined | error.
+allow_mult(Props) when is_list(Props) ->
+    MultProp = proplists:get_value(allow_mult, Props),
+    allow_mult(MultProp, undefined, undefined).
+-spec allow_mult(propvalue(), undefined, undefined) ->
+                        boolean() | undefined | error.
+allow_mult(Prop, _PropOld, _Mod) ->
+    case Prop of
         undefined ->
             undefined;
         MaybeBool ->
             coerce_bool(MaybeBool)
     end.
+
+%% @doc Check if precision for hyperloglog datatype is valid, and return
+%%      either false if it's not valid, the precision number given, or the
+%%      default prevision.
+-spec hll_precision(props(), props()) -> riak_dt_hll:precision() | false
+                                            | undefined.
+hll_precision(PropsNew, PropsOld) when is_list(PropsNew), is_list(PropsOld) ->
+    PNew = proplists:get_value(hll_precision, PropsNew),
+    POld = proplists:get_value(hll_precision, PropsOld),
+    Mod = riak_kv_crdt:to_mod(proplists:get_value(datatype, PropsNew)),
+    hll_precision(PNew, POld, Mod).
+-spec hll_precision(propvalue(), propvalue(), DT_MOD::module()) ->
+                           riak_dt_hll:precision() | false | ok.
+hll_precision(PNew0, POld, Mod) when is_binary(PNew0), is_integer(POld) ->
+    PNew1 = try binary_to_integer(PNew0) of
+                P -> P
+            catch
+                error:badarg ->
+                    0 % Force an Error if we can't convert
+            end,
+    hll_precision(PNew1, POld, Mod);
+hll_precision(PNew, POld, Mod) ->
+    case {Mod, PNew, POld} of
+        {?HLL_TYPE, undefined, undefined} ->
+            ?HYPER_DEFAULT_PRECISION;
+        {?HLL_TYPE, undefined, PO} ->
+            PO;
+        {?HLL_TYPE, PN, undefined} ->
+            PN;
+        {?HLL_TYPE, PN, PO} when PN > 3 andalso PN =< PO andalso PN < 17 ->
+            PN;
+        {?HLL_TYPE, _PN, _PO} ->
+            false;
+        _ ->
+            ok
+    end.
+
+%% @doc Error function for datatype creation.
+-spec error_dt_create(datatype_names()) -> string().
+error_dt_create(DataType) ->
+    lists:flatten(io_lib:format("~p not supported for bucket datatype property",
+                                [DataType])).
+
+%% @doc Error function for handling hyperloglog precision.
+-spec error_hll_precision(riak_dt_hll:precision()) -> string().
+error_hll_precision(Precision) ->
+    lists:flatten(io_lib:format("~p not supported for Hyperloglog precision"
+                                " property for bucket type. Precision must"
+                                " be an integer between 4 and 16, inclusive"
+                                " (3 < p < 17) and precision can be reduced"
+                                " but never increased after initial setting",
+                                [Precision])).
 
 %% Boolean value of the `last_write_wins' property, or `undefined' if not present.
 -spec last_write_wins(props()) -> boolean() | 'undefined' | 'error'.
@@ -569,7 +672,6 @@ get_boolean(Key, Props) ->
         MaybeBool ->
             coerce_bool(MaybeBool)
     end.
-
 
 %%
 %% EUNIT tests...
@@ -665,6 +767,8 @@ test_merges(TestTimeSecs) ->
 %%   * the consistent property cannot change and neither can the n_val if
 %%     the type is consistent
 %%   * the write_once property cannot change
+%%   * No inclusion of hyperloglog datatype-precision "checks" b/c it's not
+%%     an immutable property, but has some specific validation constraints.
 prop_immutable() ->
     ?FORALL(Args, gen_args(no_default_buckets),
             begin
@@ -679,12 +783,18 @@ prop_immutable() ->
                        io:format("Existing ~p~n", [Existing]),
                        io:format("New ~p~n", [New]),
                        io:format("Result ~p~n", [Result]),
-                       io:format("{allow_mult, valid_dt, valid_consistent, n_val_changed}~n"),
+                       io:format("{allow_mult, valid_dt, valid_consistent, "
+                                 "n_val_changed}~n"),
                        io:format("{~p,~p,~p,~p}~n~n",
-                                 [allow_mult(New), valid_datatype(New), valid_consistent(New), n_val_changed(Existing, New)])
+                                 [allow_mult(New), valid_datatype(New),
+                                  valid_consistent(New), n_val_changed(Existing,
+                                                                       New)])
                    end,
-                   collect(with_title("{allow_mult, valid_dt, valid_consistent, n_val_changed}"),
-                           {allow_mult(New), valid_datatype(New), valid_consistent(New), n_val_changed(Existing, New)},
+                   collect(with_title("{allow_mult, valid_dt, valid_consistent,"
+                                      " n_val_changed}"),
+                           {allow_mult(New), valid_datatype(New),
+                            valid_consistent(New), n_val_changed(Existing,
+                                                                 New)},
                            immutable(Phase, New, Existing, Result)))
             end).
 
@@ -692,6 +802,8 @@ prop_immutable() ->
 %%  * for datatypes, the datatype must be
 %%    valid, and allow mult must be true
 %%  * for consistent data, the consistent property must be valid
+%%  * for hll datatypes, we default to a precision whether or not an hll
+%%    datatype is specified, otherwise we check validity
 prop_create_valid() ->
     ?FORALL({Bucket, Existing, New}, {gen_bucket(create, bucket_types),
                                       gen_existing(), gen_new(create)},
@@ -703,34 +815,61 @@ prop_create_valid() ->
                        io:format("Existing ~p~n", [Existing]),
                        io:format("New ~p~n", [New]),
                        io:format("Result ~p~n", [Result]),
-                       io:format("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent}~n"),
-                       io:format("{~p,~p,~p,~p,~p,~p,~p}~n~n",
-                                 [has_datatype(New), valid_datatype(New), allow_mult(New),
-                                     has_w1c(New), valid_w1c(New),
-                                     has_consistent(New), valid_consistent(New)])
+                       io:format("{has_datatype, valid_datatype, allow_mult, "
+                                 "has_w1c, valid_w1c, has_consistent, "
+                                 "valid_consistent, has_hll, valid_hll}~n"),
+                       io:format("{~p,~p,~p,~p,~p,~p,~p,~p,~p}~n~n",
+                                 [has_datatype(New), valid_datatype(New),
+                                  allow_mult(New), has_w1c(New), valid_w1c(New),
+                                  has_consistent(New), valid_consistent(New),
+                                  has_hll(New), valid_hll(New)])
                    end,
-                   collect(with_title("{has_datatype, valid_datatype, allow_mult, has_w1c, valid_w1c, has_consistent, valid_consistent, lww, dvv_enabled}"),
-                           {has_datatype(New), valid_datatype(New), allow_mult(New), has_w1c(New), valid_w1c(New), has_consistent(New), valid_consistent(New), last_write_wins(New), dvv_enabled(New)},
+                   collect(with_title("{has_datatype, valid_datatype, allow_mult"
+                                      ", has_w1c, valid_w1c, has_consistent, "
+                                      "valid_consistent, lww, dvv_enabled, "
+                                      "has_hll, valid_hll}"),
+                           {has_datatype(New), valid_datatype(New),
+                            allow_mult(New), has_w1c(New), valid_w1c(New),
+                            has_consistent(New), valid_consistent(New),
+                            last_write_wins(New), dvv_enabled(New),
+                            has_hll(New), valid_hll(New)},
                            only_create_if_valid(Result, New)))
             end).
 
 %% As of 2.* validate/4 must merge the new and existing props, verify
 %% that. Not sure if this test isn't just a tautology. Reviewer?
 prop_merges() ->
-    ?FORALL({Bucket, Existing0, New}, {gen_bucket(update, any),
-                                       gen_existing(),
-                                       gen_new(update)},
+    ?FORALL({Bucket, Existing0, New0}, {gen_bucket(update, any),
+                                        gen_existing(),
+                                        gen_new(update)},
             begin
-                %% ensure default buckets are not marked consistent or write_once since that is invalid
-                Existing = case default_bucket(Bucket) of
-                               true -> lists:keydelete(write_once, 1, lists:keydelete(consistent, 1, Existing0));
-                               false -> Existing0
-                           end,
-                Result={Good, Bad} = validate(update, Bucket, Existing, New),
+                %% ensure default buckets are not marked consistent or
+                %% write_once since that is invalid
+                Existing =
+                    case default_bucket(Bucket) of
+                        true ->
+                            lists:keydelete(write_once, 1,
+                                            lists:keydelete(consistent, 1,
+                                                            Existing0));
+                        false ->
+                            Existing0
+                    end,
+
+                %% Specially remove hll_precision from gen_new(update) if
+                %% datatype is not hll, as we'll skip it in the result
+                New =
+                    case riak_kv_crdt:to_mod(
+                           proplists:get_value(datatype, Existing)) of
+                        ?HLL_TYPE -> New0;
+                        _ -> lists:keydelete(hll_precision, 1, New0)
+                    end,
+
+                Result = {Good, Bad} = validate(update, Bucket, Existing, New),
 
                 %% All we really want to check is that every key in
                 %% Good replaces the same key in Existing, right?
                 %% Remove `Bad' from the inputs to validate.
+
                 F = fun({Name, _Err}, {Old, Neu}) ->
                      case lists:keytake(Name, 1, Neu) of
                          false ->
@@ -758,12 +897,21 @@ prop_merges() ->
                        io:format("New ~p~n", [New]),
                        io:format("Result ~p~n", [Result]),
                        io:format("Expected ~p~n", [lists:sort(Expected)]),
-                       io:format("Expected - Good ~p~n", [sets:to_list(sets:subtract(sets:from_list(Expected), sets:from_list(Good)))]),
-                       io:format("Good - Expected ~p~n", [sets:to_list(sets:subtract(sets:from_list(Good), sets:from_list(Expected)))])
+                       io:format("Expected - Good ~p~n",
+                                 [sets:to_list(
+                                    sets:subtract(
+                                      sets:from_list(Expected),
+                                      sets:from_list(Good)))]),
+                       io:format("Good - Expected ~p~n",
+                                 [sets:to_list(
+                                    sets:subtract(
+                                      sets:from_list(Good),
+                                      sets:from_list(Expected)))])
                    end,
                    case valid_dvv_lww({Good, Bad}) of
                        true ->
-                           lists:sort(maybe_remove_dvv_enabled(Expected)) == lists:sort(maybe_remove_dvv_enabled(Good));
+                           lists:sort(maybe_remove_dvv_enabled(Expected))
+                               == lists:sort(maybe_remove_dvv_enabled(Good));
                        _ ->
                            false
                    end
@@ -808,7 +956,8 @@ gen_bucket() ->
 
 gen_existing() ->
     Defaults = lists:ukeysort(1, riak_core_bucket_type:defaults()),
-    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_w1c(), gen_valid_consistent(), gen_valid_dvv_lww(), []]),
+    ?LET(Special, oneof([gen_valid_mult_dt(), gen_valid_w1c(),
+                         gen_valid_consistent(), gen_valid_dvv_lww(), []]),
          lists:ukeymerge(1, lists:ukeysort(1, Special), Defaults)).
 
 gen_maybe_consistent() ->
@@ -826,7 +975,12 @@ gen_valid_mult_dt() ->
 gen_valid_mult_dt(false) ->
     ?LET(AllowMult, bool(), [{allow_mult, AllowMult}]);
 gen_valid_mult_dt(true) ->
-    ?LET(Datatype, gen_datatype(), [{allow_mult, true}, {datatype, Datatype}]).
+    ?LET(Datatype, gen_datatype(), gen_valid_mult_dt_hll(Datatype)).
+
+gen_valid_mult_dt_hll(hll) ->
+    [{allow_mult, true}, {datatype, hll} | gen_hll_precision()];
+gen_valid_mult_dt_hll(Datatype) ->
+    [{allow_mult, true}, {datatype, Datatype}].
 
 gen_valid_dvv_lww() ->
     ?LET(LastWriteWins, bool(), gen_valid_dvv_lww(LastWriteWins)).
@@ -834,42 +988,55 @@ gen_valid_dvv_lww() ->
 gen_valid_dvv_lww(true) ->
     [{last_write_wins, true}, {dvv_enabled, false}];
 gen_valid_dvv_lww(false) ->
-    ?LET(DvvEnabled, bool(), [{last_write_wins, false}, {dvv_enabled, DvvEnabled}]).
+    ?LET(DvvEnabled, bool(), [{last_write_wins, false},
+                              {dvv_enabled, DvvEnabled}]).
 
 gen_new(update) ->
     ?LET(
-        {Mult, Datatype, WriteOnce, Consistent, NVal, LastWriteWins, DvvEnabled},
-        {
-            gen_allow_mult(),
-            oneof([[], gen_datatype_property()]),
-            oneof([[], gen_valid_w1c()]),
-            oneof([[], gen_maybe_bad_consistent()]),
-            oneof([[], [{n_val, choose(1, 10)}]]),
-            oneof([[], gen_lww()]),
-            oneof([[], gen_dvv_enabled()])
+       {Mult, Datatype, WriteOnce, Consistent, NVal, LastWriteWins, DvvEnabled},
+       {
+         gen_allow_mult(),
+         oneof([[], gen_datatype_property()]),
+         oneof([[], gen_valid_w1c()]),
+         oneof([[], gen_maybe_bad_consistent()]),
+         oneof([[], [{n_val, choose(1, 10)}]]),
+         oneof([[], gen_lww()]),
+         oneof([[], gen_dvv_enabled()])
         },
-        Mult ++ Datatype ++ WriteOnce ++ Consistent ++ NVal ++ LastWriteWins ++ DvvEnabled
-    );
+       Mult ++ Datatype ++ WriteOnce ++ Consistent ++ NVal ++ LastWriteWins
+       ++ DvvEnabled);
 gen_new(create) ->
     Defaults0 = riak_core_bucket_type:defaults(),
     Defaults1 = lists:keydelete(allow_mult, 1, Defaults0),
     Defaults2 = lists:keydelete(last_write_wins, 1, Defaults1),
     Defaults = lists:keydelete(dvv_enabled, 1, Defaults2),
     ?LET(
-        {Mult, DatatypeOrConsistent, WriteOnce, LastWriteWins, DvvEnabled},
-        {
-            gen_allow_mult(),
-            frequency([{5, gen_datatype_property()},
-                       {5, gen_maybe_bad_consistent()},
-                       {5, []}]),
-            gen_w1c(), gen_lww(), gen_dvv_enabled()},
-         Defaults ++ Mult ++ DatatypeOrConsistent ++ WriteOnce ++ LastWriteWins ++ DvvEnabled).
+       {Mult, DatatypeOrConsistent, WriteOnce, LastWriteWins, DvvEnabled},
+       {
+         gen_allow_mult(),
+         frequency([{5, gen_datatype_property()},
+                    {5, gen_maybe_bad_consistent()},
+                    {5, []}]),
+         gen_w1c(), gen_lww(), gen_dvv_enabled()},
+       Defaults ++ Mult ++ DatatypeOrConsistent ++ WriteOnce ++ LastWriteWins
+       ++ DvvEnabled).
 
 gen_allow_mult() ->
     ?LET(Mult, frequency([{9, bool()}, {1, binary()}]), [{allow_mult, Mult}]).
 
 gen_datatype_property() ->
-    ?LET(Datattype, oneof([gen_datatype(), notadatatype]), [{datatype, Datattype}]).
+    ?LET(Datatype, oneof([gen_datatype(), notadatatype]),
+         gen_datatype_props(Datatype)).
+
+gen_datatype_props(hll) ->
+    [{datatype, hll} | gen_hll_precision()];
+gen_datatype_props(Datatype) ->
+    [{datatype, Datatype}].
+
+gen_hll_precision() ->
+    ?LET(P, frequency([{9, choose(4, 16)},
+                       {1, elements([1,2,17,19,20,99, a])}]),
+         [{hll_precision, P}]).
 
 gen_lww() ->
     ?LET(LwwWins, bool(), [{last_write_wins, LwwWins}]).
@@ -975,8 +1142,8 @@ undefined_props(Names, Props, Errors) ->
               end,
               Names).
 
-%% If data type and allow mult and are in New they must match what is in existing
-%% or be in Bad
+%% If data type and allow mult and are in New they must match what is in
+%% existing or be in Bad
 immutable_dt(_NewDT=undefined, _NewAllowMult=undefined, _ExistingDT, _Bad) ->
     %% datatype and allow_mult are not being modified, so its valid
     true;
@@ -984,7 +1151,8 @@ immutable_dt(_Datatype, undefined, _Datatype, _Bad) ->
     %% data types from new and existing match and allow mult not modified, valid
     true;
 immutable_dt(_Datatype, true, _Datatype, _Bad) ->
-  %% data type from new and existing match and allow mult still set to true, valid
+    %% data type from new and existing match and allow mult still set to true,
+    %% valid
     true;
 immutable_dt(undefined, true, _Datatype, _Bad) ->
     %% data type not modified and allow_mult still set to true, vald
@@ -1040,49 +1208,83 @@ has_last_write_wins(Props) ->
 only_create_if_valid2({Good, Bad}, New) ->
     DT = proplists:get_value(datatype, New),
     AM = proplists:get_value(allow_mult, New),
+    HLLP = proplists:get_value(hll_precision, New),
     FP = get_boolean(write_once, New),
     CS = proplists:get_value(consistent, New),
-    case {DT, AM, FP, CS} of
-        %% write_once true entails data type undefined and consistent false or undefined
-        {_DataType, _AllowMult, true, _Consistent} ->
+    case {DT, AM, HLLP, FP, CS} of
+        %% write_once true entails data type undefined and consistent false or
+        %% undefined
+        {_DataType, _AllowMult, _HLLP, true, _Consistent} ->
             not has_datatype(Good)
                 andalso not is_consistent(Good)
                 % NB. (!P v Q) iff P => Q
                 andalso (not has_datatype(New) or has_datatype(Bad))
-                andalso (not is_consistent(New) or has_consistent(Bad))
-            ;
-        %% if consistent or datatype properties are not defined then properties should be
-        %% valid since no other properties generated can be in valid
-        {undefined, _AllowMult, _WriteOnce, Consistent} when Consistent =:= false orelse
-                                                 Consistent =:= undefined ->
+                andalso (not is_consistent(New) or has_consistent(Bad));
+        %% if consistent or datatype properties are not defined then properties
+        %%should be valid since no other properties generated can be in valid
+        {undefined, _AllowMult, _HLLP, _WriteOnce, Consistent}
+          when Consistent =:= false orelse
+               Consistent =:= undefined ->
             true;
         %% if datatype is defined, its not a consistent type and allow_mult=true
         %% then the datatype must be valid
-        {Datatype, true, _WriteOnce,  Consistent} when Consistent =:= false orelse
-                                          Consistent =:= undefined ->
-            case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
+        {Datatype, true, _HLLP, _WriteOnce, Consistent}
+          when Consistent =:= false orelse
+               Consistent =:= undefined ->
+            case lists:member(riak_kv_crdt:to_mod(Datatype),
+                              ?V2_TOP_LEVEL_TYPES) of
                 true ->
                     has_datatype(Good) andalso has_allow_mult(Good);
                 false ->
                     has_datatype(Bad) andalso has_allow_mult(Good)
             end;
-        %% if the datatype is defined, the type is not consistent and allow_mult is false
-        %% then allow_mult should be in the Bad list and the datatype may be depending on if it
-        %% is valid
-        {Datatype, _, _WriteOnce,  Consistent} when Consistent =:= false orelse
-                                       Consistent =:= undefined->
-            case lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES) of
+        %% if the datatype is defined, the type is not consistent and
+        %% allow_mult is false then allow_mult should be in the Bad list and the
+        %% datatype may be depending on if it is valid
+        {Datatype, _, _HLLP, _WriteOnce, Consistent}
+          when Consistent =:= false orelse
+               Consistent =:= undefined ->
+            case lists:member(riak_kv_crdt:to_mod(Datatype),
+                              ?V2_TOP_LEVEL_TYPES) of
                 true ->
                     has_allow_mult(Bad) andalso has_datatype(Good);
                 false ->
                     has_datatype(Bad) andalso has_allow_mult(Bad)
             end;
-        %% the type is consistent, whether it has a datatype or allow_mult set is irrelevant (for now
-        %% at least)
-        {_, _, _, true} ->
+        %% if the datatype is defined and an HLL, the type is not consistent and
+        %% allow_mult is true, then hll_precision can be changed within the
+        %% valid precision range
+        {DataType, _, HLLP, _WriteOnce, Consistent}
+          when DataType =:= hll, HLLP > 3, HLLP < 17,
+               (Consistent =:= false orelse Consistent =:= undefined) ->
+            case lists:member(riak_kv_crdt:to_mod(DataType),
+                              ?V2_TOP_LEVEL_TYPES) of
+                true ->
+                    has_hll(Good) andalso has_datatype(Good);
+                false ->
+                    has_datatype(Bad) andalso has_hll(Bad)
+            end;
+        %% if the datatype is defined and an HLL, the type is not consistent and
+        %% allow_mult is true, then hll_precision can be fail if not given a
+        %% valid precision
+        {DataType, _, HLLP, _WriteOnce, Consistent}
+          when DataType =:= hll, HLLP < 4, HLLP > 16,
+               (Consistent =:= false orelse Consistent =:= undefined) ->
+            case lists:member(riak_kv_crdt:to_mod(DataType),
+                              ?V2_TOP_LEVEL_TYPES) of
+                true ->
+                    has_hll(Good) andalso has_datatype(Good);
+                false ->
+                    has_datatype(Bad) andalso has_hll(Bad)
+            end;
+
+        %% the type is consistent, whether it has a datatype or allow_mult set
+        %% is irrelevant (for now at least)
+        {_, _, _, _, true} ->
             has_consistent(Good);
-        %% the type was not inconsistent (explicitly or implicitly) but the value is invalid
-        {_, _, _, _Consistent} ->
+        %% the type was not inconsistent (explicitly or implicitly) but the
+        %% value is invalid
+        {_, _, _, _, _Consistent} ->
             has_consistent(Bad)
     end.
 
@@ -1092,12 +1294,15 @@ has_datatype(Props) ->
 has_allow_mult(Props) ->
     proplists:get_value(allow_mult, Props) /= undefined.
 
+has_w1c(Props) ->
+    proplists:get_value(write_once, Props) /= undefined.
+
+has_hll(Props) ->
+    proplists:get_value(hll_precision, Props) /= undefined.
+
 valid_datatype(Props) ->
     Datatype = proplists:get_value(datatype, Props),
     lists:member(riak_kv_crdt:to_mod(Datatype), ?V2_TOP_LEVEL_TYPES).
-
-has_w1c(Props) ->
-    proplists:get_value(write_once, Props) /= undefined.
 
 valid_w1c(Props) ->
     case proplists:get_value(write_once, Props) of
@@ -1105,6 +1310,16 @@ valid_w1c(Props) ->
             true;
         false ->
             true;
+        _ ->
+            false
+    end.
+
+valid_hll(Props) ->
+    case proplists:get_value(hll_precision, Props) of
+        P when P > 3 andalso P < 17 ->
+            true;
+        P when P < 4 orelse P > 16 ->
+            false;
         _ ->
             false
     end.

@@ -10,7 +10,7 @@
 %% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 %% KIND, either express or implied.  See the License for the
 %% specific language governing permissions and limitations
-%% under the License.    
+%% under the License.
 
 %% Constants used by the raw_http resources
 
@@ -55,6 +55,7 @@
 -define(JSON_EXTRACT, <<"search_extractor">>).
 -define(JSON_EXTRACT_LEGACY, <<"rs_extractfun">>).
 -define(JSON_DATATYPE, <<"datatype">>).
+-define(JSON_HLL_PRECISION, <<"hll_precision">>).
 
 %% Names of HTTP query parameters
 -define(Q_PROPS, "props").
