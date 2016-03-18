@@ -100,7 +100,6 @@ allowed_methods(RD, Ctx) ->
 malformed_request(RD, Ctx) ->
     try
         {SqlType, SQL} = query_from_request(RD),
-        checkpoint("malformed_request SqlType=~p, SQL=~p", [SqlType, SQL]),
         Table = table_from_sql(SQL),
         Mod = riak_ql_ddl:make_module_name(Table),
         {false, RD, Ctx#ctx{sql_type=SqlType,
@@ -315,6 +314,3 @@ to_json({Columns, Rows}) when is_list(Columns), is_list(Rows) ->
                 {<<"rows">>, Rows}]});
 to_json(Other) ->
     mochijson2:encode(Other).
-
-checkpoint(Format, Args) ->
-    lager:log(info, self(), Format, Args).
