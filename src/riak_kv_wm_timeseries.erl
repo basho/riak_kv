@@ -202,10 +202,11 @@ resource_exists(Path, 'GET', RD,
                 {{halt, 500}, InternalResp, Ctx}
         end
     catch
-        _:Reason ->
-            Resp = riak_kv_wm_ts_util:set_error_message("lookup on ~p failed due to ~p",
-                                                        [Path, Reason],
-                                                        RD),
+        throw:{path_error, Reason} ->
+            Resp = riak_kv_wm_ts_util:set_error_message(
+                     "lookup on ~p failed due to ~p",
+                     [Path, Reason],
+                     RD),
             {false, Resp, Ctx}
     end;
 resource_exists(Path, 'DELETE', RD, #ctx{mod=Mod}=Ctx) ->
@@ -216,8 +217,8 @@ resource_exists(Path, 'DELETE', RD, #ctx{mod=Mod}=Ctx) ->
         Key = validate_key(Path, Mod),
         {true, RD, Ctx#ctx{key=Key}}
     catch
-        _:Reason ->
-            Resp = riak_kv_wm_ts_util:set_error_message("lookup on ~p failed due to ~p",
+        throw:{path_error, Reason} ->
+            Resp = riak_kv_wm_ts_util:set_error_message("deletion of ~p failed due to ~p",
                                                         [Path, Reason],
                                                         RD),
             {false, Resp, Ctx}
@@ -273,7 +274,11 @@ delete_resource(RD,  #ctx{table=Table,
               Resp = riak_kv_wm_ts_util:set_json_response(Json, RD),
               {true, Resp, Ctx};
          {error, notfound} ->
-              {{halt, 404}, RD, Ctx}
+             Resp = riak_kv_wm_ts_util:set_error_message(
+                      "resource ~p does not exist - impossible to delete",
+                      [wrq:path(RD)],
+                      RD),
+              {{halt, 404}, Resp, Ctx}
      catch
          _:Reason ->
              lager:log(info, self(), "delete_resource failed: ~p", [Reason]),
@@ -330,7 +335,7 @@ match_path([], []) ->
 match_path([F,V|Path], [{F, Type}|KeyTypes]) ->
     [convert_field_value(Type, V)|match_path(Path, KeyTypes)];
 match_path(Path, _KeyTypes) ->
-    throw(io_lib:format("incorrect path ~p", [Path])).
+    throw({path_error, io_lib:format("incorrect path ~p", [Path])}).
 
 %% @private
 convert_field_value(varchar, V) ->
@@ -349,7 +354,7 @@ convert_field_value(timestamp, V) ->
         GoodValue when GoodValue > 0 ->
             GoodValue;
         _ ->
-            throw(url_key_bad_value)
+            throw({path_error, "incorrect field value"})
     end.
 
 extract_data(RD, Mod) ->

@@ -106,8 +106,16 @@ allowed_methods(RD, Ctx) ->
     {['GET'], RD, Ctx}.
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
-resource_exists(RD, #ctx{mod=Mod} = Ctx) ->
-    {riak_kv_wm_ts_util:table_module_exists(Mod), RD, Ctx}.
+resource_exists(RD, #ctx{mod=Mod,
+                         table=Table} = Ctx) ->
+    case riak_kv_wm_ts_util:table_module_exists(Mod) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Resp = riak_kv_wm_ts_util:set_error_message(
+                     "table ~p does not exist", [Table], RD),
+            {false, Resp, Ctx}
+    end.
 
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
                                 cb_rv_spec([{Encoding::string(), Producer::function()}]).
@@ -120,13 +128,12 @@ encodings_provided(RD, Ctx) ->
                                     cb_rv_spec([{ContentType::string(), Producer::atom()}]).
 %% @doc List the content types available for representing this resource.
 content_types_provided(RD, Ctx) ->
-      {[{"text/html", produce_doc_body}], RD, Ctx}.
+      {[{"application/json", produce_doc_body}], RD, Ctx}.
 
 produce_doc_body(RD, Ctx = #ctx{table = Table, mod=Mod,
                                 client = Client}) ->
     {ok, ReqId} = riak_client:stream_list_keys(
                     {Table, Table}, undefined, Client),
-    lager:log(info, self(), "in produce_doc_body ~p", [Table]),
     {{halt, 200}, wrq:set_resp_body({stream, prepare_stream(ReqId, Table, Mod)}, RD), Ctx}.
 
 prepare_stream(ReqId, Table, Mod) ->
@@ -142,19 +149,19 @@ stream_keys(ReqId, Table, Mod) ->
             stream_keys(ReqId, Table, Mod);
         {ReqId, From, {keys, Keys}} ->
             _ = riak_kv_keys_fsm:ack_keys(From),
-            {ts_keys_to_html(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
+            {ts_keys_to_json(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, {keys, Keys}} ->
-            {ts_keys_to_html(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
+            {ts_keys_to_json(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, done} ->
             {<<"</html>">>, done};
         {ReqId, {error, timeout}} ->
             {mochijson2:encode({struct, [{error, timeout}]}), done};
-        Weird ->
-            lager:log(info, self(), "stream_keys got totally Weird=~p", [Weird]),
+        _Weird ->
+            %% @todo: should we log this?
             stream_keys(ReqId, Table, Mod)
     end.
 
-ts_keys_to_html(EncodedKeys, Table, Mod) ->
+ts_keys_to_json(EncodedKeys, Table, Mod) ->
     BaseUrl = base_url(Table),
     Keys = decode_keys(EncodedKeys),
     KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
@@ -166,14 +173,13 @@ ts_keys_to_html(EncodedKeys, Table, Mod) ->
     %%                          format_url(BaseUrl, KeyTypes, Key)
     %%                  end,
     %%                  Keys),
-    Hrefs = [format_href(URL) || URL <- URLs],
-    list_to_binary(lists:flatten(Hrefs)).
+    JsonList = [ mochijson2:encode([{url, URL}]) || URL <- URLs],
+    list_to_binary(lists:flatten(JsonList)).
 
-format_href(URL) ->
-    io_lib:format("<a href=\"~s\">~s</a>", [URL, URL]).
 
 format_url(BaseUrl, KeyTypes, Key) ->
-    io_lib:format("~s~s", [BaseUrl, key_to_string(Key, KeyTypes)]).
+    list_to_binary(
+      io_lib:format("~s~s", [BaseUrl, key_to_string(Key, KeyTypes)])).
 
 decode_keys(Keys) ->
     [tuple_to_list(sext:decode(A))
