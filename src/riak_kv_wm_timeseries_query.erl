@@ -59,10 +59,8 @@
           table :: 'undefined' | binary(),
           mod   :: 'undefined' | module(),
           method  :: atom(),
-          prefix,       %% string() - prefix for resource uris
           timeout,      %% integer() - passed-in timeout value in ms
           security,     %% security context
-          riak,         %% local | {node(), atom()} - params for riak client
           sql_type,
           compiled_query :: undefined | #ddl_v1{} | #riak_sql_describe_v1{} | #riak_select_v1{},
           result         :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]} |
@@ -78,24 +76,19 @@
 
 
 -spec init(proplists:proplist()) -> {ok, #ctx{}}.
-%% @doc Initialize this resource.  This function extracts the
-%%      'prefix' and 'riak' properties from the dispatch args.
-init(Props) ->
-    {ok, #ctx{prefix = proplists:get_value(prefix, Props),
-              riak = proplists:get_value(riak, Props)}}.
+init(_Props) ->
+    {ok, #ctx{}}.
 
 -spec service_available(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 %% @doc Determine whether or not a connection to Riak
 %%      can be established.
-service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
-    checkpoint("service_available: RD=~p", [RD]),
-    case riak_kv_wm_utils:get_riak_client(
-           RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
-        {ok, _C} ->
+service_available(RD, Ctx) ->
+    case init:get_status() of
+        {started, _} ->
             {true, RD, Ctx};
-        {error, Reason} ->
+        Status ->
             Resp = riak_kv_wm_ts_util:set_error_message("Unable to connect to Riak: ~p",
-                                                        [Reason], RD),
+                                                        [Status], RD),
             {false, Resp, Ctx}
     end.
 
