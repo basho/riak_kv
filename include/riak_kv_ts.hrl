@@ -26,7 +26,7 @@
 %% For dialyzer types
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
-%% the result type of a query, rows means to return all mataching rows, aggregate
+%% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
 -type select_result_type() :: rows | aggregate.
 
@@ -45,8 +45,8 @@
           'SELECT'              :: #riak_sel_clause_v1{},
           'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
           'WHERE'       = []    :: [riak_ql_ddl:filter()],
-          'ORDER BY'    = []    :: [riak_ql_ddl:sorter()],
-          'LIMIT'       = []    :: [riak_ql_ddl:limit()],
+          'ORDER BY'    = []    :: [riak_kv_qry_compiler:sorter()],
+          'LIMIT'       = []    :: [riak_kv_qry_compiler:limit()],
           helper_mod            :: atom(),
           %% will include groups when we get that far
           partition_key = none  :: none | #key_v1{},
@@ -59,7 +59,15 @@
 
 -record(riak_sql_describe_v1,
         {
-          'DESCRIBE' = <<>>  :: binary()
+          'DESCRIBE'    = <<>>  :: binary()
+        }).
+
+-record(riak_sql_insert_v1,
+        {
+          'INSERT'      = <<>>  :: binary(),
+          fields                :: [riak_ql_ddl:field_identifier()],
+          values                :: [[riak_ql_ddl:data_value()]],
+          helper_mod            :: atom()
         }).
 
 -define(SQL_SELECT, #riak_select_v1).

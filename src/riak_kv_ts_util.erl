@@ -37,6 +37,8 @@
          build_sql_record/3,
          sql_record_to_tuple/1
         ]).
+-export([explain_query/1, explain_query/2]).
+-export([explain_query_print/1]).
 
 %% NOTE on table_to_bucket/1: Clients will work with table
 %% names. Those names map to a bucket type/bucket name tuple in Riak,
@@ -77,7 +79,23 @@ build_sql_record(select, SQL, Cover) ->
     end;
 build_sql_record(describe, SQL, _Cover) ->
     D = proplists:get_value(identifier, SQL),
-    {ok, #riak_sql_describe_v1{'DESCRIBE' = D}}.
+    {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
+build_sql_record(insert, SQL, _Cover) ->
+    T = proplists:get_value(table, SQL),
+    case is_binary(T) of
+        true ->
+            Mod = riak_ql_ddl:make_module_name(T),
+            %% If columns are not specified, all columns are implied
+            F = riak_ql_ddl:insert_sql_columns(Mod, proplists:get_value(fields, SQL, [])),
+            V = proplists:get_value(values, SQL),
+            {ok, #riak_sql_insert_v1{'INSERT'   = T,
+                                     fields     = F,
+                                     values     = V,
+                                     helper_mod = Mod
+                                    }};
+        false ->
+            {error, <<"Must provide exactly one table name">>}
+    end.
 
 
 %% Useful key extractors for functions (e.g., in get or delete code
@@ -98,10 +116,11 @@ table_to_bucket(Table) when is_binary(Table) ->
     {Table, Table}.
 
 
--spec queried_table(#riak_sql_describe_v1{} | ?SQL_SELECT{}) -> binary().
+-spec queried_table(#riak_sql_describe_v1{} | ?SQL_SELECT{} | #riak_sql_insert_v1{}) -> binary().
 %% Extract table name from various sql records.
 queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
-queried_table(?SQL_SELECT{'FROM' = Table})               -> Table.
+queried_table(?SQL_SELECT{'FROM' = Table})               -> Table;
+queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table.
 
 
 -spec get_table_ddl(binary()) ->
@@ -236,6 +255,94 @@ make_ts_keys(CompoundKey, DDL = #ddl_v1{local_key = #key_v1{ast = LKParams},
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
 
+%% Print the query explanation to the shell.
+explain_query_print(QueryString) ->
+    explain_query_print2(1, explain_query(QueryString)).
+
+explain_query_print2(_, []) ->
+    ok;
+explain_query_print2(Index, [{Start, End, Filter}|Tail]) ->
+    io:format("SUB QUERY ~p~n~s ~s~n~s~n",
+        [Index,Start,filter_to_string(Filter),End]),
+    explain_query_print2(Index+1, Tail).
+
+%% Show some debug info about how a query is compiled into sub queries
+%% and what key ranges are created.
+explain_query(QueryString) ->
+    {ok, ?SQL_SELECT{ 'FROM' = Table } = Select} =
+        explain_compile_query(QueryString),
+    {ok, _Mod, DDL} = get_table_ddl(Table),
+    explain_query(DDL, Select).
+
+%% Explain a query using the ddl and select records. The select can be a query
+%% string.
+%%
+%% Have a flexible API because it is a debugging function.
+explain_query(DDL, ?SQL_SELECT{} = Select) ->
+    {ok, SubQueries} = riak_kv_qry_compiler:compile(DDL, Select, 10000),
+    [explain_sub_query(SQ) || SQ <- SubQueries];
+explain_query(DDL, QueryString) ->
+    {ok, Select} = explain_compile_query(QueryString),
+    explain_query(DDL, Select).
+
+%%
+explain_compile_query(QueryString) ->
+    {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(QueryString)),
+    build_sql_record(select, Q, undefined).
+
+%%
+explain_sub_query(#riak_select_v1{ 'WHERE' = SubQueryWhere }) ->
+    {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
+    {_, EndKey1} = lists:keyfind(endkey, 1, SubQueryWhere),
+    {_, Filter} = lists:keyfind(filter, 1, SubQueryWhere),
+    explain_query_keys(StartKey1, EndKey1, Filter).
+
+%%
+explain_query_keys(StartKey1, EndKey1, Filter) ->
+    StartKey2 = [[key_element_to_string(V), $/] || {_,_,V} <- StartKey1],
+    EndKey2 = [[key_element_to_string(V), $/] || {_,_,V} <- EndKey1],
+    case lists:keyfind(start_inclusive, 1, StartKey1) of
+        {start_inclusive,true} ->
+            StartKey3 = [">= ", StartKey2];
+        _ ->
+            StartKey3 = [">  ", StartKey2]
+    end,
+    case lists:keyfind(end_inclusive, 1, EndKey1) of
+        {end_inclusive,true} ->
+            EndKey3 = ["<= ", EndKey2];
+        _ ->
+            EndKey3 = ["<  ", EndKey2]
+    end,
+    {StartKey3, EndKey3, Filter}.
+
+%%
+key_element_to_string(V) when is_binary(V) -> varchar_quotes(V);
+key_element_to_string(V) when is_float(V) -> mochinum:digits(V);
+key_element_to_string(V) -> io_lib:format("~p", [V]).
+
+%%
+filter_to_string([]) ->
+    "NO FILTER";
+filter_to_string(Filter) ->
+    ["FILTER ", filter_to_string2(Filter)].
+
+%%
+filter_to_string2({const,V}) ->
+    key_element_to_string(V);
+filter_to_string2({field,V,_}) ->
+    V;
+filter_to_string2({Op, A, B}) ->
+    [filter_to_string2(A), op_to_string(Op), filter_to_string2(B)].
+
+%%
+op_to_string(and_) -> " AND ";
+op_to_string(or_) -> " OR ";
+op_to_string(Op) -> " " ++ atom_to_list(Op) ++ " ".
+
+%%
+varchar_quotes(V) ->
+    <<"'", V/binary, "'">>.
+
 %%%
 %%% TESTS
 %%%
@@ -263,30 +370,30 @@ make_ts_keys_1_test() ->
     ).
 
 % a two element key, still using the table definition field order
-% make_ts_keys_2_test() ->
-%     {DDL, Mod} = helper_compile_def_to_module(
-%         "CREATE TABLE table1 ("
-%         "a SINT64 NOT NULL, "
-%         "b TIMESTAMP NOT NULL, "
-%         "c SINT64 NOT NULL, "
-%         "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
-%     ?assertEqual(
-%         {ok, {{1,0}, {1,2}}},
-%         make_ts_keys([1,2], DDL, Mod)
-%     ).
+make_ts_keys_2_test() ->
+    {DDL, Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table1 ("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
+    ?assertEqual(
+        {ok, {{1,0}, {1,2}}},
+        make_ts_keys([1,2], DDL, Mod)
+    ).
 
-% make_ts_keys_3_test() ->
-%     {DDL, Mod} = helper_compile_def_to_module(
-%         "CREATE TABLE table2 ("
-%         "a SINT64 NOT NULL, "
-%         "b SINT64 NOT NULL, "
-%         "c TIMESTAMP NOT NULL, "
-%         "d SINT64 NOT NULL, "
-%         "PRIMARY KEY  ((d,a,quantum(c, 1, 's')), d,a,c))"),
-%     ?assertEqual(
-%         {ok, {{10,20,0}, {10,20,1}}},
-%         make_ts_keys([10,20,1], DDL, Mod)
-%     ).
+make_ts_keys_3_test() ->
+    {DDL, Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table2 ("
+        "a SINT64 NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "c TIMESTAMP NOT NULL, "
+        "d SINT64 NOT NULL, "
+        "PRIMARY KEY  ((d,a,quantum(c, 1, 's')), d,a,c))"),
+    ?assertEqual(
+        {ok, {{10,20,0}, {10,20,1}}},
+        make_ts_keys([10,20,1], DDL, Mod)
+    ).
 
 make_ts_keys_4_test() ->
     {DDL, Mod} = helper_compile_def_to_module(
