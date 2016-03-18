@@ -38,6 +38,18 @@
                         {filter, [term()]} |
                         {start_inclusive, boolean()} |
                         {end_inclusive, boolean()}].
+-type combinator()       :: [binary()].
+-type limit()            :: any().
+-type operator()         :: [binary()].
+-type sorter()           :: term().
+
+
+-export_type([
+    combinator/0,
+    limit/0,
+    operator/0,
+    sorter/0
+]).
 -export_type([where_props/0]).
 
 %% 3rd argument is undefined if we should not be concerned about the
@@ -211,7 +223,7 @@ get_col_names2(_, Name) ->
          }).
 
 %%
--spec select_column_clause_folder(#ddl_v1{}, selection(),
+-spec select_column_clause_folder(#ddl_v1{}, riak_ql_ddl:selection(),
                                   {set(), #riak_sel_clause_v1{}}) ->
                 {set(), #riak_sel_clause_v1{}}.
 select_column_clause_folder(DDL, ColAST1,
@@ -294,7 +306,7 @@ compile_select_col(DDL, Select) ->
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
--spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}|{return_state, integer()}) ->
+-spec compile_select_col_stateless(#ddl_v1{}, riak_ql_ddl:selection()|{Op::atom(), riak_ql_ddl:selection(), riak_ql_ddl:selection()}|{return_state, integer()}) ->
        compiled_select().
 compile_select_col_stateless(_, {identifier, [<<"*">>]}) ->
     fun(Row, _) -> Row end;
@@ -319,8 +331,8 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
     compile_select_col_stateless2(Op, Arg_a, Arg_b).
 
 %%
--spec infer_col_type(#ddl_v1{}, selection(), Errors1::[any()]) ->
-        {Type::simple_field_type() | error, Errors2::[any()]}.
+-spec infer_col_type(#ddl_v1{}, riak_ql_ddl:selection(), Errors1::[any()]) ->
+        {riak_ql_ddl:simple_field_type() | error, Errors2::[any()]}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
     {Type, Errors};
@@ -366,15 +378,15 @@ pull_from_row(N, Row) ->
     lists:nth(N, Row).
 
 %%
--spec extract_stateful_functions(selection(), integer()) ->
-        {selection() | {return_state, integer()}, [selection_function()]}.
+-spec extract_stateful_functions(riak_ql_ddl:selection(), integer()) ->
+        {riak_ql_ddl:selection() | {return_state, integer()}, [riak_ql_ddl:selection_function()]}.
 extract_stateful_functions(Selection1, FinaliserLen) when is_integer(FinaliserLen) ->
     {Selection2, Fns} = extract_stateful_functions2(Selection1, FinaliserLen, []),
     {Selection2, lists:reverse(Fns)}.
 
 %% extract stateful functions from the selection
--spec extract_stateful_functions2(selection(), integer(), [selection_function()]) ->
-        {selection() | {finalise_aggregation, FnName::atom(), integer()}, [selection_function()]}.
+-spec extract_stateful_functions2(riak_ql_ddl:selection(), integer(), [riak_ql_ddl:selection_function()]) ->
+        {riak_ql_ddl:selection() | {finalise_aggregation, FnName::atom(), integer()}, [riak_ql_ddl:selection_function()]}.
 extract_stateful_functions2({Op, ArgA1, ArgB1}, FinaliserLen, Fns1) ->
     {ArgA2, Fns2} = extract_stateful_functions2(ArgA1, FinaliserLen, Fns1),
     {ArgB2, Fns3} = extract_stateful_functions2(ArgB1, FinaliserLen, Fns2),
@@ -506,7 +518,7 @@ col_index_and_type_of(Fields, ColumnName) ->
     end.
 
 %%
--spec expand_where(filter(), #key_v1{}, integer()) ->
+-spec expand_where(riak_ql_ddl:filter(), #key_v1{}, integer()) ->
         [where_props()] | {error, any()}.
 expand_where(Where, PartitionKey, MaxSubQueries) ->
     case find_quantum_field_index_in_key(PartitionKey) of
@@ -534,7 +546,7 @@ find_quantum_field_index_in_key2([_|Tail], Index) ->
     find_quantum_field_index_in_key2(Tail, Index+1).
 
 %%
-hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where) ->
+hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
                            {element(3, lists:nth(QIndex, List)), E};
                       ({endkey,   List}, {S, _E}) ->
@@ -542,23 +554,34 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where) ->
                       (_, {S, E})  ->
                            {S, E}
                    end,
-    {Min, Max} = lists:foldl(GetMaxMinFun, {"", ""}, Where),
-    EffMin = case proplists:get_value(start_inclusive, Where, true) of
-                 true  -> Min;
-                 false -> Min + 1
-             end,
-    EffMax = case proplists:get_value(end_inclusive, Where, false) of
-                 true  -> Max + 1;
-                 false -> Max
-             end,
+    {Min1, Max1} = lists:foldl(GetMaxMinFun, {"", ""}, Where1),
+    %% if the start range is not inclusive then add one and remove the
+    %% start_inclusive flag. This is so that the query start key hashes to the
+    %% correct quanta when it is on the boundary since the start_inclusive flag
+    %% is not taken into account in the partition hashing. For example given a
+    %% one second quantum `mytime > 1999` should return keys with mytime greater
+    %% than 2000 but will hash to the quantum before 2000 and receive no results
+    %% from it.
+    case lists:keytake(start_inclusive, 1, Where1) of
+        {value, {start_inclusive, false}, WhereX}  ->
+            Where2 = WhereX,
+            Min2 = Min1 + 1;
+        _ ->
+            Where2 = Where1,
+            Min2 = Min1
+    end,
+    Max2 =
+        case proplists:get_value(end_inclusive, Where2, false) of
+            true  -> Max1 + 1;
+            false -> Max1
+        end,
     {NoSubQueries, Boundaries} =
-        riak_ql_quanta:quanta(EffMin, EffMax, QSize, QUnit),
+        riak_ql_quanta:quanta(Min2, Max2, QSize, QUnit),
     if
-        NoSubQueries == 1 ->
-            [Where];
-        NoSubQueries > 1 andalso (MaxSubQueries == undefined orelse
-                                  NoSubQueries =< MaxSubQueries) ->
-            make_wheres(Where, QField, Min, Max, Boundaries);
+        MaxSubQueries == undefined orelse NoSubQueries =< MaxSubQueries ->
+            %% use the maximum value that has not been incremented, we still use
+            %% the end_inclusive flag because the end key is not used to hash
+            make_wheres(Where2, QField, Min2, Max1, Boundaries);
         NoSubQueries > MaxSubQueries ->
             {error, {too_many_subqueries, NoSubQueries}}
     end.
@@ -1098,19 +1121,14 @@ simplest_test() ->
     Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'San Francisco'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
-    [Where1] =
-        test_data_where_clause(<<"San Francisco">>, <<"user_1">>, [{3000, 5000}]),
-    Where2 = Where1 ++ [{start_inclusive, false}],
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where2,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    [ExpectedWhere] =
+        test_data_where_clause(<<"San Francisco">>, <<"user_1">>, [{3001, 5000}]),
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 simple_with_filter_1_test() ->
     {ok, Q} = get_query(
@@ -1122,23 +1140,18 @@ simple_with_filter_1_test() ->
     DDL = get_standard_ddl(),
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    Where = [
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
+    ExpectedWhere = [
              StartKey,
              EndKey,
-             {filter, {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}},
-             {start_inclusive, false}
+             {filter, {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}}
             ],
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 simple_with_filter_2_test() ->
     {ok, Q} = get_query(
@@ -1151,21 +1164,17 @@ simple_with_filter_2_test() ->
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
         test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    Where = [
+    ExpectedWhere = [
              StartKey,
              EndKey,
              {filter,   {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}}
             ],
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 simple_with_filter_3_test() ->
     {ok, Q} = get_query(
@@ -1177,24 +1186,21 @@ simple_with_filter_3_test() ->
     DDL = get_standard_ddl(),
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
     PK = get_standard_pk(),
     LK = get_standard_lk(),
-    Where = [
+    ExpectedWhere = [
              StartKey,
              EndKey,
              {filter, {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}},
-             {start_inclusive, false},
-             {end_inclusive,   true}
+             {end_inclusive, true}
             ],
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 simple_with_2_field_filter_test() ->
     {ok, Q} = get_query(
@@ -1207,10 +1213,8 @@ simple_with_2_field_filter_test() ->
     DDL = get_standard_ddl(),
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    Where = [
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
+    ExpectedWhere = [
              StartKey,
              EndKey,
              {filter,
@@ -1218,17 +1222,14 @@ simple_with_2_field_filter_test() ->
                {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}},
                {'=', {field, <<"temperature">>, varchar}, {const, <<"yelp">>}}
               }
-             },
-             {start_inclusive, false}
+             }
             ],
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 complex_with_4_field_filter_test() ->
     Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'Scotland' and extra = 1 and (weather = 'yankee' or (temperature = 'yelp' and geohash = 'erko'))",
@@ -1236,8 +1237,8 @@ complex_with_4_field_filter_test() ->
     DDL = get_long_ddl(),
     true = is_query_valid(DDL, Q),
     [[Start, End | _]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    Where2 = [
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
+    ExpectedWhere = [
               Start, End,
               {filter,
                {and_,
@@ -1249,19 +1250,14 @@ complex_with_4_field_filter_test() ->
                 },
                 {'=', {field, <<"extra">>, sint64}, {const, 1}}
                }
-              },
-              {start_inclusive, false}
+              }
              ],
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where2,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 complex_with_boolean_rewrite_filter_test() ->
     DDL = get_long_ddl(),
@@ -1272,10 +1268,8 @@ complex_with_boolean_rewrite_filter_test() ->
                 "AND (myboolean = False OR myboolean = tRue)"),
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    Where = [
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
+    ExpectedWhere = [
              StartKey,
              EndKey,
              {filter,
@@ -1283,18 +1277,14 @@ complex_with_boolean_rewrite_filter_test() ->
                {'=', {field, <<"myboolean">>, boolean}, {const, false}},
                {'=', {field, <<"myboolean">>, boolean}, {const, true}}
               }
-             },
-             {start_inclusive, false}
+             }
             ],
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable  = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK
-                        }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 %% got for 3 queries to get partition ordering problems flushed out
 simple_spanning_boundary_test() ->
@@ -1433,23 +1423,12 @@ key_is_all_timestamps_test() ->
                 "SELECT time_a FROM GeoCheckin "
                 "WHERE time_c > 2999 AND time_c < 5000 "
                 "AND time_a = 10 AND time_b = 15"),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{
-                'WHERE' = [
-                           {startkey, [
-                                       {<<"time_a">>, timestamp, 10},
-                                       {<<"time_b">>, timestamp, 15},
-                                       {<<"time_c">>, timestamp, 2999}
-                                      ]},
-                           {endkey, [
-                                     {<<"time_a">>, timestamp, 10},
-                                     {<<"time_b">>, timestamp, 15},
-                                     {<<"time_c">>, timestamp, 5000}
-                                    ]},
-                           {filter, []},
-                           {start_inclusive, false}]
-               }]},
-       compile(DDL, Q, 5)
+    {ok, [?SQL_SELECT{ 'WHERE' = Where }]} = compile(DDL, Q, 5),
+    ?assertEqual(
+        [{startkey, [{<<"time_a">>,timestamp,10}, {<<"time_b">>,timestamp,15}, {<<"time_c">>,timestamp,3000} ]},
+         {endkey,   [{<<"time_a">>,timestamp,10}, {<<"time_b">>,timestamp,15}, {<<"time_c">>,timestamp,5000} ]},
+         {filter, []} ],
+        Where
       ).
 
 duplicate_lower_bound_filter_not_allowed_test() ->
@@ -2106,10 +2085,9 @@ flexible_keys_1_test() ->
           "SELECT * FROM tab4 WHERE a > 0 AND a < 1000 AND a1 = 1"),
     {ok, [Select]} = compile(DDL, Q, 100),
     ?assertEqual(
-        [{startkey,[{<<"a1">>,sint64,1}, {<<"a">>,timestamp,0}]},
+        [{startkey,[{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1}]},
           {endkey, [{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1000}]},
-          {filter,[]},
-          {start_inclusive,false}],
+          {filter,[]}],
         Select#riak_select_v1.'WHERE'
     ).
 

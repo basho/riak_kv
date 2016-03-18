@@ -1024,7 +1024,7 @@ bucket_type_and_table_error_local_key_test() ->
         "user   varchar   not null, ",
         "time   timestamp not null, ",
         "other  varchar   not null, ",
-        "PRIMARY KEY ((series, user, quantum(time, 15, m)), seriesd, user, time, other))">>,
+        "PRIMARY KEY ((series, user, quantum(time, 15, m)), seriesTYPO, user, time))">>,
     JSON = json_props([{bucket_type, my_type},
                        {table_def, TableDef}]),
     ?assertEqual(
