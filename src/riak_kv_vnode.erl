@@ -842,19 +842,20 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
-%% For now, ignore async_put
+%% For now, ignore async_put. This is currently TS-only, and TS
+%% supports neither AAE nor YZ.
 handle_command(?KV_W1C_BATCH_PUT_REQ{objs=Objs, type=Type},
                 From, State=#state{mod=Mod, idx=Idx, modstate=ModState}) ->
     StartTS = os:timestamp(),
     Context = {w1c_batch_put, From, Type, Objs, StartTS},
     case Mod:batch_put(Context, Objs, [], ModState) of
         {ok, UpModState} ->
-            lists:foreach(
-              fun({{Bucket, Key}, EncodedVal}) ->
-                      update_hashtree(Bucket, Key, EncodedVal, State),
-                      ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx)
-              end,
-              Objs),
+            %% When we support AAE, be sure to call a batch version of
+            %% `update_hashtree' instead of iterating over each
+            %% element of Objs.
+            %%
+            %% riak_kv_index_hashtree:insert/async_insert can
+            %% take a list
             {reply, ?KV_W1C_BATCH_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_BATCH_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
