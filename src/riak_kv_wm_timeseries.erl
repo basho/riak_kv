@@ -140,8 +140,8 @@ malformed_request(RD, Ctx) ->
         Ctx2 = extract_params(wrq:req_qs(RD), Ctx),
         malformed_request(wrq:path_tokens(RD), RD, Ctx2)
     catch
-        throw:ParameterError ->
-            Resp = riak_kv_wm_ts_util:set_error_message("parameter error: ~p", [ParameterError], RD),
+        throw:{parameter_error, Error} ->
+            Resp = riak_kv_wm_ts_util:set_error_message("parameter error: ~p", [Error], RD),
             {true, Resp, Ctx}
     end.
 
@@ -303,10 +303,12 @@ extract_params([{"timeout", TimeoutStr}], Ctx) ->
                 options = [{timeout, Timeout}]}
     catch
         _:_ ->
-            throw(riak_kv_wm_ts_util:flat_format("timeout not an integer value: ~s", [TimeoutStr]))
+            Reason = io_lib:format("timeout not an integer value: ~s", [TimeoutStr]),
+            throw({parameter_error, Reason})
     end;
 extract_params(Params, _Ctx) ->
-    throw(riak_kv_wm_ts_util:flat_format("incorrect paramters: ~p", [Params])).
+    Reason = io_lib:format("incorrect paramters: ~p", [Params]),
+    throw({parameter_error, Reason}).
 
 validate_key(Path, Mod) ->
     UnquotedPath = lists:map(fun mochiweb_util:unquote/1, Path),
