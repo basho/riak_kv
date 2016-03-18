@@ -108,15 +108,18 @@ malformed_request(RD, Ctx) ->
                             mod=Mod}}
     catch
         throw:{query, Reason} ->
-            lager:log(info, self(), "try in malformed_request backfired: ~p", [Reason]),
             Response = riak_kv_wm_ts_util:set_error_message("bad query: ~p", [Reason], RD),
-            {true, Response, Ctx}
+            {true, Response, Ctx};
+        throw:{unsupported_sql_type, Type} ->
+            Response = riak_kv_wm_ts_util:set_error_message(
+                         "The ~p query type is not supported over the HTTP API yet",
+                         [Type], RD),
+            {{halt, 503}, Response, Ctx}
     end.
 
 -spec is_authorized(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()|string()|halt()).
 is_authorized(RD, #ctx{sql_type=SqlType, table=Table}=Ctx) ->
     Call = call_from_sql_type(SqlType),
-    lager:log(info, self(), "is_authorized type:~p", [SqlType]),
     case riak_kv_wm_ts_util:authorize(Call, Table, RD) of
         ok ->
             {true, RD, Ctx};
@@ -170,7 +173,6 @@ resource_exists(RD, #ctx{sql_type=Type,
     Res = riak_kv_wm_ts_util:table_module_exists(Mod),
     {Res, RD, Ctx};
 resource_exists(RD, Ctx) ->
-    lager:log(info, self(), "resource_exists default case Ctx=~p", [Ctx]),
     {false, RD, Ctx}.
 
 -spec post_is_create(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
@@ -238,7 +240,6 @@ process_post(RD, #ctx{sql_type=select,
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 query_from_request(RD) ->
     QueryStr = query_string_from_request(RD),
-    lager:log(info, self(), "query_from_request: ~p", [QueryStr]),
     compile_query(QueryStr).
 
 query_string_from_request(RD) ->
@@ -260,7 +261,9 @@ compile_query(QueryStr) ->
         {Type, Compiled} when Type==select; Type==describe ->
             {ok, SQL} =  riak_kv_ts_util:build_sql_record(
                            Type, Compiled, undefined),
-            {Type, SQL}
+            {Type, SQL};
+        {UnsupportedType, _ } ->
+            throw({unsupported_sql_type, UnsupportedType})
     end.
 
 %% @todo: should really be in riak_ql somewhere
