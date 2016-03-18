@@ -183,11 +183,16 @@ start(_Type, _StartArgs) ->
                                           encode_zlib),
 
             riak_core_capability:register({riak_kv, crdt},
-                                          [?TOP_LEVEL_TYPES, [pncounter], []],
+                                          [?TOP_LEVEL_TYPES,
+                                           ?V2_TOP_LEVEL_TYPES,
+                                           ?V1_TOP_LEVEL_TYPES,
+                                           []],
                                           []),
 
             riak_core_capability:register({riak_kv, crdt_epoch_versions},
-                                          [?E2_DATATYPE_VERSIONS, ?E1_DATATYPE_VERSIONS],
+                                          [?E3_DATATYPE_VERSIONS,
+                                           ?E2_DATATYPE_VERSIONS,
+                                           ?E1_DATATYPE_VERSIONS],
                                           ?E1_DATATYPE_VERSIONS),
 
             riak_core_capability:register({riak_kv, put_fsm_ack_execute},

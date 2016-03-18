@@ -160,6 +160,7 @@
 -type vnodeid() :: binary().
 -type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
 
+
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
 
@@ -192,7 +193,7 @@
                   robj :: term(),
                   index_specs=[] :: [{index_op(), binary(), index_value()}],
                   reqid :: non_neg_integer(),
-                  bprops :: maybe_improper_list(),
+                  bprops :: riak_kv_bucket:props(),
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
                   readrepair=false :: boolean(),
