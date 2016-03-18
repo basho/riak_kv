@@ -141,10 +141,6 @@ forbidden(RD, Ctx) ->
             {false, RD, Ctx}
     end.
 
-
-
-
-
 -spec content_types_provided(#wm_reqdata{}, #ctx{}) ->
                                     cb_rv_spec([{ContentType::string(), Producer::atom()}]).
 content_types_provided(RD, Ctx) ->
@@ -160,8 +156,7 @@ encodings_provided(RD, Ctx) ->
 -spec content_types_accepted(#wm_reqdata{}, #ctx{}) ->
                                     cb_rv_spec([{ContentType::string(), Acceptor::atom()}]).
 content_types_accepted(RD, Ctx) ->
-%% @todo: if we end up without a body in the request this function should be deleted.
-    {[], RD, Ctx}.
+    {["text/plain"], RD, Ctx}.
 
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
@@ -243,11 +238,11 @@ query_from_request(RD) ->
     compile_query(QueryStr).
 
 query_string_from_request(RD) ->
-    case wrq:get_qs_value("query", RD) of
+    case wrq:req_body(RD) of
         undefined ->
-            throw({query, "no query key in query string"});
+            throw({query, "no query in body"});
         Str ->
-            Str
+            binary_to_list(Str)
     end.
 
 compile_query(QueryStr) ->
