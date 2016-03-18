@@ -108,7 +108,7 @@ malformed_request(RD, Ctx) ->
                             mod=Mod}}
     catch
         throw:{query, Reason} ->
-            Response = riak_kv_wm_ts_util:set_error_message("bad query: ~p", [Reason], RD),
+            Response = riak_kv_wm_ts_util:set_error_message("bad query: ~s", [Reason], RD),
             {true, Response, Ctx};
         throw:{unsupported_sql_type, Type} ->
             Response = riak_kv_wm_ts_util:set_error_message(
@@ -172,12 +172,21 @@ resource_exists(RD, #ctx{sql_type=ddl,
             {{halt, 409}, Resp, Ctx}
     end;
 resource_exists(RD, #ctx{sql_type=Type,
-                         mod=Mod}=Ctx) when Type == describe;
+                         mod=Mod,
+                         table=Table}=Ctx) when Type == describe;
                                                 Type == select    ->
-    Res = riak_kv_wm_ts_util:table_module_exists(Mod),
-    {Res, RD, Ctx};
+    case riak_kv_wm_ts_util:table_module_exists(Mod) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Resp = riak_kv_wm_ts_util:set_error_message("table ~p does not exist",
+                                                        [Table], RD),
+            {false, Resp, Ctx}
+    end;
 resource_exists(RD, Ctx) ->
-    {false, RD, Ctx}.
+    Resp = riak_kv_wm_ts_util:set_error_message("no such resource ~p",
+                                                wrq:path(RD), RD),
+    {false, Resp, Ctx}.
 
 -spec post_is_create(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 post_is_create(RD, Ctx) ->
@@ -321,3 +330,6 @@ to_json({Columns, Rows}) when is_list(Columns), is_list(Rows) ->
                 {<<"rows">>, Rows}]});
 to_json(Other) ->
     mochijson2:encode(Other).
+
+%% log(Format, Args) ->
+%%     lager:log(info, self(), Format, Args).
