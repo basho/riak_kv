@@ -159,9 +159,18 @@ content_types_accepted(RD, Ctx) ->
     {["text/plain"], RD, Ctx}.
 
 
--spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
-resource_exists(RD, #ctx{sql_type=ddl}=Ctx) ->
-    {true, RD, Ctx};
+-spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()|halt()).
+resource_exists(RD, #ctx{sql_type=ddl,
+                         mod=Mod,
+                         table=Table}=Ctx) ->
+    case riak_kv_wm_ts_util:table_module_exists(Mod) of
+        false ->
+            {true, RD, Ctx};
+        true ->
+            Resp = riak_kv_wm_ts_util:set_error_message("table ~p already exists",
+                                                        [Table], RD),
+            {{halt, 409}, Resp, Ctx}
+    end;
 resource_exists(RD, #ctx{sql_type=Type,
                          mod=Mod}=Ctx) when Type == describe;
                                                 Type == select    ->
