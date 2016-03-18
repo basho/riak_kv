@@ -24,7 +24,6 @@
 
 -export([table_from_request/1]).
 -export([utf8_to_binary/1]).
--export([flat_format/2]).
 -export([set_text_resp_header/2]).
 -export([set_error_message/3]).
 -export([set_json_response/2]).
@@ -61,7 +60,9 @@ set_text_resp_header(IoList, RD) ->
        "Content-Type", "text/plain", wrq:append_to_response_body(IoList,RD)).
 
 set_error_message(Format, Args, RD) ->
-    set_text_resp_header(flat_format(Format, Args), RD).
+    Str = flat_format(Format, Args),
+    Json = mochijson2:encode([{error, list_to_binary(Str)}]),
+    set_json_response(Json, RD).
 
 set_json_response(Json, RD) ->
      wrq:set_resp_header("Content-Type", "application/json",
