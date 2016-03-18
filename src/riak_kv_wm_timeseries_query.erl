@@ -94,7 +94,7 @@ service_available(RD, Ctx) ->
 
 -spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
 allowed_methods(RD, Ctx) ->
-    {['GET', 'POST'], RD, Ctx}.
+    {['POST'], RD, Ctx}.
 
 -spec malformed_request(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 malformed_request(RD, Ctx) ->
