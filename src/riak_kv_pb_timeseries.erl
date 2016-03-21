@@ -58,7 +58,7 @@
 -define(E_BAD_QUERY,         1018).
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
--define(E_DELETE_NOTFOUND,   1021).
+-define(E_NOTFOUND,          1021).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -74,7 +74,7 @@
 -type ts_responses() :: #tsputresp{} |
                         #tsdelresp{} | #tsgetresp{} | #tslistkeysresp{} | #tsqueryresp{} |
                         #rpberrorresp{}.
--type ts_query_types() :: #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
+-type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
                           #riak_sql_insert_v1{}.
 
 -type process_retval() :: {reply, RpbOrTsMessage::tuple(), #state{}}.
@@ -131,15 +131,15 @@ decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
             riak_kv_ts_util:build_sql_record(describe, SQL, Cover);
         {insert, SQL} ->
             riak_kv_ts_util:build_sql_record(insert, SQL, Cover);
-        {ddl, DDL} ->
-            {ok, DDL};
+        {ddl, DDL, WithProperties} ->
+            {ok, {DDL, WithProperties}};
         Other ->
             Other
     end.
 
 -spec decode_query_permissions(ts_query_types()) ->
                                       {string(), binary()}.
-decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
+decode_query_permissions({?DDL{table = NewBucketType}, _WithProps}) ->
     {"riak_kv.ts_create_table", NewBucketType};
 decode_query_permissions(?SQL_SELECT{'FROM' = Table}) ->
     {"riak_kv.ts_query", Table};
@@ -180,9 +180,9 @@ process(M = #tscoveragereq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tscoveragereq/4, M, State);
 
 %% this is tsqueryreq, subdivided per query type in its SQL
-process(DDL = #ddl_v1{}, State) ->
+process({DDL = ?DDL{}, WithProperties}, State) ->
     %% the only one that doesn't require an activated table
-    create_table(DDL, State);
+    create_table({DDL, WithProperties}, State);
 
 process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
@@ -226,16 +226,33 @@ process_stream({ReqId, Error}, ReqId,
 %% create_table, the only function for which we don't do
 %% check_table_and_call
 
--spec create_table(#ddl_v1{}, #state{}) ->
+-spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
                           {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
-create_table(DDL = #ddl_v1{table = Table}, State) ->
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
-    Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
-    case riak_core_bucket_type:create(Table, Props2) of
-        ok ->
-            wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
-        {error, Reason} ->
-            {reply, table_create_fail_response(Table, Reason), State}
+create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, WithProps),
+    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
+        {bad_linkfun_modfun, {M, F}} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format(
+                               "Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F])),
+             State};
+        {bad_linkfun_bkey, {B, K}} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format(
+                               "Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K])),
+             State};
+        {bad_chash_keyfun, {M, F}} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format(
+                               "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F])),
+             State};
+        Props2 ->
+            case riak_core_bucket_type:create(Table, Props2) of
+                ok ->
+                    wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
+                {error, Reason} ->
+                    {reply, table_create_fail_response(Table, Reason), State}
+            end
     end.
 
 wait_until_active(Table, State, 0) ->
@@ -456,7 +473,7 @@ put_data(Data, Table, Mod) when is_binary(Table) ->
 -spec partition_data(Data :: list(term()),
                      Bucket :: {binary(), binary()},
                      BucketProps :: proplists:proplist(),
-                     DDL :: #ddl_v1{},
+                     DDL :: ?DDL{},
                      Mod :: module()) ->
                             list(tuple(chash:index(), list(term()))).
 partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
@@ -529,7 +546,7 @@ sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
-            {reply, tsgetresp, State};
+            {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
     end.
@@ -581,7 +598,7 @@ sub_tsdelreq(Mod, DDL, #tsdelreq{table = Table,
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
-            {reply, make_rpberrresp(?E_DELETE_NOTFOUND, "notfound"), State};
+            {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
         {error, Reason} ->
             {reply, failed_delete_response(Reason), State}
     end.
@@ -602,7 +619,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
         {ok, ReqId} ->
             ColumnInfo =
                 [Mod:get_field_type(N)
-                 || #param_v1{name = N} <- DDL#ddl_v1.local_key#key_v1.ast],
+                 || #param_v1{name = N} <- DDL?DDL.local_key#key_v1.ast],
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
                                                  column_info = ColumnInfo}};
         {error, Reason} ->
@@ -804,7 +821,7 @@ make_tsquery_resp(Mod, SQL = #riak_sql_insert_v1{}, _Data) ->
 %% ---------------------------------------------------
 
 -spec check_table_and_call(Table::binary(),
-                           WorkItem::fun((module(), #ddl_v1{},
+                           WorkItem::fun((module(), ?DDL{},
                                           OrigMessage::tuple(), #state{}) ->
                                                 process_retval()),
                            OrigMessage::tuple(),
@@ -982,17 +999,20 @@ missing_helper_module_not_ts_type_test() ->
 missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
-        missing_helper_module(<<"mytype">>, [{ddl, #ddl_v1{}}])
+        missing_helper_module(<<"mytype">>, [{ddl, ?DDL{}}])
     ).
 
 test_helper_validate_rows_mod() ->
-    riak_ql_ddl_compiler:compile_and_load_from_tmp(
-        riak_ql_parser:parse(riak_ql_lexer:get_tokens(
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
+          riak_ql_lexer:get_tokens(
             "CREATE TABLE mytable ("
             "family VARCHAR NOT NULL,"
             "series VARCHAR NOT NULL,"
             "time TIMESTAMP NOT NULL,"
-            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')), family, series, time))"))).
+            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')),"
+            " family, series, time))")),
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
 
 validate_rows_empty_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),

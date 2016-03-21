@@ -368,9 +368,14 @@ erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
     case {proplists:get_value(?JSON_MOD, Props),
           proplists:get_value(?JSON_FUN, Props)} of
         {Mod, Fun} when is_binary(Mod), is_binary(Fun) ->
-            {linkfun, {modfun,
-                       list_to_existing_atom(binary_to_list(Mod)),
-                       list_to_existing_atom(binary_to_list(Fun))}};
+            try
+                {linkfun, {modfun,
+                           list_to_existing_atom(binary_to_list(Mod)),
+                           list_to_existing_atom(binary_to_list(Fun))}}
+            catch
+                error:badarg ->
+                    throw({bad_linkfun_modfun, {Mod, Fun}})
+            end;
         {undefined, undefined} ->
             case proplists:get_value(?JSON_JSFUN, Props) of
                 Name when is_binary(Name) ->
@@ -380,25 +385,42 @@ erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
                         {struct, Bkey} ->
                             Bucket = proplists:get_value(?JSON_JSBUCKET, Bkey),
                             Key = proplists:get_value(?JSON_JSKEY, Bkey),
-                            %% bomb if malformed
-                            true = is_binary(Bucket) andalso is_binary(Key),
-                            {linkfun, {jsanon, {Bucket, Key}}};
+                            if is_binary(Bucket) andalso is_binary(Key) ->
+                                    {linkfun, {jsanon, {Bucket, Key}}};
+                               el/=se ->
+                                    throw({bad_linkfun_bkey, {Bucket, Key}})
+                            end;
                         Source when is_binary(Source) ->
                             {linkfun, {jsanon, Source}}
                     end
             end
     end;
 erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
-    {chash_keyfun, {list_to_existing_atom(
-                      binary_to_list(
-                        proplists:get_value(?JSON_MOD, Props))),
-                    list_to_existing_atom(
-                      binary_to_list(
-                        proplists:get_value(?JSON_FUN, Props)))}};
+    Mod = proplists:get_value(?JSON_MOD, Props),
+    Fun = proplists:get_value(?JSON_FUN, Props),
+    try
+        {chash_keyfun, {list_to_existing_atom(
+                          binary_to_list(Mod)),
+                        list_to_existing_atom(
+                          binary_to_list(Fun))}}
+    catch
+        error:badarg ->
+            throw({bad_chash_keyfun, {Mod, Fun}})
+    end;
 erlify_bucket_prop({<<"ddl">>, Value}) ->
     {ddl, Value};
 erlify_bucket_prop({Prop, Value}) ->
-    {list_to_existing_atom(binary_to_list(Prop)), Value}.
+    {validate_bucket_property(binary_to_list(Prop)), Value}.
+
+validate_bucket_property(P) ->
+    %% there's no validation; free-form properties are all allowed
+    try
+        list_to_existing_atom(P)
+    catch
+        error:badarg ->
+            lager:info("Setting new custom bucket type property '~s'", [P]),
+            list_to_atom(P)
+    end.
 
 %% @doc Populates the resource's context/state with the bucket type
 %% from the path info, if not already set.
