@@ -522,8 +522,19 @@ bucket_type_create(CreateTypeFn, Type, {struct, Fields}) ->
         [{<<"props", _/binary>>, {struct, Props1}}] ->
             case catch riak_kv_ts_util:maybe_parse_table_def(Type, Props1) of
                 {ok, Props2} ->
-                    Props3 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2],
-                    CreateTypeFn(Props3);
+                    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props2] of
+                        {bad_linkfun_modfun, {M, F}} ->
+                            io:format("Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F]),
+                            error;
+                        {bad_linkfun_bkey, {B, K}} ->
+                            io:format("Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K]),
+                            error;
+                        {bad_chash_keyfun, {M, F}} ->
+                            io:format("Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F]),
+                            error;
+                        Props3 ->
+                            CreateTypeFn(Props3)
+                    end;
                 {error, ErrorMessage} when is_list(ErrorMessage) orelse is_binary(ErrorMessage) ->
                     bucket_type_print_create_result_error_header(Type),
                     io:format("~ts~n", [ErrorMessage]),
@@ -566,8 +577,13 @@ bucket_type_update([TypeStr, PropsStr]) ->
 bucket_type_update(Type, {struct, Fields}) ->
     case proplists:get_value(<<"props">>, Fields) of
         {struct, Props} ->
-            ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
-            bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, ErlProps));
+            case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props] of
+                {bad_bucket_property, BadProp} ->
+                    io:format("Invalid bucket type property: ~ts\n", [BadProp]),
+                    error;
+                ErlProps ->
+                    bucket_type_print_update_result(Type, riak_core_bucket_type:update(Type, ErlProps))
+            end;
         _ ->
             io:format("Cannot create bucket type ~ts: no props field found in json~n", [Type]),
             error
@@ -875,6 +891,7 @@ bucket_error_xlate(X) ->
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 json_props(Props) ->
     lists:flatten(mochijson2:encode([{props, Props}])).
@@ -900,18 +917,29 @@ bucket_type_create_with_timeseries_table_test() ->
           "user   varchar   not null, ",
           "time   timestamp not null, ",
           "PRIMARY KEY ((series, user, quantum(time, 15, m)), "
-          "series, user, time))">>,
-    JSON = json_props([{bucket_type, my_type}, 
-                       {table_def, TableDef}]),
+          "series, user, time))"
+          " with (n_val=42)">>,
+    JSON = json_props([{bucket_type, my_type},
+                       {table_def, TableDef},
+                       {n_val, 41}]),
     bucket_type_create(
-        fun(Props) -> put(Ref, Props) end,
-        <<"my_type">>,
-        mochijson2:decode(JSON)
-    ),
+      fun(Props) -> put(Ref, Props) end,
+      <<"my_type">>,
+      mochijson2:decode(JSON)
+     ),
     ?assertMatch(
-        [{ddl, _}, {bucket_type, <<"my_type">>} | _],
-        get(Ref)
-    ).
+       {n_val, 42},  %% 42 set in query via 'with'
+       %% takes precedence over 41 from sidecar properties
+       lists:keyfind(n_val, 1, get(Ref))
+      ),
+    ?assertMatch(
+       {ddl, _},
+       lists:keyfind(ddl, 1, get(Ref))
+      ),
+    ?assertMatch(
+       {bucket_type, <<"my_type">>},
+       lists:keyfind(bucket_type, 1, get(Ref))
+      ).
 
 bucket_type_create_with_timeseries_table_is_write_once_test() ->
     Ref = make_ref(),
@@ -991,9 +1019,10 @@ bucket_type_create_with_timeseries_table_with_two_element_key_test() ->
         mochijson2:decode(JSON)
     ),
     % just assert that this returns a ddl prop
+    HaveDDL = proplists:get_value(ddl, Result),
     ?assertMatch(
-        [{ddl, _}|_],
-        Result
+        ?DDL{},
+        HaveDDL
     ).
 
 bucket_type_create_with_timeseries_table_error_with_misplaced_quantum_test() ->
