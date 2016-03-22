@@ -113,7 +113,9 @@ put(RObj0, Options) ->
                 Preflist :: term()) ->
                        {ok, {reference(), atom()}}.
 
-async_put(RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist) ->
+async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) when is_tuple(LK) ->
+    async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
+async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
     StartTS = os:timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),

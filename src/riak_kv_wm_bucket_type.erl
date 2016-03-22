@@ -261,12 +261,25 @@ produce_bucket_type_body(RD, Ctx) ->
 %% @doc Modify the bucket properties according to the body of the
 %%      bucket-level PUT request.
 accept_bucket_type_body(RD, Ctx=#ctx{bucket_type=T, bucketprops=Props}) ->
-    ErlProps = lists:map(fun riak_kv_wm_utils:erlify_bucket_prop/1, Props),
-    case riak_core_bucket_type:update(T, ErlProps) of
-        ok ->
-            {true, RD, Ctx};
-        {error, Details} ->
-            JSON = mochijson2:encode(Details),
-            RD2 = wrq:append_to_resp_body(JSON, RD),
-            {{halt, 400}, RD2, Ctx}
+    try lists:map(fun riak_kv_wm_utils:erlify_bucket_prop/1, Props) of
+        ErlProps ->
+            case riak_core_bucket_type:update(T, ErlProps) of
+                ok ->
+                    {true, RD, Ctx};
+                {error, Details} ->
+                    JSON = mochijson2:encode(Details),
+                    RD2 = wrq:append_to_resp_body(JSON, RD),
+                    {{halt, 400}, RD2, Ctx}
+            end
+    catch
+        throw:Details ->
+            error_out({halt, 400}, "Bad bucket type properties: ~p", [Details], RD, Ctx)
     end.
+
+error_out(Type, Fmt, Args, RD, Ctx) ->
+    {Type,
+     wrq:set_resp_header(
+       "Content-Type", "text/plain",
+       wrq:append_to_response_body(
+         lists:flatten(io_lib:format(Fmt, Args)), RD)),
+     Ctx}.
