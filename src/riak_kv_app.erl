@@ -155,6 +155,10 @@ start(_Type, _StartArgs) ->
                                           [true, false],
                                           false),
 
+            riak_core_capability:register({riak_kv, w1c_batch_vnode},
+                                          [true, false],
+                                          false),
+
             %% mapred_system should remain until no nodes still exist
             %% that would propose 'legacy' as the default choice
             riak_core_capability:register({riak_kv, mapred_system},
