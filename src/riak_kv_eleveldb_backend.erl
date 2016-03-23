@@ -486,12 +486,14 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     {_, Bucket, Qry1} = proplists:lookup(index, Opts),
     Qry2 = riak_kv_select:convert(riak_kv_select:current_version(), Qry1),
     ?SQL_SELECT{'WHERE'    = W,
+                helper_mod = Mod,
                 local_key  =  #key_v1{ast = LKAST}} = Qry2,
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
+    FieldOrders = Mod:field_orders(),
     LocalKeyLen = length(LKAST),
-    StartKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- StartK], LocalKeyLen),
-    EndKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- EndK], LocalKeyLen),
+    StartKey1 = key_prefix(Bucket,  key_to_storage_format_key(FieldOrders, StartK), LocalKeyLen),
+    EndKey1 = key_prefix(Bucket, key_to_storage_format_key(FieldOrders, EndK), LocalKeyLen),
     %% append extra byte to the key when it is not inclusive so that it compares
     %% as greater
     StartKey2 =
@@ -518,6 +520,26 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                         FoldIndexFun(lists:reverse(Vals), Buffer)
                 end,
     {async, KeyFolder}.
+
+%%
+key_to_storage_format_key(_,[]) ->
+    %% FIXME the local key is currently partition key ++ _ where the underscore
+    %% is additional fields, these are currently in the filter and not part of
+    %% the key so cannot be ordered yet
+    [];
+key_to_storage_format_key([Order|OrderTail], [{_Name,_Type,Value}|KeyTail]) ->
+    [apply_ordering(Order, Value) | key_to_storage_format_key(OrderTail, KeyTail)].
+
+%%
+apply_ordering(descending, Val) when is_integer(Val) ->
+    -Val;
+apply_ordering(descending, Val) when is_binary(Val) ->
+    flip_binary(Val);
+apply_ordering(_, Val) -> % ascending or undefined
+    Val.
+
+flip_binary(Val) ->
+    list_to_binary([bnot Byte || Byte <- binary_to_list(Val)]).
 
 %%
 range_scan_additional_options(Where) ->
