@@ -445,11 +445,22 @@ fix_start_order(W, Mod, LK) ->
             %% timestamp field.
             W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
             W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+            %% Swap the start/end inclusivity flags unless they are the default
+            %% value.
             %% start inclusive defaults true, end inclusive defaults false
-            W3 = lists:keystore(start_inclusive, 1, W2,
-                                {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
-            _W4 = lists:keystore(end_inclusive, 1, W3,
-                                 {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
+            W3 =
+            case lists:keyfind(end_inclusive, 1, W) of
+                {end_inclusive, false} ->
+                    lists:keystore(start_inclusive, 1, W2, {start_inclusive, false});
+                _ ->
+                    W2
+            end,
+            case lists:keyfind(start_inclusive, 1, W2) of
+                {start_inclusive, true} ->
+                    lists:keystore(end_inclusive, 1, W3, {end_inclusive, true});
+                _ ->
+                    W3
+            end
     end.
 
 %%
