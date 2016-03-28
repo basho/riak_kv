@@ -127,6 +127,13 @@ start(_Type, _StartArgs) ->
     %% print out critical env limits for support/debugging purposes
     catch riak_kv_env:doc_env(),
 
+    %% TODO: Fix when DETS table is opened. Currently it's in riak_kv_ts_sup:init/0
+    %% Convert all legacy DDL compilation records to current format
+    %% riak_kv_compile_tab:upgrade_legacy_records(riak_ql_ddl:get_legacy_compiler_version()),
+
+    %% Clean up any lingering tables stuck in the compiling state
+    %% riak_kv_compile_tab:mark_compiling_for_retry(),
+
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->
@@ -207,6 +214,14 @@ start(_Type, _StartArgs) ->
             riak_core_capability:register({riak_kv, put_fsm_ack_execute},
                                           [enabled, disabled],
                                           disabled),
+
+            riak_core_capability:register({riak_kv, riak_ql_ddl_version},
+                                           riak_ql_ddl:get_compiler_capabilities(),
+                                           lists:last(riak_ql_ddl:get_compiler_capabilities())),
+
+            %% Q: Does KV need to be registered before getting a core_capability?
+            NegotiatedCompilerVersion = riak_core_capability:get({riak_kv, riak_ql_ddl_version}),
+            riak_kv_ts_newtype:recompile_ddl(NegotiatedCompilerVersion),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.

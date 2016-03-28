@@ -56,8 +56,10 @@ handle_event(_Event, State) ->
     {ok, State}.
 
 handle_call({is_type_compiled, [BucketType, DDL]}, State) ->
-    IsCompiled = (riak_kv_compile_tab:get_state(BucketType) == compiled andalso
-                  riak_kv_compile_tab:get_ddl(BucketType) == DDL),
+    %% TODO: Where should the version come from?
+    DDLVersion = riak_ql_ddl:get_compiler_version(),
+    IsCompiled = (riak_kv_compile_tab:get_state(BucketType, DDLVersion) == compiled andalso
+                  riak_kv_compile_tab:get_ddl(BucketType, DDLVersion) == DDL),
     {ok, IsCompiled, State};
 handle_call(_Request, State) ->
     Reply = ok,
