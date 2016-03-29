@@ -23,18 +23,15 @@
 -module(riak_kv_compile_tab).
 
 -export([
-         cleanup_old_tables/1,
          delete_dets/1,
-         get_compiled_ddl_versions/1,
-         get_ddl/2,
-         get_state/2,
+         get_compiled_ddl_version/1,
+         get_ddl/1,
+         get_state/1,
          get_tables_needing_recompiling/1,
          insert/5,
-         is_compiling/2,
-         mark_compiling_for_retry/0,
+         is_compiling/1,
          new/1,
-         update_state/2,
-         upgrade_legacy_records/1]).
+         update_state/2]).
 
 -define(TABLE, ?MODULE).
 
@@ -52,7 +49,19 @@
         {ok, dets:tab_name()} | {error, any()}.
 new(FileDir) ->
     FilePath = filename:join(FileDir, [?TABLE, ".dets"]),
-    dets:open_file(?TABLE, [{type, set}, {repair, force}, {file, FilePath}]).
+    lager:debug("Opening DDL DETS table ~s", [FilePath]),
+    Result = dets:open_file(?TABLE, [{type, set}, {repair, force}, {file, FilePath}]),
+    %% Only update the DETS database if it opens successfully
+    case Result of
+        {ok, _} ->
+            %% Convert all legacy DDL compilation records to current format
+            upgrade_legacy_records(),
+
+            %% Clean up any lingering tables stuck in the compiling state
+            mark_compiling_for_retry();
+        _ -> ok
+    end,
+    Result.
 
 %%
 -spec delete_dets(file:name()) ->
@@ -69,53 +78,50 @@ delete_dets(FileDir) ->
              CompilerPid :: pid(),
              State :: compiling_state()) -> ok.
 insert(BucketType, DDLVersion, DDL, CompilerPid, State) ->
-    dets:insert(?TABLE, {{BucketType, DDLVersion}, DDL, CompilerPid, State}),
+    lager:info("DDL DETS Update: ~p, ~p, ~p, ~p, ~p",
+               [BucketType, DDLVersion, DDL, CompilerPid, State]),
+    dets:insert(?TABLE, {BucketType, DDLVersion, DDL, CompilerPid, State}),
     ok.
 
 %% Check if the bucket type is in the compiling state.
--spec is_compiling(BucketType :: binary(),
-                   DDLVersion :: riak_ql_ddl:compiler_version_type()) ->
+-spec is_compiling(BucketType :: binary()) ->
     {true, pid()} | false.
-is_compiling(BucketType, DDLVersion) ->
-    case dets:lookup(?TABLE, {BucketType, DDLVersion}) of
-        [{_,_,Pid,compiling}] ->
+is_compiling(BucketType) ->
+    case dets:lookup(?TABLE, BucketType) of
+        [{_,_,_,Pid,compiling}] ->
             {true, Pid};
         _ ->
             false
     end.
 
 %%
--spec get_state(BucketType :: binary(),
-                DDLVersion :: riak_ql_ddl:compiler_version_type()) ->
+-spec get_state(BucketType :: binary()) ->
         compiling_state() | notfound.
-get_state(BucketType, DDLVersion) when is_binary(BucketType),
-                                       is_integer(DDLVersion)->
-    case dets:lookup(?TABLE, {BucketType, DDLVersion}) of
-        [{_,_,_,State}] ->
+get_state(BucketType) when is_binary(BucketType) ->
+    case dets:lookup(?TABLE, BucketType) of
+        [{_,_,_,_,State}] ->
             State;
         [] ->
             notfound
     end.
 
 %%
--spec get_compiled_ddl_versions(BucketType :: binary()) ->
+-spec get_compiled_ddl_version(BucketType :: binary()) ->
     riak_ql_ddl:compiler_version_type() | notfound.
-get_compiled_ddl_versions(BucketType) when is_binary(BucketType) ->
-    case dets:match(?TABLE, {{BucketType, '$1'},'_','_','_'}) of
-        [Versions] ->
-            Versions;
+get_compiled_ddl_version(BucketType) when is_binary(BucketType) ->
+    case dets:match(?TABLE, {BucketType,'$1','_','_','_'}) of
+        [[Version]] ->
+            Version;
         [] ->
             notfound
     end.
 
 %%
--spec get_ddl(BucketType :: binary(),
-              DDLVersion :: riak_ql_ddl:compiler_version_type()) ->
+-spec get_ddl(BucketType :: binary()) ->
         term() | notfound.
-get_ddl(BucketType, DDLVersion) when is_binary(BucketType),
-                         is_integer(DDLVersion) ->
-    case dets:lookup(?TABLE, {BucketType, DDLVersion}) of
-        [{_,DDL,_,_}] ->
+get_ddl(BucketType) when is_binary(BucketType) ->
+    case dets:lookup(?TABLE, BucketType) of
+        [{_,_,DDL,_,_}] ->
             DDL;
         [] ->
             notfound
@@ -127,7 +133,7 @@ get_ddl(BucketType, DDLVersion) when is_binary(BucketType),
         ok | notfound.
 update_state(CompilerPid, State) when is_pid(CompilerPid),
                                        ?is_compiling_state(State) ->
-    case dets:match(?TABLE, {{'$1','$2'},'$3',CompilerPid,'_'}) of
+    case dets:match(?TABLE, {'$1','$2','$3',CompilerPid,'_'}) of
         [[BucketType, DDLVersion, DDL]] ->
             insert(BucketType, DDLVersion, DDL, CompilerPid, State);
         [] ->
@@ -137,39 +143,28 @@ update_state(CompilerPid, State) when is_pid(CompilerPid),
 %% Mark any lingering compilations as being retried
 -spec mark_compiling_for_retry() -> ok.
 mark_compiling_for_retry() ->
-    CompilingPids = dets:match(?TABLE, {{'_','_'},'_','$1',compiling}),
+    CompilingPids = dets:match(?TABLE, {'_','_','_','$1',compiling}),
     lists:foreach(fun([Pid]) -> update_state(Pid, retrying) end, CompilingPids).
 
 %% Get the list of tables which need to be recompiled
 -spec get_tables_needing_recompiling(DDLVersion :: riak_ql_ddl:compiler_version_type()) ->
-    [{binary(), riak_ql_ddl:compiler_version_type(), riak_ql_ddl:ddl()}].
+    [binary()].
 get_tables_needing_recompiling(DDLVersion) ->
     %% First find all tables with a version
-%%    CompiledTables = dets:match(?TABLE, {{'$1','$2'},'$3','_',compiled}),
-%%    MismatchedTables = lists:filter(fun([_, Vsn, _DDL]) -> Vsn /= DDLVersion end, CompiledTables),
-    MismatchedTables = dets:select(?TABLE, [{{{'$1','$2'},'$3','_',compiled},[{'/=','$2', DDLVersion}],['$$']}]),
-    RetryingTables = dets:match(?TABLE, {{'$1','$2'},'$3','_',retrying}),
-    [list_to_tuple(X) || X <- MismatchedTables ++ RetryingTables].
-
-%% Delete all versions of the DDL compilation record which do not match
-%% the current one specified by a Pid.
--spec cleanup_old_tables(Pid :: pid()) -> ok.
-cleanup_old_tables(Pid) ->
-    [[BucketType, Version]] = dets:match(?TABLE, {{'$1','$2'},'_',Pid,compiled}),
-    OldVersions = dets:select(?TABLE, [{{{BucketType,'$1'},'_','_',compiled},[{'/=','$1', Version}],['$$']}]),
-    lists:foreach(fun([Vsn]) ->
-                       dets:delete(?TABLE, {BucketType, Vsn})
-                  end, OldVersions),
-    ok.
+    MismatchedTables = dets:select(?TABLE, [{{'$1','$2','_','_',compiled},[{'/=','$2', DDLVersion}],['$$']}]),
+    RetryingTables = dets:match(?TABLE, {'$1','$2','_','_',retrying}),
+    Tables = [hd(X) || X <- MismatchedTables ++ RetryingTables],
+    lager:info("Recompile the DDL of these bucket types ~p", [Tables]),
+    Tables.
 
 %% Convert all pre-1.3 records to include the DDL compiler version in the
-%% DETS primary key
--spec upgrade_legacy_records(LegacyVersion :: riak_ql_ddl:compiler_version_type()) -> ok.
-upgrade_legacy_records(LegacyVersion) ->
-    OldVersions = dets:select(?TABLE, [{{'$1','$2','$3','$4'},[{is_binary,'$1'}],['$$']}]),
+%% DETS table. Insert will replace the existing record
+-spec upgrade_legacy_records() -> ok.
+upgrade_legacy_records() ->
+    LegacyVersion = 1,
+    OldVersions = dets:match(?TABLE, {'$1','$2','$3','$4'}),
     lists:foreach(fun([BucketType, DDL, Pid, State]) ->
-                       ok = dets:insert(?TABLE, {{BucketType, LegacyVersion}, DDL, Pid, State}),
-                       ok = dets:delete(?TABLE, BucketType)
+                       ok = dets:insert(?TABLE, {BucketType, LegacyVersion, DDL, Pid, State})
                   end, OldVersions),
     ok.
 
@@ -184,7 +179,7 @@ upgrade_legacy_records(LegacyVersion) ->
     Self = self(),
     spawn_link(
         fun() ->
-            ok = riak_kv_compile_tab:delete_dets("."),
+            _ = riak_kv_compile_tab:delete_dets("."),
             _ = riak_kv_compile_tab:new("."),
             TestCode,
             Self ! test_ok
@@ -201,7 +196,7 @@ insert_test() ->
             ok = insert(<<"my_type">>, 2, {ddl_v1}, Pid, compiling),
             ?assertEqual(
                 compiling,
-                get_state(<<"my_type">>, 2)
+                get_state(<<"my_type">>)
             )
         end).
 
@@ -213,7 +208,7 @@ update_state_test() ->
             ok = update_state(Pid, compiled),
             ?assertEqual(
                 compiled,
-                get_state(<<"my_type">>, 3)
+                get_state(<<"my_type">>)
             )
         end).
 
@@ -224,7 +219,7 @@ is_compiling_test() ->
             ok = insert(<<"my_type">>, 4, {ddl_v1}, Pid, compiling),
             ?assertEqual(
                 {true, Pid},
-                is_compiling(<<"my_type">>, 4)
+                is_compiling(<<"my_type">>)
             )
         end).
 
@@ -235,7 +230,7 @@ compiled_version_test() ->
             ok = insert(<<"my_type">>, 5, {ddl_v1}, Pid, compiled),
             ?assertEqual(
                 [5],
-                get_compiled_ddl_versions(<<"my_type">>)
+                get_compiled_ddl_version(<<"my_type">>)
             )
         end).
 
@@ -246,7 +241,7 @@ get_ddl_test() ->
             ok = insert(<<"my_type">>, 6, {ddl_v1}, Pid, compiled),
             ?assertEqual(
                 {ddl_v1},
-                get_ddl(<<"my_type">>, 6)
+                get_ddl(<<"my_type">>)
             )
         end).
 
@@ -263,29 +258,11 @@ recompile_ddl_test() ->
             ok = insert(<<"my_type4">>, 8, {ddl_v1}, Pid4, compiled),
             mark_compiling_for_retry(),
             ?assertEqual(
-                [{<<"my_type1">>, 6, {ddl_v1}},
-                 {<<"my_type2">>, 7, {ddl_v1}},
-                 {<<"my_type3">>, 6, {ddl_v1}}
+                [<<"my_type1">>,
+                 <<"my_type2">>,
+                 <<"my_type3">>,
                 ],
                 lists:sort(get_tables_needing_recompiling(8))
-            )
-        end).
-
-cleanup_old_ddl_test() ->
-    ?in_process(
-        begin
-            Pid = spawn(fun() -> ok end),
-            Pid2 = spawn(fun() -> ok end),
-            Pid3 = spawn(fun() -> ok end),
-            Pid4 = spawn(fun() -> ok end),
-            ok = insert(<<"my_type">>, 5, {ddl_v1}, Pid, compiled),
-            ok = insert(<<"my_type">>, 7, {ddl_v1}, Pid2, compiled),
-            ok = insert(<<"my_type">>, 6, {ddl_v1}, Pid3, compiled),
-            ok = insert(<<"my_type1">>, 8, {ddl_v1}, Pid4, compiled),
-            cleanup_old_tables(Pid),
-            ?assertEqual(
-                [[5]],
-                dets:match(?TABLE, {{<<"my_type">>,'$1'},'_','_','_'})
             )
         end).
 
@@ -303,7 +280,7 @@ update_legacy_ddl_test() ->
             upgrade_legacy_records(4),
             ?assertEqual(
                 [[<<"my_type">>],[<<"my_type1">>],[<<"my_type2">>],[<<"my_type3">>]],
-                lists:sort(dets:match(?TABLE, {{'$1',4},'_','_','_'}))
+                lists:sort(dets:match(?TABLE, {'$1',4,'_','_','_'}))
             )
         end).
 -endif.

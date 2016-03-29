@@ -416,6 +416,8 @@ erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
     end;
 erlify_bucket_prop({<<"ddl">>, Value}) ->
     {ddl, Value};
+erlify_bucket_prop({<<"ddl_compiler_version">>, Value}) ->
+    {ddl_compiler_version, Value};
 erlify_bucket_prop({Prop, Value}) ->
     {validate_bucket_property(binary_to_list(Prop)), Value}.
 

@@ -154,7 +154,7 @@ apply_timeseries_bucket_props(DDL, DDLVersion, Props1) ->
     Props3 = lists:keystore(
         <<"ddl">>, 1, Props2, {<<"ddl">>, DDL}),
     Props4 = lists:keystore(
-        <<"compiler_version">>, 1, Props3, {<<"compiler_version">>, DDLVersion}),
+        <<"ddl_compiler_version">>, 1, Props3, {<<"ddl_compiler_version">>, DDLVersion}),
     {ok, Props4}.
 
 

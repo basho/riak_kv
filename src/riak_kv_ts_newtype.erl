@@ -53,10 +53,10 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-%% TODO: Determine where to introduce the DDL compiler version
 -spec new_type(binary()) -> ok.
 new_type(BucketType) ->
-    gen_server:cast(?MODULE, {new_type, BucketType, riak_ql_ddl:get_compiler_version()}).
+    lager:info("Add new Time Series bucket type ~s", [BucketType]),
+    gen_server:cast(?MODULE, {new_type, BucketType}).
 
 %%%
 %%% gen_server.
@@ -73,16 +73,16 @@ init([]) ->
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
-handle_cast({new_type, BucketType, DDLVersion}, State) ->
-    ok = do_new_type(BucketType, DDLVersion),
+handle_cast({new_type, BucketType}, State) ->
+    ok = do_new_type(BucketType),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info({'EXIT', Pid, normal}, State) ->
     % success
+    lager:info("DDL Compilation Pid ~p successfully compiled", [Pid]),
     _ = riak_kv_compile_tab:update_state(Pid, compiled),
-    ok = riak_kv_compile_tab:cleanup_old_tables(Pid),
     {noreply, State};
 handle_info({'EXIT', _, bucket_type_changed_mid_compile}, State) ->
     % this means that the process was interrupted while compiling by an update
@@ -90,6 +90,7 @@ handle_info({'EXIT', _, bucket_type_changed_mid_compile}, State) ->
     {noreply, State};
 handle_info({'EXIT', Pid, _Error}, State) ->
     % compilation error, check
+    lager:info("DDL Compilation Pid ~p failed", [Pid]),
     _ = riak_kv_compile_tab:update_state(Pid, failed),
     {noreply, State};
 handle_info(add_ddl_ebin_to_path, State) ->
@@ -114,24 +115,43 @@ code_change(_OldVsn, State, _Extra) ->
 %% We rely on the claimant to not give us new DDLs after the bucket
 %% type is activated, at least until we have a system in place for
 %% managing DDL versioning
-do_new_type(BucketType, DDLVersion) ->
-    maybe_compile_ddl(BucketType, retrieve_ddl_from_metadata(BucketType),
-                      riak_kv_compile_tab:get_ddl(BucketType, DDLVersion), DDLVersion).
+do_new_type(BucketType) ->
+    maybe_compile_ddl(BucketType,
+                      retrieve_ddl_from_metadata(BucketType),
+                      riak_kv_compile_tab:get_ddl(BucketType),
+                      riak_ql_ddl:get_compiler_version(),
+                      riak_kv_compile_tab:get_compiled_ddl_version(BucketType)).
 
-maybe_compile_ddl(_BucketType, NewDDL, NewDDL, _DDLVersion) ->
+maybe_compile_ddl(BucketType, NewDDL, NewDDL, NewVsn, NewVsn) ->
+    lager:info("Not compiling DDL for bucket type ~s because it is unchanged", [BucketType]),
     %% Do nothing; we're seeing a CMD update but the DDL hasn't changed
     ok;
-maybe_compile_ddl(BucketType, NewDDL, _OldDDL, DDLVersion) when is_record(NewDDL, ?DDL_RECORD_NAME) ->
-    ok = maybe_stop_current_compilation(BucketType, DDLVersion),
-    _Pid = start_compilation(BucketType, NewDDL),
-    ok;
-maybe_compile_ddl(_BucketType, _NewDDL, _OldDDL, _DDLVersion) ->
+maybe_compile_ddl(BucketType, NewDDL, NewDDL, NewVsn, OldVsn) when is_record(NewDDL, ?DDL_RECORD_NAME),
+                                                                   is_integer(OldVsn), is_integer(NewVsn) ->
+    lager:info("Recompiling same DDL for bucket type ~s from version ~b to ~b",
+               [BucketType, OldVsn, NewVsn]),
+    actually_compile_ddl(BucketType, NewDDL);
+maybe_compile_ddl(BucketType, NewDDL, _OldDDL, NewVsn, OldVsn) when is_record(NewDDL, ?DDL_RECORD_NAME),
+                                                                    is_integer(OldVsn), is_integer(NewVsn) ->
+    lager:info("Compiling new DDL for bucket type ~s from version ~b to ~b",
+               [BucketType, OldVsn, NewVsn]),
+    actually_compile_ddl(BucketType, NewDDL);
+maybe_compile_ddl(BucketType, NewDDL, _OldDDL, NewVsn, OldVsn) ->
+    lager:error("Unknown DDL version type ~p for bucket type ~s "
+                "(expecting ~p with old version ~p, new version ~p)",
+                [NewDDL, BucketType, ?DDL_RECORD_NAME, OldVsn, NewVsn]),
     %% We don't know what to do with this new DDL, so stop
     ok.
 
 %%
-maybe_stop_current_compilation(BucketType, DDLVersion) ->
-    case riak_kv_compile_tab:is_compiling(BucketType, DDLVersion) of
+actually_compile_ddl(BucketType, NewDDL) ->
+    ok = maybe_stop_current_compilation(BucketType),
+    _Pid = start_compilation(BucketType, NewDDL),
+    ok.
+
+%%
+maybe_stop_current_compilation(BucketType) ->
+    case riak_kv_compile_tab:is_compiling(BucketType) of
         {true, CompilerPid} ->
             ok = stop_current_compilation(CompilerPid);
         false ->
@@ -163,6 +183,7 @@ start_compilation(BucketType, DDL) ->
         fun() ->
             ok = compile_and_store(ddl_ebin_directory(), DDL)
         end),
+    lager:info("Starting DDL compilation of ~s on Pid ~p", [BucketType, Pid]),
     ok = riak_kv_compile_tab:insert(BucketType, riak_ql_ddl:get_compiler_version(), DDL, Pid, compiling),
     Pid.
 
@@ -218,9 +239,8 @@ add_ddl_ebin_to_path() ->
 recompile_ddl(DDLVersion) ->
     %% Get list of tables to recompile
     Tables = riak_kv_compile_tab:get_tables_needing_recompiling(DDLVersion),
-    lists:foreach(fun({Table, _Vsn, DDL}) ->
-                       Pid = start_compilation(Table, DDL),
-                       ok = riak_kv_compile_tab:cleanup_old_tables(Pid)
+    lists:foreach(fun(Table) ->
+                      new_type(Table)
                   end,
                   Tables),
     ok.
