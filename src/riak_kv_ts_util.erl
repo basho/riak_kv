@@ -327,19 +327,15 @@ explain_sub_query(#riak_select_v1{ 'WHERE' = SubQueryWhere }) ->
     {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
     {_, EndKey1} = lists:keyfind(endkey, 1, SubQueryWhere),
     {_, Filter} = lists:keyfind(filter, 1, SubQueryWhere),
-    explain_query_keys(StartKey1, EndKey1, Filter).
-
-%%
-explain_query_keys(StartKey1, EndKey1, Filter) ->
     StartKey2 = [[key_element_to_string(V), $/] || {_,_,V} <- StartKey1],
     EndKey2 = [[key_element_to_string(V), $/] || {_,_,V} <- EndKey1],
-    case lists:keyfind(start_inclusive, 1, StartKey1) of
+    case lists:keyfind(start_inclusive, 1, SubQueryWhere) of
         {start_inclusive,true} ->
             StartKey3 = [">= ", StartKey2];
         _ ->
             StartKey3 = [">  ", StartKey2]
     end,
-    case lists:keyfind(end_inclusive, 1, EndKey1) of
+    case lists:keyfind(end_inclusive, 1, SubQueryWhere) of
         {end_inclusive,true} ->
             EndKey3 = ["<= ", EndKey2];
         _ ->
