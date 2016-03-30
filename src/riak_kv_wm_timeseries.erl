@@ -24,13 +24,13 @@
 %%
 %% This resource is responsible for everything under
 %% ```
-%% ts/v1/table/Table/keys
+%% ts/v1/tables/Table/keys
 %% ```
 %% Specific operations supported:
 %% ```
-%% GET     /ts/v1/table/Table/keys/K1/V1/...  single-key get
-%% DELETE  /ts/v1/table/Table/keys/K1/V1/...  single-key delete
-%% POST    /ts/v1/table/Table/keys            singe-key or batch put depending
+%% GET     /ts/v1/tables/Table/keys/K1/V1/...  single-key get
+%% DELETE  /ts/v1/tables/Table/keys/K1/V1/...  single-key delete
+%% POST    /ts/v1/tables/Table/keys            singe-key or batch put depending
 %%                                            on the body
 %% '''
 %%
