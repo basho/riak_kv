@@ -72,7 +72,8 @@
 -type ts_responses() :: #tsputresp{} |
                         #tsdelresp{} | #tsgetresp{} | #tslistkeysresp{} | #tsqueryresp{} |
                         #rpberrorresp{}.
--type ts_query_types() :: #ddl_v1{} | ?SQL_SELECT{} | #riak_sql_describe_v1{}.
+-type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
+                          #riak_sql_insert_v1{}.
 
 -type process_retval() :: {reply, RpbOrTsMessage::tuple(), #state{}}.
 
@@ -87,7 +88,7 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover} ->
-            %% convert error returns to ok's, this menas it will be passed into
+            %% convert error returns to ok's, this means it will be passed into
             %% process which will not process it and return the error.
             case catch decode_query(Q, Cover) of
                 {ok, DecodedQuery} ->
@@ -126,21 +127,24 @@ decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
             riak_kv_ts_util:build_sql_record(select, SQL, Cover);
         {describe, SQL} ->
             riak_kv_ts_util:build_sql_record(describe, SQL, Cover);
-        {ddl, DDL} ->
-            {ok, DDL};
+        {insert, SQL} ->
+            riak_kv_ts_util:build_sql_record(insert, SQL, Cover);
+        {ddl, DDL, WithProperties} ->
+            {ok, {DDL, WithProperties}};
         Other ->
             Other
     end.
 
 -spec decode_query_permissions(ts_query_types()) ->
                                       {string(), binary()}.
-decode_query_permissions(#ddl_v1{table = NewBucketType}) ->
+decode_query_permissions({?DDL{table = NewBucketType}, _WithProps}) ->
     {"riak_kv.ts_create_table", NewBucketType};
 decode_query_permissions(?SQL_SELECT{'FROM' = Table}) ->
     {"riak_kv.ts_query", Table};
 decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
-    {"riak_kv.ts_describe", Table}.
-
+    {"riak_kv.ts_describe", Table};
+decode_query_permissions(#riak_sql_insert_v1{'INSERT' = Table}) ->
+    {"riak_kv.ts_insert", Table}.
 
 
 -spec encode(tuple()) -> {ok, iolist()}.
@@ -174,16 +178,18 @@ process(M = #tscoveragereq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tscoveragereq/4, M, State);
 
 %% this is tsqueryreq, subdivided per query type in its SQL
-process(DDL = #ddl_v1{}, State) ->
+process({DDL = ?DDL{}, WithProperties}, State) ->
     %% the only one that doesn't require an activated table
-    create_table(DDL, State);
+    create_table({DDL, WithProperties}, State);
 
 process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
 
 process(M = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
-    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State).
+    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
 
+process(M = #riak_sql_insert_v1{'INSERT' = Table}, State) ->
+    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State).
 
 %% There is no two-tuple variants of process_stream for tslistkeysresp
 %% as TS list_keys senders always use backpressure.
@@ -218,16 +224,33 @@ process_stream({ReqId, Error}, ReqId,
 %% create_table, the only function for which we don't do
 %% check_table_and_call
 
--spec create_table(#ddl_v1{}, #state{}) ->
+-spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
                           {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
-create_table(DDL = #ddl_v1{table = Table}, State) ->
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
-    Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
-    case riak_core_bucket_type:create(Table, Props2) of
-        ok ->
-            wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
-        {error, Reason} ->
-            {reply, table_create_fail_response(Table, Reason), State}
+create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, WithProps),
+    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
+        {bad_linkfun_modfun, {M, F}} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format(
+                               "Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F])),
+             State};
+        {bad_linkfun_bkey, {B, K}} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format(
+                               "Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K])),
+             State};
+        {bad_chash_keyfun, {M, F}} ->
+            {reply, table_create_fail_response(
+                      Table, flat_format(
+                               "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F])),
+             State};
+        Props2 ->
+            case riak_core_bucket_type:create(Table, Props2) of
+                ok ->
+                    wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
+                {error, Reason} ->
+                    {reply, table_create_fail_response(Table, Reason), State}
+            end
     end.
 
 wait_until_active(Table, State, 0) ->
@@ -252,6 +275,116 @@ wait_until_active(Table, State, Seconds) ->
 %% ---------------------------------------------------
 %% functions called from check_table_and_call, one per ts* request
 %% ---------------------------------------------------
+
+
+%%
+%% INSERT statements, called from check_table_and_call.
+%%
+-spec make_insert_response(module(), #riak_sql_insert_v1{}) ->
+                           #tsqueryresp{} | #rpberrorresp{}.
+make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields, values = Values}) ->
+    case lookup_field_positions(Mod, Fields) of
+    {ok, Positions} ->
+        Empty = make_empty_row(Mod),
+        case xlate_insert_to_putdata(Values, Positions, Empty) of
+            {error, ValueReason} ->
+                make_rpberrresp(?E_BAD_QUERY, ValueReason);
+            {ok, Data} ->
+                insert_putreqs(Mod, Table, Data)
+        end;
+    {error, FieldReason} ->
+        make_rpberrresp(?E_BAD_QUERY, FieldReason)
+    end.
+
+insert_putreqs(Mod, Table, Data) ->
+    case catch riak_kv_ts_util:validate_rows(Mod, Data) of
+        [] ->
+            case riak_kv_ts_api:put_data(Data, Table, Mod) of
+                ok ->
+                    #tsqueryresp{};
+                {error, {some_failed, ErrorCount}} ->
+                    failed_put_response(ErrorCount);
+                {error, no_type} ->
+                    table_not_activated_response(Table);
+                {error, OtherReason} ->
+                    make_rpberrresp(?E_PUT, to_string(OtherReason))
+            end;
+        BadRowIdxs when is_list(BadRowIdxs) ->
+            validate_rows_error_response(BadRowIdxs)
+    end.
+
+%%
+%% Return an all-null empty row ready to be populated by the values
+%%
+-spec make_empty_row(module()) -> tuple(undefined).
+make_empty_row(Mod) ->
+    Positions = Mod:get_field_positions(),
+    list_to_tuple(lists:duplicate(length(Positions), undefined)).
+
+%%
+%% Lookup the index of the field names selected to insert.
+%%
+%% This *requires* that once schema changes take place the DDL fields are left in order.
+%%
+-spec lookup_field_positions(module(), [riak_ql_ddl:field_identifier()]) ->
+                           {ok, [pos_integer()]} | {error, string()}.
+lookup_field_positions(Mod, FieldIdentifiers) ->
+    case lists:foldl(
+           fun({identifier, FieldName}, {Good, Bad}) ->
+                   case Mod:is_field_valid(FieldName) of
+                       false ->
+                           {Good, [FieldName | Bad]};
+                       true ->
+                           {[Mod:get_field_position(FieldName) | Good], Bad}
+                   end
+           end, {[], []}, FieldIdentifiers)
+    of
+        {Positions, []} ->
+            {ok, lists:reverse(Positions)};
+        {_, Errors} ->
+            {error, flat_format("undefined fields: ~s",
+                                [string:join(lists:reverse(Errors), ", ")])}
+    end.
+
+%%
+%% Map the list of values from statement order into the correct place in the tuple.
+%% If there are less values given than the field list the NULL will carry through
+%% and the general validation rules should pick that up.
+%% If there are too many values given for the fields it returns an error.
+%%
+-spec xlate_insert_to_putdata([[riak_ql_ddl:data_value()]], [pos_integer()], tuple(undefined)) ->
+                              {ok, [tuple()]} | {error, string()}.
+xlate_insert_to_putdata(Values, Positions, Empty) ->
+    ConvFn = fun(RowVals, {Good, Bad, RowNum}) ->
+                 case make_insert_row(RowVals, Positions, Empty) of
+                     {ok, Row} ->
+                         {[Row | Good], Bad, RowNum + 1};
+                     {error, _Reason} ->
+                         {Good, [integer_to_list(RowNum) | Bad], RowNum + 1}
+                 end
+             end,
+    Converted = lists:foldl(ConvFn, {[], [], 1}, Values),
+    case Converted of
+        {PutData, [], _} ->
+            {ok, lists:reverse(PutData)};
+        {_, Errors, _} ->
+            {error, flat_format("too many values in row index(es) ~s",
+                                [string:join(lists:reverse(Errors), ", ")])}
+    end.
+
+-spec make_insert_row([] | [riak_ql_ddl:data_value()], [] | [pos_integer()], tuple()) ->
+                      {ok, tuple()} | {error, string()}.
+make_insert_row([], _Positions, Row) when is_tuple(Row) ->
+    %% Out of entries in the value - row is populated with default values
+    %% so if we run out of data for implicit/explicit fieldnames can just return
+    {ok, Row};
+make_insert_row(_, [], Row) when is_tuple(Row) ->
+    %% Too many values for the field
+    {error, "too many values"};
+%% Make sure the types match
+make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(Row) ->
+    make_insert_row(Values, Positions, setelement(Pos, Row, Val)).
+
 
 %% -----------
 %% put
@@ -361,7 +494,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
         {ok, ReqId} ->
             ColumnInfo =
                 [Mod:get_field_type(N)
-                 || #param_v1{name = N} <- DDL#ddl_v1.local_key#key_v1.ast],
+                 || #param_v1{name = N} <- DDL?DDL.local_key#key_v1.ast],
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
                                                  column_info = ColumnInfo}};
         {error, Reason} ->
@@ -384,6 +517,11 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                     Bucket = riak_kv_ts_util:table_to_bucket(Table),
                     convert_cover_list(
                       riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, []), State);
+                %% parser messages have a tuple for Reason:
+                {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
+                    ErrorMessage = flat_format("~p: ~s", [E, Reason]),
+                    make_rpberrresp(?E_SUBMIT, ErrorMessage);
+
                 {error, Reason} ->
                     make_rpberrresp(
                       ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason]))
@@ -430,13 +568,14 @@ assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text)
 %% query
 %%
 
-sub_tsqueryreq(_Mod, DDL, SQL, State) ->
-    case riak_kv_ts_api:query(SQL, DDL) of
-        {ok, Data} when element(1, SQL) =:= ?SQL_SELECT_RECORD_NAME ->
-            {reply, make_tsqueryresp(Data), State};
-        {ok, Data} when element(1, SQL) =:= riak_sql_describe_v1 ->
-            {reply, make_describe_response(Data), State};
-
+-spec sub_tsqueryreq(module(), #ddl_v1{},
+                     ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{},
+                     #state{}) ->
+                     {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+sub_tsqueryreq(Mod, DDL, SQL, State) ->
+    case riak_kv_qry:submit(SQL, DDL) of
+        {ok, Data}  ->
+            {reply, make_tsquery_resp(Mod, SQL, Data), State};
         %% the following timeouts are known and distinguished:
         {error, no_type} ->
             {reply, table_not_activated_response(DDL#ddl_v1.table), State};
@@ -449,17 +588,28 @@ sub_tsqueryreq(_Mod, DDL, SQL, State) ->
             %% response
             {reply, make_rpberrresp(?E_TIMEOUT, "backend timeout"), State};
 
+        %% parser messages have a tuple for Reason:
+        {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
+            ErrorMessage = flat_format("~p: ~s", [E, Reason]),
+            {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
+
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
     end.
 
+make_tsquery_resp(_Mod, ?SQL_SELECT{}, Data) ->
+    make_tsqueryresp(Data);
+make_tsquery_resp(_Mod, #riak_sql_describe_v1{}, Data) ->
+    make_describe_response(Data);
+make_tsquery_resp(Mod, SQL = #riak_sql_insert_v1{}, _Data) ->
+    make_insert_response(Mod, SQL).
 
 %% ---------------------------------------------------
 %% local functions
 %% ---------------------------------------------------
 
 -spec check_table_and_call(Table::binary(),
-                           WorkItem::fun((module(), #ddl_v1{},
+                           WorkItem::fun((module(), ?DDL{},
                                           OrigMessage::tuple(), #state{}) ->
                                                 process_retval()),
                            OrigMessage::tuple(),
@@ -573,8 +723,6 @@ table_created_missing_response(Table) ->
 to_string(X) ->
     flat_format("~p", [X]).
 
-
-
 %% helpers to make various error responses
 
 -spec make_tsqueryresp([] | {[riak_pb_ts_codec:tscolumnname()],
@@ -632,17 +780,20 @@ missing_helper_module_not_ts_type_test() ->
 missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
-        missing_helper_module(<<"mytype">>, [{ddl, #ddl_v1{}}])
+        missing_helper_module(<<"mytype">>, [{ddl, ?DDL{}}])
     ).
 
 test_helper_validate_rows_mod() ->
-    riak_ql_ddl_compiler:compile_and_load_from_tmp(
-        riak_ql_parser:parse(riak_ql_lexer:get_tokens(
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
+          riak_ql_lexer:get_tokens(
             "CREATE TABLE mytable ("
             "family VARCHAR NOT NULL,"
             "series VARCHAR NOT NULL,"
             "time TIMESTAMP NOT NULL,"
-            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')), family, series, time))"))).
+            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')),"
+            " family, series, time))")),
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
 
 validate_rows_empty_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),
@@ -686,6 +837,74 @@ validate_rows_error_response_2_test() ->
         #rpberrorresp{errcode = ?E_IRREG,
                       errmsg = Msg ++ "1, 2, 3" },
         validate_rows_error_response(["1", "2", "3"])
+    ).
+
+batch_1_test() ->
+    ?assertEqual(lists:reverse([[1, 2, 3, 4], [5, 6, 7, 8], [9]]),
+                 riak_kv_ts_api:create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 4)).
+
+batch_2_test() ->
+    ?assertEqual(lists:reverse([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]]),
+                 riak_kv_ts_api:create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4)).
+
+batch_3_test() ->
+    ?assertEqual(lists:reverse([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
+                 riak_kv_ts_api:create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)).
+
+batch_undersized1_test() ->
+    ?assertEqual([[1, 2, 3, 4, 5, 6]],
+                 riak_kv_ts_api:create_batches([1, 2, 3, 4, 5, 6], 6)).
+
+batch_undersized2_test() ->
+    ?assertEqual([[1, 2, 3, 4, 5, 6]],
+                 riak_kv_ts_api:create_batches([1, 2, 3, 4, 5, 6], 7)).
+
+batch_almost_undersized_test() ->
+    ?assertEqual(lists:reverse([[1, 2, 3, 4, 5], [6]]),
+                 riak_kv_ts_api:create_batches([1, 2, 3, 4, 5, 6], 5)).
+
+validate_make_insert_row_basic_test() ->
+    Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
+    Positions = [3, 1, 2],
+    Row = {undefined, undefined, undefined},
+    Result = make_insert_row(Data, Positions, Row),
+    ?assertEqual(
+        {ok, {<<"bamboozle">>, 3.14, 4}},
+        Result
+    ).
+
+validate_make_insert_row_too_many_test() ->
+    Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}, {integer, 8}],
+    Positions = [3, 1, 2],
+    Row = {undefined, undefined, undefined},
+    Result = make_insert_row(Data, Positions, Row),
+    ?assertEqual(
+        {error, "too many values"},
+        Result
+    ).
+
+
+validate_xlate_insert_to_putdata_ok_test() ->
+    Empty = list_to_tuple(lists:duplicate(5, undefined)),
+    Values = [[{integer, 4}, {binary, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}],
+              [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
+    Positions = [5, 3, 1, 2, 4],
+    Result = xlate_insert_to_putdata(Values, Positions, Empty),
+    ?assertEqual(
+        {ok,[{5.67,<<"bingo">>,<<"babs">>,undefined,4},
+             {7.65,<<"yolo!">>,<<"scat">>,undefined,8}]},
+        Result
+    ).
+
+validate_xlate_insert_to_putdata_too_many_values_test() ->
+    Empty = list_to_tuple(lists:duplicate(5, undefined)),
+    Values = [[{integer, 4}, {binary, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}, {integer, 7}],
+           [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
+    Positions = [3, 1, 2, 4],
+    Result = xlate_insert_to_putdata(Values, Positions, Empty),
+    ?assertEqual(
+        {error,"too many values in row index(es) 1"},
+        Result
     ).
 
 -endif.

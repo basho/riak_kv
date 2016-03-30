@@ -33,13 +33,32 @@
 -include("riak_kv_index.hrl").
 -include("riak_kv_ts_error_msgs.hrl").
 
+-type where_props() :: [{startkey, [term()]} |
+                        {endkey, [term()]} |
+                        {filter, [term()]} |
+                        {start_inclusive, boolean()} |
+                        {end_inclusive, boolean()}].
+-type combinator()       :: [binary()].
+-type limit()            :: any().
+-type operator()         :: [binary()].
+-type sorter()           :: term().
+
+
+-export_type([
+    combinator/0,
+    limit/0,
+    operator/0,
+    sorter/0
+]).
+-export_type([where_props/0]).
+
 %% 3rd argument is undefined if we should not be concerned about the
 %% maximum number of quanta
--spec compile(#ddl_v1{}, ?SQL_SELECT{}, 'undefined'|pos_integer()) ->
+-spec compile(?DDL{}, ?SQL_SELECT{}, 'undefined'|pos_integer()) ->
     {ok, [?SQL_SELECT{}]} | {error, any()}.
-compile(#ddl_v1{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
+compile(?DDL{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
     {error, 'query is already compiled'};
-compile(#ddl_v1{} = DDL,
+compile(?DDL{} = DDL,
         ?SQL_SELECT{is_executable = false, 'SELECT' = Sel} = Q, MaxSubQueries) ->
     if Sel#riak_sel_clause_v1.clause == [] ->
             {error, 'full table scan not implemented'};
@@ -55,7 +74,7 @@ compile(#ddl_v1{} = DDL,
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
 %% write that up in time
-compile_where_clause(#ddl_v1{} = DDL,
+compile_where_clause(?DDL{} = DDL,
                      ?SQL_SELECT{is_executable = false,
                                  'WHERE'       = W,
                                  cover_context = Cover} = Q,
@@ -70,7 +89,7 @@ compile_where_clause(#ddl_v1{} = DDL,
     end.
 
 %% now break out the query on quantum boundaries
-expand_query(#ddl_v1{local_key = LK, partition_key = PK},
+expand_query(?DDL{local_key = LK, partition_key = PK},
              ?SQL_SELECT{} = Q1, Where1,
              MaxSubQueries) ->
     case expand_where(Where1, PK, MaxSubQueries) of
@@ -177,7 +196,7 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     end.
 
 %%
--spec get_col_names(#ddl_v1{}, ?SQL_SELECT{}) -> [binary()].
+-spec get_col_names(?DDL{}, ?SQL_SELECT{}) -> [binary()].
 get_col_names(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{clause = Select}}) ->
     ColNames = riak_ql_to_string:col_names_from_select(Select),
     %% flatten because * gets expanded to multiple columns
@@ -187,7 +206,7 @@ get_col_names(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{clause = Select}})
 
 %%
 get_col_names2(DDL, "*") ->
-    [X#riak_field_v1.name || X <- DDL#ddl_v1.fields];
+    [X#riak_field_v1.name || X <- DDL?DDL.fields];
 get_col_names2(_, Name) ->
     list_to_binary(Name).
 
@@ -202,7 +221,7 @@ get_col_names2(_, Name) ->
          }).
 
 %%
--spec select_column_clause_folder(#ddl_v1{}, selection(),
+-spec select_column_clause_folder(?DDL{}, riak_ql_ddl:selection(),
                                   {set(), #riak_sel_clause_v1{}}) ->
                 {set(), #riak_sel_clause_v1{}}.
 select_column_clause_folder(DDL, ColAST1,
@@ -254,7 +273,7 @@ select_column_clause_exploded_folder(DDL, {ColAst, Finaliser}, {TypeSet1, SelCla
 
 %% Compile a single selection column into a fun that can extract the cell
 %% from the row.
--spec compile_select_col(DDL::#ddl_v1{}, ColumnSpec::any()) ->
+-spec compile_select_col(DDL::?DDL{}, ColumnSpec::any()) ->
                                 #single_sel_column{}.
 compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) when is_atom(FnName) ->
     case riak_ql_window_agg_fns:start_state(FnName) of
@@ -285,8 +304,10 @@ compile_select_col(DDL, Select) ->
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
 %% row.
--spec compile_select_col_stateless(#ddl_v1{}, selection()|{Op::atom(), selection(), selection()}|{return_state, integer()}) ->
-       compiled_select().
+-spec compile_select_col_stateless(?DDL{}, riak_ql_ddl:selection()
+                                   | {Op::atom(), riak_ql_ddl:selection(), riak_ql_ddl:selection()}
+                                   | {return_state, integer()}) ->
+                                          compiled_select().
 compile_select_col_stateless(_, {identifier, [<<"*">>]}) ->
     fun(Row, _) -> Row end;
 compile_select_col_stateless(DDL, {negate, ExprToNegate}) ->
@@ -301,7 +322,7 @@ compile_select_col_stateless(_, {finalise_aggregation, FnName, N}) ->
         ColValue = pull_from_row(N, Row),
         riak_ql_window_agg_fns:finalise(FnName, ColValue)
     end;
-compile_select_col_stateless(#ddl_v1{ fields = Fields }, {identifier, ColumnName}) ->
+compile_select_col_stateless(?DDL{ fields = Fields }, {identifier, ColumnName}) ->
     {Index, _} = col_index_and_type_of(Fields, to_column_name_binary(ColumnName)),
     fun(Row,_) -> pull_from_row(Index, Row) end;
 compile_select_col_stateless(DDL, {Op, A, B}) ->
@@ -310,8 +331,8 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
     compile_select_col_stateless2(Op, Arg_a, Arg_b).
 
 %%
--spec infer_col_type(#ddl_v1{}, selection(), Errors1::[any()]) ->
-        {Type::simple_field_type() | error, Errors2::[any()]}.
+-spec infer_col_type(?DDL{}, riak_ql_ddl:selection(), Errors1::[any()]) ->
+        {Type::riak_ql_ddl:simple_field_type() | error, Errors2::[any()]}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
     {Type, Errors};
@@ -321,7 +342,7 @@ infer_col_type(_, {integer, _}, Errors) ->
     {sint64, Errors};
 infer_col_type(_, {float, _}, Errors) ->
     {double, Errors};
-infer_col_type(#ddl_v1{ fields = Fields }, {identifier, ColName1}, Errors) ->
+infer_col_type(?DDL{ fields = Fields }, {identifier, ColName1}, Errors) ->
     case to_column_name_binary(ColName1) of
         <<"*">> ->
             Type = [T || #riak_field_v1{ type = T } <- Fields];
@@ -357,15 +378,18 @@ pull_from_row(N, Row) ->
     lists:nth(N, Row).
 
 %%
--spec extract_stateful_functions(selection(), integer()) ->
-        {selection() | {return_state, integer()}, [selection_function()]}.
+-spec extract_stateful_functions(riak_ql_ddl:selection(), integer()) ->
+        {riak_ql_ddl:selection() |
+         {return_state, integer()}, [riak_ql_ddl:selection_function()]}.
 extract_stateful_functions(Selection1, FinaliserLen) when is_integer(FinaliserLen) ->
     {Selection2, Fns} = extract_stateful_functions2(Selection1, FinaliserLen, []),
     {Selection2, lists:reverse(Fns)}.
 
 %% extract stateful functions from the selection
--spec extract_stateful_functions2(selection(), integer(), [selection_function()]) ->
-        {selection() | {finalise_aggregation, FnName::atom(), integer()}, [selection_function()]}.
+-spec extract_stateful_functions2(riak_ql_ddl:selection(), integer(),
+                                  [riak_ql_ddl:selection_function()]) ->
+        {riak_ql_ddl:selection() | {finalise_aggregation, FnName::atom(), integer()},
+         [riak_ql_ddl:selection_function()]}.
 extract_stateful_functions2({Op, ArgA1, ArgB1}, FinaliserLen, Fns1) ->
     {ArgA2, Fns2} = extract_stateful_functions2(ArgA1, FinaliserLen, Fns1),
     {ArgB2, Fns3} = extract_stateful_functions2(ArgB1, FinaliserLen, Fns2),
@@ -441,39 +465,71 @@ col_index_and_type_of(Fields, ColumnName) ->
             {Position, Type}
     end.
 
-expand_where(Where, #key_v1{ast = PAST}, MaxSubQueries) ->
+%%
+-spec expand_where(riak_ql_ddl:filter(), #key_v1{}, integer()) ->
+        [where_props()] | {error, any()}.
+expand_where(Where, PartitionKey, MaxSubQueries) ->
+    case find_quantum_field_index_in_key(PartitionKey) of
+        {QField, QSize, QUnit, QIndex} ->
+            hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where);
+        notfound ->
+            [Where]
+    end.
+
+%% Return the parameters for the quantum function and it's index in the
+%% partition key fields.
+-spec find_quantum_field_index_in_key(#key_v1{}) ->
+    {QName::binary(), QSize::integer(), QUnit::atom(), QIndex::integer()} | notfound.
+find_quantum_field_index_in_key(#key_v1{ ast = PKAST }) ->
+    find_quantum_field_index_in_key2(PKAST, 1).
+
+%%
+find_quantum_field_index_in_key2([], _) ->
+    notfound;
+find_quantum_field_index_in_key2([#hash_fn_v1{ mod = riak_ql_quanta,
+                                               fn = quantum,
+                                               args = [#param_v1{name = [X]}, Y, Z] }|_], Index) ->
+    {X,Y,Z,Index};
+find_quantum_field_index_in_key2([_|Tail], Index) ->
+    find_quantum_field_index_in_key2(Tail, Index+1).
+
+%%
+hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
     GetMaxMinFun = fun({startkey, List}, {_S, E}) ->
-                           {element(3, lists:last(List)), E};
+                           {element(3, lists:nth(QIndex, List)), E};
                       ({endkey,   List}, {S, _E}) ->
-                           {S, element(3, lists:last(List))};
+                           {S, element(3, lists:nth(QIndex, List))};
                       (_, {S, E})  ->
                            {S, E}
                    end,
-    {Min, Max} = lists:foldl(GetMaxMinFun, {"", ""}, Where),
-    [{[QField], Q, U}] = [{X, Y, Z}
-                          || #hash_fn_v1{mod = riak_ql_quanta,
-                                         fn   = quantum,
-                                         args = [#param_v1{name = X}, Y, Z]}
-                                 <- PAST],
-    EffMin = case proplists:get_value(start_inclusive, Where, true) of
-                 true ->
-                     Min;
-                 _ ->
-                     Min + 1
-             end,
-    EffMax = case proplists:get_value(end_inclusive, Where, false) of
-                 true ->
-                     Max + 1;
-                 _ ->
-                     Max
-             end,
-    {NoSubQueries, Boundaries} = riak_ql_quanta:quanta(EffMin, EffMax, Q, U),
+    {Min1, Max1} = lists:foldl(GetMaxMinFun, {"", ""}, Where1),
+    %% if the start range is not inclusive then add one and remove the
+    %% start_inclusive flag. This is so that the query start key hashes to the
+    %% correct quanta when it is on the boundary since the start_inclusive flag
+    %% is not taken into account in the partition hashing. For example given a
+    %% one second quantum `mytime > 1999` should return keys with mytime greater
+    %% than 2000 but will hash to the quantum before 2000 and receive no results
+    %% from it.
+    case lists:keytake(start_inclusive, 1, Where1) of
+        {value, {start_inclusive, false}, WhereX}  ->
+            Where2 = WhereX,
+            Min2 = Min1 + 1;
+        _ ->
+            Where2 = Where1,
+            Min2 = Min1
+    end,
+    Max2 =
+        case proplists:get_value(end_inclusive, Where2, false) of
+            true  -> Max1 + 1;
+            false -> Max1
+        end,
+    {NoSubQueries, Boundaries} =
+        riak_ql_quanta:quanta(Min2, Max2, QSize, QUnit),
     if
-        NoSubQueries == 1 ->
-            [Where];
-        NoSubQueries > 1 andalso (MaxSubQueries == undefined orelse
-                                  NoSubQueries =< MaxSubQueries) ->
-            make_wheres(Where, QField, Min, Max, Boundaries);
+        MaxSubQueries == undefined orelse NoSubQueries =< MaxSubQueries ->
+            %% use the maximum value that has not been incremented, we still use
+            %% the end_inclusive flag because the end key is not used to hash
+            make_wheres(Where2, QField, Min2, Max1, Boundaries);
         NoSubQueries > MaxSubQueries ->
             {error, {too_many_subqueries, NoSubQueries}}
     end.
@@ -522,35 +578,49 @@ compile_where(DDL, Where) ->
         {true, NewW} -> NewW
     end.
 
-quantum_field_name(#ddl_v1{ partition_key = PK }) ->
-    #key_v1{ ast = PartitionKeyAST } = PK,
-    [_, _, Quantum] = PartitionKeyAST,
-    #hash_fn_v1{args = [#param_v1{name = QFieldName} | _]} = Quantum,
-    QFieldName.
+%%
+quantum_field_name(DDL) ->
+    case find_quantum_fields(DDL) of
+        [QFieldName] ->
+            QFieldName;
+        [] ->
+            no_quanta
+    end.
 
-check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL,
+%%
+find_quantum_fields(?DDL{ partition_key = #key_v1{ ast = PKAST } }) ->
+    [quantum_fn_to_field_name(QuantumFunc) || #hash_fn_v1{ } = QuantumFunc <- PKAST].
+
+%%
+quantum_fn_to_field_name(#hash_fn_v1{ mod = riak_ql_quanta,
+                                      fn = quantum,
+                                      args = [#param_v1{name = [Name]}|_ ] }) ->
+    Name.
+
+check_if_timeseries(?DDL{table = T, partition_key = PK, local_key = LK0} = DDL,
                     [W]) ->
     try
         #key_v1{ast = PartitionKeyAST} = PK,
-        LocalFields     = [X || #param_v1{name = X} <- LK#key_v1.ast],
         PartitionFields = [X || #param_v1{name = X} <- PartitionKeyAST],
-        [QuantumFieldName] = quantum_field_name(DDL),
+        LK = LK0#key_v1{ast = lists:sublist(LK0#key_v1.ast, length(PartitionKeyAST))},
+        QuantumFieldName = quantum_field_name(DDL),
         StrippedW = strip(W, []),
-        {StartW, EndW, Filter} = break_out_timeseries(StrippedW, LocalFields, [QuantumFieldName]),
+        {StartW, EndW, Filter} =
+            break_out_timeseries(StrippedW, PartitionFields, QuantumFieldName),
         Mod = riak_ql_ddl:make_module_name(T),
         StartKey = rewrite(LK, StartW, Mod),
         EndKey = rewrite(LK, EndW, Mod),
-        %% defaults on startkey and endkey are different
-        IncStart = case includes(StartW, '>', Mod) of
-                       true  -> [{start_inclusive, false}];
-                       false -> []
-                   end,
-        IncEnd = case includes(EndW, '<', Mod) of
-                     true  -> [];
-                     false -> [{end_inclusive, true}]
-                 end,
         case has_errors(StartKey, EndKey) of
             [] ->
+                %% defaults on startkey and endkey are different
+                IncStart = case includes(StartW, '>', Mod) of
+                               true  -> [{start_inclusive, false}];
+                               false -> []
+                           end,
+                IncEnd = case includes(EndW, '<', Mod) of
+                             true  -> [];
+                             false -> [{end_inclusive, true}]
+                         end,
                 RewrittenFilter = add_types_to_filter(Filter, Mod),
                 {true, lists:flatten([
                                       {startkey, StartKey},
@@ -569,7 +639,7 @@ check_if_timeseries(#ddl_v1{table = T, partition_key = PK, local_key = LK} = DDL
             %% debugging
             {error, {where_not_timeseries, Reason, erlang:get_stacktrace()}}
     end;
-check_if_timeseries(#ddl_v1{ }, []) ->
+check_if_timeseries(?DDL{}, []) ->
     {error, {no_where_clause, ?E_NO_WHERE_CLAUSE}}.
 
 %%
@@ -598,7 +668,7 @@ includes([{Op1, Field, _} | T], Op2, Mod) ->
     end.
 
 %% find the upper and lower bound for the time
-find_timestamp_bounds(QuantumField, LocalFields) when is_binary(QuantumField) ->
+find_timestamp_bounds(QuantumField, LocalFields) ->
     find_timestamp_bounds2(QuantumField, LocalFields, [], {undefined, undefined}).
 
 %%
@@ -608,15 +678,19 @@ find_timestamp_bounds2(QuantumFieldName, [{or_, {_, QuantumFieldName, _}, _} | _
     %% if this is an or state ment, lookahead at what is being tested, the quanta
     %% cannot be tested with an OR operator
     error({time_bounds_must_use_and_op, ?E_TIME_BOUNDS_MUST_USE_AND});
-find_timestamp_bounds2(QuantumFieldName, [{Op, QuantumFieldName, _} = Filter | Tail], OtherFilters, BoundsAcc1) ->
+find_timestamp_bounds2(QuantumFieldName, [{Op, QuantumFieldName, _} = Filter | Tail],
+                       OtherFilters, BoundsAcc1) ->
     %% if there are already end bounds throw an error
     if
         Op == '>' orelse Op == '>=' ->
-            find_timestamp_bounds2(QuantumFieldName, Tail, OtherFilters, acc_lower_bounds(Filter, BoundsAcc1));
+            find_timestamp_bounds2(
+              QuantumFieldName, Tail, OtherFilters, acc_lower_bounds(Filter, BoundsAcc1));
         Op == '<' orelse Op == '<=' ->
-            find_timestamp_bounds2(QuantumFieldName, Tail, OtherFilters, acc_upper_bounds(Filter, BoundsAcc1));
+            find_timestamp_bounds2(
+              QuantumFieldName, Tail, OtherFilters, acc_upper_bounds(Filter, BoundsAcc1));
         Op == '=' orelse Op == '!=' ->
-            find_timestamp_bounds2(QuantumFieldName, Tail, [Filter | OtherFilters], BoundsAcc1)
+            find_timestamp_bounds2(
+              QuantumFieldName, Tail, [Filter | OtherFilters], BoundsAcc1)
     end;
 find_timestamp_bounds2(QuantumFieldName, [Filter | Tail], OtherFilters, BoundsAcc1) ->
     %% this filter is not on the quantum
@@ -635,8 +709,11 @@ acc_upper_bounds(_Filter, {_, _U}) ->
     error({upper_bound_specified_more_than_once, ?E_TSMSG_DUPLICATE_UPPER_BOUND}).
 
 %%
-break_out_timeseries(Filters1, LocalFields1, [QuantumFields]) ->
-    case find_timestamp_bounds(QuantumFields, Filters1) of
+break_out_timeseries(Filters1, PartitionFields1, no_quanta) ->
+    {Body, Filters2} = split_key_from_filters(PartitionFields1, Filters1),
+    {Body, Body, Filters2};
+break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(QuantumField) ->
+    case find_timestamp_bounds(QuantumField, Filters1) of
         {_, {undefined, undefined}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
         {_, {_, undefined}} ->
@@ -657,13 +734,9 @@ break_out_timeseries(Filters1, LocalFields1, [QuantumFields]) ->
             error({lower_and_upper_bounds_are_equal_when_no_equals_operator,
                    ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR});
         {Filters2, {Starts, Ends}} ->
-            %% remove the quanta from the local fields, this has alreadfy been
-            %% removed from the fields
-            [F1, F2, _] = LocalFields1,
-            LocalFields2 = [F1,F2],
             %% create the keys by splitting the key filters and prepending it
             %% with the time bound.
-            {Body, Filters3} = split_key_from_filters(LocalFields2, Filters2),
+            {Body, Filters3} = split_key_from_filters(PartitionFields1, Filters2),
             {[Starts | Body], [Ends | Body], Filters3}
     end.
 
@@ -676,7 +749,7 @@ split_key_from_filters2([FieldName], Filters) when is_binary(FieldName) ->
     take_key_field(FieldName, Filters, []).
 
 %%
-take_key_field(FieldName, [], Acc) ->
+take_key_field(FieldName, [], Acc) when is_binary(FieldName) ->
     %% check if the field exists in the clause but used the wrong operator or
     %% it never existed at all. Give a more helpful message if the wrong op was
     %% used.
@@ -813,7 +886,7 @@ modify_where_key(TupleList, Field, NewVal) ->
 -define(MIN, 60 * 1000).
 -define(NAME, "time").
 
-is_query_valid(#ddl_v1{ table = Table } = DDL, Q) ->
+is_query_valid(?DDL{table = Table} = DDL, Q) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(Q)).
 
@@ -851,7 +924,7 @@ get_standard_ddl() ->
 
 get_ddl(SQL) ->
     Lexed = riak_ql_lexer:get_tokens(SQL),
-    {ok, DDL} = riak_ql_parser:parse(Lexed),
+    {ddl, DDL, _WithProps} = riak_ql_parser:ql_parse(Lexed),
     {module, _Module} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     DDL.
 
@@ -886,7 +959,7 @@ get_standard_lk() ->
 %%
 
 simple_filter_typing_test() ->
-    #ddl_v1{table = T} = get_long_ddl(),
+    ?DDL{table = T} = get_long_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     Filter = [
               {or_,
@@ -918,7 +991,7 @@ simple_filter_typing_test() ->
 %% we have enough info to build a range scan
 %%
 simple_rewrite_test() ->
-    #ddl_v1{table = T} = get_standard_ddl(),
+    ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
@@ -942,7 +1015,7 @@ simple_rewrite_test() ->
 %% local key - there is no enough info for a range scan
 %%
 simple_rewrite_fail_1_test() ->
-    #ddl_v1{table = T} = get_standard_ddl(),
+    ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
@@ -957,7 +1030,7 @@ simple_rewrite_fail_1_test() ->
       ).
 
 simple_rewrite_fail_2_test() ->
-    #ddl_v1{table = T} = get_standard_ddl(),
+    ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
@@ -972,7 +1045,7 @@ simple_rewrite_fail_2_test() ->
       ).
 
 simple_rewrite_fail_3_test() ->
-    #ddl_v1{table = T} = get_standard_ddl(),
+    ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
                          #param_v1{name = [<<"geohash">>]},
@@ -995,22 +1068,19 @@ simple_rewrite_fail_3_test() ->
 
 simplest_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'San Francisco'",
+    Query =
+        "select weather from GeoCheckin where time > 3000"
+        " and time < 5000 and user = 'user_1' and location = 'San Francisco'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
-    [Where1] =
-        test_data_where_clause(<<"San Francisco">>, <<"user_1">>, [{3000, 5000}]),
-    Where2 = Where1 ++ [{start_inclusive, false}],
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where2,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    [ExpectedWhere] =
+        test_data_where_clause(<<"San Francisco">>, <<"user_1">>, [{3001, 5000}]),
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 simple_with_filter_1_test() ->
     {ok, Q} = get_query(
@@ -1022,23 +1092,18 @@ simple_with_filter_1_test() ->
     DDL = get_standard_ddl(),
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    Where = [
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
+    ExpectedWhere = [
              StartKey,
              EndKey,
-             {filter, {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}},
-             {start_inclusive, false}
+             {filter, {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}}
             ],
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 simple_with_filter_2_test() ->
     {ok, Q} = get_query(
@@ -1051,21 +1116,17 @@ simple_with_filter_2_test() ->
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
         test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    Where = [
+    ExpectedWhere = [
              StartKey,
              EndKey,
              {filter,   {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}}
             ],
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 simple_with_filter_3_test() ->
     {ok, Q} = get_query(
@@ -1077,24 +1138,21 @@ simple_with_filter_3_test() ->
     DDL = get_standard_ddl(),
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
     PK = get_standard_pk(),
     LK = get_standard_lk(),
-    Where = [
+    ExpectedWhere = [
              StartKey,
              EndKey,
              {filter, {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}}},
-             {start_inclusive, false},
-             {end_inclusive,   true}
+             {end_inclusive, true}
             ],
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 simple_with_2_field_filter_test() ->
     {ok, Q} = get_query(
@@ -1107,10 +1165,8 @@ simple_with_2_field_filter_test() ->
     DDL = get_standard_ddl(),
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    Where = [
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
+    ExpectedWhere = [
              StartKey,
              EndKey,
              {filter,
@@ -1118,26 +1174,27 @@ simple_with_2_field_filter_test() ->
                {'=', {field, <<"weather">>, varchar}, {const, <<"yankee">>}},
                {'=', {field, <<"temperature">>, varchar}, {const, <<"yelp">>}}
               }
-             },
-             {start_inclusive, false}
+             }
             ],
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 complex_with_4_field_filter_test() ->
-    Query = "select weather from GeoCheckin where time > 3000 and time < 5000 and user = 'user_1' and location = 'Scotland' and extra = 1 and (weather = 'yankee' or (temperature = 'yelp' and geohash = 'erko'))",
+    Query =
+        "select weather from GeoCheckin where"
+        " time > 3000 and time < 5000 and user = 'user_1'"
+        " and location = 'Scotland' and extra = 1"
+        " and (weather = 'yankee' or (temperature = 'yelp' and geohash = 'erko'))",
     {ok, Q} = get_query(Query),
     DDL = get_long_ddl(),
     true = is_query_valid(DDL, Q),
     [[Start, End | _]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    Where2 = [
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
+    ExpectedWhere = [
               Start, End,
               {filter,
                {and_,
@@ -1149,19 +1206,14 @@ complex_with_4_field_filter_test() ->
                 },
                 {'=', {field, <<"extra">>, sint64}, {const, 1}}
                }
-              },
-              {start_inclusive, false}
+              }
              ],
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable = true,
-                          type          = timeseries,
-                          'WHERE'       = Where2,
-                          partition_key = PK,
-                          local_key     = LK }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 complex_with_boolean_rewrite_filter_test() ->
     DDL = get_long_ddl(),
@@ -1172,10 +1224,8 @@ complex_with_boolean_rewrite_filter_test() ->
                 "AND (myboolean = False OR myboolean = tRue)"),
     true = is_query_valid(DDL, Q),
     [[StartKey, EndKey |_]] =
-        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 5000}]),
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    Where = [
+        test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3001, 5000}]),
+    ExpectedWhere = [
              StartKey,
              EndKey,
              {filter,
@@ -1183,24 +1233,22 @@ complex_with_boolean_rewrite_filter_test() ->
                {'=', {field, <<"myboolean">>, boolean}, {const, false}},
                {'=', {field, <<"myboolean">>, boolean}, {const, true}}
               }
-             },
-             {start_inclusive, false}
+             }
             ],
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ is_executable  = true,
-                          type          = timeseries,
-                          'WHERE'       = Where,
-                          partition_key = PK,
-                          local_key     = LK
-                        }]},
-       compile(DDL, Q, 5)
-      ).
+    {ok, [?SQL_SELECT{ 'WHERE'       = WhereVal,
+                       partition_key = PK,
+                       local_key     = LK }]} = compile(DDL, Q, 5),
+    ?assertEqual(get_standard_pk(), PK),
+    ?assertEqual(get_standard_lk(), LK),
+    ?assertEqual(ExpectedWhere, WhereVal).
 
 %% got for 3 queries to get partition ordering problems flushed out
 simple_spanning_boundary_test() ->
     DDL = get_standard_ddl(),
     {ok, Q} = get_query(
-                "select weather from GeoCheckin where time >= 3000 and time < 31000 and user = 'user_1' and location = 'Scotland'"),
+                "select weather from GeoCheckin"
+                " where time >= 3000 and time < 31000"
+                " and user = 'user_1' and location = 'Scotland'"),
     true = is_query_valid(DDL, Q),
     %% get basic query
     %% now make the result - expecting 3 queries
@@ -1231,7 +1279,10 @@ simple_spanning_boundary_test() ->
 %% one.
 boundary_quanta_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 14000 and time <= 15000 and user = 'user_1' and location = 'Scotland'",
+    Query =
+        "select weather from GeoCheckin"
+        " where time >= 14000 and time <= 15000"
+        " and user = 'user_1' and location = 'Scotland'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% get basic query
@@ -1261,7 +1312,10 @@ test_data_where_clause(Family, Series, StartEndTimes) ->
 %% is exact multiple of quantum size)
 simple_spanning_boundary_precision_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 30000 and user = 'user_1' and location = 'Scotland'",
+    Query =
+        "select weather from GeoCheckin"
+        " where time >= 3000 and time < 30000"
+        " and user = 'user_1' and location = 'Scotland'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% now make the result - expecting 2 queries
@@ -1286,7 +1340,10 @@ simple_spanning_boundary_precision_test() ->
 
 simplest_compile_once_only_fail_test() ->
     DDL = get_standard_ddl(),
-    Query = "select weather from GeoCheckin where time >= 3000 and time < 5000 and user = 'user_1' and location = 'Scotland'",
+    Query =
+        "select weather from GeoCheckin where"
+        " time >= 3000 and time < 5000"
+        " and user = 'user_1' and location = 'Scotland'",
     {ok, Q} = get_query(Query),
     true = is_query_valid(DDL, Q),
     %% now try and compile twice
@@ -1330,23 +1387,12 @@ key_is_all_timestamps_test() ->
                 "SELECT time_a FROM GeoCheckin "
                 "WHERE time_c > 2999 AND time_c < 5000 "
                 "AND time_a = 10 AND time_b = 15"),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{
-                'WHERE' = [
-                           {startkey, [
-                                       {<<"time_a">>, timestamp, 10},
-                                       {<<"time_b">>, timestamp, 15},
-                                       {<<"time_c">>, timestamp, 2999}
-                                      ]},
-                           {endkey, [
-                                     {<<"time_a">>, timestamp, 10},
-                                     {<<"time_b">>, timestamp, 15},
-                                     {<<"time_c">>, timestamp, 5000}
-                                    ]},
-                           {filter, []},
-                           {start_inclusive, false}]
-               }]},
-       compile(DDL, Q, 5)
+    {ok, [?SQL_SELECT{ 'WHERE' = Where }]} = compile(DDL, Q, 5),
+    ?assertEqual(
+        [{startkey, [{<<"time_a">>,timestamp,10}, {<<"time_b">>,timestamp,15}, {<<"time_c">>,timestamp,3000} ]},
+         {endkey,   [{<<"time_a">>,timestamp,10}, {<<"time_b">>,timestamp,15}, {<<"time_c">>,timestamp,5000} ]},
+         {filter, []} ],
+        Where
       ).
 
 duplicate_lower_bound_filter_not_allowed_test() ->
@@ -1378,7 +1424,8 @@ lower_bound_is_bigger_than_upper_bound_test() ->
                 "WHERE time > 6000 AND time < 5000"
                 "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-       {error, {lower_bound_must_be_less_than_upper_bound, ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND}},
+       {error, {lower_bound_must_be_less_than_upper_bound,
+                ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND}},
        compile(DDL, Q, 5)
       ).
 
@@ -1389,7 +1436,8 @@ lower_bound_is_same_as_upper_bound_test() ->
                 "WHERE time > 5000 AND time < 5000"
                 "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-       {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR}},
+       {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator,
+                ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR}},
        compile(DDL, Q, 5)
       ).
 
@@ -1435,7 +1483,8 @@ missing_key_field_in_where_clause_test() ->
 
 not_equals_can_only_be_a_filter_test() ->
     DDL = get_standard_ddl(),
-    {ok, Q} = get_query("select * from test1 where time > 1 and time < 6 and user = '2' and location != '4'"),
+    {ok, Q} = get_query("select * from test1 where time > 1"
+                        " and time < 6 and user = '2' and location != '4'"),
     ?assertEqual(
        {error, {missing_key_clause, ?E_KEY_PARAM_MUST_USE_EQUALS_OPERATOR("location", '!=')}},
        compile(DDL, Q, 5)
@@ -1473,9 +1522,10 @@ run_select_all_test() ->
 
 run_select_first_test() ->
     DDL = get_standard_ddl(),
-    Sel = testing_compile_row_select(DDL,
-                                     "SELECT geohash FROM GeoCheckin "
-                                     "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    Sel = testing_compile_row_select(
+            DDL,
+            "SELECT geohash FROM GeoCheckin "
+            "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     #riak_sel_clause_v1{clause = SelectSpec} = Sel,
     ?assertEqual(
        [<<"geodude">>],
@@ -1484,9 +1534,10 @@ run_select_first_test() ->
 
 run_select_last_test() ->
     DDL = get_standard_ddl(),
-    Sel = testing_compile_row_select(DDL,
-                                     "SELECT temperature FROM GeoCheckin "
-                                     "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    Sel = testing_compile_row_select(
+            DDL,
+            "SELECT temperature FROM GeoCheckin "
+            "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     #riak_sel_clause_v1{clause = SelectSpec} = Sel,
     ?assertEqual(
        [12.2],
@@ -1495,9 +1546,10 @@ run_select_last_test() ->
 
 run_select_all_individually_test() ->
     DDL = get_standard_ddl(),
-    Sel = testing_compile_row_select(DDL,
-                                     "SELECT geohash, location, user, time, weather, temperature FROM GeoCheckin "
-                                     "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    Sel = testing_compile_row_select(
+            DDL,
+            "SELECT geohash, location, user, time, weather, temperature FROM GeoCheckin "
+            "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     #riak_sel_clause_v1{clause = SelectSpec} = Sel,
     ?assertEqual(
        ?ROW,
@@ -1506,9 +1558,10 @@ run_select_all_individually_test() ->
 
 run_select_some_test() ->
     DDL = get_standard_ddl(),
-    Sel = testing_compile_row_select(DDL,
-                                     "SELECT  location, weather FROM GeoCheckin "
-                                     "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    Sel = testing_compile_row_select(
+            DDL,
+            "SELECT  location, weather FROM GeoCheckin "
+            "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     #riak_sel_clause_v1{clause = SelectSpec} = Sel,
     ?assertEqual(
        [<<"derby">>, <<"hot">>],
@@ -1517,9 +1570,10 @@ run_select_some_test() ->
 
 select_count_aggregation_test() ->
     DDL = get_standard_ddl(),
-    Sel = testing_compile_row_select(DDL,
-                                     "SELECT count(location) FROM GeoCheckin "
-                                     "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    Sel = testing_compile_row_select(
+            DDL,
+            "SELECT count(location) FROM GeoCheckin "
+            "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     #riak_sel_clause_v1{clause = SelectSpec} = Sel,
     ?assertEqual(
        [1],
@@ -1529,9 +1583,10 @@ select_count_aggregation_test() ->
 
 select_count_aggregation_2_test() ->
     DDL = get_standard_ddl(),
-    Sel = testing_compile_row_select(DDL,
-                                     "SELECT count(location), count(location) FROM GeoCheckin "
-                                     "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
+    Sel = testing_compile_row_select(
+            DDL,
+            "SELECT count(location), count(location) FROM GeoCheckin "
+            "WHERE time > 1 AND time < 6 AND user = '2' AND location = '4'"),
     #riak_sel_clause_v1{clause = SelectSpec} = Sel,
     ?assertEqual(
        [1, 10],
@@ -1605,7 +1660,10 @@ get_sel_ddl() ->
 
 basic_select_test() ->
     DDL = get_sel_ddl(),
-    SQL = "SELECT location from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
+    SQL =
+        "SELECT location from mytab"
+        " WHERE myfamily = 'familyX'"
+        " and myseries = 'seriesX' and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
     {ok, Sel} = compile_select_clause(DDL, Rec),
     ?assertMatch(#riak_sel_clause_v1{calc_type        = rows,
@@ -1677,7 +1735,10 @@ select_column_and_all_test() ->
       ).
 
 basic_select_window_agg_fn_test() ->
-    SQL = "SELECT count(location), avg(mydouble), avg(mysint) from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
+    SQL =
+        "SELECT count(location), avg(mydouble), avg(mysint)"
+        " from mytab WHERE myfamily = 'familyX'"
+        " and myseries = 'seriesX' and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
     {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(#riak_sel_clause_v1{calc_type        = aggregate,
@@ -1695,7 +1756,10 @@ basic_select_window_agg_fn_test() ->
                  Sel).
 
 basic_select_arith_1_test() ->
-    SQL = "SELECT 1 + 2 - 3 /4 * 5 from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
+    SQL =
+        "SELECT 1 + 2 - 3 /4 * 5 from mytab"
+        " WHERE myfamily = 'familyX' and myseries = 'seriesX'"
+        " and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
     {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
@@ -1740,7 +1804,10 @@ boolean_false_literal_test() ->
       ).
 
 basic_select_arith_2_test() ->
-    SQL = "SELECT 1 + 2.0 - 3 /4 * 5 from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
+    SQL =
+        "SELECT 1 + 2.0 - 3 /4 * 5 from mytab"
+        " WHERE myfamily = 'familyX' and myseries = 'seriesX'"
+        " and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
     {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
@@ -1830,7 +1897,10 @@ extract_stateful_function_1_test() ->
     CountFn1 = {{window_agg_fn, 'COUNT'}, [{identifier, [<<"col1">>]}]},
     CountFn2 = {{window_agg_fn, 'COUNT'}, [{identifier, [<<"col2">>]}]},
     ?assertEqual(
-        {{'+', {finalise_aggregation, 'COUNT', 1}, {finalise_aggregation, 'COUNT', 2}}, [CountFn1,CountFn2]},
+        {{'+',
+          {finalise_aggregation, 'COUNT', 1},
+          {finalise_aggregation, 'COUNT', 2}},
+         [CountFn1,CountFn2]},
         extract_stateful_functions(Select, 0)
     ).
 
@@ -1944,7 +2014,6 @@ compile_query_with_function_type_error_1_test() ->
           "SELECT SUM(location) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
-    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
         {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].">>}},
         compile(get_standard_ddl(), Q, 100)
@@ -1955,7 +2024,6 @@ compile_query_with_function_type_error_2_test() ->
           "SELECT SUM(location), AVG(location) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
-    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
         {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].\n"
                                 "Function 'AVG' called with arguments of the wrong type [varchar].">>}},
@@ -1977,7 +2045,6 @@ compile_query_with_arithmetic_type_error_1_test() ->
           "SELECT location + 1 FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
-    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
         {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
@@ -1988,10 +2055,183 @@ compile_query_with_arithmetic_type_error_2_test() ->
           "SELECT 2*(location + 1) FROM GeoCheckin "
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
-    io:format(user, "~p", [compile(get_standard_ddl(), Q, 100)]),
     ?assertEqual(
         {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q, 100)
+    ).
+
+flexible_keys_1_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab4("
+        "a1 SINT64 NOT NULL, "
+        "a TIMESTAMP NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "c VARCHAR NOT NULL, "
+        "d SINT64 NOT NULL, "
+        "PRIMARY KEY  ((a1, quantum(a, 15, 's')), a1, a, b, c, d))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab4 WHERE a > 0 AND a < 1000 AND a1 = 1"),
+    {ok, [Select]} = compile(DDL, Q, 100),
+    ?assertEqual(
+        [{startkey,[{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1}]},
+          {endkey, [{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1000}]},
+          {filter,[]}],
+        Select#riak_select_v1.'WHERE'
+    ).
+
+%% two element key with quantum
+flexible_keys_2_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab4("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((quantum(a, 15, 's')), a))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab4 WHERE a > 0 AND a < 1000"),
+    ?assertMatch(
+        {ok, [#riak_select_v1{}]},
+        compile(DDL, Q, 100)
+    ).
+
+quantum_field_name_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a,quantum(b, 15, 's')), a,b))"),
+    ?assertEqual(
+        <<"b">>,
+        quantum_field_name(DDL)
+    ).
+
+quantum_field_name_no_quanta_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a,b), a,b))"),
+    ?assertEqual(
+        no_quanta,
+        quantum_field_name(DDL)
+    ).
+
+%% short key, partition and local keys are the same
+no_quantum_in_query_1_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tabab("
+        "a TIMESTAMP NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "PRIMARY KEY  ((a,b), a,b))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1 AND b = 1"),
+    ?assertMatch(
+        {ok, [#riak_select_v1{
+            'WHERE' =
+                [{startkey,[{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
+                 {endkey,  [{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
+                 {filter,[]},
+                 {end_inclusive,true}] }]},
+        compile(DDL, Q, 100)
+    ).
+
+%% partition and local key are different
+no_quantum_in_query_2_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tabab("
+        "a SINT64 NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "c DOUBLE NOT NULL, "
+        "d BOOLEAN NOT NULL, "
+        "PRIMARY KEY  ((c,a,b), c,a,b,d))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tabab WHERE a = 1000 AND b = 'bval' AND c = 3.5"),
+    {ok, [Select]} = compile(DDL, Q, 100),
+    Key =
+        [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>}],
+    ?assertEqual(
+        [{startkey, Key},
+         {endkey, Key},
+         {filter,[]},
+         {end_inclusive,true}],
+        Select#riak_select_v1.'WHERE'
+    ).
+
+
+no_quantum_in_query_3_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tababa("
+        "a SINT64 NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "c DOUBLE NOT NULL, "
+        "d BOOLEAN NOT NULL, "
+        "PRIMARY KEY  ((c,a,b), c,a,b,d))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tababa WHERE a = 1000 AND b = 'bval' AND c = 3.5 AND d = true"),
+    {ok, [Select]} = compile(DDL, Q, 100),
+    Key =
+        [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>}],
+    ?assertEqual(
+        [{startkey, Key},
+         {endkey, Key},
+         {filter,{'=',{field,<<"d">>,boolean},{const, true}}},
+         {end_inclusive,true}],
+        Select#riak_select_v1.'WHERE'
+    ).
+
+%% one element key
+no_quantum_in_query_4_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a), a))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1000"),
+    {ok, [Select]} = compile(DDL, Q, 100),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,timestamp,1000}]},
+          {endkey,[{<<"a">>,timestamp,1000}]},
+          {filter,[]},
+          {end_inclusive,true}],
+        Select#riak_select_v1.'WHERE'
+    ).
+
+two_element_key_range_cannot_match_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tabab("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY  ((a,quantum(b, 15, 's')), a,b))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1 AND b > 1 AND b < 1"),
+    ?assertMatch(
+        {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, <<_/binary>>}},
+        compile(DDL, Q, 100)
+    ).
+
+quantum_is_not_last_element_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY  ((a,quantum(b,1,'s'),c), a,b,c))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE b >= 1000 AND b <= 3000 AND a = 10 AND c = 20"),
+    {ok, SubQueries} = compile(DDL, Q, 100),
+    SubQueryWheres = [S#riak_select_v1.'WHERE' || S <- SubQueries],
+    ?assertEqual(
+        [
+            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,1000},{<<"c">>,sint64,20}]},
+             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
+             {filter,[]}],
+            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
+             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
+             {filter,[]}],
+            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
+             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
+             {filter,[]},
+             {end_inclusive,true}]
+        ],
+        SubQueryWheres
     ).
 
 negate_an_aggregation_function_test() ->

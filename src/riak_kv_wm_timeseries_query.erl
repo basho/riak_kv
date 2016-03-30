@@ -330,6 +330,3 @@ to_json({Columns, Rows}) when is_list(Columns), is_list(Rows) ->
                 {<<"rows">>, Rows}]});
 to_json(Other) ->
     mochijson2:encode(Other).
-
-%% log(Format, Args) ->
-%%     lager:log(info, self(), Format, Args).
