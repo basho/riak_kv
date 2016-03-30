@@ -34,7 +34,7 @@
          pk/1,
          queried_table/1,
          table_to_bucket/1,
-         build_sql_record/3,
+         build_sql_record/4,
          sql_record_to_tuple/1
         ]).
 -export([explain_query/1, explain_query/2]).
@@ -59,7 +59,11 @@ sql_record_to_tuple(?SQL_SELECT{'FROM'=From,
     {From, Select, Where}.
 
 %% Convert the proplist obtained from the QL parser
-build_sql_record(select, SQL, Cover) ->
+
+build_sql_record(Atom, SQL, Cover) ->
+    build_sql_record(Atom, SQL, Cover, tsqueryreq).
+
+build_sql_record(select, SQL, Cover, Request) ->
     T = proplists:get_value(tables, SQL),
     F = proplists:get_value(fields, SQL),
     L = proplists:get_value(limit, SQL),
@@ -72,15 +76,16 @@ build_sql_record(select, SQL, Cover) ->
                          'WHERE'    = W,
                          'LIMIT'    = L,
                          helper_mod = riak_ql_ddl:make_module_name(T),
-                         cover_context = Cover}
+                         cover_context = Cover,
+			 request       = Request}
             };
         false ->
             {error, <<"Must provide exactly one table name">>}
     end;
-build_sql_record(describe, SQL, _Cover) ->
+build_sql_record(describe, SQL, _Cover, Request) ->
     D = proplists:get_value(identifier, SQL),
-    {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
-build_sql_record(insert, SQL, _Cover) ->
+    {ok, #riak_sql_describe_v1{'DESCRIBE' = D, request = Request}};
+build_sql_record(insert, SQL, _Cover, Request) ->
     T = proplists:get_value(table, SQL),
     case is_binary(T) of
         true ->
@@ -91,7 +96,8 @@ build_sql_record(insert, SQL, _Cover) ->
             {ok, #riak_sql_insert_v1{'INSERT'   = T,
                                      fields     = F,
                                      values     = V,
-                                     helper_mod = Mod
+                                     helper_mod = Mod,
+				     request    = Request
                                     }};
         false ->
             {error, <<"Must provide exactly one table name">>}
