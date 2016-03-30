@@ -105,7 +105,7 @@ service_available(RD, #ctx{riak = RiakProps}=Ctx) ->
             Mod = riak_ql_ddl:make_module_name(Table),
             {true, RD, Ctx#ctx{table=Table, mod=Mod}};
         {error, Reason} ->
-            Resp = riak_kv_wm_ts_util:set_error_message("Unable to connect to Riak: ~p", [Reason], RD),
+            Resp = riak_kv_wm_ts_util:set_error_message("Node not ready: ~p", [Reason], RD),
             {false, Resp, Ctx}
     end.
 
@@ -281,7 +281,6 @@ delete_resource(RD,  #ctx{table=Table,
               {{halt, 404}, Resp, Ctx}
      catch
          _:Reason ->
-             lager:log(info, self(), "delete_resource failed: ~p", [Reason]),
              Resp = riak_kv_wm_ts_util:set_error_message("Internal error: ~p", [Reason], RD),
              {{halt, 500}, Resp, Ctx}
      end.
@@ -364,8 +363,7 @@ extract_data(RD, Mod) ->
         DDLFieldTypes = ddl_fields_and_types(Mod),
         extract_records(Json, DDLFieldTypes)
     catch
-        Error:Reason ->
-            lager:log(info, self(), "extract_data: ~p:~p", [Error, Reason]),
+        _Error:Reason ->
             throw({data_problem, Reason})
     end.
 

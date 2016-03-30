@@ -264,7 +264,7 @@ query_string_from_request(RD) ->
     end.
 
 compile_query(QueryStr) ->
-    case riak_ql_parser:ql_parse(
+    try riak_ql_parser:ql_parse(
            riak_ql_lexer:get_tokens(QueryStr)) of
         {error, Reason} ->
             ErrorMsg = lists:flatten(io_lib:format("parse error: ~p", [Reason])),
@@ -277,6 +277,10 @@ compile_query(QueryStr) ->
             {Type, SQL};
         {UnsupportedType, _ } ->
             throw({unsupported_sql_type, UnsupportedType})
+    catch
+        E:T ->
+            ErrorMsg = io_lib:format("query error: ~p:~p", [E, T]),
+            throw({query, ErrorMsg})
     end.
 
 %% @todo: should really be in riak_ql somewhere
