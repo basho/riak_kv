@@ -128,7 +128,7 @@ encodings_provided(RD, Ctx) ->
                                     cb_rv_spec([{ContentType::string(), Producer::atom()}]).
 %% @doc List the content types available for representing this resource.
 content_types_provided(RD, Ctx) ->
-      {[{"application/json", produce_doc_body}], RD, Ctx}.
+      {[{"text/plain", produce_doc_body}], RD, Ctx}.
 
 produce_doc_body(RD, Ctx = #ctx{table = Table, mod=Mod,
                                 client = Client}) ->
@@ -137,7 +137,7 @@ produce_doc_body(RD, Ctx = #ctx{table = Table, mod=Mod,
     {{halt, 200}, wrq:set_resp_body({stream, prepare_stream(ReqId, Table, Mod)}, RD), Ctx}.
 
 prepare_stream(ReqId, Table, Mod) ->
-    {<<"<html>">>, fun() -> stream_keys(ReqId, Table, Mod) end}.
+    {<<"">>, fun() -> stream_keys(ReqId, Table, Mod) end}.
 
 stream_keys(ReqId, Table, Mod) ->
     receive
@@ -149,11 +149,11 @@ stream_keys(ReqId, Table, Mod) ->
             stream_keys(ReqId, Table, Mod);
         {ReqId, From, {keys, Keys}} ->
             _ = riak_kv_keys_fsm:ack_keys(From),
-            {ts_keys_to_json(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
+            {ts_keys_to_body(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, {keys, Keys}} ->
-            {ts_keys_to_json(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
+            {ts_keys_to_body(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, done} ->
-            {<<"</html>">>, done};
+            {<<"">>, done};
         {ReqId, {error, timeout}} ->
             {mochijson2:encode({struct, [{error, timeout}]}), done};
         _Weird ->
@@ -161,7 +161,7 @@ stream_keys(ReqId, Table, Mod) ->
             stream_keys(ReqId, Table, Mod)
     end.
 
-ts_keys_to_json(EncodedKeys, Table, Mod) ->
+ts_keys_to_body(EncodedKeys, Table, Mod) ->
     BaseUrl = base_url(Table),
     Keys = decode_keys(EncodedKeys),
     KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
@@ -173,13 +173,12 @@ ts_keys_to_json(EncodedKeys, Table, Mod) ->
     %%                          format_url(BaseUrl, KeyTypes, Key)
     %%                  end,
     %%                  Keys),
-    JsonList = [ mochijson2:encode([{url, URL}]) || URL <- URLs],
-    list_to_binary(lists:flatten(JsonList)).
+    list_to_binary(lists:flatten(URLs)).
 
 
 format_url(BaseUrl, KeyTypes, Key) ->
     list_to_binary(
-      io_lib:format("~s~s", [BaseUrl, key_to_string(Key, KeyTypes)])).
+      io_lib:format("~s~s~n", [BaseUrl, key_to_string(Key, KeyTypes)])).
 
 decode_keys(Keys) ->
     [tuple_to_list(sext:decode(A))
