@@ -25,6 +25,7 @@
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
+-include_lib("riak_pb/include/riak_ts_ttb.hrl").
 
 -include("riak_kv_ts.hrl").
 -include("riak_kv_wm_raw.hrl").
