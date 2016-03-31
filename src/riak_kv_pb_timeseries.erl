@@ -33,6 +33,7 @@
 
 -export([init/0,
          decode/2,
+	 decode_query_common/3,
          encode/1,
          process/2,
          process_stream/3]).
@@ -70,9 +71,11 @@
          }).
 
 -type ts_requests() :: #tsputreq{} | #tsttbputreq{} |
-                       #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{} | #tsqueryreq{} | #tsttbqueryreq{}.
--type ts_responses() :: #tsputresp{} |
-                        #tsdelresp{} | #tsgetresp{} | #tslistkeysresp{} | #tsqueryresp{} | #tsttbqueryresp{} | #rpberrorresp{}.
+                       #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{} | 
+		       #tsqueryreq{} | #tsttbqueryreq{}.
+-type ts_responses() :: #tsputresp{} | #tsttbputresp{} | 
+                        #tsdelresp{} | #tsgetresp{} | #tslistkeysresp{} | 
+			#tsqueryresp{} | #tsttbqueryresp{} | #rpberrorresp{}.
 -type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
                           #riak_sql_insert_v1{}.
 
@@ -85,6 +88,11 @@ init() ->
 -spec decode(integer(), binary()) ->
                     {ok, ts_requests(), {PermSpec::string(), Table::binary()}} |
                     {error, _}.
+
+%% ------------------------------------------------------------ 
+%% We only decode PB messages here -- TTB variants are decoded by the
+%% riak_kv_ttb_timeseries service
+%% ------------------------------------------------------------
 
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
@@ -158,6 +166,10 @@ decode_query_permissions(#riak_sql_insert_v1{'INSERT' = Table}) ->
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
+%% ------------------------------------------------------------
+%% However, both PB and TTB variants are processed here, since the
+%% sub-functions are common to both
+%% ------------------------------------------------------------
 
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
                      {reply, ts_responses(), #state{}}.
