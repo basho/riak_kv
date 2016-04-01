@@ -59,9 +59,13 @@ sql_record_to_tuple(?SQL_SELECT{'FROM'=From,
     {From, Select, Where}.
 
 %% Convert the proplist obtained from the QL parser
-
+%% 
+%% Passes atom 'none' as the originating request to build_sql_record/4
+%% when not called in the context of servicing a tsqueryreq or
+%% tsttbqueryreq
+%%
 build_sql_record(Atom, SQL, Cover) ->
-    build_sql_record(Atom, SQL, Cover, tsqueryreq).
+    build_sql_record(Atom, SQL, Cover, none).
 
 build_sql_record(select, SQL, Cover, Request) ->
     T = proplists:get_value(tables, SQL),

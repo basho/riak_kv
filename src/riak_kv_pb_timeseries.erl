@@ -91,8 +91,16 @@ init() ->
                     {error, _}.
 
 %% ------------------------------------------------------------ 
-%% We only decode PB messages here -- TTB variants are decoded by the
-%% riak_kv_ttb_timeseries service
+%% Decode both PB and TTB messages here.  
+%%
+%% Ideally, we would register a separate service for TTB messages, but
+%% query processing in particular requires significant amounts of code
+%% localized to this module, and it doesn't make sense to duplicate it
+%% elsewhere, or just have a shell service that points back to this
+%% module, so the messages are processed here.
+%%
+%% riak_pb_codec knows about TTB messages and decodes them seamlessly
+%% under the hood
 %% ------------------------------------------------------------
 
 decode(Code, Bin) ->
@@ -129,12 +137,12 @@ decode_query_common(Q, Cover, Request) ->
 	    {ok, make_decoder_error_response(Error)}
     end.
 
--spec decode_query(Query::#tsinterpolation{}) ->
+-spec decode_query(Query::#tsinterpolation{}, Request::atom()) ->
     {error, _} | {ok, ts_query_types()}.
-decode_query(SQL) ->
-    decode_query(SQL, undefined, tsqueryreq).
+decode_query(SQL, Request) ->
+    decode_query(SQL, undefined, Request).
 
--spec decode_query(Query::#tsinterpolation{}, term(), atom()) ->
+-spec decode_query(Query::#tsinterpolation{}, Cover::term(), Request::atom()) ->
     {error, _} | {ok, ts_query_types()}.
 decode_query(#tsinterpolation{ base = BaseQuery }, Cover, Request) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
@@ -707,7 +715,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                                             query = Q},
                   State) ->
-    case compile(Mod, catch decode_query(Q)) of
+    case compile(Mod, catch decode_query(Q, tscoveragereq)) of
         {error, #rpberrorresp{} = Error} ->
             {reply, Error, State};
         {error, _} ->
@@ -857,7 +865,7 @@ compile(Mod, {ok, ?SQL_SELECT{}=SQL}) ->
 -spec sub_tsqueryreq(module(), #ddl_v1{},
                      ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{},
                      #state{}) ->
-                     {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+                     {reply, #tsqueryresp{} | #tsttbqueryresp{} | #rpberrorresp{}, #state{}}.
 sub_tsqueryreq(Mod, DDL, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
         {ok, Data}  ->
