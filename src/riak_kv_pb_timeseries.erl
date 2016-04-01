@@ -34,7 +34,7 @@
 
 -export([init/0,
          decode/2,
-	 decode_query_common/3,
+         decode_query_common/3,
          encode/1,
          process/2,
          process_stream/3]).
@@ -73,10 +73,10 @@
 
 -type ts_requests() :: #tsputreq{} | #tsttbputreq{} |
                        #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{} | 
-		       #tsqueryreq{} | #tsttbqueryreq{}.
+                       #tsqueryreq{} | #tsttbqueryreq{}.
 -type ts_responses() :: #tsputresp{} | #tsttbputresp{} | 
                         #tsdelresp{} | #tsgetresp{} | #tslistkeysresp{} | 
-			#tsqueryresp{} | #tsttbqueryresp{} | #rpberrorresp{}.
+                        #tsqueryresp{} | #tsttbqueryresp{} | #rpberrorresp{}.
 -type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
                           #riak_sql_insert_v1{}.
 
@@ -128,13 +128,13 @@ decode_query_common(Q, Cover, Request) ->
     %% convert error returns to ok's, this means it will be passed into
     %% process which will not process it and return the error.
     case catch decode_query(Q, Cover, Request) of
-	{ok, DecodedQuery} ->
-	    PermAndTarget = decode_query_permissions(DecodedQuery),
-	    {ok, DecodedQuery, PermAndTarget};
-	{error, Error} ->
-	    {ok, make_decoder_error_response(Error)};
-	{'EXIT', {Error, _}} ->
-	    {ok, make_decoder_error_response(Error)}
+        {ok, DecodedQuery} ->
+            PermAndTarget = decode_query_permissions(DecodedQuery),
+            {ok, DecodedQuery, PermAndTarget};
+        {error, Error} ->
+            {ok, make_decoder_error_response(Error)};
+        {'EXIT', {Error, _}} ->
+            {ok, make_decoder_error_response(Error)}
     end.
 
 -spec decode_query(Query::#tsinterpolation{}, Request::atom()) ->
@@ -319,7 +319,7 @@ make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields,
                 make_rpberrresp(?E_BAD_QUERY, ValueReason);
             {ok, Data} ->
                 insert_putreqs(Mod, Table, Data, Request)
-	    end;
+            end;
     {error, FieldReason} ->
         make_rpberrresp(?E_BAD_QUERY, FieldReason)
     end.
@@ -334,7 +334,7 @@ insert_putreqs(Mod, Table, Data, Request) ->
         [] ->
             case put_data(Data, Table, Mod) of
                 0 ->
-		    query_response(Request);
+                    query_response(Request);
                 ErrorCount ->
                     failed_put_response(ErrorCount)
             end;
@@ -359,14 +359,14 @@ make_empty_row(Mod) ->
                            {ok, [pos_integer()]} | {error, string()}.
 lookup_field_positions(Mod, FieldIdentifiers) ->
     case lists:foldl(
-	   fun({identifier, FieldName}, {Good, Bad}) ->
-		   case Mod:is_field_valid(FieldName) of
+           fun({identifier, FieldName}, {Good, Bad}) ->
+                   case Mod:is_field_valid(FieldName) of
                false ->
                    {Good, [FieldName | Bad]};
                true ->
                    {[Mod:get_field_position(FieldName) | Good], Bad}
-		   end
-	   end, {[], []}, FieldIdentifiers)
+                   end
+           end, {[], []}, FieldIdentifiers)
     of
         {Positions, []} ->
             {ok, lists:reverse(Positions)};
@@ -1047,7 +1047,7 @@ make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}, tsqueryreq) ->
                  rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)};
 make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}, tsttbqueryreq) ->
     #tsttbqueryresp{columns = {ColumnNames, ColumnTypes},
-		    rows = JustRows}.
+                    rows = JustRows}.
 
 -spec make_describe_response([[term()]], atom()) -> #tsqueryresp{} | #tsttbqueryresp{}.
 make_describe_response(DescribeTableRows, tsqueryreq) ->

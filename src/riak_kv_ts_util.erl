@@ -81,7 +81,7 @@ build_sql_record(select, SQL, Cover, Request) ->
                          'LIMIT'    = L,
                          helper_mod = riak_ql_ddl:make_module_name(T),
                          cover_context = Cover,
-			 request       = Request}
+                         request       = Request}
             };
         false ->
             {error, <<"Must provide exactly one table name">>}
@@ -101,7 +101,7 @@ build_sql_record(insert, SQL, _Cover, Request) ->
                                      fields     = F,
                                      values     = V,
                                      helper_mod = Mod,
-				     request    = Request
+                                     request    = Request
                                     }};
         false ->
             {error, <<"Must provide exactly one table name">>}

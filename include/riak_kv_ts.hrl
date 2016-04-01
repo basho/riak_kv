@@ -55,13 +55,13 @@
           type          = sql   :: sql | timeseries,
           cover_context = undefined :: term(), %% for parallel queries
           local_key,                           %% prolly a mistake to put this here - should be in DDL
-	  request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
+          request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
         }).
 
 -record(riak_sql_describe_v1,
         {
           'DESCRIBE'    = <<>>  :: binary(),
-	  request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
+          request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
         }).
 
 -record(riak_sql_insert_v1,
@@ -70,7 +70,7 @@
           fields                :: [riak_ql_ddl:field_identifier()],
           values                :: [[riak_ql_ddl:data_value()]],
           helper_mod            :: atom(),
-	  request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
+          request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
         }).
 
 -define(SQL_SELECT, #riak_select_v1).
