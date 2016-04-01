@@ -1035,6 +1035,7 @@ maybe_get_vnode_lock(SrcPartition, Pid) ->
 
 snapshot_and_async_update_tree(Tree, Id, From, Callback) ->
     {SnapTree, Tree2} = hashtree:update_snapshot(Tree),
+    Tree3 = hashtree:set_next_rebuild(Tree2, full),
     Self = self(),
     spawn_link(
         fun() ->
@@ -1049,7 +1050,7 @@ snapshot_and_async_update_tree(Tree, Id, From, Callback) ->
             gen_server:cast(Self, {updated, Id}),
             gen_server:reply(From, ok)
         end),
-    Tree2.
+    Tree3.
 
 maybe_callback(undefined) ->
     ok;
