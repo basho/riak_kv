@@ -81,6 +81,7 @@ insert(BucketType, DDLVersion, DDL, CompilerPid, State) ->
     lager:info("DDL DETS Update: ~p, ~p, ~p, ~p, ~p",
                [BucketType, DDLVersion, DDL, CompilerPid, State]),
     dets:insert(?TABLE, {BucketType, DDLVersion, DDL, CompilerPid, State}),
+    dets:sync(?TABLE),
     ok.
 
 %% Check if the bucket type is in the compiling state.
