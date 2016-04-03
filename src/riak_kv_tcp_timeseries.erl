@@ -34,7 +34,7 @@
 
 -export([init/0,
          decode/2,
-         decode_query_common/3,
+         decode_query_common/2,
          encode/1,
          process/2,
          process_stream/3]).
@@ -98,7 +98,7 @@ decode(?TTB_MSG_CODE, Bin) ->
     Msg = riak_ttb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover} ->
-            decode_query_common(Q, Cover, tsqueryreq);
+            decode_query_common(Q, Cover);
         #tsgetreq{table = Table}->
             {ok, Msg, {"riak_kv.ts_get", Table}};
         #tsputreq{table = Table} ->
@@ -108,7 +108,7 @@ decode(Code, Bin) when Code >= 90, Code <= 103  ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover} ->
-            decode_query_common(Q, Cover, tsqueryreq);
+            decode_query_common(Q, Cover);
         #tsgetreq{table = Table}->
             {ok, Msg, {"riak_kv.ts_get", Table}};
         #tsputreq{table = Table} ->
