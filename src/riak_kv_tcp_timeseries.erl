@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_pb_timeseries.erl: Riak TS protobuf callbacks
+%% riak_kv_tcp_timeseries.erl: Riak TS PB/TTB callbacks
 %%
 %% Copyright (c) 2016 Basho Technologies, Inc.
 %%
@@ -19,9 +19,9 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..104]
+%% @doc Callbacks for TS TCP messages [codes 90..104]
 
--module(riak_kv_pb_timeseries).
+-module(riak_kv_tcp_timeseries).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
@@ -92,29 +92,26 @@ init() ->
 
 %% ------------------------------------------------------------ 
 %% Decode both PB and TTB messages here.  
-%%
-%% Ideally, we would register a separate service for TTB messages, but
-%% query processing in particular requires significant amounts of code
-%% localized to this module, and it doesn't make sense to duplicate it
-%% elsewhere, or just have a shell service that points back to this
-%% module, so the messages are processed here.
-%%
-%% riak_pb_codec knows about TTB messages and decodes them seamlessly
-%% under the hood
 %% ------------------------------------------------------------
 
-decode(Code, Bin) ->
+decode(?TTB_MSG_CODE, Bin) ->
+    Msg = riak_ttb_codec:decode(Code, Bin),
+    case Msg of
+        #tsqueryreq{query = Q, cover_context = Cover} ->
+            decode_query_common(Q, Cover, tsqueryreq);
+        #tsgetreq{table = Table}->
+            {ok, Msg, {"riak_kv.ts_get", Table}};
+        #tsputreq{table = Table} ->
+            {ok, Msg, {"riak_kv.ts_put", Table}}
+    end;
+decode(Code, Bin) when Code >= 90, Code <= 103  ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover} ->
             decode_query_common(Q, Cover, tsqueryreq);
-        #tsttbqueryreq{query = Q, cover_context = Cover} ->
-            decode_query_common(Q, Cover, tsttbqueryreq);
         #tsgetreq{table = Table}->
             {ok, Msg, {"riak_kv.ts_get", Table}};
         #tsputreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_put", Table}};
-        #tsttbputreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_put", Table}};
         #tsdelreq{table = Table} ->
             {ok, Msg, {"riak_kv.ts_del", Table}};
@@ -124,10 +121,10 @@ decode(Code, Bin) ->
             {ok, Msg, {"riak_kv.ts_cover", Table}}
     end.
 
-decode_query_common(Q, Cover, Request) ->
+decode_query_common(Q, Cover) ->
     %% convert error returns to ok's, this means it will be passed into
     %% process which will not process it and return the error.
-    case catch decode_query(Q, Cover, Request) of
+    case catch decode_query(Q, Cover) of
         {ok, DecodedQuery} ->
             PermAndTarget = decode_query_permissions(DecodedQuery),
             {ok, DecodedQuery, PermAndTarget};
@@ -137,22 +134,22 @@ decode_query_common(Q, Cover, Request) ->
             {ok, make_decoder_error_response(Error)}
     end.
 
--spec decode_query(Query::#tsinterpolation{}, Request::atom()) ->
+-spec decode_query(Query::#tsinterpolation{}) ->
     {error, _} | {ok, ts_query_types()}.
-decode_query(SQL, Request) ->
-    decode_query(SQL, undefined, Request).
+decode_query(SQL) ->
+    decode_query(SQL, undefined).
 
--spec decode_query(Query::#tsinterpolation{}, Cover::term(), Request::atom()) ->
+-spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
     {error, _} | {ok, ts_query_types()}.
-decode_query(#tsinterpolation{ base = BaseQuery }, Cover, Request) ->
+decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
     case riak_ql_parser:ql_parse(Lexed) of
         {select, SQL} ->
-            riak_kv_ts_util:build_sql_record(select, SQL, Cover, Request);
+            riak_kv_ts_util:build_sql_record(select, SQL, Cover);
         {describe, SQL} ->
-            riak_kv_ts_util:build_sql_record(describe, SQL, Cover, Request);
+            riak_kv_ts_util:build_sql_record(describe, SQL, Cover);
         {insert, SQL} ->
-            riak_kv_ts_util:build_sql_record(insert, SQL, Cover, Request);
+            riak_kv_ts_util:build_sql_record(insert, SQL, Cover);
         {ddl, DDL, WithProperties} ->
             {ok, {DDL, WithProperties}};
         Other ->
