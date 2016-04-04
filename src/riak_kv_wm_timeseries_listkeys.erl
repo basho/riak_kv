@@ -165,14 +165,18 @@ ts_keys_to_body(EncodedKeys, Table, Mod) ->
     BaseUrl = base_url(Table),
     Keys = decode_keys(EncodedKeys),
     KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
-    URLs = [format_url(BaseUrl, KeyTypes, Key)
-            || Key <- Keys],
-    %% Dialyzer does not like the list_comprehension, if you want to avoid the
-    %% dialyzer error you have to write it like this:
-    %% URLs = lists:map(fun(Key) ->
-    %%                          format_url(BaseUrl, KeyTypes, Key)
-    %%                  end,
-    %%                  Keys),
+    %% Dialyzer issues this warning if the lists:map is replaced with
+    %% the list comprehension (below):
+    %%   riak_kv_wm_timeseries_listkeys.erl:168: The pattern [Key | _] can never match the type []
+    %% for which no clear workaround could be found.
+    %%
+    %% URLs = [format_url(BaseUrl, KeyTypes, Key)
+    %%         || Key <- Keys],
+
+    URLs = lists:map(fun(Key) ->
+                             format_url(BaseUrl, KeyTypes, Key)
+                     end,
+                     Keys),
     list_to_binary(lists:flatten(URLs)).
 
 

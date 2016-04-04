@@ -156,7 +156,7 @@ encodings_provided(RD, Ctx) ->
 
 
 -spec content_types_accepted(#wm_reqdata{}, #ctx{}) ->
-                                    cb_rv_spec([{ContentType::string(), Acceptor::atom()}]).
+                                    cb_rv_spec([ContentType::string()]).
 content_types_accepted(RD, Ctx) ->
     {["text/plain"], RD, Ctx}.
 
