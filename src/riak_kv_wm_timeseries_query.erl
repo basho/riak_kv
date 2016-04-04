@@ -63,6 +63,7 @@
           security,     %% security context
           sql_type,
           compiled_query :: undefined | #ddl_v1{} | #riak_sql_describe_v1{} | #riak_select_v1{},
+          with_props     :: undefined | proplists:proplist(),
           result         :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]} |
                             [{entry, proplists:proplist()}]
          }).
@@ -99,11 +100,12 @@ allowed_methods(RD, Ctx) ->
 -spec malformed_request(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 malformed_request(RD, Ctx) ->
     try
-        {SqlType, SQL} = query_from_request(RD),
+        {SqlType, SQL, WithProps} = query_from_request(RD),
         Table = table_from_sql(SQL),
         Mod = riak_ql_ddl:make_module_name(Table),
         {false, RD, Ctx#ctx{sql_type=SqlType,
                             compiled_query=SQL,
+                            with_props=WithProps,
                             table=Table,
                             mod=Mod}}
     catch
@@ -193,8 +195,8 @@ post_is_create(RD, Ctx) ->
     {false, RD, Ctx}.
 
 -spec process_post(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
-process_post(RD, #ctx{sql_type=ddl, compiled_query=SQL}=Ctx) ->
-    case create_table(SQL) of
+process_post(RD, #ctx{sql_type = ddl, compiled_query = SQL, with_props = WithProps} = Ctx) ->
+    case create_table(SQL, WithProps) of
         ok ->
             Result =  [{success, true}],  %% represents ok
             Json = to_json(Result),
@@ -269,12 +271,14 @@ compile_query(QueryStr) ->
         {error, Reason} ->
             ErrorMsg = lists:flatten(io_lib:format("parse error: ~p", [Reason])),
             throw({query, ErrorMsg});
-        {ddl, _ } = Res ->
+        {ddl, _DDL, _Props} = Res ->
             Res;
-        {Type, Compiled} when Type==select; Type==describe ->
-            {ok, SQL} =  riak_kv_ts_util:build_sql_record(
+        {Type, Compiled} when Type == select;
+                              Type == describe;
+                              Type == insert ->
+            {ok, SQL} = riak_kv_ts_util:build_sql_record(
                            Type, Compiled, undefined),
-            {Type, SQL};
+            {Type, SQL, undefined};
         {UnsupportedType, _ } ->
             throw({unsupported_sql_type, UnsupportedType})
     catch
@@ -292,9 +296,9 @@ call_from_sql_type(ddl)      -> query_create_table;
 call_from_sql_type(select)   -> query_select;
 call_from_sql_type(describe) -> query_describe.
 
-create_table(DDL = #ddl_v1{table = Table}) ->
+create_table(DDL = #ddl_v1{table = Table}, Props) ->
     %% would be better to use a function to get the table out.
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, []),
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, Props),
     Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
     case riak_core_bucket_type:create(Table, Props2) of
         ok ->
