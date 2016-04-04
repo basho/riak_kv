@@ -130,8 +130,7 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
 newts(B, K, V, MD) ->
     new_int2(B, K, V, MD).
 
-%% {true, DDL-version}
-%% false
+-spec is_ts(riak_object()) -> {'true', pos_integer()} | 'false'.
 is_ts(RObj) ->
     check_for_ddl(get_contents(RObj)).
 
