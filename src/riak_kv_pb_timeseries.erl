@@ -66,7 +66,9 @@
 -record(state, {
           req,
           req_ctx,
-          column_info
+          %% Arity one fun for transforming keys from their leveldb encoding to
+          %% values as inserted by the user
+          key_transform_fn
          }).
 
 -type ts_requests() :: #tsputreq{} | #tsttbputreq{} |
@@ -203,17 +205,13 @@ process_stream({ReqId, From, {keys, []}}, ReqId,
                State = #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
     riak_kv_keys_fsm:ack_keys(From),
     {ignore, State};
-
 process_stream({ReqId, From, {keys, CompoundKeys}}, ReqId,
-               State = #state{req = #tslistkeysreq{},
-                              req_ctx = ReqId,
-                              column_info = ColumnInfo}) ->
+               #state{req = #tslistkeysreq{},
+                      req_ctx = ReqId,
+                      key_transform_fn = EncodeStreamKeysFn} = State) ->
     riak_kv_keys_fsm:ack_keys(From),
-    Keys = riak_pb_ts_codec:encode_rows(
-             ColumnInfo, [tuple_to_list(sext:decode(A))
-                          || A <- CompoundKeys, A /= []]),
+    Keys = EncodeStreamKeysFn(CompoundKeys),
     {reply, #tslistkeysresp{keys = Keys, done = false}, State};
-
 process_stream({ReqId, {error, Error}}, ReqId,
                #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
     {error, {format, Error}, #state{}};
@@ -221,6 +219,19 @@ process_stream({ReqId, Error}, ReqId,
                #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
     {error, {format, Error}, #state{}}.
 
+%%
+encode_rows_for_streaming(Mod, ColumnInfo, CompoundKeys1) ->
+    CompoundKeys2 = decode_keys_for_streaming(Mod, CompoundKeys1),
+    riak_pb_ts_codec:encode_rows(ColumnInfo, CompoundKeys2).
+
+%%
+decode_keys_for_streaming(_, []) ->
+    [];
+decode_keys_for_streaming(Mod, [[]|Tail]) ->
+    decode_keys_for_streaming(Mod, Tail);
+decode_keys_for_streaming(Mod, [K1|Tail]) ->
+    K2 = Mod:revert_ordering_on_local_key(sext:decode(K1)),
+    [K2|decode_keys_for_streaming(Mod, Tail)].
 
 %% ---------------------------------
 %% create_table, the only function for which we don't do
@@ -620,8 +631,13 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
             ColumnInfo =
                 [Mod:get_field_type(N)
                  || #param_v1{name = N} <- DDL?DDL.local_key#key_v1.ast],
-            {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
-                                                 column_info = ColumnInfo}};
+            EncodeStreamKeysFn =
+                fun(CompoundKeys) ->
+                    encode_rows_for_streaming(Mod, ColumnInfo, CompoundKeys)
+                end,
+            {reply, {stream, ReqId}, State#state{req = Req,
+                                                 req_ctx = ReqId,
+                                                 key_transform_fn = EncodeStreamKeysFn}};
         {error, Reason} ->
             {reply, failed_listkeys_response(Reason), State}
     end.
@@ -637,9 +653,9 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
     case compile(Mod, catch decode_query(Q)) of
         {error, #rpberrorresp{} = Error} ->
             {reply, Error, State};
-        {error, _} ->
+        {error, Error} ->
             {reply, make_rpberrresp(
-                      ?E_BAD_QUERY, "Failed to compile query"),
+                      ?E_BAD_QUERY, flat_format("Failed to compile query with error ~p", [Error])),
              State};
         SQL ->
             %% SQL is a list of queries (1 per quantum)
@@ -772,8 +788,8 @@ compile(Mod, {ok, ?SQL_SELECT{}=SQL}) ->
                         {ok, Queries} ->
                             Queries
                     end;
-                {false, _Errors} ->
-                    {error, invalid_query}
+                {false, Errors} ->
+                    {error, make_decoder_error_response(Errors)}
             end
     end.
 
