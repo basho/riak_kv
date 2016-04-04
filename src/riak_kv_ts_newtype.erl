@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ts_newtype 
+%% riak_kv_ts_newtype
 %%
 %% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -43,7 +43,7 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
-%%% 
+%%%
 %%% API.
 %%%
 
@@ -55,7 +55,7 @@ start_link() ->
 new_type(BucketType) ->
     gen_server:cast(?MODULE, {new_type, BucketType}).
 
-%%% 
+%%%
 %%% gen_server.
 %%%
 
@@ -117,7 +117,7 @@ do_new_type(BucketType) ->
 maybe_compile_ddl(_BucketType, NewDDL, NewDDL) ->
     %% Do nothing; we're seeing a CMD update but the DDL hasn't changed
     ok;
-maybe_compile_ddl(BucketType, NewDDL, _OldDDL) when is_record(NewDDL, ddl_v1) ->
+maybe_compile_ddl(BucketType, NewDDL, _OldDDL) when is_record(NewDDL, ?DDL_RECORD_NAME) ->
     ok = maybe_stop_current_compilation(BucketType),
     ok = start_compilation(BucketType, NewDDL);
 maybe_compile_ddl(_BucketType, _NewDDL, _OldDDL) ->

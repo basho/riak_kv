@@ -22,6 +22,7 @@
 
 %% API
 -export([start_link/1, put/2, async_put/8, async_put_replies/2,
+         ts_batch_put/7,
          workers/0, validate_options/4]).
 -export([init/1,
     handle_call/3,
@@ -116,16 +117,13 @@ put(RObj0, Options) ->
                 Preflist :: term()) ->
                        {ok, {reference(), atom()}}.
 
-async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) ->
+async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) when is_tuple(LK) ->
     async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
 async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
     StartTS = os:timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
-    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
-    RObj3 = riak_object:update_last_modified(RObj2),
-    RObj4 = riak_object:apply_updates(RObj3),
-    EncodedVal = EncodeFn(RObj4),
+    EncodedVal = EncodeFn(w1c_vclock(RObj)),
 
     gen_server:cast(
       Worker,
@@ -134,6 +132,37 @@ async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
             start_ts=StartTS,
             size=size(EncodedVal)}}),
     {ok, {ReqId, Worker}}.
+
+-spec ts_batch_put(RObjs :: [{riak_object:key(), riak_object:riak_object()}],
+                   W :: pos_integer(),
+                   PW :: pos_integer(),
+                   Bucket :: binary()|{binary(), binary()},
+                   NVal :: pos_integer(),
+                   EncodeFn :: fun((riak_object:riak_object()) -> binary()),
+                   Preflist :: term()) ->
+                          {ok, {reference(), atom()}}.
+
+ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, Preflist) ->
+    StartTS = os:timestamp(),
+    Worker = random_worker(),
+    ReqId = erlang:monitor(process, Worker),
+    EncodedVals =
+        lists:map(fun({K, O}) -> {{Bucket, K}, EncodeFn(w1c_vclock(O))} end,
+                  RObjs),
+    Size = lists:sum(lists:map(fun({_BK, O}) -> size(O) end, EncodedVals)),
+
+    gen_server:cast(
+      Worker,
+      {batch_put, EncodedVals, ReqId, Preflist,
+       #rec{w=W, pw=PW, n_val=NVal, from=self(),
+            start_ts=StartTS,
+            size=Size}}),
+    {ok, {ReqId, Worker}}.
+
+w1c_vclock(RObj) ->
+    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
+    RObj3 = riak_object:update_last_modified(RObj2),
+    riak_object:apply_updates(RObj3).
 
 -spec async_put_replies(ReqIdTuples :: list({reference(), pid()}), proplists:proplist()) ->
                                        list(term()).
@@ -161,6 +190,15 @@ handle_cast({put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}
             S
     end,
     {noreply, NewState};
+handle_cast({batch_put, EncodedVals, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
+    NewState = case store_request_record(ReqId, Rec, State) of
+        {undefined, S} ->
+            S#state{proxies=batch_send_vnodes(Preflist, Proxies, EncodedVals, ReqId)};
+        {_, S} ->
+            reply(From, ReqId, {error, request_id_already_defined}),
+            S
+    end,
+    {noreply, NewState};
 handle_cast({cancel, ReqId}, State) ->
     NewState = case erase_request_record(ReqId, State) of
         {undefined, S} ->
@@ -173,7 +211,14 @@ handle_cast({cancel, ReqId}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+handle_info({ReqId, ?KV_W1C_BATCH_PUT_REPLY{reply=Reply, type=Type}}, State) ->
+    handle_put_reply(ReqId, Reply, Type, State);
 handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
+    handle_put_reply(ReqId, Reply, Type, State);
+handle_info(_Msg, State) ->
+    {noreply, State}.
+
+handle_put_reply(ReqId, Reply, Type, State) ->
     case get_request_record(ReqId, State) of
         undefined->
             % the entry was likely purged by the timeout mechanism
@@ -213,9 +258,7 @@ handle_info({ReqId, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}}, State) ->
                     {_, NewState} = store_request_record(ReqId, NewRec, State)
             end,
             {noreply, NewState}
-    end;
-handle_info(_Msg, State) ->
-    {noreply, State}.
+    end.
 
 terminate(_Reason, _State) ->
     ok.
@@ -271,6 +314,16 @@ send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId)
     ),
     send_vnodes(Rest, NewProxies, Bucket, Key, EncodedVal, ReqId).
 
+batch_send_vnodes([], Proxies, _EncodedVals, _ReqId) ->
+    Proxies;
+batch_send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, EncodedVals, ReqId) ->
+    {Proxy, NewProxies} = get_proxy(Idx, Proxies),
+    Message = ?KV_W1C_BATCH_PUT_REQ{objs=EncodedVals, type=Type},
+    gen_fsm:send_event(
+        {Proxy, Node},
+        riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
+    ),
+    batch_send_vnodes(Rest, NewProxies, EncodedVals, ReqId).
 
 get_proxy(Idx, Proxies) ->
     case ?DICT_TYPE:find(Idx, Proxies) of

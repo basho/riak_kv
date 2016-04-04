@@ -38,6 +38,10 @@
          %% use riak_kv_ts_util:sql_to_cover/4.
         ]).
 
+%% @lehoff 30-Mar-2016: seems to have been moved from riak_kv_pb_timeseries at
+%% some point, so I have have had to export it from here.
+-export([create_batches/2]).
+
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_ts.hrl").
@@ -79,6 +83,11 @@ put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
     PartitionedData = partition_data(Data, Bucket, BucketProps, DDL, Mod),
     PreflistData = add_preflists(PartitionedData, NVal,
                                  riak_core_node_watcher:nodes(riak_kv)),
+    SendFullBatches = riak_core_capability:get({riak_kv, w1c_batch_vnode}, false),
+    %% Default to 1MB for a max batch size to not overwhelm disterl
+    CappedBatchSize = app_helper:get_env(riak_kv, timeseries_max_batch_size,
+                                         1024 * 1024),
+
     EncodeFn =
         fun(O) -> riak_object:to_binary(v1, O, msgpack) end,
 
@@ -88,21 +97,28 @@ put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
                   case riak_kv_w1c_worker:validate_options(
                          NVal, Preflist, [], BucketProps) of
                       {ok, W, PW} ->
-                          {Ids, Errs} =
-                              lists:foldl(
-                                fun(Record, {PartReqIds, PartErrors}) ->
-                                        {RObj, LK} =
-                                            build_object(Bucket, Mod, DDL,
-                                                         Record, DocIdx),
-
-                                        {ok, ReqId} =
-                                            riak_kv_w1c_worker:async_put(
-                                              RObj, W, PW, Bucket, NVal, LK,
-                                              EncodeFn, Preflist),
-                                        {[ReqId | PartReqIds], PartErrors}
-                                end,
-                                {[], 0}, Records),
-                          {GlobalReqIds ++ Ids, GlobalErrorsCnt + Errs};
+                          DataForVnode = pick_batch_option(SendFullBatches,
+                                                           CappedBatchSize,
+                                                           Records,
+                                                           termsize(hd(Records)),
+                                                           length(Records)),
+                          Ids =
+                              invoke_async_put(fun(Record) ->
+                                                       build_object(Bucket, Mod, DDL,
+                                                                    Record, DocIdx)
+                                               end,
+                                               fun(RObj, LK) ->
+                                                       riak_kv_w1c_worker:async_put(
+                                                         RObj, W, PW, Bucket, NVal, LK,
+                                                         EncodeFn, Preflist)
+                                               end,
+                                               fun(RObjs) ->
+                                                       riak_kv_w1c_worker:ts_batch_put(
+                                                         RObjs, W, PW, Bucket, NVal,
+                                                         EncodeFn, Preflist)
+                                               end,
+                                               DataForVnode),
+                          {GlobalReqIds ++ Ids, GlobalErrorsCnt};
                       _Error ->
                           {GlobalReqIds, GlobalErrorsCnt + length(Records)}
                   end
@@ -117,11 +133,10 @@ put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
             end, Responses)) + FailReqs.
 
 
-
 -spec partition_data(Data :: list(term()),
                      Bucket :: {binary(), binary()},
                      BucketProps :: proplists:proplist(),
-                     DDL :: #ddl_v1{},
+                     DDL :: ?DDL{},
                      Mod :: module()) ->
                             list(tuple(chash:index(), list(term()))).
 partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
@@ -139,6 +154,54 @@ row_to_key(Row, DDL, Mod) ->
     riak_kv_ts_util:encode_typeval_key(
       riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
+
+%% Returns a tuple with a list of request IDs and an error tally
+invoke_async_put(BuildRObjFun, AsyncPutFun, _BatchPutFun, {individual, Records}) ->
+    lists:map(fun(Record) ->
+                      {LK, RObj} = BuildRObjFun(Record),
+                      {ok, ReqId} = AsyncPutFun(RObj, LK),
+                      ReqId
+                end,
+              Records);
+invoke_async_put(BuildRObjFun, _AsyncPutFun, BatchPutFun, {batches, Batches}) ->
+    lists:map(fun(Batch) ->
+                      RObjs = lists:map(BuildRObjFun, Batch),
+                      {ok, ReqId} = BatchPutFun(RObjs),
+                      ReqId
+                end,
+              Batches).
+
+%%%%%%%%
+%% Utility functions for batch delivery of records
+termsize(Term) ->
+    size(term_to_binary(Term)).
+
+pick_batch_option(_, _, Records, _, 1) ->
+    {individual, Records};
+pick_batch_option(true, MaxBatch, Records, SampleSize, _NumRecs) ->
+    {batches, create_batches(Records,
+                             estimated_row_count(SampleSize, MaxBatch))};
+pick_batch_option(false, _, Records, _, _) ->
+    {individual, Records}.
+
+estimated_row_count(SampleRowSize, MaxBatchSize) ->
+    %% Assume some rows will be larger, so introduce a fudge factor of
+    %% roughly 10 percent.
+    RowSizeFudged = (SampleRowSize * 10) div 9,
+    MaxBatchSize div RowSizeFudged.
+
+create_batches(Rows, MaxSize) ->
+    create_batches(Rows, MaxSize, []).
+
+create_batches([], _MaxSize, Accum) ->
+    Accum;
+create_batches(Rows, MaxSize, Accum) when length(Rows) < MaxSize ->
+    [Rows|Accum];
+create_batches(Rows, MaxSize, Accum) ->
+    {First, Rest} = lists:split(MaxSize, Rows),
+    create_batches(Rest, MaxSize, [First|Accum]).
+%%%%%%%%
+
 add_preflists(PartitionedData, NVal, UpNodes) ->
     lists:map(fun({Idx, Rows}) -> {Idx,
                                    riak_core_apl:get_apl_ann(Idx, NVal, UpNodes),
@@ -153,8 +216,7 @@ build_object(Bucket, Mod, DDL, Row, PK) ->
     RObj = riak_object:newts(
              Bucket, PK, Obj,
              dict:from_list([{?MD_DDL_VERSION, ?DDL_VERSION}])),
-    {RObj, LK}.
-
+    {LK, RObj}.
 
 
 

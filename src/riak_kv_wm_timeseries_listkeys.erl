@@ -24,11 +24,10 @@
 %% @doc Resource for Riak TS operations over HTTP.
 %%
 %% ```
-%% GET    /ts/v1/table/Table/keys     list_keys
+%% GET    /ts/v1/table/Table/list_keys
 %% '''
 %%
-%% Request body is expected to be a JSON containing key and/or value(s).
-%% Response is a JSON containing data rows with column headers.
+%% Response is HTML URLs for the entries in the table.
 %%
 
 -module(riak_kv_wm_timeseries_listkeys).
@@ -40,24 +39,24 @@
          allowed_methods/2,
          is_authorized/2,
          forbidden/2,
-         malformed_request/2,
          resource_exists/2,
          content_types_provided/2,
-         encodings_provided/2,
-         produce_doc_body/2
-        ]).
+         encodings_provided/2]).
+
+%% webmachine body-producing functions
+-export([produce_doc_body/2]).
 
 -include("riak_kv_wm_raw.hrl").
 -include_lib("webmachine/include/webmachine.hrl").
 
--record(ctx, {api_version,
-              riak,
+-record(ctx, {riak,
               security,
               client,
-              table    :: undefined | binary()
+              table    :: undefined | binary(),
+              mod :: module()
              }).
 
--define(CB_RV_SPEC, {boolean()|atom()|tuple(), #wm_reqdata{}, #ctx{}}).
+-type cb_rv_spec(T) :: {T, #wm_reqdata{}, #ctx{}}.
 
 -define(DEFAULT_TIMEOUT, 60000).
 
@@ -65,9 +64,7 @@
 %% @doc Initialize this resource.  This function extracts the
 %%      'prefix' and 'riak' properties from the dispatch args.
 init(Props) ->
-    {ok, #ctx{api_version = proplists:get_value(api_version, Props),
-              riak = proplists:get_value(riak, Props),
-              table = proplists:get_value(table, Props)}}.
+    {ok, #ctx{riak = proplists:get_value(riak, Props)}}.
 
 -spec service_available(#wm_reqdata{}, #ctx{}) ->
     {boolean(), #wm_reqdata{}, #ctx{}}.
@@ -77,164 +74,127 @@ service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
     case riak_kv_wm_utils:get_riak_client(
            RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
+            Table = riak_kv_wm_ts_util:table_from_request(RD),
+            Mod = riak_ql_ddl:make_module_name(Table),
             {true, RD,
-             Ctx#ctx{api_version = wrq:path_info(api_version, RD),
-                     client = C,
-                     table = utf8_to_binary(
-                               mochiweb_util:unquote(
-                                 wrq:path_info(table, RD)))
-                    }};
+             Ctx#ctx{client = C,
+                     table = Table,
+                     mod = Mod}};
         {error, Reason} ->
-            handle_error({riak_client_error, Reason}, RD, Ctx)
+            Resp = riak_kv_wm_ts_util:set_error_message("Unable to connect to Riak: ~p", [Reason], RD),
+            {false, Resp, Ctx}
     end.
 
-
-is_authorized(RD, Ctx) ->
-    case riak_api_web_security:is_authorized(RD) of
-        false ->
-            {"Basic realm=\"Riak\"", RD, Ctx};
-        {true, SecContext} ->
-            {true, RD, Ctx#ctx{security = SecContext}};
-        insecure ->
-            handle_error(insecure_connection, RD, Ctx)
-    end.
-
-
--spec forbidden(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-forbidden(RD, Ctx) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
-        true ->
+is_authorized(RD, #ctx{table=Table}=Ctx) ->
+    case riak_kv_wm_ts_util:authorize(listkeys, Table, RD) of
+        ok ->
             {true, RD, Ctx};
-        false ->
-            case check_permissions(RD, Ctx) of
-                {true, RD1, Ctx1} ->
-                    {false, RD1, Ctx1};
-                ErrorAlreadyReported ->
-                    ErrorAlreadyReported
-            end
+        {error, ErrorMsg} ->
+            {ErrorMsg, RD, Ctx};
+        {insecure, Halt, Resp} ->
+            {Halt, Resp, Ctx}
     end.
 
--spec check_permissions(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-check_permissions(RD, Ctx = #ctx{security = undefined}) ->
-    {true, RD, Ctx};
-check_permissions(RD, Ctx = #ctx{security = Security,
-                                 table = Table}) ->
-    case riak_core_security:check_permission(
-           {riak_kv_ts_util:api_call_to_perm(listkeys), Table}, Security) of
-        {false, Error, _} ->
-            handle_error(
-              {not_permitted, utf8_to_binary(Error)}, RD, Ctx);
-        _ ->
-            {true, RD, Ctx}
-    end.
+-spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+forbidden(RD, Ctx) ->
+   Result = riak_kv_wm_utils:is_forbidden(RD),
+    {Result, RD, Ctx}.
 
-
--spec malformed_request(#wm_reqdata{}, #ctx{}) -> ?CB_RV_SPEC.
-malformed_request(RD, Ctx = #ctx{api_version = "v1"}) ->
-    {false, RD, Ctx};
-malformed_request(RD, Ctx = #ctx{api_version = UnsupportedVersion}) ->
-    handle_error({unsupported_version, UnsupportedVersion}, RD, Ctx).
-
-
--spec allowed_methods(#wm_reqdata{}, #ctx{}) ->
-    {[atom()], #wm_reqdata{}, #ctx{}}.
+-spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
 %% @doc Get the list of methods this resource supports.
 allowed_methods(RD, Ctx) ->
     {['GET'], RD, Ctx}.
 
-
--spec resource_exists(#wm_reqdata{}, #ctx{}) ->
-                             {boolean(), #wm_reqdata{}, #ctx{}}.
-resource_exists(RD, #ctx{table = Table} = Ctx) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    case catch Mod:get_ddl() of
-        {_, {undef, _}} ->
-            handle_error({no_such_table, Table}, RD, Ctx);
-        _ ->
-            {true, RD, Ctx}
+-spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
+resource_exists(RD, #ctx{mod=Mod,
+                         table=Table} = Ctx) ->
+    case riak_kv_wm_ts_util:table_module_exists(Mod) of
+        true ->
+            {true, RD, Ctx};
+        false ->
+            Resp = riak_kv_wm_ts_util:set_error_message(
+                     "table ~p does not exist", [Table], RD),
+            {false, Resp, Ctx}
     end.
 
-
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
-                                {[{Encoding::string(), Producer::function()}],
-                                 #wm_reqdata{}, #ctx{}}.
+                                cb_rv_spec([{Encoding::string(), Producer::function()}]).
 %% @doc List the encodings available for representing this resource.
 %%      "identity" and "gzip" are available.
 encodings_provided(RD, Ctx) ->
     {riak_kv_wm_utils:default_encodings(), RD, Ctx}.
 
 -spec content_types_provided(#wm_reqdata{}, #ctx{}) ->
-                                    {[{ContentType::string(), Producer::atom()}],
-                                     #wm_reqdata{}, #ctx{}}.
+                                    cb_rv_spec([{ContentType::string(), Producer::atom()}]).
 %% @doc List the content types available for representing this resource.
 content_types_provided(RD, Ctx) ->
-    {[{"application/json", produce_doc_body}], RD, Ctx}.
+      {[{"text/plain", produce_doc_body}], RD, Ctx}.
 
-
-produce_doc_body(RD, Ctx = #ctx{table = Table,
+produce_doc_body(RD, Ctx = #ctx{table = Table, mod=Mod,
                                 client = Client}) ->
-    F = fun() ->
-                {ok, ReqId} = riak_client:stream_list_keys(
-                                {Table, Table}, undefined, Client),
-                stream_keys(ReqId)
-        end,
-    {{stream, {<<>>, F}}, RD, Ctx}.
+    {ok, ReqId} = riak_client:stream_list_keys(
+                    {Table, Table}, undefined, Client),
+    {{halt, 200}, wrq:set_resp_body({stream, prepare_stream(ReqId, Table, Mod)}, RD), Ctx}.
 
-stream_keys(ReqId) ->
+prepare_stream(ReqId, Table, Mod) ->
+    {<<"">>, fun() -> stream_keys(ReqId, Table, Mod) end}.
+
+stream_keys(ReqId, Table, Mod) ->
     receive
         %% skip empty shipments
         {ReqId, {keys, []}} ->
-            stream_keys(ReqId);
+            stream_keys(ReqId, Table, Mod);
         {ReqId, From, {keys, []}} ->
             _ = riak_kv_keys_fsm:ack_keys(From),
-            stream_keys(ReqId);
+            stream_keys(ReqId, Table, Mod);
         {ReqId, From, {keys, Keys}} ->
             _ = riak_kv_keys_fsm:ack_keys(From),
-            {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
+            {ts_keys_to_body(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, {keys, Keys}} ->
-            {ts_keys_to_json(Keys), fun() -> stream_keys(ReqId) end};
+            {ts_keys_to_body(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, done} ->
-            {<<>>, done};
+            {<<"">>, done};
         {ReqId, {error, timeout}} ->
-            {mochijson2:encode({struct, [{error, timeout}]}), done}
+            {mochijson2:encode({struct, [{error, timeout}]}), done};
+        _Weird ->
+            %% @todo: should we log this?
+            stream_keys(ReqId, Table, Mod)
     end.
 
-ts_keys_to_json(Keys) ->
-    KeysTerm = [tuple_to_list(sext:decode(A))
-                || A <- Keys, A /= []],
-    mochijson2:encode({struct, [{<<"keys">>, KeysTerm}]}).
+ts_keys_to_body(EncodedKeys, Table, Mod) ->
+    BaseUrl = base_url(Table),
+    Keys = decode_keys(EncodedKeys),
+    KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
+    URLs = [format_url(BaseUrl, KeyTypes, Key)
+            || Key <- Keys],
+    %% Dialyzer does not like the list_comprehension, if you want to avoid the
+    %% dialyzer error you have to write it like this:
+    %% URLs = lists:map(fun(Key) ->
+    %%                          format_url(BaseUrl, KeyTypes, Key)
+    %%                  end,
+    %%                  Keys),
+    list_to_binary(lists:flatten(URLs)).
 
 
-error_out(Type, Fmt, Args, RD, Ctx) ->
-    {Type,
-     wrq:set_resp_header(
-       "Content-Type", "text/plain", wrq:append_to_response_body(
-                                       flat_format(Fmt, Args), RD)),
-     Ctx}.
+format_url(BaseUrl, KeyTypes, Key) ->
+    list_to_binary(
+      io_lib:format("~s~s~n", [BaseUrl, key_to_string(Key, KeyTypes)])).
 
--spec handle_error(atom()|tuple(), #wm_reqdata{}, #ctx{}) -> {tuple(), #wm_reqdata{}, #ctx{}}.
-handle_error(Error, RD, Ctx) ->
-    case Error of
-        {riak_client_error, Reason} ->
-            error_out(false,
-                      "Unable to connect to Riak: ~p", [Reason], RD, Ctx);
-        insecure_connection ->
-            error_out({halt, 426},
-                      "Security is enabled and Riak does not"
-                      " accept credentials over HTTP. Try HTTPS instead.", [], RD, Ctx);
-        {unsupported_version, BadVersion} ->
-            error_out({halt, 412},
-                      "Unsupported API version ~s", [BadVersion], RD, Ctx);
-        {not_permitted, Table} ->
-            error_out({halt, 401},
-                      "Access to table ~ts not allowed", [Table], RD, Ctx);
-        {no_such_table, Table} ->
-            error_out({halt, 404},
-                      "Table \"~ts\" does not exist", [Table], RD, Ctx)
-    end.
+decode_keys(Keys) ->
+    [tuple_to_list(sext:decode(A))
+     || A <- Keys, A /= []].
 
-flat_format(Format, Args) ->
-    lists:flatten(io_lib:format(Format, Args)).
+key_to_string([], []) ->
+    "";
+key_to_string([Key|Keys], [{Field, Type}|KeyTypes]) ->
+    Field ++ "/" ++ value_to_url_string(Key, Type) ++ "/" ++ key_to_string(Keys, KeyTypes).
 
-utf8_to_binary(S) ->
-    unicode:characters_to_binary(S, utf8, utf8).
+value_to_url_string(V, varchar) ->
+    binary_to_list(V);
+value_to_url_string(V, timestamp) ->
+    erlang:integer_to_list(V).
+
+base_url(Table) ->
+    {ok, [{Server, Port}]} = application:get_env(riak_api, http),
+    lists:flatten(io_lib:format("http://~s:~B/ts/v1/tables/~s/keys/",
+                                [Server, Port, Table])).
