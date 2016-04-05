@@ -19,7 +19,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS TCP messages [codes 90..104]
+%% @doc Callbacks for TS TTB-Encoded TCP messages [code 104]
 
 -module(riak_kv_ttb_ts).
 

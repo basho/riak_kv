@@ -19,7 +19,7 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS TCP messages [codes 90..104]
+%% @doc Callbacks for TS PB-Encoded TCP messages [codes 90..103]
 
 -module(riak_kv_pb_ts).
 
