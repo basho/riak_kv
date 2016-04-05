@@ -462,7 +462,7 @@ put_data(Data, Table, Mod) when is_binary(Table) ->
                                                end,
                                                fun(RObj, LK) ->
                                                        riak_kv_w1c_worker:async_put(
-                                                         RObj, W, PW, Bucket, NVal, LK,
+                                                         RObj, W, PW, Bucket, NVal, {DocIdx, LK},
                                                          EncodeFn, Preflist)
                                                end,
                                                fun(RObjs) ->

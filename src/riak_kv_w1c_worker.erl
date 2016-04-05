@@ -113,9 +113,12 @@ put(RObj0, Options) ->
                 Preflist :: term()) ->
                        {ok, {reference(), atom()}}.
 
-async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) when is_tuple(LK) ->
-    async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
+async_put(RObj, W, PW, Bucket, NVal, {PK, LK}, EncodeFn, Preflist) when is_tuple(LK) ->
+    async_put(RObj, W, PW, Bucket, NVal, PK, LK, EncodeFn, Preflist);
 async_put(RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist) ->
+    async_put(RObj, W, PW, Bucket, NVal, undefined, Key, EncodeFn, Preflist).
+
+async_put(RObj, W, PW, Bucket, NVal, PartitionIdx, Key, EncodeFn, Preflist) ->
     StartTS = os:timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
@@ -124,7 +127,7 @@ async_put(RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist) ->
 
     gen_server:cast(
       Worker,
-      {put, Bucket, BucketProps, Key, EncodedVal, ReqId, Preflist,
+      {put, Bucket, BucketProps, PartitionIdx, Key, EncodedVal, ReqId, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
             size=size(EncodedVal)}}),
@@ -205,12 +208,13 @@ init(_) ->
 handle_call(_Request, _From, State) ->
     {reply, undefined, State}.
 
-handle_cast({put, Bucket, BucketProps, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
+handle_cast({put, Bucket, BucketProps, PartitionIdx, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
     NewState = case store_request_record(ReqId, Rec, State) of
                    {undefined, S} ->
                        UpdProxies = send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId),
                        postcommit(data_type_by_key(Key), Bucket,
-                                  maybe_add_pk(Key, EncodedVal), BucketProps),
+                                  maybe_ts_markup(PartitionIdx, Bucket, Key, EncodedVal),
+                                  BucketProps),
                        S#state{proxies=UpdProxies};
                    {_, S} ->
                        reply(From, ReqId, {error, request_id_already_defined}),
@@ -302,12 +306,16 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-maybe_add_pk({PK, _LK}, Val) ->
-    {PK, Val};
-maybe_add_pk(_Key, Val) ->
-    Val.
+%% First argument is a binary partition index for timeseries data or
+%% `undefined' if this is routed through the standard KV data code
+%% path
+maybe_ts_markup(undefined, _Bucket, _LK, Val) ->
+    Val;
+maybe_ts_markup(PartitionIdx, Bucket, LK, Val) ->
+    {PartitionIdx, {{Bucket, LK}, Val}}.
 
-data_type_by_key({_PK, _LK}) ->
+%% Timeseries local key will be a tuple of values
+data_type_by_key(Key) when is_tuple(Key) ->
     ts;
 data_type_by_key(_Key) ->
     kv.
