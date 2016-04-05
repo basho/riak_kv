@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ddl: defines records used in the data description language
+%% riak_kv_ts: defines records used in the data description language
 %%
 %% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -54,14 +54,12 @@
           is_executable = false :: boolean(),
           type          = sql   :: sql | timeseries,
           cover_context = undefined :: term(), %% for parallel queries
-          local_key,                           %% prolly a mistake to put this here - should be in DDL
-          request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
+          local_key                            %% prolly a mistake to put this here - should be in DDL
         }).
 
 -record(riak_sql_describe_v1,
         {
-          'DESCRIBE'    = <<>>  :: binary(),
-          request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
+          'DESCRIBE'    = <<>>  :: binary()
         }).
 
 -record(riak_sql_insert_v1,
@@ -69,8 +67,7 @@
           'INSERT'      = <<>>  :: binary(),
           fields                :: [riak_ql_ddl:field_identifier()],
           values                :: [[riak_ql_ddl:data_value()]],
-          helper_mod            :: atom(),
-          request               :: atom()      %% The request that originated this select query (tsqueryreq | tsttbqueryreq)
+          helper_mod            :: atom()
         }).
 
 -define(SQL_SELECT, #riak_select_v1).
