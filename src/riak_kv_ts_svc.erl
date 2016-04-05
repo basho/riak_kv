@@ -311,10 +311,9 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
     make_insert_row(Values, Positions, setelement(Pos, Row, Val)).
 
 
-%% -----------
 %% put
-%% -----------
-
+%% NB: since this method deals with PB and TTB messages, the message must be fully
+%% decoded before sub_tsqueryreq is called
 sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
              State) ->
     case catch validate_rows(Mod, Rows) of
@@ -470,20 +469,17 @@ build_object(Bucket, Mod, DDL, Row, PK) ->
     {LK, RObj}.
 
 
-%% -----------
-%% get and delete
-%% -----------
-
+%% get
+%% NB: since this method deals with PB and TTB messages, the message must be fully
+%% decoded before sub_tsqueryreq is called
 sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
-                                 key    = PbCompoundKey,
+                                 key    = CompoundKey,
                                  timeout = Timeout},
              State) ->
     Options =
         if Timeout == undefined -> [];
            true -> [{timeout, Timeout}]
         end,
-
-    CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
 
     Result =
         case riak_kv_ts_util:make_ts_keys(CompoundKey, DDL, Mod) of
@@ -511,6 +507,7 @@ sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
     end.
 
 
+%% delete
 sub_tsdelreq(Mod, DDL, #tsdelreq{table = Table,
                                  key    = PbCompoundKey,
                                  vclock  = PbVClock,
@@ -737,8 +734,8 @@ compile(Mod, {ok, ?SQL_SELECT{}=SQL}) ->
     end.
 
 %% query
-%%
-
+%% NB: since this method deals with PB and TTB messages, the message must be fully
+%% decoded before sub_tsqueryreq is called
 -spec sub_tsqueryreq(module(), #ddl_v1{},
                      ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{},
                      #state{}) ->
