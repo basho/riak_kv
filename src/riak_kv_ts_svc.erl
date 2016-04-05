@@ -317,10 +317,9 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
 
 sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
              State) ->
-    Data = riak_pb_ts_codec:decode_rows(Rows),
-    case catch validate_rows(Mod, Data) of
+    case catch validate_rows(Mod, Rows) of
         [] ->
-            case put_data(Data, Table, Mod) of
+            case put_data(Rows, Table, Mod) of
                 0 ->
                     {reply, #tsputresp{}, State};
                 ErrorCount ->
