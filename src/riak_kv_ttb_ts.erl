@@ -76,7 +76,7 @@ process_stream(_, _, _) ->
     {error, "Not Supported", #state{}}.
 
 encode_response({reply, {tsqueryresp, {_, _, []}}, State}) ->
-    Encoded = #tsqueryresp{columns = [], rows = []},
+    Encoded = #tsqueryresp{columns = {[], []}, rows = []},
     {reply, Encoded, State};
 encode_response({reply, {tsqueryresp, {CNames, CTypes, Rows}}, State}) ->
     Encoded = #tsqueryresp{columns = {CNames, CTypes}, rows = Rows},
