@@ -52,7 +52,7 @@ init() ->
                     {ok, ts_requests(), {PermSpec::string(), Table::binary()}} |
                     {error, _}.
 decode(?TTB_MSG_CODE, Bin) ->
-    Msg = riak_ttb_codec:decode(?TTB_MSG_CODE, Bin),
+    Msg = riak_ttb_codec:decode(Bin),
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover} ->
             riak_kv_ts_svc:decode_query_common(Q, Cover);
