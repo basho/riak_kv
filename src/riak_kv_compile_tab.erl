@@ -27,7 +27,7 @@
          get_compiled_ddl_version/1,
          get_ddl/1,
          get_state/1,
-         get_tables_needing_recompiling/1,
+         get_ddl_records_needing_recompiling/1,
          insert/5,
          is_compiling/1,
          new/1,
@@ -57,7 +57,7 @@ new(FileDir) ->
             %% Convert all legacy DDL compilation records to current format
             upgrade_legacy_records(),
 
-            %% Clean up any lingering tables stuck in the compiling state
+            %% Clean up any lingering records stuck in the compiling state
             mark_compiling_for_retry();
         _ -> ok
     end,
@@ -147,10 +147,10 @@ mark_compiling_for_retry() ->
     CompilingPids = dets:match(?TABLE, {'_','_','_','$1',compiling}),
     lists:foreach(fun([Pid]) -> update_state(Pid, retrying) end, CompilingPids).
 
-%% Get the list of tables which need to be recompiled
--spec get_tables_needing_recompiling(DDLVersion :: riak_ql_ddl:compiler_version_type()) ->
+%% Get the list of records which need to be recompiled
+-spec get_ddl_records_needing_recompiling(DDLVersion :: riak_ql_ddl:compiler_version_type()) ->
     [binary()].
-get_tables_needing_recompiling(DDLVersion) ->
+get_ddl_records_needing_recompiling(DDLVersion) ->
     %% First find all tables with a version
     MismatchedTables = dets:select(?TABLE, [{{'$1','$2','_','_',compiled},[{'/=','$2', DDLVersion}],['$$']}]),
     RetryingTables = dets:match(?TABLE, {'$1','$2','_','_',retrying}),
@@ -263,7 +263,7 @@ recompile_ddl_test() ->
                  <<"my_type2">>,
                  <<"my_type3">>,
                 ],
-                lists:sort(get_tables_needing_recompiling(8))
+                lists:sort(get_ddl_records_needing_recompiling(8))
             )
         end).
 
