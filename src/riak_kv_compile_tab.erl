@@ -49,9 +49,11 @@
 -spec new(file:name()) ->
          {ok, dets:tab_name(), dets:tab_name()} | {error, any(), any()}.
 new(FileDir) ->
+    LegacyFilePath = filename:join(FileDir, [?LEGACY_TABLE, ".dets"]),
+    lager:debug("Opening legacy DDL DETS table ~s", [LegacyFilePath]),
     FilePath = filename:join(FileDir, [?TABLE, ".dets"]),
     lager:debug("Opening DDL DETS table ~s", [FilePath]),
-    Result1 = dets:open_file(?LEGACY_TABLE, [{type, set}, {repair, force}, {file, FilePath}]),
+    Result1 = dets:open_file(?LEGACY_TABLE, [{type, set}, {repair, force}, {file, LegacyFilePath}]),
     Result2 = dets:open_file(?TABLE, [{type, set}, {repair, force}, {file, FilePath}]),
     new_table_result(Result1, Result2).
 
@@ -227,6 +229,19 @@ upgrade_legacy_records() ->
         test_ok -> ok
     end
 ).
+
+insert_version_test() ->
+    ?in_process(
+        begin
+            Pid = spawn(fun() -> ok end),
+            ok = insert(<<"my_type">>, 2, {ddl_v1}, Pid, compiling),
+            First = dets:match(?LEGACY_TABLE, {'$1','$2','$3','$4'}),
+            Second = dets:match(?TABLE, {'$1','_','$2','$3','$4'}),
+            ?assertEqual(
+                First,
+                Second
+            )
+        end).
 
 insert_test() ->
     ?in_process(
