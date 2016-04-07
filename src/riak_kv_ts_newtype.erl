@@ -238,7 +238,7 @@ add_ddl_ebin_to_path() ->
 -spec recompile_ddl(DDLVersion :: riak_ql_ddl:compiler_version_type()) -> ok.
 recompile_ddl(DDLVersion) ->
     %% Get list of tables to recompile
-    Tables = riak_kv_compile_tab:get_tables_needing_recompiling(DDLVersion),
+    Tables = riak_kv_compile_tab:get_ddl_records_needing_recompiling(DDLVersion),
     lists:foreach(fun(Table) ->
                       new_type(Table)
                   end,
