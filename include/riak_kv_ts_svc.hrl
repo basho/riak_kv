@@ -56,4 +56,6 @@
           column_info
          }).
 
+-type process_retval() :: {reply, RpbOrTsMessage::tuple(), #state{}}.
+
 -endif.

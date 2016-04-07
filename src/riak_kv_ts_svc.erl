@@ -35,15 +35,6 @@
          process/2,
          process_stream/3]).
 
--type ts_requests() :: #tsputreq{} | #tsdelreq{} | #tsgetreq{} |
-                       #tslistkeysreq{} | #tsqueryreq{}.
--type ts_responses() :: #tsputresp{} | #tsdelresp{} | #tsgetresp{} |
-                        #tslistkeysresp{} | #tsqueryresp{} | #rpberrorresp{}.
--type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
-                          #riak_sql_insert_v1{}.
-
--type process_retval() :: {reply, RpbOrTsMessage::tuple(), #state{}}.
-
 decode_query_common(Q, Cover) ->
     %% convert error returns to ok's, this means it will be passed into
     %% process which will not process it and return the error.
@@ -87,6 +78,8 @@ decode_query_permissions(#riak_sql_insert_v1{'INSERT' = Table}) ->
 
 
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
+                     {reply, ts_query_responses(), #state{}} |
+                     {reply, ts_get_response(), #state{}} |
                      {reply, ts_responses(), #state{}}.
 process(#rpberrorresp{} = Error, State) ->
     {reply, Error, State};
@@ -210,7 +203,7 @@ wait_until_active(Table, State, Seconds) ->
 %%
 %% INSERT statements, called from check_table_and_call.
 %%
--spec make_insert_response(module(), #riak_sql_insert_v1{}) -> tsqueryresp | #rpberrorresp{}.
+-spec make_insert_response(module(), #riak_sql_insert_v1{}) -> #tsqueryresp{} | #rpberrorresp{}.
 make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields, values = Values}) ->
     case lookup_field_positions(Mod, Fields) of
     {ok, Positions} ->
@@ -230,7 +223,7 @@ insert_putreqs(Mod, Table, Data) ->
         [] ->
             case put_data(Data, Table, Mod) of
                 0 ->
-                    tsqueryresp;
+                    #tsqueryresp{};
                 ErrorCount ->
                     failed_put_response(ErrorCount)
             end;
@@ -739,7 +732,9 @@ compile(Mod, {ok, ?SQL_SELECT{}=SQL}) ->
 -spec sub_tsqueryreq(module(), #ddl_v1{},
                      ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{},
                      #state{}) ->
-                     {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
+                     {reply,
+                      ts_query_responses() | #rpberrorresp{},
+                      #state{}}.
 sub_tsqueryreq(Mod, DDL, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
         {ok, Data}  ->
@@ -911,13 +906,13 @@ invoke_async_put(BuildRObjFun, _AsyncPutFun, BatchPutFun, {batches, Batches}) ->
 
 -spec make_tsqueryresp([] | {[riak_pb_ts_codec:tscolumnname()],
                              [riak_pb_ts_codec:tscolumntype()],
-                             [[riak_pb_ts_codec:ldbvalue()]]}) -> {tsqueryresp, {}}.
+                             [[riak_pb_ts_codec:ldbvalue()]]}) -> ts_query_response().
 make_tsqueryresp({_, _, []}) ->
     {tsqueryresp, {[], [], []}};
 make_tsqueryresp({ColumnNames, ColumnTypes, Rows}) ->
     {tsqueryresp, {ColumnNames, ColumnTypes, Rows}}.
 
--spec make_describe_response([[term()]]) -> {tsqueryresp, {}}.
+-spec make_describe_response([[term()]]) -> ts_query_response().
 make_describe_response(Rows) ->
     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
     ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],

@@ -38,12 +38,6 @@
          process/2,
          process_stream/3]).
 
--type ts_requests() :: #tsputreq{} | #tsgetreq{} | #tsqueryreq{}.
--type ts_responses() :: #tsputresp{} | #tsgetresp{} | #tsqueryresp{} |
-                        #rpberrorresp{}.
--type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
-                          #riak_sql_insert_v1{}.
-
 -spec init() -> any().
 init() ->
     #state{}.
@@ -81,8 +75,6 @@ encode_response({reply, {tsqueryresp, {_, _, []}}, State}) ->
 encode_response({reply, {tsqueryresp, {CNames, CTypes, Rows}}, State}) ->
     Encoded = #tsqueryresp{columns={CNames, CTypes}, rows=Rows},
     {reply, Encoded, State};
-encode_response({reply, tsqueryresp, State}) ->
-    {reply, #tsqueryresp{}, State};
 encode_response({reply, {tsgetresp, {CNames, CTypes, Rows}}, State}) ->
     Encoded = #tsgetresp{columns={CNames, CTypes}, rows=Rows},
     {reply, Encoded, State};

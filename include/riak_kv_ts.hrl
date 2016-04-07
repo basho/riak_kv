@@ -23,8 +23,14 @@
 -ifndef(RIAK_KV_TS_HRL).
 -define(RIAK_KV_TS_HRL, included).
 
+%% For riak_pb records
+-include_lib("riak_pb/include/riak_ts_pb.hrl").
+
 %% For dialyzer types
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
+
+-define(SQL_SELECT, #riak_select_v1).
+-define(SQL_SELECT_RECORD_NAME, riak_select_v1).
 
 %% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
@@ -70,7 +76,14 @@
           helper_mod            :: atom()
         }).
 
--define(SQL_SELECT, #riak_select_v1).
--define(SQL_SELECT_RECORD_NAME, riak_select_v1).
-
+-type ts_requests() :: #tsputreq{} | #tsdelreq{} | #tsgetreq{} |
+                       #tslistkeysreq{} | #tsqueryreq{}.
+-type ts_responses() :: #tsputresp{} | #tsdelresp{} | #tsgetresp{} |
+                        #tslistkeysresp{} | #tsqueryresp{} |
+                        #rpberrorresp{}.
+-type ts_get_response() :: {tsgetresp, {list(binary()), list(atom()), list(list(term()))}}.
+-type ts_query_response() :: {tsqueryresp, {list(binary()), list(atom()), list(list(term()))}}.
+-type ts_query_responses() :: #tsqueryresp{} | ts_query_response().
+-type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
+                          #riak_sql_insert_v1{}.
 -endif.
