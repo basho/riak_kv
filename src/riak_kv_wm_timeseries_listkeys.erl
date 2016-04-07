@@ -177,21 +177,21 @@ ts_keys_to_body(EncodedKeys, Table, Mod) ->
                              format_url(BaseUrl, KeyTypes, Key)
                      end,
                      Keys),
-    list_to_binary(lists:flatten(URLs)).
+    iolist_to_binary(URLs).
 
 
 format_url(BaseUrl, KeyTypes, Key) ->
-    list_to_binary(
-      io_lib:format("~s~s~n", [BaseUrl, key_to_string(Key, KeyTypes)])).
+    iolist_to_binary([BaseUrl, key_to_string(lists:zip(Key, KeyTypes)), $\n]).
 
 decode_keys(Keys) ->
     [tuple_to_list(sext:decode(A))
      || A <- Keys, A /= []].
 
-key_to_string([], []) ->
-    "";
-key_to_string([Key|Keys], [{Field, Type}|KeyTypes]) ->
-    Field ++ "/" ++ value_to_url_string(Key, Type) ++ "/" ++ key_to_string(Keys, KeyTypes).
+key_to_string(KFTypes) ->
+    string:join(
+      [[Field, $/, mochiweb_util:quote_plus(value_to_url_string(Key, Type))]
+       || {Key, {Field, Type}} <- KFTypes],
+      "/").
 
 value_to_url_string(V, varchar) ->
     binary_to_list(V);
