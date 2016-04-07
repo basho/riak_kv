@@ -157,18 +157,17 @@ run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T).
 
-decode_results(KVList) ->
-    [extract_riak_object(V) || {_, V} <- KVList].
-
-extract_riak_object(V) when is_binary(V) ->
-    %% don't care about bkey
+decode_results([]) ->
+    [];
+decode_results([{_,V}|Tail]) when is_binary(V) ->
     RObj = riak_object:from_binary(<<>>, <<>>, V),
     case riak_object:get_value(RObj) of
         <<>> ->
             %% record was deleted
-            [];
+            decode_results(Tail);
         FullRecord ->
-            [CellValue || {_, CellValue} <- FullRecord]
+            Values = [CellValue || {_, CellValue} <- FullRecord],
+            [Values | decode_results(Tail)]
     end.
 
 %% Send a message to this process to get the next query.
