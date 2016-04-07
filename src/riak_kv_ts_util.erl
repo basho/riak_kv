@@ -145,7 +145,7 @@ get_table_ddl(Table) when is_binary(Table) ->
 
 %%
 -spec apply_timeseries_bucket_props(DDL::?DDL{},
-                                    DDLVersion::riak_ql_ddl:compiler_version_type(),
+                                    DDLVersion::riak_ql_ddl_compiler:compiler_version(),
                                     Props1::[proplists:property()]) ->
         {ok, Props2::[proplists:property()]}.
 apply_timeseries_bucket_props(DDL, DDLVersion, Props1) ->
@@ -177,7 +177,7 @@ maybe_parse_table_def(BucketType, Props) ->
                     MergedProps = merge_props_with_preference(
                                     PropsNoDef, WithProps),
                     ok = assert_write_once_not_false(BucketType, MergedProps),
-                    apply_timeseries_bucket_props(DDL, riak_ql_ddl:get_compiler_version(), MergedProps);
+                    apply_timeseries_bucket_props(DDL, riak_ql_ddl_compiler:get_compiler_version(), MergedProps);
                 {'EXIT', {Reason, _}} ->
                     % the lexer throws exceptions, the reason should always be a
                     % binary

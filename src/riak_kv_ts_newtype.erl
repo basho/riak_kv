@@ -119,7 +119,7 @@ do_new_type(BucketType) ->
     maybe_compile_ddl(BucketType,
                       retrieve_ddl_from_metadata(BucketType),
                       riak_kv_compile_tab:get_ddl(BucketType),
-                      riak_ql_ddl:get_compiler_version(),
+                      riak_ql_ddl_compiler:get_compiler_version(),
                       riak_kv_compile_tab:get_compiled_ddl_version(BucketType)).
 
 maybe_compile_ddl(BucketType, NewDDL, NewDDL, NewVsn, NewVsn) ->
@@ -189,7 +189,7 @@ start_compilation(BucketType, DDL) ->
             ok = compile_and_store(ddl_ebin_directory(), DDL)
         end),
     lager:info("Starting DDL compilation of ~s on Pid ~p", [BucketType, Pid]),
-    ok = riak_kv_compile_tab:insert(BucketType, riak_ql_ddl:get_compiler_version(), DDL, Pid, compiling),
+    ok = riak_kv_compile_tab:insert(BucketType, riak_ql_ddl_compiler:get_compiler_version(), DDL, Pid, compiling),
     Pid.
 
 %%
@@ -240,7 +240,7 @@ add_ddl_ebin_to_path() ->
     ok.
 
 %%
--spec recompile_ddl(DDLVersion :: riak_ql_ddl:compiler_version_type()) -> ok.
+-spec recompile_ddl(DDLVersion :: riak_ql_ddl_compiler:compiler_version()) -> ok.
 recompile_ddl(DDLVersion) ->
     %% Get list of tables to recompile
     Tables = riak_kv_compile_tab:get_ddl_records_needing_recompiling(DDLVersion),
