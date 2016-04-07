@@ -94,7 +94,7 @@ delete_dets(FileDir) ->
 
 %%
 -spec insert(BucketType :: binary(),
-             DDLVersion :: riak_ql_ddl_compiler:compiler_version(),
+             DDLVersion :: riak_ql_component:component_version(),
              DDL :: term(),
              CompilerPid :: pid(),
              State :: compiling_state()) -> ok | error.
@@ -146,7 +146,7 @@ get_state(BucketType) when is_binary(BucketType) ->
 
 %%
 -spec get_compiled_ddl_version(BucketType :: binary()) ->
-    riak_ql_ddl_compiler:compiler_version() | notfound.
+    riak_ql_component:component_version() | notfound.
 get_compiled_ddl_version(BucketType) when is_binary(BucketType) ->
     case dets:match(?TABLE, {BucketType,'$1','_','_','_'}) of
         [[Version]] ->
@@ -186,7 +186,7 @@ mark_compiling_for_retry() ->
     lists:foreach(fun([Pid]) -> update_state(Pid, retrying) end, CompilingPids).
 
 %% Get the list of records which need to be recompiled
--spec get_ddl_records_needing_recompiling(DDLVersion :: riak_ql_ddl_compiler:compiler_version()) ->
+-spec get_ddl_records_needing_recompiling(DDLVersion :: riak_ql_component:component_version()) ->
     [binary()].
 get_ddl_records_needing_recompiling(DDLVersion) ->
     %% First find all tables with a version

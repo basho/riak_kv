@@ -144,9 +144,9 @@ get_table_ddl(Table) when is_binary(Table) ->
 
 
 %%
--spec apply_timeseries_bucket_props(DDL::?DDL{},
-                                    DDLVersion::riak_ql_ddl_compiler:compiler_version(),
-                                    Props1::[proplists:property()]) ->
+-spec apply_timeseries_bucket_props(DDL :: ?DDL{},
+                                    DDLVersion :: riak_ql_component:component_version(),
+                                    Props1 :: [proplists:property()]) ->
         {ok, Props2::[proplists:property()]}.
 apply_timeseries_bucket_props(DDL, DDLVersion, Props1) ->
     Props2 = lists:keystore(
