@@ -195,8 +195,13 @@ key_to_string(KFTypes) ->
 
 value_to_url_string(V, varchar) ->
     binary_to_list(V);
+value_to_url_string(V, sint64) ->
+    integer_to_list(V);
+value_to_url_string(V, double) ->
+    %% float_to_list(V);  %% this would give "1.19999999999999995559e+00" for 1.2
+    lists:flatten(io_lib:format("~g", [V]));
 value_to_url_string(V, timestamp) ->
-    erlang:integer_to_list(V).
+    integer_to_list(V).
 
 base_url(Table) ->
     {ok, [{Server, Port}]} = application:get_env(riak_api, http),
