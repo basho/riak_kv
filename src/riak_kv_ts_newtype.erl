@@ -127,7 +127,7 @@ maybe_compile_ddl(BucketType, NewDDL, NewDDL, NewVsn, NewVsn) ->
     %% Do nothing; we're seeing a CMD update but the DDL hasn't changed
     ok;
 maybe_compile_ddl(BucketType, NewDDL, NewDDL, NewVsn, OldVsn) when is_record(NewDDL, ?DDL_RECORD_NAME),
-                                                                   is_integer(OldVsn), is_integer(NewVsn) ->
+                                                                   is_integer(NewVsn), is_integer(OldVsn) ->
     lager:info("Recompiling same DDL for bucket type ~s from version ~b to ~b",
                [BucketType, OldVsn, NewVsn]),
     actually_compile_ddl(BucketType, NewDDL);
@@ -135,6 +135,11 @@ maybe_compile_ddl(BucketType, NewDDL, _OldDDL, NewVsn, OldVsn) when is_record(Ne
                                                                     is_integer(OldVsn), is_integer(NewVsn) ->
     lager:info("Compiling new DDL for bucket type ~s from version ~b to ~b",
                [BucketType, OldVsn, NewVsn]),
+    actually_compile_ddl(BucketType, NewDDL);
+maybe_compile_ddl(BucketType, NewDDL, _OldDDL, NewVsn, notfound) when is_record(NewDDL, ?DDL_RECORD_NAME),
+                                                                      is_integer(NewVsn) ->
+    lager:info("Compiling new DDL for bucket type ~s with version ~b",
+               [BucketType, NewVsn]),
     actually_compile_ddl(BucketType, NewDDL);
 maybe_compile_ddl(BucketType, NewDDL, _OldDDL, NewVsn, OldVsn) ->
     lager:error("Unknown DDL version type ~p for bucket type ~s "
