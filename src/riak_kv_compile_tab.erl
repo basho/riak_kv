@@ -66,7 +66,6 @@ new_table_result({ok, LegacyDets}, {ok, Dets}) ->
     %% Convert all legacy DDL compilation records to current format
     upgrade_legacy_records(),
 
-    %% TODO: Use this once 1.2 support has been removed
     %% Clean up any lingering records stuck in the compiling state
     mark_compiling_for_retry(),
     {ok, LegacyDets, Dets};
@@ -199,7 +198,7 @@ get_ddl_records_needing_recompiling(DDLVersion) ->
 %% TODO: Remove this once 1.2 support has been removed
 %% Convert all pre-1.3 records to include the DDL compiler version in the
 %% DETS table.  Simply recompile everything all the time since we don't
-%% know if this is a downgrade or not.
+%% know if this is an upgrade following a downgrade or not.
 -spec upgrade_legacy_records() -> ok.
 upgrade_legacy_records() ->
     LegacyVersion = 1,
