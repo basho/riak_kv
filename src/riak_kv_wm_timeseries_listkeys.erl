@@ -41,7 +41,8 @@
          forbidden/2,
          resource_exists/2,
          content_types_provided/2,
-         encodings_provided/2]).
+         encodings_provided/2
+        ]).
 
 %% webmachine body-producing functions
 -export([produce_doc_body/2]).
@@ -49,16 +50,16 @@
 -include("riak_kv_wm_raw.hrl").
 -include_lib("webmachine/include/webmachine.hrl").
 
--record(ctx, {riak,
-              security,
-              client,
-              table    :: undefined | binary(),
-              mod :: module()
-             }).
+-record(ctx,
+        {
+          api_version :: undefined | integer(),
+          riak,
+          security,
+          table    :: undefined | binary(),
+          mod :: module()
+        }).
 
 -type cb_rv_spec(T) :: {T, #wm_reqdata{}, #ctx{}}.
-
--define(DEFAULT_TIMEOUT, 60000).
 
 -spec init(proplists:proplist()) -> {ok, #ctx{}}.
 %% @doc Initialize this resource.  This function extracts the
@@ -70,34 +71,35 @@ init(Props) ->
     {boolean(), #wm_reqdata{}, #ctx{}}.
 %% @doc Determine whether or not a connection to Riak
 %%      can be established.
-service_available(RD, Ctx = #ctx{riak = RiakProps}) ->
-    case riak_kv_wm_utils:get_riak_client(
-           RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
-        {ok, C} ->
+service_available(RD, Ctx) ->
+    ApiVersion = riak_kv_wm_ts_util:extract_api_version(RD),
+    case {riak_kv_wm_ts_util:is_supported_api_version(ApiVersion),
+          init:get_status()} of
+        {true, {started, _}} ->
             Table = riak_kv_wm_ts_util:table_from_request(RD),
             Mod = riak_ql_ddl:make_module_name(Table),
             {true, RD,
-             Ctx#ctx{client = C,
-                     table = Table,
+             Ctx#ctx{table = Table,
                      mod = Mod}};
-        {error, Reason} ->
-            Resp = riak_kv_wm_ts_util:set_error_message("Unable to connect to Riak: ~p", [Reason], RD),
-            {false, Resp, Ctx}
+        {false, {started, _}} ->
+            riak_kv_wm_ts_util:handle_error({unsupported_version, ApiVersion}, RD, Ctx);
+        {_, {InternalStatus, _}} ->
+            riak_kv_wm_ts_util:handle_error({not_ready, InternalStatus}, RD, Ctx)
     end.
 
-is_authorized(RD, #ctx{table=Table}=Ctx) ->
+is_authorized(RD, #ctx{table = Table} = Ctx) ->
     case riak_kv_wm_ts_util:authorize(listkeys, Table, RD) of
         ok ->
             {true, RD, Ctx};
         {error, ErrorMsg} ->
-            {ErrorMsg, RD, Ctx};
-        {insecure, Halt, Resp} ->
-            {Halt, Resp, Ctx}
+            riak_kv_wm_ts_util:handle_error({not_permitted, Table, ErrorMsg}, RD, Ctx);
+        insecure ->
+            riak_kv_wm_ts_util:handle_error(insecure_connection, RD, Ctx)
     end.
 
 -spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 forbidden(RD, Ctx) ->
-   Result = riak_kv_wm_utils:is_forbidden(RD),
+    Result = riak_kv_wm_utils:is_forbidden(RD),
     {Result, RD, Ctx}.
 
 -spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
@@ -106,15 +108,12 @@ allowed_methods(RD, Ctx) ->
     {['GET'], RD, Ctx}.
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
-resource_exists(RD, #ctx{mod=Mod,
-                         table=Table} = Ctx) ->
+resource_exists(RD, #ctx{mod = Mod, table = Table} = Ctx) ->
     case riak_kv_wm_ts_util:table_module_exists(Mod) of
         true ->
             {true, RD, Ctx};
         false ->
-            Resp = riak_kv_wm_ts_util:set_error_message(
-                     "table ~p does not exist", [Table], RD),
-            {false, Resp, Ctx}
+            riak_kv_wm_ts_util:handle_error({no_such_table, Table}, RD, Ctx)
     end.
 
 -spec encodings_provided(#wm_reqdata{}, #ctx{}) ->
@@ -130,10 +129,9 @@ encodings_provided(RD, Ctx) ->
 content_types_provided(RD, Ctx) ->
       {[{"text/plain", produce_doc_body}], RD, Ctx}.
 
-produce_doc_body(RD, Ctx = #ctx{table = Table, mod=Mod,
-                                client = Client}) ->
+produce_doc_body(RD, Ctx = #ctx{table = Table, mod = Mod}) ->
     {ok, ReqId} = riak_client:stream_list_keys(
-                    {Table, Table}, undefined, Client),
+                    {Table, Table}, undefined, {riak_client, [node(), undefined]}),
     {{halt, 200}, wrq:set_resp_body({stream, prepare_stream(ReqId, Table, Mod)}, RD), Ctx}.
 
 prepare_stream(ReqId, Table, Mod) ->
@@ -205,5 +203,7 @@ value_to_url_string(V, timestamp) ->
 
 base_url(Table) ->
     {ok, [{Server, Port}]} = application:get_env(riak_api, http),
-    lists:flatten(io_lib:format("http://~s:~B/ts/v1/tables/~s/keys/",
-                                [Server, Port, Table])).
+    lists:flatten(
+      io_lib:format(
+        "http://~s:~B/ts/~s/tables/~s/keys/",
+        [Server, Port, riak_kv_wm_ts_util:current_api_version_string(), Table])).
