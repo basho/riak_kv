@@ -25,7 +25,7 @@
 -module(riak_kv_ts_util).
 
 -export([
-         apply_timeseries_bucket_props/2,
+         apply_timeseries_bucket_props/3,
          encode_typeval_key/1,
          get_table_ddl/1,
          lk/1,
@@ -144,15 +144,18 @@ get_table_ddl(Table) when is_binary(Table) ->
 
 
 %%
--spec apply_timeseries_bucket_props(DDL::?DDL{},
-                                    Props1::[proplists:property()]) ->
+-spec apply_timeseries_bucket_props(DDL :: ?DDL{},
+                                    DDLVersion :: riak_ql_component:component_version(),
+                                    Props1 :: [proplists:property()]) ->
         {ok, Props2::[proplists:property()]}.
-apply_timeseries_bucket_props(DDL, Props1) ->
+apply_timeseries_bucket_props(DDL, DDLVersion, Props1) ->
     Props2 = lists:keystore(
         <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
     Props3 = lists:keystore(
         <<"ddl">>, 1, Props2, {<<"ddl">>, DDL}),
-    {ok, Props3}.
+    Props4 = lists:keystore(
+        <<"ddl_compiler_version">>, 1, Props3, {<<"ddl_compiler_version">>, DDLVersion}),
+    {ok, Props4}.
 
 
 -spec maybe_parse_table_def(BucketType :: binary(),
@@ -174,7 +177,7 @@ maybe_parse_table_def(BucketType, Props) ->
                     MergedProps = merge_props_with_preference(
                                     PropsNoDef, WithProps),
                     ok = assert_write_once_not_false(BucketType, MergedProps),
-                    apply_timeseries_bucket_props(DDL, MergedProps);
+                    apply_timeseries_bucket_props(DDL, riak_ql_ddl_compiler:get_compiler_version(), MergedProps);
                 {'EXIT', {Reason, _}} ->
                     % the lexer throws exceptions, the reason should always be a
                     % binary

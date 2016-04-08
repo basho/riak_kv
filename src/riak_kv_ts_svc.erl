@@ -151,7 +151,7 @@ process_stream({ReqId, Error}, ReqId,
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
                           {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
 create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, WithProps),
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
     case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
         {bad_linkfun_modfun, {M, F}} ->
             {reply, table_create_fail_response(
