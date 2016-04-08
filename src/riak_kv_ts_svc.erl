@@ -1,6 +1,7 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_pb_timeseries.erl: Riak TS protobuf callbacks
+%% riak_kv_ts_svc.erl: Riak TS PB/TTB message handler services common
+%%                     code
 %%
 %% Copyright (c) 2016 Basho Technologies, Inc.
 %%
@@ -19,108 +20,35 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-%% @doc Callbacks for TS protobuf messages [codes 90..104]
+%% @doc Common code for callbacks for TS TCP messages [codes 90..104]
 
--module(riak_kv_pb_timeseries).
+-module(riak_kv_ts_svc).
 
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
 
 -include("riak_kv_ts.hrl").
+-include("riak_kv_ts_svc.hrl").
 -include("riak_kv_wm_raw.hrl").
 
--behaviour(riak_api_pb_service).
-
--export([init/0,
-         decode/2,
-         encode/1,
+-export([decode_query_common/2,
          process/2,
          process_stream/3]).
 
-%% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
--define(E_SUBMIT,            1001).
--define(E_FETCH,             1002).
--define(E_IRREG,             1003).
--define(E_PUT,               1004).
--define(E_NOCREATE,          1005).   %% unused
--define(E_NOT_TS_TYPE,       1006).
--define(E_MISSING_TYPE,      1007).
--define(E_MISSING_TS_MODULE, 1008).
--define(E_DELETE,            1009).
--define(E_GET,               1010).
--define(E_BAD_KEY_LENGTH,    1011).
--define(E_LISTKEYS,          1012).
--define(E_TIMEOUT,           1013).
--define(E_CREATE,            1014).
--define(E_CREATED_INACTIVE,  1015).
--define(E_CREATED_GHOST,     1016).
--define(E_ACTIVATE,          1017).
--define(E_BAD_QUERY,         1018).
--define(E_TABLE_INACTIVE,    1019).
--define(E_PARSE_ERROR,       1020).
--define(E_NOTFOUND,          1021).
-
--define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
--define(TABLE_ACTIVATE_WAIT, 30). %% ditto
-
--record(state, {
-          req,
-          req_ctx,
-          column_info
-         }).
-
--type ts_requests() :: #tsputreq{} | #tsttbputreq{} |
-                       #tsdelreq{} | #tsgetreq{} | #tslistkeysreq{} | #tsqueryreq{}.
--type ts_responses() :: #tsputresp{} |
-                        #tsdelresp{} | #tsgetresp{} | #tslistkeysresp{} | #tsqueryresp{} |
-                        #rpberrorresp{}.
--type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
-                          #riak_sql_insert_v1{}.
-
--type process_retval() :: {reply, RpbOrTsMessage::tuple(), #state{}}.
-
--spec init() -> any().
-init() ->
-    #state{}.
-
--spec decode(integer(), binary()) ->
-                    {ok, ts_requests(), {PermSpec::string(), Table::binary()}} |
-                    {error, _}.
-decode(Code, Bin) ->
-    Msg = riak_pb_codec:decode(Code, Bin),
-    case Msg of
-        #tsqueryreq{query = Q, cover_context = Cover} ->
-            %% convert error returns to ok's, this means it will be passed into
-            %% process which will not process it and return the error.
-            case catch decode_query(Q, Cover) of
-                {ok, DecodedQuery} ->
-                    PermAndTarget = decode_query_permissions(DecodedQuery),
-                    {ok, DecodedQuery, PermAndTarget};
-                {error, Error} ->
-                    {ok, make_decoder_error_response(Error)};
-                {'EXIT', {Error, _}} ->
-                    {ok, make_decoder_error_response(Error)}
-            end;
-        #tsgetreq{table = Table}->
-            {ok, Msg, {"riak_kv.ts_get", Table}};
-        #tsputreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_put", Table}};
-        #tsttbputreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_put", Table}};
-        #tsdelreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_del", Table}};
-        #tslistkeysreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_listkeys", Table}};
-        #tscoveragereq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_cover", Table}}
+decode_query_common(Q, Cover) ->
+    %% convert error returns to ok's, this means it will be passed into
+    %% process which will not process it and return the error.
+    case catch decode_query(Q, Cover) of
+        {ok, DecodedQuery} ->
+            PermAndTarget = decode_query_permissions(DecodedQuery),
+            {ok, DecodedQuery, PermAndTarget};
+        {error, Error} ->
+            {ok, make_decoder_error_response(Error)};
+        {'EXIT', {Error, _}} ->
+            {ok, make_decoder_error_response(Error)}
     end.
 
--spec decode_query(Query::#tsinterpolation{}) ->
-    {error, _} | {ok, ts_query_types()}.
-decode_query(SQL) ->
-    decode_query(SQL, undefined).
-
--spec decode_query(Query::#tsinterpolation{}, term()) ->
+-spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
     {error, _} | {ok, ts_query_types()}.
 decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
@@ -149,21 +77,15 @@ decode_query_permissions(#riak_sql_insert_v1{'INSERT' = Table}) ->
     {"riak_kv.ts_insert", Table}.
 
 
--spec encode(tuple()) -> {ok, iolist()}.
-encode(Message) ->
-    {ok, riak_pb_codec:encode(Message)}.
-
-
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
+                     {reply, ts_query_responses(), #state{}} |
+                     {reply, ts_get_response(), #state{}} |
                      {reply, ts_responses(), #state{}}.
 process(#rpberrorresp{} = Error, State) ->
     {reply, Error, State};
 
 process(M = #tsputreq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tsputreq/4, M, State);
-
-process(M = #tsttbputreq{table = Table}, State) ->
-    check_table_and_call(Table, fun sub_tsttbputreq/4, M, State);
 
 process(M = #tsgetreq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tsgetreq/4, M, State);
@@ -278,12 +200,10 @@ wait_until_active(Table, State, Seconds) ->
 %% functions called from check_table_and_call, one per ts* request
 %% ---------------------------------------------------
 
-
 %%
 %% INSERT statements, called from check_table_and_call.
 %%
--spec make_insert_response(module(), #riak_sql_insert_v1{}) ->
-                           #tsqueryresp{} | #rpberrorresp{}.
+-spec make_insert_response(module(), #riak_sql_insert_v1{}) -> #tsqueryresp{} | #rpberrorresp{}.
 make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields, values = Values}) ->
     case lookup_field_positions(Mod, Fields) of
     {ok, Positions} ->
@@ -293,7 +213,7 @@ make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields,
                 make_rpberrresp(?E_BAD_QUERY, ValueReason);
             {ok, Data} ->
                 insert_putreqs(Mod, Table, Data)
-	    end;
+            end;
     {error, FieldReason} ->
         make_rpberrresp(?E_BAD_QUERY, FieldReason)
     end.
@@ -328,14 +248,14 @@ make_empty_row(Mod) ->
                            {ok, [pos_integer()]} | {error, string()}.
 lookup_field_positions(Mod, FieldIdentifiers) ->
     case lists:foldl(
-	   fun({identifier, FieldName}, {Good, Bad}) ->
-		   case Mod:is_field_valid(FieldName) of
+           fun({identifier, FieldName}, {Good, Bad}) ->
+                   case Mod:is_field_valid(FieldName) of
                false ->
                    {Good, [FieldName | Bad]};
                true ->
                    {[Mod:get_field_position(FieldName) | Good], Bad}
-		   end
-	   end, {[], []}, FieldIdentifiers)
+                   end
+           end, {[], []}, FieldIdentifiers)
     of
         {Positions, []} ->
             {ok, lists:reverse(Positions)};
@@ -384,23 +304,14 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
     make_insert_row(Values, Positions, setelement(Pos, Row, Val)).
 
 
-%% -----------
 %% put
-%% -----------
-
+%% NB: since this method deals with PB and TTB messages, the message must be fully
+%% decoded before sub_tsqueryreq is called
 sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
              State) ->
-    Data = riak_pb_ts_codec:decode_rows(Rows),
-    sub_putreq_common(Mod, Table, Data, State).
-
-sub_tsttbputreq(Mod, _DDL, #tsttbputreq{table = Table, rows = Data},
-               State) ->
-    sub_putreq_common(Mod, Table, Data, State).
-
-sub_putreq_common(Mod, Table, Data, State) ->
-    case catch validate_rows(Mod, Data) of
+    case catch validate_rows(Mod, Rows) of
         [] ->
-            case put_data(Data, Table, Mod) of
+            case put_data(Rows, Table, Mod) of
                 0 ->
                     {reply, #tsputresp{}, State};
                 ErrorCount ->
@@ -551,20 +462,17 @@ build_object(Bucket, Mod, DDL, Row, PK) ->
     {LK, RObj}.
 
 
-%% -----------
-%% get and delete
-%% -----------
-
+%% get
+%% NB: since this method deals with PB and TTB messages, the message must be fully
+%% decoded before sub_tsqueryreq is called
 sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
-                                 key    = PbCompoundKey,
+                                 key    = CompoundKey,
                                  timeout = Timeout},
              State) ->
     Options =
         if Timeout == undefined -> [];
            true -> [{timeout, Timeout}]
         end,
-
-    CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
 
     Result =
         case riak_kv_ts_util:make_ts_keys(CompoundKey, DDL, Mod) of
@@ -582,10 +490,7 @@ sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
             %% the columns stored in riak_object are just
             %% names; we need names with types, so:
             ColumnTypes = get_column_types(ColumnNames, Mod),
-            Rows = riak_pb_ts_codec:encode_rows(ColumnTypes, [Row]),
-            {reply, #tsgetresp{columns = make_tscolumndescription_list(
-                                           ColumnNames, ColumnTypes),
-                               rows = Rows}, State};
+            {reply, {tsgetresp, {ColumnNames, ColumnTypes, [Row]}}, State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
@@ -595,6 +500,7 @@ sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
     end.
 
 
+%% delete
 sub_tsdelreq(Mod, DDL, #tsdelreq{table = Table,
                                  key    = PbCompoundKey,
                                  vclock  = PbVClock,
@@ -677,7 +583,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                                             query = Q},
                   State) ->
-    case compile(Mod, catch decode_query(Q)) of
+    case compile(Mod, catch decode_query(Q, tscoveragereq)) of
         {error, #rpberrorresp{} = Error} ->
             {reply, Error, State};
         {error, _} ->
@@ -820,14 +726,15 @@ compile(Mod, {ok, ?SQL_SELECT{}=SQL}) ->
             end
     end.
 
-
 %% query
-%%
-
+%% NB: since this method deals with PB and TTB messages, the message must be fully
+%% decoded before sub_tsqueryreq is called
 -spec sub_tsqueryreq(module(), #ddl_v1{},
                      ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{},
                      #state{}) ->
-                     {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+                     {reply,
+                      ts_query_responses() | #rpberrorresp{},
+                      #state{}}.
 sub_tsqueryreq(Mod, DDL, SQL, State) ->
     case riak_kv_qry:submit(SQL, DDL) of
         {ok, Data}  ->
@@ -995,33 +902,25 @@ invoke_async_put(BuildRObjFun, _AsyncPutFun, BatchPutFun, {batches, Batches}) ->
                 end,
               Batches).
 
-%% helpers to make various error responses
+%% helpers to make various responses
 
 -spec make_tsqueryresp([] | {[riak_pb_ts_codec:tscolumnname()],
                              [riak_pb_ts_codec:tscolumntype()],
-                             [[riak_pb_ts_codec:ldbvalue()]]}) -> #tsqueryresp{}.
+                             [[riak_pb_ts_codec:ldbvalue()]]}) -> ts_query_response().
 make_tsqueryresp({_, _, []}) ->
-    #tsqueryresp{columns = [], rows = []};
-make_tsqueryresp({ColumnNames, ColumnTypes, JustRows}) ->
-    #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
-                 rows = riak_pb_ts_codec:encode_rows(ColumnTypes, JustRows)}.
+    {tsqueryresp, {[], [], []}};
+make_tsqueryresp({ColumnNames, ColumnTypes, Rows}) ->
+    {tsqueryresp, {ColumnNames, ColumnTypes, Rows}}.
 
--spec make_describe_response([[term()]]) -> #tsqueryresp{}.
-make_describe_response(DescribeTableRows) ->
+-spec make_describe_response([[term()]]) -> ts_query_response().
+make_describe_response(Rows) ->
     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
     ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
-    #tsqueryresp{columns = make_tscolumndescription_list(ColumnNames, ColumnTypes),
-                 rows = riak_pb_ts_codec:encode_rows(ColumnTypes, DescribeTableRows)}.
+    {tsqueryresp, {ColumnNames, ColumnTypes, Rows}}.
 
 -spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
-
--spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
-                                           [#tscolumndescription{}].
-make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
-    [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
-     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
 
 make_decoder_error_response({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("~ts", [Msg]));
