@@ -44,10 +44,8 @@
          process_post/2,
          content_types_accepted/2,
          content_types_provided/2,
-         encodings_provided/2
-        ]).
-
--export([produce_doc_body/2
+         encodings_provided/2,
+         produce_doc_body/2
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -55,17 +53,19 @@
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_ts.hrl").
 
--record(ctx, {
-          table :: 'undefined' | binary(),
-          mod   :: 'undefined' | module(),
-          method  :: atom(),
-          timeout,      %% integer() - passed-in timeout value in ms
+-record(ctx,
+        {
+          api_version :: undefined | integer(),
+          table       :: undefined | binary(),
+          mod         :: undefined | module(),
+          method      :: atom(),
+          timeout     :: undefined | integer(), %% passed-in timeout value in ms
           security,     %% security context
-          sql_type,
-          compiled_query :: undefined | #ddl_v1{} | #riak_sql_describe_v1{} | #riak_select_v1{},
+          sql_type    :: undefined | riak_kv_qry:query_type(),
+          compiled_query :: undefined | ?DDL{} | #riak_select_v1{} |
+                            #riak_sql_describe_v1{} | #riak_sql_insert_v1{},
           with_props     :: undefined | proplists:proplist(),
-          result         :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]} |
-                            [{entry, proplists:proplist()}]
+          result         :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]}
          }).
 
 -define(DEFAULT_TIMEOUT, 60000).
@@ -84,14 +84,18 @@ init(_Props) ->
 %% @doc Determine whether or not a connection to Riak
 %%      can be established.
 service_available(RD, Ctx) ->
-    case init:get_status() of
-        {started, _} ->
+    ApiVersion = riak_kv_wm_ts_util:extract_api_version(RD),
+    case {riak_kv_wm_ts_util:is_supported_api_version(ApiVersion),
+          init:get_status()} of
+        {true, {started, _}} ->
+            %% always available because no client connection is required
             {true, RD, Ctx};
-        Status ->
-            Resp = riak_kv_wm_ts_util:set_error_message("Unable to connect to Riak: ~p",
-                                                        [Status], RD),
-            {false, Resp, Ctx}
+        {false, {started, _}} ->
+            riak_kv_wm_ts_util:handle_error({unsupported_version, ApiVersion}, RD, Ctx);
+        {_, {InternalStatus, _}} ->
+            riak_kv_wm_ts_util:handle_error({not_ready, InternalStatus}, RD, Ctx)
     end.
+
 
 -spec allowed_methods(#wm_reqdata{}, #ctx{}) -> cb_rv_spec([atom()]).
 allowed_methods(RD, Ctx) ->
@@ -101,35 +105,28 @@ allowed_methods(RD, Ctx) ->
 malformed_request(RD, Ctx) ->
     try
         {SqlType, SQL, WithProps} = query_from_request(RD),
-        Table = table_from_sql(SQL),
+        Table = riak_kv_ts_util:queried_table(SQL),
         Mod = riak_ql_ddl:make_module_name(Table),
-        {false, RD, Ctx#ctx{sql_type=SqlType,
-                            compiled_query=SQL,
-                            with_props=WithProps,
-                            table=Table,
-                            mod=Mod}}
+        {false, RD, Ctx#ctx{sql_type = SqlType,
+                            compiled_query = SQL,
+                            with_props = WithProps,
+                            table = Table,
+                            mod = Mod}}
     catch
-        throw:{query, Reason} ->
-            Response = riak_kv_wm_ts_util:set_error_message("bad query: ~s", [Reason], RD),
-            {true, Response, Ctx};
-        throw:{unsupported_sql_type, Type} ->
-            Response = riak_kv_wm_ts_util:set_error_message(
-                         "The ~p query type is not supported over the HTTP API yet",
-                         [Type], RD),
-            {{halt, 503}, Response, Ctx}
+        throw:Condition ->
+            riak_kv_wm_ts_util:handle_error(Condition, RD, Ctx)
     end.
 
 -spec is_authorized(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()|string()|halt()).
-is_authorized(RD, #ctx{sql_type=SqlType, table=Table}=Ctx) ->
-    Call = call_from_sql_type(SqlType),
+is_authorized(RD, #ctx{sql_type = SqlType, table = Table} = Ctx) ->
+    Call = riak_kv_ts_api:api_call_from_sql_type(SqlType),
     case riak_kv_wm_ts_util:authorize(Call, Table, RD) of
         ok ->
             {true, RD, Ctx};
         {error, ErrorMsg} ->
-            ErrorStr = lists:flatten(io_lib:format("~p", [ErrorMsg])),
-            {ErrorStr, RD, Ctx};
-        {insecure, Halt, Resp} ->
-            {Halt, Resp, Ctx}
+            riak_kv_wm_ts_util:handle_error({not_permitted, Table, ErrorMsg}, RD, Ctx);
+        insecure ->
+            riak_kv_wm_ts_util:handle_error(insecure_connection, RD, Ctx)
     end.
 
 -spec forbidden(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
@@ -162,33 +159,24 @@ content_types_accepted(RD, Ctx) ->
 
 
 -spec resource_exists(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()|halt()).
-resource_exists(RD, #ctx{sql_type=ddl,
-                         mod=Mod,
-                         table=Table}=Ctx) ->
+resource_exists(RD, #ctx{sql_type = ddl,
+                         mod = Mod,
+                         table = Table} = Ctx) ->
     case riak_kv_wm_ts_util:table_module_exists(Mod) of
         false ->
             {true, RD, Ctx};
         true ->
-            Resp = riak_kv_wm_ts_util:set_error_message("table ~p already exists",
-                                                        [Table], RD),
-            {{halt, 409}, Resp, Ctx}
+            riak_kv_wm_ts_util:handle_error({table_exists, Table}, RD, Ctx)
     end;
-resource_exists(RD, #ctx{sql_type=Type,
-                         mod=Mod,
-                         table=Table}=Ctx) when Type == describe;
-                                                Type == select    ->
+resource_exists(RD, #ctx{sql_type = Type,
+                         mod = Mod,
+                         table = Table} = Ctx) when Type /= ddl ->
     case riak_kv_wm_ts_util:table_module_exists(Mod) of
         true ->
             {true, RD, Ctx};
         false ->
-            Resp = riak_kv_wm_ts_util:set_error_message("table ~p does not exist",
-                                                        [Table], RD),
-            {false, Resp, Ctx}
-    end;
-resource_exists(RD, Ctx) ->
-    Resp = riak_kv_wm_ts_util:set_error_message("no such resource ~p",
-                                                wrq:path(RD), RD),
-    {false, Resp, Ctx}.
+            riak_kv_wm_ts_util:handle_error({no_such_table, Table}, RD, Ctx)
+    end.
 
 -spec post_is_create(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(boolean()).
 post_is_create(RD, Ctx) ->
@@ -198,35 +186,23 @@ post_is_create(RD, Ctx) ->
 process_post(RD, #ctx{sql_type = ddl, compiled_query = SQL, with_props = WithProps} = Ctx) ->
     case create_table(SQL, WithProps) of
         ok ->
-            Result =  [{success, true}],  %% represents ok
+            Result = [{success, true}],  %% represents ok
             Json = to_json(Result),
             {true, wrq:append_to_response_body(Json, RD), Ctx};
         {error, Reason} ->
-            Resp = riak_kv_wm_ts_util:set_error_message("query error: ~p",
-                                                        [Reason],
-                                                        RD),
-            {{halt, 500}, Resp, Ctx}
+            riak_kv_wm_ts_util:handle_error(Reason, RD, Ctx)
     end;
-process_post(RD, #ctx{sql_type=describe,
-                      compiled_query=SQL,
-                      mod=Mod}=Ctx) ->
+process_post(RD, #ctx{sql_type = QueryType,
+                      compiled_query = SQL,
+                      table = Table,
+                      mod = Mod} = Ctx) ->
     DDL = Mod:get_ddl(), %% might be faster to store this earlier on
     case riak_kv_ts_api:query(SQL, DDL) of
-        {ok, Data} ->
+        {ok, Data} when QueryType == describe ->
             ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>,
                            <<"Primary Key">>, <<"Local Key">>],
             Json = to_json({ColumnNames, Data}),
             {true, wrq:append_to_response_body(Json, RD), Ctx};
-        {error, Reason} ->
-            Resp = riak_kv_wm_ts_util:set_error_message(
-                     "describe failed: ~p", [Reason], RD),
-            {{halt, 500}, Resp, Ctx}
-    end;
-process_post(RD, #ctx{sql_type=select,
-                      compiled_query=SQL,
-                      mod=Mod}=Ctx) ->
-    DDL = Mod:get_ddl(), %% might be faster to store this earlier on
-    case riak_kv_ts_api:query(SQL, DDL) of
         {ok, Data} ->
             {ColumnNames, _ColumnTypes, Rows} = Data,
             Json = to_json({ColumnNames, Rows}),
@@ -235,19 +211,13 @@ process_post(RD, #ctx{sql_type=select,
         {error, qry_worker_timeout} ->
             %% the eleveldb process didn't send us any response after
             %% 10 sec (hardcoded in riak_kv_qry), and probably died
-            Resp = riak_kv_wm_ts_util:set_error_message(
-                     "qry_worker_timeout", [], RD),
-            {false, Resp, Ctx};
+            riak_kv_wm_ts_util:handle_error(query_worker_timeout, RD, Ctx);
         {error, backend_timeout} ->
             %% the eleveldb process did manage to send us a timeout
             %% response
-            Resp = riak_kv_wm_ts_util:set_error_message(
-                     "backend_timeout", [], RD),
-            {false, Resp, Ctx};
+            riak_kv_wm_ts_util:handle_error(backend_timeout, RD, Ctx);
         {error, Reason} ->
-            Resp = riak_kv_wm_ts_util:set_error_message(
-                     "select query execution error: ~p", [Reason], RD),
-            {false, Resp, Ctx}
+            riak_kv_wm_ts_util:handle_error({query_exec_error, QueryType, Table, Reason}, RD, Ctx)
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -260,43 +230,33 @@ query_from_request(RD) ->
 query_string_from_request(RD) ->
     case wrq:req_body(RD) of
         undefined ->
-            throw({query, "no query in body"});
+            throw(no_query_in_body);
         Str ->
             binary_to_list(Str)
     end.
 
 compile_query(QueryStr) ->
-    try riak_ql_parser:ql_parse(
-           riak_ql_lexer:get_tokens(QueryStr)) of
+    case catch riak_ql_parser:ql_parse(
+                 riak_ql_lexer:get_tokens(QueryStr)) of
+        %% parser messages have a tuple for Reason:
+        {error, {_LineNo, riak_ql_parser, Msg}} when is_integer(_LineNo) ->
+            throw({query_parse_error, Msg});
+        {error, {Token, riak_ql_parser, _}} ->
+            throw({query_parse_error, io_lib:format("Unexpected token: '~s'", [Token])});
+        {'EXIT', {Reason, _StackTrace}} ->  %% these come from deep in the lexer
+            throw({query_parse_error, Reason});
         {error, Reason} ->
-            ErrorMsg = lists:flatten(io_lib:format("parse error: ~p", [Reason])),
-            throw({query, ErrorMsg});
+            throw({query_compile_error, Reason});
         {ddl, _DDL, _Props} = Res ->
             Res;
-        {Type, Compiled} when Type == select;
-                              Type == describe;
-                              Type == insert ->
+        {Type, Compiled} ->
             {ok, SQL} = riak_kv_ts_util:build_sql_record(
-                           Type, Compiled, undefined),
-            {Type, SQL, undefined};
-        {UnsupportedType, _ } ->
-            throw({unsupported_sql_type, UnsupportedType})
-    catch
-        E:T ->
-            ErrorMsg = io_lib:format("query error: ~p:~p", [E, T]),
-            throw({query, ErrorMsg})
+                          Type, Compiled, undefined),
+            {Type, SQL, undefined}
     end.
 
-%% @todo: should really be in riak_ql somewhere
-table_from_sql(#ddl_v1{table=Table})                    -> Table;
-table_from_sql(#riak_select_v1{'FROM'=Table})               -> Table;
-table_from_sql(#riak_sql_describe_v1{'DESCRIBE'=Table}) -> Table.
 
-call_from_sql_type(ddl)      -> query_create_table;
-call_from_sql_type(select)   -> query_select;
-call_from_sql_type(describe) -> query_describe.
-
-create_table(DDL = #ddl_v1{table = Table}, Props) ->
+create_table(DDL = ?DDL{table = Table}, Props) ->
     %% would be better to use a function to get the table out.
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, Props),
     Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
@@ -304,7 +264,7 @@ create_table(DDL = #ddl_v1{table = Table}, Props) ->
         ok ->
             wait_until_active(Table, ?TABLE_ACTIVATE_WAIT);
         {error, Reason} ->
-            {error,{table_create_fail, Table, Reason}}
+            {error, {table_create_fail, Table, Reason}}
     end.
 
 wait_until_active(Table, 0) ->
