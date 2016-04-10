@@ -84,6 +84,5 @@
 -type ts_get_response() :: {tsgetresp, {list(binary()), list(atom()), list(list(term()))}}.
 -type ts_query_response() :: {tsqueryresp, {list(binary()), list(atom()), list(list(term()))}}.
 -type ts_query_responses() :: #tsqueryresp{} | ts_query_response().
--type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
-                          #riak_sql_insert_v1{}.
+-type ts_query_types() :: ?DDL{} | riak_kv_qry:sql_query_type_record().
 -endif.

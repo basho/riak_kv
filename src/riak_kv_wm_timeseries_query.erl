@@ -62,8 +62,7 @@
           timeout     :: undefined | integer(), %% passed-in timeout value in ms
           security,     %% security context
           sql_type    :: undefined | riak_kv_qry:query_type(),
-          compiled_query :: undefined | ?DDL{} | #riak_select_v1{} |
-                            #riak_sql_describe_v1{} | #riak_sql_insert_v1{},
+          compiled_query :: undefined | ?DDL{} | riak_kv_qry:sql_query_type_record(),
           with_props     :: undefined | proplists:proplist(),
           result         :: undefined | ok | {Headers::[binary()], Rows::[ts_rec()]}
          }).
@@ -258,7 +257,8 @@ compile_query(QueryStr) ->
 
 create_table(DDL = ?DDL{table = Table}, Props) ->
     %% would be better to use a function to get the table out.
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, Props),
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(
+                     DDL, riak_ql_ddl_compiler:get_compiler_version(), Props),
     Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
     case riak_core_bucket_type:create(Table, Props2) of
         ok ->

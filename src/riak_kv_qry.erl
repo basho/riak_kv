@@ -27,21 +27,34 @@
 
 -export([
          submit/2,
+         empty_result/0,
          format_query_syntax_errors/1
         ]).
 
 -include("riak_kv_ts.hrl").
 
+%% enumerate all current SQL query types
+-type query_type() ::
+        ddl | select | describe | insert.
+%% and also their corresponding records (mainly for use in specs)
+-type sql_query_type_record() ::
+        ?SQL_SELECT{} |
+        #riak_sql_describe_v1{} |
+        #riak_sql_insert_v1{}.
+
+-export_type([query_type/0, sql_query_type_record/0]).
 %% No coverage plan for parallel requests
--spec submit(string() | ?SQL_SELECT{} | #riak_sql_describe_v1{} | #riak_sql_insert_v1{}, ?DDL{}) ->
-    {ok, any()} | {error, any()}.
+-spec submit(string() | sql_query_type_record(), ?DDL{}) ->
+    {ok, query_tabular_result()} | {error, any()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
 %%      To get the results of running the query, use fetch/1.
 submit(SQLString, DDL) when is_list(SQLString) ->
-    Lexed = riak_ql_lexer:get_tokens(SQLString),
-    case riak_ql_parser:parse(Lexed) of
+    case catch riak_ql_parser:parse(
+                 riak_ql_lexer:get_tokens(SQLString)) of
         {error, _Reason} = Error ->
             Error;
+        {'EXIT', Reason} ->  %% lexer problem
+            {error, Reason};
         {ok, SQL} ->
             submit(SQL, DDL)
     end;
@@ -130,6 +143,11 @@ maybe_await_query_results(_) ->
 format_query_syntax_errors(Errors) ->
     iolist_to_binary(
         [["\n", riak_ql_ddl:syntax_error_to_msg(E)] || E <- Errors]).
+
+
+-spec empty_result() -> query_tabular_result().
+empty_result() ->
+    {[], [], []}.
 
 %%%===================================================================
 %%% Unit tests
