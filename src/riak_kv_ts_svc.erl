@@ -195,17 +195,17 @@ create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
                      DDL, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
     case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
         {bad_linkfun_modfun, {M, F}} ->
-            {reply, table_create_fail_response(
+            {reply, make_table_create_fail_resp(
                       Table, flat_format(
                                "Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F])),
              State};
         {bad_linkfun_bkey, {B, K}} ->
-            {reply, table_create_fail_response(
+            {reply, make_table_create_fail_resp(
                       Table, flat_format(
                                "Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K])),
              State};
         {bad_chash_keyfun, {M, F}} ->
-            {reply, table_create_fail_response(
+            {reply, make_table_create_fail_resp(
                       Table, flat_format(
                                "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F])),
              State};
@@ -214,12 +214,12 @@ create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
                 ok ->
                     wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
                 {error, Reason} ->
-                    {reply, table_create_fail_response(Table, Reason), State}
+                    {reply, make_table_create_fail_resp(Table, Reason), State}
             end
     end.
 
 wait_until_active(Table, State, 0) ->
-    {reply, table_activate_fail_response(Table), State};
+    {reply, make_table_activate_fail_resp(Table), State};
 wait_until_active(Table, State, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
@@ -234,7 +234,7 @@ wait_until_active(Table, State, Seconds) ->
             %% the dialyzer (and of course, for the odd chance
             %% of Erlang imps crashing nodes between create
             %% and activate calls)
-            {reply, table_created_missing_response(Table), State}
+            {reply, make_table_created_missing_resp(Table), State}
     end.
 
 
@@ -257,14 +257,14 @@ sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
                 ok ->
                     {reply, #tsputresp{}, State};
                 {error, {some_failed, ErrorCount}} ->
-                    {reply, failed_put_response(ErrorCount), State};
+                    {reply, make_failed_put_resp(ErrorCount), State};
                 {error, no_type} ->
-                    {reply, table_not_activated_response(Table), State};
+                    {reply, make_table_not_activated_resp(Table), State};
                 {error, OtherReason} ->
                     {reply, make_rpberrresp(?E_PUT, to_string(OtherReason)), State}
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
-            {reply, validate_rows_error_response(BadRowIdxs), State}
+            {reply, make_validate_rows_error_resp(BadRowIdxs), State}
     end.
 
 
@@ -294,9 +294,9 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
             ColumnTypes = riak_kv_ts_util:get_column_types(ColumnNames, Mod),
             {reply, make_tsgetresp(ColumnNames, ColumnTypes, [Row]), State};
         {error, no_type} ->
-            {reply, table_not_activated_response(Table), State};
+            {reply, make_table_not_activated_resp(Table), State};
         {error, {bad_key_length, Got, Need}} ->
-            {reply, key_element_count_mismatch(Got, Need), State};
+            {reply, make_key_element_count_mismatch_resp(Got, Need), State};
         {error, notfound} ->
             {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
         {error, Reason} ->
@@ -324,13 +324,13 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
         ok ->
             {reply, tsdelresp, State};
         {error, no_type} ->
-            {reply, table_not_activated_response(Table), State};
+            {reply, make_table_not_activated_resp(Table), State};
         {error, {bad_key_length, Got, Need}} ->
-            {reply, key_element_count_mismatch(Got, Need), State};
+            {reply, make_key_element_count_mismatch_resp(Got, Need), State};
         {error, notfound} ->
             {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
         {error, Reason} ->
-            {reply, failed_delete_response(Reason), State}
+            {reply, make_failed_delete_resp(Reason), State}
     end.
 
 
@@ -353,7 +353,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
                                                  column_info = ColumnInfo}};
         {error, Reason} ->
-            {reply, failed_listkeys_response(Reason), State}
+            {reply, make_failed_listkeys_resp(Reason), State}
     end.
 
 
@@ -433,7 +433,7 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
 
         %% the following timeouts are known and distinguished:
         {error, no_type} ->
-            {reply, table_not_activated_response(DDL#ddl_v1.table), State};
+            {reply, make_table_not_activated_resp(Table), State};
         {error, qry_worker_timeout} ->
             %% the eleveldb process didn't send us any response after
             %% 10 sec (hardcoded in riak_kv_qry), and probably died
@@ -447,12 +447,6 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
     end.
 
-make_tsquery_resp(_Mod, ?SQL_SELECT{}, Data) ->
-    make_tsqueryresp(Data);
-make_tsquery_resp(_Mod, #riak_sql_describe_v1{}, Data) ->
-    make_describe_response(Data);
-make_tsquery_resp(Mod, SQL = #riak_sql_insert_v1{}, _Data) ->
-    make_insert_response(Mod, SQL).
 
 %% ---------------------------------------------------
 %% local functions
@@ -475,11 +469,11 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
         {ok, Mod, DDL} ->
             Fun(Mod, DDL, TsMessage, State);
         {error, no_type} ->
-            {reply, table_not_activated_response(Table), State};
+            {reply, make_table_not_activated_resp(Table), State};
         {error, missing_helper_module} ->
             BucketProps = riak_core_bucket:get_bucket(
                             riak_kv_ts_util:table_to_bucket(Table)),
-            {reply, missing_helper_module(Table, BucketProps), State}
+            {reply, make_missing_helper_module_resp(Table, BucketProps), State}
     end.
 
 
@@ -491,81 +485,81 @@ make_rpberrresp(Code, Message) ->
                   errmsg = lists:flatten(Message)}.
 
 %%
--spec missing_helper_module(Table::binary(),
+-spec make_missing_helper_module_resp(Table::binary(),
                             BucketProps::{error, any()} | [proplists:property()])
                            -> #rpberrorresp{}.
-missing_helper_module(Table, {error, _}) ->
-    missing_type_response(Table);
-missing_helper_module(Table, BucketProps)
+make_missing_helper_module_resp(Table, {error, _}) ->
+    make_missing_type_resp(Table);
+make_missing_helper_module_resp(Table, BucketProps)
   when is_binary(Table), is_list(BucketProps) ->
     case lists:keymember(ddl, 1, BucketProps) of
-        true  -> missing_table_module_response(Table);
-        false -> not_timeseries_type_response(Table)
+        true  -> make_missing_table_module_resp(Table);
+        false -> make_nonts_type_resp(Table)
     end.
 
 %%
--spec missing_type_response(Table::binary()) -> #rpberrorresp{}.
-missing_type_response(Table) ->
+-spec make_missing_type_resp(Table::binary()) -> #rpberrorresp{}.
+make_missing_type_resp(Table) ->
     make_rpberrresp(
       ?E_MISSING_TYPE,
-      flat_format("Time Series table ~s does not exist.", [Table])).
+      flat_format("Time Series table ~s does not exist", [Table])).
 
 %%
--spec not_timeseries_type_response(Table::binary()) -> #rpberrorresp{}.
-not_timeseries_type_response(Table) ->
+-spec make_nonts_type_resp(Table::binary()) -> #rpberrorresp{}.
+make_nonts_type_resp(Table) ->
     make_rpberrresp(
       ?E_NOT_TS_TYPE,
-      flat_format("Attempt Time Series operation on non Time Series table ~s.", [Table])).
+      flat_format("Attempt Time Series operation on non Time Series table ~s", [Table])).
 
--spec missing_table_module_response(Table::binary()) -> #rpberrorresp{}.
-missing_table_module_response(Table) ->
+-spec make_missing_table_module_resp(Table::binary()) -> #rpberrorresp{}.
+make_missing_table_module_resp(Table) ->
     make_rpberrresp(
       ?E_MISSING_TS_MODULE,
-      flat_format("The compiled module for Time Series table ~s cannot be loaded.", [Table])).
+      flat_format("The compiled module for Time Series table ~s cannot be loaded", [Table])).
 
--spec key_element_count_mismatch(Got::integer(), Need::integer()) -> #rpberrorresp{}.
-key_element_count_mismatch(Got, Need) ->
+-spec make_key_element_count_mismatch_resp(Got::integer(), Need::integer()) -> #rpberrorresp{}.
+make_key_element_count_mismatch_resp(Got, Need) ->
     make_rpberrresp(
       ?E_BAD_KEY_LENGTH,
-      flat_format("Key element count mismatch (key has ~b elements but ~b supplied).", [Need, Got])).
+      flat_format("Key element count mismatch (key has ~b elements but ~b supplied)", [Need, Got])).
 
--spec validate_rows_error_response([string()]) ->#rpberrorresp{}.
-validate_rows_error_response(BadRowIdxs) ->
+-spec make_validate_rows_error_resp([string()]) -> #rpberrorresp{}.
+make_validate_rows_error_resp(BadRowIdxs) ->
     BadRowsString = string:join(BadRowIdxs,", "),
     make_rpberrresp(
       ?E_IRREG,
-      flat_format("Invalid data found at row index(es) ~s", [BadRowsString])).
+      flat_format("Invalid data at row index(es) ~s", [BadRowsString])).
 
-failed_put_response(ErrorCount) ->
+make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(
       ?E_PUT,
       flat_format("Failed to put ~b record(s)", [ErrorCount])).
 
-failed_delete_response(Reason) ->
+make_failed_delete_resp(Reason) ->
     make_rpberrresp(
       ?E_DELETE,
       flat_format("Failed to delete record: ~p", [Reason])).
 
-failed_listkeys_response(Reason) ->
+make_failed_listkeys_resp(Reason) ->
     make_rpberrresp(
       ?E_LISTKEYS,
       flat_format("Failed to list keys: ~p", [Reason])).
 
-table_create_fail_response(Table, Reason) ->
+make_table_create_fail_resp(Table, Reason) ->
     make_rpberrresp(
       ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])).
 
-table_activate_fail_response(Table) ->
+make_table_activate_fail_resp(Table) ->
     make_rpberrresp(
       ?E_ACTIVATE,
       flat_format("Failed to activate table ~s", [Table])).
 
-table_not_activated_response(Table) ->
+make_table_not_activated_resp(Table) ->
     make_rpberrresp(
       ?E_TABLE_INACTIVE,
-      flat_format("~ts is not an active table.", [Table])).
+      flat_format("~ts is not an active table", [Table])).
 
-table_created_missing_response(Table) ->
+make_table_created_missing_resp(Table) ->
     make_rpberrresp(
       ?E_CREATED_GHOST,
       flat_format("Table ~s has been created but found missing", [Table])).
@@ -576,11 +570,12 @@ to_string(X) ->
 
 %% helpers to make various responses
 
--spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
-                                           [#tscolumndescription{}].
-make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
-    [#tscolumndescription{name = Name, type = riak_pb_ts_codec:encode_field_type(Type)}
-     || {Name, Type} <- lists:zip(ColumnNames, ColumnTypes)].
+make_tsgetresp(ColumnNames, ColumnTypes, Rows) ->
+    {tsgetresp, {ColumnNames, ColumnTypes, Rows}}.
+
+make_tsqueryresp(Data = {_ColumnNames, _ColumnTypes, _Rows}) ->
+    {tsqueryresp, Data}.
+
 
 make_decoder_error_response({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("~ts", [Msg]));
@@ -600,13 +595,13 @@ flat_format(Format, Args) ->
 missing_helper_module_missing_type_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TYPE },
-        missing_helper_module(<<"mytype">>, {error, any})
+        make_missing_helper_module_resp(<<"mytype">>, {error, any})
     ).
 
 missing_helper_module_not_ts_type_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_NOT_TS_TYPE },
-        missing_helper_module(<<"mytype">>, []) % no ddl property
+        make_missing_helper_module_resp(<<"mytype">>, []) % no ddl property
     ).
 
 %% if the bucket properties exist and they contain a ddl property then
@@ -615,7 +610,7 @@ missing_helper_module_not_ts_type_test() ->
 missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
-        missing_helper_module(<<"mytype">>, [{ddl, ?DDL{}}])
+        make_missing_helper_module_resp(<<"mytype">>, [{ddl, ?DDL{}}])
     ).
 
 test_helper_validate_rows_mod() ->
@@ -663,7 +658,7 @@ validate_rows_error_response_1_test() ->
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
                       errmsg = Msg ++ "1" },
-        validate_rows_error_response(["1"])
+        make_validate_rows_error_resp(["1"])
     ).
 
 validate_rows_error_response_2_test() ->
@@ -671,7 +666,7 @@ validate_rows_error_response_2_test() ->
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
                       errmsg = Msg ++ "1, 2, 3" },
-        validate_rows_error_response(["1", "2", "3"])
+        make_validate_rows_error_resp(["1", "2", "3"])
     ).
 
 -endif.
