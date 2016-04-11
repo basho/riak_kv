@@ -93,12 +93,8 @@ decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
         {QryType, SQL} when QryType /= error,
                             QryType /= 'EXIT' ->
             {QryType, riak_kv_ts_util:build_sql_record(QryType, SQL, Cover)};
-        {error, {_LineNo, riak_ql_parser, Msg}} when is_integer(_LineNo) ->
-            {error, Msg};
-        {error, {Token, riak_ql_parser, _}} ->
-            {error, flat_format("Unexpected token: '~s'", [Token])};
         {'EXIT', {Reason, _StackTrace}} ->
-            {error, flat_format("~p", [Reason])};
+            {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
             {error, Other}
     end.
@@ -570,6 +566,8 @@ make_tsqueryresp(Data = {_ColumnNames, _ColumnTypes, _Rows}) ->
     {tsqueryresp, Data}.
 
 
+make_decoder_error_response({lexer_error, Msg}) ->
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("~s", [Msg]));
 make_decoder_error_response({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("~ts", [Msg]));
 make_decoder_error_response({Token, riak_ql_parser, _}) when is_binary(Token) ->
