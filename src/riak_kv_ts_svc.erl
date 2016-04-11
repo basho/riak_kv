@@ -99,7 +99,7 @@ decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
             {error, Other}
     end.
 
-decode_query_permissions(QryType, {DDL, _WithProps}) ->
+decode_query_permissions(QryType, {DDL = ?DDL{}, _WithProps}) ->
     decode_query_permissions(QryType, DDL);
 decode_query_permissions(QryType, Qry) ->
     {riak_kv_ts_api:api_call_from_sql_type(QryType),
