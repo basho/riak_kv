@@ -308,5 +308,48 @@ describe_table_columns_test() ->
               [<<"t">>, <<"timestamp">>, false, 3,  3],
               [<<"w">>, <<"sint64">>, false, undefined, undefined],
               [<<"p">>, <<"double">>, true,  undefined, undefined]]}}).
+validate_make_insert_row_basic_test() ->
+    Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
+    Positions = [3, 1, 2],
+    Row = {undefined, undefined, undefined},
+    Result = make_insert_row(Data, Positions, Row),
+    ?assertEqual(
+        {ok, {<<"bamboozle">>, 3.14, 4}},
+        Result
+    ).
+
+validate_make_insert_row_too_many_test() ->
+    Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}, {integer, 8}],
+    Positions = [3, 1, 2],
+    Row = {undefined, undefined, undefined},
+    Result = make_insert_row(Data, Positions, Row),
+    ?assertEqual(
+        {error, "too many values"},
+        Result
+    ).
+
+
+validate_xlate_insert_to_putdata_ok_test() ->
+    Empty = list_to_tuple(lists:duplicate(5, undefined)),
+    Values = [[{integer, 4}, {binary, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}],
+              [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
+    Positions = [5, 3, 1, 2, 4],
+    Result = xlate_insert_to_putdata(Values, Positions, Empty),
+    ?assertEqual(
+        {ok,[{5.67,<<"bingo">>,<<"babs">>,undefined,4},
+             {7.65,<<"yolo!">>,<<"scat">>,undefined,8}]},
+        Result
+    ).
+
+validate_xlate_insert_to_putdata_too_many_values_test() ->
+    Empty = list_to_tuple(lists:duplicate(5, undefined)),
+    Values = [[{integer, 4}, {binary, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}, {integer, 7}],
+           [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
+    Positions = [3, 1, 2, 4],
+    Result = xlate_insert_to_putdata(Values, Positions, Empty),
+    ?assertEqual(
+        {error,"too many values in row index(es) 1"},
+        Result
+    ).
 
 -endif.
