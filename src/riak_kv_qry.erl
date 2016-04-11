@@ -43,6 +43,12 @@
         #riak_sql_insert_v1{}.
 
 -export_type([query_type/0, sql_query_type_record/0]).
+
+-type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
+                                 [riak_pb_ts_codec:tscolumntype()],
+                                 [list(riak_pb_ts_codec:ldbvalue())]}.
+
+
 %% No coverage plan for parallel requests
 -spec submit(string() | sql_query_type_record(), ?DDL{}) ->
     {ok, query_tabular_result()} | {error, any()}.
@@ -60,29 +66,150 @@ submit(SQLString, DDL) when is_list(SQLString) ->
     end;
 
 submit(#riak_sql_describe_v1{}, DDL) ->
-    describe_table_columns(DDL);
-
+    do_describe(DDL);
 submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
-    {ok, SQL};
-
+    do_insert(SQL);
 submit(SQL = ?SQL_SELECT{}, DDL) ->
-    maybe_submit_to_queue(SQL, DDL).
+    do_select(SQL, DDL).
+
 
 %% ---------------------
 %% local functions
 
--spec describe_table_columns(?DDL{}) ->
-                                    {ok, [[binary() | boolean() | integer() | undefined]]}.
-describe_table_columns(?DDL{fields = FieldSpecs,
-                            partition_key = #key_v1{ast = PKSpec},
-                            local_key     = #key_v1{ast = LKSpec}}) ->
-    {ok,
-     [{Name, list_to_binary(atom_to_list(Type)), Nullable,
-       column_pk_position_or_blank(Name, PKSpec),
-       column_lk_position_or_blank(Name, LKSpec)}
-      || #riak_field_v1{name = Name,
-                        type = Type,
-                        optional = Nullable} <- FieldSpecs]}.
+%%
+%% INSERT statements
+%%
+-spec do_insert(#riak_sql_insert_v1{}) -> {ok, query_tabular_result()} | {error, term()}.
+do_insert(#riak_sql_insert_v1{'INSERT' = Table,
+                              fields = Fields,
+                              values = Values}) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    case lookup_field_positions(Mod, Fields) of
+        {ok, Positions} ->
+            Empty = make_empty_row(Mod),
+            case xlate_insert_to_putdata(Values, Positions, Empty) of
+                {error, Reason} ->
+                    {error, Reason};
+                {ok, Data} ->
+                    insert_putreqs(Mod, Table, Data)
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+insert_putreqs(Mod, Table, Data) ->
+    case riak_kv_ts_util:validate_rows(Mod, Data) of
+        [] ->
+            case riak_kv_ts_api:put_data(Data, Table, Mod) of
+                ok ->
+                    {ok, empty_result()};
+                {error, {some_failed, ErrorCount}} ->
+                    {error, io_lib:format("Failed to put ~b record(s)", [ErrorCount])};
+                {error, no_type} ->
+                    {error, io_lib:format("~ts is not an active table", [Table])};
+                {error, OtherReason} ->
+                    {error, OtherReason}
+            end;
+        BadRowIdxs when is_list(BadRowIdxs) ->
+            BadRowsString = string:join(BadRowIdxs,", "),
+            {error, io_lib:format("Invalid data at row index(es) ~s", [BadRowsString])}
+    end.
+
+%%
+%% Return an all-null empty row ready to be populated by the values
+%%
+-spec make_empty_row(module()) -> tuple(undefined).
+make_empty_row(Mod) ->
+    Positions = Mod:get_field_positions(),
+    list_to_tuple(lists:duplicate(length(Positions), undefined)).
+
+%%
+%% Lookup the index of the field names selected to insert.
+%%
+%% This *requires* that once schema changes take place the DDL fields are left in order.
+%%
+-spec lookup_field_positions(module(), [riak_ql_ddl:field_identifier()]) ->
+                           {ok, [pos_integer()]} | {error, string()}.
+lookup_field_positions(Mod, FieldIdentifiers) ->
+    GoodBadPositions =
+        lists:foldl(
+          fun({identifier, FieldName}, {Good, Bad}) ->
+                  case Mod:is_field_valid(FieldName) of
+                      false ->
+                          {Good, [FieldName | Bad]};
+                      true ->
+                          {[Mod:get_field_position(FieldName) | Good], Bad}
+                  end
+          end, {[], []}, FieldIdentifiers),
+    case GoodBadPositions of
+        {Positions, []} ->
+            {ok, lists:reverse(Positions)};
+        {_, Errors} ->
+            {error, io_lib:format(
+                      "undefined fields: ~s",
+                      [string:join(lists:reverse(Errors), ", ")])}
+    end.
+
+%%
+%% Map the list of values from statement order into the correct place in the tuple.
+%% If there are less values given than the field list the NULL will carry through
+%% and the general validation rules should pick that up.
+%% If there are too many values given for the fields it returns an error.
+%%
+-spec xlate_insert_to_putdata([[riak_ql_ddl:data_value()]], [pos_integer()], tuple(undefined)) ->
+                              {ok, [tuple()]} | {error, string()}.
+xlate_insert_to_putdata(Values, Positions, Empty) ->
+    ConvFn = fun(RowVals, {Good, Bad, RowNum}) ->
+                 case make_insert_row(RowVals, Positions, Empty) of
+                     {ok, Row} ->
+                         {[Row | Good], Bad, RowNum + 1};
+                     {error, _Reason} ->
+                         {Good, [integer_to_list(RowNum) | Bad], RowNum + 1}
+                 end
+             end,
+    Converted = lists:foldl(ConvFn, {[], [], 1}, Values),
+    case Converted of
+        {PutData, [], _} ->
+            {ok, lists:reverse(PutData)};
+        {_, Errors, _} ->
+            {error, lists:flatten(
+                      io_lib:format(
+                        "too many values in row index(es) ~s",
+                        [string:join(lists:reverse(Errors), ", ")]))}
+    end.
+
+-spec make_insert_row([] | [riak_ql_ddl:data_value()], [] | [pos_integer()], tuple()) ->
+                      {ok, tuple()} | {error, string()}.
+make_insert_row([], _Positions, Row) when is_tuple(Row) ->
+    %% Out of entries in the value - row is populated with default values
+    %% so if we run out of data for implicit/explicit fieldnames can just return
+    {ok, Row};
+make_insert_row(_, [], Row) when is_tuple(Row) ->
+    %% Too many values for the field
+    {error, "too many values"};
+%% Make sure the types match
+make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(Row) ->
+    make_insert_row(Values, Positions, setelement(Pos, Row, Val)).
+
+
+%% DESCRIBE
+
+-spec do_describe(?DDL{}) ->
+                         {ok, query_tabular_result()} | {error, term()}.
+do_describe(?DDL{fields = FieldSpecs,
+                 partition_key = #key_v1{ast = PKSpec},
+                 local_key     = #key_v1{ast = LKSpec}}) ->
+    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
+    ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
+    Rows =
+        [[Name, list_to_binary(atom_to_list(Type)), Nullable,
+          column_pk_position_or_blank(Name, PKSpec),
+          column_lk_position_or_blank(Name, LKSpec)]
+         || #riak_field_v1{name = Name,
+                           type = Type,
+                           optional = Nullable} <- FieldSpecs],
+    {ok, {ColumnNames, ColumnTypes, Rows}}.
+
 
 %% the following two functions are identical, for the way fields and
 %% keys are represented as of 2015-12-18; duplication here is a hint
@@ -105,7 +232,11 @@ count_to_position(Col, [_ | Rest], Pos) ->
     count_to_position(Col, Rest, Pos + 1).
 
 
-maybe_submit_to_queue(SQL, ?DDL{table = BucketType} = DDL) ->
+%% SELECT
+
+-spec do_select(?SQL_SELECT{}, ?DDL{}) ->
+                       {ok, query_tabular_result()} | {error, term()}.
+do_select(SQL, ?DDL{table = BucketType} = DDL) ->
     Mod = riak_ql_ddl:make_module_name(BucketType),
     MaxSubQueries =
         app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
@@ -115,9 +246,9 @@ maybe_submit_to_queue(SQL, ?DDL{table = BucketType} = DDL) ->
             case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
                 {error,_} = Error ->
                     Error;
-                {ok, Queries} ->
+                {ok, SubQueries} ->
                     maybe_await_query_results(
-                      riak_kv_qry_queue:put_on_queue(self(), Queries, DDL))
+                      riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL))
             end;
         {false, Errors} ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}
@@ -131,8 +262,10 @@ maybe_await_query_results(_) ->
     % we can't use a gen_server call here because the reply needs to be
     % from an fsm but one is not assigned if the query is queued.
     receive
-        Result ->
-            Result
+        {ok, Result} ->
+            {ok, Result};
+        {error, Reason} ->
+            {error, Reason}
     after
         Timeout ->
             {error, qry_worker_timeout}
@@ -168,12 +301,57 @@ describe_table_columns_test() ->
             " p double,"
             " PRIMARY KEY ((f, s, quantum(t, 15, m)), "
             " f, s, t))")),
+    ?assertMatch(
+       do_describe(DDL),
+       {ok, {_, _,
+             [{<<"f">>, <<"varchar">>,   false, 1,  1},
+              {<<"s">>, <<"varchar">>,   false, 2,  2},
+              {<<"t">>, <<"timestamp">>, false, 3,  3},
+              {<<"w">>, <<"sint64">>, false, [], []},
+              {<<"p">>, <<"double">>, true,  [], []}]}}).
+
+validate_make_insert_row_basic_test() ->
+    Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
+    Positions = [3, 1, 2],
+    Row = {undefined, undefined, undefined},
+    Result = make_insert_row(Data, Positions, Row),
     ?assertEqual(
-       describe_table_columns(DDL),
-       {ok, [{<<"f">>, <<"varchar">>,   false, 1,  1},
-             {<<"s">>, <<"varchar">>,   false, 2,  2},
-             {<<"t">>, <<"timestamp">>, false, 3,  3},
-             {<<"w">>, <<"sint64">>, false, [], []},
-             {<<"p">>, <<"double">>, true,  [], []}]}).
+        {ok, {<<"bamboozle">>, 3.14, 4}},
+        Result
+    ).
+
+validate_make_insert_row_too_many_test() ->
+    Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}, {integer, 8}],
+    Positions = [3, 1, 2],
+    Row = {undefined, undefined, undefined},
+    Result = make_insert_row(Data, Positions, Row),
+    ?assertEqual(
+        {error, "too many values"},
+        Result
+    ).
+
+
+validate_xlate_insert_to_putdata_ok_test() ->
+    Empty = list_to_tuple(lists:duplicate(5, undefined)),
+    Values = [[{integer, 4}, {binary, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}],
+              [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
+    Positions = [5, 3, 1, 2, 4],
+    Result = xlate_insert_to_putdata(Values, Positions, Empty),
+    ?assertEqual(
+        {ok,[{5.67,<<"bingo">>,<<"babs">>,undefined,4},
+             {7.65,<<"yolo!">>,<<"scat">>,undefined,8}]},
+        Result
+    ).
+
+validate_xlate_insert_to_putdata_too_many_values_test() ->
+    Empty = list_to_tuple(lists:duplicate(5, undefined)),
+    Values = [[{integer, 4}, {binary, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}, {integer, 7}],
+           [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
+    Positions = [3, 1, 2, 4],
+    Result = xlate_insert_to_putdata(Values, Positions, Empty),
+    ?assertEqual(
+        {error,"too many values in row index(es) 1"},
+        Result
+    ).
 
 -endif.

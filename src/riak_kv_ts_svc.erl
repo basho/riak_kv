@@ -203,109 +203,6 @@ wait_until_active(Table, State, Seconds) ->
 %% functions called from check_table_and_call, one per ts* request
 %% ---------------------------------------------------
 
-%%
-%% INSERT statements, called from check_table_and_call.
-%%
--spec make_insert_response(module(), #riak_sql_insert_v1{}) -> #tsqueryresp{} | #rpberrorresp{}.
-make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields, values = Values}) ->
-    case lookup_field_positions(Mod, Fields) of
-    {ok, Positions} ->
-        Empty = make_empty_row(Mod),
-        case xlate_insert_to_putdata(Values, Positions, Empty) of
-            {error, ValueReason} ->
-                make_rpberrresp(?E_BAD_QUERY, ValueReason);
-            {ok, Data} ->
-                insert_putreqs(Mod, Table, Data)
-            end;
-    {error, FieldReason} ->
-        make_rpberrresp(?E_BAD_QUERY, FieldReason)
-    end.
-
-insert_putreqs(Mod, Table, Data) ->
-    case catch riak_kv_ts_util:validate_rows(Mod, Data) of
-        [] ->
-            case riak_kv_ts_util:put_data(Data, Table, Mod) of
-                0 ->
-                    #tsqueryresp{};
-                ErrorCount ->
-                    failed_put_response(ErrorCount)
-            end;
-        BadRowIdxs when is_list(BadRowIdxs) ->
-            validate_rows_error_response(BadRowIdxs)
-    end.
-
-%%
-%% Return an all-null empty row ready to be populated by the values
-%%
--spec make_empty_row(module()) -> tuple(undefined).
-make_empty_row(Mod) ->
-    Positions = Mod:get_field_positions(),
-    list_to_tuple(lists:duplicate(length(Positions), undefined)).
-
-%%
-%% Lookup the index of the field names selected to insert.
-%%
-%% This *requires* that once schema changes take place the DDL fields are left in order.
-%%
--spec lookup_field_positions(module(), [riak_ql_ddl:field_identifier()]) ->
-                           {ok, [pos_integer()]} | {error, string()}.
-lookup_field_positions(Mod, FieldIdentifiers) ->
-    case lists:foldl(
-           fun({identifier, FieldName}, {Good, Bad}) ->
-                   case Mod:is_field_valid(FieldName) of
-               false ->
-                   {Good, [FieldName | Bad]};
-               true ->
-                   {[Mod:get_field_position(FieldName) | Good], Bad}
-                   end
-           end, {[], []}, FieldIdentifiers)
-    of
-        {Positions, []} ->
-            {ok, lists:reverse(Positions)};
-        {_, Errors} ->
-            {error, flat_format("undefined fields: ~s",
-                                [string:join(lists:reverse(Errors), ", ")])}
-    end.
-
-%%
-%% Map the list of values from statement order into the correct place in the tuple.
-%% If there are less values given than the field list the NULL will carry through
-%% and the general validation rules should pick that up.
-%% If there are too many values given for the fields it returns an error.
-%%
--spec xlate_insert_to_putdata([[riak_ql_ddl:data_value()]], [pos_integer()], tuple(undefined)) ->
-                              {ok, [tuple()]} | {error, string()}.
-xlate_insert_to_putdata(Values, Positions, Empty) ->
-    ConvFn = fun(RowVals, {Good, Bad, RowNum}) ->
-                 case make_insert_row(RowVals, Positions, Empty) of
-                     {ok, Row} ->
-                         {[Row | Good], Bad, RowNum + 1};
-                     {error, _Reason} ->
-                         {Good, [integer_to_list(RowNum) | Bad], RowNum + 1}
-                 end
-             end,
-    Converted = lists:foldl(ConvFn, {[], [], 1}, Values),
-    case Converted of
-        {PutData, [], _} ->
-            {ok, lists:reverse(PutData)};
-        {_, Errors, _} ->
-            {error, flat_format("too many values in row index(es) ~s",
-                                [string:join(lists:reverse(Errors), ", ")])}
-    end.
-
--spec make_insert_row([] | [riak_ql_ddl:data_value()], [] | [pos_integer()], tuple()) ->
-                      {ok, tuple()} | {error, string()}.
-make_insert_row([], _Positions, Row) when is_tuple(Row) ->
-    %% Out of entries in the value - row is populated with default values
-    %% so if we run out of data for implicit/explicit fieldnames can just return
-    {ok, Row};
-make_insert_row(_, [], Row) when is_tuple(Row) ->
-    %% Too many values for the field
-    {error, "too many values"};
-%% Make sure the types match
-make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(Row) ->
-    make_insert_row(Values, Positions, setelement(Pos, Row, Val)).
-
 
 %% -----------
 %% put
@@ -640,20 +537,6 @@ to_string(X) ->
 
 %% helpers to make various responses
 
--spec make_tsqueryresp([] | {[riak_pb_ts_codec:tscolumnname()],
-                             [riak_pb_ts_codec:tscolumntype()],
-                             [[riak_pb_ts_codec:ldbvalue()]]}) -> ts_query_response().
-make_tsqueryresp({_, _, []}) ->
-    {tsqueryresp, {[], [], []}};
-make_tsqueryresp({ColumnNames, ColumnTypes, Rows}) ->
-    {tsqueryresp, {ColumnNames, ColumnTypes, Rows}}.
-
--spec make_describe_response([[term()]]) -> ts_query_response().
-make_describe_response(Rows) ->
-    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
-    ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
-    {tsqueryresp, {ColumnNames, ColumnTypes, Rows}}.
-
 -spec make_tscolumndescription_list([binary()], [riak_pb_ts_codec:tscolumntype()]) ->
                                            [#tscolumndescription{}].
 make_tscolumndescription_list(ColumnNames, ColumnTypes) ->
@@ -733,11 +616,11 @@ validate_rows_bad_2_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),
     ?assertEqual(
         ["1", "3", "4"],
-        riak_kv_ts_util:validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, "hithere"])
+        riak_kv_ts_util:validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
     ).
 
 validate_rows_error_response_1_test() ->
-    Msg = "Invalid data found at row index(es) ",
+    Msg = "Invalid data at row index(es) ",
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
                       errmsg = Msg ++ "1" },
@@ -745,79 +628,11 @@ validate_rows_error_response_1_test() ->
     ).
 
 validate_rows_error_response_2_test() ->
-    Msg = "Invalid data found at row index(es) ",
+    Msg = "Invalid data at row index(es) ",
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
                       errmsg = Msg ++ "1, 2, 3" },
         validate_rows_error_response(["1", "2", "3"])
-    ).
-
-batch_1_test() ->
-    ?assertEqual(lists:reverse([[1, 2, 3, 4], [5, 6, 7, 8], [9]]),
-                 create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 4)).
-
-batch_2_test() ->
-    ?assertEqual(lists:reverse([[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]]),
-                 create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4)).
-
-batch_3_test() ->
-    ?assertEqual(lists:reverse([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
-                 create_batches([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)).
-
-batch_undersized1_test() ->
-    ?assertEqual([[1, 2, 3, 4, 5, 6]],
-                 create_batches([1, 2, 3, 4, 5, 6], 6)).
-
-batch_undersized2_test() ->
-    ?assertEqual([[1, 2, 3, 4, 5, 6]],
-                 create_batches([1, 2, 3, 4, 5, 6], 7)).
-
-batch_almost_undersized_test() ->
-    ?assertEqual(lists:reverse([[1, 2, 3, 4, 5], [6]]),
-                 create_batches([1, 2, 3, 4, 5, 6], 5)).
-
-validate_make_insert_row_basic_test() ->
-    Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
-    Positions = [3, 1, 2],
-    Row = {undefined, undefined, undefined},
-    Result = make_insert_row(Data, Positions, Row),
-    ?assertEqual(
-        {ok, {<<"bamboozle">>, 3.14, 4}},
-        Result
-    ).
-
-validate_make_insert_row_too_many_test() ->
-    Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}, {integer, 8}],
-    Positions = [3, 1, 2],
-    Row = {undefined, undefined, undefined},
-    Result = make_insert_row(Data, Positions, Row),
-    ?assertEqual(
-        {error, "too many values"},
-        Result
-    ).
-
-
-validate_xlate_insert_to_putdata_ok_test() ->
-    Empty = list_to_tuple(lists:duplicate(5, undefined)),
-    Values = [[{integer, 4}, {binary, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}],
-              [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
-    Positions = [5, 3, 1, 2, 4],
-    Result = xlate_insert_to_putdata(Values, Positions, Empty),
-    ?assertEqual(
-        {ok,[{5.67,<<"bingo">>,<<"babs">>,undefined,4},
-             {7.65,<<"yolo!">>,<<"scat">>,undefined,8}]},
-        Result
-    ).
-
-validate_xlate_insert_to_putdata_too_many_values_test() ->
-    Empty = list_to_tuple(lists:duplicate(5, undefined)),
-    Values = [[{integer, 4}, {binary, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}, {integer, 7}],
-           [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
-    Positions = [3, 1, 2, 4],
-    Result = xlate_insert_to_putdata(Values, Positions, Empty),
-    ?assertEqual(
-        {error,"too many values in row index(es) 1"},
-        Result
     ).
 
 -endif.
