@@ -471,7 +471,7 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
 -spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
 make_rpberrresp(Code, Message) ->
     #rpberrorresp{errcode = Code,
-                  errmsg = lists:flatten(Message)}.
+                  errmsg = iolist_to_binary(Message)}.
 
 %%
 -spec make_missing_helper_module_resp(Table::binary(),
@@ -648,7 +648,7 @@ validate_rows_error_response_1_test() ->
     Msg = "Invalid data at row index(es) ",
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = Msg ++ "1" },
+                      errmsg = iolist_to_binary(Msg ++ "1") },
         make_validate_rows_error_resp(["1"])
     ).
 
@@ -656,7 +656,7 @@ validate_rows_error_response_2_test() ->
     Msg = "Invalid data at row index(es) ",
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = Msg ++ "1, 2, 3" },
+                      errmsg = iolist_to_binary(Msg ++ "1, 2, 3") },
         make_validate_rows_error_resp(["1", "2", "3"])
     ).
 
