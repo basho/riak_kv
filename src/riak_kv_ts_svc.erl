@@ -33,6 +33,19 @@
          process/2,
          process_stream/3]).
 
+-type ts_requests() :: #tsputreq{} | #tsdelreq{} | #tsgetreq{} |
+                       #tslistkeysreq{} | #tsqueryreq{}.
+-type ts_responses() :: #tsputresp{} | #tsdelresp{} | #tsgetresp{} |
+                        #tslistkeysresp{} | #tsqueryresp{} |
+                        #rpberrorresp{}.
+-type ts_get_response() :: {tsgetresp, {list(binary()), list(atom()), list(list(term()))}}.
+-type ts_query_response() :: {tsqueryresp, {list(binary()), list(atom()), list(list(term()))}}.
+-type ts_query_responses() :: #tsqueryresp{} | ts_query_response().
+-type ts_query_types() :: ?DDL{} | riak_kv_qry:sql_query_type_record().
+-export_type([ts_requests/0, ts_responses/0,
+              ts_query_response/0, ts_query_responses/0,
+              ts_query_types/0]).
+
 decode_query_common(Q, Cover) ->
     %% convert error returns to ok's, this means it will be passed into
     %% process which will not process it and return the error.

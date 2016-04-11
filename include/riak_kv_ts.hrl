@@ -76,13 +76,4 @@
           helper_mod            :: atom()
         }).
 
--type ts_requests() :: #tsputreq{} | #tsdelreq{} | #tsgetreq{} |
-                       #tslistkeysreq{} | #tsqueryreq{}.
--type ts_responses() :: #tsputresp{} | #tsdelresp{} | #tsgetresp{} |
-                        #tslistkeysresp{} | #tsqueryresp{} |
-                        #rpberrorresp{}.
--type ts_get_response() :: {tsgetresp, {list(binary()), list(atom()), list(list(term()))}}.
--type ts_query_response() :: {tsqueryresp, {list(binary()), list(atom()), list(list(term()))}}.
--type ts_query_responses() :: #tsqueryresp{} | ts_query_response().
--type ts_query_types() :: ?DDL{} | riak_kv_qry:sql_query_type_record().
 -endif.
