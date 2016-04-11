@@ -583,7 +583,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                                             query = Q},
                   State) ->
-    case compile(Mod, catch decode_query(Q, tscoveragereq)) of
+    case compile(Mod, catch decode_query(Q, undefined)) of
         {error, #rpberrorresp{} = Error} ->
             {reply, Error, State};
         {error, _} ->
