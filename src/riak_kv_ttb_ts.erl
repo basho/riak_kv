@@ -73,7 +73,7 @@ encode_response({reply, {tsqueryresp, {_, _, []}}, State}) ->
     Encoded = #tsqueryresp{columns={[], []}, rows=[]},
     {reply, Encoded, State};
 encode_response({reply, {tsqueryresp, {CNames, CTypes, Rows}}, State}) ->
-    Encoded = #tsqueryresp{columns={CNames, CTypes}, rows=Rows},
+    Encoded = #tsqueryresp{columns={CNames, CTypes}, rows=riak_ttb_codec:encode_ts_rows(Rows)},
     {reply, Encoded, State};
 encode_response({reply, {tsgetresp, {CNames, CTypes, Rows}}, State}) ->
     Encoded = #tsgetresp{columns={CNames, CTypes}, rows=Rows},
