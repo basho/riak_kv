@@ -643,11 +643,11 @@ validate_rows_bad_2_test() ->
     {module, Mod} = test_helper_validate_rows_mod(),
     ?assertEqual(
         ["1", "3", "4"],
-        riak_kv_ts_util:validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, "hithere"])
+        riak_kv_ts_util:validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
     ).
 
 validate_rows_error_response_1_test() ->
-    Msg = "Invalid data found at row index(es) ",
+    Msg = "Invalid data at row index(es) ",
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
                       errmsg = Msg ++ "1" },
@@ -655,7 +655,7 @@ validate_rows_error_response_1_test() ->
     ).
 
 validate_rows_error_response_2_test() ->
-    Msg = "Invalid data found at row index(es) ",
+    Msg = "Invalid data at row index(es) ",
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
                       errmsg = Msg ++ "1, 2, 3" },

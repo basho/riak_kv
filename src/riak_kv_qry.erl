@@ -172,9 +172,10 @@ xlate_insert_to_putdata(Values, Positions, Empty) ->
         {PutData, [], _} ->
             {ok, lists:reverse(PutData)};
         {_, Errors, _} ->
-            {error, io_lib:format(
-                      "too many values in row index(es) ~s",
-                      [string:join(lists:reverse(Errors), ", ")])}
+            {error, lists:flatten(
+                      io_lib:format(
+                        "too many values in row index(es) ~s",
+                        [string:join(lists:reverse(Errors), ", ")]))}
     end.
 
 -spec make_insert_row([] | [riak_ql_ddl:data_value()], [] | [pos_integer()], tuple()) ->
@@ -300,14 +301,15 @@ describe_table_columns_test() ->
             " p double,"
             " PRIMARY KEY ((f, s, quantum(t, 15, m)), "
             " f, s, t))")),
-    ?assertMatch(
-       do_describe(DDL),
-       {ok, {_ColNames, _ColTypes,
-             [[<<"f">>, <<"varchar">>,   false, 1,  1],
-              [<<"s">>, <<"varchar">>,   false, 2,  2],
-              [<<"t">>, <<"timestamp">>, false, 3,  3],
-              [<<"w">>, <<"sint64">>, false, undefined, undefined],
-              [<<"p">>, <<"double">>, true,  undefined, undefined]]}}).
+    {ok, {_ColNames, _CTypes, Rows}} = do_describe(DDL),
+    ?assertEqual(
+       [[<<"f">>, <<"varchar">>,   false, 1,  1],
+        [<<"s">>, <<"varchar">>,   false, 2,  2],
+        [<<"t">>, <<"timestamp">>, false, 3,  3],
+        [<<"w">>, <<"sint64">>, false, undefined, undefined],
+        [<<"p">>, <<"double">>, true,  undefined, undefined]],
+       Rows).
+
 validate_make_insert_row_basic_test() ->
     Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
     Positions = [3, 1, 2],
