@@ -70,15 +70,13 @@ process_stream(_, _, _) ->
     {error, "Not Supported", #state{}}.
 
 encode_response({reply, {tsqueryresp, {_, _, []}}, State}) ->
-    Encoded = #tsqueryresp{columns={[], []}, rows=[]},
+    Encoded = #tsqueryresp{columns = {[], []}, rows = []},
     {reply, Encoded, State};
 encode_response({reply, {tsqueryresp, {CNames, CTypes, Rows}}, State}) ->
-    R = riak_ttb_codec:encode_ts_rows(Rows),
-    Encoded = #tsqueryresp{columns={CNames, CTypes}, rows=R},
+    Encoded = #tsqueryresp{columns={CNames, CTypes}, rows = Rows},
     {reply, Encoded, State};
 encode_response({reply, {tsgetresp, {CNames, CTypes, Rows}}, State}) ->
-    R = riak_ttb_codec:encode_ts_rows(Rows),
-    Encoded = #tsgetresp{columns={CNames, CTypes}, rows=R},
+    Encoded = #tsgetresp{columns={CNames, CTypes}, rows = Rows},
     {reply, Encoded, State};
 encode_response(Response) ->
     Response.

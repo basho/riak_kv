@@ -76,16 +76,16 @@ process_stream(Message, ReqId, State) ->
     riak_kv_ts_svc:process_stream(Message, ReqId, State).
 
 encode_response({reply, {tsqueryresp, {_, _, []}}, State}) ->
-    Encoded = #tsqueryresp{columns=[], rows=[]},
+    Encoded = #tsqueryresp{columns = {[], []}, rows = []},
     {reply, Encoded, State};
 encode_response({reply, {tsqueryresp, {CNames, CTypes, Rows}}, State}) ->
-    Encoded = #tsqueryresp{columns=riak_pb_ts_codec:encode_columns(CNames, CTypes),
-                           rows=riak_pb_ts_codec:encode_rows(CTypes, Rows)},
+    Encoded = #tsqueryresp{columns = riak_pb_ts_codec:encode_columns(CNames, CTypes),
+                           rows = riak_pb_ts_codec:encode_rows(CTypes, Rows)},
     {reply, Encoded, State};
 encode_response({reply, {tsgetresp, {CNames, CTypes, Rows}}, State}) ->
     C = riak_pb_ts_codec:encode_columns(CNames, CTypes),
     R = riak_pb_ts_codec:encode_rows(CTypes, Rows),
-    Encoded = #tsgetresp{columns=C, rows=R},
+    Encoded = #tsgetresp{columns = C, rows = R},
     {reply, Encoded, State};
 encode_response(Response) ->
-    Response. 
+    Response.

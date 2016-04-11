@@ -372,12 +372,13 @@ varchar_quotes(V) ->
 %% and it will return a list of strings that represent the invalid rows indexes.
 -spec validate_rows(module(), list(tuple())) -> list(string()).
 validate_rows(Mod, Rows) ->
-    ValidateFn = fun(X, {Acc, BadRowIdxs}) ->
-        case Mod:validate_obj(X) of
-            true -> {Acc+1, BadRowIdxs};
-            _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
-        end
-    end,
+    ValidateFn =
+        fun(Row, {Acc, BadRowIdxs}) when is_tuple(Row) ->
+                case Mod:validate_obj(Row) of
+                    true -> {Acc+1, BadRowIdxs};
+                    _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
+                end
+        end,
     {_, BadRowIdxs} = lists:foldl(ValidateFn, {1, []}, Rows),
     lists:reverse(BadRowIdxs).
 
