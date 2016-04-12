@@ -149,7 +149,7 @@ process_stream({ReqId, Error}, ReqId,
 %% check_table_and_call
 
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
-                          {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+                          {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
 create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
     case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
@@ -182,7 +182,7 @@ wait_until_active(Table, State, 0) ->
 wait_until_active(Table, State, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
-            {reply, #tsqueryresp{}, State};
+            {reply, tsqueryresp, State};
         {error, not_ready} ->
             timer:sleep(1000),
             wait_until_active(Table, State, Seconds - 1);
@@ -203,7 +203,7 @@ wait_until_active(Table, State, Seconds) ->
 %%
 %% INSERT statements, called from check_table_and_call.
 %%
--spec make_insert_response(module(), #riak_sql_insert_v1{}) -> #tsqueryresp{} | #rpberrorresp{}.
+-spec make_insert_response(module(), #riak_sql_insert_v1{}) -> tsqueryresp | #rpberrorresp{}.
 make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields, values = Values}) ->
     case lookup_field_positions(Mod, Fields) of
     {ok, Positions} ->
@@ -223,7 +223,7 @@ insert_putreqs(Mod, Table, Data) ->
         [] ->
             case put_data(Data, Table, Mod) of
                 0 ->
-                    #tsqueryresp{};
+                    tsqueryresp;
                 ErrorCount ->
                     failed_put_response(ErrorCount)
             end;
