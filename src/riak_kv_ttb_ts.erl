@@ -70,13 +70,14 @@ process_stream(_, _, _) ->
     {error, "Not Supported", #state{}}.
 
 encode_response({reply, {tsqueryresp, {_, _, []}}, State}) ->
-    Encoded = #tsqueryresp{columns = {[], []}, rows = []},
+    Encoded = #tsqueryresp{columns = [], rows = []},
     {reply, Encoded, State};
 encode_response({reply, {tsqueryresp, {CNames, CTypes, Rows}}, State}) ->
-    Encoded = #tsqueryresp{columns={CNames, CTypes}, rows = Rows},
+    Encoded = #tsqueryresp{columns = lists:zip(CNames, CTypes),
+                           rows = Rows},
     {reply, Encoded, State};
-encode_response({reply, {tsgetresp, {CNames, CTypes, Rows}}, State}) ->
-    Encoded = #tsgetresp{columns={CNames, CTypes}, rows = Rows},
+encode_response({reply, {tsgetresp, {CNames, _CTypes, Rows}}, State}) ->
+    Encoded = #tsgetresp{columns = CNames, rows = Rows},
     {reply, Encoded, State};
 encode_response(Response) ->
     Response.
