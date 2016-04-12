@@ -214,11 +214,11 @@ do_describe(?DDL{fields = FieldSpecs,
 %% the following two functions are identical, for the way fields and
 %% keys are represented as of 2015-12-18; duplication here is a hint
 %% of things to come.
--spec column_pk_position_or_blank(binary(), [#param_v1{}]) -> integer() | undefined.
+-spec column_pk_position_or_blank(binary(), [#param_v1{}]) -> integer() | [].
 column_pk_position_or_blank(Col, KSpec) ->
     count_to_position(Col, KSpec, 1).
 
--spec column_lk_position_or_blank(binary(), [#param_v1{}]) -> integer() | undefined.
+-spec column_lk_position_or_blank(binary(), [#param_v1{}]) -> integer() | [].
 column_lk_position_or_blank(Col, KSpec) ->
     count_to_position(Col, KSpec, 1).
 
