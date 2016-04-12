@@ -801,7 +801,7 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
 -spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
 make_rpberrresp(Code, Message) ->
     #rpberrorresp{errcode = Code,
-                  errmsg = lists:flatten(Message)}.
+                  errmsg = iolist_to_binary(Message)}.
 
 %%
 -spec missing_helper_module(Table::binary(),
