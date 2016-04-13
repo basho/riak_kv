@@ -910,7 +910,7 @@ invoke_async_put(BuildRObjFun, _AsyncPutFun, BatchPutFun, {batches, Batches}) ->
 make_tsqueryresp({_, _, []}) ->
     {tsqueryresp, {[], [], []}};
 make_tsqueryresp({ColumnNames, ColumnTypes, Rows}) ->
-    {tsqueryresp, {ColumnNames, ColumnTypes, [list_to_tuple(X) || X <- Rows]}}.
+    {tsqueryresp, {ColumnNames, ColumnTypes, Rows}}.
 
 -spec make_describe_response([[term()]]) -> ts_query_response().
 make_describe_response(Rows) ->
