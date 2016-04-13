@@ -1002,7 +1002,7 @@ validate_rows_error_response_1_test() ->
     Msg = "Invalid data found at row index(es) ",
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = Msg ++ "1" },
+                      errmsg = list_to_binary(Msg ++ "1")},
         validate_rows_error_response(["1"])
     ).
 
@@ -1010,7 +1010,7 @@ validate_rows_error_response_2_test() ->
     Msg = "Invalid data found at row index(es) ",
     ?assertEqual(
         #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = Msg ++ "1, 2, 3" },
+                      errmsg = list_to_binary(Msg ++ "1, 2, 3")},
         validate_rows_error_response(["1", "2", "3"])
     ).
 
