@@ -451,7 +451,7 @@ get_request_record(ReqId, #state{entries=Entries} = _State) ->
 %% Utility function for put/2: is this a TS object with its special
 %% requirements or a more traditional KV object?
 %%
-%% When riak_kv_pb_timeseries is driving a put request, it can provide
+%% When riak_kv_ts_svc is driving a put request, it can provide
 %% all of these details directly to async_put/8, but when a tombstone
 %% is being put via riak_kv_delete, these must be extracted from the
 %% object.
