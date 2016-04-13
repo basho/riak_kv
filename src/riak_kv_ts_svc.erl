@@ -149,7 +149,7 @@ process_stream({ReqId, Error}, ReqId,
 %% check_table_and_call
 
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
-                          {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+                          {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
 create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
     case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
@@ -182,7 +182,7 @@ wait_until_active(Table, State, 0) ->
 wait_until_active(Table, State, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
-            {reply, #tsqueryresp{}, State};
+            {reply, tsqueryresp, State};
         {error, not_ready} ->
             timer:sleep(1000),
             wait_until_active(Table, State, Seconds - 1);
@@ -203,7 +203,7 @@ wait_until_active(Table, State, Seconds) ->
 %%
 %% INSERT statements, called from check_table_and_call.
 %%
--spec make_insert_response(module(), #riak_sql_insert_v1{}) -> #tsqueryresp{} | #rpberrorresp{}.
+-spec make_insert_response(module(), #riak_sql_insert_v1{}) -> tsqueryresp | #rpberrorresp{}.
 make_insert_response(Mod, #riak_sql_insert_v1{'INSERT' = Table, fields = Fields, values = Values}) ->
     case lookup_field_positions(Mod, Fields) of
     {ok, Positions} ->
@@ -223,7 +223,7 @@ insert_putreqs(Mod, Table, Data) ->
         [] ->
             case put_data(Data, Table, Mod) of
                 0 ->
-                    #tsqueryresp{};
+                    tsqueryresp;
                 ErrorCount ->
                     failed_put_response(ErrorCount)
             end;
@@ -306,7 +306,7 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
 
 %% put
 %% NB: since this method deals with PB and TTB messages, the message must be fully
-%% decoded before sub_tsqueryreq is called
+%% decoded before sub_tsputreq is called
 sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
              State) ->
     case catch validate_rows(Mod, Rows) of
@@ -464,7 +464,7 @@ build_object(Bucket, Mod, DDL, Row, PK) ->
 
 %% get
 %% NB: since this method deals with PB and TTB messages, the message must be fully
-%% decoded before sub_tsqueryreq is called
+%% decoded before sub_tsgetreq is called
 sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
                                  key    = CompoundKey,
                                  timeout = Timeout},
