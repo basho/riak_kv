@@ -292,9 +292,10 @@ prepare_final_results2(#riak_sel_clause_v1{col_return_types = ColTypes,
 
 prepare_final_results_test() ->
     Rows = [[12, <<"windy">>], [13, <<"windy">>]],
+    RowsAsTuples = [{12, <<"windy">>}, {13, <<"windy">>}],
     % IndexedChunks = [{1, Rows}],
     ?assertEqual(
-        {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
+        {[<<"a">>, <<"b">>], [sint64, varchar], RowsAsTuples},
         prepare_final_results(
             #state{
                 qry =
