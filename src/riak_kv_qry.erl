@@ -111,7 +111,7 @@ insert_putreqs(Mod, Table, Data) ->
                     {error, OtherReason}
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
-            BadRowsString = string:join(BadRowIdxs,", "),
+            BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
             {error, io_lib:format("Invalid data at row index(es) ~s", [BadRowsString])}
     end.
 

@@ -236,7 +236,9 @@ process_post(RD, #ctx{mod = Mod,
                             riak_kv_wm_ts_util:handle_error({failed_some_puts, ErrorCount, Table}, RD, Ctx)
                     end;
                 BadRowIdxs when is_list(BadRowIdxs) ->
-                    riak_kv_wm_ts_util:handle_error({invalid_data, BadRowIdxs}, RD, Ctx)
+                    riak_kv_wm_ts_util:handle_error(
+                      {invalid_data, string:join([integer_to_list(I) || I <- BadRowIdxs],", ")},
+                      RD, Ctx)
             end
     catch
         throw:Reason ->

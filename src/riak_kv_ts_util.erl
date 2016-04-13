@@ -369,14 +369,14 @@ varchar_quotes(V) ->
     <<"'", V/binary, "'">>.
 
 %% Give validate_rows/2 a DDL Module and a list of decoded rows,
-%% and it will return a list of strings that represent the invalid rows indexes.
--spec validate_rows(module(), list(tuple())) -> list(string()).
+%% and it will return a list of invalid rows indexes.
+-spec validate_rows(module(), list(tuple())) -> [integer()].
 validate_rows(Mod, Rows) ->
     ValidateFn =
-        fun(Row, {Acc, BadRowIdxs}) when is_tuple(Row) ->
+        fun(Row, {N, Acc}) when is_tuple(Row) ->
                 case Mod:validate_obj(Row) of
-                    true -> {Acc+1, BadRowIdxs};
-                    _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
+                    true -> {N + 1, Acc};
+                    _    -> {N + 1, [N|Acc]}
                 end
         end,
     {_, BadRowIdxs} = lists:foldl(ValidateFn, {1, []}, Rows),

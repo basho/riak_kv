@@ -252,7 +252,7 @@ sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
                 {error, OtherReason} ->
                     {reply, make_rpberrresp(?E_PUT, to_string(OtherReason)), State}
             end;
-        BadRowIdxs when is_list(BadRowIdxs) ->
+        BadRowIdxs ->
             {reply, make_validate_rows_error_resp(BadRowIdxs), State}
     end.
 
@@ -512,9 +512,9 @@ make_key_element_count_mismatch_resp(Got, Need) ->
       ?E_BAD_KEY_LENGTH,
       flat_format("Key element count mismatch (key has ~b elements but ~b supplied)", [Need, Got])).
 
--spec make_validate_rows_error_resp([string()]) -> #rpberrorresp{}.
+-spec make_validate_rows_error_resp([integer()]) -> #rpberrorresp{}.
 make_validate_rows_error_resp(BadRowIdxs) ->
-    BadRowsString = string:join(BadRowIdxs,", "),
+    BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
     make_rpberrresp(
       ?E_IRREG,
       flat_format("Invalid data at row index(es) ~s", [BadRowsString])).
