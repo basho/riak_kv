@@ -306,7 +306,7 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
 
 %% put
 %% NB: since this method deals with PB and TTB messages, the message must be fully
-%% decoded before sub_tsqueryreq is called
+%% decoded before sub_tsputreq is called
 sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
              State) ->
     case catch validate_rows(Mod, Rows) of
@@ -464,7 +464,7 @@ build_object(Bucket, Mod, DDL, Row, PK) ->
 
 %% get
 %% NB: since this method deals with PB and TTB messages, the message must be fully
-%% decoded before sub_tsqueryreq is called
+%% decoded before sub_tsgetreq is called
 sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
                                  key    = CompoundKey,
                                  timeout = Timeout},
