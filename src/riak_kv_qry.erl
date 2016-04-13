@@ -64,9 +64,9 @@ describe_table_columns(?DDL{fields = FieldSpecs,
                             partition_key = #key_v1{ast = PKSpec},
                             local_key     = #key_v1{ast = LKSpec}}) ->
     {ok,
-     [[Name, list_to_binary(atom_to_list(Type)), Nullable,
+     [{Name, list_to_binary(atom_to_list(Type)), Nullable,
        column_pk_position_or_blank(Name, PKSpec),
-       column_lk_position_or_blank(Name, LKSpec)]
+       column_lk_position_or_blank(Name, LKSpec)}
       || #riak_field_v1{name = Name,
                         type = Type,
                         optional = Nullable} <- FieldSpecs]}.
@@ -83,7 +83,7 @@ column_lk_position_or_blank(Col, KSpec) ->
     count_to_position(Col, KSpec, 1).
 
 count_to_position(_, [], _) ->
-    undefined;
+    [];
 count_to_position(Col, [#param_v1{name = [Col]} | _], Pos) ->
     Pos;
 count_to_position(Col, [#hash_fn_v1{args = [#param_v1{name = [Col]} | _]} | _], Pos) ->
@@ -152,10 +152,10 @@ describe_table_columns_test() ->
             " f, s, t))")),
     ?assertEqual(
        describe_table_columns(DDL),
-       {ok, [[<<"f">>, <<"varchar">>,   false, 1,  1],
-             [<<"s">>, <<"varchar">>,   false, 2,  2],
-             [<<"t">>, <<"timestamp">>, false, 3,  3],
-             [<<"w">>, <<"sint64">>, false, undefined, undefined],
-             [<<"p">>, <<"double">>, true,  undefined, undefined]]}).
+       {ok, [{<<"f">>, <<"varchar">>,   false, 1,  1},
+             {<<"s">>, <<"varchar">>,   false, 2,  2},
+             {<<"t">>, <<"timestamp">>, false, 3,  3},
+             {<<"w">>, <<"sint64">>, false, [], []},
+             {<<"p">>, <<"double">>, true,  [], []}]}).
 
 -endif.
