@@ -402,9 +402,12 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
         {error, Error} ->
             {error, Error};
         [Cover] ->
-            {Description, RangeReplacement} = reverse_sql(SQL),
-            sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
-                                                 Description}|Accum])
+            {Description, SubRange} = reverse_sql(SQL),
+            Node = proplists:get_value(node, Cover),
+            {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
+            Context = riak_kv_pb_coverage:term_to_checksum_binary({Cover, SubRange}),
+            Entry = {{IP, Port}, Context, SubRange, Description},
+            sql_to_cover(Client, Tail, Bucket, [Entry|Accum])
     end.
 
 

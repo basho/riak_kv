@@ -63,6 +63,7 @@
                        #tslistkeysreq{} | #tsqueryreq{}.
 -type ts_responses() :: #tsputresp{} | #tsdelresp{} | #tsgetresp{} |
                         #tslistkeysresp{} | #tsqueryresp{} |
+                        #tscoverageresp{} |
                         #rpberrorresp{}.
 -type ts_get_response() :: {tsgetresp, {list(binary()), list(atom()), list(list(term()))}}.
 -type ts_query_response() :: {tsqueryresp, {list(binary()), list(atom()), list(list(term()))}}.
@@ -361,50 +362,18 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
             case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
                 {ok, Compiled} ->
                     Bucket = riak_kv_ts_util:table_to_bucket(Table),
-                    convert_cover_list(
-                      riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, []), State);
+                    {reply,
+                     {tscoverageresp, riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, [])},
+                     State};
                 {error, Reason} ->
-                    make_rpberrresp(
-                      ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason]))
+                    {reply, make_rpberrresp(
+                      ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason])), State}
             end;
         {error, Reason} ->
             {reply, make_rpberrresp(
                       ?E_BAD_QUERY, flat_format("Failed to parse query: ~p", [Reason])),
              State}
     end.
-
-%% Copied and modified from riak_kv_pb_coverage:convert_list. Would
-%% be nice to collapse them back together, probably with a closure,
-%% but time and effort.
-convert_cover_list({error, Error}, State) ->
-    {error, Error, State};
-convert_cover_list(Results, State) ->
-    %% Pull hostnames & ports
-    %% Wrap each element of this list into a rpbcoverageentry
-    Resp = #tscoverageresp{
-              entries =
-                  [begin
-                       Node = proplists:get_value(node, Cover),
-                       {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
-                       #tscoverageentry{
-                          cover_context = riak_kv_pb_coverage:term_to_checksum_binary(
-                                            {Cover, Range}),
-                          ip = IP, port = Port,
-                          range = assemble_ts_range(Range, SQLtext)
-                         }
-                   end || {Cover, Range, SQLtext} <- Results]
-             },
-    {reply, Resp, State}.
-
-assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text) ->
-    #tsrange{
-       field_name = FieldName,
-       lower_bound = StartVal,
-       lower_bound_inclusive = StartIncl,
-       upper_bound = EndVal,
-       upper_bound_inclusive = EndIncl,
-       desc = Text
-      }.
 
 
 %% ----------
