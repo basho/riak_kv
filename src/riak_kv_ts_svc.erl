@@ -490,11 +490,11 @@ sub_tsgetreq(Mod, DDL, #tsgetreq{table = Table,
             %% the columns stored in riak_object are just
             %% names; we need names with types, so:
             ColumnTypes = get_column_types(ColumnNames, Mod),
-            {reply, {tsgetresp, {ColumnNames, ColumnTypes, [Row]}}, State};
+            {reply, {tsgetresp, {ColumnNames, ColumnTypes, [list_to_tuple(Row)]}}, State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, key_element_count_mismatch(Got, Need), State};
         {error, notfound} ->
-            {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
+            {reply, {tsgetresp, {[], [], []}}, State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
     end.
