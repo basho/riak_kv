@@ -483,6 +483,7 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                {fold_method, streaming},
                {encoding,    msgpack} | range_scan_additional_options(W)
               ],
+    gg:format("Got Qry ~p~nSending Options ~p~n", [Qry, Options]),
     KeyFolder = fun() ->
                         Vals = eleveldb:fold(Ref, FoldFun, [], Options),
                         FoldIndexFun(lists:reverse(Vals), Buffer)

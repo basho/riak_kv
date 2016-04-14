@@ -164,8 +164,8 @@ maybe_parse_table_def(BucketType, Props) ->
         false ->
             {ok, Props};
         {value, {<<"table_def">>, TableDef}, PropsNoDef} ->
-            case catch riak_ql_parser:parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
-                {ok, DDL} ->
+            case catch riak_ql_parser:ql_parse(riak_ql_lexer:get_tokens(binary_to_list(TableDef))) of
+                {ddl, DDL} ->
                     ok = assert_type_and_table_name_same(BucketType, DDL),
                     ok = try_compile_ddl(DDL),
                     ok = assert_write_once_not_false(PropsNoDef),
@@ -287,7 +287,7 @@ explain_query(DDL, QueryString) ->
 
 %%
 explain_compile_query(QueryString) ->
-    {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(QueryString)),
+    {ok, Q} = riak_ql_parser:ql_parse(riak_ql_lexer:get_tokens(QueryString)),
     build_sql_record(select, Q, undefined).
 
 %%
@@ -352,7 +352,7 @@ varchar_quotes(V) ->
 
 helper_compile_def_to_module(SQL) ->
     Lexed = riak_ql_lexer:get_tokens(SQL),
-    {ok, DDL} = riak_ql_parser:parse(Lexed),
+    {ok, DDL} = riak_ql_parser:ql_parse(Lexed),
     {module, Mod} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     {DDL, Mod}.
 

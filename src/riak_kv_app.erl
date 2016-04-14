@@ -211,38 +211,18 @@ register_capabilities() ->
                                   [enabled, disabled],
                                   disabled),
     
-%    %% register the pipeline capabilities
-    riak_core_capability:register({query_pipeline, create_table},
-                                  [riak_ql_create_table_pipeline:get_version()],
-                                  "1.2"),
-
+    %% register the pipeline capabilities
     riak_core_capability:register({query_pipeline, ddl_compiler},
                                   [riak_ql_ddl_compiler:get_version()],
-                                  "1.2"),
-
-    riak_core_capability:register({query_pipeline, ddl_validate},
-                                  [riak_ql_ddl_validate_pipeline:get_version()],
-                                  "1.2"),
-
-    riak_core_capability:register({query_pipeline, describe},
-                                  [riak_ql_describe_pipeline:get_version()],
-                                  "1.2"),
-
-    riak_core_capability:register({query_pipeline, insert},
-                                  [riak_ql_insert_pipeline:get_version()],
-                                  "1.2"),
+                                  1),
 
     riak_core_capability:register({query_pipeline, parser},
                                   [riak_ql_parser:get_version()],
-                                  "1.2"),
+                                  1),
 
-    riak_core_capability:register({query_pipeline, select},
-                                  [riak_ql_select_pipeline:get_version()],
-                                  "1.2"),
-
-    riak_core_capability:register({query_pipeline, where},
-                                  [riak_ql_where_pipeline:get_version()],
-                                  "1.2"),
+    riak_core_capability:register({query_pipeline, query_compiler},
+                                  [riak_kv_qry_compiler:get_version()],
+                                  1),
 
     HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
     %% Go ahead and mark the riak_kv service as up in the node watcher.

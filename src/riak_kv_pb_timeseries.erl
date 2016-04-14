@@ -987,7 +987,7 @@ missing_helper_module_test() ->
 
 test_helper_validate_rows_mod() ->
     riak_ql_ddl_compiler:compile_and_load_from_tmp(
-        riak_ql_parser:parse(riak_ql_lexer:get_tokens(
+        riak_ql_parser:ql_parse(riak_ql_lexer:get_tokens(
             "CREATE TABLE mytable ("
             "family VARCHAR NOT NULL,"
             "series VARCHAR NOT NULL,"

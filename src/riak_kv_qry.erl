@@ -39,7 +39,7 @@
 %%      To get the results of running the query, use fetch/1.
 submit(SQLString, DDL) when is_list(SQLString) ->
     Lexed = riak_ql_lexer:get_tokens(SQLString),
-    case riak_ql_parser:parse(Lexed) of
+    case riak_ql_parser:ql_parse(Lexed) of
         {error, _Reason} = Error ->
             Error;
         {ok, SQL} ->
@@ -140,7 +140,7 @@ format_query_syntax_errors(Errors) ->
 
 describe_table_columns_test() ->
     {ok, DDL} =
-        riak_ql_parser:parse(
+        riak_ql_parser:ql_parse(
           riak_ql_lexer:get_tokens(
             "CREATE TABLE fafa ("
             " f varchar   not null,"
