@@ -281,7 +281,7 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
             %% the columns stored in riak_object are just
             %% names; we need names with types, so:
             ColumnTypes = riak_kv_ts_util:get_column_types(ColumnNames, Mod),
-            {reply, make_tsgetresp(ColumnNames, ColumnTypes, [Row]), State};
+            {reply, make_tsgetresp(ColumnNames, ColumnTypes, [list_to_tuple(Row)]), State};
         {error, no_type} ->
             {reply, make_table_not_activated_resp(Table), State};
         {error, {bad_key_length, Got, Need}} ->
