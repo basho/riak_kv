@@ -108,13 +108,13 @@ put(RObj0, Options) ->
                 PW :: pos_integer(),
                 Bucket :: binary()|{binary(), binary()},
                 NVal :: pos_integer(),
-                Key :: binary()|{binary(), binary()},
+                Key :: tuple()|{binary(), tuple()},
                 EncodeFn :: fun((riak_object:riak_object()) -> binary()),
                 Preflist :: term()) ->
                        {ok, {reference(), atom()}}.
 
-async_put(RObj, W, PW, Bucket, NVal, {PK, LK}, EncodeFn, Preflist) when is_tuple(LK) ->
-    async_put(RObj, W, PW, Bucket, NVal, PK, LK, EncodeFn, Preflist);
+async_put(RObj, W, PW, Bucket, NVal, {PartIdx, LK}, EncodeFn, Preflist) when is_tuple(LK) ->
+    async_put(RObj, W, PW, Bucket, NVal, PartIdx, LK, EncodeFn, Preflist);
 async_put(RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist) ->
     async_put(RObj, W, PW, Bucket, NVal, undefined, Key, EncodeFn, Preflist).
 
