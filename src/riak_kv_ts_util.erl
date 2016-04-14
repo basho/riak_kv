@@ -25,21 +25,25 @@
 -module(riak_kv_ts_util).
 
 -export([
-         apply_timeseries_bucket_props/2,
+         apply_timeseries_bucket_props/3,
          build_sql_record/3,
          encode_typeval_key/1,
+         get_column_types/2,
          get_table_ddl/1,
          lk/1,
          make_ts_keys/3,
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
+         responsible_row_preflists/2,
          sql_record_to_tuple/1,
+         sql_to_cover/4,
          table_to_bucket/1,
-         responsible_row_preflists/2
+         validate_rows/2
         ]).
 -export([explain_query/1, explain_query/2]).
 -export([explain_query_print/1]).
+
 
 %% NOTE on table_to_bucket/1: Clients will work with table
 %% names. Those names map to a bucket type/bucket name tuple in Riak,
@@ -50,13 +54,14 @@
 %% bucket tuple. This function is a convenient mechanism for doing so
 %% and making that transition more obvious.
 
+%%-include("riak_kv_wm_raw.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_ts.hrl").
 
 %% riak_ql_ddl:is_query_valid expects a tuple, not a SQL record
-sql_record_to_tuple(?SQL_SELECT{'FROM'=From,
-                                'SELECT'=#riak_sel_clause_v1{clause=Select},
-                                'WHERE'=Where}) ->
+sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
+                                'SELECT' = #riak_sel_clause_v1{clause=Select},
+                                'WHERE'  = Where}) ->
     {From, Select, Where}.
 
 %% Convert the proplist obtained from the QL parser
@@ -117,8 +122,9 @@ table_to_bucket(Table) when is_binary(Table) ->
     {Table, Table}.
 
 
--spec queried_table(#riak_sql_describe_v1{} | ?SQL_SELECT{} | #riak_sql_insert_v1{}) -> binary().
+-spec queried_table(riak_kv_qry:sql_query_type_record() | ?DDL{}) -> binary().
 %% Extract table name from various sql records.
+queried_table(?DDL{table = Table}) -> Table;
 queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
 queried_table(?SQL_SELECT{'FROM' = Table})               -> Table;
 queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table.
@@ -145,15 +151,18 @@ get_table_ddl(Table) when is_binary(Table) ->
 
 
 %%
--spec apply_timeseries_bucket_props(DDL::?DDL{},
-                                    Props1::[proplists:property()]) ->
+-spec apply_timeseries_bucket_props(DDL :: ?DDL{},
+                                    DDLVersion :: riak_ql_component:component_version(),
+                                    Props1 :: [proplists:property()]) ->
         {ok, Props2::[proplists:property()]}.
-apply_timeseries_bucket_props(DDL, Props1) ->
+apply_timeseries_bucket_props(DDL, DDLVersion, Props1) ->
     Props2 = lists:keystore(
         <<"write_once">>, 1, Props1, {<<"write_once">>, true}),
     Props3 = lists:keystore(
         <<"ddl">>, 1, Props2, {<<"ddl">>, DDL}),
-    {ok, Props3}.
+    Props4 = lists:keystore(
+        <<"ddl_compiler_version">>, 1, Props3, {<<"ddl_compiler_version">>, DDLVersion}),
+    {ok, Props4}.
 
 
 -spec maybe_parse_table_def(BucketType :: binary(),
@@ -175,7 +184,7 @@ maybe_parse_table_def(BucketType, Props) ->
                     MergedProps = merge_props_with_preference(
                                     PropsNoDef, WithProps),
                     ok = assert_write_once_not_false(BucketType, MergedProps),
-                    apply_timeseries_bucket_props(DDL, MergedProps);
+                    apply_timeseries_bucket_props(DDL, riak_ql_ddl_compiler:get_compiler_version(), MergedProps);
                 {'EXIT', {Reason, _}} ->
                     % the lexer throws exceptions, the reason should always be a
                     % binary
@@ -371,6 +380,102 @@ op_to_string(Op) -> " " ++ atom_to_list(Op) ++ " ".
 varchar_quotes(V) ->
     <<"'", V/binary, "'">>.
 
+%% Give validate_rows/2 a DDL Module and a list of decoded rows,
+%% and it will return a list of strings that represent the invalid rows indexes.
+-spec validate_rows(module(), list(tuple())) -> list(string()).
+validate_rows(Mod, Rows) ->
+    ValidateFn =
+        fun(Row, {Acc, BadRowIdxs}) when is_tuple(Row) ->
+                case Mod:validate_obj(Row) of
+                    true -> {Acc+1, BadRowIdxs};
+                    _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
+                end
+        end,
+    {_, BadRowIdxs} = lists:foldl(ValidateFn, {1, []}, Rows),
+    lists:reverse(BadRowIdxs).
+
+
+-spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
+get_column_types(ColumnNames, Mod) ->
+    [Mod:get_field_type([N]) || N <- ColumnNames].
+
+
+%% Result from riak_client:get_cover is a nested list of coverage plan
+%% because KV coverage requests are designed that way, but in our case
+%% all we want is the singleton head
+
+%% If any of the results from get_cover are errors, we want that tuple
+%% to be the sole return value
+sql_to_cover(_Client, [], _Bucket, Accum) ->
+    lists:reverse(Accum);
+sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
+    case Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
+                          {SQL, Bucket}) of
+        {error, Error} ->
+            {error, Error};
+        [Cover] ->
+            {Description, RangeReplacement} = reverse_sql(SQL),
+            sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
+                                                 Description}|Accum])
+    end.
+
+
+%% Generate a human-readable description of the target
+%%     <<"<TABLE> / time > X and time < Y">>
+%% Generate a start/end timestamp for future replacement in a query
+reverse_sql(?SQL_SELECT{'FROM'  = Table,
+                        'WHERE' = KeyProplist,
+                        partition_key = PartitionKey}) ->
+    QuantumField = identify_quantum_field(PartitionKey),
+    RangeTuple = extract_time_boundaries(QuantumField, KeyProplist),
+    Desc = derive_description(Table, QuantumField, RangeTuple),
+    ReplacementValues = {QuantumField, RangeTuple},
+    {Desc, ReplacementValues}.
+
+
+derive_description(Table, Field, {{Start, StartInclusive}, {End, EndInclusive}}) ->
+    StartOp = pick_operator(">", StartInclusive),
+    EndOp = pick_operator("<", EndInclusive),
+    unicode:characters_to_binary(
+      flat_format("~ts / ~ts ~s ~B and ~ts ~s ~B",
+                  [Table, Field, StartOp, Start,
+                   Field, EndOp, End]), utf8).
+
+pick_operator(LGT, true) ->
+    LGT ++ "=";
+pick_operator(LGT, false) ->
+    LGT.
+
+extract_time_boundaries(FieldName, WhereList) ->
+    {FieldName, timestamp, Start} =
+        lists:keyfind(FieldName, 1, proplists:get_value(startkey, WhereList, [])),
+    {FieldName, timestamp, End} =
+        lists:keyfind(FieldName, 1, proplists:get_value(endkey, WhereList, [])),
+    StartInclusive = proplists:get_value(start_inclusive, WhereList, true),
+    EndInclusive = proplists:get_value(end_inclusive, WhereList, false),
+    {{Start, StartInclusive}, {End, EndInclusive}}.
+
+
+%%%%%%%%%%%%
+%% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
+identify_quantum_field(#key_v1{ast = KeyList}) ->
+    HashFn = find_hash_fn(KeyList),
+    P_V1 = hd(HashFn#hash_fn_v1.args),
+    hd(P_V1#param_v1.name).
+
+find_hash_fn([]) ->
+    throw(wtf);
+find_hash_fn([#hash_fn_v1{}=Hash|_T]) ->
+    Hash;
+find_hash_fn([_H|T]) ->
+    find_hash_fn(T).
+
+%%%%%%%%%%%%
+
+
+flat_format(Format, Args) ->
+    lists:flatten(io_lib:format(Format, Args)).
+
 %%%
 %%% TESTS
 %%%
@@ -438,6 +543,3 @@ make_ts_keys_4_test() ->
     ).
 
 -endif.
-
-flat_format(F, A) ->
-    lists:flatten(io_lib:format(F, A)).

@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ddl: defines records used in the data description language
+%% riak_kv_ts: defines records used in the data description language
 %%
 %% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -23,8 +23,14 @@
 -ifndef(RIAK_KV_TS_HRL).
 -define(RIAK_KV_TS_HRL, included).
 
+%% For riak_pb records
+-include_lib("riak_pb/include/riak_ts_pb.hrl").
+
 %% For dialyzer types
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
+
+-define(SQL_SELECT, #riak_select_v1).
+-define(SQL_SELECT_RECORD_NAME, riak_select_v1).
 
 %% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
@@ -54,7 +60,7 @@
           is_executable = false :: boolean(),
           type          = sql   :: sql | timeseries,
           cover_context = undefined :: term(), %% for parallel queries
-          local_key                                  % prolly a mistake to put this here - should be in DDL
+          local_key                            %% prolly a mistake to put this here - should be in DDL
         }).
 
 -record(riak_sql_describe_v1,
@@ -69,8 +75,5 @@
           values                :: [[riak_ql_ddl:data_value()]],
           helper_mod            :: atom()
         }).
-
--define(SQL_SELECT, #riak_select_v1).
--define(SQL_SELECT_RECORD_NAME, riak_select_v1).
 
 -endif.

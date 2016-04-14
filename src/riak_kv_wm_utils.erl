@@ -355,6 +355,8 @@ jsonify_bucket_prop({search_extractor, {M, F, Arg}}) ->
                               {?JSON_ARG, Arg}]}};
 jsonify_bucket_prop({name, {_T, B}}) ->
     {<<"name">>, B};
+jsonify_bucket_prop({ddl, _DDL}) ->
+    {<<"ddl">>, <<"riak_ql_to_string:sql_to_string might be useful here.">>};
 jsonify_bucket_prop({Prop, Value}) ->
     {atom_to_binary(Prop, utf8), Value}.
 
@@ -362,20 +364,16 @@ jsonify_bucket_prop({Prop, Value}) ->
           {Property::atom(), erlpropvalue()}.
 %% @doc The reverse of jsonify_bucket_prop/1.  Converts JSON representation
 %%      of bucket properties to their Erlang form.
-erlify_bucket_prop({?JSON_DATATYPE, Type}) when is_binary(Type) ->
-    {datatype, binary_to_existing_atom(Type, utf8)};
+erlify_bucket_prop({?JSON_DATATYPE, Type}) ->
+    try
+        {datatype, binary_to_existing_atom(Type, utf8)}
+    catch
+        error:badarg ->
+            throw({bad_datatype, Type})
+    end;
 erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
     case {proplists:get_value(?JSON_MOD, Props),
           proplists:get_value(?JSON_FUN, Props)} of
-        {Mod, Fun} when is_binary(Mod), is_binary(Fun) ->
-            try
-                {linkfun, {modfun,
-                           list_to_existing_atom(binary_to_list(Mod)),
-                           list_to_existing_atom(binary_to_list(Fun))}}
-            catch
-                error:badarg ->
-                    throw({bad_linkfun_modfun, {Mod, Fun}})
-            end;
         {undefined, undefined} ->
             case proplists:get_value(?JSON_JSFUN, Props) of
                 Name when is_binary(Name) ->
@@ -391,24 +389,37 @@ erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
                                     throw({bad_linkfun_bkey, {Bucket, Key}})
                             end;
                         Source when is_binary(Source) ->
-                            {linkfun, {jsanon, Source}}
-                    end
+                            {linkfun, {jsanon, Source}};
+                        NotBinary ->
+                            throw({bad_linkfun_modfun, {jsanon, NotBinary}})
+                    end;
+                NotBinary ->
+                    throw({bad_linkfun_modfun, NotBinary})
+            end;
+        {Mod, Fun} ->
+            try
+                {linkfun, {modfun,
+                           binary_to_existing_atom(Mod, utf8),
+                           binary_to_existing_atom(Fun, utf8)}}
+            catch
+                error:badarg ->
+                    throw({bad_linkfun_modfun, {Mod, Fun}})
             end
     end;
 erlify_bucket_prop({?JSON_CHASH, {struct, Props}}) ->
     Mod = proplists:get_value(?JSON_MOD, Props),
     Fun = proplists:get_value(?JSON_FUN, Props),
     try
-        {chash_keyfun, {list_to_existing_atom(
-                          binary_to_list(Mod)),
-                        list_to_existing_atom(
-                          binary_to_list(Fun))}}
+        {chash_keyfun, {binary_to_existing_atom(Mod, utf8),
+                        binary_to_existing_atom(Fun, utf8)}}
     catch
         error:badarg ->
             throw({bad_chash_keyfun, {Mod, Fun}})
     end;
 erlify_bucket_prop({<<"ddl">>, Value}) ->
     {ddl, Value};
+erlify_bucket_prop({<<"ddl_compiler_version">>, Value}) ->
+    {ddl_compiler_version, Value};
 erlify_bucket_prop({Prop, Value}) ->
     {validate_bucket_property(binary_to_list(Prop)), Value}.
 
@@ -461,3 +472,47 @@ method_to_perm('GET') ->
     "riak_kv.get";
 method_to_perm('DELETE') ->
     "riak_kv.delete".
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+erlify_property_check_valid_test() ->
+    ?assertEqual({datatype, integer},
+                 erlify_bucket_prop({?JSON_DATATYPE, <<"integer">>})),
+
+    ?assertEqual({linkfun, {modfun, erlang, halt}},
+                 erlify_bucket_prop({?JSON_LINKFUN, {struct, [{?JSON_MOD, <<"erlang">>},
+                                                              {?JSON_FUN, <<"halt">>}]}})),
+    ?assertEqual({linkfun, {jsfun, <<"js_never_dies">>}},
+                 erlify_bucket_prop({?JSON_LINKFUN, {struct, [{?JSON_JSFUN, <<"js_never_dies">>}]}})),
+
+    ?assertEqual({linkfun, {jsanon, {<<"face">>, <<"book">>}}},
+                 erlify_bucket_prop({?JSON_LINKFUN, {struct, [{?JSON_JSANON, {struct, [{?JSON_JSBUCKET, <<"face">>},
+                                                                                       {?JSON_JSKEY, <<"book">>}]}}]}})),
+    ?assertEqual({chash_keyfun, {re, run}},
+                 erlify_bucket_prop({?JSON_CHASH, {struct, [{?JSON_MOD, <<"re">>},
+                                                            {?JSON_FUN, <<"run">>}]}})).
+
+erlify_property_check_exceptions_test() ->
+    ?assertThrow({bad_datatype, 42},
+                 erlify_bucket_prop({?JSON_DATATYPE, 42})),
+    ?assertThrow({bad_datatype, <<"tatadype">>},
+                 erlify_bucket_prop({?JSON_DATATYPE, <<"tatadype">>})),
+
+    ?assertThrow({bad_linkfun_modfun, {<<"nomod">>, <<"nofun">>}},
+                 erlify_bucket_prop({?JSON_LINKFUN, {struct, [{?JSON_MOD, <<"nomod">>},
+                                                              {?JSON_FUN, <<"nofun">>}]}})),
+    ?assertThrow({bad_linkfun_modfun, {<<"nomod">>, 368}},
+                 erlify_bucket_prop({?JSON_LINKFUN, {struct, [{?JSON_MOD, <<"nomod">>},
+                                                              {?JSON_FUN, 368}]}})),
+    ?assertThrow({bad_linkfun_modfun, 635},
+                 erlify_bucket_prop({?JSON_LINKFUN, {struct, [{?JSON_JSFUN, 635}]}})),
+
+    ?assertThrow({bad_linkfun_bkey, {nobinarybucket, 89}},
+                 erlify_bucket_prop({?JSON_LINKFUN, {struct, [{?JSON_JSANON, {struct, [{?JSON_JSBUCKET, nobinarybucket},
+                                                                                       {?JSON_JSKEY, 89}]}}]}})),
+    ?assertThrow({bad_chash_keyfun, {<<"nomod">>, <<"nofun">>}},
+                 erlify_bucket_prop({?JSON_CHASH, {struct, [{?JSON_MOD, <<"nomod">>},
+                                                            {?JSON_FUN, <<"nofun">>}]}})).
+
+-endif.
