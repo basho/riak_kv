@@ -42,11 +42,12 @@
         #riak_sql_describe_v1{} |
         #riak_sql_insert_v1{}.
 
--export_type([query_type/0, sql_query_type_record/0]).
-
 -type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
                                  [riak_pb_ts_codec:tscolumntype()],
                                  [list(riak_pb_ts_codec:ldbvalue())]}.
+
+-export_type([query_type/0, sql_query_type_record/0,
+              query_tabular_result/0]).
 
 
 %% No coverage plan for parallel requests
@@ -196,9 +197,9 @@ do_describe(?DDL{fields = FieldSpecs,
     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
     ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
     Rows =
-        [{Name, list_to_binary(atom_to_list(Type)), Nullable,
+        [[Name, list_to_binary(atom_to_list(Type)), Nullable,
           column_pk_position_or_blank(Name, PKSpec),
-          column_lk_position_or_blank(Name, LKSpec)}
+          column_lk_position_or_blank(Name, LKSpec)]
          || #riak_field_v1{name = Name,
                            type = Type,
                            optional = Nullable} <- FieldSpecs],
@@ -295,14 +296,15 @@ describe_table_columns_test() ->
             " p double,"
             " PRIMARY KEY ((f, s, quantum(t, 15, m)), "
             " f, s, t))")),
+    Res = do_describe(DDL),
     ?assertMatch(
-       do_describe(DDL),
-       {ok, {_, _,
+       {ok, [_, _,
              [{<<"f">>, <<"varchar">>,   false, 1,  1},
               {<<"s">>, <<"varchar">>,   false, 2,  2},
               {<<"t">>, <<"timestamp">>, false, 3,  3},
               {<<"w">>, <<"sint64">>, false, [], []},
-              {<<"p">>, <<"double">>, true,  [], []}]}}).
+              {<<"p">>, <<"double">>, true,  [], []}]]},
+       Res).
 
 validate_make_insert_row_basic_test() ->
     Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],

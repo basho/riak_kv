@@ -75,7 +75,7 @@ api_call_to_perm(query_describe) ->
 
 
 -spec query(string() | riak_kv_qry:sql_query_type_record(), ?DDL{}) ->
-                   {ok, any()} |
+                   {ok, riak_kv_qry:query_tabular_result()} |
                    {error, term()}.
 query(QueryStringOrSQL, DDL) ->
     riak_kv_qry:submit(QueryStringOrSQL, DDL).

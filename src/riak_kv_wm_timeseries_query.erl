@@ -198,8 +198,7 @@ process_post(RD, #ctx{sql_type = QueryType,
     DDL = Mod:get_ddl(), %% might be faster to store this earlier on
     case riak_kv_ts_api:query(SQL, DDL) of
         {ok, Data} ->
-            {ColumnNames, _ColumnTypes, RowsAsTuples} = Data,
-            Rows = [tuple_to_list(R) || R <- RowsAsTuples],
+            {ColumnNames, _ColumnTypes, Rows} = Data,
             Json = to_json({ColumnNames, Rows}),
             {true, wrq:append_to_response_body(Json, RD), Ctx};
         %% the following timeouts are known and distinguished:
