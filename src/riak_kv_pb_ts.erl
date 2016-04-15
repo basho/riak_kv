@@ -42,7 +42,7 @@ init() ->
     #state{}.
 
 -spec decode(integer(), binary()) ->
-                    {ok, ts_requests(), {PermSpec::string(), Table::binary()}} |
+                    {ok, riak_kv_ts_svc:ts_requests(), {PermSpec::string(), Table::binary()}} |
                     {error, _}.
 decode(Code, Bin) when Code >= 90, Code =< 103 ->
     Msg = riak_pb_codec:decode(Code, Bin),
@@ -50,23 +50,23 @@ decode(Code, Bin) when Code >= 90, Code =< 103 ->
         #tsqueryreq{query = Q, cover_context = Cover} ->
             riak_kv_ts_svc:decode_query_common(Q, Cover);
         #tsgetreq{table = Table}->
-            {ok, Msg, {"riak_kv.ts_get", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
         #tsputreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_put", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(put), Table}};
         #tsdelreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_del", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(delete), Table}};
         #tslistkeysreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_listkeys", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(listkeys), Table}};
         #tscoveragereq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_cover", Table}}
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(coverage), Table}}
     end.
 
 -spec encode(tuple()) -> {ok, iolist()}.
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
--spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
-                     {reply, ts_responses(), #state{}}.
+-spec process(atom() | riak_kv_ts_svc:ts_requests() | riak_kv_ts_svc:ts_query_types(), #state{}) ->
+                     {reply, riak_kv_ts_svc:ts_responses(), #state{}}.
 process(Request, State) ->
     encode_response(riak_kv_ts_svc:process(Request, State)).
 
@@ -76,16 +76,20 @@ process_stream(Message, ReqId, State) ->
     riak_kv_ts_svc:process_stream(Message, ReqId, State).
 
 encode_response({reply, {tsqueryresp, {_, _, []}}, State}) ->
-    Encoded = #tsqueryresp{columns=[], rows=[]},
+    Encoded = #tsqueryresp{columns = {[], []}, rows = []},
     {reply, Encoded, State};
 encode_response({reply, {tsqueryresp, {CNames, CTypes, Rows}}, State}) ->
-    Encoded = #tsqueryresp{columns=riak_pb_ts_codec:encode_columns(CNames, CTypes),
-                           rows=riak_pb_ts_codec:encode_rows(CTypes, Rows)},
+    Encoded = #tsqueryresp{columns = riak_pb_ts_codec:encode_columns(CNames, CTypes),
+                           rows = riak_pb_ts_codec:encode_rows(CTypes, Rows)},
     {reply, Encoded, State};
 encode_response({reply, {tsgetresp, {CNames, CTypes, Rows}}, State}) ->
     C = riak_pb_ts_codec:encode_columns(CNames, CTypes),
     R = riak_pb_ts_codec:encode_rows(CTypes, Rows),
-    Encoded = #tsgetresp{columns=C, rows=R},
+    Encoded = #tsgetresp{columns = C, rows = R},
+    {reply, Encoded, State};
+
+encode_response({reply, {tscoverageresp, Entries}, State}) ->
+    Encoded = #tscoverageresp{entries = riak_pb_ts_codec:encode_cover_list(Entries)},
     {reply, Encoded, State};
 encode_response(Response) ->
-    Response. 
+    Response.
