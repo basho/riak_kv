@@ -402,12 +402,25 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             %% response
             {reply, make_rpberrresp(?E_TIMEOUT, "backend timeout"), State};
 
+        %% this one comes from riak_kv_qry_worker
+        {error, divide_by_zero} ->
+            {reply, make_rpberrresp(?E_SUBMIT, "Divide by zero"), State};
+
+        %% from riak_kv_qry
+        {error, {invalid_data, BadRowIdxs}} ->
+            {reply, make_validate_rows_error_resp(BadRowIdxs), State};
+        {error, {too_many_insert_values, BadRowIdxs}} ->
+            {reply, make_too_many_insert_values_resp(BadRowIdxs), State};
+        {error, {undefined_fields, BadFields}} ->
+            {reply, make_undefined_field_in_insert_resp(BadFields), State};
+
         %% this one comes from riak_kv_qry_compiler, even though the query is a valid SQL.
         %% It needs to be treated as execution error.
         {error, {too_many_subqueries, DDLCompilerErrDesc}} ->
             {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
             {reply, make_rpberrresp(?E_BAD_QUERY, DDLCompilerErrDesc), State};
+
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
     end.
@@ -493,7 +506,18 @@ make_validate_rows_error_resp(BadRowIdxs) ->
     BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
     make_rpberrresp(
       ?E_IRREG,
-      flat_format("Invalid data at row index(es) ~s", [BadRowsString])).
+      flat_format("Invalid data found at row index(es) ~s", [BadRowsString])).
+
+make_too_many_insert_values_resp(BadRowIdxs) ->
+    BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
+    make_rpberrresp(
+      ?E_BAD_QUERY,
+      flat_format("too many values in row index(es) ~s", [BadRowsString])).
+
+make_undefined_field_in_insert_resp(BadFields) ->
+    make_rpberrresp(
+      ?E_BAD_QUERY,
+      flat_format("undefined fields: ~s", [string:join(BadFields, ", ")])).
 
 make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(

@@ -111,8 +111,7 @@ insert_putreqs(Mod, Table, Data) ->
                     {error, OtherReason}
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
-            BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
-            {error, io_lib:format("Invalid data at row index(es) ~s", [BadRowsString])}
+            {error, {invalid_data, BadRowIdxs}}
     end.
 
 %%
@@ -145,9 +144,7 @@ lookup_field_positions(Mod, FieldIdentifiers) ->
         {Positions, []} ->
             {ok, lists:reverse(Positions)};
         {_, Errors} ->
-            {error, io_lib:format(
-                      "undefined fields: ~s",
-                      [string:join(lists:reverse(Errors), ", ")])}
+            {error, {undefined_fields, Errors}}
     end.
 
 %%
@@ -164,7 +161,7 @@ xlate_insert_to_putdata(Values, Positions, Empty) ->
                      {ok, Row} ->
                          {[Row | Good], Bad, RowNum + 1};
                      {error, _Reason} ->
-                         {Good, [integer_to_list(RowNum) | Bad], RowNum + 1}
+                         {Good, [RowNum | Bad], RowNum + 1}
                  end
              end,
     Converted = lists:foldl(ConvFn, {[], [], 1}, Values),
@@ -172,10 +169,7 @@ xlate_insert_to_putdata(Values, Positions, Empty) ->
         {PutData, [], _} ->
             {ok, lists:reverse(PutData)};
         {_, Errors, _} ->
-            {error, lists:flatten(
-                      io_lib:format(
-                        "too many values in row index(es) ~s",
-                        [string:join(lists:reverse(Errors), ", ")]))}
+            {error, {too_many_insert_values, lists:reverse(Errors)}}
     end.
 
 -spec make_insert_row([] | [riak_ql_ddl:data_value()], [] | [pos_integer()], tuple()) ->
@@ -186,7 +180,7 @@ make_insert_row([], _Positions, Row) when is_tuple(Row) ->
     {ok, Row};
 make_insert_row(_, [], Row) when is_tuple(Row) ->
     %% Too many values for the field
-    {error, "too many values"};
+    {error, too_many_values};
 %% Make sure the types match
 make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(Row) ->
     make_insert_row(Values, Positions, setelement(Pos, Row, Val)).
