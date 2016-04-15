@@ -373,7 +373,7 @@ varchar_quotes(V) ->
 -spec validate_rows(module(), list(tuple())) -> [integer()].
 validate_rows(Mod, Rows) ->
     ValidateFn =
-        fun(Row, {N, Acc}) when is_tuple(Row) ->
+        fun(Row, {N, Acc}) ->
                 case Mod:validate_obj(Row) of
                     true -> {N + 1, Acc};
                     _    -> {N + 1, [N|Acc]}
@@ -573,22 +573,5 @@ validate_rows_bad_2_test() ->
         [1, 3, 4],
         validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
     ).
-
-validate_rows_error_response_1_test() ->
-    Msg = "Invalid data at row index(es) ",
-    ?assertEqual(
-        #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = iolist_to_binary(Msg ++ "1") },
-        make_validate_rows_error_resp([1])
-    ).
-
-validate_rows_error_response_2_test() ->
-    Msg = "Invalid data at row index(es) ",
-    ?assertEqual(
-        #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = iolist_to_binary(Msg ++ "1, 2, 3") },
-        make_validate_rows_error_resp([1, 2, 3])
-    ).
-
 
 -endif.
