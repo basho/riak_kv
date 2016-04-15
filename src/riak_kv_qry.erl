@@ -320,7 +320,7 @@ validate_make_insert_row_too_many_test() ->
     Row = {undefined, undefined, undefined},
     Result = make_insert_row(Data, Positions, Row),
     ?assertEqual(
-        {error, "too many values"},
+        {error, too_many_values},
         Result
     ).
 
@@ -344,7 +344,7 @@ validate_xlate_insert_to_putdata_too_many_values_test() ->
     Positions = [3, 1, 2, 4],
     Result = xlate_insert_to_putdata(Values, Positions, Empty),
     ?assertEqual(
-        {error,"too many values in row index(es) 1"},
+        {error,{too_many_insert_values, [1]}},
         Result
     ).
 

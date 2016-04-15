@@ -414,12 +414,9 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
         {error, {undefined_fields, BadFields}} ->
             {reply, make_undefined_field_in_insert_resp(BadFields), State};
 
-        %% this one comes from riak_kv_qry_compiler, even though the query is a valid SQL.
-        %% It needs to be treated as execution error.
-        {error, {too_many_subqueries, DDLCompilerErrDesc}} ->
-            {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
+        %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
-            {reply, make_rpberrresp(?E_BAD_QUERY, DDLCompilerErrDesc), State};
+            {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
 
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
