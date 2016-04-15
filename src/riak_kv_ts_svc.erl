@@ -77,6 +77,8 @@ decode_query_common(Q, Cover) ->
     case decode_query(Q, Cover) of
         {QueryType, {ok, Query}} ->
             {ok, Query, decode_query_permissions(QueryType, Query)};
+        {_QueryType, {error, Error}} ->
+            {ok, make_decoder_error_response(Error)};
         {error, Error} ->
             %% convert error returns to ok's, this means it will be passed into
             %% process which will not process it and return the error.
@@ -400,8 +402,14 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             %% response
             {reply, make_rpberrresp(?E_TIMEOUT, "backend timeout"), State};
 
+        %% this one comes from riak_kv_qry_compiler, even though the query is a valid SQL.
+        %% It needs to be treated as execution error.
+        {error, {too_many_subqueries, DDLCompilerErrDesc}} ->
+            {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
+        {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
+            {reply, make_rpberrresp(?E_BAD_QUERY, DDLCompilerErrDesc), State};
         {error, Reason} ->
-            {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
+            {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
     end.
 
 
@@ -543,7 +551,7 @@ make_decoder_error_response({Token, riak_ql_parser, _}) when is_binary(Token) ->
 make_decoder_error_response({Token, riak_ql_parser, _}) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("Unexpected token '~p'", [Token]));
 make_decoder_error_response(Error) ->
-    Error.
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("~p", [Error])).
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
