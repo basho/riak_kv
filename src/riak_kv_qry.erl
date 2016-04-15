@@ -298,12 +298,12 @@ describe_table_columns_test() ->
             " f, s, t))")),
     Res = do_describe(DDL),
     ?assertMatch(
-       {ok, [_, _,
-             [{<<"f">>, <<"varchar">>,   false, 1,  1},
-              {<<"s">>, <<"varchar">>,   false, 2,  2},
-              {<<"t">>, <<"timestamp">>, false, 3,  3},
-              {<<"w">>, <<"sint64">>, false, [], []},
-              {<<"p">>, <<"double">>, true,  [], []}]]},
+       {ok, {_, _,
+             [[<<"f">>, <<"varchar">>,   false, 1,  1],
+              [<<"s">>, <<"varchar">>,   false, 2,  2],
+              [<<"t">>, <<"timestamp">>, false, 3,  3],
+              [<<"w">>, <<"sint64">>, false, [], []],
+              [<<"p">>, <<"double">>, true,  [], []]]}},
        Res).
 
 validate_make_insert_row_basic_test() ->
