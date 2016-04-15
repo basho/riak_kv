@@ -179,7 +179,7 @@ process_stream({ReqId, Error}, ReqId,
 %% check_table_and_call
 
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
-                          {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+                          {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
 create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(
                      DDL, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
@@ -213,8 +213,7 @@ wait_until_active(Table, State, 0) ->
 wait_until_active(Table, State, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
-            {reply, make_tsqueryresp(
-                      riak_kv_qry:empty_result()), State};
+            {reply, tsqueryresp, State};
         {error, not_ready} ->
             timer:sleep(1000),
             wait_until_active(Table, State, Seconds - 1);
@@ -238,7 +237,7 @@ wait_until_active(Table, State, Seconds) ->
 %% -----------
 
 %% NB: since this method deals with PB and TTB messages, the message must be fully
-%% decoded before sub_tsqueryreq is called
+%% decoded before sub_tsputreq is called
 sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
              State) ->
     case riak_kv_ts_util:validate_rows(Mod, Rows) of
@@ -263,7 +262,7 @@ sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
 %% -----------
 
 %% NB: since this method deals with PB and TTB messages, the message must be fully
-%% decoded before sub_tsqueryreq is called
+%% decoded before sub_tsgetreq is called
 sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
                                   key    = CompoundKey,
                                   timeout = Timeout},
@@ -288,7 +287,7 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
         {error, {bad_key_length, Got, Need}} ->
             {reply, make_key_element_count_mismatch_resp(Got, Need), State};
         {error, notfound} ->
-            {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
+            {reply, make_tsgetresp([], [], []), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
     end.
@@ -571,62 +570,6 @@ missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
         make_missing_helper_module_resp(<<"mytype">>, [{ddl, ?DDL{}}])
-    ).
-
-test_helper_validate_rows_mod() ->
-    {ddl, DDL, []} =
-        riak_ql_parser:ql_parse(
-          riak_ql_lexer:get_tokens(
-            "CREATE TABLE mytable ("
-            "family VARCHAR NOT NULL,"
-            "series VARCHAR NOT NULL,"
-            "time TIMESTAMP NOT NULL,"
-            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')),"
-            " family, series, time))")),
-    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
-
-validate_rows_empty_test() ->
-    {module, Mod} = test_helper_validate_rows_mod(),
-    ?assertEqual(
-        [],
-        riak_kv_ts_util:validate_rows(Mod, [])
-    ).
-
-validate_rows_1_test() ->
-    {module, Mod} = test_helper_validate_rows_mod(),
-    ?assertEqual(
-        [],
-        riak_kv_ts_util:validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
-    ).
-
-validate_rows_bad_1_test() ->
-    {module, Mod} = test_helper_validate_rows_mod(),
-    ?assertEqual(
-        ["1"],
-        riak_kv_ts_util:validate_rows(Mod, [{}])
-    ).
-
-validate_rows_bad_2_test() ->
-    {module, Mod} = test_helper_validate_rows_mod(),
-    ?assertEqual(
-        ["1", "3", "4"],
-        riak_kv_ts_util:validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
-    ).
-
-validate_rows_error_response_1_test() ->
-    Msg = "Invalid data at row index(es) ",
-    ?assertEqual(
-        #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = iolist_to_binary(Msg ++ "1") },
-        make_validate_rows_error_resp(["1"])
-    ).
-
-validate_rows_error_response_2_test() ->
-    Msg = "Invalid data at row index(es) ",
-    ?assertEqual(
-        #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = iolist_to_binary(Msg ++ "1, 2, 3") },
-        make_validate_rows_error_resp(["1", "2", "3"])
     ).
 
 -endif.

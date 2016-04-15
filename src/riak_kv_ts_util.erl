@@ -533,4 +533,62 @@ make_ts_keys_4_test() ->
         make_ts_keys([10,20,1], DDL, Mod)
     ).
 
+
+test_helper_validate_rows_mod() ->
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
+          riak_ql_lexer:get_tokens(
+            "CREATE TABLE mytable ("
+            "family VARCHAR NOT NULL,"
+            "series VARCHAR NOT NULL,"
+            "time TIMESTAMP NOT NULL,"
+            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')),"
+            " family, series, time))")),
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
+
+validate_rows_empty_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [])
+    ).
+
+validate_rows_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
+    ).
+
+validate_rows_bad_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [1],
+        validate_rows(Mod, [{}])
+    ).
+
+validate_rows_bad_2_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [1, 3, 4],
+        validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
+    ).
+
+validate_rows_error_response_1_test() ->
+    Msg = "Invalid data at row index(es) ",
+    ?assertEqual(
+        #rpberrorresp{errcode = ?E_IRREG,
+                      errmsg = iolist_to_binary(Msg ++ "1") },
+        make_validate_rows_error_resp([1])
+    ).
+
+validate_rows_error_response_2_test() ->
+    Msg = "Invalid data at row index(es) ",
+    ?assertEqual(
+        #rpberrorresp{errcode = ?E_IRREG,
+                      errmsg = iolist_to_binary(Msg ++ "1, 2, 3") },
+        make_validate_rows_error_resp([1, 2, 3])
+    ).
+
+
 -endif.
