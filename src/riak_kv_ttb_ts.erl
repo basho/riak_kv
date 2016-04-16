@@ -51,9 +51,9 @@ decode(?TTB_MSG_CODE, Bin) ->
         #tsqueryreq{query = Q, cover_context = Cover} ->
             riak_kv_ts_svc:decode_query_common(Q, Cover);
         #tsgetreq{table = Table}->
-            {ok, Msg, {"riak_kv.ts_get", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
         #tsputreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_put", Table}}
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(put), Table}}
     end.
 
 -spec encode(tuple()) -> {ok, iolist()}.

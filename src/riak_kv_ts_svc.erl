@@ -74,45 +74,37 @@
               ts_query_types/0]).
 
 decode_query_common(Q, Cover) ->
-    %% convert error returns to ok's, this means it will be passed into
-    %% process which will not process it and return the error.
-    case catch decode_query(Q, Cover) of
-        {ok, DecodedQuery} ->
-            PermAndTarget = decode_query_permissions(DecodedQuery),
-            {ok, DecodedQuery, PermAndTarget};
-        {error, Error} ->
+    case decode_query(Q, Cover) of
+        {QueryType, {ok, Query}} ->
+            {ok, Query, decode_query_permissions(QueryType, Query)};
+        {_QueryType, {error, Error}} ->
             {ok, make_decoder_error_response(Error)};
-        {'EXIT', {Error, _}} ->
+        {error, Error} ->
+            %% convert error returns to ok's, this means it will be passed into
+            %% process which will not process it and return the error.
             {ok, make_decoder_error_response(Error)}
     end.
 
 -spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
     {error, _} | {ok, ts_query_types()}.
-decode_query(#tsinterpolation{ base = BaseQuery }, Cover) ->
-    Lexed = riak_ql_lexer:get_tokens(binary_to_list(BaseQuery)),
-    case riak_ql_parser:ql_parse(Lexed) of
-        {select, SQL} ->
-            riak_kv_ts_util:build_sql_record(select, SQL, Cover);
-        {describe, SQL} ->
-            riak_kv_ts_util:build_sql_record(describe, SQL, Cover);
-        {insert, SQL} ->
-            riak_kv_ts_util:build_sql_record(insert, SQL, Cover);
+decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
+    case catch riak_ql_parser:ql_parse(
+                 riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
+                   binary_to_list(BaseQuery))) of
         {ddl, DDL, WithProperties} ->
-            {ok, {DDL, WithProperties}};
-        Other ->
-            Other
+            {ddl, {ok, {DDL, WithProperties}}};
+        {QryType, SQL} when QryType /= error,
+                            QryType /= 'EXIT' ->
+            {QryType, riak_kv_ts_util:build_sql_record(QryType, SQL, Cover)};
+        {error, Other} ->
+            {error, Other}
     end.
 
--spec decode_query_permissions(ts_query_types()) ->
-                                      {string(), binary()}.
-decode_query_permissions({?DDL{table = NewBucketType}, _WithProps}) ->
-    {"riak_kv.ts_create_table", NewBucketType};
-decode_query_permissions(?SQL_SELECT{'FROM' = Table}) ->
-    {"riak_kv.ts_query", Table};
-decode_query_permissions(#riak_sql_describe_v1{'DESCRIBE' = Table}) ->
-    {"riak_kv.ts_describe", Table};
-decode_query_permissions(#riak_sql_insert_v1{'INSERT' = Table}) ->
-    {"riak_kv.ts_insert", Table}.
+decode_query_permissions(QryType, {DDL = ?DDL{}, _WithProps}) ->
+    decode_query_permissions(QryType, DDL);
+decode_query_permissions(QryType, Qry) ->
+    {riak_kv_ts_api:api_call_from_sql_type(QryType),
+     riak_kv_ts_util:queried_table(Qry)}.
 
 
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->

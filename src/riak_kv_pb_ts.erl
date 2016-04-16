@@ -50,15 +50,15 @@ decode(Code, Bin) when Code >= 90, Code =< 103 ->
         #tsqueryreq{query = Q, cover_context = Cover} ->
             riak_kv_ts_svc:decode_query_common(Q, Cover);
         #tsgetreq{table = Table}->
-            {ok, Msg, {"riak_kv.ts_get", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
         #tsputreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_put", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(put), Table}};
         #tsdelreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_del", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(delete), Table}};
         #tslistkeysreq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_listkeys", Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(listkeys), Table}};
         #tscoveragereq{table = Table} ->
-            {ok, Msg, {"riak_kv.ts_cover", Table}}
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(coverage), Table}}
     end.
 
 -spec encode(tuple()) -> {ok, iolist()}.
