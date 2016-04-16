@@ -597,7 +597,7 @@ make_missing_helper_module_resp(Table, BucketProps)
 make_missing_type_resp(Table) ->
     make_rpberrresp(
       ?E_MISSING_TYPE,
-      flat_format("Time Series table ~s does not exist.", [Table])).
+      flat_format("Time Series table ~s does not exist", [Table])).
 
 %%
 -spec make_nonts_type_resp(Table::binary()) -> #rpberrorresp{}.
@@ -616,7 +616,7 @@ make_missing_table_module_resp(Table) ->
 make_key_element_count_mismatch_resp(Got, Need) ->
     make_rpberrresp(
       ?E_BAD_KEY_LENGTH,
-      flat_format("Key element count mismatch (key has ~b elements but ~b supplied).", [Need, Got])).
+      flat_format("Key element count mismatch (key has ~b elements but ~b supplied)", [Need, Got])).
 
 -spec make_validate_rows_error_resp([integer()]) -> #rpberrorresp{}.
 make_validate_rows_error_resp(BadRowIdxs) ->
