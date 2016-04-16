@@ -43,7 +43,7 @@ init() ->
     #state{}.
 
 -spec decode(integer(), binary()) ->
-                    {ok, ts_requests(), {PermSpec::string(), Table::binary()}} |
+                    {ok, riak_kv_ts_svc:ts_requests(), {PermSpec::string(), Table::binary()}} |
                     {error, _}.
 decode(?TTB_MSG_CODE, Bin) ->
     Msg = riak_ttb_codec:decode(Bin),
@@ -60,8 +60,8 @@ decode(?TTB_MSG_CODE, Bin) ->
 encode(Message) ->
     {ok, riak_ttb_codec:encode(Message)}.
 
--spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
-                     {reply, ts_responses(), #state{}}.
+-spec process(atom() | riak_kv_ts_svc:ts_requests() | riak_kv_ts_svc:ts_query_types(), #state{}) ->
+                     {reply, riak_kv_ts_svc:ts_responses(), #state{}}.
 process(Request, State) ->
     riak_kv_ts_svc:process(Request, State).
 

@@ -42,7 +42,7 @@ init() ->
     #state{}.
 
 -spec decode(integer(), binary()) ->
-                    {ok, ts_requests(), {PermSpec::string(), Table::binary()}} |
+                    {ok, riak_kv_ts_svc:ts_requests(), {PermSpec::string(), Table::binary()}} |
                     {error, _}.
 decode(Code, Bin) when Code >= 90, Code =< 103 ->
     Msg = riak_pb_codec:decode(Code, Bin),
@@ -65,8 +65,8 @@ decode(Code, Bin) when Code >= 90, Code =< 103 ->
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
--spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
-                     {reply, ts_responses(), #state{}}.
+-spec process(atom() | riak_kv_ts_svc:ts_requests() | riak_kv_ts_svc:ts_query_types(), #state{}) ->
+                     {reply, riak_kv_ts_svc:ts_responses(), #state{}}.
 process(Request, State) ->
     encode_response(riak_kv_ts_svc:process(Request, State)).
 
