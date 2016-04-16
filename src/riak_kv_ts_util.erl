@@ -121,8 +121,9 @@ table_to_bucket(Table) when is_binary(Table) ->
     {Table, Table}.
 
 
--spec queried_table(#riak_sql_describe_v1{} | ?SQL_SELECT{} | #riak_sql_insert_v1{}) -> binary().
+-spec queried_table(riak_kv_qry:sql_query_type_record() | ?DDL{}) -> binary().
 %% Extract table name from various sql records.
+queried_table(?DDL{table = Table}) -> Table;
 queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
 queried_table(?SQL_SELECT{'FROM' = Table})               -> Table;
 queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table.
