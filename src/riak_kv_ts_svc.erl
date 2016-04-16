@@ -620,6 +620,7 @@ make_key_element_count_mismatch_resp(Got, Need) ->
 
 -spec make_validate_rows_error_resp([integer()]) -> #rpberrorresp{}.
 make_validate_rows_error_resp(BadRowIdxs) ->
+    BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
     make_rpberrresp(
       ?E_IRREG,
       flat_format("Invalid data found at row index(es) ~s", [BadRowsString])).
