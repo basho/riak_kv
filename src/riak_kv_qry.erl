@@ -60,6 +60,8 @@ submit(SQLString, DDL) when is_list(SQLString) ->
                  riak_ql_lexer:get_tokens(SQLString)) of
         {error, _Reason} = Error ->
             Error;
+        {'EXIT', Reason} ->  %% lexer problem
+            {error, Reason};
         {ok, SQL} ->
             submit(SQL, DDL)
     end;

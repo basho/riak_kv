@@ -96,6 +96,8 @@ decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
         {QryType, SQL} when QryType /= error,
                             QryType /= 'EXIT' ->
             {QryType, riak_kv_ts_util:build_sql_record(QryType, SQL, Cover)};
+        {'EXIT', {Reason, _StackTrace}} ->
+            {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
             {error, Other}
     end.
@@ -508,10 +510,6 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
         {ok, Data} ->
             {reply, make_tsqueryresp(Data), State};
 
-        %% parser messages have a tuple for Reason:
-        {error, {E, Reason}} when is_atom(E), is_binary(Reason) ->
-            ErrorMessage = flat_format("~p: ~s", [E, Reason]),
-            {reply, make_rpberrresp(?E_SUBMIT, ErrorMessage), State};
         %% the following timeouts are known and distinguished:
         {error, no_type} ->
             {reply, make_table_not_activated_resp(Table), State};
@@ -523,6 +521,22 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             %% the eleveldb process did manage to send us a timeout
             %% response
             {reply, make_rpberrresp(?E_TIMEOUT, "backend timeout"), State};
+
+        %% this one comes from riak_kv_qry_worker
+        {error, divide_by_zero} ->
+            {reply, make_rpberrresp(?E_SUBMIT, "Divide by zero"), State};
+
+        %% from riak_kv_qry
+        {error, {invalid_data, BadRowIdxs}} ->
+            {reply, make_validate_rows_error_resp(BadRowIdxs), State};
+        {error, {too_many_insert_values, BadRowIdxs}} ->
+            {reply, make_too_many_insert_values_resp(BadRowIdxs), State};
+        {error, {undefined_fields, BadFields}} ->
+            {reply, make_undefined_field_in_insert_resp(BadFields), State};
+
+        %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
+        {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
+            {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
 
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
@@ -555,13 +569,12 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
     case riak_kv_ts_util:get_table_ddl(Table) of
         {ok, Mod, DDL} ->
             Fun(Mod, DDL, TsMessage, State);
+        {error, no_type} ->
+            {reply, make_table_not_activated_resp(Table), State};
         {error, missing_helper_module} ->
             BucketProps = riak_core_bucket:get_bucket(
                             riak_kv_ts_util:table_to_bucket(Table)),
-            {reply, missing_helper_module(Table, BucketProps), State};
-        {error, _} ->
-            {reply, table_not_activated_response(Table),
-             State}
+            {reply, make_missing_helper_module_resp(Table, BucketProps), State}
     end.
 
 
@@ -573,12 +586,12 @@ make_rpberrresp(Code, Message) ->
                   errmsg = iolist_to_binary(Message)}.
 
 %%
--spec missing_helper_module(Table::binary(),
+-spec make_missing_helper_module_resp(Table::binary(),
                             BucketProps::{error, any()} | [proplists:property()])
                            -> #rpberrorresp{}.
-missing_helper_module(Table, {error, _}) ->
-    missing_type_response(Table);
-missing_helper_module(Table, BucketProps)
+make_missing_helper_module_resp(Table, {error, _}) ->
+    make_missing_type_resp(Table);
+make_missing_helper_module_resp(Table, BucketProps)
   when is_binary(Table), is_list(BucketProps) ->
     case lists:keymember(ddl, 1, BucketProps) of
         true  -> missing_table_module_response(Table);
@@ -618,7 +631,18 @@ validate_rows_error_response(BadRowIdxs) ->
       ?E_IRREG,
       flat_format("Invalid data found at row index(es) ~s", [BadRowsString])).
 
-failed_put_response(ErrorCount) ->
+make_too_many_insert_values_resp(BadRowIdxs) ->
+    BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
+    make_rpberrresp(
+      ?E_BAD_QUERY,
+      flat_format("too many values in row index(es) ~s", [BadRowsString])).
+
+make_undefined_field_in_insert_resp(BadFields) ->
+    make_rpberrresp(
+      ?E_BAD_QUERY,
+      flat_format("undefined fields: ~s", [string:join(BadFields, ", ")])).
+
+make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(
       ?E_PUT,
       flat_format("Failed to put ~b record(s)", [ErrorCount])).
@@ -668,6 +692,8 @@ make_tsqueryresp({ColumnNames, ColumnTypes, Rows}) ->
 
 
 
+make_decoder_error_response({lexer_error, Msg}) ->
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("~s", [Msg]));
 make_decoder_error_response({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("~ts", [Msg]));
 make_decoder_error_response({Token, riak_ql_parser, _}) when is_binary(Token) ->
@@ -675,7 +701,7 @@ make_decoder_error_response({Token, riak_ql_parser, _}) when is_binary(Token) ->
 make_decoder_error_response({Token, riak_ql_parser, _}) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("Unexpected token '~p'", [Token]));
 make_decoder_error_response(Error) ->
-    Error.
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("~p", [Error])).
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
