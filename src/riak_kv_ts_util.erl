@@ -26,19 +26,23 @@
 
 -export([
          apply_timeseries_bucket_props/3,
+         build_sql_record/3,
          encode_typeval_key/1,
+         get_column_types/2,
          get_table_ddl/1,
          lk/1,
          make_ts_keys/3,
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
+         sql_record_to_tuple/1,
+         sql_to_cover/4,
          table_to_bucket/1,
-         build_sql_record/3,
-         sql_record_to_tuple/1
+         validate_rows/2
         ]).
 -export([explain_query/1, explain_query/2]).
 -export([explain_query_print/1]).
+
 
 %% NOTE on table_to_bucket/1: Clients will work with table
 %% names. Those names map to a bucket type/bucket name tuple in Riak,
@@ -49,13 +53,14 @@
 %% bucket tuple. This function is a convenient mechanism for doing so
 %% and making that transition more obvious.
 
+%%-include("riak_kv_wm_raw.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_ts.hrl").
 
 %% riak_ql_ddl:is_query_valid expects a tuple, not a SQL record
-sql_record_to_tuple(?SQL_SELECT{'FROM'=From,
-                                'SELECT'=#riak_sel_clause_v1{clause=Select},
-                                'WHERE'=Where}) ->
+sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
+                                'SELECT' = #riak_sel_clause_v1{clause=Select},
+                                'WHERE'  = Where}) ->
     {From, Select, Where}.
 
 %% Convert the proplist obtained from the QL parser
@@ -362,6 +367,104 @@ op_to_string(Op) -> " " ++ atom_to_list(Op) ++ " ".
 varchar_quotes(V) ->
     <<"'", V/binary, "'">>.
 
+%% Give validate_rows/2 a DDL Module and a list of decoded rows,
+%% and it will return a list of invalid rows indexes.
+-spec validate_rows(module(), list(tuple())) -> [integer()].
+validate_rows(Mod, Rows) ->
+    ValidateFn =
+        fun(Row, {N, Acc}) ->
+                case Mod:validate_obj(Row) of
+                    true -> {N + 1, Acc};
+                    _    -> {N + 1, [N|Acc]}
+                end
+        end,
+    {_, BadRowIdxs} = lists:foldl(ValidateFn, {1, []}, Rows),
+    lists:reverse(BadRowIdxs).
+
+
+-spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
+get_column_types(ColumnNames, Mod) ->
+    [Mod:get_field_type([N]) || N <- ColumnNames].
+
+
+%% Result from riak_client:get_cover is a nested list of coverage plan
+%% because KV coverage requests are designed that way, but in our case
+%% all we want is the singleton head
+
+%% If any of the results from get_cover are errors, we want that tuple
+%% to be the sole return value
+sql_to_cover(_Client, [], _Bucket, Accum) ->
+    lists:reverse(Accum);
+sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
+    case Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
+                          {SQL, Bucket}) of
+        {error, Error} ->
+            {error, Error};
+        [Cover] ->
+            {Description, SubRange} = reverse_sql(SQL),
+            Node = proplists:get_value(node, Cover),
+            {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
+            Context = riak_kv_pb_coverage:term_to_checksum_binary({Cover, SubRange}),
+            Entry = {{IP, Port}, Context, SubRange, Description},
+            sql_to_cover(Client, Tail, Bucket, [Entry|Accum])
+    end.
+
+
+%% Generate a human-readable description of the target
+%%     <<"<TABLE> / time > X and time < Y">>
+%% Generate a start/end timestamp for future replacement in a query
+reverse_sql(?SQL_SELECT{'FROM'  = Table,
+                        'WHERE' = KeyProplist,
+                        partition_key = PartitionKey}) ->
+    QuantumField = identify_quantum_field(PartitionKey),
+    RangeTuple = extract_time_boundaries(QuantumField, KeyProplist),
+    Desc = derive_description(Table, QuantumField, RangeTuple),
+    ReplacementValues = {QuantumField, RangeTuple},
+    {Desc, ReplacementValues}.
+
+
+derive_description(Table, Field, {{Start, StartInclusive}, {End, EndInclusive}}) ->
+    StartOp = pick_operator(">", StartInclusive),
+    EndOp = pick_operator("<", EndInclusive),
+    unicode:characters_to_binary(
+      flat_format("~ts / ~ts ~s ~B and ~ts ~s ~B",
+                  [Table, Field, StartOp, Start,
+                   Field, EndOp, End]), utf8).
+
+pick_operator(LGT, true) ->
+    LGT ++ "=";
+pick_operator(LGT, false) ->
+    LGT.
+
+extract_time_boundaries(FieldName, WhereList) ->
+    {FieldName, timestamp, Start} =
+        lists:keyfind(FieldName, 1, proplists:get_value(startkey, WhereList, [])),
+    {FieldName, timestamp, End} =
+        lists:keyfind(FieldName, 1, proplists:get_value(endkey, WhereList, [])),
+    StartInclusive = proplists:get_value(start_inclusive, WhereList, true),
+    EndInclusive = proplists:get_value(end_inclusive, WhereList, false),
+    {{Start, StartInclusive}, {End, EndInclusive}}.
+
+
+%%%%%%%%%%%%
+%% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
+identify_quantum_field(#key_v1{ast = KeyList}) ->
+    HashFn = find_hash_fn(KeyList),
+    P_V1 = hd(HashFn#hash_fn_v1.args),
+    hd(P_V1#param_v1.name).
+
+find_hash_fn([]) ->
+    throw(wtf);
+find_hash_fn([#hash_fn_v1{}=Hash|_T]) ->
+    Hash;
+find_hash_fn([_H|T]) ->
+    find_hash_fn(T).
+
+%%%%%%%%%%%%
+
+
+flat_format(Format, Args) ->
+    lists:flatten(io_lib:format(Format, Args)).
 
 %%%
 %%% TESTS
@@ -429,7 +532,45 @@ make_ts_keys_4_test() ->
         make_ts_keys([10,20,1], DDL, Mod)
     ).
 
--endif.
 
-flat_format(F, A) ->
-    lists:flatten(io_lib:format(F, A)).
+test_helper_validate_rows_mod() ->
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
+          riak_ql_lexer:get_tokens(
+            "CREATE TABLE mytable ("
+            "family VARCHAR NOT NULL,"
+            "series VARCHAR NOT NULL,"
+            "time TIMESTAMP NOT NULL,"
+            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')),"
+            " family, series, time))")),
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
+
+validate_rows_empty_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [])
+    ).
+
+validate_rows_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
+    ).
+
+validate_rows_bad_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [1],
+        validate_rows(Mod, [{}])
+    ).
+
+validate_rows_bad_2_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [1, 3, 4],
+        validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
+    ).
+
+-endif.
