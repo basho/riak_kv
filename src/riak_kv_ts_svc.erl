@@ -680,6 +680,17 @@ to_string(X) ->
 make_tsgetresp(ColumnNames, ColumnTypes, Rows) ->
     {tsgetresp, {ColumnNames, ColumnTypes, Rows}}.
 
+make_tsqueryresp({_ColumnNames, _ColumnTypes, []}) ->
+    %% tests (and probably docs, too) expect an empty result set to be
+    %% returned as {[], []} (with column names omitted). Before the
+    %% TTB merge, the columns info was dropped in
+    %% riak_kv_pb_ts:encode_response({reply, {tsqueryresp, Data}, _}).
+    %% Now, because the TTB encoder is dumb, leaving the special case
+    %% treatment in the PB-specific riak_kv_pb_ts lets empty query
+    %% results going through TTB still have the columns info, which is
+    %% not what the caller might expect. We ensure uniform {[], []}
+    %% for bot PB and TTB by preparing this term in advance, here.
+    {tsqueryresp, {[], [], []}};
 make_tsqueryresp(Data = {_ColumnNames, _ColumnTypes, _Rows}) ->
     {tsqueryresp, Data}.
 

@@ -75,9 +75,6 @@ process(Request, State) ->
 process_stream(Message, ReqId, State) ->
     riak_kv_ts_svc:process_stream(Message, ReqId, State).
 
-encode_response({reply, {tsqueryresp, {_, _, []}}, State}) ->
-    Encoded = #tsqueryresp{columns = {[], []}, rows = []},
-    {reply, Encoded, State};
 encode_response({reply, {tsqueryresp, {CNames, CTypes, Rows}}, State}) ->
     Encoded = #tsqueryresp{columns = riak_pb_ts_codec:encode_columns(CNames, CTypes),
                            rows = riak_pb_ts_codec:encode_rows(CTypes, Rows)},
