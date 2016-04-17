@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ts_util: supporting functions for timeseries code paths
+%% riak_kv_ts_api: supporting functions for timeseries code paths
 %%
 %% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
