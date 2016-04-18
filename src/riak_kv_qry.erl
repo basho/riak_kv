@@ -197,9 +197,9 @@ do_describe(?DDL{fields = FieldSpecs,
     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
     ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
     Rows =
-        [[Name, list_to_binary(atom_to_list(Type)), Nullable,
+        [{Name, list_to_binary(atom_to_list(Type)), Nullable,
           column_pk_position_or_blank(Name, PKSpec),
-          column_lk_position_or_blank(Name, LKSpec)]
+          column_lk_position_or_blank(Name, LKSpec)}
          || #riak_field_v1{name = Name,
                            type = Type,
                            optional = Nullable} <- FieldSpecs],
