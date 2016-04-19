@@ -371,9 +371,7 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                       ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason])), State}
             end;
         {error, Reason} ->
-            {reply, make_rpberrresp(
-                      ?E_BAD_QUERY, flat_format("Failed to parse query: ~p", [Reason])),
-             State}
+            {reply, make_decoder_error_response(Reason), State}
     end.
 
 
