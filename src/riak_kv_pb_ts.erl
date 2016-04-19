@@ -84,5 +84,9 @@ encode_response({reply, {tsgetresp, {CNames, CTypes, Rows}}, State}) ->
     R = riak_pb_ts_codec:encode_rows(CTypes, Rows),
     Encoded = #tsgetresp{columns = C, rows = R},
     {reply, Encoded, State};
+
+encode_response({reply, {tscoverageresp, Entries}, State}) ->
+    Encoded = #tscoverageresp{entries = riak_pb_ts_codec:encode_cover_list(Entries)},
+    {reply, Encoded, State};
 encode_response(Response) ->
     Response.
