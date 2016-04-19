@@ -355,18 +355,19 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                                             query = Q},
                   State) ->
-    case compile(Mod, catch decode_query(Q, undefined)) of
+    {select, SQL} = decode_query(Q, undefined),
+    case compile(Mod, SQL) of
         {error, #rpberrorresp{} = Error} ->
             {reply, Error, State};
         {error, _} ->
             {reply, make_rpberrresp(
                       ?E_BAD_QUERY, "Failed to compile query"),
              State};
-        SQL ->
+        Queries ->
             %% SQL is a list of queries (1 per quantum)
             Bucket = riak_kv_ts_util:table_to_bucket(Table),
             Client = {riak_client, [node(), undefined]},
-            convert_cover_list(sql_to_cover(Client, SQL, Bucket, []), State)
+            convert_cover_list(sql_to_cover(Client, Queries, Bucket, []), State)
     end.
 
 %% Copied and modified from riak_kv_pb_coverage:convert_list. Would
