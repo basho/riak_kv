@@ -105,7 +105,7 @@ del_timeseries_postcommit(Hook) ->
 %% This function invokes each registered timeseries postcommit
 %% hook.
 -spec call_timeseries_postcommit(tuple(), bucket(), list()) -> ok.
-call_timeseries_postcommit({_PK, _Data}=Batch, Bucket, BucketProps) ->
+call_timeseries_postcommit({_PartitionIdx, _Data}=Batch, Bucket, BucketProps) ->
     Hooks = get_hooks(timeseries_postcommit),
     lists:foreach(fun({Mod, Fun}) ->
                           Mod:Fun(Batch, Bucket, BucketProps)
