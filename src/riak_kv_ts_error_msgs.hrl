@@ -87,3 +87,9 @@
         ["The '", ParamName, "' parameter is part the primary key, and must have an ",
          "equals clause in the query but the ", atom_to_list(Op), " operator was used."])
 ).
+
+-define(
+   E_TOO_MANY_SUBQUERIES(N),
+   iolist_to_binary(
+     ["Too many subqueries (",integer_to_list(N),")"])
+).

@@ -40,7 +40,7 @@
         {
           calc_type        = rows :: select_result_type(),
           initial_state    = []   :: [any()],
-          col_return_types = []   :: [riak_ql_ddl:field_type()],
+          col_return_types = []   :: [riak_ql_ddl:simple_field_type()],
           col_names        = []   :: [binary()],
           clause           = []   :: [riak_kv_qry_compiler:compiled_select()],
           finalisers       = []   :: [skip | function()]
@@ -76,14 +76,4 @@
           helper_mod            :: atom()
         }).
 
--type ts_requests() :: #tsputreq{} | #tsdelreq{} | #tsgetreq{} |
-                       #tslistkeysreq{} | #tsqueryreq{}.
--type ts_responses() :: #tsputresp{} | #tsdelresp{} | #tsgetresp{} |
-                        #tslistkeysresp{} | #tsqueryresp{} |
-                        #rpberrorresp{}.
--type ts_get_response() :: {tsgetresp, {list(binary()), list(atom()), list(list(term()))}}.
--type ts_query_response() :: {tsqueryresp, {list(binary()), list(atom()), list(list(term()))}}.
--type ts_query_responses() :: #tsqueryresp{} | ts_query_response().
--type ts_query_types() :: ?DDL{} | ?SQL_SELECT{} | #riak_sql_describe_v1{} |
-                          #riak_sql_insert_v1{}.
 -endif.
