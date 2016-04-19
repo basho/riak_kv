@@ -24,32 +24,6 @@
 -ifndef(RIAK_KV_TS_SVC_HRL).
 -define(RIAK_KV_TS_SVC_HRL, included).
 
-%% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
--define(E_SUBMIT,            1001).
--define(E_FETCH,             1002).
--define(E_IRREG,             1003).
--define(E_PUT,               1004).
--define(E_NOCREATE,          1005).   %% unused
--define(E_NOT_TS_TYPE,       1006).
--define(E_MISSING_TYPE,      1007).
--define(E_MISSING_TS_MODULE, 1008).
--define(E_DELETE,            1009).
--define(E_GET,               1010).
--define(E_BAD_KEY_LENGTH,    1011).
--define(E_LISTKEYS,          1012).
--define(E_TIMEOUT,           1013).
--define(E_CREATE,            1014).
--define(E_CREATED_INACTIVE,  1015).
--define(E_CREATED_GHOST,     1016).
--define(E_ACTIVATE,          1017).
--define(E_BAD_QUERY,         1018).
--define(E_TABLE_INACTIVE,    1019).
--define(E_PARSE_ERROR,       1020).
--define(E_NOTFOUND,          1021).
-
--define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
--define(TABLE_ACTIVATE_WAIT, 30). %% ditto
-
 -record(state, {
           req,
           req_ctx,
