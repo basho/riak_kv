@@ -151,8 +151,8 @@ stream_keys(ReqId, Table, Mod) ->
             {<<>>, done};
         {ReqId, {error, timeout}} ->
             {mochijson2:encode({struct, [{error, timeout}]}), done};
-        _Weird ->
-            %% @todo: should we log this?
+        Weird ->
+            lager:warning("Unexpected message while waiting for list_keys batch with ReqId ~p, Table ~s: ~p", [ReqId, Table, Weird]),
             stream_keys(ReqId, Table, Mod)
     end.
 
