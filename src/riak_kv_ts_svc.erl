@@ -478,8 +478,6 @@ find_hash_fn([_H|T]) ->
 
 compile(_Mod, {error, Err}) ->
     {error, make_decoder_error_response(Err)};
-compile(_Mod, {'EXIT', {Err, _}}) ->
-    {error, make_decoder_error_response(Err)};
 compile(Mod, {ok, ?SQL_SELECT{}=SQL}) ->
     case (catch Mod:get_ddl()) of
         {_, {undef, _}} ->
