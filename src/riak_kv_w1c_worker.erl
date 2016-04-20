@@ -359,7 +359,7 @@ validate_options(NVal, Preflist, Options, BucketProps) ->
             {ok, W, PW}
     end.
 
-send_vnodes(Preflist, Proxies, Bucket, {_PK, LK}, EncodedVal, ReqId) ->
+send_vnodes(Preflist, Proxies, Bucket, {_PK, LK}, EncodedVal, ReqId) when is_tuple(LK) ->
     send_vnodes(Preflist, Proxies, Bucket, LK, EncodedVal, ReqId);
 send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
