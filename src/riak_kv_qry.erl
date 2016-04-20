@@ -197,9 +197,9 @@ do_describe(?DDL{fields = FieldSpecs,
     ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
     ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
     Rows =
-        [{Name, list_to_binary(atom_to_list(Type)), Nullable,
+        [[Name, list_to_binary(atom_to_list(Type)), Nullable,
           column_pk_position_or_blank(Name, PKSpec),
-          column_lk_position_or_blank(Name, LKSpec)}
+          column_lk_position_or_blank(Name, LKSpec)]
          || #riak_field_v1{name = Name,
                            type = Type,
                            optional = Nullable} <- FieldSpecs],
@@ -299,11 +299,11 @@ describe_table_columns_test() ->
     Res = do_describe(DDL),
     ?assertMatch(
        {ok, {_, _,
-             [{<<"f">>, <<"varchar">>,   false, 1,  1},
-              {<<"s">>, <<"varchar">>,   false, 2,  2},
-              {<<"t">>, <<"timestamp">>, false, 3,  3},
-              {<<"w">>, <<"sint64">>, false, [], []},
-              {<<"p">>, <<"double">>, true,  [], []}]}},
+             [[<<"f">>, <<"varchar">>,   false, 1,  1],
+              [<<"s">>, <<"varchar">>,   false, 2,  2],
+              [<<"t">>, <<"timestamp">>, false, 3,  3],
+              [<<"w">>, <<"sint64">>, false, [], []],
+              [<<"p">>, <<"double">>, true,  [], []]]}},
        Res).
 
 validate_make_insert_row_basic_test() ->
