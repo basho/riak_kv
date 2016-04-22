@@ -40,7 +40,7 @@
         {
           calc_type        = rows :: select_result_type(),
           initial_state    = []   :: [any()],
-          col_return_types = []   :: [riak_ql_ddl:field_type()],
+          col_return_types = []   :: [riak_ql_ddl:simple_field_type()],
           col_names        = []   :: [binary()],
           clause           = []   :: [riak_kv_qry_compiler:compiled_select()],
           finalisers       = []   :: [skip | function()]

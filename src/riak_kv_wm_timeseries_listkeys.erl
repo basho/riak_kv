@@ -132,10 +132,7 @@ content_types_provided(RD, Ctx) ->
 produce_doc_body(RD, Ctx = #ctx{table = Table, mod = Mod}) ->
     {ok, ReqId} = riak_client:stream_list_keys(
                     {Table, Table}, undefined, {riak_client, [node(), undefined]}),
-    {{halt, 200}, wrq:set_resp_body({stream, prepare_stream(ReqId, Table, Mod)}, RD), Ctx}.
-
-prepare_stream(ReqId, Table, Mod) ->
-    {<<"">>, fun() -> stream_keys(ReqId, Table, Mod) end}.
+    {{stream, {[], fun() -> stream_keys(ReqId, Table, Mod) end}}, RD, Ctx}.
 
 stream_keys(ReqId, Table, Mod) ->
     receive
@@ -151,17 +148,16 @@ stream_keys(ReqId, Table, Mod) ->
         {ReqId, {keys, Keys}} ->
             {ts_keys_to_body(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, done} ->
-            {<<"">>, done};
+            {<<>>, done};
         {ReqId, {error, timeout}} ->
             {mochijson2:encode({struct, [{error, timeout}]}), done};
-        _Weird ->
-            %% @todo: should we log this?
+        Weird ->
+            lager:warning("Unexpected message while waiting for list_keys batch with ReqId ~p, Table ~s: ~p", [ReqId, Table, Weird]),
             stream_keys(ReqId, Table, Mod)
     end.
 
-ts_keys_to_body(EncodedKeys, Table, Mod) ->
+ts_keys_to_body(Keys, Table, Mod) ->
     BaseUrl = base_url(Table),
-    Keys = decode_keys(EncodedKeys),
     KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
     %% Dialyzer issues this warning if the lists:map is replaced with
     %% the list comprehension (below):
@@ -171,19 +167,19 @@ ts_keys_to_body(EncodedKeys, Table, Mod) ->
     %% URLs = [format_url(BaseUrl, KeyTypes, Key)
     %%         || Key <- Keys],
 
-    URLs = lists:map(fun(Key) ->
-                             format_url(BaseUrl, KeyTypes, Key)
-                     end,
-                     Keys),
+    URLs =
+        lists:map(
+          fun(Key) when is_tuple(Key) ->  %% simple single-field keys like {1}, seen in the wild
+                  format_url(BaseUrl, KeyTypes, tuple_to_list(Key));
+             (Key) when is_binary(Key) -> %% sext-encoded ones
+                  format_url(BaseUrl, KeyTypes, tuple_to_list(sext:decode(Key)))
+          end,
+          Keys),
     iolist_to_binary(URLs).
 
 
 format_url(BaseUrl, KeyTypes, Key) ->
     iolist_to_binary([BaseUrl, key_to_string(lists:zip(Key, KeyTypes)), $\n]).
-
-decode_keys(Keys) ->
-    [tuple_to_list(sext:decode(A))
-     || A <- Keys, A /= []].
 
 key_to_string(KFTypes) ->
     string:join(
@@ -195,9 +191,6 @@ value_to_url_string(V, varchar) ->
     binary_to_list(V);
 value_to_url_string(V, sint64) ->
     integer_to_list(V);
-value_to_url_string(V, double) ->
-    %% float_to_list(V);  %% this would give "1.19999999999999995559e+00" for 1.2
-    lists:flatten(io_lib:format("~g", [V]));
 value_to_url_string(V, timestamp) ->
     integer_to_list(V).
 

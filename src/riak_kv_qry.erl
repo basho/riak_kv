@@ -42,12 +42,12 @@
         #riak_sql_describe_v1{} |
         #riak_sql_insert_v1{}.
 
--export_type([query_type/0, sql_query_type_record/0]).
-
 -type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
                                  [riak_pb_ts_codec:tscolumntype()],
                                  [list(riak_pb_ts_codec:ldbvalue())]}.
 
+-export_type([query_type/0, sql_query_type_record/0,
+              query_tabular_result/0]).
 
 %% No coverage plan for parallel requests
 -spec submit(string() | sql_query_type_record(), ?DDL{}) ->
@@ -111,8 +111,7 @@ insert_putreqs(Mod, Table, Data) ->
                     {error, OtherReason}
             end;
         BadRowIdxs when is_list(BadRowIdxs) ->
-            BadRowsString = string:join(BadRowIdxs,", "),
-            {error, io_lib:format("Invalid data at row index(es) ~s", [BadRowsString])}
+            {error, {invalid_data, BadRowIdxs}}
     end.
 
 %%
@@ -145,9 +144,7 @@ lookup_field_positions(Mod, FieldIdentifiers) ->
         {Positions, []} ->
             {ok, lists:reverse(Positions)};
         {_, Errors} ->
-            {error, io_lib:format(
-                      "undefined fields: ~s",
-                      [string:join(lists:reverse(Errors), ", ")])}
+            {error, {undefined_fields, Errors}}
     end.
 
 %%
@@ -164,7 +161,7 @@ xlate_insert_to_putdata(Values, Positions, Empty) ->
                      {ok, Row} ->
                          {[Row | Good], Bad, RowNum + 1};
                      {error, _Reason} ->
-                         {Good, [integer_to_list(RowNum) | Bad], RowNum + 1}
+                         {Good, [RowNum | Bad], RowNum + 1}
                  end
              end,
     Converted = lists:foldl(ConvFn, {[], [], 1}, Values),
@@ -172,10 +169,7 @@ xlate_insert_to_putdata(Values, Positions, Empty) ->
         {PutData, [], _} ->
             {ok, lists:reverse(PutData)};
         {_, Errors, _} ->
-            {error, lists:flatten(
-                      io_lib:format(
-                        "too many values in row index(es) ~s",
-                        [string:join(lists:reverse(Errors), ", ")]))}
+            {error, {too_many_insert_values, lists:reverse(Errors)}}
     end.
 
 -spec make_insert_row([] | [riak_ql_ddl:data_value()], [] | [pos_integer()], tuple()) ->
@@ -186,7 +180,7 @@ make_insert_row([], _Positions, Row) when is_tuple(Row) ->
     {ok, Row};
 make_insert_row(_, [], Row) when is_tuple(Row) ->
     %% Too many values for the field
-    {error, "too many values"};
+    {error, too_many_values};
 %% Make sure the types match
 make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(Row) ->
     make_insert_row(Values, Positions, setelement(Pos, Row, Val)).
@@ -195,46 +189,51 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
 %% DESCRIBE
 
 -spec do_describe(?DDL{}) ->
-        {ok, [[binary() | boolean() | integer() | undefined]]}.
-do_describe(?DDL{ fields = FieldSpecs } = DDL) ->
-    Cols = [describe_table_column(DDL, F) || F <- FieldSpecs],
-    {ok, Cols}.
+                         {ok, query_tabular_result()} | {error, term()}.
+do_describe(?DDL{fields = FieldSpecs,
+                 partition_key = #key_v1{ast = PKSpec},
+                 local_key     = #key_v1{ast = LKSpec}}) ->
+    ColumnNames =
+        [<<"Column">>,<<"Type">>,<<"Is Null">>,<<"Primary Key">>,<<"Local Key">>, <<"Order">>],
+    ColumnTypes =
+        [varchar, varchar, boolean, sint64, sint64 , varchar],
+    Rows =
+        [[Name, list_to_binary(atom_to_list(Type)), Nullable,
+          column_pk_position_or_blank(Name, PKSpec),
+          column_lk_position_or_blank(Name, LKSpec),
+          describe_field_order(Name, LKSpec)]
+         || #riak_field_v1{name = Name,
+                           type = Type,
+                           optional = Nullable} <- FieldSpecs],
+    {ok, {ColumnNames, ColumnTypes, Rows}}.
 
-describe_table_column(#ddl_v1{ partition_key = #key_v1{ast = PKSpec},
-                               local_key     = #key_v1{ast = LKSpec}},
-                      #riak_field_v1{ name = Name,
-                                      type = Type,
-                                      optional = Nullable}) ->
+%%
+describe_field_order(Name, LKSpec) when is_binary(Name) ->
     case lists:keyfind([Name], #param_v1.name, LKSpec) of
         #param_v1{ ordering = descending } ->
-            Ordering = <<"DESC">>;
+            <<"DESC">>;
         #param_v1{ ordering = ParamOrder } when ParamOrder == ascending;
                                                 ParamOrder == undefined ->
-            Ordering = <<"ASC">>;
+            <<"ASC">>;
         false ->
-
-            Ordering = <<" - ">>
-    end,
-    [Name, 
-     list_to_binary(atom_to_list(Type)),
-     Nullable,
-     column_pk_position_or_blank(Name, PKSpec),
-     column_lk_position_or_blank(Name, LKSpec),
-     Ordering].
+            %% NULL if the field is not in the local
+            %% key because it canot affect the order
+            []
+    end.
 
 %% the following two functions are identical, for the way fields and
 %% keys are represented as of 2015-12-18; duplication here is a hint
 %% of things to come.
--spec column_pk_position_or_blank(binary(), [#param_v1{}]) -> integer() | undefined.
+-spec column_pk_position_or_blank(binary(), [#param_v1{}]) -> integer() | [].
 column_pk_position_or_blank(Col, KSpec) ->
     count_to_position(Col, KSpec, 1).
 
--spec column_lk_position_or_blank(binary(), [#param_v1{}]) -> integer() | undefined.
+-spec column_lk_position_or_blank(binary(), [#param_v1{}]) -> integer() | [].
 column_lk_position_or_blank(Col, KSpec) ->
     count_to_position(Col, KSpec, 1).
 
 count_to_position(_, [], _) ->
-    undefined;
+    [];
 count_to_position(Col, [#param_v1{name = [Col]} | _], Pos) ->
     Pos;
 count_to_position(Col, [#hash_fn_v1{args = [#param_v1{name = [Col]} | _]} | _], Pos) ->
@@ -312,14 +311,15 @@ describe_table_columns_test() ->
             " p double,"
             " PRIMARY KEY ((f, s, quantum(t, 15, m)), "
             " f, s, t))")),
-    {ok, Rows} = do_describe(DDL),
-    ?assertEqual(
-       [[<<"f">>, <<"varchar">>,   false, 1,  1, <<"ASC">>],
-        [<<"s">>, <<"varchar">>,   false, 2,  2, <<"ASC">>],
-        [<<"t">>, <<"timestamp">>, false, 3,  3, <<"ASC">>],
-        [<<"w">>, <<"sint64">>, false, undefined, undefined, <<" - ">>],
-        [<<"p">>, <<"double">>, true,  undefined, undefined, <<" - ">>]],
-       Rows).
+    Res = do_describe(DDL),
+    ?assertMatch(
+       {ok, {_, _,
+             [[<<"f">>, <<"varchar">>,   false, 1,  1, <<"ASC">>],
+              [<<"s">>, <<"varchar">>,   false, 2,  2, <<"ASC">>],
+              [<<"t">>, <<"timestamp">>, false, 3,  3, <<"ASC">>],
+              [<<"w">>, <<"sint64">>,    false, [], [], []],
+              [<<"p">>, <<"double">>,    true,  [], [], []]]}},
+       Res).
 
 validate_make_insert_row_basic_test() ->
     Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
@@ -337,7 +337,7 @@ validate_make_insert_row_too_many_test() ->
     Row = {undefined, undefined, undefined},
     Result = make_insert_row(Data, Positions, Row),
     ?assertEqual(
-        {error, "too many values"},
+        {error, too_many_values},
         Result
     ).
 
@@ -361,7 +361,7 @@ validate_xlate_insert_to_putdata_too_many_values_test() ->
     Positions = [3, 1, 2, 4],
     Result = xlate_insert_to_putdata(Values, Positions, Empty),
     ?assertEqual(
-        {error,"too many values in row index(es) 1"},
+        {error,{too_many_insert_values, [1]}},
         Result
     ).
 

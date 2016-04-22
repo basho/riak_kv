@@ -624,7 +624,7 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
             %% the end_inclusive flag because the end key is not used to hash
             make_wheres(Where2, QField, Min2, Max1, Boundaries);
         NoSubQueries > MaxSubQueries ->
-            {error, {too_many_subqueries, NoSubQueries}}
+            {error, {too_many_subqueries, ?E_TOO_MANY_SUBQUERIES(NoSubQueries)}}
     end.
 
 make_wheres(Where, QField, Min, Max, Boundaries) when Min > Max ->

@@ -63,6 +63,7 @@
                        #tslistkeysreq{} | #tsqueryreq{}.
 -type ts_responses() :: #tsputresp{} | #tsdelresp{} | #tsgetresp{} |
                         #tslistkeysresp{} | #tsqueryresp{} |
+                        #tscoverageresp{} |
                         #rpberrorresp{}.
 -type ts_get_response() :: {tsgetresp, {list(binary()), list(atom()), list(list(term()))}}.
 -type ts_query_response() :: {tsqueryresp, {list(binary()), list(atom()), list(list(term()))}}.
@@ -76,6 +77,8 @@ decode_query_common(Q, Cover) ->
     case decode_query(Q, Cover) of
         {QueryType, {ok, Query}} ->
             {ok, Query, decode_query_permissions(QueryType, Query)};
+        {_QueryType, {error, Error}} ->
+            {ok, make_decoder_error_response(Error)};
         {error, Error} ->
             %% convert error returns to ok's, this means it will be passed into
             %% process which will not process it and return the error.
@@ -178,7 +181,7 @@ process_stream({ReqId, Error}, ReqId,
 %% check_table_and_call
 
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
-                          {reply, #tsqueryresp{} | #rpberrorresp{}, #state{}}.
+                          {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
 create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(
                      DDL, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
@@ -212,8 +215,7 @@ wait_until_active(Table, State, 0) ->
 wait_until_active(Table, State, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
-            {reply, make_tsqueryresp(
-                      riak_kv_qry:empty_result()), State};
+            {reply, tsqueryresp, State};
         {error, not_ready} ->
             timer:sleep(1000),
             wait_until_active(Table, State, Seconds - 1);
@@ -237,7 +239,7 @@ wait_until_active(Table, State, Seconds) ->
 %% -----------
 
 %% NB: since this method deals with PB and TTB messages, the message must be fully
-%% decoded before sub_tsqueryreq is called
+%% decoded before sub_tsputreq is called
 sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
              State) ->
     case riak_kv_ts_util:validate_rows(Mod, Rows) of
@@ -252,7 +254,7 @@ sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
                 {error, OtherReason} ->
                     {reply, make_rpberrresp(?E_PUT, to_string(OtherReason)), State}
             end;
-        BadRowIdxs when is_list(BadRowIdxs) ->
+        BadRowIdxs ->
             {reply, make_validate_rows_error_resp(BadRowIdxs), State}
     end.
 
@@ -262,7 +264,7 @@ sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
 %% -----------
 
 %% NB: since this method deals with PB and TTB messages, the message must be fully
-%% decoded before sub_tsqueryreq is called
+%% decoded before sub_tsgetreq is called
 sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
                                   key    = CompoundKey,
                                   timeout = Timeout},
@@ -281,13 +283,13 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
             %% the columns stored in riak_object are just
             %% names; we need names with types, so:
             ColumnTypes = riak_kv_ts_util:get_column_types(ColumnNames, Mod),
-            {reply, make_tsgetresp(ColumnNames, ColumnTypes, [Row]), State};
+            {reply, make_tsgetresp(ColumnNames, ColumnTypes, [list_to_tuple(Row)]), State};
         {error, no_type} ->
             {reply, make_table_not_activated_resp(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, make_key_element_count_mismatch_resp(Got, Need), State};
         {error, notfound} ->
-            {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
+            {reply, make_tsgetresp([], [], []), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_GET, to_string(Reason)), State}
     end.
@@ -361,51 +363,16 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
             case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
                 {ok, Compiled} ->
                     Bucket = riak_kv_ts_util:table_to_bucket(Table),
-                    convert_cover_list(
-                      riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, []), State);
+                    {reply,
+                     {tscoverageresp, riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, [])},
+                     State};
                 {error, Reason} ->
-                    make_rpberrresp(
-                      ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason]))
+                    {reply, make_rpberrresp(
+                      ?E_BAD_QUERY, flat_format("Failed to compile query: ~p", [Reason])), State}
             end;
         {error, Reason} ->
-            {reply, make_rpberrresp(
-                      ?E_BAD_QUERY, flat_format("Failed to parse query: ~p", [Reason])),
-             State}
+            {reply, make_decoder_error_response(Reason), State}
     end.
-
-%% Copied and modified from riak_kv_pb_coverage:convert_list. Would
-%% be nice to collapse them back together, probably with a closure,
-%% but time and effort.
-convert_cover_list({error, Error}, State) ->
-    {error, Error, State};
-convert_cover_list(Results, State) ->
-    %% Pull hostnames & ports
-    %% Wrap each element of this list into a rpbcoverageentry
-    Resp = #tscoverageresp{
-              entries =
-                  [begin
-                       Node = proplists:get_value(node, Cover),
-                       {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
-                       #tscoverageentry{
-                          cover_context = riak_kv_pb_coverage:term_to_checksum_binary(
-                                            {Cover, Range}),
-                          ip = IP, port = Port,
-                          range = assemble_ts_range(Range, SQLtext)
-                         }
-                   end || {Cover, Range, SQLtext} <- Results]
-             },
-    {reply, Resp, State}.
-
-assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text) ->
-    #tsrange{
-       field_name = FieldName,
-       lower_bound = StartVal,
-       lower_bound_inclusive = StartIncl,
-       upper_bound = EndVal,
-       upper_bound_inclusive = EndIncl,
-       desc = Text
-      }.
-
 
 %% ----------
 %% query
@@ -417,8 +384,9 @@ assemble_ts_range({FieldName, {{StartVal, StartIncl}, {EndVal, EndIncl}}}, Text)
                      {reply, ts_query_responses() | #rpberrorresp{}, #state{}}.
 sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
     case riak_kv_ts_api:query(SQL, DDL) of
-        {ok, Data = {_ColNames, _ColTypes, _Rows}} ->
-            {reply, make_tsqueryresp(Data), State};
+        {ok, {ColNames, ColTypes, LdbNativeRows}} ->
+            Rows = [list_to_tuple(R) || R <- LdbNativeRows],
+            {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State};
 
         %% the following timeouts are known and distinguished:
         {error, no_type} ->
@@ -432,8 +400,24 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             %% response
             {reply, make_rpberrresp(?E_TIMEOUT, "backend timeout"), State};
 
+        %% this one comes from riak_kv_qry_worker
+        {error, divide_by_zero} ->
+            {reply, make_rpberrresp(?E_SUBMIT, "Divide by zero"), State};
+
+        %% from riak_kv_qry
+        {error, {invalid_data, BadRowIdxs}} ->
+            {reply, make_validate_rows_error_resp(BadRowIdxs), State};
+        {error, {too_many_insert_values, BadRowIdxs}} ->
+            {reply, make_too_many_insert_values_resp(BadRowIdxs), State};
+        {error, {undefined_fields, BadFields}} ->
+            {reply, make_undefined_field_in_insert_resp(BadFields), State};
+
+        %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
+        {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
+            {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
+
         {error, Reason} ->
-            {reply, make_rpberrresp(?E_SUBMIT, to_string(Reason)), State}
+            {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
     end.
 
 
@@ -471,7 +455,7 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
 -spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
 make_rpberrresp(Code, Message) ->
     #rpberrorresp{errcode = Code,
-                  errmsg = lists:flatten(Message)}.
+                  errmsg = iolist_to_binary(Message)}.
 
 %%
 -spec make_missing_helper_module_resp(Table::binary(),
@@ -512,12 +496,23 @@ make_key_element_count_mismatch_resp(Got, Need) ->
       ?E_BAD_KEY_LENGTH,
       flat_format("Key element count mismatch (key has ~b elements but ~b supplied)", [Need, Got])).
 
--spec make_validate_rows_error_resp([string()]) -> #rpberrorresp{}.
+-spec make_validate_rows_error_resp([integer()]) -> #rpberrorresp{}.
 make_validate_rows_error_resp(BadRowIdxs) ->
-    BadRowsString = string:join(BadRowIdxs,", "),
+    BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
     make_rpberrresp(
       ?E_IRREG,
       flat_format("Invalid data at row index(es) ~s", [BadRowsString])).
+
+make_too_many_insert_values_resp(BadRowIdxs) ->
+    BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
+    make_rpberrresp(
+      ?E_BAD_QUERY,
+      flat_format("too many values in row index(es) ~s", [BadRowsString])).
+
+make_undefined_field_in_insert_resp(BadFields) ->
+    make_rpberrresp(
+      ?E_BAD_QUERY,
+      flat_format("undefined fields: ~s", [string:join(BadFields, ", ")])).
 
 make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(
@@ -562,6 +557,18 @@ to_string(X) ->
 make_tsgetresp(ColumnNames, ColumnTypes, Rows) ->
     {tsgetresp, {ColumnNames, ColumnTypes, Rows}}.
 
+
+make_tsqueryresp({_ColumnNames, _ColumnTypes, []}) ->
+    %% tests (and probably docs, too) expect an empty result set to be
+    %% returned as {[], []} (with column names omitted). Before the
+    %% TTB merge, the columns info was dropped in
+    %% riak_kv_pb_ts:encode_response({reply, {tsqueryresp, Data}, _}).
+    %% Now, because the TTB encoder is dumb, leaving the special case
+    %% treatment in the PB-specific riak_kv_pb_ts lets empty query
+    %% results going through TTB still have the columns info, which is
+    %% not what the caller might expect. We ensure uniform {[], []}
+    %% for bot PB and TTB by preparing this term in advance, here.
+    {tsqueryresp, {[], [], []}};
 make_tsqueryresp(Data = {_ColumnNames, _ColumnTypes, _Rows}) ->
     {tsqueryresp, Data}.
 
@@ -575,7 +582,7 @@ make_decoder_error_response({Token, riak_ql_parser, _}) when is_binary(Token) ->
 make_decoder_error_response({Token, riak_ql_parser, _}) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("Unexpected token '~p'", [Token]));
 make_decoder_error_response(Error) ->
-    Error.
+    make_rpberrresp(?E_PARSE_ERROR, flat_format("~p", [Error])).
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
@@ -602,62 +609,6 @@ missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
         make_missing_helper_module_resp(<<"mytype">>, [{ddl, ?DDL{}}])
-    ).
-
-test_helper_validate_rows_mod() ->
-    {ddl, DDL, []} =
-        riak_ql_parser:ql_parse(
-          riak_ql_lexer:get_tokens(
-            "CREATE TABLE mytable ("
-            "family VARCHAR NOT NULL,"
-            "series VARCHAR NOT NULL,"
-            "time TIMESTAMP NOT NULL,"
-            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')),"
-            " family, series, time))")),
-    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
-
-validate_rows_empty_test() ->
-    {module, Mod} = test_helper_validate_rows_mod(),
-    ?assertEqual(
-        [],
-        riak_kv_ts_util:validate_rows(Mod, [])
-    ).
-
-validate_rows_1_test() ->
-    {module, Mod} = test_helper_validate_rows_mod(),
-    ?assertEqual(
-        [],
-        riak_kv_ts_util:validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
-    ).
-
-validate_rows_bad_1_test() ->
-    {module, Mod} = test_helper_validate_rows_mod(),
-    ?assertEqual(
-        ["1"],
-        riak_kv_ts_util:validate_rows(Mod, [{}])
-    ).
-
-validate_rows_bad_2_test() ->
-    {module, Mod} = test_helper_validate_rows_mod(),
-    ?assertEqual(
-        ["1", "3", "4"],
-        riak_kv_ts_util:validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
-    ).
-
-validate_rows_error_response_1_test() ->
-    Msg = "Invalid data at row index(es) ",
-    ?assertEqual(
-        #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = Msg ++ "1" },
-        make_validate_rows_error_resp(["1"])
-    ).
-
-validate_rows_error_response_2_test() ->
-    Msg = "Invalid data at row index(es) ",
-    ?assertEqual(
-        #rpberrorresp{errcode = ?E_IRREG,
-                      errmsg = Msg ++ "1, 2, 3" },
-        make_validate_rows_error_resp(["1", "2", "3"])
     ).
 
 -endif.

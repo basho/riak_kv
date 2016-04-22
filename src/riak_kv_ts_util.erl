@@ -35,7 +35,6 @@
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
-         responsible_row_preflists/2,
          sql_record_to_tuple/1,
          sql_to_cover/4,
          table_to_bucket/1,
@@ -280,22 +279,6 @@ make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKParams},
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
 
-%%
-% -spec responsible_row_preflists(binary(), [term()], riak_core_ring()) ->
-%         [index_n()].
-responsible_row_preflists(Table, Row) when is_binary(Table), is_list(Row) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    Key = row_to_key(Row, Mod:get_ddl(), Mod),
-    Bucket = table_to_bucket(Table),
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    <<Index:160/integer>>  = riak_core_util:chash_key({Bucket, Key}, BucketProps),
-    riak_kv_util:responsible_preflists(Index).
-
-%%
-row_to_key(Row, DDL, Mod) ->
-    riak_kv_ts_util:encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, list_to_tuple(Row), Mod)).
-
 %% Print the query explanation to the shell.
 explain_query_print(QueryString) ->
     explain_query_print2(1, explain_query(QueryString)).
@@ -381,14 +364,14 @@ varchar_quotes(V) ->
     <<"'", V/binary, "'">>.
 
 %% Give validate_rows/2 a DDL Module and a list of decoded rows,
-%% and it will return a list of strings that represent the invalid rows indexes.
--spec validate_rows(module(), list(tuple())) -> list(string()).
+%% and it will return a list of invalid rows indexes.
+-spec validate_rows(module(), list(tuple())) -> [integer()].
 validate_rows(Mod, Rows) ->
     ValidateFn =
-        fun(Row, {Acc, BadRowIdxs}) when is_tuple(Row) ->
+        fun(Row, {N, Acc}) ->
                 case Mod:validate_obj(Row) of
-                    true -> {Acc+1, BadRowIdxs};
-                    _ -> {Acc+1, [integer_to_list(Acc) | BadRowIdxs]}
+                    true -> {N + 1, Acc};
+                    _    -> {N + 1, [N|Acc]}
                 end
         end,
     {_, BadRowIdxs} = lists:foldl(ValidateFn, {1, []}, Rows),
@@ -414,9 +397,12 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
         {error, Error} ->
             {error, Error};
         [Cover] ->
-            {Description, RangeReplacement} = reverse_sql(SQL),
-            sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
-                                                 Description}|Accum])
+            {Description, SubRange} = reverse_sql(SQL),
+            Node = proplists:get_value(node, Cover),
+            {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
+            Context = riak_kv_pb_coverage:term_to_checksum_binary({Cover, SubRange}),
+            Entry = {{IP, Port}, Context, SubRange, Description},
+            sql_to_cover(Client, Tail, Bucket, [Entry|Accum])
     end.
 
 
@@ -540,6 +526,46 @@ make_ts_keys_4_test() ->
     ?assertEqual(
         {ok, {{10,20,0}, {10,20,1}}},
         make_ts_keys([10,20,1], DDL, Mod)
+    ).
+
+test_helper_validate_rows_mod() ->
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
+          riak_ql_lexer:get_tokens(
+            "CREATE TABLE mytable ("
+            "family VARCHAR NOT NULL,"
+            "series VARCHAR NOT NULL,"
+            "time TIMESTAMP NOT NULL,"
+            "PRIMARY KEY ((family, series, quantum(time, 1, 'm')),"
+            " family, series, time))")),
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
+
+validate_rows_empty_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [])
+    ).
+
+validate_rows_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [],
+        validate_rows(Mod, [{<<"f">>, <<"s">>, 11}])
+    ).
+
+validate_rows_bad_1_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [1],
+        validate_rows(Mod, [{}])
+    ).
+
+validate_rows_bad_2_test() ->
+    {module, Mod} = test_helper_validate_rows_mod(),
+    ?assertEqual(
+        [1, 3, 4],
+        validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
     ).
 
 -endif.
