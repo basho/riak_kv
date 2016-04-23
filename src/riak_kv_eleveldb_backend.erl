@@ -1059,12 +1059,17 @@ orig_from_object_key(LKey) ->
 %% so that the key in the riak object structure will be a binary on decode.
 %% All support tooling/usual methods for visiting objects should still work.
 %%
+%% 2016-04-23 @hmmr:
+%% Because flexible keys work by @andytill has lifted the 3-field
+%% restriction on TS keys, we should, correspondingly, allow the 5th
+%% byte of the binary (which is the number of elements in the encoded
+%% tuple) to be any number.
 from_object_key(<<16,0,0,0,3, %% 3-tuple - outer
                   12,183,128,8, %% o-atom
-                  Rest/binary>>=Bin) ->
+                  Rest/binary>> = Bin) ->
     {Bucket, Rest1} = sext:decode_next(Rest), % grabs the two-tuple of bucket type/name
     case Rest1 of
-        <<16,0,0,0,3,_TSKeyElements/binary>> = TSKey ->
+        <<16,0,0,0,_NTupleElements,_TSKeyElements/binary>> = TSKey ->
             {Bucket, TSKey}; % small risk not checking for junk at the end of the TSKeyElements
         _ ->
             case catch sext:decode_next(Rest1) of
