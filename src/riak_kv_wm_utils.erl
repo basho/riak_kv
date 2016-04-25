@@ -355,6 +355,8 @@ jsonify_bucket_prop({search_extractor, {M, F, Arg}}) ->
                               {?JSON_ARG, Arg}]}};
 jsonify_bucket_prop({name, {_T, B}}) ->
     {<<"name">>, B};
+jsonify_bucket_prop({ddl, _DDL}) ->
+    {<<"ddl">>, <<"riak_ql_to_string:sql_to_string might be useful here.">>};
 jsonify_bucket_prop({Prop, Value}) ->
     {atom_to_binary(Prop, utf8), Value}.
 

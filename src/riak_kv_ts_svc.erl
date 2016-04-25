@@ -384,8 +384,9 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                      {reply, ts_query_responses() | #rpberrorresp{}, #state{}}.
 sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
     case riak_kv_ts_api:query(SQL, DDL) of
-        {ok, Data} ->
-            {reply, make_tsqueryresp(Data), State};
+        {ok, {ColNames, ColTypes, LdbNativeRows}} ->
+            Rows = [list_to_tuple(R) || R <- LdbNativeRows],
+            {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State};
 
         %% the following timeouts are known and distinguished:
         {error, no_type} ->

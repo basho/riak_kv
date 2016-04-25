@@ -2,7 +2,7 @@
 %%
 %% riak_kv_web: setup Riak's KV HTTP interface
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -121,7 +121,17 @@ raw_dispatch(Name) ->
      {Prefix ++ ["buckets", bucket, "index", field, '*'],
       riak_kv_wm_index, Props}
 
-    ] || {Prefix, Props} <- Props2 ]).
+    ] || {Prefix, Props} <- Props2 ]) ++
+
+    lists:flatten(
+      [
+       %% Right now we only have version 1. When we get version 2 we have to
+       %% decide if we want to dispatch to separate resource modules or handle
+       %% the different versions inside the same resource handler module.
+       [{["ts", api_version, "tables", table, "list_keys"], riak_kv_wm_timeseries_listkeys, Props},
+        {["ts", api_version, "tables", table, "keys", '*'], riak_kv_wm_timeseries, Props},
+        {["ts", api_version, "query"], riak_kv_wm_timeseries_query, Props}
+       ] || {_Prefix, Props} <- Props2]).
 
 is_post(Req) ->
     wrq:method(Req) == 'POST'.
