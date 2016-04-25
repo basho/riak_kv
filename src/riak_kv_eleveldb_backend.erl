@@ -1059,7 +1059,6 @@ orig_from_object_key(LKey) ->
 %% so that the key in the riak object structure will be a binary on decode.
 %% All support tooling/usual methods for visiting objects should still work.
 %%
-%% 2016-04-23 @hmmr:
 %% Because flexible keys work by @andytill has lifted the 3-field
 %% restriction on TS keys, we should, correspondingly, allow the 5th
 %% byte of the binary (which is the number of elements in the encoded
@@ -1215,6 +1214,41 @@ retry_fail() ->
         application:unset_env(riak_kv, eleveldb_open_retries),
         application:unset_env(riak_kv, eleveldb_open_retry_delay)
     end.
+
+to_from_object_1elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_3elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1, 2, <<"three">>}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_4elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1, <<"two">>, <<"III">>, 3+1}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+
+to_from_object_nonts1_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, <<"two">>},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+%% the rest nonts keys are impossible (KV uses only binaries); they
+%% are here purely to check they are not mistaken for TS keys:
+to_from_object_nonts2_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, "two"},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_nonts3_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, 2},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_nonts4_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, [2]},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
 
 
 -ifdef(EQC).
