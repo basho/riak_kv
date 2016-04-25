@@ -46,7 +46,6 @@
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
--export([get_hooks/2, get_hooks/3]).
 
 -type detail_info() :: timing.
 -type detail() :: true |
