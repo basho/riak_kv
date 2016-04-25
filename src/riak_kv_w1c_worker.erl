@@ -87,25 +87,36 @@ put(RObj0, Options) ->
             NVal = proplists:get_value(n_val, BucketProps),
             {RObj, Key, EncodeFn} =
                 kv_or_ts_details(RObj0, riak_object:get_ts_local_key(RObj0)),
-            DocIdx = chash_key(Bucket, Key, BucketProps),
+            PartitionIdx = chash_key(Bucket, Key, BucketProps),
             Preflist =
                 case proplists:get_value(sloppy_quorum, Options, true) of
                     true ->
                         UpNodes = riak_core_node_watcher:nodes(riak_kv),
-                        riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes);
+                        riak_core_apl:get_apl_ann(PartitionIdx, NVal, UpNodes);
                     false ->
-                        riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv)
+                        riak_core_apl:get_primary_apl(PartitionIdx, NVal, riak_kv)
                 end,
 
             case validate_options(NVal, Preflist, Options, BucketProps) of
                 {ok, W, PW} ->
                     synchronize_put(
                       async_put(
-                        RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist), Options);
+                        RObj, W, PW, Bucket, NVal, choose_put_key(Key, PartitionIdx),
+                        EncodeFn, Preflist),
+                      Options);
                 Error ->
                     Error
             end
     end.
+
+%% `put/2' is invoked for timeseries data only when placing a
+%% tombstone. In such a case, we need to replace the usual
+%% {PartitionKey, LocalKey} tuple with {PartitionIndex, LocalKey} for
+%% `async_put'
+choose_put_key({_PK, LK}, PartitionIdx) ->
+    {PartitionIdx, LK};
+choose_put_key(Key, _Idx) ->
+    Key.
 
 -spec async_put(RObj :: riak_object:riak_object(),
                 W :: pos_integer(),
