@@ -32,7 +32,8 @@
          get_data/2, get_data/3, get_data/4,
          delete_data/2, delete_data/3, delete_data/4, delete_data/5,
          query/2,
-         compile_to_per_quantum_queries/2  %% coverage
+	 row_to_key/3,
+         compile_to_per_quantum_queries/2,  %% coverage
          %% To reassemble the broken-up queries into coverage entries
          %% for returning to pb or http clients (each needing to
          %% convert and repackage entry details in their own way),

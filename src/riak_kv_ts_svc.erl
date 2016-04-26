@@ -340,7 +340,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 
     KeyConvFn =
         fun(Key) ->                
-                riak_kv_ts_svc:row_to_key(sext:decode(Key), DDL, Mod)
+                riak_kv_ts_api:row_to_key(sext:decode(Key), DDL, Mod)
         end,
 
     Result =
