@@ -73,8 +73,8 @@ build_filter(Bucket, ItemFilterInput, {_Hash, _Mask}=SubP, KeyConvFn) ->
             SubpartitionFun = build_subpartition_fun(Bucket, KeyConvFn),
             compose_sub_filter(SubP, SubpartitionFun);
         true -> % key and vnode filtering
-            SubpartitionFun = build_subpartition_fun(Bucket),
-            compose_sub_filter(SubP, SubpartitionFun, ItemFilter, KeyConvFn)
+            SubpartitionFun = build_subpartition_fun(Bucket, KeyConvFn),
+            compose_sub_filter(SubP, SubpartitionFun, ItemFilter)
     end;
 build_filter(Bucket, ItemFilterInput, FilterVNode, KeyConvFn) ->
     ItemFilter = build_item_filter(ItemFilterInput),
