@@ -134,7 +134,9 @@ newts(B, K, V, MD) ->
 is_ts(RObj) ->
     check_for_ddl(get_contents(RObj)).
 
-check_for_ddl([{Metadata, _V}]) ->
+%% Presence or absence of ddl in the metadata for the head object
+%% is sufficient. Shouldn't have siblings for TS ordinarily anyway.
+check_for_ddl([{Metadata, _V}|_Tail]) ->
     case dict:find(<<"ddl">>, Metadata) of
         {ok, Version} ->
             {true, Version};
