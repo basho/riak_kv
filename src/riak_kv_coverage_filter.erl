@@ -30,7 +30,7 @@
 -module(riak_kv_coverage_filter).
 
 %% API
--export([build_filter/1, build_filter/3]).
+-export([build_filter/1, build_filter/3, build_filter/4]).
 
 -export_type([filter/0]).
 
@@ -60,19 +60,23 @@
 build_filter(Filter) ->
     build_item_filter(Filter).
 
-
 -spec build_filter(bucket(), filter(), [index()]|subpartition()) -> filter().
-build_filter(Bucket, ItemFilterInput, {_Hash, _Mask}=SubP) ->
+build_filter(Bucket, ItemFilterInput, FilterVNode) ->
+    KeyConvFn = fun(StorageKey) -> StorageKey end,
+    build_filter(Bucket, ItemFilterInput, FilterVNode, KeyConvFn).
+
+-spec build_filter(bucket(), filter(), [index()]|subpartition(), function()) -> filter().
+build_filter(Bucket, ItemFilterInput, {_Hash, _Mask}=SubP, KeyConvFn) ->
     ItemFilter = build_item_filter(ItemFilterInput),
     if
         (ItemFilter == none) -> % only subpartition filtering required
-            SubpartitionFun = build_subpartition_fun(Bucket),
+            SubpartitionFun = build_subpartition_fun(Bucket, KeyConvFn),
             compose_sub_filter(SubP, SubpartitionFun);
         true -> % key and vnode filtering
             SubpartitionFun = build_subpartition_fun(Bucket),
-            compose_sub_filter(SubP, SubpartitionFun, ItemFilter)
+            compose_sub_filter(SubP, SubpartitionFun, ItemFilter, KeyConvFn)
     end;
-build_filter(Bucket, ItemFilterInput, FilterVNode) ->
+build_filter(Bucket, ItemFilterInput, FilterVNode, KeyConvFn) ->
     ItemFilter = build_item_filter(ItemFilterInput),
 
     if
@@ -84,12 +88,12 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
             ItemFilter;
         (ItemFilter == none) -> % only vnode filtering required
             {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
-            PrefListFun = build_preflist_fun(Bucket, CHBin),
+            PrefListFun = build_preflist_fun(Bucket, CHBin, KeyConvFn),
             %% Create a VNode filter
             compose_filter(FilterVNode, PrefListFun);
         true -> % key and vnode filtering
             {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
-            PrefListFun = build_preflist_fun(Bucket, CHBin),
+            PrefListFun = build_preflist_fun(Bucket, CHBin, KeyConvFn),
             %% Create a filter for the VNode
             compose_filter(FilterVNode, PrefListFun, ItemFilter)
     end.
@@ -150,26 +154,26 @@ build_item_filter(FilterInput) ->
 
 
 %% @private
-build_preflist_fun(Bucket, CHBin) ->
+build_preflist_fun(Bucket, CHBin, KeyConvFn) ->
     fun({o, Key, _Value}) -> %% $ index return_body
-            ChashKey = riak_core_util:chash_key({Bucket, Key}),
+            ChashKey = riak_core_util:chash_key({Bucket, KeyConvFn(Key)}),
             chashbin:responsible_index(ChashKey, CHBin);
        ({_Value, Key}) ->
-            ChashKey = riak_core_util:chash_key({Bucket, Key}),
+            ChashKey = riak_core_util:chash_key({Bucket, KeyConvFn(Key)}),
             chashbin:responsible_index(ChashKey, CHBin);
        (Key) ->
-            ChashKey = riak_core_util:chash_key({Bucket, Key}),
+            ChashKey = riak_core_util:chash_key({Bucket, KeyConvFn(Key)}),
             chashbin:responsible_index(ChashKey, CHBin)
     end.
 
 %% @private
-build_subpartition_fun(Bucket) ->
+build_subpartition_fun(Bucket, KeyConvFn) ->
     fun({o, Key, _Value}) -> %% $ index return_body
-            riak_core_util:chash_key({Bucket, Key});
+            riak_core_util:chash_key({Bucket, KeyConvFn(Key)});
        ({_Value, Key}) ->
-            riak_core_util:chash_key({Bucket, Key});
+            riak_core_util:chash_key({Bucket, KeyConvFn(Key)});
        (Key) ->
-            riak_core_util:chash_key({Bucket, Key})
+            riak_core_util:chash_key({Bucket, KeyConvFn(Key)})
     end.
 
 
