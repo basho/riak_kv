@@ -119,9 +119,9 @@ create_plan(Target, NVal, PVC, ReqId, Service, Request, KeyConvFn) ->
     CoveragePlan = riak_core_coverage_plan:create_plan(Target, NVal, PVC, ReqId, Service, Request),
     case CoveragePlan of
         {error, Reason} ->
-	    {error, Reason};
-	{CoverageVNodes, FilterVNodes} ->
-	    {CoverageVNodes, [{key_conv_fn, KeyConvFn} | FilterVNodes]}
+            {error, Reason};
+        {CoverageVNodes, FilterVNodes} ->
+            {CoverageVNodes, [{key_conv_fn, KeyConvFn} | FilterVNodes]}
     end.
 
 process_results({From, Bucket, Keys},

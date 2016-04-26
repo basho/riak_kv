@@ -702,7 +702,7 @@ stream_list_keys(Input, Timeout, KeyConvFn, Client, {?MODULE, [Node, _ClientId]}
                                                          [Bucket,
                                                           FilterExprs,
                                                           Timeout,
-							  KeyConvFn]]),
+                                                          KeyConvFn]]),
                     {ok, ReqId}
             end;
         Bucket ->
@@ -711,7 +711,7 @@ stream_list_keys(Input, Timeout, KeyConvFn, Client, {?MODULE, [Node, _ClientId]}
                                                  [Bucket,
                                                   none,
                                                   Timeout,
-						  KeyConvFn]]),
+                                                  KeyConvFn]]),
             {ok, ReqId}
     end.
 
