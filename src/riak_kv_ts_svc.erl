@@ -333,15 +333,23 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                                            timeout = Timeout} = Req,
                   State) ->
 
-    %% A function to convert from TS local key to TS partition key.
+    %% Construct a function to convert from TS local key to TS
+    %% partition key.
+    %%
     %% This is needed because coverage filter functions must check the
     %% hash of the partition key, not the local key, when folding over
     %% keys in the backend.
 
-    KeyConvFn =
-        fun(Key) ->                
-                riak_kv_ts_api:row_to_key(sext:decode(Key), DDL, Mod)
-        end,
+    KeyConvFn = 
+	fun(Key) when is_binary(Key) ->
+		riak_kv_ts_api:row_to_key(sext:decode(Key), DDL, Mod);
+	   (Key) ->
+		%% Key read from leveldb will always be binary.  This
+		%% clause is just to keep dialyzer quiet (dialyzer is
+		%% within his rights as we have no way to 'declare'
+		%% the type of Key)
+		Key
+	end,
 
     Result =
         riak_client:stream_list_keys(
@@ -357,7 +365,6 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
         {error, Reason} ->
             {reply, make_failed_listkeys_resp(Reason), State}
     end.
-
 
 %% -----------
 %% coverage
