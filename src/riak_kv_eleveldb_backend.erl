@@ -1059,12 +1059,16 @@ orig_from_object_key(LKey) ->
 %% so that the key in the riak object structure will be a binary on decode.
 %% All support tooling/usual methods for visiting objects should still work.
 %%
+%% Because flexible keys work by @andytill has lifted the 3-field
+%% restriction on TS keys, we should, correspondingly, allow the 5th
+%% byte of the binary (which is the number of elements in the encoded
+%% tuple) to be any number.
 from_object_key(<<16,0,0,0,3, %% 3-tuple - outer
                   12,183,128,8, %% o-atom
-                  Rest/binary>>=Bin) ->
+                  Rest/binary>> = Bin) ->
     {Bucket, Rest1} = sext:decode_next(Rest), % grabs the two-tuple of bucket type/name
     case Rest1 of
-        <<16,0,0,0,3,_TSKeyElements/binary>> = TSKey ->
+        <<16,0,0,0,_NTupleElements,_TSKeyElements/binary>> = TSKey ->
             {Bucket, TSKey}; % small risk not checking for junk at the end of the TSKeyElements
         _ ->
             case catch sext:decode_next(Rest1) of
@@ -1210,6 +1214,41 @@ retry_fail() ->
         application:unset_env(riak_kv, eleveldb_open_retries),
         application:unset_env(riak_kv, eleveldb_open_retry_delay)
     end.
+
+to_from_object_1elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_3elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1, 2, <<"three">>}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_4elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1, <<"two">>, <<"III">>, 3+1}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+
+to_from_object_nonts1_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, <<"two">>},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+%% the rest nonts keys are impossible (KV uses only binaries); they
+%% are here purely to check they are not mistaken for TS keys:
+to_from_object_nonts2_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, "two"},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_nonts3_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, 2},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_nonts4_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, [2]},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
 
 
 -ifdef(EQC).
