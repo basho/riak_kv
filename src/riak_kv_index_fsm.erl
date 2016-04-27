@@ -125,8 +125,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, V
 
     %% Note riak_core_coverage_fsm now expects a plan function, not a mod, to be returned
 
-    {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, fun PlannerMod:create_pl\
-an/6,
+    {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, fun PlannerMod:create_plan/6,
      #state{from=From, max_results=MaxResults, pagination_sort=PgSort}}.
 
 plan(CoverageVNodes, State = #state{pagination_sort=true}) ->
