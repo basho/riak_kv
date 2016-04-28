@@ -374,6 +374,7 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
             {reply, make_decoder_error_response(Reason), State}
     end.
 
+
 %% ----------
 %% query
 %% ----------
@@ -501,7 +502,7 @@ make_validate_rows_error_resp(BadRowIdxs) ->
     BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
     make_rpberrresp(
       ?E_IRREG,
-      flat_format("Invalid data at row index(es) ~s", [BadRowsString])).
+      flat_format("Invalid data found at row index(es) ~s", [BadRowsString])).
 
 make_too_many_insert_values_resp(BadRowIdxs) ->
     BadRowsString = string:join([integer_to_list(I) || I <- BadRowIdxs],", "),
@@ -556,7 +557,6 @@ to_string(X) ->
 
 make_tsgetresp(ColumnNames, ColumnTypes, Rows) ->
     {tsgetresp, {ColumnNames, ColumnTypes, Rows}}.
-
 
 make_tsqueryresp({_ColumnNames, _ColumnTypes, []}) ->
     %% tests (and probably docs, too) expect an empty result set to be
