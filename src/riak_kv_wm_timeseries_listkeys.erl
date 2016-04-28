@@ -142,10 +142,10 @@ stream_keys(ReqId, Table, Mod) ->
         {ReqId, From, {keys, []}} ->
             _ = riak_kv_keys_fsm:ack_keys(From),
             stream_keys(ReqId, Table, Mod);
-        {ReqId, From, {keys, Keys}} ->
+        {ReqId, From, {keys, Keys}} when is_list(Keys) ->
             _ = riak_kv_keys_fsm:ack_keys(From),
             {ts_keys_to_body(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
-        {ReqId, {keys, Keys}} ->
+        {ReqId, {keys, Keys}} when is_list(Keys) ->
             {ts_keys_to_body(Keys, Table, Mod), fun() -> stream_keys(ReqId, Table, Mod) end};
         {ReqId, done} ->
             {<<>>, done};
@@ -159,20 +159,15 @@ stream_keys(ReqId, Table, Mod) ->
 ts_keys_to_body(Keys, Table, Mod) ->
     BaseUrl = base_url(Table),
     KeyTypes = riak_kv_wm_ts_util:local_key_fields_and_types(Mod),
-    %% Dialyzer issues this warning if the lists:map is replaced with
-    %% the list comprehension (below):
-    %%   riak_kv_wm_timeseries_listkeys.erl:168: The pattern [Key | _] can never match the type []
-    %% for which no clear workaround could be found.
-    %%
-    %% URLs = [format_url(BaseUrl, KeyTypes, Key)
-    %%         || Key <- Keys],
-
     URLs =
         lists:map(
-          fun(Key) when is_tuple(Key) ->  %% simple single-field keys like {1}, seen in the wild
-                  format_url(BaseUrl, KeyTypes, tuple_to_list(Key));
-             (Key) when is_binary(Key) -> %% sext-encoded ones
-                  format_url(BaseUrl, KeyTypes, tuple_to_list(sext:decode(Key)))
+          fun(Key) when is_binary(Key) ->
+                  format_url(BaseUrl, KeyTypes, tuple_to_list(sext:decode(Key)));
+             (Key) ->
+                  %% this clause is to please dialyzer (dialyzer is
+                  %% within his rights as we have no way to 'declare'
+                  %% the type of Key)
+                  format_url(BaseUrl, KeyTypes, tuple_to_list(Key))
           end,
           Keys),
     iolist_to_binary(URLs).
