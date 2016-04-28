@@ -258,7 +258,6 @@ sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
             {reply, make_validate_rows_error_resp(BadRowIdxs), State}
     end.
 
-
 %% -----------
 %% get
 %% -----------

@@ -22,7 +22,7 @@
 
 %% API
 -export([start_link/1, put/2, async_put/8, async_put_replies/2,
-         ts_batch_put/7,
+         ts_batch_put/8, ts_batch_put_encoded/2,
          workers/0, validate_options/4]).
 -export([init/1,
     handle_call/3,
@@ -87,47 +87,62 @@ put(RObj0, Options) ->
             NVal = proplists:get_value(n_val, BucketProps),
             {RObj, Key, EncodeFn} =
                 kv_or_ts_details(RObj0, riak_object:get_ts_local_key(RObj0)),
-            DocIdx = chash_key(Bucket, Key, BucketProps),
+            PartitionIdx = chash_key(Bucket, Key, BucketProps),
             Preflist =
                 case proplists:get_value(sloppy_quorum, Options, true) of
                     true ->
                         UpNodes = riak_core_node_watcher:nodes(riak_kv),
-                        riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes);
+                        riak_core_apl:get_apl_ann(PartitionIdx, NVal, UpNodes);
                     false ->
-                        riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv)
+                        riak_core_apl:get_primary_apl(PartitionIdx, NVal, riak_kv)
                 end,
 
             case validate_options(NVal, Preflist, Options, BucketProps) of
                 {ok, W, PW} ->
                     synchronize_put(
                       async_put(
-                        RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist), Options);
+                        RObj, W, PW, Bucket, NVal, choose_put_key(Key, PartitionIdx),
+                        EncodeFn, Preflist),
+                      Options);
                 Error ->
                     Error
             end
     end.
+
+%% `put/2' is invoked for timeseries data only when placing a
+%% tombstone. In such a case, we need to replace the usual
+%% {PartitionKey, LocalKey} tuple with {PartitionIndex, LocalKey} for
+%% `async_put'
+choose_put_key({_PK, LK}, PartitionIdx) ->
+    {PartitionIdx, LK};
+choose_put_key(Key, _Idx) ->
+    Key.
 
 -spec async_put(RObj :: riak_object:riak_object(),
                 W :: pos_integer(),
                 PW :: pos_integer(),
                 Bucket :: binary()|{binary(), binary()},
                 NVal :: pos_integer(),
-                Key :: binary()|{binary(), binary()},
+                Key :: tuple()|{binary(), tuple()},
                 EncodeFn :: fun((riak_object:riak_object()) -> binary()),
                 Preflist :: term()) ->
                        {ok, {reference(), atom()}}.
 
-async_put(RObj, W, PW, Bucket, NVal, {_PK, LK}, EncodeFn, Preflist) when is_tuple(LK) ->
-    async_put(RObj, W, PW, Bucket, NVal, LK, EncodeFn, Preflist);
-async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
+async_put(RObj, W, PW, Bucket, NVal, {PartIdx, LK}, EncodeFn, Preflist) when is_tuple(LK) ->
+    async_put(RObj, W, PW, Bucket, NVal, PartIdx, LK, EncodeFn, Preflist);
+async_put(RObj, W, PW, Bucket, NVal, Key, EncodeFn, Preflist) ->
+    async_put(RObj, W, PW, Bucket, NVal, undefined, Key, EncodeFn, Preflist).
+
+async_put(RObj, W, PW, Bucket, NVal, PartitionIdx, Key, EncodeFn, Preflist) ->
     StartTS = os:timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
     EncodedVal = EncodeFn(w1c_vclock(RObj)),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
 
     gen_server:cast(
       Worker,
-      {put, Bucket, LocalKey, EncodedVal, ReqId, Preflist,
+      {put, Bucket, BucketProps, PartitionIdx, Key, EncodedVal, ReqId, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
             size=size(EncodedVal)}}),
@@ -139,13 +154,15 @@ async_put(RObj, W, PW, Bucket, NVal, LocalKey, EncodeFn, Preflist) ->
                    Bucket :: binary()|{binary(), binary()},
                    NVal :: pos_integer(),
                    EncodeFn :: fun((riak_object:riak_object()) -> binary()),
+                   DocIdx :: chash:index(),
                    Preflist :: term()) ->
                           {ok, {reference(), atom()}}.
 
-ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, Preflist) ->
+ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, DocIdx, Preflist) ->
     StartTS = os:timestamp(),
     Worker = random_worker(),
     ReqId = erlang:monitor(process, Worker),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
     EncodedVals =
         lists:map(fun({K, O}) -> {{Bucket, K}, EncodeFn(w1c_vclock(O))} end,
                   RObjs),
@@ -153,11 +170,36 @@ ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, Preflist) ->
 
     gen_server:cast(
       Worker,
-      {batch_put, EncodedVals, ReqId, Preflist,
+      {batch_put, Bucket, BucketProps, EncodedVals, ReqId, DocIdx, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
             size=Size}}),
     {ok, {ReqId, Worker}}.
+
+%% Primarily for repl support. Put a list of objects represented as
+%% tuple({Bucket, LocalKey}, msgpack-encoded riak object) into the
+%% correct partition
+ts_batch_put_encoded([{{Bucket, _LK}, _RObj0}|_Rest]=RObjs, DocIdx) ->
+    StartTS = os:timestamp(),
+    Worker = random_worker(),
+    ReqId = erlang:monitor(process, Worker),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    NVal = proplists:get_value(n_val, BucketProps),
+    W = proplists:get_value(w, BucketProps),
+    PW = proplists:get_value(pw, BucketProps),
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    Preflist = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
+    Size = lists:sum(lists:map(fun({_BK, O}) -> size(O) end, RObjs)),
+    gen_server:cast(
+      Worker,
+      {batch_put, Bucket, BucketProps, RObjs, ReqId, DocIdx, Preflist,
+       #rec{w=W, pw=PW, n_val=NVal, from=self(),
+            start_ts=StartTS,
+            size=Size}}),
+    {ok, {ReqId, Worker}}.
+
+
+
 
 w1c_vclock(RObj) ->
     RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
@@ -181,22 +223,28 @@ init(_) ->
 handle_call(_Request, _From, State) ->
     {reply, undefined, State}.
 
-handle_cast({put, Bucket, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
+handle_cast({put, Bucket, BucketProps, PartitionIdx, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
     NewState = case store_request_record(ReqId, Rec, State) of
-        {undefined, S} ->
-            S#state{proxies=send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId)};
-        {_, S} ->
-            reply(From, ReqId, {error, request_id_already_defined}),
-            S
+                   {undefined, S} ->
+                       UpdProxies = send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId),
+                       postcommit(data_type_by_key(Key), Bucket,
+                                  maybe_ts_markup(PartitionIdx, Bucket, Key, EncodedVal),
+                                  BucketProps),
+                       S#state{proxies=UpdProxies};
+                   {_, S} ->
+                       reply(From, ReqId, {error, request_id_already_defined}),
+                       S
     end,
     {noreply, NewState};
-handle_cast({batch_put, EncodedVals, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
+handle_cast({batch_put, Bucket, BucketProps, EncodedVals, ReqId, PK, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
     NewState = case store_request_record(ReqId, Rec, State) of
-        {undefined, S} ->
-            S#state{proxies=batch_send_vnodes(Preflist, Proxies, EncodedVals, ReqId)};
-        {_, S} ->
-            reply(From, ReqId, {error, request_id_already_defined}),
-            S
+                   {undefined, S} ->
+                       UpdProxies = batch_send_vnodes(Preflist, Proxies, EncodedVals, ReqId),
+                       postcommit(ts, Bucket, {PK, EncodedVals}, BucketProps),
+                       S#state{proxies=UpdProxies};
+                   {_, S} ->
+                       reply(From, ReqId, {error, request_id_already_defined}),
+                       S
     end,
     {noreply, NewState};
 handle_cast({cancel, ReqId}, State) ->
@@ -273,6 +321,25 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+%% First argument is a binary partition index for timeseries data or
+%% `undefined' if this is routed through the standard KV data code
+%% path
+maybe_ts_markup(undefined, _Bucket, _LK, Val) ->
+    Val;
+maybe_ts_markup(PartitionIdx, Bucket, LK, Val) ->
+    {PartitionIdx, {{Bucket, LK}, Val}}.
+
+%% Timeseries local key will be a tuple of values
+data_type_by_key(Key) when is_tuple(Key) ->
+    ts;
+data_type_by_key(_Key) ->
+    kv.
+
+postcommit(kv, _Bucket, _ValTuple, _BucketProps) ->
+    %% No plans for general w1c hooks yet
+    ok;
+postcommit(ts, Bucket, ValTuple, BucketProps) ->
+    riak_kv_hooks:call_timeseries_postcommit(ValTuple, Bucket, BucketProps).
 
 random_worker() ->
     Workers = workers(),
@@ -303,6 +370,8 @@ validate_options(NVal, Preflist, Options, BucketProps) ->
             {ok, W, PW}
     end.
 
+send_vnodes(Preflist, Proxies, Bucket, {_PK, LK}, EncodedVal, ReqId) when is_tuple(LK) ->
+    send_vnodes(Preflist, Proxies, Bucket, LK, EncodedVal, ReqId);
 send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
 send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId) ->
