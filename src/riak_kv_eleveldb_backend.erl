@@ -528,18 +528,7 @@ key_to_storage_format_key(_,[]) ->
     %% the key so cannot be ordered yet
     [];
 key_to_storage_format_key([Order|OrderTail], [{_Name,_Type,Value}|KeyTail]) ->
-    [apply_ordering(Order, Value) | key_to_storage_format_key(OrderTail, KeyTail)].
-
-%%
-apply_ordering(descending, Val) when is_integer(Val) ->
-    -Val;
-apply_ordering(descending, Val) when is_binary(Val) ->
-    flip_binary(Val);
-apply_ordering(_, Val) -> % ascending or undefined
-    Val.
-
-flip_binary(Val) ->
-    list_to_binary([bnot Byte || Byte <- binary_to_list(Val)]).
+    [riak_ql_ddl:apply_ordering(Value, Order) | key_to_storage_format_key(OrderTail, KeyTail)].
 
 %%
 range_scan_additional_options(Where) ->
