@@ -2198,40 +2198,13 @@ two_element_key_range_cannot_match_test() ->
     DDL = get_ddl(
         "CREATE TABLE tabab("
         "a TIMESTAMP NOT NULL, "
-        "b SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,quantum(b, 15, 's')), a,b))"),
     {ok, Q} = get_query(
           "SELECT * FROM tab1 WHERE a = 1 AND b > 1 AND b < 1"),
     ?assertMatch(
         {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, <<_/binary>>}},
         compile(DDL, Q, 100)
-    ).
-
-quantum_is_not_last_element_test() ->
-    DDL = get_ddl(
-        "CREATE TABLE tab1("
-        "a SINT64 NOT NULL, "
-        "b TIMESTAMP NOT NULL, "
-        "c SINT64 NOT NULL, "
-        "PRIMARY KEY  ((a,quantum(b,1,'s'),c), a,b,c))"),
-    {ok, Q} = get_query(
-          "SELECT * FROM tab1 WHERE b >= 1000 AND b <= 3000 AND a = 10 AND c = 20"),
-    {ok, SubQueries} = compile(DDL, Q, 100),
-    SubQueryWheres = [S#riak_select_v1.'WHERE' || S <- SubQueries],
-    ?assertEqual(
-        [
-            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,1000},{<<"c">>,sint64,20}]},
-             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
-             {filter,[]}],
-            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
-             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
-             {filter,[]}],
-            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
-             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
-             {filter,[]},
-             {end_inclusive,true}]
-        ],
-        SubQueryWheres
     ).
 
 negate_an_aggregation_function_test() ->
