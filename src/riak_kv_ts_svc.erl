@@ -341,15 +341,15 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
     %% keys in the backend.
 
     KeyConvFn = 
-	fun(Key) when is_binary(Key) ->
-		riak_kv_ts_api:row_to_key(sext:decode(Key), DDL, Mod);
-	   (Key) ->
-		%% Key read from leveldb will always be binary.  This
-		%% clause is just to keep dialyzer quiet (dialyzer is
-		%% within his rights as we have no way to 'declare'
-		%% the type of Key)
-		Key
-	end,
+        fun(Key) when is_binary(Key) ->
+                riak_kv_ts_api:row_to_key(sext:decode(Key), DDL, Mod);
+           (Key) ->
+                %% Key read from leveldb will always be binary.  This
+                %% clause is just to keep dialyzer quiet (dialyzer is
+                %% within his rights as we have no way to 'declare'
+                %% the type of Key)
+                Key
+        end,
 
     Result =
         riak_client:stream_list_keys(
