@@ -521,11 +521,8 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                 end,
     {async, KeyFolder}.
 
-%%
+%% Apply ordering to the key values.
 key_to_storage_format_key(_,[]) ->
-    %% FIXME the local key is currently partition key ++ _ where the underscore
-    %% is additional fields, these are currently in the filter and not part of
-    %% the key so cannot be ordered yet
     [];
 key_to_storage_format_key([Order|OrderTail], [{_Name,_Type,Value}|KeyTail]) ->
     [riak_ql_ddl:apply_ordering(Value, Order) | key_to_storage_format_key(OrderTail, KeyTail)].
