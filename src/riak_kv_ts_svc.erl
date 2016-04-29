@@ -349,13 +349,13 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                 %% (otherwise dialyzer will complain about no local
                 %% return, since we have no way to spec the type
                 %% of Key for an anonymous function).
-		%%
-		%% Nonetheless, we log an error in case this branch is
-		%% ever exercised
+                %%
+                %% Nonetheless, we log an error in case this branch is
+                %% ever exercised
 
-		lager:error("Key conversion function " ++ 
-				"(from riak_kv_ts_svc:sub_tslistkeysreq/4) " ++
-				"encountered a non-binary object key: ~p~n", [Key]),
+                lager:error("Key conversion function " ++ 
+                                "(from riak_kv_ts_svc:sub_tslistkeysreq/4) " ++
+                                "encountered a non-binary object key: ~p~n", [Key]),
                 Key
         end,
 
