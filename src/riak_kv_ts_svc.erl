@@ -344,10 +344,18 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
         fun(Key) when is_binary(Key) ->
                 riak_kv_ts_util:row_to_key(sext:decode(Key), DDL, Mod);
            (Key) ->
-                %% Key read from leveldb will always be binary.  This
-                %% clause is just to keep dialyzer quiet (dialyzer is
-                %% within his rights as we have no way to 'declare'
-                %% the type of Key)
+                %% Key read from leveldb should always be binary.
+                %% This clause is just to keep dialyzer quiet
+                %% (otherwise dialyzer will complain about no local
+                %% return, since we have no way to spec the type
+                %% of Key for an anonymous function).
+		%%
+		%% Nonetheless, we log an error in case this branch is
+		%% ever exercised
+
+		lager:error("Key conversion function " ++ 
+				"(from riak_kv_ts_svc:sub_tslistkeysreq/4) " ++
+				"encountered a non-binary object key: ~p~n", [Key]),
                 Key
         end,
 
