@@ -139,13 +139,13 @@ put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
                                                end,
                                                fun(RObj, LK) ->
                                                        riak_kv_w1c_worker:async_put(
-                                                         RObj, W, PW, Bucket, NVal, LK,
+                                                         RObj, W, PW, Bucket, NVal, {DocIdx, LK},
                                                          EncodeFn, Preflist)
                                                end,
                                                fun(RObjs) ->
                                                        riak_kv_w1c_worker:ts_batch_put(
                                                          RObjs, W, PW, Bucket, NVal,
-                                                         EncodeFn, Preflist)
+                                                         EncodeFn, DocIdx, Preflist)
                                                end,
                                                DataForVnode),
                           {GlobalReqIds ++ Ids, GlobalErrorsCnt};
