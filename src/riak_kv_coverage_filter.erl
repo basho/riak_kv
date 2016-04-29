@@ -152,6 +152,33 @@ build_item_filter(FilterInput) ->
     %% FilterInput is a list of {Module, Fun, Args} tuples
     compose(FilterInput).
 
+%% The functions build_preflist_fun and build_subpartition_fun are
+%% used to compute the hash and/or vnode index corresponding to a key
+%% read from the backend.
+%%
+%% For example, the function returned in build_preflist_fun is the
+%% PrefListFun called in the filter returned by build_vnode_filter
+%% above.  That filter is the Filter arg used in
+%% riak_kv_vnode:fold_fun variants to determine if a key should be
+%% added to a results buffer during a fold.
+%%
+%% These functions have been modified to accept a key conversion
+%% function, KeyConvFn, which allows for an arbitrary transformation
+%% to be performed on the storage key prior to computing a hash.  
+%%
+%% This is required for timseries keys for example, because the local
+%% key read from the backend must be transformed to a partition key to
+%% determine what hash partition it belongs to.
+%%
+%% The key conversion function is constructed once when the fold is
+%% initialized and passed into these functions to avoid incurring
+%% per-key overheads (e.g., extracting the DDL from a TS bucket every
+%% time a key is read from the backend, when instead the DDL can be
+%% retrieved once and built into the key conversion function)
+%%
+%% For ordinary keys, KeyConvFn will usually be a no-op, i.e.,
+%% KeyConvFn = fun(Key) -> Key end.  We leave it here as a generic
+%% hook to allow transformations on any type of key.
 
 %% @private
 build_preflist_fun(Bucket, CHBin, KeyConvFn) ->

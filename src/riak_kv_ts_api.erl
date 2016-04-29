@@ -32,7 +32,6 @@
          get_data/2, get_data/3, get_data/4,
          delete_data/2, delete_data/3, delete_data/4, delete_data/5,
          query/2,
-         row_to_key/3,
          compile_to_per_quantum_queries/2  %% coverage
          %% To reassemble the broken-up queries into coverage entries
          %% for returning to pb or http clients (each needing to
@@ -170,7 +169,7 @@ put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
                             list(tuple(chash:index(), list(term()))).
 partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
     PartitionTuples =
-        [ { riak_core_util:chash_key({Bucket, row_to_key(R, DDL, Mod)},
+        [ { riak_core_util:chash_key({Bucket, riak_kv_ts_util:row_to_key(R, DDL, Mod)},
                                      BucketProps), R } || R <- Data ],
     dict:to_list(
       lists:foldl(fun({Idx, R}, Dict) ->
@@ -178,10 +177,6 @@ partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
                   end,
                   dict:new(),
                   PartitionTuples)).
-
-row_to_key(Row, DDL, Mod) ->
-    riak_kv_ts_util:encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
 add_preflists(PartitionedData, NVal, UpNodes) ->
     lists:map(fun({Idx, Rows}) -> {Idx,
