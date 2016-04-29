@@ -38,7 +38,8 @@
          sql_record_to_tuple/1,
          sql_to_cover/4,
          table_to_bucket/1,
-         validate_rows/2
+         validate_rows/2,
+         row_to_key/3
         ]).
 -export([explain_query/1, explain_query/2]).
 -export([explain_query_print/1]).
@@ -387,6 +388,9 @@ validate_rows(Mod, Rows) ->
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
 
+row_to_key(Row, DDL, Mod) ->
+    riak_kv_ts_util:encode_typeval_key(
+      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
 %% Result from riak_client:get_cover is a nested list of coverage plan
 %% because KV coverage requests are designed that way, but in our case

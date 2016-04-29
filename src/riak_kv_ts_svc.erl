@@ -331,9 +331,36 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
 sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                                            timeout = Timeout} = Req,
                   State) ->
+
+    %% Construct a function to convert from TS local key to TS
+    %% partition key.
+    %%
+    %% This is needed because coverage filter functions must check the
+    %% hash of the partition key, not the local key, when folding over
+    %% keys in the backend.
+
+    KeyConvFn = 
+        fun(Key) when is_binary(Key) ->
+                riak_kv_ts_util:row_to_key(sext:decode(Key), DDL, Mod);
+           (Key) ->
+                %% Key read from leveldb should always be binary.
+                %% This clause is just to keep dialyzer quiet
+                %% (otherwise dialyzer will complain about no local
+                %% return, since we have no way to spec the type
+                %% of Key for an anonymous function).
+                %%
+                %% Nonetheless, we log an error in case this branch is
+                %% ever exercised
+
+                lager:error("Key conversion function " ++ 
+                                "(from riak_kv_ts_svc:sub_tslistkeysreq/4) " ++
+                                "encountered a non-binary object key: ~p~n", [Key]),
+                Key
+        end,
+
     Result =
         riak_client:stream_list_keys(
-          riak_kv_ts_util:table_to_bucket(Table), Timeout,
+          riak_kv_ts_util:table_to_bucket(Table), Timeout, KeyConvFn,
           {riak_client, [node(), undefined]}),
     case Result of
         {ok, ReqId} ->
@@ -345,7 +372,6 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
         {error, Reason} ->
             {reply, make_failed_listkeys_resp(Reason), State}
     end.
-
 
 %% -----------
 %% coverage

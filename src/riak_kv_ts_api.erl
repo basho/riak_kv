@@ -169,7 +169,7 @@ put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
                             list(tuple(chash:index(), list(term()))).
 partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
     PartitionTuples =
-        [ { riak_core_util:chash_key({Bucket, row_to_key(R, DDL, Mod)},
+        [ { riak_core_util:chash_key({Bucket, riak_kv_ts_util:row_to_key(R, DDL, Mod)},
                                      BucketProps), R } || R <- Data ],
     dict:to_list(
       lists:foldl(fun({Idx, R}, Dict) ->
@@ -177,10 +177,6 @@ partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
                   end,
                   dict:new(),
                   PartitionTuples)).
-
-row_to_key(Row, DDL, Mod) ->
-    riak_kv_ts_util:encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
 add_preflists(PartitionedData, NVal, UpNodes) ->
     lists:map(fun({Idx, Rows}) -> {Idx,
