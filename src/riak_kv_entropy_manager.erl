@@ -35,7 +35,9 @@
          get_lock/2,
          requeue_poke/1,
          start_exchange_remote/3,
-         exchange_status/4]).
+         exchange_status/4,
+         expire_trees/0,
+         clear_trees/0]).
 -export([all_pairwise_exchanges/2]).
 -export([get_aae_throttle/0,
          set_aae_throttle/1,
@@ -172,6 +174,12 @@ enable() ->
 disable() ->
     gen_server:call(?MODULE, disable, infinity).
 
+expire_trees() ->
+    gen_server:cast(?MODULE, expire_trees).
+
+clear_trees() ->
+    gen_server:cast(?MODULE, clear_trees).
+
 %% @doc Manually trigger hashtree exchanges.
 %%      -- If an index is provided, trigger exchanges between the index and all
 %%         sibling indices for all index_n.
@@ -305,6 +313,13 @@ handle_cast({requeue_poke, Index}, State) ->
 handle_cast({exchange_status, Pid, LocalVN, RemoteVN, IndexN, Reply}, State) ->
     State2 = do_exchange_status(Pid, LocalVN, RemoteVN, IndexN, Reply, State),
     {noreply, State2};
+handle_cast(clear_trees, S) ->
+    clear_all_exchanges(S#state.exchanges),
+    clear_all_trees(S#state.trees),
+    {noreply, S};
+handle_cast(expire_trees, S) ->
+    ok = expire_all_trees(S#state.trees),
+    {noreply, S};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -349,6 +364,19 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+clear_all_exchanges(Exchanges) ->
+    [begin
+         exit(Pid, kill),
+         Index
+     end || {Index, _Ref, Pid} <- Exchanges].
+
+clear_all_trees(Trees) ->
+    [riak_kv_index_hashtree:clear(TPid) || {_, TPid} <- Trees].
+
+expire_all_trees(Trees) ->
+    _ = [riak_kv_index_hashtree:expire(TPid) || {_, TPid} <- Trees],
+    ok.
 
 schedule_reset_build_tokens() ->
     {_, Reset} = app_helper:get_env(riak_kv, anti_entropy_build_limit,
