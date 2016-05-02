@@ -66,6 +66,9 @@ build_filter(Bucket, ItemFilterInput, FilterVNode) ->
     build_filter(Bucket, ItemFilterInput, FilterVNode, KeyConvFn).
 
 -spec build_filter(bucket(), filter(), [index()]|subpartition(), function()) -> filter().
+build_filter(Bucket, ItemFilterInput, FilterVNode, undefined) ->
+    %% Generate an identity function for `KeyConvFn' and come back
+    build_filter(Bucket, ItemFilterInput, FilterVNode);
 build_filter(Bucket, ItemFilterInput, {_Hash, _Mask}=SubP, KeyConvFn) ->
     ItemFilter = build_item_filter(ItemFilterInput),
     if
