@@ -139,7 +139,8 @@ run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q}, {qid, QId}} |
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
-    Opts = [Bucket, none, Q, Timeout, all, undefined, {Q, Bucket}, riak_kv_qry_coverage_plan],
+    KeyConvFn = make_key_conversion_fun(Table),
+    Opts = [Bucket, none, Q, Timeout, all, undefined, {Q, Bucket}, riak_kv_qry_coverage_plan, KeyConvFn],
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T);
 %% if cover_context in the SQL record is *not* undefined, we've been
@@ -153,9 +154,22 @@ run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
-    Opts = [Bucket, none, Q, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan],
+    KeyConvFn = make_key_conversion_fun(Table),
+    Opts = [Bucket, none, Q, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan, KeyConvFn],
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T).
+
+make_key_conversion_fun(Table) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    DDL = Mod:get_ddl(),
+    fun(Key) when is_binary(Key) ->
+            riak_kv_ts_util:row_to_key(sext:decode(Key), DDL, Mod);
+       (Key) ->
+            lager:error("Key conversion function "
+                        "encountered a non-binary object key: ~p", [Key]),
+            Key
+    end.
+
 
 decode_results([]) ->
     [];
