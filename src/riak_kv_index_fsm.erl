@@ -108,6 +108,11 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, riak_core_coverage_plan]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod]) ->
+    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod, fun(X) -> X end]);
+%% The KeyConvFn is needed to infer the PK from LK in TS keys, and use
+%% that to correctly create the coverage plan.  For details, see
+%% github/riak_kv/pulls/1404
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod, KeyConvFn]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -125,8 +130,22 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, V
 
     %% Note riak_core_coverage_fsm now expects a plan function, not a mod, to be returned
 
-    {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, fun PlannerMod:create_plan/6,
+    CreatePlanFn =
+        fun(Target, NValArg, PVC, ReqId, Service, Request) ->
+                create_plan(PlannerMod, Target, NValArg, PVC, ReqId, Service, Request, KeyConvFn)
+        end,
+
+    {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, CreatePlanFn,
      #state{from=From, max_results=MaxResults, pagination_sort=PgSort}}.
+
+create_plan(PlannerMod, Target, NVal, PVC, ReqId, Service, Request, KeyConvFn) ->
+    CoveragePlan = PlannerMod:create_plan(Target, NVal, PVC, ReqId, Service, Request),
+    case CoveragePlan of
+        {error, Reason} ->
+            {error, Reason};
+        {CoverageVNodes, FilterVNodes} ->
+            {CoverageVNodes, [{key_conv_fn, KeyConvFn} | FilterVNodes]}
+    end.
 
 plan(CoverageVNodes, State = #state{pagination_sort=true}) ->
     {ok, State#state{merge_sort_buffer=sms:new(CoverageVNodes)}};
