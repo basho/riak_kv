@@ -339,7 +339,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
     %% hash of the partition key, not the local key, when folding over
     %% keys in the backend.
 
-    KeyConvFn = 
+    KeyConvFn =
         fun(Key) when is_binary(Key) ->
                 riak_kv_ts_util:row_to_key(sext:decode(Key), DDL, Mod);
            (Key) ->
@@ -352,9 +352,8 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                 %% Nonetheless, we log an error in case this branch is
                 %% ever exercised
 
-                lager:error("Key conversion function " ++ 
-                                "(from riak_kv_ts_svc:sub_tslistkeysreq/4) " ++
-                                "encountered a non-binary object key: ~p~n", [Key]),
+                lager:error("Key conversion function "
+                            "encountered a non-binary object key: ~p", [Key]),
                 Key
         end,
 
