@@ -157,7 +157,7 @@ is_crdt(_RObj, _BProps) ->
 is_crdt_object(RObj) ->
     ObjVal = riak_object:get_value(RObj),
     case ObjVal of
-        <<69, _Rest/binary>> when is_binary(ObjVal) ->
+        <<?TAG, _Rest/binary>> when is_binary(ObjVal) ->
             true;
        _ -> false
     end.
