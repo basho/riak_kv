@@ -832,15 +832,13 @@ unwrap_cover(undefined) ->
     {ok, {undefined, undefined}};
 unwrap_cover(<<>>) ->
     {ok, {undefined, undefined}};
-unwrap_cover(Cover) ->
+unwrap_cover(Cover) when is_binary(Cover) ->
     case catch riak_kv_pb_coverage:checksum_binary_to_term(Cover) of
         {ok, {OpaqueContext, {FieldName, RangeTuple}}} ->
             {riak_kv_pb_coverage:term_to_checksum_binary(OpaqueContext),
              {FieldName, RangeTuple}};
         {error, invalid_checksum} ->
-            {error, invalid_coverage_context_checksum};
-        {'EXIT', _} ->
-            {error, bad_coverage_context}
+            {error, invalid_coverage_context_checksum}
     end.
 
 update_where_for_cover(Where, undefined) ->
@@ -2236,12 +2234,6 @@ doctored_coverage_context_test() ->
     {ok, Q} = get_query(?TINY_SQL, term_to_binary({NotACheckSum, OfThisTerm})),
     ?assertEqual(
        {error, invalid_coverage_context_checksum},
-       compile(get_ddl(?TINY_DDL), Q, 100)).
-
-outright_bad_coverage_context_test() ->
-    {ok, Q} = get_query(?TINY_SQL, not_a_binary),
-    ?assertEqual(
-       {error, bad_coverage_context},
        compile(get_ddl(?TINY_DDL), Q, 100)).
 
 -endif.
