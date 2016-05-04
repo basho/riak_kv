@@ -440,6 +440,10 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
         %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
             {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
+        {error, invalid_coverage_context_checksum} ->
+            {reply, make_rpberrresp(?E_SUBMIT, "Query coverage context fails checksum"), State};
+        {error, bad_coverage_context} ->
+            {reply, make_rpberrresp(?E_SUBMIT, "Bad coverage context"), State};
 
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}

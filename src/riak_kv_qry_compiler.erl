@@ -79,13 +79,15 @@ compile_where_clause(?DDL{} = DDL,
                                  'WHERE'       = W,
                                  cover_context = Cover} = Q,
                      MaxSubQueries) ->
-    {RealCover, WhereModifications} = unwrap_cover(Cover),
-    case compile_where(DDL, W) of
-        {error, E} -> {error, E};
-        NewW ->
+    case {compile_where(DDL, W), unwrap_cover(Cover)} of
+        {{error, E}, _} ->
+            {error, E};
+        {_, {error, E}} ->
+            {error, E};
+        {NewW, {ok, {RealCover, WhereModifications}}} ->
             expand_query(DDL, Q?SQL_SELECT{cover_context = RealCover},
-                              update_where_for_cover(NewW, WhereModifications),
-                              MaxSubQueries)
+                         update_where_for_cover(NewW, WhereModifications),
+                         MaxSubQueries)
     end.
 
 %% now break out the query on quantum boundaries
@@ -827,12 +829,19 @@ rewrite2([#param_v1{name = [FieldName]} | T], Where1, Mod, Acc) ->
 
 %% Functions to assist with coverage chunks that redefine quanta ranges
 unwrap_cover(undefined) ->
-    {undefined, undefined};
+    {ok, {undefined, undefined}};
+unwrap_cover(<<>>) ->
+    {ok, {undefined, undefined}};
 unwrap_cover(Cover) ->
-    {ok, {OpaqueContext, {FieldName, RangeTuple}}} =
-        riak_kv_pb_coverage:checksum_binary_to_term(Cover),
-    {riak_kv_pb_coverage:term_to_checksum_binary(OpaqueContext),
-     {FieldName, RangeTuple}}.
+    case catch riak_kv_pb_coverage:checksum_binary_to_term(Cover) of
+        {ok, {OpaqueContext, {FieldName, RangeTuple}}} ->
+            {riak_kv_pb_coverage:term_to_checksum_binary(OpaqueContext),
+             {FieldName, RangeTuple}};
+        {error, invalid_checksum} ->
+            {error, invalid_coverage_context_checksum};
+        {'EXIT', _} ->
+            {error, bad_coverage_context}
+    end.
 
 update_where_for_cover(Where, undefined) ->
     Where;
@@ -891,9 +900,11 @@ is_query_valid(?DDL{table = Table} = DDL, Q) ->
     riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(Q)).
 
 get_query(String) ->
+    get_query(String, undefined).
+get_query(String, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(String),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    riak_kv_ts_util:build_sql_record(select, Q, undefined).
+    riak_kv_ts_util:build_sql_record(select, Q, Cover).
 
 get_long_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++
@@ -2215,5 +2226,22 @@ negate_an_aggregation_function_test() ->
         [-3],
         finalise_aggregate(Select, [3])
       ).
+
+-define(TINY_DDL, "create table t (a timestamp not null, primary key ((quantum(a,1,d)), a))").
+-define(TINY_SQL, "select a from t where a>0 and a<2").
+
+doctored_coverage_context_test() ->
+    NotACheckSum = 34,
+    OfThisTerm = <<"f,a,f,a">>,
+    {ok, Q} = get_query(?TINY_SQL, term_to_binary({NotACheckSum, OfThisTerm})),
+    ?assertEqual(
+       {error, invalid_coverage_context_checksum},
+       compile(get_ddl(?TINY_DDL), Q, 100)).
+
+outright_bad_coverage_context_test() ->
+    {ok, Q} = get_query(?TINY_SQL, not_a_binary),
+    ?assertEqual(
+       {error, bad_coverage_context},
+       compile(get_ddl(?TINY_DDL), Q, 100)).
 
 -endif.
