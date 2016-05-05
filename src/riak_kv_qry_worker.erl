@@ -54,7 +54,6 @@
           qry           = none                :: none | ?SQL_SELECT{},
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
-          status        = void                :: void | accumulating_chunks,
           receiver_pid                        :: pid(),
           result        = []                  :: [{non_neg_integer(), list()}] | [{binary(), term()}],
           run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun()
@@ -209,11 +208,10 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
     case lists:member(SubQId, SubQs) of
         true ->
             try
-              QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
-              NSubQ = lists:delete(SubQId, SubQs),
-              State#state{status   = accumulating_chunks,
-                          result   = QueryResult2,
-                          sub_qrys = NSubQ}
+                QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
+                NSubQ = lists:delete(SubQId, SubQs),
+                State#state{result   = QueryResult2,
+                            sub_qrys = NSubQ}
             catch
               error:divide_by_zero ->
                   cancel_error_query(divide_by_zero, State)
@@ -232,7 +230,7 @@ run_select_on_chunk(SubQId, Chunk, #state{ qry = Query,
       rows ->
           run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1);
       aggregate ->
-          run_select_on_aggregate_chunk(SelClause, QueryResult1, DecodedChunk)
+          run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1)
   end.
 
 %% Run the selection clause on results that accumulate rows
