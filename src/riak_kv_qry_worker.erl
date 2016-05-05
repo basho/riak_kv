@@ -205,29 +205,11 @@ execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
                      result       = InitialState }}.
 
 %%
-add_subquery_result(SubQId, Chunk,
-                    #state{qry      = Qry,
-                           result   = QueryResult1,
-                           sub_qrys = SubQs} = State) ->
-    ?SQL_SELECT{'SELECT' = Sel} = Qry,
-    #riak_sel_clause_v1{calc_type  = CalcType,
-                        clause     = SelClause} = Sel,
+add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
     case lists:member(SubQId, SubQs) of
         true ->
-            DecodedChunk = decode_results(lists:flatten(Chunk)),
             try
-              case CalcType of
-                  rows ->
-                      IndexedChunks = [riak_kv_qry_compiler:run_select(SelClause, Row)
-                                       || Row <- DecodedChunk],
-                      QueryResult2 = [{SubQId, IndexedChunks} | QueryResult1];
-                  aggregate ->
-                      QueryResult2 =
-                        lists:foldl(
-                            fun(E, Acc) ->
-                                riak_kv_qry_compiler:run_select(SelClause, E, Acc)
-                            end, QueryResult1, DecodedChunk)
-              end,
+              QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
               NSubQ = lists:delete(SubQId, SubQs),
               State#state{status   = accumulating_chunks,
                           result   = QueryResult2,
@@ -240,6 +222,31 @@ add_subquery_result(SubQId, Chunk,
             %% discard; Don't touch state as it may have already 'finished'.
             State
     end.
+
+%%
+run_select_on_chunk(SubQId, Chunk, #state{ qry = Query,
+                                           result = QueryResult1 }) ->
+  DecodedChunk = decode_results(lists:flatten(Chunk)),
+  SelClause = sql_select_clause(Query),
+  case sql_select_calc_type(Query) of
+      rows ->
+          run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1);
+      aggregate ->
+          run_select_on_aggregate_chunk(SelClause, QueryResult1, DecodedChunk)
+  end.
+
+%% Run the selection clause on results that accumulate rows
+run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1) ->
+    IndexedChunks =
+        [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
+    [{SubQId, IndexedChunks} | QueryResult1].
+
+%%
+run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
+    lists:foldl(
+        fun(E, Acc) ->
+            riak_kv_qry_compiler:run_select(SelClause, E, Acc)
+        end, QueryResult1, DecodedChunk).
 
 %%
 -spec cancel_error_query(Error::any(), State1::#state{}) ->
@@ -293,6 +300,14 @@ prepare_final_results(#state{
 prepare_final_results2(#riak_sel_clause_v1{col_return_types = ColTypes,
                                            col_names = ColNames}, Rows) ->
     {ColNames, ColTypes, Rows}.
+
+%% Return the `calc_type' from a query.
+sql_select_calc_type(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = Type}}) ->
+    Type.
+
+%% Return the selection clause from a query
+sql_select_clause(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{clause = Clause}}) ->
+    Clause.
 
 %%%===================================================================
 %%% Unit tests
