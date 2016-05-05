@@ -830,8 +830,6 @@ rewrite2([#param_v1{name = [FieldName]} | T], Where1, Mod, Acc) ->
 %% Functions to assist with coverage chunks that redefine quanta ranges
 unwrap_cover(undefined) ->
     {ok, {undefined, undefined}};
-unwrap_cover(<<>>) ->
-    {ok, {undefined, undefined}};
 unwrap_cover(Cover) when is_binary(Cover) ->
     case catch riak_kv_pb_coverage:checksum_binary_to_term(Cover) of
         {ok, {OpaqueContext, {FieldName, RangeTuple}}} ->
@@ -2225,15 +2223,12 @@ negate_an_aggregation_function_test() ->
         finalise_aggregate(Select, [3])
       ).
 
--define(TINY_DDL, "create table t (a timestamp not null, primary key ((quantum(a,1,d)), a))").
--define(TINY_SQL, "select a from t where a>0 and a<2").
-
-doctored_coverage_context_test() ->
+coverage_context_not_a_tuple_or_invalid_checksum_test() ->
     NotACheckSum = 34,
     OfThisTerm = <<"f,a,f,a">>,
-    {ok, Q} = get_query(?TINY_SQL, term_to_binary({NotACheckSum, OfThisTerm})),
+    {ok, Q} = get_query("select a from t where a>0 and a<2", term_to_binary({NotACheckSum, OfThisTerm})),
     ?assertEqual(
        {error, invalid_coverage_context_checksum},
-       compile(get_ddl(?TINY_DDL), Q, 100)).
+       compile(get_ddl("create table t (a timestamp not null, primary key ((quantum(a,1,d)), a))"), Q, 100)).
 
 -endif.
