@@ -50,7 +50,6 @@
 -define(NO_PG_SORT, undefined).
 
 -record(state, {
-          name                                :: atom(),
           qry           = none                :: none | ?SQL_SELECT{},
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
@@ -64,7 +63,7 @@
 %%%===================================================================
 -spec start_link(RegisteredName::atom()) -> {ok, pid()} | ignore | {error, term()}.
 start_link(RegisteredName) ->
-    gen_server:start_link({local, RegisteredName}, ?MODULE, [RegisteredName], []).
+    gen_server:start_link({local, RegisteredName}, ?MODULE, [], []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -72,9 +71,9 @@ start_link(RegisteredName) ->
 
 -spec init([RegisteredName::atom()]) -> {ok, #state{}}.
 %% @private
-init([RegisteredName]) ->
+init([]) ->
     pop_next_query(),
-    {ok, new_state(RegisteredName)}.
+    {ok, new_state()}.
 
 handle_call(_, _, State) ->
     {reply, {error, not_handled}, State}.
@@ -96,15 +95,15 @@ handle_info({{_, QId}, done}, #state{ qid = QId } = State) ->
 handle_info({{SubQId, QId}, {results, Chunk}}, #state{ qid = QId } = State) ->
     {noreply, add_subquery_result(SubQId, Chunk, State)};
 handle_info({{SubQId, QId}, {error, Reason} = Error},
-            State = #state{receiver_pid = ReceiverPid,
-                           qid    = QId,
-                           result = IndexedChunks}) ->
+            #state{receiver_pid = ReceiverPid,
+                   qid    = QId,
+                   result = IndexedChunks}) ->
     lager:warning("Error ~p while collecting on QId ~p (~p);"
                   " dropping ~b chunks of data accumulated so far",
                   [Reason, QId, SubQId, length(IndexedChunks)]),
     ReceiverPid ! Error,
     pop_next_query(),
-    {noreply, new_state(State#state.name)};
+    {noreply, new_state()};
 
 handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2}) when QId1 =/= QId2 ->
     %% catches late results or errors such getting results for invalid QIds.
@@ -126,9 +125,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
--spec new_state(RegisteredName::atom()) -> #state{}.
-new_state(RegisteredName) ->
-    #state{name = RegisteredName}.
+-spec new_state() -> #state{}.
+new_state() ->
+    #state{ }.
 
 run_sub_qs_fn([]) ->
     ok;
@@ -249,11 +248,10 @@ run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
 %%
 -spec cancel_error_query(Error::any(), State1::#state{}) ->
         State2::#state{}.
-cancel_error_query(Error, #state{ receiver_pid = ReceiverPid,
-                                  name = Name }) ->
+cancel_error_query(Error, #state{ receiver_pid = ReceiverPid}) ->
     ReceiverPid ! {error, Error},
     pop_next_query(),
-    new_state(Name).
+    new_state().
 
 %%
 subqueries_done(QId,
@@ -267,7 +265,7 @@ subqueries_done(QId,
             ReceiverPid ! {ok, QueryResult2},
             pop_next_query(),
             % clean the state of query specfic data, ready for the next one
-            new_state(State#state.name);
+            new_state();
         _ ->
             % more sub queries are left to run
             State
