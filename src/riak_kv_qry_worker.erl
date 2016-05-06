@@ -168,7 +168,6 @@ make_key_conversion_fun(Table) ->
             Key
     end.
 
-
 decode_results([]) ->
     [];
 decode_results([{_,V}|Tail]) when is_binary(V) ->
@@ -223,14 +222,14 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
 %%
 run_select_on_chunk(SubQId, Chunk, #state{ qry = Query,
                                            result = QueryResult1 }) ->
-  DecodedChunk = decode_results(lists:flatten(Chunk)),
-  SelClause = sql_select_clause(Query),
-  case sql_select_calc_type(Query) of
-      rows ->
-          run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1);
-      aggregate ->
-          run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1)
-  end.
+    DecodedChunk = decode_results(lists:flatten(Chunk)),
+    SelClause = sql_select_clause(Query),
+    case sql_select_calc_type(Query) of
+        rows ->
+            run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1);
+        aggregate ->
+            run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1)
+    end.
 
 %% Run the selection clause on results that accumulate rows
 run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1) ->
@@ -254,10 +253,9 @@ cancel_error_query(Error, #state{ receiver_pid = ReceiverPid}) ->
     new_state().
 
 %%
-subqueries_done(QId,
-                #state{qid          = QId,
-                       receiver_pid = ReceiverPid,
-                       sub_qrys     = SubQQ} = State) ->
+subqueries_done(QId, #state{qid          = QId,
+                            receiver_pid = ReceiverPid,
+                            sub_qrys     = SubQQ} = State) ->
     case SubQQ of
         [] ->
             QueryResult2 = prepare_final_results(State),
