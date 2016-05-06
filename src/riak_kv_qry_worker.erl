@@ -208,8 +208,8 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
             try
                 QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
                 NSubQ = lists:delete(SubQId, SubQs),
-                State#state{result   = QueryResult2,
-                            sub_qrys = NSubQ}
+                maybe_stream_chunk_to_client(
+                    QueryResult2, State#state{ sub_qrys = NSubQ })
             catch
               error:divide_by_zero ->
                   cancel_error_query(divide_by_zero, State)
@@ -218,6 +218,26 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
             %% discard; Don't touch state as it may have already 'finished'.
             State
     end.
+
+%%
+maybe_stream_chunk_to_client(QueryResult, #state{ qry = Query } = State) ->
+    case sql_select_streaming(Query) of
+        true ->
+            ok = stream_chunk_to_client(QueryResult, State),
+            State;
+        false ->
+            State#state{ result = QueryResult }
+    end.
+
+%%
+stream_chunk_to_client(Chunk, #state{ receiver_pid = Pid, qid = {_,QID} }) ->
+    Pid ! {QID, {self(), x_monitor}, {rows, Chunk}},
+    ok.
+
+%%
+stream_done_to_client(#state{ receiver_pid = Pid, qid = {_,QID} }) ->
+    Pid ! {QID, done},
+    ok.
 
 %%
 run_select_on_chunk(SubQId, Chunk, #state{ qry = Query,
@@ -253,14 +273,11 @@ cancel_error_query(Error, #state{ receiver_pid = ReceiverPid}) ->
     new_state().
 
 %%
-subqueries_done(QId, #state{qid          = QId,
-                            receiver_pid = ReceiverPid,
-                            sub_qrys     = SubQQ} = State) ->
+subqueries_done(QId, #state{qid = QId, sub_qrys = SubQQ} = State) ->
     case SubQQ of
         [] ->
             QueryResult2 = prepare_final_results(State),
-            %   send the results to the waiting client process
-            ReceiverPid ! {ok, QueryResult2},
+            send_final_results_to_client(QueryResult2, State),
             pop_next_query(),
             % clean the state of query specfic data, ready for the next one
             new_state();
@@ -269,10 +286,21 @@ subqueries_done(QId, #state{qid          = QId,
             State
     end.
 
+%%
+send_final_results_to_client(FinalResult, #state{ qry = Query,
+                                                  receiver_pid = ReceiverPid } = State) ->
+    case sql_select_streaming(Query) of
+        true ->
+            ok = stream_chunk_to_client(FinalResult, State),
+            ok = stream_done_to_client(State);
+        false ->
+            ReceiverPid ! {ok, FinalResult}
+    end.
+
 -spec prepare_final_results(#state{}) ->
                                    {[riak_pb_ts_codec:tscolumnname()],
                                     [riak_pb_ts_codec:tscolumntype()],
-                                    [[riak_pb_ts_codec:ldbvalue()]]}.
+                                    [[riak_pb_ts_codec:ldbvalSue()]]}.
 prepare_final_results(#state{
         result = IndexedChunks,
         qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select }}) ->
@@ -302,6 +330,10 @@ sql_select_calc_type(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = Type
 %% Return the selection clause from a query
 sql_select_clause(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{clause = Clause}}) ->
     Clause.
+
+%%
+sql_select_streaming(?SQL_SELECT{ stream = Stream }) ->
+    Stream.
 
 %%%===================================================================
 %%% Unit tests

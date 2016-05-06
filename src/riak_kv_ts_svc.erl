@@ -51,11 +51,12 @@
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
 -define(E_NOTFOUND,          1021).
+-define(E_QUERY_NOT_STREAMABLE, 1022).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
 
--export([decode_query_common/2,
+-export([decode_query_common/3,
          process/2,
          process_stream/3]).
 
@@ -73,8 +74,11 @@
               ts_query_response/0, ts_query_responses/0,
               ts_query_types/0]).
 
-decode_query_common(Q, Cover) ->
-    case decode_query(Q, Cover) of
+-spec decode_query_common(Query::#tsinterpolation{},
+                          Cover::term(),
+                          Stream::boolean()) -> {ok, ?SQL_SELECT{}, Permissions::term()}.
+decode_query_common(Q, Cover, Stream) ->
+    case decode_query(Q, Cover, Stream) of
         {QueryType, {ok, Query}} ->
             {ok, Query, decode_query_permissions(QueryType, Query)};
         {_QueryType, {error, Error}} ->
@@ -85,23 +89,46 @@ decode_query_common(Q, Cover) ->
             {ok, make_decoder_error_response(Error)}
     end.
 
--spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
+-spec decode_query(Query::#tsinterpolation{}, Cover::term(), Stream::boolean()) ->
     {error, _} | {ok, ts_query_types()}.
-decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
+decode_query(#tsinterpolation{base = BaseQuery}, Cover, Stream) ->
     case catch riak_ql_parser:ql_parse(
                  riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
                    binary_to_list(BaseQuery))) of
         {ddl, DDL, WithProperties} ->
             {ddl, {ok, {DDL, WithProperties}}};
-        {QryType, SQL} when QryType /= error,
-                            QryType /= 'EXIT' ->
-            {QryType, riak_kv_ts_util:build_sql_record(QryType, SQL, Cover)};
         {'EXIT', {Reason, _StackTrace}} ->
             {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
-            {error, Other}
+            {error, Other};
+        {QryType, SQL} ->
+            SqlRecord =
+                riak_kv_ts_util:build_sql_record(QryType, SQL, Cover, Stream),
+            case validate_streamable_query(Stream, SqlRecord) of
+                ok ->
+                    {QryType, SqlRecord};
+                {error, _} = Error ->
+                    Error
+            end
     end.
 
+%% if steaming is requested then check that the query is not using features
+%% that prevent streaming.
+validate_streamable_query(false, _) ->
+    ok;
+validate_streamable_query(true, SqlRecord) ->
+    case sql_select_calc_type(SqlRecord) of
+        rows ->
+            ok;
+        aggregate ->
+            {error, {?E_QUERY_NOT_STREAMABLE, ""}}
+    end.
+
+%% Return the `calc_type' from a query.
+sql_select_calc_type(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = Type}}) ->
+    Type.
+
+%%
 decode_query_permissions(QryType, {DDL = ?DDL{}, _WithProps}) ->
     decode_query_permissions(QryType, DDL);
 decode_query_permissions(QryType, Qry) ->
@@ -382,7 +409,8 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
     Client = {riak_client, [node(), undefined]},
     %% all we need from decode_query is to compile the query,
     %% but also to check permissions
-    case decode_query(Q, undefined) of
+    Stream = false,
+    case decode_query(Q, undefined, Stream) of
         {_QryType, {ok, SQL}} ->
             case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
                 {ok, Compiled} ->
