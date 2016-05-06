@@ -210,6 +210,10 @@ process_post(RD, #ctx{sql_type = QueryType,
             %% the eleveldb process did manage to send us a timeout
             %% response
             riak_kv_wm_ts_util:handle_error(backend_timeout, RD, Ctx);
+        {error, invalid_coverage_context_checksum} ->
+            riak_kv_wm_ts_util:handle_error({parameter_error, "Query coverage context fails checksum"}, RD, Ctx);
+        {error, bad_coverage_context} ->
+            riak_kv_wm_ts_util:handle_error({parameter_error, "Bad coverage context"}, RD, Ctx);
         {error, Reason} ->
             riak_kv_wm_ts_util:handle_error({query_exec_error, QueryType, Table, Reason}, RD, Ctx)
     end.
