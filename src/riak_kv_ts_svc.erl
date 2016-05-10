@@ -209,24 +209,19 @@ process_stream({ReqId, _From, ReqChunk}, ReqId, #state{ req = ?SQL_SELECT{}, req
 %% Process streamed chunks from Riak TS queries. The request ID has already been
 %% checked before this function is called.
 process_stream_query(done, State) ->
-    {done, #tslistkeysresp{done = true}, State};
+    {done, #tsqueryresp{ columns = [], rows = [], done = true }, State};
 process_stream_query({rows, []}, State) ->
     {ignore, State};
-process_stream_query({rows, [{_,Rows}]}, State) ->
-    _ColTypes = sql_select_column_types(State#state.req),
-    % Rows2 = [list_to_tuple(R) || R <- Rows],
-    %% FIXME col types, these are applied by the qry_compiler which is not invoked yet
-    EncodedRows = riak_pb_ts_codec:encode_rows([sint64,sint64,timestamp], Rows),
-    {reply, #tslistkeysresp{keys = EncodedRows, done = false}, State};
+process_stream_query({rows, {ColNames, ColTypes, Rows}}, State) ->
+    Encoded = #tsqueryresp{
+        columns = riak_pb_ts_codec:encode_columns(ColNames, ColTypes),
+        rows = riak_pb_ts_codec:encode_rows(ColTypes, Rows),
+        done = false },
+    {reply, Encoded, State};
 process_stream_query({error, Error}, _) ->
     {error, {format, Error}, #state{}};
 process_stream_query(Error, _) ->
     {error, {format, Error}, #state{}}.
-
-sql_select_column_types(SqlRecord) ->
-    ?SQL_SELECT{ 'SELECT' = SelectClause } = SqlRecord,
-    #riak_sel_clause_v1{ col_return_types = ColTypes } = SelectClause,
-    ColTypes.
 
 
 %% ---------------------------------

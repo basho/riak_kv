@@ -893,7 +893,7 @@ is_query_valid(?DDL{table = Table} = DDL, Q) ->
 get_query(String) ->
     Lexed = riak_ql_lexer:get_tokens(String),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    riak_kv_ts_util:build_sql_record(select, Q, undefined).
+    riak_kv_ts_util:build_sql_record(select, Q, undefined, false).
 
 get_long_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++

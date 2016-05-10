@@ -303,7 +303,7 @@ describe_table_columns_test() ->
             " f, s, t))")),
     Res = do_describe(DDL),
     ?assertMatch(
-       {ok, {_, _,
+       {result_set, {_, _,
              [[<<"f">>, <<"varchar">>,   false, 1,  1],
               [<<"s">>, <<"varchar">>,   false, 2,  2],
               [<<"t">>, <<"timestamp">>, false, 3,  3],

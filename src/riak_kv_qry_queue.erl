@@ -210,35 +210,40 @@ do_blocking_pop_2_test() ->
 
 % reply to a waiting worker with the pushed query
 do_push_query_1_test() ->
-    Ref = make_ref(),
+    ReqId = mk_reqid(),
     State = #state{
-        reply_fn = fun(test_from, test_query) -> put(Ref, Ref) end
+        reply_fn = fun(test_from, test_query) -> put(ReqId, ReqId) end
     },
     ?assertEqual(
         do_push_query(
+            ReqId,
             test_query,
             State#state{ waiting_workers = ?Q(test_from) }),
-        {reply, ok, State}
+        {reply, {ok,ReqId}, State}
     ),
     % test that the reply function was called
     ?assertEqual(
-        Ref,
-        get(Ref)
+        ReqId,
+        get(ReqId)
     ).
 
 % no worker is waiting so queue the query
 do_push_query_2_test() ->
+    ReqId = mk_reqid(),
     ?assertEqual(
         do_push_query(
+            ReqId,
             test_query,
             #state{}),
-        {reply, ok, #state{ queued_qrys = ?Q(test_query) }}
+        {reply, {ok,ReqId}, #state{ queued_qrys = ?Q(test_query) }}
     ).
 
 % no worker is waiting so queue the query with other queries queued
 do_push_query_3_test() ->
-    {reply, ok, State} =
+    ReqId = mk_reqid(),
+    {reply, {ok,ReqId}, State} =
         do_push_query(
+            ReqId,
             test_query_3,
             #state{ max_q_len = 3, queued_qrys = ?Q([test_query_2,test_query_1]) }),
     ?assertEqual(
@@ -251,7 +256,7 @@ do_push_query_4_test() ->
     State = #state{ max_q_len = 1, queued_qrys = ?Q([test_query_1]) },
     ?assertEqual(
         {reply, {error, overload}, State},
-        do_push_query(test_query_3, State)
+        do_push_query(mk_reqid(), test_query_3, State)
     ).
 
 -endif.
