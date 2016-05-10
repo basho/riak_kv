@@ -104,29 +104,8 @@ decode_query(#tsinterpolation{base = BaseQuery}, Cover, Stream) ->
         {QryType, SQL} ->
             {ok, SqlRecord} =
                 riak_kv_ts_util:build_sql_record(QryType, SQL, Cover, Stream),
-            case validate_streamable_query(Stream, SqlRecord) of
-                ok ->
-                    {QryType, SqlRecord};
-                {error, _} = Error ->
-                    Error
-            end
+            {QryType, SqlRecord}
     end.
-
-%% if steaming is requested then check that the query is not using features
-%% that prevent streaming.
-validate_streamable_query(false, _) ->
-    ok;
-validate_streamable_query(true, SqlRecord) ->
-    case sql_select_calc_type(SqlRecord) of
-        rows ->
-            ok;
-        aggregate ->
-            {error, {?E_QUERY_NOT_STREAMABLE, ""}} %% FIXME error message
-    end.
-
-%% Return the `calc_type' from a query.
-sql_select_calc_type(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = Type}}) ->
-    Type.
 
 %%
 decode_query_permissions(QryType, {DDL = ?DDL{}, _WithProps}) ->

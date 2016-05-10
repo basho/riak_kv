@@ -158,7 +158,8 @@ my_mapfoldl(F, Accu0, [Hd|Tail]) ->
 my_mapfoldl(F, Accu, []) when is_function(F, 2) -> {[],Accu}.
 
 %%
-compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
+compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel },
+                                       stream = Stream } = Q) ->
     CompileColFn =
         fun(ColX, AccX) ->
             select_column_clause_folder(DDL, ColX, AccX)
@@ -170,9 +171,9 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     %% iterate from the right so we can append to the head of lists
     {ResultTypeSet, Q2} = lists:foldl(CompileColFn, Acc, Sel),
 
-    {ColTypes, Errors} = my_mapfoldl(
-        fun(ColASTX, Errors) ->
-            infer_col_type(DDL, ColASTX, Errors)
+    {ColTypes, Errors1} = my_mapfoldl(
+        fun(ColASTX, ErrorsX) ->
+            infer_col_type(DDL, ColASTX, ErrorsX)
         end, [], Sel),
 
     case sets:is_element(aggregate, ResultTypeSet) of
@@ -186,14 +187,24 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
                    initial_state = [],
                    col_names = get_col_names(DDL, Q) }
     end,
-    case Errors of
+    Errors2 = validate_stream_query(Stream, Q3, Errors1),
+    case Errors2 of
       [] ->
           {ok, Q3#riak_sel_clause_v1{
               col_names = get_col_names(DDL, Q),
               col_return_types = lists:flatten(ColTypes) }};
       [_|_] ->
-          {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
+          {error, {invalid_query,
+                riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors2))}}
     end.
+
+%% Queries that have been requested with the stream API cannot contain
+%% aggregates because the result set cannot be returned until all rows have been
+%% processed.
+validate_stream_query(true, #riak_sel_clause_v1{ calc_type = aggregate }, Errors) ->
+    [{aggregate_in_stream_query, ?E_AGGREGATE_IN_STREAM_QUERY} | Errors];
+validate_stream_query(_, _, Errors) ->
+    Errors.
 
 %%
 -spec get_col_names(?DDL{}, ?SQL_SELECT{}) -> [binary()].

@@ -89,7 +89,12 @@
 ).
 
 -define(
-   E_TOO_MANY_SUBQUERIES(N),
-   iolist_to_binary(
-     ["Too many subqueries (",integer_to_list(N),")"])
+    E_TOO_MANY_SUBQUERIES(N),
+    iolist_to_binary(
+      ["Too many subqueries (",integer_to_list(N),")"])
+).
+
+-define(
+    E_AGGREGATE_IN_STREAM_QUERY,
+    <<"Aggregate functions are not allowed in streamed queries.">>
 ).

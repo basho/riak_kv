@@ -275,8 +275,12 @@ maybe_await_query_results(false, _) ->
 %% message.
 format_query_syntax_errors(Errors) ->
     iolist_to_binary(
-        [["\n", riak_ql_ddl:syntax_error_to_msg(E)] || E <- Errors]).
+        [["\n", syntax_error_to_msg(E)] || E <- Errors]).
 
+syntax_error_to_msg({aggregate_in_stream_query, Message}) when is_binary(Message) ->
+    Message;
+syntax_error_to_msg(E) ->
+    riak_ql_ddl:syntax_error_to_msg(E).
 
 -spec empty_result() -> query_tabular_result().
 empty_result() ->
