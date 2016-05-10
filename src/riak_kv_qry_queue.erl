@@ -104,9 +104,9 @@ init([MaxQueryLength]) ->
 handle_call(blocking_pop, From, State) ->
     do_blocking_pop(From, State);
 handle_call({push_query, ReceivePid, Qry, DDL}, _, State) ->
-    QId = {node(), make_ref()},
+    QId = mk_reqid(),
     QueryItem = {query, ReceivePid, QId, Qry, DDL},
-    do_push_query(QueryItem, State).
+    do_push_query(QId, QueryItem, State).
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 %% @private
@@ -137,6 +137,11 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 %%
+mk_reqid() ->
+    %% only has to be unique per-pid
+    erlang:phash2({self(), os:timestamp()}).
+
+%%
 do_blocking_pop(From,
                 #state{ queued_qrys = Queue1,
                         waiting_workers = WaitingWorkers } = State1) ->
@@ -154,7 +159,7 @@ do_blocking_pop(From,
     end.
 
 %%
-do_push_query(QueryItem,
+do_push_query(QId, QueryItem,
               #state{ max_q_len = MaxQLen,
                       queued_qrys = Queue1,
                       reply_fn = ReplyFn,
@@ -172,12 +177,12 @@ do_push_query(QueryItem,
                     State2 =
                         State1#state{ queued_qrys = queue:in(QueryItem, Queue1),
                                       waiting_workers = WaitingWorkers2 },
-                    {reply, ok, State2}
+                    {reply, {ok, QId}, State2}
             end;
         {{value, Worker}, WaitingWorkers2} ->
             % there is a waiting worker so send it straight on
             _ = ReplyFn(Worker, QueryItem),
-            {reply, ok, State1#state{ waiting_workers = WaitingWorkers2 }}
+            {reply, {ok, QId}, State1#state{ waiting_workers = WaitingWorkers2 }}
     end.
 
 %%%===================================================================

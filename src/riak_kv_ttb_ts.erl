@@ -66,5 +66,5 @@ process(Request, State) ->
     riak_kv_ts_svc:process(Request, State).
 
 %% TS TTB messages do not support streaming yet
-process_stream(_, _, _) ->
-    {error, "Not Supported", #state{}}.
+process_stream(Chunk, ReqId, State) ->
+    riak_kv_ts_svc:process_stream(Chunk, ReqId, State).

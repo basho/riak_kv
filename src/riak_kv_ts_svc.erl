@@ -79,14 +79,14 @@
                           Stream::boolean()) -> {ok, ?SQL_SELECT{}, Permissions::term()}.
 decode_query_common(Q, Cover, Stream) ->
     case decode_query(Q, Cover, Stream) of
-        {QueryType, {ok, Query}} ->
-            {ok, Query, decode_query_permissions(QueryType, Query)};
         {_QueryType, {error, Error}} ->
             {ok, make_decoder_error_response(Error)};
         {error, Error} ->
             %% convert error returns to ok's, this means it will be passed into
             %% process which will not process it and return the error.
-            {ok, make_decoder_error_response(Error)}
+            {ok, make_decoder_error_response(Error)};
+        {QueryType, Query} ->
+            {ok, Query, decode_query_permissions(QueryType, Query)}
     end.
 
 -spec decode_query(Query::#tsinterpolation{}, Cover::term(), Stream::boolean()) ->
@@ -96,13 +96,13 @@ decode_query(#tsinterpolation{base = BaseQuery}, Cover, Stream) ->
                  riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
                    binary_to_list(BaseQuery))) of
         {ddl, DDL, WithProperties} ->
-            {ddl, {ok, {DDL, WithProperties}}};
+            {ddl, {DDL, WithProperties}};
         {'EXIT', {Reason, _StackTrace}} ->
             {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
             {error, Other};
         {QryType, SQL} ->
-            SqlRecord =
+            {ok, SqlRecord} =
                 riak_kv_ts_util:build_sql_record(QryType, SQL, Cover, Stream),
             case validate_streamable_query(Stream, SqlRecord) of
                 ok ->
@@ -121,7 +121,7 @@ validate_streamable_query(true, SqlRecord) ->
         rows ->
             ok;
         aggregate ->
-            {error, {?E_QUERY_NOT_STREAMABLE, ""}}
+            {error, {?E_QUERY_NOT_STREAMABLE, ""}} %% FIXME error message
     end.
 
 %% Return the `calc_type' from a query.
@@ -200,7 +200,33 @@ process_stream({ReqId, {error, Error}}, ReqId,
     {error, {format, Error}, #state{}};
 process_stream({ReqId, Error}, ReqId,
                #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
+    {error, {format, Error}, #state{}};
+process_stream({ReqId, ReqChunk}, ReqId, #state{ req = ?SQL_SELECT{}, req_ctx = ReqId } = State) ->
+    process_stream_query(ReqChunk, State);
+process_stream({ReqId, _From, ReqChunk}, ReqId, #state{ req = ?SQL_SELECT{}, req_ctx = ReqId } = State) ->
+    process_stream_query(ReqChunk, State).
+
+%% Process streamed chunks from Riak TS queries. The request ID has already been
+%% checked before this function is called.
+process_stream_query(done, State) ->
+    {done, #tslistkeysresp{done = true}, State};
+process_stream_query({rows, []}, State) ->
+    {ignore, State};
+process_stream_query({rows, [{_,Rows}]}, State) ->
+    _ColTypes = sql_select_column_types(State#state.req),
+    % Rows2 = [list_to_tuple(R) || R <- Rows],
+    %% FIXME col types, these are applied by the qry_compiler which is not invoked yet
+    EncodedRows = riak_pb_ts_codec:encode_rows([sint64,sint64,timestamp], Rows),
+    {reply, #tslistkeysresp{keys = EncodedRows, done = false}, State};
+process_stream_query({error, Error}, _) ->
+    {error, {format, Error}, #state{}};
+process_stream_query(Error, _) ->
     {error, {format, Error}, #state{}}.
+
+sql_select_column_types(SqlRecord) ->
+    ?SQL_SELECT{ 'SELECT' = SelectClause } = SqlRecord,
+    #riak_sel_clause_v1{ col_return_types = ColTypes } = SelectClause,
+    ColTypes.
 
 
 %% ---------------------------------
@@ -437,10 +463,12 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                      {reply, ts_query_responses() | #rpberrorresp{}, #state{}}.
 sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
     case riak_kv_ts_api:query(SQL, DDL) of
-        {ok, {ColNames, ColTypes, LdbNativeRows}} ->
+        {result_set, {ColNames, ColTypes, LdbNativeRows}} ->
             Rows = [list_to_tuple(R) || R <- LdbNativeRows],
             {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State};
-
+        {reqid, ReqId} ->
+            State2 = State#state{ req = SQL, req_ctx = ReqId },
+            {reply, {stream, ReqId}, State2};
         %% the following timeouts are known and distinguished:
         {error, no_type} ->
             {reply, make_table_not_activated_resp(Table), State};

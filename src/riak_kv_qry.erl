@@ -52,7 +52,7 @@
 
 %% No coverage plan for parallel requests
 -spec submit(string() | sql_query_type_record(), ?DDL{}) ->
-    {ok, query_tabular_result()} | {error, any()}.
+    {error, term()} | {reqid, integer()} | {result_set, query_tabular_result()}.
 %% @doc Parse, validate against DDL, and submit a query for execution.
 %%      To get the results of running the query, use fetch/1.
 submit(SQLString, DDL) when is_list(SQLString) ->
@@ -80,7 +80,8 @@ submit(SQL = ?SQL_SELECT{}, DDL) ->
 %%
 %% INSERT statements
 %%
--spec do_insert(#riak_sql_insert_v1{}) -> {ok, query_tabular_result()} | {error, term()}.
+-spec do_insert(#riak_sql_insert_v1{}) ->
+    {result_set, query_tabular_result()} | {error, term()}.
 do_insert(#riak_sql_insert_v1{'INSERT' = Table,
                               fields = Fields,
                               values = Values}) ->
@@ -103,7 +104,7 @@ insert_putreqs(Mod, Table, Data) ->
         [] ->
             case riak_kv_ts_api:put_data(Data, Table, Mod) of
                 ok ->
-                    {ok, empty_result()};
+                    {result_set, empty_result()};
                 {error, {some_failed, ErrorCount}} ->
                     {error, io_lib:format("Failed to put ~b record(s)", [ErrorCount])};
                 {error, no_type} ->
@@ -190,7 +191,7 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
 %% DESCRIBE
 
 -spec do_describe(?DDL{}) ->
-                         {ok, query_tabular_result()} | {error, term()}.
+                         {result_set, query_tabular_result()} | {error, term()}.
 do_describe(?DDL{fields = FieldSpecs,
                  partition_key = #key_v1{ast = PKSpec},
                  local_key     = #key_v1{ast = LKSpec}}) ->
@@ -203,7 +204,7 @@ do_describe(?DDL{fields = FieldSpecs,
          || #riak_field_v1{name = Name,
                            type = Type,
                            optional = Nullable} <- FieldSpecs],
-    {ok, {ColumnNames, ColumnTypes, Rows}}.
+    {result_set, {ColumnNames, ColumnTypes, Rows}}.
 
 
 %% the following two functions are identical, for the way fields and
@@ -230,7 +231,7 @@ count_to_position(Col, [_ | Rest], Pos) ->
 %% SELECT
 
 -spec do_select(?SQL_SELECT{}, ?DDL{}) ->
-                       {ok, query_tabular_result()} | {error, term()}.
+    {error, term()} | {reqid, integer()} | {result_set, query_tabular_result()}.
 do_select(SQL, ?DDL{table = BucketType} = DDL) ->
     Mod = riak_ql_ddl:make_module_name(BucketType),
     MaxSubQueries =
@@ -242,23 +243,27 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                 {error,_} = Error ->
                     Error;
                 {ok, SubQueries} ->
-                    maybe_await_query_results(
-                      riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL))
+                    maybe_await_query_results(SQL?SQL_SELECT.stream,
+                        riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL))
             end;
         {false, Errors} ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}
     end.
 
-maybe_await_query_results({error,_} = Error) ->
+-spec maybe_await_query_results(Steam::boolean(), {error, term()} | {ok, integer()}) ->
+    {error, term()} | {reqid, integer()} | {result_set, query_tabular_result()}.
+maybe_await_query_results(_, {error,_} = Error) ->
     Error;
-maybe_await_query_results(_) ->
+maybe_await_query_results(true, {ok, ReqID}) ->
+    {reqid, ReqID};
+maybe_await_query_results(false, _) ->
     Timeout = app_helper:get_env(riak_kv, timeseries_query_timeout_ms),
 
     % we can't use a gen_server call here because the reply needs to be
     % from an fsm but one is not assigned if the query is queued.
     receive
         {ok, Result} ->
-            {ok, Result};
+            {result_set, Result};
         {error, Reason} ->
             {error, Reason}
     after

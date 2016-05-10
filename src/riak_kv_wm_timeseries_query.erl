@@ -244,8 +244,10 @@ compile_query(QueryStr) ->
         {ddl, _DDL, _Props} = Res ->
             Res;
         {Type, Compiled} ->
+            Cover = undefined,
+            Stream = false,
             {ok, SQL} = riak_kv_ts_util:build_sql_record(
-                          Type, Compiled, undefined),
+                          Type, Compiled, Cover, Stream),
             {Type, SQL, undefined}
     end.
 

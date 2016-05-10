@@ -51,7 +51,7 @@
 
 -record(state, {
           qry           = none                :: none | ?SQL_SELECT{},
-          qid           = undefined           :: undefined | {node(), non_neg_integer()},
+          qid           = undefined           :: undefined | non_neg_integer(),
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
           result        = []                  :: [{non_neg_integer(), list()}] | [{binary(), term()}],
@@ -230,12 +230,12 @@ maybe_stream_chunk_to_client(QueryResult, #state{ qry = Query } = State) ->
     end.
 
 %%
-stream_chunk_to_client(Chunk, #state{ receiver_pid = Pid, qid = {_,QID} }) ->
-    Pid ! {QID, {self(), x_monitor}, {rows, Chunk}},
+stream_chunk_to_client(Chunk, #state{ receiver_pid = Pid, qid = QID }) ->
+    Pid ! {QID, self(), {rows, Chunk}},
     ok.
 
 %%
-stream_done_to_client(#state{ receiver_pid = Pid, qid = {_,QID} }) ->
+stream_done_to_client(#state{ receiver_pid = Pid, qid = QID }) ->
     Pid ! {QID, done},
     ok.
 
