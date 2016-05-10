@@ -312,7 +312,7 @@ send_final_results_to_client(FinalResult, #state{ qry = Query,
 -spec prepare_final_results(#state{}) ->
                                    {[riak_pb_ts_codec:tscolumnname()],
                                     [riak_pb_ts_codec:tscolumntype()],
-                                    [[riak_pb_ts_codec:ldbvalSue()]]}.
+                                    [[riak_pb_ts_codec:ldbvalue()]]}.
 prepare_final_results(#state{
         result = IndexedChunks,
         qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select }}) ->

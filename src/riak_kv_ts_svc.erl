@@ -91,6 +91,9 @@ decode_query_common(Q, Cover, Stream) ->
 
 -spec decode_query(Query::#tsinterpolation{}, Cover::term(), Stream::boolean()) ->
     {error, _} | {ok, ts_query_types()}.
+decode_query(#tsinterpolation{}, Cover, _)
+  when not (Cover == undefined orelse is_binary(Cover)) ->
+    {error, bad_coverage_context};
 decode_query(#tsinterpolation{base = BaseQuery}, Cover, Stream) ->
     case catch riak_ql_parser:ql_parse(
                  riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
@@ -470,6 +473,8 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
         %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
             {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
+        {error, invalid_coverage_context_checksum} ->
+            {reply, make_rpberrresp(?E_SUBMIT, "Query coverage context fails checksum"), State};
 
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
@@ -627,6 +632,8 @@ make_tsqueryresp(Data = {_ColumnNames, _ColumnTypes, _Rows}) ->
     {tsqueryresp, Data}.
 
 
+make_decoder_error_response(bad_coverage_context) ->
+    make_rpberrresp(?E_SUBMIT, "Bad coverage context");
 make_decoder_error_response({lexer_error, Msg}) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("~s", [Msg]));
 make_decoder_error_response({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->
