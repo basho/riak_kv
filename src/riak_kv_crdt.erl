@@ -29,7 +29,7 @@
 %% MR helper funs
 -export([value/1, counter_value/1, set_value/1, map_value/1]).
 %% Other helper funs
--export([is_crdt/1, is_crdt/2]).
+-export([is_crdt/1, is_crdt/2, is_crdt_object/1, is_crdt_supported/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
@@ -145,22 +145,39 @@ is_crdt(RObj) ->
             false
     end.
 
--spec is_crdt(riak_object:riak_object(), riak_kv_bucket:props()) -> boolean().
+%% @doc Check if bucket_type is set for Riak datatypes and check the
+%%      Riak object || or its values** contain a special Riak
+%%      datatype tag -> <<69>>.
+%%
+%%      **We look at values instead of value because if there are siblings
+%%        for reasons (before a crdt merge) in, eg. the Yokozuna usecase,
+%%        we just to check that the first value  contains the special datatype
+%%        tag.
+-spec is_crdt(riak_object:riak_object(),
+              riak_kv_bucket:props()) -> boolean().
 is_crdt(RObj, BProps) when is_list(BProps) ->
+    is_crdt_supported(BProps) andalso is_crdt_object(RObj).
+
+-spec is_crdt_object(riak_object:riak_object() |
+                     [riak_object:value()]) -> boolean()|{error,_}.
+is_crdt_object([]=_RObjVals) ->
+    false;
+is_crdt_object([H|_T]=_RObjVals) ->
+    contains_crdt_tag(H);
+is_crdt_object(RObj) ->
+    ObjVals = riak_object:get_values(RObj),
+    is_crdt_object(ObjVals).
+
+is_crdt_supported(BProps) ->
     Type = proplists:get_value(datatype, BProps),
     Mod = riak_kv_crdt:to_mod(Type),
-    supported(Mod) andalso is_crdt_object(RObj);
-is_crdt(_RObj, _BProps) ->
-    false.
+    supported(Mod).
 
--spec is_crdt_object(riak_object:riak_object()) -> boolean()|{error,_}.
-is_crdt_object(RObj) ->
-    ObjVal = riak_object:get_value(RObj),
-    case ObjVal of
-        <<?TAG, _Rest/binary>> when is_binary(ObjVal) ->
-            true;
-       _ -> false
-    end.
+-spec contains_crdt_tag(riak_object:value()) -> boolean().
+contains_crdt_tag(<<?TAG, _Rest/binary>>) ->
+    true;
+contains_crdt_tag(_ObjVal) ->
+    false.
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
