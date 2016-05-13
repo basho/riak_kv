@@ -105,22 +105,15 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 -spec start_link({raw, req_id(), pid()}, binary(), binary(), options()) ->
                         {ok, pid()} | {error, any()}.
 start_link(From, Bucket, Key, GetOptions) ->
-    case whereis(riak_kv_get_fsm_sj) of
-        undefined ->
-            %% Overload protection disabled 
-            Args = [From, Bucket, Key, GetOptions, true],
-            gen_fsm:start_link(?MODULE, Args, []);
-        _ ->
-            Args = [From, Bucket, Key, GetOptions, false],
-            case sidejob_supervisor:start_child(riak_kv_get_fsm_sj,
-                                                gen_fsm, start_link,
-                                                [?MODULE, Args, []]) of
-                {error, overload} ->
-                    riak_kv_util:overload_reply(From),
-                    {error, overload};
-                {ok, Pid} ->
-                    {ok, Pid}
-            end
+    Args = [From, Bucket, Key, GetOptions, false],
+    case sidejob_supervisor:start_child(riak_kv_get_fsm_sj,
+                                        gen_fsm, start_link,
+                                        [?MODULE, Args, []]) of
+        {error, overload} ->
+            riak_kv_util:overload_reply(From),
+            {error, overload};
+        {ok, Pid} ->
+            {ok, Pid}
     end.
 
 %% ===================================================================
