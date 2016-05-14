@@ -108,8 +108,9 @@ expand_query(?DDL{local_key = LK, partition_key = PK},
 
 %% Calulate the final result for an aggregate.
 -spec finalise_aggregate(#riak_sel_clause_v1{}, [any()]) -> [any()].
-finalise_aggregate(#riak_sel_clause_v1{ calc_type = aggregate,
-                                        finalisers = FinaliserFns }, Row) ->
+finalise_aggregate(#riak_sel_clause_v1{ calc_type = CalcType,
+                                        finalisers = FinaliserFns }, Row)
+                    when CalcType == aggregate; CalcType == group_by ->
     finalise_aggregate2(FinaliserFns, Row, Row).
 
 %%

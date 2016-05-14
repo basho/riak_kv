@@ -34,7 +34,7 @@
 
 %% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
--type select_result_type() :: rows | aggregate.
+-type select_result_type() :: rows | aggregate | group_by.
 
 -record(riak_sel_clause_v1,
         {
@@ -60,7 +60,9 @@
           is_executable = false :: boolean(),
           type          = sql   :: sql | timeseries,
           cover_context = undefined :: term(), %% for parallel queries
-          local_key                            %% prolly a mistake to put this here - should be in DDL
+          %% prolly a mistake to put this here - should be in DDL
+          local_key,
+          group_by = undefined :: undefined | integer()
         }).
 
 -record(riak_sql_describe_v1,

@@ -186,20 +186,35 @@ pop_next_query() ->
     self() ! pop_next_query.
 
 %%
-execute_query({query, ReceiverPid, QId, [Qry|_] = SubQueries, _},
+execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
               #state{ run_sub_qs_fn = RunSubQs } = State) ->
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
     %% all subqueries have the same select clause
-    ?SQL_SELECT{'SELECT' = Sel} = Qry,
-    #riak_sel_clause_v1{initial_state = InitialState} = Sel,
+
+    %%%%%% DANGER, HIGH VOLTAGE
+    ?SQL_SELECT{'SELECT' = Sel} = Qry1,
+    Qry2 = Qry1?SQL_SELECT{ group_by = 4,
+                            'SELECT' = Sel#riak_sel_clause_v1 {
+                                calc_type = group_by
+                            }},
+    %%%%%% DANGER, HIGH VOLTAGE
+
+    #riak_sel_clause_v1{initial_state = InitialState1} = Sel,
+    InitialState2 =
+        case sql_select_calc_type(Qry2) of
+            group_by ->
+                {group_by, InitialState1, dict:new()};
+            _ ->
+                InitialState1
+        end,
     SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
     ok = RunSubQs(SubQs),
     {ok, State#state{qid          = QId,
                      receiver_pid = ReceiverPid,
-                     qry          = Qry,
+                     qry          = Qry2,
                      sub_qrys     = Indices,
-                     result       = InitialState }}.
+                     result       = InitialState2 }}.
 
 %%
 add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
@@ -228,8 +243,36 @@ run_select_on_chunk(SubQId, Chunk, #state{ qry = Query,
         rows ->
             run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1);
         aggregate ->
-            run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1)
+            run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1);
+        group_by ->
+            run_select_on_group(Query, SelClause, DecodedChunk, QueryResult1)
     end.
+
+%%
+run_select_on_group(Query, SelClause, Chunk, QueryResult1) ->
+    lists:foldl(
+        fun(Row, Acc) ->
+            run_select_on_group_row(Query, SelClause, Row, Acc)
+        end, QueryResult1, Chunk).
+
+%%
+run_select_on_group_row(Query, SelClause, Row, QueryResult1) ->
+    {group_by, InitialGroupState, Dict1} = QueryResult1,
+    Key = select_group(Query, Row),
+    Aggregate1 =
+        case dict:find(Key, Dict1) of
+            error ->
+                InitialGroupState;
+            {ok, AggregateX} ->
+                AggregateX
+        end,
+    Aggregate2 = riak_kv_qry_compiler:run_select(SelClause, Row, Aggregate1),
+    Dict2 = dict:store(Key, Aggregate2, Dict1),
+    {group_by, InitialGroupState, Dict2}.
+
+%%
+select_group(Query, Row) ->
+    lists:nth(sql_select_group_by(Query), Row).
 
 %% Run the selection clause on results that accumulate rows
 run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1) ->
@@ -288,6 +331,20 @@ prepare_final_results(#state{
     catch
         error:divide_by_zero ->
             cancel_error_query(divide_by_zero, State)
+    end;
+prepare_final_results(#state{
+        result = {group_by, _, Dict},
+        qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = group_by} = Select }} = State) ->
+    try
+        FinaliseFn =
+            fun(_,V,Acc) ->
+                [riak_kv_qry_compiler:finalise_aggregate(Select, V) | Acc]
+            end,
+        GroupedRows = dict:fold(FinaliseFn, [], Dict),
+        prepare_final_results2(Select, GroupedRows)
+    catch
+        error:divide_by_zero ->
+            cancel_error_query(divide_by_zero, State)
     end.
 
 %%
@@ -302,6 +359,9 @@ sql_select_calc_type(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = Type
 %% Return the selection clause from a query
 sql_select_clause(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{clause = Clause}}) ->
     Clause.
+
+sql_select_group_by(?SQL_SELECT{ group_by = GroupBy }) ->
+    GroupBy.
 
 %%%===================================================================
 %%% Unit tests
