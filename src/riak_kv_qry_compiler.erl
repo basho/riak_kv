@@ -178,12 +178,18 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
             infer_col_type(DDL, ColASTX, Errors)
         end, [], Sel),
 
-    case sets:is_element(aggregate, ResultTypeSet) of
-        true  ->
+    IsGroupBy = (Q?SQL_SELECT.group_by /= []),
+    IsAggregate = sets:is_element(aggregate, ResultTypeSet),
+    if
+        IsGroupBy ->
+            Q3 = Q2#riak_sel_clause_v1{
+                   calc_type = group_by,
+                   col_names = get_col_names(DDL, Q) };
+        IsAggregate ->
             Q3 = Q2#riak_sel_clause_v1{
                    calc_type = aggregate,
                    col_names = get_col_names(DDL, Q) };
-        false ->
+        not IsAggregate ->
             Q3 = Q2#riak_sel_clause_v1{
                    calc_type = rows,
                    initial_state = [],

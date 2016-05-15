@@ -54,7 +54,7 @@
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
-          result        = []                  :: [{non_neg_integer(), list()}] | [{binary(), term()}],
+          result        = []                  :: [{non_neg_integer(), list()}] | [{binary(), term()}] | any(),
           run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun()
          }).
 
@@ -191,18 +191,10 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
     %% all subqueries have the same select clause
-
-    %%%%%% DANGER, HIGH VOLTAGE
     ?SQL_SELECT{'SELECT' = Sel} = Qry1,
-    Qry2 = Qry1?SQL_SELECT{ group_by = 4,
-                            'SELECT' = Sel#riak_sel_clause_v1 {
-                                calc_type = group_by
-                            }},
-    %%%%%% DANGER, HIGH VOLTAGE
-
     #riak_sel_clause_v1{initial_state = InitialState1} = Sel,
     InitialState2 =
-        case sql_select_calc_type(Qry2) of
+        case sql_select_calc_type(Qry1) of
             group_by ->
                 {group_by, InitialState1, dict:new()};
             _ ->
@@ -212,7 +204,7 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
     ok = RunSubQs(SubQs),
     {ok, State#state{qid          = QId,
                      receiver_pid = ReceiverPid,
-                     qry          = Qry2,
+                     qry          = Qry1,
                      sub_qrys     = Indices,
                      result       = InitialState2 }}.
 
@@ -272,7 +264,8 @@ run_select_on_group_row(Query, SelClause, Row, QueryResult1) ->
 
 %%
 select_group(Query, Row) ->
-    lists:nth(sql_select_group_by(Query), Row).
+    GroupByFields = sql_select_group_by(Query),
+    [lists:nth(N, Row) || {N,_} <- GroupByFields].
 
 %% Run the selection clause on results that accumulate rows
 run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1) ->
