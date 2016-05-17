@@ -24,14 +24,17 @@
          del_conditional_postcommit/1,
          get_conditional_postcommit/2]).
 
+-export([add_timeseries_postcommit/1,
+         del_timeseries_postcommit/1,
+         call_timeseries_postcommit/3]).
+
 %% Exported for internal use by `riak_kv_sup'
 -export([create_table/0]).
 
 %% Types
 -type hook()      :: {module(), atom()}.
--type hook_type() :: conditional_postcommit.
+-type hook_type() :: conditional_postcommit|timeseries_postcommit.
 -type bucket() :: riak_object:bucket().
--type key()    :: riak_object:key().
 -type bucket_props() :: riak_kv_bucket:props().
 
 %%%===================================================================
@@ -67,8 +70,8 @@ del_conditional_postcommit(Hook) ->
 %% This function invokes each registered conditional postcommit
 %% hook. Each hook will return either `false' or a list of active
 %% hooks. This function then returns the combined list of active hooks.
--spec get_conditional_postcommit({bucket(), key()}, bucket_props()) -> [any()].
-get_conditional_postcommit({{BucketType, Bucket}, _Key}, BucketProps) ->
+-spec get_conditional_postcommit(bucket(), bucket_props()) -> [any()].
+get_conditional_postcommit({BucketType, Bucket}, BucketProps) ->
     Hooks = get_hooks(conditional_postcommit),
     ActiveHooks =
         [ActualHook || {Mod, Fun} <- Hooks,
@@ -78,6 +81,36 @@ get_conditional_postcommit({{BucketType, Bucket}, _Key}, BucketProps) ->
 get_conditional_postcommit(_BKey, _BucketProps) ->
     %% For now, we only support typed buckets.
     [].
+
+%% @doc
+%% Add a global timeseries postcommit hook that is called for each
+%% timeseries PUT operation. The hook is of the form `{Module, Fun}'. The specified
+%% function will be called with three arguments:
+%%    {PartitionKey, ListOfEncodedValues}, {BucketType, Bucket}, BucketProps
+%%
+%% Unlike conditional postcommits, this *is* the postcommit hook. If a
+%% table/bucket type should not be subject to realtime replication,
+%% the bucket type properties should include `{repl, false}` or
+%% `{repl, fullsync}`.
+-spec add_timeseries_postcommit(hook()) -> ok.
+add_timeseries_postcommit(Hook) ->
+    add_hook(timeseries_postcommit, Hook).
+
+%% @doc Remove a previously registered timeseries postcommit hook
+-spec del_timeseries_postcommit(hook()) -> ok.
+del_timeseries_postcommit(Hook) ->
+    del_hook(timeseries_postcommit, Hook).
+
+%% @doc
+%% This function invokes each registered timeseries postcommit
+%% hook.
+-spec call_timeseries_postcommit(tuple(), bucket(), list()) -> ok.
+call_timeseries_postcommit({_PartitionIdx, _Data}=Batch, Bucket, BucketProps) ->
+    Hooks = get_hooks(timeseries_postcommit),
+    lists:foreach(fun({Mod, Fun}) ->
+                          Mod:Fun(Batch, Bucket, BucketProps)
+                  end, Hooks),
+    ok.
 
 %%%===================================================================
 

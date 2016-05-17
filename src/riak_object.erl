@@ -101,6 +101,7 @@
 -export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
 -export([get_ts_local_key/1]).
+-export([is_ts/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -129,6 +130,19 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
 newts(B, K, V, MD) ->
     new_int2(B, K, V, MD).
 
+-spec is_ts(riak_object()) -> {'true', pos_integer()} | 'false'.
+is_ts(RObj) ->
+    check_for_ddl(get_contents(RObj)).
+
+check_for_ddl([{Metadata, _V}]) ->
+    case dict:find(<<"ddl">>, Metadata) of
+        {ok, Version} ->
+            {true, Version};
+        _ ->
+            false
+    end;
+check_for_ddl(_) ->
+    false.
 
 %% internal version after all validation has been done
 new_int(B, K, V, MD) ->
@@ -228,7 +242,7 @@ reconcile(Objects, AllowMultiple) ->
 -spec get_ts_local_key(riak_object()) ->
         {ok, key()} | error.
 get_ts_local_key(RObj) when is_record(RObj, r_object) ->
-    % TODO 
+    % TODO
     % using update metadata while testing with ts_run2, updates should
     % be applied by this point!
     dict:find(?MD_TS_LOCAL_KEY, get_update_metadata(RObj)).
@@ -1072,7 +1086,7 @@ fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
     {Elems, <<RestBin/binary, MetaBin/binary>>}.
 
 %% @doc Encode the contents of a riak object, either using
-%% term_to_binary   (if Enc == erlang), or 
+%% term_to_binary   (if Enc == erlang), or
 %% msgpack encoding (if Enc == msgpack)
 encode(Bin, erlang) ->
     encode_maybe_binary(Bin);

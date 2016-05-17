@@ -79,13 +79,15 @@ compile_where_clause(?DDL{} = DDL,
                                  'WHERE'       = W,
                                  cover_context = Cover} = Q,
                      MaxSubQueries) ->
-    {RealCover, WhereModifications} = unwrap_cover(Cover),
-    case compile_where(DDL, W) of
-        {error, E} -> {error, E};
-        NewW ->
+    case {compile_where(DDL, W), unwrap_cover(Cover)} of
+        {{error, E}, _} ->
+            {error, E};
+        {_, {error, E}} ->
+            {error, E};
+        {NewW, {ok, {RealCover, WhereModifications}}} ->
             expand_query(DDL, Q?SQL_SELECT{cover_context = RealCover},
-                              update_where_for_cover(NewW, WhereModifications),
-                              MaxSubQueries)
+                         update_where_for_cover(NewW, WhereModifications),
+                         MaxSubQueries)
     end.
 
 %% now break out the query on quantum boundaries
@@ -922,12 +924,15 @@ rewrite2([#param_v1{name = [FieldName]} | T], Where1, Mod, Acc) ->
 
 %% Functions to assist with coverage chunks that redefine quanta ranges
 unwrap_cover(undefined) ->
-    {undefined, undefined};
-unwrap_cover(Cover) ->
-    {ok, {OpaqueContext, {FieldName, RangeTuple}}} =
-        riak_kv_pb_coverage:checksum_binary_to_term(Cover),
-    {riak_kv_pb_coverage:term_to_checksum_binary(OpaqueContext),
-     {FieldName, RangeTuple}}.
+    {ok, {undefined, undefined}};
+unwrap_cover(Cover) when is_binary(Cover) ->
+    case catch riak_kv_pb_coverage:checksum_binary_to_term(Cover) of
+        {ok, {OpaqueContext, {FieldName, RangeTuple}}} ->
+            {riak_kv_pb_coverage:term_to_checksum_binary(OpaqueContext),
+             {FieldName, RangeTuple}};
+        {error, invalid_checksum} ->
+            {error, invalid_coverage_context_checksum}
+    end.
 
 update_where_for_cover(Where, undefined) ->
     Where;
@@ -986,9 +991,11 @@ is_query_valid(?DDL{table = Table} = DDL, Q) ->
     riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(Q)).
 
 get_query(String) ->
+    get_query(String, undefined).
+get_query(String, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(String),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    riak_kv_ts_util:build_sql_record(select, Q, undefined).
+    riak_kv_ts_util:build_sql_record(select, Q, Cover).
 
 get_long_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++
@@ -2295,40 +2302,13 @@ two_element_key_range_cannot_match_test() ->
     DDL = get_ddl(
         "CREATE TABLE tabab("
         "a TIMESTAMP NOT NULL, "
-        "b SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,quantum(b, 15, 's')), a,b))"),
     {ok, Q} = get_query(
           "SELECT * FROM tab1 WHERE a = 1 AND b > 1 AND b < 1"),
     ?assertMatch(
         {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, <<_/binary>>}},
         compile(DDL, Q, 100)
-    ).
-
-quantum_is_not_last_element_test() ->
-    DDL = get_ddl(
-        "CREATE TABLE tab1("
-        "a SINT64 NOT NULL, "
-        "b TIMESTAMP NOT NULL, "
-        "c SINT64 NOT NULL, "
-        "PRIMARY KEY  ((a,quantum(b,1,'s'),c), a,b,c))"),
-    {ok, Q} = get_query(
-          "SELECT * FROM tab1 WHERE b >= 1000 AND b <= 3000 AND a = 10 AND c = 20"),
-    {ok, SubQueries} = compile(DDL, Q, 100),
-    SubQueryWheres = [S#riak_select_v1.'WHERE' || S <- SubQueries],
-    ?assertEqual(
-        [
-            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,1000},{<<"c">>,sint64,20}]},
-             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
-             {filter,[]}],
-            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,2000},{<<"c">>,sint64,20}]},
-             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
-             {filter,[]}],
-            [{startkey,[{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
-             {endkey,  [{<<"a">>,sint64,10},{<<"b">>,timestamp,3000},{<<"c">>,sint64,20}]},
-             {filter,[]},
-             {end_inclusive,true}]
-        ],
-        SubQueryWheres
     ).
 
 negate_an_aggregation_function_test() ->
@@ -2421,5 +2401,13 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
         ],
         SubQueryWheres
     ).
+
+coverage_context_not_a_tuple_or_invalid_checksum_test() ->
+    NotACheckSum = 34,
+    OfThisTerm = <<"f,a,f,a">>,
+    {ok, Q} = get_query("select a from t where a>0 and a<2", term_to_binary({NotACheckSum, OfThisTerm})),
+    ?assertEqual(
+       {error, invalid_coverage_context_checksum},
+       compile(get_ddl("create table t (a timestamp not null, primary key ((quantum(a,1,d)), a))"), Q, 100)).
 
 -endif.

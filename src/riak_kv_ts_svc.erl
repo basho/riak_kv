@@ -87,6 +87,9 @@ decode_query_common(Q, Cover) ->
 
 -spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
     {error, _} | {ok, ts_query_types()}.
+decode_query(#tsinterpolation{}, Cover)
+  when not (Cover == undefined orelse is_binary(Cover)) ->
+    {error, bad_coverage_context};
 decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
     case catch riak_ql_parser:ql_parse(
                  riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
@@ -258,7 +261,6 @@ sub_tsputreq(Mod, _DDL, #tsputreq{table = Table, rows = Rows},
             {reply, make_validate_rows_error_resp(BadRowIdxs), State}
     end.
 
-
 %% -----------
 %% get
 %% -----------
@@ -332,9 +334,35 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
 sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                                            timeout = Timeout} = Req,
                   State) ->
+
+    %% Construct a function to convert from TS local key to TS
+    %% partition key.
+    %%
+    %% This is needed because coverage filter functions must check the
+    %% hash of the partition key, not the local key, when folding over
+    %% keys in the backend.
+
+    KeyConvFn =
+        fun(Key) when is_binary(Key) ->
+                riak_kv_ts_util:row_to_key(sext:decode(Key), DDL, Mod);
+           (Key) ->
+                %% Key read from leveldb should always be binary.
+                %% This clause is just to keep dialyzer quiet
+                %% (otherwise dialyzer will complain about no local
+                %% return, since we have no way to spec the type
+                %% of Key for an anonymous function).
+                %%
+                %% Nonetheless, we log an error in case this branch is
+                %% ever exercised
+
+                lager:error("Key conversion function "
+                            "encountered a non-binary object key: ~p", [Key]),
+                Key
+        end,
+
     Result =
         riak_client:stream_list_keys(
-          riak_kv_ts_util:table_to_bucket(Table), Timeout,
+          riak_kv_ts_util:table_to_bucket(Table), Timeout, KeyConvFn,
           {riak_client, [node(), undefined]}),
     case Result of
         {ok, ReqId} ->
@@ -346,7 +374,6 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
         {error, Reason} ->
             {reply, make_failed_listkeys_resp(Reason), State}
     end.
-
 
 %% -----------
 %% coverage
@@ -416,6 +443,8 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
         %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
             {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
+        {error, invalid_coverage_context_checksum} ->
+            {reply, make_rpberrresp(?E_SUBMIT, "Query coverage context fails checksum"), State};
 
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
@@ -573,6 +602,8 @@ make_tsqueryresp(Data = {_ColumnNames, _ColumnTypes, _Rows}) ->
     {tsqueryresp, Data}.
 
 
+make_decoder_error_response(bad_coverage_context) ->
+    make_rpberrresp(?E_SUBMIT, "Bad coverage context");
 make_decoder_error_response({lexer_error, Msg}) ->
     make_rpberrresp(?E_PARSE_ERROR, flat_format("~s", [Msg]));
 make_decoder_error_response({LineNo, riak_ql_parser, Msg}) when is_integer(LineNo) ->

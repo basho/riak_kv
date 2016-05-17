@@ -48,7 +48,7 @@
          overload_reply/1,
          get_backend_config/3,
          is_modfun_allowed/2,
-	 get_bucket_from_req/1]).
+         get_bucket_from_req/1]).
 
 -include_lib("riak_kv_vnode.hrl").
 
