@@ -27,7 +27,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -export([test_link/7, test_link/5]).
 -endif.
--export([start/6, start_link/6, start_link/4]).
+-export([start/6, start_link/6, start/4, start_link/4]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([prepare/2,validate/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
@@ -89,10 +89,10 @@
 
 %% In place only for backwards compatibility
 start(ReqId,Bucket,Key,R,Timeout,From) ->
-    start_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}]).
+    start({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}]).
 
 start_link(ReqId,Bucket,Key,R,Timeout,From) ->
-    start_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}]).
+    start({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}]).
 
 %% @doc Start the get FSM - retrieve Bucket/Key with the options provided
 %%
@@ -102,9 +102,8 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 %%                             in some failure cases.
 %% {notfound_ok, boolean()}  - Count notfound reponses as successful.
 %% {timeout, pos_integer() | infinity} -  Timeout for vnode responses
--spec start_link({raw, req_id(), pid()}, binary(), binary(), options()) ->
-                        {ok, pid()} | {error, any()}.
-start_link(From, Bucket, Key, GetOptions) ->
+-spec start({raw, req_id(), pid()}, binary(), binary(), options()) -> {ok, pid()} | {error, any()}.
+start(From, Bucket, Key, GetOptions) ->
     Args = [From, Bucket, Key, GetOptions, false],
     case sidejob_supervisor:start_child(riak_kv_get_fsm_sj,
                                         gen_fsm, start_link,
@@ -115,6 +114,12 @@ start_link(From, Bucket, Key, GetOptions) ->
         {ok, Pid} ->
             {ok, Pid}
     end.
+
+%% Included for backward compatibility, in case someone is, say, passing around
+%% a riak_client instace between nodes during a rolling upgrade. The old
+%% `start_link' function has been renamed `start' since it doesn't actually link
+%% to the caller.
+start_link(From, Bucket, Key, GetOptions) -> start(From, Bucket, Key, GetOptions).
 
 %% ===================================================================
 %% Test API
