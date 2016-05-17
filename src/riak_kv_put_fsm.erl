@@ -33,7 +33,7 @@
 
 -behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
--export([start/6,start/7]).
+-export([start/3,start/6,start/7]).
 -export([start_link/3,start_link/6,start_link/7]).
 -export([set_put_coordinator_failure_timeout/1,
          get_put_coordinator_failure_timeout/0]).
@@ -134,9 +134,9 @@ start_link(ReqId,RObj,W,DW,Timeout,ResultPid) ->
     start_link(ReqId,RObj,W,DW,Timeout,ResultPid,[]).
 
 start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
-    start_link({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
+    start({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
 
-start_link(From, Object, PutOptions) ->
+start(From, Object, PutOptions) ->
     Args = [From, Object, PutOptions, false],
     case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
                                         gen_fsm, start_link,
@@ -147,6 +147,12 @@ start_link(From, Object, PutOptions) ->
         {ok, Pid} ->
             {ok, Pid}
     end.
+
+%% Included for backward compatibility, in case someone is, say, passing around
+%% a riak_client instace between nodes during a rolling upgrade. The old
+%% `start_link' function has been renamed `start' since it doesn't actually link
+%% to the caller.
+start_link(From, Object, PutOptions) -> start(From, Object, PutOptions).
 
 set_put_coordinator_failure_timeout(MS) when is_integer(MS), MS >= 0 ->
     application:set_env(riak_kv, put_coordinator_failure_timeout, MS);
