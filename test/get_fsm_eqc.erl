@@ -69,10 +69,16 @@ setup() ->
                 fun(_Bucket) ->
                         [dvv_enabled]
                 end),
+    meck:new(sidejob_resource_stats),
+    meck:expect(sidejob_resource_stats, usage,
+                fun(riak_kv_get_fsm_sj) ->
+                        app_helper:get_env(riak_kv, fake_get_fsm_usage)
+                end),
     ok.
 
 cleanup(_) ->
     fsm_eqc_util:cleanup_mock_servers(),
+    meck:unload(sidejob_resource_stats),
     meck:unload(riak_core_bucket),
     ok.
 
@@ -219,11 +225,7 @@ prop_basic_get() ->
         {SoftCap, HardCap, Actual, Roll} = RRAbort,
         application:set_env(riak_kv, read_repair_soft, SoftCap),
         application:set_env(riak_kv, read_repair_max, HardCap),
-        StatKey = [riak, riak_kv, node, gets, fsm, active],
-        % don't really care if the key doesn't exist when we delete it.
-        _ = exometer:delete(StatKey),
-        exometer:new(StatKey, counter),
-        exometer:update(StatKey, Actual),
+        application:set_env(riak_kv, fake_get_fsm_usage, Actual),
         fsm_eqc_util:set_fake_rng(?MODULE, Roll),
 
         {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
