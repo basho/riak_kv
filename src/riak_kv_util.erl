@@ -386,28 +386,13 @@ overload_reply(_) ->
     ok.
 
 puts_active() ->
-    case whereis(riak_kv_put_fsm_sj) of
-        undefined ->
-            riak_kv_get_put_monitor:puts_active();
-        _ ->
-            sidejob_resource_stats:usage(riak_kv_put_fsm_sj)
-    end.
+    sidejob_resource_stats:usage(riak_kv_put_fsm_sj).
 
 exact_puts_active() ->
-    case whereis(riak_kv_put_fsm_sj) of
-        undefined ->
-            riak_kv_get_put_monitor:puts_active();
-        _ ->
-            length(sidejob_supervisor:which_children(riak_kv_put_fsm_sj))
-    end.
+    length(sidejob_supervisor:which_children(riak_kv_put_fsm_sj)).
 
 gets_active() ->
-    case whereis(riak_kv_get_fsm_sj) of
-        undefined ->
-            riak_kv_get_put_monitor:gets_active();
-        _ ->
-            sidejob_resource_stats:usage(riak_kv_get_fsm_sj)
-    end.
+    sidejob_resource_stats:usage(riak_kv_get_fsm_sj).
 
 %% @doc Get backend config for backends without an associated application
 %% eg, yessir, memory

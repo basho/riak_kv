@@ -137,7 +137,7 @@ start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
     start({raw, ReqId, ResultPid}, RObj, [{w, W}, {dw, DW}, {timeout, Timeout} | Options]).
 
 start(From, Object, PutOptions) ->
-    Args = [From, Object, PutOptions, false],
+    Args = [From, Object, PutOptions],
     case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
                                         gen_fsm, start_link,
                                         [?MODULE, Args, []]) of
@@ -216,7 +216,7 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
 %%
 %% As test, but linked to the caller
 test_link(From, Object, PutOptions, StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions, true], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
 
 -endif.
 
@@ -226,7 +226,7 @@ test_link(From, Object, PutOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From, RObj, Options0, Monitor]) ->
+init([From, RObj, Options0]) ->
     BKey = {Bucket, Key} = {riak_object:bucket(RObj), riak_object:key(RObj)},
     CoordTimeout = get_put_coordinator_failure_timeout(),
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
@@ -238,7 +238,6 @@ init([From, RObj, Options0, Monitor]) ->
                        options = Options,
                        timing = riak_kv_fsm_timing:add_timing(prepare, []),
                        coordinator_timeout=CoordTimeout},
-    (Monitor =:= true) andalso riak_kv_get_put_monitor:put_fsm_spawned(self()),
     case Trace of
         true ->
             riak_core_dtrace:put_tag([Bucket, $,, Key]),

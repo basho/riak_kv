@@ -321,8 +321,7 @@ prop_basic_get() ->
                  {n_value, equals(length(History), ExpectedN)},
                  {repair, check_repair(Objects, RepairHistory, History, RRAbort)},
                  {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
-                 {distinct, all_distinct(Partitions)},
-                 {told_monitor, fsm_eqc_util:is_get_put_last_cast(get, GetPid)}
+                 {distinct, all_distinct(Partitions)}
                 ]))
     end).
 

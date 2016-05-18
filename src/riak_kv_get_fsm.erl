@@ -104,7 +104,7 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 %% {timeout, pos_integer() | infinity} -  Timeout for vnode responses
 -spec start({raw, req_id(), pid()}, binary(), binary(), options()) -> {ok, pid()} | {error, any()}.
 start(From, Bucket, Key, GetOptions) ->
-    Args = [From, Bucket, Key, GetOptions, false],
+    Args = [From, Bucket, Key, GetOptions],
     case sidejob_supervisor:start_child(riak_kv_get_fsm_sj,
                                         gen_fsm, start_link,
                                         [?MODULE, Args, []]) of
@@ -136,7 +136,7 @@ test_link(ReqId,Bucket,Key,R,Timeout,From,StateProps) ->
     test_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}], StateProps).
 
 test_link(From, Bucket, Key, GetOptions, StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Key, GetOptions, true], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Key, GetOptions], StateProps}, []).
 
 -endif.
 
@@ -145,7 +145,7 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
-init([From, Bucket, Key, Options0, Monitor]) ->
+init([From, Bucket, Key, Options0]) ->
     StartNow = os:timestamp(),
     Options = proplists:unfold(Options0),
     StateData = #state{from = From,
@@ -153,7 +153,6 @@ init([From, Bucket, Key, Options0, Monitor]) ->
                        bkey = {Bucket, Key},
                        timing = riak_kv_fsm_timing:add_timing(prepare, []),
                        startnow = StartNow},
-    (Monitor =:= true) andalso riak_kv_get_put_monitor:get_fsm_spawned(self()),
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
     case Trace of 
         true ->
