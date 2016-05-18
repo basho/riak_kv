@@ -162,13 +162,11 @@ process_stream({ReqId, From, {keys, []}}, ReqId,
     {ignore, State};
 
 process_stream({ReqId, From, {keys, CompoundKeys}}, ReqId,
-               State = #state{req = #tslistkeysreq{},
-                              req_ctx = ReqId,
-                              column_info = ColumnInfo}) ->
+               #state{req = #tslistkeysreq{},
+                      req_ctx = ReqId,
+                      key_transform_fn = EncodeStreamKeysFn} = State) ->
     riak_kv_keys_fsm:ack_keys(From),
-    Keys = riak_pb_ts_codec:encode_rows(
-             ColumnInfo, [tuple_to_list(sext:decode(A))
-                          || A <- CompoundKeys, A /= []]),
+    Keys = EncodeStreamKeysFn(CompoundKeys),
     {reply, #tslistkeysresp{keys = Keys, done = false}, State};
 
 process_stream({ReqId, {error, Error}}, ReqId,
@@ -178,6 +176,19 @@ process_stream({ReqId, Error}, ReqId,
                #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
     {error, {format, Error}, #state{}}.
 
+%%
+encode_rows_for_streaming(Mod, ColumnInfo, CompoundKeys1) ->
+    CompoundKeys2 = decode_keys_for_streaming(Mod, CompoundKeys1),
+    riak_pb_ts_codec:encode_rows(ColumnInfo, CompoundKeys2).
+
+%%
+decode_keys_for_streaming(_, []) ->
+    [];
+decode_keys_for_streaming(Mod, [[]|Tail]) ->
+    decode_keys_for_streaming(Mod, Tail);
+decode_keys_for_streaming(Mod, [K1|Tail]) ->
+    K2 = Mod:revert_ordering_on_local_key(sext:decode(K1)),
+    [K2|decode_keys_for_streaming(Mod, Tail)].
 
 %% ---------------------------------
 %% create_table, the only function for which we don't do
@@ -369,8 +380,13 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
             ColumnInfo =
                 [Mod:get_field_type(N)
                  || #param_v1{name = N} <- DDL?DDL.local_key#key_v1.ast],
+            EncodeStreamKeysFn =
+                fun(CompoundKeys) ->
+                    encode_rows_for_streaming(Mod, ColumnInfo, CompoundKeys)
+                end,
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
-                                                 column_info = ColumnInfo}};
+                                                 column_info = ColumnInfo,
+                                                 key_transform_fn = EncodeStreamKeysFn}};
         {error, Reason} ->
             {reply, make_failed_listkeys_resp(Reason), State}
     end.
