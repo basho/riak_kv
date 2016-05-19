@@ -492,6 +492,9 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     {endkey,   EndK}   = proplists:lookup(endkey, W),
     FieldOrders = Mod:field_orders(),
     LocalKeyLen = length(LKAST),
+    %% in the case where a local key is descending (it has the DESC keyword)
+    %% then the start and end keys will have been swapped, the start key will
+    %% be "greater" than the end key until ordering is applied.
     StartKey1 = key_prefix(Bucket,  key_to_storage_format_key(FieldOrders, StartK), LocalKeyLen),
     EndKey1 = key_prefix(Bucket, key_to_storage_format_key(FieldOrders, EndK), LocalKeyLen),
     %% append extra byte to the key when it is not inclusive so that it compares
