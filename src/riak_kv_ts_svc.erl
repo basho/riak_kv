@@ -191,15 +191,24 @@ process_stream({ReqId, _From, ReqChunk}, ReqId, #state{ req = ?SQL_SELECT{}, req
 %% Process streamed chunks from Riak TS queries. The request ID has already been
 %% checked before this function is called.
 process_stream_query(done, State) ->
-    {done, #tsqueryresp{ columns = [], rows = [], done = true }, State};
+    Response = {tsresponse, [
+      {column_names, []},
+      {column_types, []},
+      {done, true},
+      {rows, []}
+    ]},
+    {done, Response, State};
 process_stream_query({rows, []}, State) ->
     {ignore, State};
-process_stream_query({rows, {ColNames, ColTypes, Rows}}, State) ->
-    Encoded = #tsqueryresp{
-        columns = riak_pb_ts_codec:encode_columns(ColNames, ColTypes),
-        rows = riak_pb_ts_codec:encode_rows(ColTypes, Rows),
-        done = false },
-    {reply, Encoded, State};
+process_stream_query({rows, SubQueryId, {ColNames, ColTypes, Rows}}, State) ->
+    Response = {tsresponse, [
+      {column_names, ColNames},
+      {column_types, ColTypes},
+      {done, false},
+      {rows, [list_to_tuple(R) || R <- Rows]},
+      {sub_query_id, SubQueryId}
+    ]},
+    {reply, Response, State};
 process_stream_query({error, Error}, _) ->
     {error, {format, Error}, #state{}};
 process_stream_query(Error, _) ->

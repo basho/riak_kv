@@ -209,7 +209,7 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
                 QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
                 NSubQ = lists:delete(SubQId, SubQs),
                 maybe_stream_chunk_to_client(
-                    QueryResult2, State#state{ sub_qrys = NSubQ })
+                    SubQId, QueryResult2, State#state{ sub_qrys = NSubQ })
             catch
               error:divide_by_zero ->
                   cancel_error_query(divide_by_zero, State)
@@ -220,18 +220,18 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
     end.
 
 %%
-maybe_stream_chunk_to_client(QueryResult, #state{ qry = Query } = State) ->
+maybe_stream_chunk_to_client(SubQId, QueryResult, #state{ qry = Query } = State) ->
     case sql_select_streaming(Query) of
         true ->
-            ok = stream_chunk_to_client(QueryResult, State),
+            ok = stream_chunk_to_client(SubQId, QueryResult, State),
             State;
         false ->
             State#state{ result = QueryResult }
     end.
 
 %%
-stream_chunk_to_client(Chunk, #state{ receiver_pid = Pid, qid = QID }) ->
-    Pid ! {QID, self(), {rows, Chunk}},
+stream_chunk_to_client(SubQId, Chunk, #state{ receiver_pid = Pid, qid = QID }) ->
+    Pid ! {QID, self(), {rows, SubQId, Chunk}},
     ok.
 
 %%
