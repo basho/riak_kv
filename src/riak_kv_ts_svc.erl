@@ -368,7 +368,10 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 
     KeyConvFn =
         fun(Key) when is_binary(Key) ->
-                riak_kv_ts_util:lk_to_pk(sext:decode(Key), DDL, Mod);
+                PossiblyNegatedRow = sext:decode(Key),
+                LocalKey = riak_ql_ddl:get_local_key(DDL, PossiblyNegatedRow, Mod),
+                UnnegatedRow = riak_kv_ts_util:encode_typeval_key(LocalKey),
+                riak_kv_ts_util:row_to_key(UnnegatedRow, DDL, Mod);
            (Key) ->
                 %% Key read from leveldb should always be binary.
                 %% This clause is just to keep dialyzer quiet
