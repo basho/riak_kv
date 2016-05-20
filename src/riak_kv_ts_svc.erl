@@ -206,7 +206,7 @@ process_stream_query({rows, SubQueryId, {ColNames, ColTypes, Rows}}, State) ->
       {column_types, ColTypes},
       {done, false},
       {rows, [list_to_tuple(R) || R <- Rows]},
-      {sub_query_id, SubQueryId}
+      {continuation, <<SubQueryId:32>>}
     ]},
     {reply, Response, State};
 process_stream_query({error, Error}, _) ->
