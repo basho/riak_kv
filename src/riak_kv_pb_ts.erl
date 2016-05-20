@@ -48,8 +48,6 @@ decode(Code, Bin) when Code >= 90, Code =< 103 ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
         #tsqueryreq{query = Q, cover_context = Cover, stream = Stream} ->
-            %% FIXME this function can return {ok, Error} which is not allowed
-            %% according to the spec
             riak_kv_ts_svc:decode_query_common(Q, Cover, Stream);
         #tsgetreq{table = Table}->
             {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
