@@ -131,8 +131,6 @@ process(M = #tsdelreq{table = Table}, State) ->
 process(M = #tslistkeysreq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tslistkeysreq/4, M, State);
 
-%% No support yet for replacing coverage components; we'll ignore any
-%% value provided for replace_cover
 process(M = #tscoveragereq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tscoveragereq/4, M, State);
 
@@ -380,18 +378,24 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 %% -----------
 
 sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
-                                            query = Q},
+                                            query = Q,
+                                            replace_cover=R,
+                                            unavailable_cover=U},
                   State) ->
     Client = {riak_client, [node(), undefined]},
     %% all we need from decode_query is to compile the query,
     %% but also to check permissions
     case decode_query(Q, undefined) of
         {_QryType, {ok, SQL}} ->
-            case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
+            %% Make sure, if we pass a replacement cover, we use it to
+            %% determine the proper where range
+            case riak_kv_ts_api:compile_to_per_quantum_queries(Mod,
+                                                               SQL?SQL_SELECT{cover_context=R}) of
                 {ok, Compiled} ->
                     Bucket = riak_kv_ts_util:table_to_bucket(Table),
                     {reply,
-                     {tscoverageresp, riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, [])},
+                     {tscoverageresp,
+                      riak_kv_ts_util:sql_to_cover(Client, Compiled, Bucket, R, U, [])},
                      State};
                 {error, Reason} ->
                     {reply, make_rpberrresp(

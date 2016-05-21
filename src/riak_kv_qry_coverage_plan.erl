@@ -24,10 +24,34 @@
 
 -export([
          create_plan/5,
-         create_plan/6
+         create_plan/6,
+         replace_chunk/7,
+         cover_to_proplist/1
         ]).
 
 -include("riak_kv_ts.hrl").
+
+-type index() :: chash:index_as_int().
+
+%% In `riak_kv_ts_util' we should have added the quantum boundary
+%% metadata as more keys in the native coverage proplist, but we
+%% didn't. In TS 1.6 (or merged KV equivalent) we can and should fix
+%% that and change this to an identity function (or, hopefully, remove
+%% it entirely; `riak_client' should stop calling it).
+-spec cover_to_proplist(tuple()) -> list(tuple()).
+cover_to_proplist({Proplist, _WhereBoundary}) ->
+    Proplist.
+
+-spec replace_chunk(VnodeIdx :: index(),
+                    Node :: node(),
+                    Filters :: list(index()),
+                    Metadata :: list(tuple()),
+                    NVal :: pos_integer(),
+                    ReqId :: pos_integer(),
+                    DownNodes :: list(node())) ->
+                           {error, term()} | list(list()).
+replace_chunk(_VnodeIdx, Node, _Filters, [{Query, Bucket}], NVal, ReqId, DownNodes) ->
+    do_plan({Query, Bucket}, NVal, 1, ReqId, riak_kv, undefined, [Node] ++ DownNodes).
 
 %%
 create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService) ->
@@ -39,8 +63,11 @@ create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService, Request) when n
     %% that's a battle for another day
     create_plan({Query, Bucket}, NVal, PVC,
                 erlang:phash2({self(), os:timestamp()}), NodeCheckService, Request);
+create_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService, Request) ->
+    do_plan({Query, Bucket}, NVal, PVC, ReqId, NodeCheckService, Request, []).
+
 %% PVC is generally 1 anyway, no support for it yet
-create_plan({Query, Bucket}, NVal, _PVC, ReqId, NodeCheckService, _Request) ->
+do_plan({Query, Bucket}, NVal, _PVC, ReqId, NodeCheckService, _Request, DownNodes) ->
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
     RingSize = chashbin:num_partitions(CHBin),
     UnavailableVNodes =
@@ -52,7 +79,10 @@ create_plan({Query, Bucket}, NVal, _PVC, ReqId, NodeCheckService, _Request) ->
         [] ->
             {error, no_primaries_available};
         VNodes when is_list(VNodes) ->
-            AvailVNodes = filter_down_vnodes(VNodes, UnavailableVNodes, RingSize),
+            AvailVNodes = drop_nodes(
+                            filter_down_vnodes(VNodes, UnavailableVNodes, RingSize),
+                            DownNodes),
+
             case AvailVNodes of
                 [] ->
                     {error, no_primaries_available};
@@ -77,6 +107,12 @@ filter_down_vnodes(VNodes, Unavail, RingSize) ->
     RingIndexInc = chash:ring_increment(RingSize),
     VNodes -- lists:map(fun({vnode_id, Id, Node}) -> {Id * RingIndexInc, Node} end,
                         Unavail).
+
+%% Take the results from filter_down_vnodes/3 and drop any vnodes on
+%% nodes that the client believes to be unavailable
+drop_nodes(Vnodes, DownNodes) ->
+    lists:filter(fun({_Index, Node}) -> not lists:member(Node, DownNodes) end,
+                 Vnodes).
 
 %% This is fugly because the physical format of the startkey
 %% which is neede by eleveldb is being used by the query

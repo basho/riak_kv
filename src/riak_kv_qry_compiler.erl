@@ -832,9 +832,20 @@ unwrap_cover(undefined) ->
     {ok, {undefined, undefined}};
 unwrap_cover(Cover) when is_binary(Cover) ->
     case catch riak_kv_pb_coverage:checksum_binary_to_term(Cover) of
-        {ok, {OpaqueContext, {FieldName, RangeTuple}}} ->
-            {riak_kv_pb_coverage:term_to_checksum_binary(OpaqueContext),
-             {FieldName, RangeTuple}};
+        {ok, {Proplist, {FieldName, RangeTuple}}} ->
+            {ok, {riak_kv_pb_coverage:term_to_checksum_binary(Proplist),
+             {FieldName, RangeTuple}}};
+
+        %% As of 1.6 or the equivalent merged KV version, we can start
+        %% generating simpler coverage chunks for timeseries that are
+        %% pure property lists instead of a tuple with the
+        %% `vnode_hash'/`node' property list as first element and the
+        %% local where clause parameters as second.
+        {ok, Proplist} ->
+            FieldName = proplists:get_value(ts_where_field, Proplist),
+            RangeTuple = proplists:get_value(ts_where_range, Proplist),
+            {ok, {Cover, {FieldName, RangeTuple}}};
+
         {error, invalid_checksum} ->
             {error, invalid_coverage_context_checksum}
     end.
