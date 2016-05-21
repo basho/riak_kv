@@ -62,7 +62,7 @@
           cover_context = undefined :: term(), %% for parallel queries
           %% prolly a mistake to put this here - should be in DDL
           local_key,
-          group_by = undefined :: undefined | integer()
+          group_by = [] :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}]
         }).
 
 -record(riak_sql_describe_v1,
