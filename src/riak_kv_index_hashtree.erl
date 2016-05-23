@@ -235,7 +235,7 @@ clear(Tree) ->
 
 %% @doc Expire the specified index_hashtree
 expire(Tree) ->
-    gen_server:call(Tree, expire, infinity).
+    gen_server:cast(Tree, expire).
 
 %% @doc Estimate total number of keys in index_hashtree
 estimate_keys(Tree) ->
@@ -343,11 +343,6 @@ handle_call(clear, _From, State) ->
     State2 = clear_tree(State),
     {reply, ok, State2};
 
-handle_call(expire, _From, State) ->
-    State2 = State#state{expired=true},
-    lager:info("Manually expired tree: ~p", [State#state.index]),
-    {reply, ok, State2};
-
 handle_call(estimate_keys, _From,  State=#state{trees=Trees}) ->
     EstimateNrKeys =
         orddict:fold(fun(_, Tree, Acc) ->
@@ -397,6 +392,11 @@ handle_cast(build_failed, State) ->
 handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
     {noreply, State2};
+
+handle_cast(expire, State) ->
+    State2 = State#state{expired=true},
+    lager:info("Manually expired tree: ~p", [State#state.index]),
+    {reply, ok, State2};
 
 handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
     %% Concurrency lock already acquired, try to acquire tree lock.
@@ -997,8 +997,9 @@ close_trees(State=#state{trees=Trees}) ->
     _ = [hashtree:close(Tree) || {_IdxN, Tree} <- Trees2],
     State#state{trees=undefined}.
 
+-spec get_all_locks(build | rehash, index(), pid()) -> boolean().
 get_all_locks(Type, Index, Pid) ->
-    case riak_kv_entropy_manager:get_lock(Type, Pid) of
+    try riak_kv_entropy_manager:get_lock(Type, Pid) of
         ok ->
             case maybe_get_vnode_lock(Type, Index, Pid) of
                 ok ->
@@ -1006,8 +1007,13 @@ get_all_locks(Type, Index, Pid) ->
                 _ ->
                     false
             end;
-        _ ->
+        Other ->
+            lager:debug("Could not get lock: ~p", [Other]),
             false
+    catch exit:{timeout,_} ->
+        riak_kv_entropy_manager:release_lock(Pid),
+        lager:debug("Could not get lock due to timeout."),
+        false
     end.
 
 maybe_get_vnode_lock(rehash, _Partition, _Pid) ->
