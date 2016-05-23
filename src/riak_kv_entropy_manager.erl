@@ -33,6 +33,7 @@
          cancel_exchanges/0,
          get_lock/1,
          get_lock/2,
+         release_lock/1,
          requeue_poke/1,
          start_exchange_remote/3,
          exchange_status/4,
@@ -79,6 +80,7 @@
 
 -define(DEFAULT_CONCURRENCY, 2).
 -define(DEFAULT_BUILD_LIMIT, {1, 3600000}). %% Once per hour
+-define(KV_ENTROPY_LOCK_TIMEOUT, app_helper:get_env(riak_kv, anti_entropy_lock_timeout, 10000)).
 -define(AAE_THROTTLE_ENV_KEY, aae_throttle_sleep_time).
 -define(AAE_THROTTLE_KILL_ENV_KEY, aae_throttle_kill_switch).
 
@@ -100,7 +102,11 @@ get_lock(Type) ->
 %%      the lock with the provided pid.
 -spec get_lock(any(), pid()) -> ok | max_concurrency.
 get_lock(Type, Pid) ->
-    gen_server:call(?MODULE, {get_lock, Type, Pid}, infinity).
+    gen_server:call(?MODULE, {get_lock, Type, Pid}, ?KV_ENTROPY_LOCK_TIMEOUT).
+
+-spec release_lock(pid()) -> ok.
+release_lock(Pid) ->
+    gen_server:cast(?MODULE, {release_lock, Pid}).
 
 %% @doc Acquire the necessary locks for an entropy exchange with the specified
 %%      remote vnode. The request is sent to the remote entropy manager which
@@ -306,6 +312,10 @@ handle_call(cancel_exchanges, _From, State=#state{exchanges=Exchanges}) ->
     {reply, Indices, State};
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
+
+handle_cast({release_lock, Pid}, S) ->
+    S2 = maybe_release_lock(Pid, S),
+    {noreply, S2};
 
 handle_cast({requeue_poke, Index}, State) ->
     State2 = requeue_poke(Index, State),
