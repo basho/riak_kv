@@ -136,7 +136,11 @@ process(M = #tslistkeysreq{table = Table}, State) ->
 process(M = #tscoveragereq{table = Table}, State) ->
     check_table_and_call(Table, fun sub_tscoveragereq/4, M, State);
 
-%% this is tsqueryreq, subdivided per query type in its SQL
+%% The following heads of `process' are all, in terms of protobuffer
+%% structures, a `#tsqueryreq{}', subdivided per query type (CREATE
+%% TABLE, SELECT, DESCRIBE, INSERT). The first argument will be the
+%% specific SQL converted from the original `#tsqueryreq{}' in
+%% `riak_kv_pb_ts:decode' via `decode_query_common').
 process({DDL = ?DDL{}, WithProperties}, State) ->
     %% the only one that doesn't require an activated table
     create_table({DDL, WithProperties}, State);
