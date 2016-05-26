@@ -20,3 +20,4 @@ Unknown types:
   mochijson2:json_value/0
   riak_dt:operation/0
   riak_dt:value/0
+The pattern {'reqid', ReqId} can never match the type {'error',_}

@@ -26,7 +26,7 @@
 
 -export([
          apply_timeseries_bucket_props/3,
-         build_sql_record/3,
+         build_sql_record/4,
          encode_typeval_key/1,
          get_column_types/2,
          get_table_ddl/1,
@@ -65,7 +65,7 @@ sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
     {From, Select, Where}.
 
 %% Convert the proplist obtained from the QL parser
-build_sql_record(select, SQL, Cover) ->
+build_sql_record(select, SQL, Cover, Stream) ->
     T = proplists:get_value(tables, SQL),
     F = proplists:get_value(fields, SQL),
     L = proplists:get_value(limit, SQL),
@@ -78,15 +78,16 @@ build_sql_record(select, SQL, Cover) ->
                          'WHERE'    = W,
                          'LIMIT'    = L,
                          helper_mod = riak_ql_ddl:make_module_name(T),
-                         cover_context = Cover}
+                         cover_context = Cover,
+                         stream = Stream }
             };
         false ->
             {error, <<"Must provide exactly one table name">>}
     end;
-build_sql_record(describe, SQL, _Cover) ->
+build_sql_record(describe, SQL, _Cover, _Stream) ->
     D = proplists:get_value(identifier, SQL),
     {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
-build_sql_record(insert, SQL, _Cover) ->
+build_sql_record(insert, SQL, _Cover, _Stream) ->
     T = proplists:get_value(table, SQL),
     case is_binary(T) of
         true ->
@@ -314,7 +315,7 @@ explain_query(DDL, QueryString) ->
 %%
 explain_compile_query(QueryString) ->
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(QueryString)),
-    build_sql_record(select, Q, undefined).
+    build_sql_record(select, Q, undefined, false).
 
 %%
 explain_sub_query(#riak_select_v1{ 'WHERE' = SubQueryWhere }) ->

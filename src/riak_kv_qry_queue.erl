@@ -104,9 +104,9 @@ init([MaxQueryLength]) ->
 handle_call(blocking_pop, From, State) ->
     do_blocking_pop(From, State);
 handle_call({push_query, ReceivePid, Qry, DDL}, _, State) ->
-    QId = {node(), make_ref()},
+    QId = mk_reqid(),
     QueryItem = {query, ReceivePid, QId, Qry, DDL},
-    do_push_query(QueryItem, State).
+    do_push_query(QId, QueryItem, State).
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
 %% @private
@@ -137,6 +137,11 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 %%
+mk_reqid() ->
+    %% only has to be unique per-pid
+    erlang:phash2({self(), os:timestamp()}).
+
+%%
 do_blocking_pop(From,
                 #state{ queued_qrys = Queue1,
                         waiting_workers = WaitingWorkers } = State1) ->
@@ -154,7 +159,7 @@ do_blocking_pop(From,
     end.
 
 %%
-do_push_query(QueryItem,
+do_push_query(QId, QueryItem,
               #state{ max_q_len = MaxQLen,
                       queued_qrys = Queue1,
                       reply_fn = ReplyFn,
@@ -172,12 +177,12 @@ do_push_query(QueryItem,
                     State2 =
                         State1#state{ queued_qrys = queue:in(QueryItem, Queue1),
                                       waiting_workers = WaitingWorkers2 },
-                    {reply, ok, State2}
+                    {reply, {ok, QId}, State2}
             end;
         {{value, Worker}, WaitingWorkers2} ->
             % there is a waiting worker so send it straight on
             _ = ReplyFn(Worker, QueryItem),
-            {reply, ok, State1#state{ waiting_workers = WaitingWorkers2 }}
+            {reply, {ok, QId}, State1#state{ waiting_workers = WaitingWorkers2 }}
     end.
 
 %%%===================================================================
@@ -205,35 +210,40 @@ do_blocking_pop_2_test() ->
 
 % reply to a waiting worker with the pushed query
 do_push_query_1_test() ->
-    Ref = make_ref(),
+    ReqId = mk_reqid(),
     State = #state{
-        reply_fn = fun(test_from, test_query) -> put(Ref, Ref) end
+        reply_fn = fun(test_from, test_query) -> put(ReqId, ReqId) end
     },
     ?assertEqual(
         do_push_query(
+            ReqId,
             test_query,
             State#state{ waiting_workers = ?Q(test_from) }),
-        {reply, ok, State}
+        {reply, {ok,ReqId}, State}
     ),
     % test that the reply function was called
     ?assertEqual(
-        Ref,
-        get(Ref)
+        ReqId,
+        get(ReqId)
     ).
 
 % no worker is waiting so queue the query
 do_push_query_2_test() ->
+    ReqId = mk_reqid(),
     ?assertEqual(
         do_push_query(
+            ReqId,
             test_query,
             #state{}),
-        {reply, ok, #state{ queued_qrys = ?Q(test_query) }}
+        {reply, {ok,ReqId}, #state{ queued_qrys = ?Q(test_query) }}
     ).
 
 % no worker is waiting so queue the query with other queries queued
 do_push_query_3_test() ->
-    {reply, ok, State} =
+    ReqId = mk_reqid(),
+    {reply, {ok,ReqId}, State} =
         do_push_query(
+            ReqId,
             test_query_3,
             #state{ max_q_len = 3, queued_qrys = ?Q([test_query_2,test_query_1]) }),
     ?assertEqual(
@@ -246,7 +256,7 @@ do_push_query_4_test() ->
     State = #state{ max_q_len = 1, queued_qrys = ?Q([test_query_1]) },
     ?assertEqual(
         {reply, {error, overload}, State},
-        do_push_query(test_query_3, State)
+        do_push_query(mk_reqid(), test_query_3, State)
     ).
 
 -endif.

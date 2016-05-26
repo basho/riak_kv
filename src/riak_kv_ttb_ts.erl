@@ -48,8 +48,8 @@ init() ->
 decode(?TTB_MSG_CODE, Bin) ->
     Msg = riak_ttb_codec:decode(Bin),
     case Msg of
-        #tsqueryreq{query = Q, cover_context = Cover} ->
-            riak_kv_ts_svc:decode_query_common(Q, Cover);
+        #tsqueryreq{query = Q, cover_context = Cover, stream = Stream} ->
+            riak_kv_ts_svc:decode_query_common(Q, Cover, Stream);
         #tsgetreq{table = Table}->
             {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
         #tsputreq{table = Table} ->
@@ -66,5 +66,5 @@ process(Request, State) ->
     riak_kv_ts_svc:process(Request, State).
 
 %% TS TTB messages do not support streaming yet
-process_stream(_, _, _) ->
-    {error, "Not Supported", #state{}}.
+process_stream(Chunk, ReqId, State) ->
+    riak_kv_ts_svc:process_stream(Chunk, ReqId, State).

@@ -60,7 +60,8 @@
           is_executable = false :: boolean(),
           type          = sql   :: sql | timeseries,
           cover_context = undefined :: term(), %% for parallel queries
-          local_key                            %% prolly a mistake to put this here - should be in DDL
+          local_key,                           %% prolly a mistake to put this here - should be in DDL
+          stream :: boolean()          
         }).
 
 -record(riak_sql_describe_v1,

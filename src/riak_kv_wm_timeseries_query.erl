@@ -197,7 +197,7 @@ process_post(RD, #ctx{sql_type = QueryType,
                       mod = Mod} = Ctx) ->
     DDL = Mod:get_ddl(), %% might be faster to store this earlier on
     case riak_kv_ts_api:query(SQL, DDL) of
-        {ok, Data} ->
+        {result_set, Data} ->
             {ColumnNames, _ColumnTypes, Rows} = Data,
             Json = to_json({ColumnNames, Rows}),
             {true, wrq:append_to_response_body(Json, RD), Ctx};
@@ -248,8 +248,10 @@ compile_query(QueryStr) ->
         {ddl, _DDL, _Props} = Res ->
             Res;
         {Type, Compiled} ->
+            Cover = undefined,
+            Stream = false,
             {ok, SQL} = riak_kv_ts_util:build_sql_record(
-                          Type, Compiled, undefined),
+                          Type, Compiled, Cover, Stream),
             {Type, SQL, undefined}
     end.
 

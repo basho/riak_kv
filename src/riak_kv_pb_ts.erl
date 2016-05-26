@@ -47,8 +47,8 @@ init() ->
 decode(Code, Bin) when Code >= 90, Code =< 103 ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #tsqueryreq{query = Q, cover_context = Cover} ->
-            riak_kv_ts_svc:decode_query_common(Q, Cover);
+        #tsqueryreq{query = Q, cover_context = Cover, stream = Stream} ->
+            riak_kv_ts_svc:decode_query_common(Q, Cover, Stream);
         #tsgetreq{table = Table}->
             {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
         #tsputreq{table = Table} ->
@@ -84,7 +84,6 @@ encode_response({reply, {tsgetresp, {CNames, CTypes, Rows}}, State}) ->
     R = riak_pb_ts_codec:encode_rows(CTypes, Rows),
     Encoded = #tsgetresp{columns = C, rows = R},
     {reply, Encoded, State};
-
 encode_response({reply, {tscoverageresp, Entries}, State}) ->
     Encoded = #tscoverageresp{entries = riak_pb_ts_codec:encode_cover_list(Entries)},
     {reply, Encoded, State};

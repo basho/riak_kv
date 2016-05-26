@@ -51,11 +51,12 @@
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
 -define(E_NOTFOUND,          1021).
+-define(E_QUERY_NOT_STREAMABLE, 1022).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
 
--export([decode_query_common/2,
+-export([decode_query_common/3,
          process/2,
          process_stream/3]).
 
@@ -73,38 +74,43 @@
               ts_query_response/0, ts_query_responses/0,
               ts_query_types/0]).
 
-decode_query_common(Q, Cover) ->
-    case decode_query(Q, Cover) of
-        {QueryType, {ok, Query}} ->
-            {ok, Query, decode_query_permissions(QueryType, Query)};
+-spec decode_query_common(Query::#tsinterpolation{},
+                          Cover::term(),
+                          Stream::boolean()) -> {ok, ?SQL_SELECT{}, Permissions::term()}.
+decode_query_common(Q, Cover, Stream) ->
+    case decode_query(Q, Cover, Stream) of
         {_QueryType, {error, Error}} ->
             {ok, make_decoder_error_response(Error)};
         {error, Error} ->
             %% convert error returns to ok's, this means it will be passed into
             %% process which will not process it and return the error.
-            {ok, make_decoder_error_response(Error)}
+            {ok, make_decoder_error_response(Error)};
+        {QueryType, Query} ->
+            {ok, Query, decode_query_permissions(QueryType, Query)}
     end.
 
--spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
+-spec decode_query(Query::#tsinterpolation{}, Cover::term(), Stream::boolean()) ->
     {error, _} | {ok, ts_query_types()}.
-decode_query(#tsinterpolation{}, Cover)
+decode_query(#tsinterpolation{}, Cover, _)
   when not (Cover == undefined orelse is_binary(Cover)) ->
     {error, bad_coverage_context};
-decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
+decode_query(#tsinterpolation{base = BaseQuery}, Cover, Stream) ->
     case catch riak_ql_parser:ql_parse(
                  riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
                    binary_to_list(BaseQuery))) of
         {ddl, DDL, WithProperties} ->
-            {ddl, {ok, {DDL, WithProperties}}};
-        {QryType, SQL} when QryType /= error,
-                            QryType /= 'EXIT' ->
-            {QryType, riak_kv_ts_util:build_sql_record(QryType, SQL, Cover)};
+            {ddl, {DDL, WithProperties}};
         {'EXIT', {Reason, _StackTrace}} ->
             {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
-            {error, Other}
+            {error, Other};
+        {QryType, SQL} ->
+            {ok, SqlRecord} =
+                riak_kv_ts_util:build_sql_record(QryType, SQL, Cover, Stream),
+            {QryType, SqlRecord}
     end.
 
+%%
 decode_query_permissions(QryType, {DDL = ?DDL{}, _WithProps}) ->
     decode_query_permissions(QryType, DDL);
 decode_query_permissions(QryType, Qry) ->
@@ -180,6 +186,36 @@ process_stream({ReqId, {error, Error}}, ReqId,
     {error, {format, Error}, #state{}};
 process_stream({ReqId, Error}, ReqId,
                #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
+    {error, {format, Error}, #state{}};
+process_stream({ReqId, ReqChunk}, ReqId, #state{ req = ?SQL_SELECT{}, req_ctx = ReqId } = State) ->
+    process_stream_query(ReqChunk, State);
+process_stream({ReqId, _From, ReqChunk}, ReqId, #state{ req = ?SQL_SELECT{}, req_ctx = ReqId } = State) ->
+    process_stream_query(ReqChunk, State).
+
+%% Process streamed chunks from Riak TS queries. The request ID has already been
+%% checked before this function is called.
+process_stream_query(done, State) ->
+    Response = {tsresponse, [
+      {column_names, []},
+      {column_types, []},
+      {done, true},
+      {rows, []}
+    ]},
+    {done, Response, State};
+process_stream_query({rows, []}, State) ->
+    {ignore, State};
+process_stream_query({rows, SubQueryId, {ColNames, ColTypes, Rows}}, State) ->
+    Response = {tsresponse, [
+      {column_names, ColNames},
+      {column_types, ColTypes},
+      {done, false},
+      {rows, [list_to_tuple(R) || R <- Rows]},
+      {continuation, <<SubQueryId:32>>}
+    ]},
+    {reply, Response, State};
+process_stream_query({error, Error}, _) ->
+    {error, {format, Error}, #state{}};
+process_stream_query(Error, _) ->
     {error, {format, Error}, #state{}}.
 
 
@@ -389,7 +425,8 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
     Client = {riak_client, [node(), undefined]},
     %% all we need from decode_query is to compile the query,
     %% but also to check permissions
-    case decode_query(Q, undefined) of
+    Stream = false,
+    case decode_query(Q, undefined, Stream) of
         {_QryType, {ok, SQL}} ->
             case riak_kv_ts_api:compile_to_per_quantum_queries(Mod, SQL) of
                 {ok, Compiled} ->
@@ -416,10 +453,12 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
                      {reply, ts_query_responses() | #rpberrorresp{}, #state{}}.
 sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
     case riak_kv_ts_api:query(SQL, DDL) of
-        {ok, {ColNames, ColTypes, LdbNativeRows}} ->
+        {result_set, {ColNames, ColTypes, LdbNativeRows}} ->
             Rows = [list_to_tuple(R) || R <- LdbNativeRows],
             {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State};
-
+        {reqid, ReqId} ->
+            State2 = State#state{ req = SQL, req_ctx = ReqId },
+            {reply, {stream, ReqId}, State2};
         %% the following timeouts are known and distinguished:
         {error, no_type} ->
             {reply, make_table_not_activated_resp(Table), State};

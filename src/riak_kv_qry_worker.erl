@@ -51,7 +51,7 @@
 
 -record(state, {
           qry           = none                :: none | ?SQL_SELECT{},
-          qid           = undefined           :: undefined | {node(), non_neg_integer()},
+          qid           = undefined           :: undefined | non_neg_integer(),
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
           result        = []                  :: [{non_neg_integer(), list()}] | [{binary(), term()}],
@@ -208,8 +208,8 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
             try
                 QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
                 NSubQ = lists:delete(SubQId, SubQs),
-                State#state{result   = QueryResult2,
-                            sub_qrys = NSubQ}
+                maybe_stream_chunk_to_client(
+                    SubQId, QueryResult2, State#state{ sub_qrys = NSubQ })
             catch
               error:divide_by_zero ->
                   cancel_error_query(divide_by_zero, State)
@@ -220,22 +220,54 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
     end.
 
 %%
+maybe_stream_chunk_to_client(SubQId, QueryResult, #state{ qry = Query } = State) ->
+    case sql_select_streaming(Query) of
+        true ->
+            ok = stream_chunk_to_client(SubQId, QueryResult, State),
+            State;
+        false ->
+            State#state{ result = QueryResult }
+    end.
+
+%%
+stream_chunk_to_client(SubQId, Chunk, #state{ receiver_pid = Pid, qid = QID }) ->
+    Pid ! {QID, self(), {rows, SubQId, Chunk}},
+    ok.
+
+%%
+stream_done_to_client(#state{ receiver_pid = Pid, qid = QID }) ->
+    Pid ! {QID, done},
+    ok.
+
+%%
 run_select_on_chunk(SubQId, Chunk, #state{ qry = Query,
                                            result = QueryResult1 }) ->
     DecodedChunk = decode_results(lists:flatten(Chunk)),
     SelClause = sql_select_clause(Query),
+    Stream = sql_select_streaming(Query),
     case sql_select_calc_type(Query) of
+        rows when Stream == true ->
+            ColTypes = sql_select_column_types(Query),
+            ColNames = sql_select_column_names(Query),
+            run_select_on_streamable_chunk(
+                ColNames, ColTypes, SelClause, DecodedChunk);
         rows ->
             run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1);
         aggregate ->
             run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1)
     end.
 
+%%
+run_select_on_streamable_chunk(ColNames, ColTypes, SelClause, DecodedChunk) ->
+    SelectedRows =
+        [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
+    {ColNames, ColTypes, SelectedRows}.
+
 %% Run the selection clause on results that accumulate rows
 run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1) ->
-    IndexedChunks =
+    SelectedRows =
         [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
-    [{SubQId, IndexedChunks} | QueryResult1].
+    [{SubQId, SelectedRows} | QueryResult1].
 
 %%
 run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
@@ -253,20 +285,28 @@ cancel_error_query(Error, #state{ receiver_pid = ReceiverPid}) ->
     new_state().
 
 %%
-subqueries_done(QId, #state{qid          = QId,
-                            receiver_pid = ReceiverPid,
-                            sub_qrys     = SubQQ} = State) ->
+subqueries_done(QId, #state{qid = QId, sub_qrys = SubQQ} = State) ->
     case SubQQ of
         [] ->
             QueryResult2 = prepare_final_results(State),
-            %   send the results to the waiting client process
-            ReceiverPid ! {ok, QueryResult2},
+            send_final_results_to_client(QueryResult2, State),
             pop_next_query(),
             % clean the state of query specfic data, ready for the next one
             new_state();
         _ ->
             % more sub queries are left to run
             State
+    end.
+
+%%
+send_final_results_to_client(FinalResult, #state{ qry = Query,
+                                                  receiver_pid = ReceiverPid } = State) ->
+    case sql_select_streaming(Query) of
+        true ->
+            % ok = stream_chunk_to_client(FinalResult, State),
+            ok = stream_done_to_client(State);
+        false ->
+            ReceiverPid ! {ok, FinalResult}
     end.
 
 -spec prepare_final_results(#state{}) ->
@@ -302,6 +342,20 @@ sql_select_calc_type(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = Type
 %% Return the selection clause from a query
 sql_select_clause(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{clause = Clause}}) ->
     Clause.
+
+%%
+sql_select_streaming(?SQL_SELECT{ stream = Stream }) ->
+    Stream.
+
+%%
+sql_select_column_names(Query) ->
+    ?SQL_SELECT{ 'SELECT' = #riak_sel_clause_v1{col_names = ColNames }} = Query,
+    ColNames.
+
+%%
+sql_select_column_types(Query) ->
+    ?SQL_SELECT{ 'SELECT' = #riak_sel_clause_v1{col_return_types = ColTypes }} = Query,
+    ColTypes.
 
 %%%===================================================================
 %%% Unit tests
