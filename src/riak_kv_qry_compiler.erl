@@ -828,6 +828,10 @@ rewrite2([#param_v1{name = [FieldName]} | T], Where1, Mod, Acc) ->
     end.
 
 %% Functions to assist with coverage chunks that redefine quanta ranges
+-spec unwrap_cover(undefined | binary()) ->
+                          {ok, {undefined, undefined} |
+                           {OpaqueContext::binary(), {FieldName::binary(), Range::tuple()}}} |
+                          {error, invalid_coverage_context_checksum}.
 unwrap_cover(undefined) ->
     {ok, {undefined, undefined}};
 unwrap_cover(Cover) when is_binary(Cover) ->
