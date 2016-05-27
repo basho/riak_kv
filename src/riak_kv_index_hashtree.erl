@@ -396,7 +396,7 @@ handle_cast(build_finished, State) ->
 handle_cast(expire, State) ->
     State2 = State#state{expired=true},
     lager:info("Manually expired tree: ~p", [State#state.index]),
-    {reply, ok, State2};
+    {noreply, State2};
 
 handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
     %% Concurrency lock already acquired, try to acquire tree lock.
