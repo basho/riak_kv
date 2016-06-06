@@ -28,6 +28,7 @@
 -export([
          api_call_from_sql_type/1,
          api_call_to_perm/1,
+         api_calls/0,
          put_data/2, put_data/3,
          get_data/2, get_data/3, get_data/4,
          delete_data/2, delete_data/3, delete_data/4, delete_data/5,
@@ -72,6 +73,12 @@ api_call_to_perm(query_select) ->
     "riak_ts.query_select";
 api_call_to_perm(query_describe) ->
     "riak_ts.query_describe".
+
+%%
+-spec api_calls() -> [api_call()].
+api_calls() ->
+    [query_create_table, query_select, query_describe, query_insert,
+     get, put, delete, listkeys, coverage].
 
 
 -spec query(string() | riak_kv_qry:sql_query_type_record(), ?DDL{}) ->
