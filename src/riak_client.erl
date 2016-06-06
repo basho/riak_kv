@@ -45,7 +45,7 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
--export([get_cover/3, get_cover/4, get_cover/5, replace_cover/6]).
+-export([get_cover/3, get_cover/4, get_cover/5, replace_cover/6, replace_cover/7]).
 -export([vnode_target/1]).
 
 -include_lib("riak_core/include/riak_core_vnode.hrl").
@@ -534,7 +534,18 @@ get_cover_aux(Module, MinPar, ReqId, N, RingSize, Target) ->
 %% Will ignore the number of partitions, reconstruct from the coverage
 %% plan chunk we're replacing. The `Replace' argument is an ok/error
 %% tuple because it is intended to be the result of
-%% `riak_kv_pb_coverage:checksum_binary_to_term'
+%% `riak_kv_pb_coverage:checksum_binary_to_term'. For the same reason
+%% `OtherBroken' will be a list of such ok/error tuples.
+-spec replace_cover(Mod :: module(), Bucket :: binary() | {binary(), binary()},
+                    Parallelization :: undefined | non_neg_integer(),
+                    Replace :: {ok, list({atom(), term()})} |
+                               {error, Reason},
+                    OtherBroken :: list(
+                      {ok, list({atom(), term()})} |
+                      {error, Reason}),
+                    Metadata :: list(),
+                    riak_client()) ->
+                           list(list({atom(), term()})) | {error, term()}.
 -spec replace_cover(Mod :: module(), Bucket :: binary() | {binary(), binary()},
                     Parallelization :: undefined | non_neg_integer(),
                     Replace :: {ok, list({atom(), term()})} |
@@ -544,9 +555,17 @@ get_cover_aux(Module, MinPar, ReqId, N, RingSize, Target) ->
                       {error, Reason}),
                     riak_client()) ->
                            list(list({atom(), term()})) | {error, term()}.
-replace_cover(_Mod, _Bucket, _P, {error, Reason}, _OtherBroken, _Client) ->
+replace_cover(Mod, Bucket, P, Replace, OtherBroken, Client) ->
+    replace_cover(Mod, Bucket, P, Replace, OtherBroken, [], Client).
+
+replace_cover(_Mod, _Bucket, _P, {error, Reason}, _OtherBroken, _Meta, _Client) ->
     {error, Reason};
-replace_cover(Mod, Bucket, _P, {ok, Replace}, OtherBroken, _Client) ->
+replace_cover(riak_core_coverage_plan, Bucket, _P, {ok, Replace},
+              OtherBroken, _Meta, _Client) ->
+    Mod = riak_core_coverage_plan,
+    %% Core coverage plan requests can be "traditional" or
+    %% parallel. See comments in `riak_core_coverage_plan.erl' for
+    %% more details
     NVal = n_val(Bucket),
     DownNodes = extract_proplist_nodes(OtherBroken),
     case proplists:get_value(subpartition, Replace) of
@@ -556,7 +575,42 @@ replace_cover(Mod, Bucket, _P, {ok, Replace}, OtherBroken, _Client) ->
             replace_traditional_cover(Mod, NVal, Replace, DownNodes);
         _Defined ->
             replace_subpartition_cover(Mod, NVal, Replace, DownNodes)
-    end.
+    end;
+replace_cover(Mod, Bucket, _P, {ok, Replace}, OtherBroken, Meta, _Client) ->
+    %% As of 1.6 or merged KV equivalent, we should be able to
+    %% directly read these properties. The cover plan should be a
+    %% proplist natively, but John Daily messed up with 1.3.
+    %%
+    %% Other coverage module writers: make certain your coverage
+    %% chunks are simple proplists with `vnode_hash' and `node' keys,
+    %% but add `cover_to_proplist' to your coverage module as an
+    %% identity function.
+    %%
+    %% In 1.6, drop the invocation of `cover_to_proplist' because it
+    %% should simply be a proplist. See `riak_kv_ts_util' for the
+    %% place to make that change.
+    BrokenCoverProps = Mod:cover_to_proplist(Replace),
+
+    %% We maintain the `ok' tuples for `extract_proplist_nodes'.
+    DownNodeProps = lists:map(fun({ok, B}) -> {ok, Mod:cover_to_proplist(B)} end, OtherBroken),
+    DownNodes = extract_proplist_nodes(DownNodeProps),
+    NVal = n_val(Bucket),
+    replace_cover(Mod, NVal, BrokenCoverProps, DownNodes, Meta).
+
+%% For coverage plans from `riak_core', we know what kind of metadata
+%% to expect (filters for traditional plans, subpartition identifiers
+%% for parallel plans). For plans from elsewhere, we expect plans to
+%% look like traditional plans.
+replace_cover(Mod, NVal, Replace, DownNodes, Meta) ->
+    split_cover(
+      Mod:replace_chunk(
+        proplists:get_value(vnode_hash, Replace),
+        proplists:get_value(node, Replace),
+        proplists:get_value(filters, Replace, []),
+        Meta,
+        NVal,
+        mk_reqid(),
+        DownNodes)).
 
 replace_traditional_cover(Mod, NVal, Replace, DownNodes) ->
     split_cover(

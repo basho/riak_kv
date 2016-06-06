@@ -36,7 +36,7 @@
          pk/1,
          queried_table/1,
          sql_record_to_tuple/1,
-         sql_to_cover/4,
+         sql_to_cover/6,
          table_to_bucket/1,
          validate_rows/2,
          row_to_key/3
@@ -398,9 +398,9 @@ row_to_key(Row, DDL, Mod) ->
 
 %% If any of the results from get_cover are errors, we want that tuple
 %% to be the sole return value
-sql_to_cover(_Client, [], _Bucket, Accum) ->
+sql_to_cover(_Client, [], _Bucket, _Replace, _Unavail, Accum) ->
     lists:reverse(Accum);
-sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
+sql_to_cover(Client, [SQL|Tail], Bucket, undefined, _Unavail, Accum) ->
     case Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
                           {SQL, Bucket}) of
         {error, Error} ->
@@ -409,10 +409,60 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
             {Description, SubRange} = reverse_sql(SQL),
             Node = proplists:get_value(node, Cover),
             {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
+
+            %% As of 1.3, coverage chunks returned to the client for
+            %% KV are a simple proplist, but for TS are a tuple with
+            %% the first element the proplist, and the 2nd element a
+            %% representation of the quantum to which this chunk
+            %% applies.
+            %%
+            %% The fact that the structures are unnecessarily
+            %% different results in some awkwardness when interpreting
+            %% them. See `riak_client:replace_cover' for an example.
+            %%
+            %% As of 1.6 or post-merge equivalent (so that mixed
+            %% clusters with 1.3 are not supported), the SubRange
+            %% value should be added to the cover proplist instead of
+            %% creating this clumsy tuple so that cover chunks are
+            %% simple proplists for all types of coverage queries.
+            %%
+            %% See also `riak_kv_qry_compiler:unwrap_cover/1' for the
+            %% code that will interpret the proplists properly as of
+            %% 1.4 and later.
+            %%
+            %% The 2nd field in the tuple that is returned by
+            %% `reverse_sql/1' is itself a tuple with two elements:
+            %% the name of the quantum field and the relevant range
+            %% for this chunk.
+            %%
+            %% So the code to implement with 1.6 would be roughly:
+            %% Context = term_to_checksum_binary(Cover ++
+            %%     [{ts_where_field, element(1, SubRange)},
+            %%      {ts_where_range, element(2, SubRange)}]).
+            %%
+            %% (Real code would be pattern-matchy and generally cleaner.)
+
             Context = riak_kv_pb_coverage:term_to_checksum_binary({Cover, SubRange}),
             Entry = {{IP, Port}, Context, SubRange, Description},
-            sql_to_cover(Client, Tail, Bucket, [Entry|Accum])
+            sql_to_cover(Client, Tail, Bucket, undefined, [], [Entry|Accum])
+    end;
+sql_to_cover(Client, [SQL|Tail], Bucket, Replace, Unavail, Accum) ->
+    case Client:replace_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
+                              riak_kv_pb_coverage:checksum_binary_to_term(Replace),
+                              lists:map(fun riak_kv_pb_coverage:checksum_binary_to_term/1,
+                                        Unavail),
+                              [{SQL, Bucket}]) of
+        {error, Error} ->
+            {error, Error};
+        [Cover] ->
+            {Description, SubRange} = reverse_sql(SQL),
+            Node = proplists:get_value(node, Cover),
+            {IP, Port} = riak_kv_pb_coverage:node_to_pb_details(Node),
+            Context = riak_kv_pb_coverage:term_to_checksum_binary({Cover, SubRange}),
+            Entry = {{IP, Port}, Context, SubRange, Description},
+            sql_to_cover(Client, Tail, Bucket, Replace, Unavail, [Entry|Accum])
     end.
+
 
 
 %% Generate a human-readable description of the target
