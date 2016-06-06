@@ -47,7 +47,7 @@ perspective:
     * A subset of one partition
 * For TS, each chunk maps to exactly one quantum of data (aka one
   partition). Unlike KV, only a subset of full partition space will be
-  needed, unless the TS query is extremely large
+  needed, unless the TS query is extremely large.
 
 ## Code paths
 
@@ -133,20 +133,20 @@ The first 3 arguments to `riak_client:replace_cover/7` are the same as
 The remaining arguments:
 
 * The coverage chunk to be replaced, as returned by
-  `riak_kv_pb_coverage:checksum_binary_to_term`.
+  `riak_kv_pb_coverage:checksum_binary_to_term`
 * A list of other coverage chunks (also converted back to terms) that
   the client deems problematic, so we can identify other nodes to
-  exclude from the replacement plan.
-* The client reference itself, a hidden argument in most cases.
+  exclude from the replacement plan
+* The client reference itself, a hidden argument in most cases
 
 If the coverage chunk to be replaced includes a `subpartition`
 property, `replace_subpartition_cover/4` is invoked, else
 `replace_traditional_cover/4`, with identical arguments:
 
-* The coverage module to be invoked.
-* The `n_val` for the bucket.
-* The chunk to be replaced.
-* The other down nodes as extracted from the other problematic chunks.
+* The coverage module to be invoked
+* The `n_val` for the bucket
+* The chunk to be replaced
+* The other down nodes as extracted from the other problematic chunks
 
 Either `replace_traditional_chunk/7` or `replace_subpartition_chunk/7`
 in the coverage module will be called and the results converted into a
