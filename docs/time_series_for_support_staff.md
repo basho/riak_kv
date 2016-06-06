@@ -3,6 +3,11 @@ Time Series For Devs/Sys-Admins
 
 So Riak Time Series has gone live in your organisation? What now? What is it? How do you support it?
 
+You can view this document as a prezzo at:
+http://remarkjs.com/remarkise
+
+---
+
 Overview
 --------
 
@@ -10,15 +15,29 @@ Time Series is a storage and query layer on top of Riak KV that provides new way
 
 It also provides an SQL shell, `riak-shell`, which enables you to configure and query your Time Series system in an intuitive manner.
 
-At its core is a new type of bucket of provides a customisable degree of data co-location. In normal Riak you write data to a key and it goes and gets written at (usually) 3 vnodes on (usually) 3 physical nodes in your cluster. You write data to another key and that is written to a different set of 3 vnodes on a different set of 3 physical nodes.
+At its core is a new type of bucket of provides a customisable degree of data co-location.
+
+---
+
+Riak KV Data Location
+---------------------
+
+In Riak KV you write data to a key and it goes and gets written at (usually) 3 vnodes on (usually) 3 physical nodes in your cluster. You write data to another key and that is written to a different set of 3 vnodes on a different set of 3 physical nodes.
 
 To query over a Key Value store like Riak KV then you need to scan the entire cluster.
+
+---
+
+Riak TS Data Colocation
+-----------------------
 
 With Riak TimeSeries you construct a composite key with a timestamp - and for a defined, definable duration (3 seconds, 15 minutes, 2 hours, 9 days) all data with the same composite root will be written to the same set of 3 vnodes on the same set of 3 physical nodes.
 
 Based on this data co-location you can then write queries that go to where ranges of data are stored and get back results.
 
 The quering of Time Series data is done via a strict, but quite limited, subset of SQL - so it works with your tools.
+
+---
 
 Differences With Riak KV
 ------------------------
@@ -29,8 +48,10 @@ To further improve ingestion speed you can supply pre-batched data to Riak TS. T
 
 Because the data is co-located Riak TS lets you write queries to get the data out. Those queries are standard SQL - but with considerable restrictions. You should read the documentation to understand the limitations.
 
-riak-shell The Developer/Sys-Admin's New Best Pal
--------------------------------------------------
+---
+
+`riak-shell` The Developer/Sys-Admin's New Best Pal
+---------------------------------------------------
 
 The `riak-shell` is a new way of interacting with a riak cluster - it lets you:
 
@@ -38,17 +59,22 @@ The `riak-shell` is a new way of interacting with a riak cluster - it lets you:
 * insert data into those tables
 * query data from those tables
 
-In addition it can be set up to log your commands and replay those logs. This lets you prepare tables for you application in development environments, capture the configuration in text files which can be placed under version control and use those scripts to set up your Integration, UAT and Production environments.
+---
+
+`riak-shell` Logging And Replay
+-------------------------------
+
+In addition `riak-shell` can be set up to log your commands and replay those logs. This lets you prepare tables for you application in development environments, capture the configuration in text files which can be placed under version control and use those scripts to set up your Integration, UAT and Production environments.
 
 The log facility can also be used to report bugs to Basho. Find a problem, log it happening from the shell and send us the log as a bug report with notes of how it should work. This enables Basho to reproduce your problem.
 
-The replay facility of riak-shell also lets us capture your bug straight into our regression test suite - we can kill it for you and ensure that it stays killed in all future releases.
+The replay facility of `riak-shell` also lets us capture your bug straight into our regression test suite - we can kill it for you and ensure that it stays killed in all future releases.
 
-Please read the riak-shell documentation for more details:
+Please read the `riak-shell` documentation for more details:
 
 * [`riak-shell` Documentation](https://github.com/basho/riak_shell/blob/develop/README.md)
 
-**THIS IS CURRENTLY PRIVATE - WAITING ON OPEN SOURCE**
+---
 
 Data On Disk
 ------------
@@ -57,13 +83,22 @@ When a Time Series table is created in a riak cluster a dynamic module is genera
 
 These helper modules enable the riak cluster to introspect Time Series data on the fly. By default no source code for them is generated - only `.beam` files. If you wish to see what they look like *under the covers* the riak_ql [`README`](https://github.com/basho/riak_ql/blob/develop/README.md) has an example of one.
 
-Under The Covers
-----------------
+---
+
+FAQ 1
+-----
 
 **Q:** What tables have been created?
+
 **A:** list the files in `data/ddl_ebin` - they will have names like `riak_ql_table_`**TABLE NAME**`$1.beam`
 
+---
+
+FAQ 2
+-----
+
 **Q:** How do I find out the definition if a table that has been created?
+
 **A:** there are 2 ways to do this:
 
 First method:
@@ -75,6 +110,15 @@ connect to the riak node with `riak attach` in `ebin/` and run:
 
 You can convert that table representation to a string with a helper function:
 `2>riak_ql_to_string:ddl_rec_to_SQL(DDL).`
+
+---
+
+FAQ 2 (cont)
+------------
+
+**Q:** How do I find out the definition if a table that has been created?
+
+**A:** there are 2 ways to do this:
 
 Second method:
 
@@ -95,6 +139,19 @@ riak-shell(7)>describe Aggregation_written_on_old_cluster;
 riak-shell(8)>
 ```
 
-**Q:** what can I do to tune the performance of my query system?
-**A:** first you need to understand how 
+---
+
+FAQ 3
+-----
+
+**Q:** what can I do to change the behaviour of my query system?
+
+**A:** we protect your riak cluster with some fairly basic rate limiting which controls:
+* the number of concurrent queries that each node will run
+* the queue length before the clients experience back pressure
+* the number of quanta a particular query can span
+
+In addition you can control the timeouts.
+
+For more details please see [the Query System](./query_sub_system.md) documentation
 
