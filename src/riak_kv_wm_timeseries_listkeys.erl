@@ -178,7 +178,7 @@ format_url(BaseUrl, KeyTypes, Key) ->
 
 key_to_string(KFTypes) ->
     string:join(
-      [[Field, $/, mochiweb_util:quote_plus(value_to_url_string(Key, Type))]
+      [[Field, $/, http_uri:encode(value_to_url_string(Key, Type))]
        || {Key, {Field, Type}} <- KFTypes],
       "/").
 
@@ -195,3 +195,20 @@ base_url(Table) ->
       io_lib:format(
         "http://~s:~B/ts/~s/tables/~s/keys/",
         [Server, Port, riak_kv_wm_ts_util:current_api_version_string(), Table])).
+
+%%%
+%%% TESTS
+%%%
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+percent_twenty_test() ->
+    Expected = <<"http://server/ke/forty%2Btwo/mu/spa%200%20aces\n">>,
+    Got = format_url(
+            "http://server/",
+            [{"ke", varchar}, {"mu", varchar}],
+            [<<"forty+two">>, <<"spa 0 aces">>]),
+    ?assertEqual(Expected, Got).
+
+-endif.
