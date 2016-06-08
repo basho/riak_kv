@@ -36,13 +36,18 @@ The query system prevents individual queries from swamping the cluster and also 
 
 This overloading (and other behaviours) is configurable in the normal scheme of things via `riak.config` and `clique`.
 
+
+**NOTE*: the query subsystem also handles the SQL `DESCRIBE` and `INSERT` statements. Normal client puts go directly to the write-once system - text-based `INSERT` statements only come from manual input into `riak-shell`.
+
 ---
 
 ## How The Query Sub System Works
 
-A query is processed through the the riak_ql lexer/parser and validation pipeline, it arrives at the query sub-system **pre-approved* so to speak
+A query is processed through the the riak_ql lexer/parser and validation pipeline, it arrives at the query sub-system **pre-approved** so to speak
 
 ![Query Sub System](https://raw.githubusercontent.com/basho/riak_kv/feature_gg_documents_and_architecture/docs/query_sub_system.png)
+
+The actual client connection process depends on whether or not it protobuffs or http is being used to connect.
 
 ---
 
