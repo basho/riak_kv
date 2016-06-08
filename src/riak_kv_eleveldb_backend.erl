@@ -485,14 +485,18 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                                               ref=Ref}) ->
     {_, Bucket, Qry} = proplists:lookup(index, Opts),
     ?SQL_SELECT{'WHERE'    = W,
-                helper_mod = _Mod,
+                helper_mod = Mod,
                 local_key  =  #key_v1{ast = LKAST},
                 partition_key = #key_v1{ast = _PKAST}} = Qry,
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
+    FieldOrders = Mod:field_orders(),
     LocalKeyLen = length(LKAST),
-    StartKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- StartK], LocalKeyLen),
-    EndKey1 = key_prefix(Bucket,  [Value || {_Name,_Type,Value} <- EndK], LocalKeyLen),
+    %% in the case where a local key is descending (it has the DESC keyword)
+    %% then the start and end keys will have been swapped, the start key will
+    %% be "greater" than the end key until ordering is applied.
+    StartKey1 = key_prefix(Bucket,  key_to_storage_format_key(FieldOrders, StartK), LocalKeyLen),
+    EndKey1 = key_prefix(Bucket, key_to_storage_format_key(FieldOrders, EndK), LocalKeyLen),
     %% append extra byte to the key when it is not inclusive so that it compares
     %% as greater
     StartKey2 =
@@ -519,6 +523,12 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                         FoldIndexFun(lists:reverse(Vals), Buffer)
                 end,
     {async, KeyFolder}.
+
+%% Apply ordering to the key values.
+key_to_storage_format_key(_,[]) ->
+    [];
+key_to_storage_format_key([Order|OrderTail], [{_Name,_Type,Value}|KeyTail]) ->
+    [riak_ql_ddl:apply_ordering(Value, Order) | key_to_storage_format_key(OrderTail, KeyTail)].
 
 %%
 range_scan_additional_options(Where) ->

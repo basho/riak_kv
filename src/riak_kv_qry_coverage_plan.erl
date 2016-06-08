@@ -121,7 +121,8 @@ make_key(?SQL_SELECT{helper_mod    = Mod,
                      partition_key = PartitionKey,
                      'WHERE'       = Where}) ->
     {startkey, StartKey} = proplists:lookup(startkey, Where),
-    StartKey2 = [{Field, Val} || {Field, _Type, Val} <- StartKey],
+    {endkey, EndKey} = proplists:lookup(endkey, Where),
+    StartKey2 = [{Field, Val} || {Field, _Type, Val} <- min(StartKey, EndKey)],
     Key = riak_ql_ddl:make_key(Mod, PartitionKey, StartKey2),
     riak_kv_ts_util:encode_typeval_key(Key).
 

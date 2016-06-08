@@ -49,7 +49,6 @@
 -export_type([query_type/0, sql_query_type_record/0,
               query_tabular_result/0]).
 
-
 %% No coverage plan for parallel requests
 -spec submit(string() | sql_query_type_record(), ?DDL{}) ->
     {ok, query_tabular_result()} | {error, any()}.
@@ -194,17 +193,33 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
 do_describe(?DDL{fields = FieldSpecs,
                  partition_key = #key_v1{ast = PKSpec},
                  local_key     = #key_v1{ast = LKSpec}}) ->
-    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
-    ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
+    ColumnNames =
+        [<<"Column">>,<<"Type">>,<<"Is Null">>,<<"Primary Key">>,<<"Local Key">>, <<"Order">>],
+    ColumnTypes =
+        [varchar, varchar, boolean, sint64, sint64 , varchar],
     Rows =
         [[Name, list_to_binary(atom_to_list(Type)), Nullable,
           column_pk_position_or_blank(Name, PKSpec),
-          column_lk_position_or_blank(Name, LKSpec)]
+          column_lk_position_or_blank(Name, LKSpec),
+          describe_field_order(Name, LKSpec)]
          || #riak_field_v1{name = Name,
                            type = Type,
                            optional = Nullable} <- FieldSpecs],
     {ok, {ColumnNames, ColumnTypes, Rows}}.
 
+%%
+describe_field_order(Name, LKSpec) when is_binary(Name) ->
+    case lists:keyfind([Name], #param_v1.name, LKSpec) of
+        #param_v1{ ordering = descending } ->
+            <<"DESC">>;
+        #param_v1{ ordering = ParamOrder } when ParamOrder == ascending;
+                                                ParamOrder == undefined ->
+            <<"ASC">>;
+        false ->
+            %% NULL if the field is not in the local
+            %% key because it canot affect the order
+            []
+    end.
 
 %% the following two functions are identical, for the way fields and
 %% keys are represented as of 2015-12-18; duplication here is a hint
@@ -299,11 +314,11 @@ describe_table_columns_test() ->
     Res = do_describe(DDL),
     ?assertMatch(
        {ok, {_, _,
-             [[<<"f">>, <<"varchar">>,   false, 1,  1],
-              [<<"s">>, <<"varchar">>,   false, 2,  2],
-              [<<"t">>, <<"timestamp">>, false, 3,  3],
-              [<<"w">>, <<"sint64">>, false, [], []],
-              [<<"p">>, <<"double">>, true,  [], []]]}},
+             [[<<"f">>, <<"varchar">>,   false, 1,  1, <<"ASC">>],
+              [<<"s">>, <<"varchar">>,   false, 2,  2, <<"ASC">>],
+              [<<"t">>, <<"timestamp">>, false, 3,  3, <<"ASC">>],
+              [<<"w">>, <<"sint64">>,    false, [], [], []],
+              [<<"p">>, <<"double">>,    true,  [], [], []]]}},
        Res).
 
 validate_make_insert_row_basic_test() ->

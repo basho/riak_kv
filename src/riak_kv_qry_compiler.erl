@@ -91,19 +91,30 @@ compile_where_clause(?DDL{} = DDL,
     end.
 
 %% now break out the query on quantum boundaries
-expand_query(?DDL{local_key = LK, partition_key = PK},
+expand_query(?DDL{table = Table, local_key = LK, partition_key = PK},
              ?SQL_SELECT{} = Q1, Where1,
              MaxSubQueries) ->
     case expand_where(Where1, PK, MaxSubQueries) of
         {error, E} ->
             {error, E};
         Where2 ->
-            Q2 = Q1?SQL_SELECT{is_executable = true,
-                               type          = timeseries,
-                               local_key     = LK,
-                               partition_key = PK},
-            SubQueries = [Q2?SQL_SELECT{ 'WHERE' = X } || X <- Where2],
-            {ok, SubQueries}
+            Mod = riak_ql_ddl:make_module_name(Table),
+            IsDescending = lists:member(descending, Mod:field_orders()),
+            SubQueries1 =
+                [Q1?SQL_SELECT{
+                       is_executable = true,
+                       type          = timeseries,
+                       'WHERE'       = maybe_fix_start_order(IsDescending, X, Mod, LK),
+                       local_key     = LK,
+                       partition_key = PK} || X <- Where2],
+            SubQueries2 =
+                case IsDescending of
+                    true ->
+                        fix_subquery_order(SubQueries1);
+                    false ->
+                        SubQueries1
+                end,
+            {ok, SubQueries2}
     end.
 
 %% Calulate the final result for an aggregate.
@@ -128,7 +139,7 @@ run_select(Select, Row) ->
     %% there is no long running state
     run_select2(Select, Row, undefined, []).
 
-run_select(Select, Row, InitialState) ->
+run_select(Select,  Row, InitialState) ->
     %% the second argument is the state, if we're return row query results then
     %% there is no long running state
     run_select2(Select, Row, InitialState, []).
@@ -407,6 +418,88 @@ extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLe
     Fns2 = [Function | Fns1],
     {{finalise_aggregation, FnName, FinaliserLen + length(Fns2)}, Fns2}.
 
+%% Only change the start order if the query has descending fields, otherwise
+%% the natural order is correct.
+maybe_fix_start_order(false, W, _, _) ->
+    W;
+maybe_fix_start_order(true, W, Mod, LK) ->
+    fix_start_order(W, Mod, LK).
+
+%%
+fix_start_order(W, Mod, LK) ->
+    {startkey, StartKey0} = lists:keyfind(startkey, 1, W),
+    {endkey, EndKey0} = lists:keyfind(endkey, 1, W),
+    case is_start_key_greater(Mod, LK, StartKey0, EndKey0) of
+        true ->
+            W;
+        false ->
+            %% Swap the start/end keys so that the backends will
+            %% scan over them correctly.  Likely cause is a descending
+            %% timestamp field.
+            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
+            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
+            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+            %% start inclusive defaults true, end inclusive defaults false
+            W3 = lists:keystore(start_inclusive, 1, W2,
+                                {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
+            _W4 = lists:keystore(end_inclusive, 1, W3,
+                                 {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
+    end.
+
+%%
+is_start_key_greater(Mod, LK, StartKey0, EndKey0) ->
+    StartVals = [{N, V} || {N, _T, V} <- StartKey0],
+    EndVals = [{N, V} || {N, _T, V} <- EndKey0],
+    StartKey = riak_ql_ddl:make_key(Mod, LK,  StartVals),
+    EndKey = riak_ql_ddl:make_key(Mod, LK,  EndVals),
+    (StartKey < EndKey).
+
+fix_subquery_order(Queries1) ->
+    Queries2 = lists:sort(fun fix_subquery_order_compare/2, Queries1),
+    case Queries2 of
+        [#riak_select_v1{ 'WHERE' = FirstWhere1 } = FirstQuery|QueryTail] when length(Queries2) > 1 ->
+            case lists:keytake(end_inclusive, 1, FirstWhere1) of
+                false ->
+                    Queries2;
+                {value, Flag, _FirstWhere2} ->
+                    #riak_select_v1{ 'WHERE' = LastWhere } = LastQuery1 = lists:last(Queries2),
+                    LastQuery2 = LastQuery1#riak_select_v1{ 'WHERE' = lists:keystore(end_inclusive, 1, LastWhere, Flag) },
+                    Queries3 = QueryTail -- [LastQuery1],
+                    [FirstQuery#riak_select_v1{ 'WHERE' = FirstWhere1 } | Queries3] ++ [LastQuery2]
+            end;
+        _ ->
+            Queries2
+    end.
+
+%% Make the subqueries appear in the same order as the keys.  The qry worker
+%% returns the results to the client in the order of the subqueries, so
+%% if timestamp is descending for equality queries on family/series then
+%% the results need to merge in the reverse order.
+%%
+%% Detect this by the implict order of the start/end keys.  Should be
+%% refactored to explicitly understand key order at some future point.
+fix_subquery_order_compare(Qa, Qb) ->
+    {startkey, Astartkey} = lists:keyfind(startkey, 1, Qa#riak_select_v1.'WHERE'),
+    {endkey, Aendkey}     = lists:keyfind(endkey, 1, Qa#riak_select_v1.'WHERE'),
+    {startkey, Bstartkey} = lists:keyfind(startkey, 1, Qb#riak_select_v1.'WHERE'),
+    {endkey, Bendkey}     = lists:keyfind(endkey, 1, Qb#riak_select_v1.'WHERE'),
+
+    fix_subquery_order_compare(Astartkey, Aendkey, Bstartkey, Bendkey).
+
+%%
+fix_subquery_order_compare(Astartkey, Aendkey, Bstartkey, Bendkey) ->
+    if
+        (Astartkey == Aendkey) ->
+            (Astartkey =< Bstartkey orelse Aendkey =< Bendkey);
+        (Bstartkey == Bendkey) ->
+            not (Astartkey =< Bstartkey orelse Aendkey =< Bendkey);
+        (Astartkey =< Aendkey) ->
+            Astartkey =< Bstartkey;
+        true ->
+            Bstartkey =< Astartkey
+    end.
+
 %%
 maybe_infer_op_type(_, error, _, Errors) ->
     {error, Errors};
@@ -536,6 +629,8 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
             {error, {too_many_subqueries, ?E_TOO_MANY_SUBQUERIES(NoSubQueries)}}
     end.
 
+make_wheres(Where, QField, Min, Max, Boundaries) when Min > Max ->
+    make_wheres(Where, QField, Max, Min, Boundaries);
 make_wheres(Where, QField, Min, Max, Boundaries) ->
     {HeadOption, TailOption, NewWhere} = extract_options(Where),
     Starts = [Min | Boundaries],
@@ -1343,18 +1438,21 @@ simple_spanning_boundary_precision_test() ->
     %% now make the result - expecting 2 queries
     [Where1, Where2] =
         test_data_where_clause(<<"Scotland">>, <<"user_1">>, [{3000, 15000}, {15000, 30000}]),
-    PK = get_standard_pk(),
-    LK = get_standard_lk(),
-    ?assertMatch(
-       {ok, [?SQL_SELECT{ 'WHERE'       = Where1,
-                          partition_key = PK,
-                          local_key     = LK},
-             ?SQL_SELECT{ 'WHERE'       = Where2,
-                          partition_key = PK,
-                          local_key     = LK
-                        }]},
-       compile(DDL, Q, 5)
-      ).
+    _PK = get_standard_pk(),
+    _LK = get_standard_lk(),
+    {ok, [Select1, Select2]} = compile(DDL, Q, 5),
+    ?assertEqual(
+        [Where1, Where2],
+        [Select1#riak_select_v1.'WHERE', Select2#riak_select_v1.'WHERE']
+    ),
+    ?assertEqual(
+        [get_standard_pk(), get_standard_pk()],
+        [Select1#riak_select_v1.partition_key, Select2#riak_select_v1.partition_key]
+    ),
+    ?assertEqual(
+        [get_standard_lk(), get_standard_lk()],
+        [Select1#riak_select_v1.local_key, Select2#riak_select_v1.local_key]
+    ).
 
 %%
 %% test failures
@@ -2145,14 +2243,13 @@ no_quantum_in_query_1_test() ->
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q} = get_query(
           "SELECT * FROM tab1 WHERE a = 1 AND b = 1"),
-    ?assertMatch(
-        {ok, [#riak_select_v1{
-            'WHERE' =
+    {ok, [#riak_select_v1{ 'WHERE' = Where }]} = compile(DDL, Q, 100),
+    ?assertEqual(
                 [{startkey,[{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
                  {endkey,  [{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
                  {filter,[]},
-                 {end_inclusive,true}] }]},
-        compile(DDL, Q, 100)
+                 {end_inclusive,true}],
+        Where
     ).
 
 %% partition and local key are different
@@ -2237,6 +2334,88 @@ negate_an_aggregation_function_test() ->
         [-3],
         finalise_aggregate(Select, [3])
       ).
+
+helper_desc_order_on_quantum_ddl() ->
+    get_ddl(
+        "CREATE TABLE table1 ("
+        "a SINT64 NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "c TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((a,b,quantum(c, 1, 's')), a,b,c DESC))").
+
+query_desc_order_on_quantum_at_quanta_boundaries_test() ->
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 "
+          "WHERE a = 1 AND b = 1 AND c >= 4000 AND c <= 5000"),
+    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q, 100),
+    SubQueryWheres = [S#riak_select_v1.'WHERE' || S <- SubQueries],
+    ?assertEqual(
+        [
+            [{startkey,[{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
+             {endkey,  [{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
+             {filter,[]},
+             {end_inclusive,true},
+             {start_inclusive,true}]
+            ,
+            [{startkey,[{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
+             {endkey,  [{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,4000}]},
+             {filter,[]},
+             {start_inclusive,false},
+             {end_inclusive,true}]
+        ],
+        SubQueryWheres
+    ).
+
+fix_subquery_order_test() ->
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 "
+          "WHERE a = 1 AND b = 1 AND c >= 4000 AND c <= 5000"),
+    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q, 100),
+    ?assertEqual(
+        [
+            [{startkey,[{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
+             {endkey,  [{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
+             {filter,[]},
+             {end_inclusive,true},
+             {start_inclusive,true}]
+            ,
+            [{startkey,[{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
+             {endkey,  [{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,4000}]},
+             {filter,[]},
+             {start_inclusive,false},
+             {end_inclusive,true}]
+        ],
+        [S#riak_select_v1.'WHERE' || S <- fix_subquery_order(SubQueries)]
+    ).
+
+query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 "
+          "WHERE a = 1 AND b = 1 AND c >= 3500 AND c <= 5500"),
+    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q, 100),
+    SubQueryWheres = [S#riak_select_v1.'WHERE' || S <- SubQueries],
+    ?assertEqual(
+        [
+            [{startkey,[{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5500}]},
+             {endkey,  [{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
+             {filter,[]},
+             {end_inclusive,true},
+             {start_inclusive,true}]
+            ,
+            [{startkey,[{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
+             {endkey,  [{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,4000}]},
+             {filter,[]},
+             {start_inclusive,false},
+             {end_inclusive,true}]
+            ,
+            [{startkey,[{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,4000}]},
+             {endkey,  [{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,3500}]},
+             {filter,[]},
+             {start_inclusive,false},
+             {end_inclusive,true}]
+        ],
+        SubQueryWheres
+    ).
 
 coverage_context_not_a_tuple_or_invalid_checksum_test() ->
     NotACheckSum = 34,
