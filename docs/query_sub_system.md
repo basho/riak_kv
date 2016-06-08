@@ -16,7 +16,7 @@ http://docs.basho.com
 
 Time Series introduces new elements into the supervision tree of `riak_kv`
 
-![Time Series Supervision Tree](./timeseries_supervision_tree.png)
+![Time Series Supervision Tree](https://raw.githubusercontent.com/basho/riak_kv/feature_gg_documents_and_architecture/docs/timeseries_supervision_tree.png)
 
 ---
 
@@ -35,6 +35,14 @@ The `riak_kv_w1c_sup` and its subsystem is the *normal* write-once path for `ria
 The query system prevents individual queries from swamping the cluster and also implements a primitive load shedding capability with back-pressure to the clients to cope with the impact of multiple queries.
 
 This overloading (and other behaviours) is configurable in the normal scheme of things via `riak.config` and `clique`.
+
+---
+
+## How The Query Sub System Works
+
+A query is processed through the the riak_ql lexer/parser and validation pipeline, it arrives at the query sub-system **pre-approved* so to speak
+
+![Query Sub System](https://raw.githubusercontent.com/basho/riak_kv/feature_gg_documents_and_architecture/docs/query_sub_system.png)
 
 ---
 
