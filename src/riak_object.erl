@@ -623,12 +623,20 @@ get_value(Object=#r_object{}) ->
     [{_M,Value}] = get_contents(Object),
     Value.
 
-%% @doc calculates the hash of a riak object
+%% @doc calculates the canonical hash of a riak object using sorted vclock
 -spec hash(riak_object()) -> integer().
 hash(Obj=#r_object{}) ->
-    Vclock = vclock(Obj),
-    UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
-    erlang:phash2(to_binary(v0, UpdObj)).
+    case application:get_env(riak_kv, hash_only_vclock) of
+        true ->
+            Vclock = vclock(Obj),
+            %% Why do we have a version here? Changing the version will just cause all
+            %% hashes not to match, which I'm sure isn't what we want on upgrades.
+            %% So, I do not see the reason for the version or any reason to increment it
+            erlang:phash2(to_binary(v0, lists:sort(Vclock)));
+        _ ->
+            UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
+            erlang:phash2(to_binary(v0, UpdObj))
+    end.
 
 %% @doc  Set the updated metadata of an object to M.
 -spec update_metadata(riak_object(), riak_object_dict()) -> riak_object().

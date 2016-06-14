@@ -500,6 +500,7 @@ hash_object({Bucket, Key}, RObj0) ->
             false -> riak_object:from_binary(Bucket, Key, RObj0)
         end,
         Hash = riak_object:hash(RObj),
+        %% Should we move this inside the riak_object function?
         term_to_binary(Hash)
     catch _:_ ->
             Null = erlang:phash2(<<>>),
