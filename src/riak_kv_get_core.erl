@@ -295,7 +295,7 @@ maybe_log_old_vclock(Results) ->
             ok;
         _ ->
             {R1, Rest} = lists:split(1, [RObj || {_I, {ok, RObj}} <- Results]),
-            case [_R || RObj <- Rest, not riak_object:equal(R1, RObj)] of
+            case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
                 [] ->
                     ok;
                 _ ->

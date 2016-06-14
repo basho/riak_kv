@@ -626,9 +626,9 @@ get_value(Object=#r_object{}) ->
 %% @doc calculates the canonical hash of a riak object using sorted vclock
 -spec hash(riak_object()) -> integer().
 hash(Obj=#r_object{}) ->
+    Vclock = vclock(Obj),
     case application:get_env(riak_kv, hash_only_vclock) of
         true ->
-            Vclock = vclock(Obj),
             %% Why do we have a version here? Changing the version will just cause all
             %% hashes not to match, which I'm sure isn't what we want on upgrades.
             %% So, I do not see the reason for the version or any reason to increment it
