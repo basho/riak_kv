@@ -46,15 +46,15 @@ The base query returns a column which is then fed into the function:
 
 The aggregation functions are:
 
-* `COUNT`
-* `SUM`
 * `AVG`
+* `COUNT`
+* `MAX`
 * `MEAN` (alias for `AVG`)
 * `MIN`
-* `MAX`
-* `STDDEV`
 * `STDDEV_POP`
+* `STDDEV`
 * `STDEV_SAMP`
+* `SUM`
 
 ---
 
@@ -115,6 +115,10 @@ Finally:
 * calling the finalise function
 
 ---
+
+# Invocation Notes III
+
+![Sequence Diagram](./aggregation_functions.png)
 
 # Future Work
 
