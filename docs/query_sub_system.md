@@ -37,7 +37,7 @@ The query system prevents individual queries from swamping the cluster and also 
 This overloading (and other behaviours) is configurable in the normal scheme of things via `riak.config` and `clique`.
 
 
-**NOTE*: the query subsystem also handles the SQL `DESCRIBE` and `INSERT` statements. Normal client puts go directly to the write-once system - text-based `INSERT` statements only come from manual input into `riak-shell`.
+**NOTE**: the query subsystem also handles the SQL `DESCRIBE` and `INSERT` statements. Normal client puts go directly to the write-once system - text-based `INSERT` statements only come from manual input into `riak-shell`.
 
 ---
 

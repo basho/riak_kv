@@ -35,7 +35,7 @@ With Riak TimeSeries you construct a composite key with a timestamp - and for a 
 
 Based on this data co-location you can then write queries that go to where ranges of data are stored and get back results.
 
-The quering of Time Series data is done via a strict, but quite limited, subset of SQL - so it works with your tools.
+The quering of Time Series data is done via a quite limited, subset of SQL - so it works with your tools.
 
 ---
 
@@ -97,18 +97,20 @@ FAQ 1
 FAQ 2
 -----
 
-**Q:** How do I find out the definition if a table that has been created?
+**Q:** How do I find out the definition of a table that has been created?
 
 **A:** there are 2 ways to do this:
 
 First method:
 
 connect to the riak node with `riak attach` in `ebin/` and run:
+
 `1>DDL = 'riak_ql_table_my_table_name$1':get_dll().`
 
 **Note**: the module name must be a quoted atoms because it contains a `$` symbol
 
 You can convert that table representation to a string with a helper function:
+
 `2>riak_ql_to_string:ddl_rec_to_SQL(DDL).`
 
 ---

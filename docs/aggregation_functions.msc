@@ -17,7 +17,7 @@ msc {
 	
 	// declare objects
 	// This is a cluster with 3 nodes for exposition purposes
-	client_connection, riak_kv_qry_worker, vnode1, vnode2, vnode3;
+	client_connection, riak_kv_qry_queue, riak_kv_qry_worker, vnode1, vnode2, vnode3;
 
 	|||;
 	client_connection  note client_connection   [label="\nthe client connection an be\n Protocol Buffers or HTTP\n"];
@@ -26,7 +26,9 @@ msc {
 	|||;
 	client_connection  note client_connection   [label="\ncompilation defines subqueries and performs type-checking\n"];
 	|||;
-	client_connection  =>   riak_kv_qry_worker [label="submit query"];
+	client_connection  =>   riak_kv_qry_queue [label="submit query"];
+	|||;
+	riak_kv_qry_queue  =>   riak_kv_qry_worker [label="submit query"];
 	|||;
 	riak_kv_qry_worker note riak_kv_qry_worker [label="\nsame submission path for aggregation and row queries\n"];
 	|||;
