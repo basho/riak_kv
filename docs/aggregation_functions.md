@@ -56,6 +56,8 @@ The aggregation functions are:
 * `STDEV_SAMP`
 * `SUM`
 
+More details are [here](http://docs.basho.com/riak/ts/1.3.0/using/aggregate-functions/)
+
 ---
 
 ## Execution
@@ -118,7 +120,9 @@ Finally:
 
 # Invocation Notes III
 
-![Sequence Diagram](./aggregation_functions.png)
+![Sequence Diagram](https://raw.githubusercontent.com/basho/riak_kv/feature_gg_documents_and_architecture/docs/aggregation_functions.png)
+
+---
 
 # Future Work
 
