@@ -254,7 +254,8 @@ init([Index, VNPid, Opts]) ->
             end,
             ignore;
         Root ->
-            Path = filename:join(Root, integer_to_list(Index)),
+            Path0 = determine_hashtree_version(Root),
+            Path = filename:join(Path0, integer_to_list(Index)),
             monitor(process, VNPid),
             Use2i = lists:member(use_2i, Opts),
             VNEmpty = lists:member(vnode_empty, Opts),
@@ -464,6 +465,13 @@ determine_data_root() ->
                     undefined
             end
     end.
+
+%% Static version for patch. 2.2 will have ability to define version
+determine_hashtree_version(Root) ->
+    case application:get_env(riak_kv, hash_only_vclock) of
+        {ok, true} ->
+            Path = filename:join(Root, "v0")
+    end,
 
 %% @doc Init the trees.
 %%
