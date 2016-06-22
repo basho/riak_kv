@@ -49,7 +49,7 @@
          hash_index_data/1,
          hash_object/2,
          update/2,
-         start_exchange_remote/4,
+         start_exchange_remote/5,
          delete/2,
          async_delete/2,
          insert/3,
@@ -141,7 +141,7 @@ async_delete(Items=[{_Id, _Key}|_], Tree) ->
 %% @doc Called by the entropy manager to finish the process used to acquire
 %%      remote vnode locks when starting an exchange. For more details,
 %%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}
--spec start_exchange_remote(pid(), term(), index_n(), pid()) -> ok.
+-spec start_exchange_remote(pid(), atom(), term(), index_n(), pid()) -> ok.
 start_exchange_remote(FsmPid, Version, From, IndexN, Tree) ->
     gen_server:cast(Tree, {start_exchange_remote, FsmPid, Version, From, IndexN}).
 
@@ -651,7 +651,7 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}, MarkType) ->
 
 %% This function never uses the Type field. Unsure why it is part of the API. Maybe was meant to be used
 %% by the background manager which could manage tokens based on Type atom. Best guess...
--spec do_get_lock(any(), pid(), state()) -> {not_built | ok | already_locked, state()}.
+-spec do_get_lock(any(), atom(), pid(), state()) -> {not_built | ok | already_locked | bad_version, state()}.
 do_get_lock(_, _, _, State) when State#state.built /= true ->
     lager:debug("Not built: ~p :: ~p", [State#state.index, State#state.built]),
     {not_built, State};
@@ -663,7 +663,7 @@ do_get_lock(_Type, v0, Pid, State=#state{lock=undefined, version=v0}) ->
     Ref = monitor(process, Pid),
     State2 = State#state{lock=Ref},
     {ok, State2};
-do_get_lock(_Type, ReqVer, Pid, State=#state{lock=undefined, version=Version, index=Index}) ->
+do_get_lock(_Type, ReqVer, _Pid, State=#state{lock=undefined, version=Version, index=Index}) ->
     lager:error("Hashtree ~p lock attempted for version: ~p while local tree has version: ~p", [Index, ReqVer, Version]),
     {bad_version, State};
 do_get_lock(_, _, _, State) ->

@@ -324,7 +324,8 @@ remote_exchange_request(RemoteVN, IndexN, Version) ->
     as_event(fun() ->
                      riak_kv_entropy_manager:start_exchange_remote(RemoteVN,
                                                                    IndexN,
-                                                                   FsmPid)
+                                                                   FsmPid,
+                                                                   Version)
              end).
 
 %% @private
