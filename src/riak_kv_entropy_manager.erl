@@ -106,7 +106,7 @@ get_lock(Type, Pid) ->
 %%      then forwarded to the relevant index_hashtree to acquire a tree lock.
 %%      If both locks are acquired, the pid of the remote index_hashtree is
 %%      returned.
--spec start_exchange_remote({index(), node()}, index_n(), pid())
+-spec start_exchange_remote({index(), node()}, index_n(), pid(), atom())
                            -> {remote_exchange, pid()} |
                               {remote_exchange, anti_entropy_disabled} |
                               {remote_exchange, max_concurrency} |
