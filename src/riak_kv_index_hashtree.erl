@@ -36,7 +36,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--export([get_lock/3,
+-export([get_lock/2,
+         get_lock/3,
          compare/3,
          compare/4,
          compare/5,
@@ -190,14 +191,19 @@ get_trees({test, Pid}) ->
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
 -spec get_lock(pid(), any()) -> ok | not_built | already_locked | bad_version.
+get_lock(Tree, Type) ->
+    get_lock(Tree, Type, get_version(Tree), self()).
+
+%% @doc Acquire the lock for the specified index_hashtree if not already
+%%      locked, and associate the lock with the calling process. Grab lock on
+%%      specific version.
+-spec get_lock(pid(), any(), atom()) -> ok | not_built | already_locked | bad_version.
 get_lock(Tree, Type, Version) ->
     get_lock(Tree, Type, Version, self()).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
-
-%% Unsure why we have this get_lock, it is not exported and only called by the arity 2 version.
--spec get_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
+-spec get_lock(pid(), any(), atom(), pid()) -> ok | not_built | already_locked.
 get_lock(Tree, Type, Version, Pid) ->
     gen_server:call(Tree, {get_lock, Type, Version, Pid}, infinity).
 

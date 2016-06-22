@@ -544,7 +544,7 @@ do_exchange(Partition, DBRef, TmpTree0, TreePid) ->
     end.
 
 get_hashtree_lock(TreePid, Retries) ->
-    case riak_kv_index_hashtree:get_lock(TreePid, local_fsm, riak_kv_index_hashtree:get_version(TreePid)) of
+    case riak_kv_index_hashtree:get_lock(TreePid, local_fsm) of
         Reply = already_locked ->
             case Retries > 0 of
                 true ->
