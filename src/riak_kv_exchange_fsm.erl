@@ -37,6 +37,7 @@
 -type index_n() :: {index(), pos_integer()}.
 -type vnode() :: {index(), node()}.
 
+%% Maybe add version to state so we can use it in the status output.
 -record(state, {local       :: vnode(),
                 remote      :: vnode(),
                 index_n     :: index_n(),
@@ -108,13 +109,14 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%      remote concurrency lock, and remote tree lock. Exchange will
 %%      timeout if locks cannot be acquired in a timely manner.
 prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
-                                              index_n=IndexN}) ->
+                                              index_n=IndexN,
+                                              local_tree=Tree}) ->
     case riak_kv_entropy_manager:get_lock(exchange) of
         ok ->
-            case riak_kv_index_hashtree:get_lock(State#state.local_tree,
-                                                 local_fsm) of
+            Version = riak_kv_index_hashtree:get_version(Tree),
+            case riak_kv_index_hashtree:get_lock(Tree, local_fsm, Version) of
                 ok ->
-                    remote_exchange_request(RemoteVN, IndexN),
+                    remote_exchange_request(RemoteVN, IndexN, Version),
                     Timer = gen_fsm:send_event_after(State#state.timeout,
                                                      timeout),
                     {next_state, prepare_exchange, State#state{timer=Timer}};
@@ -317,7 +319,7 @@ update_request(Tree, {Index, _}, IndexN) ->
                      end
              end).
 
-remote_exchange_request(RemoteVN, IndexN) ->
+remote_exchange_request(RemoteVN, IndexN, Version) ->
     FsmPid = self(),
     as_event(fun() ->
                      riak_kv_entropy_manager:start_exchange_remote(RemoteVN,

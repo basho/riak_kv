@@ -36,7 +36,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
--export([get_lock/2,
+-export([get_lock/3,
          compare/3,
          compare/4,
          compare/5,
@@ -59,7 +59,8 @@
          expire/1,
          destroy/1,
          index_2i_n/0,
-         get_trees/1]).
+         get_trees/1,
+         get_version/1]).
 
 -export([poke/1,
          get_build_time/1]).
@@ -79,7 +80,8 @@
                 path,
                 build_time,
                 trees,
-                use_2i = false :: boolean()}).
+                use_2i = false :: boolean(),
+                version :: undefined | v0}).
 
 -type state() :: #state{}.
 
@@ -139,8 +141,8 @@ async_delete(Items=[{_Id, _Key}|_], Tree) ->
 %%      remote vnode locks when starting an exchange. For more details,
 %%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}
 -spec start_exchange_remote(pid(), term(), index_n(), pid()) -> ok.
-start_exchange_remote(FsmPid, From, IndexN, Tree) ->
-    gen_server:cast(Tree, {start_exchange_remote, FsmPid, From, IndexN}).
+start_exchange_remote(FsmPid, Version, From, IndexN, Tree) ->
+    gen_server:cast(Tree, {start_exchange_remote, FsmPid, Version, From, IndexN}).
 
 %% @doc Update all hashtrees managed by the provided index_hashtree pid.
 -spec update(index_n(), pid()) -> ok | not_responsible.
@@ -187,15 +189,22 @@ get_trees({test, Pid}) ->
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
--spec get_lock(pid(), any()) -> ok | not_built | already_locked.
-get_lock(Tree, Type) ->
-    get_lock(Tree, Type, self()).
+-spec get_lock(pid(), any()) -> ok | not_built | already_locked | bad_version.
+get_lock(Tree, Type, Version) ->
+    get_lock(Tree, Type, Version, self()).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
+
+%% Unsure why we have this get_lock, it is not exported and only called by the arity 2 version.
 -spec get_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
-get_lock(Tree, Type, Pid) ->
-    gen_server:call(Tree, {get_lock, Type, Pid}, infinity).
+get_lock(Tree, Type, Version, Pid) ->
+    gen_server:call(Tree, {get_lock, Type, Version, Pid}, infinity).
+
+%% @doc Get the version of the specified index_hashtree
+-spec get_version(pid()) -> undefined | v0.
+get_version(Tree) ->
+    gen_server:call(Tree, {get_version}, infinity).
 
 %% @doc Poke the specified index_hashtree to ensure the tree is
 %%      built/rebuilt as needed. This is periodically called by the
@@ -254,7 +263,17 @@ init([Index, VNPid, Opts]) ->
             end,
             ignore;
         Root ->
-            Path0 = determine_hashtree_version(Root),
+            %% For the patch we are not supporting an online upgrade for AAE. 2.2 will
+            %% have logic so the old hashtree can continue to be used while the new version builds.
+            %%
+            {Path0, Version} = case application:get_env(riak_kv, hash_only_vclock) of
+                {ok, true} ->
+                    %% Using v0 for vclock hashing. Joining the version to the path to support
+                    %% easy downgrades where the new trees will be unable to be found by old code.
+                    {filename:join(Root, "v0"), v0};
+                _ ->
+                    {Root, undefined}
+            end,
             Path = filename:join(Path0, integer_to_list(Index)),
             monitor(process, VNPid),
             Use2i = lists:member(use_2i, Opts),
@@ -264,7 +283,8 @@ init([Index, VNPid, Opts]) ->
                            trees=orddict:new(),
                            built=false,
                            use_2i=Use2i,
-                           path=Path},
+                           path=Path,
+                           version=Version},
             IndexNs = responsible_preflists(State),
             State2 = init_trees(IndexNs, VNEmpty, State),
             %% If vnode is empty, mark tree as built without performing fold
@@ -282,9 +302,12 @@ handle_call({new_tree, Id}, _From, State) ->
     State2 = do_new_tree(Id, State, mark_open),
     {reply, ok, State2};
 
-handle_call({get_lock, Type, Pid}, _From, State) ->
-    {Reply, State2} = do_get_lock(Type, Pid, State),
+handle_call({get_lock, Type, Version, Pid}, _From, State) ->
+    {Reply, State2} = do_get_lock(Type, Version, Pid, State),
     {reply, Reply, State2};
+
+handle_call({get_version}, _From, State=#state{version=Version}) ->
+    {reply, Version, State};
 
 handle_call({insert, Items, Options}, _From, State) ->
     State2 = do_insert(Items, Options, State),
@@ -396,9 +419,9 @@ handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
     {noreply, State2};
 
-handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
+handle_cast({start_exchange_remote, FsmPid, Version, From, _IndexN}, State) ->
     %% Concurrency lock already acquired, try to acquire tree lock.
-    case do_get_lock(remote_fsm, FsmPid, State) of
+    case do_get_lock(remote_fsm, Version, FsmPid, State) of
         {ok, State2} ->
             gen_server:reply(From, {remote_exchange, self()}),
             {noreply, State2};
@@ -465,13 +488,6 @@ determine_data_root() ->
                     undefined
             end
     end.
-
-%% Static version for patch. 2.2 will have ability to define version
-determine_hashtree_version(Root) ->
-    case application:get_env(riak_kv, hash_only_vclock) of
-        {ok, true} ->
-            Path = filename:join(Root, "v0")
-    end,
 
 %% @doc Init the trees.
 %%
@@ -627,15 +643,24 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}, MarkType) ->
     Trees2 = orddict:store(Id, NewTree1, Trees),
     State#state{trees=Trees2}.
 
+%% This function never uses the Type field. Unsure why it is part of the API. Maybe was meant to be used
+%% by the background manager which could manage tokens based on Type atom. Best guess...
 -spec do_get_lock(any(), pid(), state()) -> {not_built | ok | already_locked, state()}.
-do_get_lock(_, _, State) when State#state.built /= true ->
+do_get_lock(_, _, _, State) when State#state.built /= true ->
     lager:debug("Not built: ~p :: ~p", [State#state.index, State#state.built]),
     {not_built, State};
-do_get_lock(_Type, Pid, State=#state{lock=undefined}) ->
+do_get_lock(_Type, undefined, Pid, State=#state{lock=undefined, version=undefined}) ->
     Ref = monitor(process, Pid),
     State2 = State#state{lock=Ref},
     {ok, State2};
-do_get_lock(_, _, State) ->
+do_get_lock(_Type, v0, Pid, State=#state{lock=undefined, version=v0}) ->
+    Ref = monitor(process, Pid),
+    State2 = State#state{lock=Ref},
+    {ok, State2};
+do_get_lock(_Type, ReqVer, Pid, State=#state{lock=undefined, version=Version, index=Index}) ->
+    lager:error("Hashtree ~p lock attempted for version: ~p while local tree has version: ~p", [Index, ReqVer, Version]),
+    {bad_version, State};
+do_get_lock(_, _, _, State) ->
     lager:debug("Already locked: ~p", [State#state.index]),
     {already_locked, State}.
 

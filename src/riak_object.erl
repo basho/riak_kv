@@ -629,9 +629,6 @@ hash(Obj=#r_object{}) ->
     Vclock = vclock(Obj),
     case application:get_env(riak_kv, hash_only_vclock) of
         true ->
-            %% Why do we have a version here? Changing the version will just cause all
-            %% hashes not to match, which I'm sure isn't what we want on upgrades.
-            %% So, I do not see the reason for the version or any reason to increment it
             erlang:phash2(to_binary(v0, lists:sort(Vclock)));
         _ ->
             UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
