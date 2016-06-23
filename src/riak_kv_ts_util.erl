@@ -31,6 +31,7 @@
          get_column_types/2,
          get_table_ddl/1,
          lk/1,
+         lk_to_pk/3,
          make_ts_keys/3,
          maybe_parse_table_def/2,
          pk/1,
@@ -242,43 +243,59 @@ try_compile_ddl(DDL) ->
 
 
 -spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], ?DDL{}, module()) ->
-                          {ok, {binary(), binary()}} |
+                          {ok, {tuple(), tuple()}} |
                           {error, {bad_key_length, integer(), integer()}}.
 %% Given a list of values (of appropriate types) and a DDL, produce a
 %% partition and local key pair, which can be used in riak_client:get
 %% to fetch TS objects.
-make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKParams},
+make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
                                      fields = Fields}, Mod) ->
     %% 1. use elements in Key to form a complete data record:
-    KeyFields = [F || #param_v1{name = [F]} <- LKParams],
+    KeyFields = [F || #param_v1{name = [F]} <- LKAst],
+    AllFields = [F || #riak_field_v1{name = F} <- Fields],
     Got = length(CompoundKey),
     Need = length(KeyFields),
     case {Got, Need} of
         {_N, _N} ->
-            KeyAssigned = lists:zip(KeyFields, CompoundKey),
-            VoidRecord = [{F, void} || #riak_field_v1{name = F} <- Fields],
-            %% (void values will not be looked at in riak_ql_ddl:make_key;
-            %% only LK-constituent fields matter)
-            BareValues =
-                list_to_tuple(
-                  [proplists:get_value(K, KeyAssigned)
-                   || {K, _} <- VoidRecord]),
-
+            DummyObject = build_dummy_object_from_keyed_values(
+                            lists:zip(KeyFields, CompoundKey), AllFields),
             %% 2. make the PK and LK
             PK  = encode_typeval_key(
-                    riak_ql_ddl:get_partition_key(DDL, BareValues, Mod)),
+                    riak_ql_ddl:get_partition_key(DDL, DummyObject, Mod)),
             LK  = encode_typeval_key(
-                    riak_ql_ddl:get_local_key(DDL, BareValues, Mod)),
+                    riak_ql_ddl:get_local_key(DDL, DummyObject, Mod)),
             {ok, {PK, LK}};
        {G, N} ->
             {error, {bad_key_length, G, N}}
     end.
+
+build_dummy_object_from_keyed_values(LK, AllFields) ->
+    VoidRecord = [{F, void} || F <- AllFields],
+    %% (void values will not be looked at in riak_ql_ddl:make_key;
+    %% only LK-constituent fields matter)
+    list_to_tuple(
+      [proplists:get_value(K, LK)
+       || {K, _} <- VoidRecord]).
+
 
 -spec encode_typeval_key(list({term(), term()})) -> tuple().
 %% Encode a time series key returned by riak_ql_ddl:get_partition_key/3,
 %% riak_ql_ddl:get_local_key/3,
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
+
+
+-spec lk_to_pk(tuple(), ?DDL{}, module()) -> tuple().
+%% A simplified version of make_key/3 which only returns the PK.
+lk_to_pk(LKVals, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
+                        fields = Fields}, Mod)
+  when is_tuple(LKVals) andalso size(LKVals) == length(LKAst) ->
+    KeyFields = [F || #param_v1{name = [F]} <- LKAst],
+    AllFields = [F || #riak_field_v1{name = F} <- Fields],
+    DummyObject = build_dummy_object_from_keyed_values(
+                    lists:zip(KeyFields, tuple_to_list(LKVals)), AllFields),
+    encode_typeval_key(
+      riak_ql_ddl:get_partition_key(DDL, DummyObject, Mod)).
 
 
 %% Print the query explanation to the shell.
@@ -389,7 +406,7 @@ get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
 
 row_to_key(Row, DDL, Mod) ->
-    riak_kv_ts_util:encode_typeval_key(
+    encode_typeval_key(
       riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
 %% Result from riak_client:get_cover is a nested list of coverage plan

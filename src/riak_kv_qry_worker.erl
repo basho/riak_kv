@@ -161,7 +161,7 @@ make_key_conversion_fun(Table) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     DDL = Mod:get_ddl(),
     fun(Key) when is_binary(Key) ->
-            riak_kv_ts_util:row_to_key(sext:decode(Key), DDL, Mod);
+            riak_kv_ts_util:lk_to_pk(sext:decode(Key), DDL, Mod);
        (Key) ->
             lager:error("Key conversion function "
                         "encountered a non-binary object key: ~p", [Key]),
