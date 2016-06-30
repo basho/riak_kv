@@ -2383,11 +2383,28 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                         false ->
                             ok
                     end,
-                    PutRet = Mod:put(Bucket, Key, IndexSpecs, EncodedVal,
-                                     ModState),
+                    PutRet = case timeseries_data(Key, Obj) of
+                                 true ->
+                                     RawKey = sext:decode(Key),
+                                     Mod:put(Bucket, RawKey, IndexSpecs, EncodedVal,
+                                             ModState);
+                                 false ->
+                                     Mod:put(Bucket, Key, IndexSpecs, EncodedVal,
+                                             ModState)
+                             end,
                     {PutRet, EncodedVal}
             end
     end.
+
+%% Look for sext-encoded tuple (key) because handoff lifts it straight out of
+%% the backend and gives it to us as is. If this isn't sext-encoded
+%% then this ain't timeseries so we don't need to dig through the
+%% object metadata for a DDL.
+timeseries_data(<<16,0,0,0, _Rest/binary>>, Object) ->
+    {IsTs, _Ver} = riak_object:is_ts(Object),
+    IsTs;
+timeseries_data(_, _) ->
+    false.
 
 uses_r_object(Mod, ModState, Bucket) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
