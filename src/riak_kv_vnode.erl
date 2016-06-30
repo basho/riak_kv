@@ -2383,6 +2383,13 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                         false ->
                             ok
                     end,
+
+                    %% Timeseries data arrives during handoff with
+                    %% sext-encoded local keys. Unless care is taken,
+                    %% those keys are doubly-encoded, so here we will
+                    %% identify them and unencode the key.
+                    %%
+                    %% Not the ideal solution but sufficient.
                     PutRet = case timeseries_data(Key, Obj) of
                                  true ->
                                      RawKey = sext:decode(Key),
@@ -2396,10 +2403,13 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
             end
     end.
 
-%% Look for sext-encoded tuple (key) because handoff lifts it straight out of
-%% the backend and gives it to us as is. If this isn't sext-encoded
-%% then this ain't timeseries so we don't need to dig through the
-%% object metadata for a DDL.
+%% This function takes a key and the riak object from the handoff call
+%% chain and verifies whether or not the object is from timeseries.
+%%
+%% The binary pattern match is quick and easy: does this look like a
+%% sext-encoded tuple?
+%%
+%% Only if that is true do we examine the object for DDL metadata.
 timeseries_data(<<16,0,0,0, _Rest/binary>>, Object) ->
     {IsTs, _Ver} = riak_object:is_ts(Object),
     IsTs;
