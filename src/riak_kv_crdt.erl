@@ -29,7 +29,7 @@
 %% MR helper funs
 -export([value/1, counter_value/1, set_value/1, map_value/1]).
 %% Other helper funs
--export([is_crdt/1]).
+-export([is_crdt/1, is_crdt/2, is_crdt_object/1, is_crdt_supported/1]).
 
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
@@ -143,17 +143,51 @@ map_value(RObj) ->
 %% @doc convenience function for (e.g.) Yokozuna. Checks the bucket props for
 %% the object, if it has a supported datatype entry, returns true; otherwise
 %% false if not a 2.0 CRDT.
--spec is_crdt(riak_object:riak_object()) -> boolean()|{error,_}.
+-spec is_crdt(riak_object:riak_object()) -> boolean().
 is_crdt(RObj) ->
     Bucket = riak_object:bucket(RObj),
     case riak_core_bucket:get_bucket(Bucket) of
         BProps when is_list(BProps) ->
-            Type = proplists:get_value(datatype, BProps),
-            Mod = riak_kv_crdt:to_mod(Type),
-            supported(Mod);
+            is_crdt(RObj, BProps);
         {error, _}=Err ->
-            Err
+            Err;
+        _ ->
+            false
     end.
+
+%% @doc Check if bucket_type is set for Riak datatypes and check the
+%%      Riak object || or its values** contain a special Riak
+%%      datatype tag -> <<69>>.
+%%
+%%      **We look at values instead of value because if there are siblings
+%%        for reasons (before a crdt merge) in, eg. the Yokozuna usecase,
+%%        we just to check that the first value  contains the special datatype
+%%        tag.
+-spec is_crdt(riak_object:riak_object(),
+              riak_kv_bucket:props()) -> boolean().
+is_crdt(RObj, BProps) when is_list(BProps) ->
+    is_crdt_supported(BProps) andalso is_crdt_object(RObj).
+
+-spec is_crdt_object(riak_object:riak_object() |
+                     [riak_object:value()]) -> boolean()|{error,_}.
+is_crdt_object([]=_RObjVals) ->
+    false;
+is_crdt_object([H|_T]=_RObjVals) ->
+    contains_crdt_tag(H);
+is_crdt_object(RObj) ->
+    ObjVals = riak_object:get_values(RObj),
+    is_crdt_object(ObjVals).
+
+is_crdt_supported(BProps) ->
+    Type = proplists:get_value(datatype, BProps),
+    Mod = riak_kv_crdt:to_mod(Type),
+    supported(Mod).
+
+-spec contains_crdt_tag(riak_object:value()) -> boolean().
+contains_crdt_tag(<<?TAG, _Rest/binary>>) ->
+    true;
+contains_crdt_tag(_ObjVal) ->
+    false.
 
 %% @TODO in riak_dt change value to query allow query to take an
 %% argument, (so as to query subfields of map, or set membership etc)
@@ -364,6 +398,8 @@ later(TS1, TS2) ->
             true
     end.
 
+-spec new(riak_object:bucket(), riak_object:key(), DT_MOD::module())
+         -> riak_object:riak_object().
 new(B, K, Mod) ->
     CRDT=#crdt{ctype=CType} = to_record(Mod, Mod:new()),
     Bin = to_binary(CRDT),
@@ -516,7 +552,7 @@ get_context(Type, Value) ->
 -ifdef(TEST).
 
 is_crdt_test_() ->
-{setup,
+    {setup,
      fun() ->
              meck:new(riak_core_bucket),
              meck:new(riak_core_capability, []),
@@ -548,11 +584,14 @@ is_crdt_test_() ->
                  meck:expect(riak_core_bucket, get_bucket,
                              fun({<<"maps">>, _Name}) -> [{datatype, map}];
                                 ({<<"sets">>, _Name}) -> [{datatype, set}];
-                                ({<<"counters">>, _Name}) -> [{datatype, counter}];
+                                ({<<"counters">>, _Name}) ->
+                                     [{datatype, counter}];
+                                ({<<"mappyz">>, _Name}) -> [];
                                 ({X, Y}) -> meck:passthrough([X, Y]) end),
                  Bucket1 = {<<"maps">>, <<"crdt">>},
                  Bucket2 = {<<"sets">>, <<"crdt">>},
                  Bucket3 = {<<"counters">>, <<"crdt">>},
+                 Bucket4 = {<<"mappyz">>, <<"crdt">>},
                  BTPropsMap = riak_core_bucket:get_bucket(Bucket1),
                  BTPropsSet = riak_core_bucket:get_bucket(Bucket2),
                  BTPropsCounter = riak_core_bucket:get_bucket(Bucket3),
@@ -560,11 +599,14 @@ is_crdt_test_() ->
                  ?assertEqual(set, proplists:get_value(datatype, BTPropsSet)),
                  ?assertEqual(counter,
                               proplists:get_value(datatype, BTPropsCounter)),
-                 [?assert(is_crdt(riak_object:new(B, K, V)))
-                  || {B, K, V} <- [{Bucket1, <<"k1">>, hi},
-                                 {Bucket2, <<"k2">>, hey},
-                                 {Bucket3, <<"k3">>, hey}]]
-
+                 [?assert(is_crdt(riak_kv_crdt:new(B, K, Mod)))
+                  || {B, K, Mod} <- [{Bucket1, <<"k1">>, riak_dt_map},
+                                   {Bucket2, <<"k2">>, riak_dt_orswot},
+                                   {Bucket3, <<"k3">>, riak_dt_pncounter}]],
+                 ?assertNot(is_crdt(riak_kv_crdt:new(Bucket4, <<"k5">>,
+                                                     riak_dt_map))),
+                 ?assertNot(is_crdt(riak_object:new(Bucket1, <<"k6">>,
+                                                    <<"classic">>)))
              end)]}.
 
 -ifdef(EQC).

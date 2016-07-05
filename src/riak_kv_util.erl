@@ -223,7 +223,7 @@ responsible_preflists(Index) ->
 
 -spec responsible_preflists(index(), riak_core_ring()) -> [index_n()].
 responsible_preflists(Index, Ring) ->
-    AllN = determine_all_n(Ring),
+    AllN = riak_core_bucket:all_n(Ring),
     responsible_preflists(Index, AllN, Ring).
 
 -spec responsible_preflists(index(), [pos_integer(),...], riak_core_ring())
@@ -244,19 +244,8 @@ responsible_preflists_n(RevIndices, N) ->
 
 -spec determine_max_n(riak_core_ring()) -> pos_integer().
 determine_max_n(Ring) ->
-    lists:max(determine_all_n(Ring)).
+    lists:max(riak_core_bucket:all_n(Ring)).
 
--spec determine_all_n(riak_core_ring()) -> [pos_integer(),...].
-determine_all_n(Ring) ->
-    Buckets = riak_core_ring:get_buckets(Ring),
-    BucketProps = [riak_core_bucket:get_bucket(Bucket, Ring) || Bucket <- Buckets],
-    Default = app_helper:get_env(riak_core, default_bucket_props),
-    DefaultN = proplists:get_value(n_val, Default),
-    AllN = lists:foldl(fun(Props, AllN) ->
-                               N = proplists:get_value(n_val, Props),
-                               ordsets:add_element(N, AllN)
-                       end, [DefaultN], BucketProps),
-    AllN.
 
 fix_incorrect_index_entries() ->
     fix_incorrect_index_entries([]).
