@@ -22,6 +22,8 @@
 
 -module(crdt_statem_eqc).
 
+-include("riak_kv_types.hrl").
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
@@ -43,19 +45,24 @@ initial_state() ->
 %% Command generator, S is the state
 command(#state{vnodes=VNodes, mod=Mod}) ->
     oneof([{call, ?MODULE, create, [Mod]}] ++
-           [{call, ?MODULE, update, [Mod, Mod:gen_op(), elements(VNodes)]} || length(VNodes) > 0] ++ %% If a vnode exists
-           [{call, ?MODULE, merge, [Mod, elements(VNodes), elements(VNodes)]} || length(VNodes) > 0] ++
-           [{call, ?MODULE, crdt_equals, [Mod, elements(VNodes), elements(VNodes)]} || length(VNodes) > 0]
-).
+          [{call, ?MODULE, update, [Mod, Mod:gen_op(), elements(VNodes)]}
+           || length(VNodes) > 0] ++ %% If a vnode exists
+          [{call, ?MODULE, merge, [Mod, elements(VNodes), elements(VNodes)]}
+           || length(VNodes) > 0] ++
+          [{call, ?MODULE, crdt_equals,
+            [Mod, elements(VNodes), elements(VNodes)]} || length(VNodes) > 0]).
 
 %% Next state transformation, S is the current state
-next_state(#state{vnodes=VNodes, mod=Mod, vnode_id=ID, mod_state=Expected0}=S,V,{call,?MODULE,create,_}) ->
+next_state(#state{vnodes=VNodes, mod=Mod, vnode_id=ID, mod_state=Expected0}=S,V,
+           {call,?MODULE,create,_}) ->
     Expected = Mod:update_expected(ID, create, Expected0),
     S#state{vnodes=VNodes++[{ID, V}], vnode_id=ID+1, mod_state=Expected};
-next_state(#state{vnodes=VNodes0, mod_state=Expected, mod=Mod}=S,V,{call,?MODULE, update, [Mod, Op, {ID, _C}]}) ->
+next_state(#state{vnodes=VNodes0, mod_state=Expected, mod=Mod}=S,V,
+           {call,?MODULE, update, [Mod, Op, {ID, _C}]}) ->
     VNodes = lists:keyreplace(ID, 1, VNodes0, {ID, V}),
     S#state{vnodes=VNodes, mod_state=Mod:update_expected(ID, Op, Expected)};
-next_state(#state{vnodes=VNodes0, mod_state=Expected0, mod=Mod}=S,V,{call,?MODULE, merge, [_Mod, {IDS, _C}=_Source, {ID, _C}=_Dest]}) ->
+next_state(#state{vnodes=VNodes0, mod_state=Expected0, mod=Mod}=S,V,
+           {call,?MODULE, merge, [_Mod, {IDS, _C}=_Source, {ID, _C}=_Dest]}) ->
     VNodes = lists:keyreplace(ID, 1, VNodes0, {ID, V}),
     Expected = Mod:update_expected(ID, {merge, IDS}, Expected0),
     S#state{vnodes=VNodes, mod_state=Expected};
@@ -63,19 +70,38 @@ next_state(S, _V, _C) ->
     S.
 
 %% Precondition, checked before command is added to the command sequence
-precondition(_S,{call,_,_,_}) ->
+precondition(_S, {call,_,_,_}) ->
     true.
 
 %% Postcondition, checked after command has been evaluated
 %% OBS: S is the state before next_state(S,_,<command>)
-postcondition(_S,{call,?MODULE, crdt_equals, _},Res) ->
+postcondition(_S,{call, ?MODULE, crdt_equals, _},Res) ->
     Res == true;
 postcondition(_S,{call,_,_,_},_Res) ->
     true.
 
 prop_converge(InitialValue, NumTests, Mod) ->
-    eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(InitialValue, Mod)))).
+    eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(InitialValue,
+                                                                Mod)))).
 
+prop_converge(InitialValue, ?HLL_TYPE=Mod) ->
+    ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=InitialValue}),
+            begin
+                {H, S, Res} = run_commands(?MODULE, Cmds),
+                HllSet = merge_crdts(Mod, S#state.vnodes),
+                HllValue = Mod:value(HllSet),
+                Card = Mod:eqc_state_value(S#state.mod_state),
+                ?WHENFAIL(
+                   %% History: ~p\nState: ~p\ H,S,
+                   io:format("\nState: ~p"
+                             "\nHistory: ~p"
+                             "\nMergedHllVal: ~p"
+                             "\nCard: ~p", [H, S, HllValue, Card]),
+                   conjunction([{res, equals(Res, ok)},
+                                {within_error,
+                                 Mod:within_error_check(Card, HllSet, HllValue)}
+                               ]))
+            end);
 prop_converge(InitialValue, Mod) ->
     ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=InitialValue}),
             begin
@@ -85,9 +111,9 @@ prop_converge(InitialValue, Mod) ->
                 ExpectedValue = Mod:eqc_state_value(S#state.mod_state),
                 ?WHENFAIL(
                    %% History: ~p\nState: ~p\ H,S,
-                   io:format("History: ~p\nState: ~p", [H,S]),
+                   io:format("History: ~p\nState: ~p", [H, S]),
                    conjunction([{res, equals(Res, ok)},
-                                {total, equals(sort(MergedVal), sort(ExpectedValue))}]))
+                                {total, equals(MergedVal, ExpectedValue)}]))
             end).
 
 merge_crdts(Mod, []) ->

@@ -13,6 +13,11 @@
 -define(SET_TYPE, riak_dt_orswot).
 -define(SET_TYPE(Val), #crdt{mod=?SET_TYPE, ctype="application/riak_set", value=Val}).
 
+-define(HLL_TYPE, riak_dt_hll).
+-define(HLL_TYPE(Val), #crdt{mod=?HLL_TYPE,
+                             ctype="application/riak_hll",
+                             value=Val}).
+
 -define(MAP_TYPE, riak_dt_map).
 -define(MAP_TYPE(Val), #crdt{mod=?MAP_TYPE, ctype="application/riak_map", value=Val}).
 
@@ -22,7 +27,7 @@
 -define(EMCNTR_TYPE, riak_dt_emcntr).
 
 -define(V1_TOP_LEVEL_TYPES, [pncounter]).
--define(V2_TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?SET_TYPE, ?MAP_TYPE]).
+-define(V2_TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?SET_TYPE, ?MAP_TYPE, ?HLL_TYPE]).
 -define(TOP_LEVEL_TYPES, ?V1_TOP_LEVEL_TYPES ++ ?V2_TOP_LEVEL_TYPES).
 -define(ALL_TYPES, ?TOP_LEVEL_TYPES ++ [?FLAG_TYPE, ?REG_TYPE]).
 -define(EMBEDDED_TYPES, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
@@ -30,16 +35,23 @@
                          {register, ?REG_TYPE}]).
 
 -define(MOD_MAP, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
-                  {counter, ?COUNTER_TYPE}]).
+                  {counter, ?COUNTER_TYPE}, {hll, ?HLL_TYPE}]).
 
 -define(DATATYPE_STATS_DEFAULTS, [actor_count]).
+-define(HLL_STATS, [bytes]).
 
 %% These proplists represent the current versions of supported
 %% datatypes. The naming `EN_DATATYPE_VERSIONS' means `Epoch' and
 %% number. `N' is incremented when any new version of any datatype is
 %% introduced, thus bumping the data type `Epoch'.
 -define(E1_DATATYPE_VERSIONS, [{?COUNTER_TYPE, 2}]).
--define(E2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2}, {?SET_TYPE, 2}, {?COUNTER_TYPE, 2}]).
+-define(E2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2},
+                               {?SET_TYPE, 2},
+                               {?COUNTER_TYPE, 2},
+                               {?HLL_TYPE, 1}]).
 
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.
+
+%% Redis Default Yo Lolz.
+-define(HYPER_DEFAULT_PRECISION, 14).

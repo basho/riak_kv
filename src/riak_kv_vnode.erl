@@ -2,7 +2,7 @@
 %%
 %% riak_kv_vnode: VNode Implementation
 %%
-%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -160,6 +160,7 @@
 -type vnodeid() :: binary().
 -type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
 
+
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
 
@@ -192,9 +193,10 @@
                   robj :: term(),
                   index_specs=[] :: [{index_op(), binary(), index_value()}],
                   reqid :: non_neg_integer(),
-                  bprops :: maybe_improper_list(),
+                  bprops :: riak_kv_bucket:props(),
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
+                  readrepair=false :: boolean(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
                  }).
@@ -1181,7 +1183,7 @@ delete(State=#state{status_mgr_pid=StatusMgr, mod=Mod, modstate=ModState}) ->
     end,
     {ok, State#state{modstate=UpdModState,vnodeid=undefined,hashtrees=undefined}}.
 
-terminate(_Reason, #state{mod=Mod, modstate=ModState,hashtrees=Trees}) ->
+terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) ->
     Mod:stop(ModState),
 
     %% Explicitly stop the hashtree rather than relying on the process monitor
@@ -1190,6 +1192,7 @@ terminate(_Reason, #state{mod=Mod, modstate=ModState,hashtrees=Trees}) ->
     %% riak_core can complete their shutdown before the hashtree is written
     %% to disk causing the hashtree to be closed dirty.
     riak_kv_index_hashtree:sync_stop(Trees),
+    riak_kv_stat:unregister_vnode_stats(Idx),
     ok.
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
@@ -1376,7 +1379,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                   Props ->
                       Props
               end,
-    PruneTime = case proplists:get_value(rr, Options, false) of
+    ReadRepair = proplists:get_value(rr, Options, false),
+    PruneTime = case ReadRepair of
                     true ->
                         undefined;
                     false ->
@@ -1392,6 +1396,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        reqid=ReqID,
                        bprops=BProps,
                        starttime=StartTime,
+                       readrepair = ReadRepair,
                        prunetime=PruneTime,
                        crdt_op = CRDTOp},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
@@ -1603,16 +1608,26 @@ perform_put({true, Obj},
             #putargs{returnbody=RB,
                      bkey=BKey,
                      reqid=ReqID,
-                     index_specs=IndexSpecs}) ->
-    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
+                     index_specs=IndexSpecs,
+                     readrepair=ReadRepair}) ->
+    case ReadRepair of
+      true ->
+        MaxCheckFlag = no_max_check;
+      false ->
+        MaxCheckFlag = do_max_check
+    end,
+    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
     {Reply, State2}.
 
-actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
+actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State) ->
+    actual_put(BKey, Obj, IndexSpecs, RB, ReqID, do_max_check, State).
+
+actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
-                       do_max_check) of
+                       MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),

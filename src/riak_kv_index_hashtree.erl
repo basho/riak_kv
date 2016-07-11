@@ -48,6 +48,7 @@
          hash_index_data/1,
          hash_object/2,
          update/2,
+         update/3,
          start_exchange_remote/4,
          delete/2,
          async_delete/2,
@@ -70,6 +71,7 @@
 -type proplist() :: proplists:proplist().
 -type riak_object_t2b() :: binary().
 -type hashtree() :: hashtree:hashtree().
+-type update_callback() :: fun(() -> term()).
 
 -record(state, {index,
                 vnode_pid,
@@ -145,7 +147,14 @@ start_exchange_remote(FsmPid, From, IndexN, Tree) ->
 %% @doc Update all hashtrees managed by the provided index_hashtree pid.
 -spec update(index_n(), pid()) -> ok | not_responsible.
 update(Id, Tree) ->
-    gen_server:call(Tree, {update_tree, Id}, infinity).
+    update(Id, Tree, undefined).
+
+%% @doc Update all hashtrees managed by the provided index_hashtree pid.
+-spec update(index_n(), pid(), undefined | update_callback()) -> ok | not_responsible.
+update(Id, Tree, undefined) ->
+    gen_server:call(Tree, {update_tree, Id, undefined}, infinity);
+update(Id, Tree, Callback) when is_function(Callback) ->
+    gen_server:call(Tree, {update_tree, Id, Callback}, infinity).
 
 %% @doc Return a hash bucket from the tree identified by the given tree id
 %%      that is managed by the provided index_hashtree.
@@ -226,7 +235,7 @@ clear(Tree) ->
 
 %% @doc Expire the specified index_hashtree
 expire(Tree) ->
-    gen_server:call(Tree, expire, infinity).
+    gen_server:cast(Tree, expire).
 
 %% @doc Estimate total number of keys in index_hashtree
 estimate_keys(Tree) ->
@@ -296,21 +305,15 @@ handle_call({delete, Items}, _From, State) ->
 handle_call(get_trees, _From, #state{trees=Trees}=State) ->
     {reply, Trees, State};
 
-handle_call({update_tree, Id}, From, State) ->
+handle_call({update_tree, Id, Callback}, From, State) ->
     lager:debug("Updating tree: (vnode)=~p (preflist)=~p", [State#state.index, Id]),
     apply_tree(Id,
-               fun(Tree) ->
-                       {SnapTree, Tree2} = hashtree:update_snapshot(Tree),
-                       Self = self(),
-                       spawn_link(
-                         fun() ->
-                                 _ = hashtree:update_perform(SnapTree),
-                                 gen_server:cast(Self, {updated, Id}),
-                                 gen_server:reply(From, ok)
-                         end),
-                       {noreply, Tree2}
-               end,
-               State);
+        fun(Tree) ->
+            NewTree = snapshot_and_async_update_tree(Tree, Id, From, Callback),
+            {noreply, NewTree}
+            end,
+        State
+    );
 
 handle_call({exchange_bucket, Id, Level, Bucket}, _From, State) ->
     apply_tree(Id,
@@ -338,11 +341,6 @@ handle_call(destroy, _From, State) ->
 
 handle_call(clear, _From, State) ->
     State2 = clear_tree(State),
-    {reply, ok, State2};
-
-handle_call(expire, _From, State) ->
-    State2 = State#state{expired=true},
-    lager:info("Manually expired tree: ~p", [State#state.index]),
     {reply, ok, State2};
 
 handle_call(estimate_keys, _From,  State=#state{trees=Trees}) ->
@@ -393,6 +391,11 @@ handle_cast(build_failed, State) ->
     {noreply, State2};
 handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
+    {noreply, State2};
+
+handle_cast(expire, State) ->
+    State2 = State#state{expired=true},
+    lager:info("Manually expired tree: ~p", [State#state.index]),
     {noreply, State2};
 
 handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
@@ -994,8 +997,9 @@ close_trees(State=#state{trees=Trees}) ->
     _ = [hashtree:close(Tree) || {_IdxN, Tree} <- Trees2],
     State#state{trees=undefined}.
 
+-spec get_all_locks(build | rehash, index(), pid()) -> boolean().
 get_all_locks(Type, Index, Pid) ->
-    case riak_kv_entropy_manager:get_lock(Type, Pid) of
+    try riak_kv_entropy_manager:get_lock(Type, Pid) of
         ok ->
             case maybe_get_vnode_lock(Type, Index, Pid) of
                 ok ->
@@ -1003,8 +1007,13 @@ get_all_locks(Type, Index, Pid) ->
                 _ ->
                     false
             end;
-        _ ->
+        Other ->
+            lager:debug("Could not get lock: ~p", [Other]),
             false
+    catch exit:{timeout,_} ->
+        riak_kv_entropy_manager:release_lock(Pid),
+        lager:debug("Could not get lock due to timeout."),
+        false
     end.
 
 maybe_get_vnode_lock(rehash, _Partition, _Pid) ->
@@ -1029,3 +1038,27 @@ maybe_get_vnode_lock(SrcPartition, Pid) ->
         false ->
             ok
     end.
+
+snapshot_and_async_update_tree(Tree, Id, From, Callback) ->
+    {SnapTree, Tree2} = hashtree:update_snapshot(Tree),
+    Tree3 = hashtree:set_next_rebuild(Tree2, full),
+    Self = self(),
+    spawn_link(
+        fun() ->
+            try maybe_callback(Callback)
+            catch
+                _:E ->
+                    lager:error(
+                        "An error occurred in update callback: ~p.  "
+                        "Ignoring error and proceeding with update.", [E])
+            end,
+            _ = hashtree:update_perform(SnapTree),
+            gen_server:cast(Self, {updated, Id}),
+            gen_server:reply(From, ok)
+        end),
+    Tree3.
+
+maybe_callback(undefined) ->
+    ok;
+maybe_callback(Callback) ->
+    Callback().
