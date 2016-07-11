@@ -72,7 +72,7 @@ compile(?DDL{ table = T} = DDL,
 maybe_compile_group_by(_, {error,_} = E, _) ->
     E;
 maybe_compile_group_by(Mod, {ok, Sel3}, ?SQL_SELECT{ group_by = GroupBy } = Q1) ->
-    compile_group_by(Mod, GroupBy, [], Q1#riak_select_v1{ 'SELECT' = Sel3 }).
+    compile_group_by(Mod, GroupBy, [], Q1?SQL_SELECT{ 'SELECT' = Sel3 }).
 
 %%
 compile_group_by(_, [], Acc, Q) ->
@@ -1933,7 +1933,7 @@ sum_sum_finalise_test() ->
       ).
 
 extract_stateful_function_1_test() ->
-    {ok, #riak_select_v1{ 'SELECT' = #riak_sel_clause_v1{ clause = [Select] } }} =
+    {ok, ?SQL_SELECT{ 'SELECT' = #riak_sel_clause_v1{ clause = [Select] } }} =
         get_query(
         "SELECT COUNT(col1) + COUNT(col2) FROM mytab "
         "WHERE myfamily = 'familyX' "
@@ -2120,7 +2120,7 @@ flexible_keys_1_test() ->
         [{startkey,[{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1}]},
           {endkey, [{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1000}]},
           {filter,[]}],
-        Select#riak_select_v1.'WHERE'
+        Select?SQL_SELECT.'WHERE'
     ).
 
 %% two element key with quantum
@@ -2132,7 +2132,7 @@ flexible_keys_2_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM tab4 WHERE a > 0 AND a < 1000"),
     ?assertMatch(
-        {ok, [#riak_select_v1{}]},
+        {ok, [?SQL_SELECT{}]},
         compile(DDL, Q, 100)
     ).
 
@@ -2168,7 +2168,7 @@ no_quantum_in_query_1_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM tab1 WHERE a = 1 AND b = 1"),
     ?assertMatch(
-        {ok, [#riak_select_v1{
+        {ok, [?SQL_SELECT{
             'WHERE' =
                 [{startkey,[{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
                  {endkey,  [{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
@@ -2196,7 +2196,7 @@ no_quantum_in_query_2_test() ->
          {endkey, Key},
          {filter,[]},
          {end_inclusive,true}],
-        Select#riak_select_v1.'WHERE'
+        Select?SQL_SELECT.'WHERE'
     ).
 
 
@@ -2218,7 +2218,7 @@ no_quantum_in_query_3_test() ->
          {endkey, Key},
          {filter,{'=',{field,<<"d">>,boolean},{const, true}}},
          {end_inclusive,true}],
-        Select#riak_select_v1.'WHERE'
+        Select?SQL_SELECT.'WHERE'
     ).
 
 %% one element key
@@ -2235,7 +2235,7 @@ no_quantum_in_query_4_test() ->
           {endkey,[{<<"a">>,timestamp,1000}]},
           {filter,[]},
           {end_inclusive,true}],
-        Select#riak_select_v1.'WHERE'
+        Select?SQL_SELECT.'WHERE'
     ).
 
 two_element_key_range_cannot_match_test() ->
@@ -2263,7 +2263,7 @@ group_by_one_field_test() ->
     {ok, [Q2]} = compile(DDL, Q1, 100),
     ?assertEqual(
         [{2,<<"b">>}],
-        Q2#riak_select_v1.group_by
+        Q2?SQL_SELECT.group_by
     ).
 
 group_by_two_fields_test() ->
@@ -2278,7 +2278,7 @@ group_by_two_fields_test() ->
     {ok, [Q2]} = compile(DDL, Q1, 100),
     ?assertEqual(
         [{2,<<"b">>},{1,<<"a">>}],
-        Q2#riak_select_v1.group_by
+        Q2?SQL_SELECT.group_by
     ).
 
 negate_an_aggregation_function_test() ->

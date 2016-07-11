@@ -73,8 +73,13 @@ do_plan({Query, Bucket}, NVal, _PVC, ReqId, NodeCheckService, _Request, DownNode
     UnavailableVNodes =
         riak_core_coverage_plan:identify_unavailable_vnodes(CHBin, RingSize,
                                                             NodeCheckService),
-
-    Key = make_key(Query),
+    %% access the select record using element so that we don't have to use the
+    %% record syntax, the record may have been upgraded or downgraded at this
+    %% point
+    HelperMod = element(?SQL_SELECT.helper_mod, Query),
+    PartitionKey = element(?SQL_SELECT.partition_key, Query),
+    Where = element(?SQL_SELECT.'WHERE', Query),
+    Key = make_key(HelperMod, PartitionKey, Where),
     case hash_for_nodes(NVal, Bucket, Key) of
         [] ->
             {error, no_primaries_available};
@@ -117,9 +122,7 @@ drop_nodes(Vnodes, DownNodes) ->
 %% This is fugly because the physical format of the startkey
 %% which is neede by eleveldb is being used by the query
 %% planner which should only know about a more logical format
-make_key(?SQL_SELECT{helper_mod    = Mod,
-                     partition_key = PartitionKey,
-                     'WHERE'       = Where}) ->
+make_key(Mod, PartitionKey, Where) ->
     {startkey, StartKey} = proplists:lookup(startkey, Where),
     StartKey2 = [{Field, Val} || {Field, _Type, Val} <- StartKey],
     Key = riak_ql_ddl:make_key(Mod, PartitionKey, StartKey2),

@@ -68,7 +68,7 @@ sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
 %% Convert the proplist obtained from the QL parser
 -spec build_sql_record(QLType::select|describe|insert,
                        SQL::[proplists:property()], Cover::term()) ->
-        {error,binary()} | {ok, #riak_select_v1{}}.
+        {error,binary()} | {ok, ?SQL_SELECT{}}.
 build_sql_record(select, SQL, Cover) ->
     T = proplists:get_value(tables, SQL),
     Fields = proplists:get_value(fields, SQL),
@@ -340,7 +340,7 @@ explain_compile_query(QueryString) ->
     build_sql_record(select, Q, undefined).
 
 %%
-explain_sub_query(#riak_select_v1{ 'WHERE' = SubQueryWhere }) ->
+explain_sub_query(?SQL_SELECT{ 'WHERE' = SubQueryWhere }) ->
     {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
     {_, EndKey1} = lists:keyfind(endkey, 1, SubQueryWhere),
     {_, Filter} = lists:keyfind(filter, 1, SubQueryWhere),

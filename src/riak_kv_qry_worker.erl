@@ -131,29 +131,31 @@ new_state() ->
 
 run_sub_qs_fn([]) ->
     ok;
-run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q}, {qid, QId}} | T]) ->
-    Table = Q?SQL_SELECT.'FROM',
+run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q1}, {qid, QId}} | T]) ->
+    Table = Q1?SQL_SELECT.'FROM',
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
     KeyConvFn = make_key_conversion_fun(Table),
-    Opts = [Bucket, none, Q, Timeout, all, undefined, {Q, Bucket}, riak_kv_qry_coverage_plan, KeyConvFn],
+    Q2 = convert_query_to_cluster_version(Q1),
+    Opts = [Bucket, none, Q2, Timeout, all, undefined, {Q2, Bucket}, riak_kv_qry_coverage_plan, KeyConvFn],
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T);
 %% if cover_context in the SQL record is *not* undefined, we've been
 %% given a mini coverage plan to map to a single vnode/quantum
-run_sub_qs_fn([{{qry, Q}, {qid, QId}} | T]) ->
-    Table = Q?SQL_SELECT.'FROM',
+run_sub_qs_fn([{{qry, Q1}, {qid, QId}} | T]) ->
+    Table = Q1?SQL_SELECT.'FROM',
     {ok, CoverProps} =
-        riak_kv_pb_coverage:checksum_binary_to_term(Q?SQL_SELECT.cover_context),
+        riak_kv_pb_coverage:checksum_binary_to_term(Q1?SQL_SELECT.cover_context),
     CoverageFn = riak_client:vnode_target(CoverProps),
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     %% fix these up too
     Timeout = {timeout, 10000},
     Me = self(),
     KeyConvFn = make_key_conversion_fun(Table),
-    Opts = [Bucket, none, Q, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan, KeyConvFn],
+    Q2 = convert_query_to_cluster_version(Q1),
+    Opts = [Bucket, none, Q2, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan, KeyConvFn],
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
     run_sub_qs_fn(T).
 
@@ -167,6 +169,13 @@ make_key_conversion_fun(Table) ->
                         "encountered a non-binary object key: ~p", [Key]),
             Key
     end.
+
+%% Convert the sql select record to a version that is safe to pass around the
+%% cluster. Do not treat the result as a record in the local node, just as a
+%% tuple.
+convert_query_to_cluster_version(Query) ->
+    Version = riak_core_capability:get({riak_kv, sql_select_version}),
+    riak_kv_select:convert(Version, Query).
 
 decode_results([]) ->
     [];

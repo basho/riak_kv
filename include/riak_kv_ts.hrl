@@ -29,8 +29,8 @@
 %% For dialyzer types
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
--define(SQL_SELECT, #riak_select_v1).
--define(SQL_SELECT_RECORD_NAME, riak_select_v1).
+-define(SQL_SELECT, #riak_select_v2).
+-define(SQL_SELECT_RECORD_NAME, riak_select_v2).
 
 %% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
@@ -46,7 +46,9 @@
           finalisers       = []   :: [skip | function()]
         }).
 
--record(riak_select_v1,
+-define(GROUP_BY_DEFAULT, []).
+
+-record(riak_select_v2,
         {
           'SELECT'              :: #riak_sel_clause_v1{},
           'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
@@ -62,7 +64,7 @@
           cover_context = undefined :: term(), %% for parallel queries
           %% prolly a mistake to put this here - should be in DDL
           local_key,
-          group_by = [] :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}]
+          group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}]
         }).
 
 -record(riak_sql_describe_v1,
