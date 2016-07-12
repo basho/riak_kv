@@ -8,7 +8,7 @@ http://remarkjs.com/remarkise
 
 ## Introduction
 
-This document explains how windows aggregration functions are executed:
+This document explains how windows aggregation functions are executed:
 * query specification
 * execution
 
@@ -84,19 +84,19 @@ $finalise = SELECT AGV(temperature) FROM [$vnode_selections...]
 
 ### Chunking
 
-Chunks of data are read from the vnodes and sent to the co-ordinator (`riak_kv_qry_worker`) to be consumed by the calculation.
+Chunks of data are read from the vnodes and sent to the coordinator (`riak_kv_qry_worker`) to be consumed by the calculation.
 
-The calcultation currently consumes whole quanta in chunks - but will work equally well with streamed chunks of quanta in the future.
+The calculation currently consumes whole quanta in chunks - but will work equally well with streamed chunks of quanta in the future.
 
 The actual calculations are done in `riak_ql_window_agg_fns.erl`
 
-At the beginnng of the calculation a `start_state` function is called for each calculation. As each chunk comes in the function itself is called with the continuation state - returning a new continuation state. Once the query worker is happy all the chunks have been applied a `finalise` function is called on the continuation state - yielding the query.
+At the beginning of the calculation a `start_state` function is called for each calculation. As each chunk comes in the function itself is called with the continuation state - returning a new continuation state. Once the query worker is happy all the chunks have been applied a `finalise` function is called on the continuation state - yielding the query.
 
 ---
 
 ### Invocation Notes I
 
-The vector of values being consumed can be defined by arithemtic expressions like `COUNT((1 + temperature)/3.4)`. This makes the invocation of the function call slightly more complex.
+The vector of values being consumed can be defined by arithmetic expressions like `COUNT((1 + temperature)/3.4)`. This makes the invocation of the function call slightly more complex.
 
 The functions themselves are typed - you can't `AVG` a column of type `varchar`.
 
@@ -126,7 +126,7 @@ Finally:
 
 # Future Work
 
-The biggest performance improvement will come from query rewriting and executing `SELECT` and windows aggregration functions at the vnode as appropriate:
+The biggest performance improvement will come from query rewriting and executing `SELECT` and windows aggregation functions at the vnode as appropriate:
 
 ```sql
 For all quanta:

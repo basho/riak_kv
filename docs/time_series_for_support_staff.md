@@ -35,7 +35,7 @@ With Riak TimeSeries you construct a composite key with a timestamp - and for a 
 
 Based on this data co-location you can then write queries that go to where ranges of data are stored and get back results.
 
-The quering of Time Series data is done via a quite limited, subset of SQL - so it works with your tools.
+The querying of Time Series data is done via a quite limited, subset of SQL - so it works with your tools.
 
 ---
 
