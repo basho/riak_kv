@@ -23,7 +23,7 @@
 -export([update_request_from_json/3, fetch_response_to_json/4]).
 -compile([{inline, [bad_op/2, bad_field/1]}]).
 
--define(FIELD_PATTERN, "^(.*)_(counter|set|register|flag|map)$").
+-define(FIELD_PATTERN, "^(.*)_(counter|gset|set|register|flag|map)$").
 
 -ifdef(TEST).
 -compile(export_all).
@@ -38,19 +38,21 @@
 -type context() :: binary().
 -type map_field() :: {binary(), embedded_type()}.
 -type embedded_type() :: counter | set | register | flag | map.
--type toplevel_type() :: counter | set | map.
+-type toplevel_type() :: counter | gset | set | map.
 -type type_mappings() :: [{embedded_type(), module()}].
 
 %% Operations
 -type counter_op() :: increment | decrement | {increment | decrement, integer()}.
 -type simple_set_op() :: {add, binary()} | {remove, binary()} | {add_all, [binary()]} | {remove_all, [binary()]}.
 -type set_op() :: simple_set_op() | {update, [simple_set_op()]}.
+-type simple_gset_op() :: {add, binary()} | {add_all, [binary()]} .
+-type gset_op() :: simple_gset_op() | {update, [simple_gset_op()]}.
 -type flag_op() :: enable | disable.
 -type register_op() :: {assign, binary()}.
 -type simple_map_op() :: {remove, map_field()} | {update, map_field(), embedded_type_op()}.
 -type map_op() :: simple_map_op() | {update, [simple_map_op()]}.
 -type embedded_type_op() :: counter_op() | set_op() | register_op() | flag_op() | map_op().
--type toplevel_op() :: counter_op() | set_op() | map_op().
+-type toplevel_op() :: counter_op() | gset_op() | set_op() | map_op().
 -type update() :: {toplevel_type(), toplevel_op(), context()}.
 
 %% @doc Encodes a fetch response as a JSON struct, ready for
@@ -69,6 +71,7 @@ update_request_from_json(Type, JSON0, Mods) ->
 
 %% NB we assume that the internal format is well-formed and don't guard it.
 value_to_json(counter, Int, _) -> Int;
+value_to_json(gset, List, _) -> List;
 value_to_json(set, List, _) -> List;
 value_to_json(flag, Bool, _) -> Bool;
 value_to_json(register, Bin, _) -> Bin;
@@ -139,6 +142,7 @@ op_from_json(flag, Op, _Mods) -> flag_op_from_json(Op);
 op_from_json(register, Op, _Mods) -> register_op_from_json(Op);
 op_from_json(counter, Op, _Mods) -> counter_op_from_json(Op);
 op_from_json(set, Op, _Mods) -> set_op_from_json(Op);
+op_from_json(gset, Op, _Mods) -> gset_op_from_json(Op);
 op_from_json(map, Op, Mods) -> map_op_from_json(Op, Mods).
 
 %% Map: {"update":{Field:Op, ...}}
@@ -186,6 +190,29 @@ counter_op_from_json({struct, [{<<"increment">>,Int}]}) when is_integer(Int) -> 
 counter_op_from_json({struct, [{<<"decrement">>,Int}]}) when is_integer(Int) -> {decrement, Int};
 counter_op_from_json(Op) -> bad_op(counter, Op).
 
+-spec gset_op_from_json(mochijson2:json_term() |
+                       {mochijson2:json_string(), mochijson2:json_term()}) ->
+                              gset_op().
+gset_op_from_json({struct, Ops}) when is_list(Ops) ->
+    try
+        {update, [ gset_op_from_json(Op) || Op <- Ops]}
+    catch
+        throw:{invalid_operation, {set, _}} ->
+            bad_op(set, {struct, Ops})
+    end;
+gset_op_from_json({<<"add">>, Bin}) when is_binary(Bin) -> {add, Bin};
+gset_op_from_json({Verb, BinList}=Op) when is_list(BinList), (Verb == <<"add_all">>)->
+    case check_set_members(BinList) of
+        true ->
+            {binary_to_atom(Verb, utf8), BinList};
+        false ->
+            bad_op(set, Op)
+    end;
+gset_op_from_json({<<"update">>, {struct, Ops}}) when is_list(Ops) ->
+    {update, [ gset_op_from_json(Op) || Op <- Ops]};
+gset_op_from_json({<<"update">>, Ops}) when is_list(Ops) ->
+    {update, [ gset_op_from_json(Op) || Op <- Ops]};
+gset_op_from_json(Op) -> bad_op(set, Op).
 
 -spec set_op_from_json(mochijson2:json_term() |
                        {mochijson2:json_string(), mochijson2:json_term()}) ->

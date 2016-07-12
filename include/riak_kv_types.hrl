@@ -13,6 +13,9 @@
 -define(SET_TYPE, riak_dt_orswot).
 -define(SET_TYPE(Val), #crdt{mod=?SET_TYPE, ctype="application/riak_set", value=Val}).
 
+-define(GSET_TYPE, riak_dt_gset).
+-define(GSET_TYPE(Val), #crdt{mod=?GSET_TYPE, ctype="application/riak_gset", value=Val}).
+
 -define(MAP_TYPE, riak_dt_map).
 -define(MAP_TYPE(Val), #crdt{mod=?MAP_TYPE, ctype="application/riak_map", value=Val}).
 
@@ -22,14 +25,14 @@
 -define(EMCNTR_TYPE, riak_dt_emcntr).
 
 -define(V1_TOP_LEVEL_TYPES, [pncounter]).
--define(V2_TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?SET_TYPE, ?MAP_TYPE]).
+-define(V2_TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?GSET_TYPE, ?SET_TYPE, ?MAP_TYPE]).
 -define(TOP_LEVEL_TYPES, ?V1_TOP_LEVEL_TYPES ++ ?V2_TOP_LEVEL_TYPES).
 -define(ALL_TYPES, ?TOP_LEVEL_TYPES ++ [?FLAG_TYPE, ?REG_TYPE]).
 -define(EMBEDDED_TYPES, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
                          {counter, ?EMCNTR_TYPE}, {flag, ?FLAG_TYPE},
                          {register, ?REG_TYPE}]).
 
--define(MOD_MAP, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
+-define(MOD_MAP, [{map, ?MAP_TYPE}, {gset, ?GSET_TYPE}, {set, ?SET_TYPE},
                   {counter, ?COUNTER_TYPE}]).
 
 -define(DATATYPE_STATS_DEFAULTS, [actor_count]).
@@ -39,7 +42,7 @@
 %% number. `N' is incremented when any new version of any datatype is
 %% introduced, thus bumping the data type `Epoch'.
 -define(E1_DATATYPE_VERSIONS, [{?COUNTER_TYPE, 2}]).
--define(E2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2}, {?SET_TYPE, 2}, {?COUNTER_TYPE, 2}]).
+-define(E2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2}, {?SET_TYPE, 2}, {?GSET_TYPE, 2},    {?COUNTER_TYPE, 2}]).
 
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.
