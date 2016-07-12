@@ -505,6 +505,7 @@ bucket_type_create([TypeStr, PropsStr]) ->
     bucket_type_create(Type, catch mochijson2:decode(PropsStr)).
 
 bucket_type_create(Type, {struct, Fields}) ->
+    gset,
     case proplists:get_value(<<"props">>, Fields) of
         {struct, Props} ->
             ErlProps = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props],
