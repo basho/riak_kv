@@ -194,7 +194,7 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
 do_describe(?DDL{fields = FieldSpecs,
                  partition_key = #key_v1{ast = PKSpec},
                  local_key     = #key_v1{ast = LKSpec}}) ->
-    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>, <<"Interval">>, <<"Quantum Unit">>],
+    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>, <<"Interval">>, <<"Unit">>],
     ColumnTypes = [   varchar,      varchar,    boolean,       sint64,            sint64,         sint64,         varchar],
     Quantum = find_quantum_field(PKSpec),
     Rows =
