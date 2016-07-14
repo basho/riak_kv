@@ -40,10 +40,10 @@ set_aae_throttle_test() ->
         V <- [5,6]].
 
 set_aae_throttle_limits_test() ->
-    {error, _} = ?TM:set_aae_throttle_limits([]),
-    {error, _} = ?TM:set_aae_throttle_limits([{5,7}]),
-    {error, _} = ?TM:set_aae_throttle_limits([{-1,x}]),
-    {error, _} = ?TM:set_aae_throttle_limits([{-1,0}, {x,7}]),
+    ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([])),
+    ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([{5,7}])),
+    ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([{-1,x}])),
+    ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([{-1,0}, {x,7}])),
     ok = ?TM:set_aae_throttle_limits([{-1,0}, {100, 500}, {100, 500},
                                       {100, 500}, {100, 500}, {100, 500}]).
 

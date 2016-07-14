@@ -83,6 +83,8 @@
 -define(KV_ENTROPY_LOCK_TIMEOUT, app_helper:get_env(riak_kv, anti_entropy_lock_timeout, 10000)).
 -define(AAE_THROTTLE_ENV_KEY, aae_throttle_sleep_time).
 -define(AAE_THROTTLE_KILL_ENV_KEY, aae_throttle_kill_switch).
+-define(DEFAULT_AAE_THROTTLE_LIMITS,
+        [{-1,0}, {200,10}, {500,50}, {750,250}, {900,1000}, {1100,5000}]).
 
 %%%===================================================================
 %%% API
@@ -221,19 +223,12 @@ init([]) ->
     %% If the value is not sane, the pattern match below will fail.
     Limits = case app_helper:get_env(riak_kv, aae_throttle_limits, []) of
                  [] ->
-                     [{-1,0}, {200,10}, {500,50}, {750,250}, {900,1000}, {1100,5000}];
+                     ?DEFAULT_AAE_THROTTLE_LIMITS;
                  OtherLs ->
                      OtherLs
              end,
-    case set_aae_throttle_limits(Limits) of
-        ok ->
-            ok;
-        {error, DiagProps} ->
-            _ = [lager:error("aae_throttle_limits/anti_entropy.throttle.limits "
-                         "list fails this test: ~p\n", [Check]) ||
-                {Check, false} <- DiagProps],
-            error(invalid_aae_throttle_limits)
-    end,
+    ok = set_aae_throttle_limits(Limits),
+
     schedule_tick(),
 
     {_, Opts} = settings(),
@@ -780,10 +775,10 @@ requeue_exchange(LocalIdx, RemoteIdx, IndexN, State) ->
     end.
 
 get_aae_throttle() ->
-    app_helper:get_env(riak_kv, ?AAE_THROTTLE_ENV_KEY, 0).
+    riak_core_throttle:get_throttle(?AAE_THROTTLE_ENV_KEY).
 
 set_aae_throttle(Milliseconds) when is_integer(Milliseconds), Milliseconds >= 0 ->
-    application:set_env(riak_kv, ?AAE_THROTTLE_ENV_KEY, Milliseconds).
+    riak_core_throttle:set_throttle(?AAE_THROTTLE_ENV_KEY, Milliseconds).
 
 get_aae_throttle_kill() ->
     case app_helper:get_env(riak_kv, ?AAE_THROTTLE_KILL_ENV_KEY, undefined) of
@@ -809,8 +804,7 @@ get_max_local_vnodeq() ->
     end.
 
 get_aae_throttle_limits() ->
-    %% init() should have already set a sane default, so the default below should never be used.
-    app_helper:get_env(riak_kv, aae_throttle_limits, [{-1, 0}]).
+    riak_core_throttle:get_limits(?AAE_THROTTLE_ENV_KEY).
 
 %% @doc Set AAE throttle limits list
 %%
@@ -819,19 +813,7 @@ get_aae_throttle_limits() ->
 %% List sorting is not required: the throttle is robust with any ordering.
 
 set_aae_throttle_limits(Limits) ->
-    case {lists:keyfind(-1, 1, Limits),
-          catch lists:all(fun({Min, Lim}) ->
-                                  is_integer(Min) andalso is_integer(Lim) andalso
-                                      Lim >= 0
-                          end, Limits)} of
-        {{-1, _}, true} ->
-            lager:info("Setting AAE throttle limits: ~p\n", [Limits]),
-            application:set_env(riak_kv, aae_throttle_limits, Limits),
-            ok;
-        {Else1, Else2} ->
-            {error, [{negative_one_length_is_present, Else1},
-                     {all_sleep_times_are_non_negative_integers, Else2}]}
-    end.
+    riak_core_throttle:set_limits(?AAE_THROTTLE_ENV_KEY, Limits).
 
 query_and_set_aae_throttle(#state{last_throttle=LastThrottle} = State) ->
     case get_aae_throttle_kill() of
@@ -856,7 +838,6 @@ query_and_set_aae_throttle2(State) ->
 
 query_and_set_aae_throttle3({result, {MaxNds, BadNds}},
                             #state{last_throttle=LastThrottle} = State) ->
-    Limits = lists:sort(get_aae_throttle_limits()),
     %% If a node is really hosed, then this RPC call is going to fail
     %% for that node.  We might also delay the 'tick' processing by
     %% several seconds.  But the tick processing is OK if it's delayed
@@ -876,8 +857,9 @@ query_and_set_aae_throttle3({result, {MaxNds, BadNds}},
                 %% something meaningful in the user's info msg.
                 {{unknown_mailbox_sizes, node_list, BadNds}, BadNodes}
         end,
-    {Sat, _NonSat} = lists:partition(fun({X, _Limit}) -> X < WorstVMax end, Limits),
-    [{_, NewThrottle}|_] = lists:reverse(lists:sort(Sat)),
+    NewThrottle = riak_core_throttle:set_throttle_by_load(
+                    ?AAE_THROTTLE_ENV_KEY,
+                    WorstVMax),
     perhaps_log_throttle_change(LastThrottle, NewThrottle,
                                 {WorstVMax, WorstNode}),
     set_aae_throttle(NewThrottle),
