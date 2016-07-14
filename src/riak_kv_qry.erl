@@ -194,12 +194,14 @@ make_insert_row([{_Type, Val} | Values], [Pos | Positions], Row) when is_tuple(R
 do_describe(?DDL{fields = FieldSpecs,
                  partition_key = #key_v1{ast = PKSpec},
                  local_key     = #key_v1{ast = LKSpec}}) ->
-    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>],
-    ColumnTypes = [   varchar,     varchar,     boolean,        sint64,             sint64    ],
+    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>, <<"Interval">>, <<"Unit">>],
+    ColumnTypes = [   varchar,      varchar,    boolean,       sint64,            sint64,         sint64,         varchar],
+    Quantum = find_quantum_field(PKSpec),
     Rows =
         [[Name, list_to_binary(atom_to_list(Type)), Nullable,
           column_pk_position_or_blank(Name, PKSpec),
-          column_lk_position_or_blank(Name, LKSpec)]
+          column_lk_position_or_blank(Name, LKSpec)] ++
+          columns_quantum_or_blank(Name, Quantum)
          || #riak_field_v1{name = Name,
                            type = Type,
                            optional = Nullable} <- FieldSpecs],
@@ -216,6 +218,24 @@ column_pk_position_or_blank(Col, KSpec) ->
 -spec column_lk_position_or_blank(binary(), [#param_v1{}]) -> integer() | [].
 column_lk_position_or_blank(Col, KSpec) ->
     count_to_position(Col, KSpec, 1).
+
+%% Extract the quantum column information, if it exists in the table definition
+%% and put in two additional columns
+-spec columns_quantum_or_blank(Col :: binary(), PKSpec :: [#param_v1{}|#hash_fn_v1{}]) ->
+      [binary() | []].
+columns_quantum_or_blank(Col, #hash_fn_v1{args = [#param_v1{name = [Col]}, Interval, Unit]}) ->
+    [Interval, list_to_binary(io_lib:format("~p", [Unit]))];
+columns_quantum_or_blank(_Col, _PKSpec) ->
+    [[], []].
+
+%% Find the field associated with the quantum, if there is one
+-spec find_quantum_field([#param_v1{}|#hash_fn_v1{}]) -> [] | #hash_fn_v1{}.
+find_quantum_field([]) ->
+    [];
+find_quantum_field([Q = #hash_fn_v1{}|_]) ->
+    Q;
+find_quantum_field([_|T]) ->
+    find_quantum_field(T).
 
 count_to_position(_, [], _) ->
     [];
@@ -299,12 +319,33 @@ describe_table_columns_test() ->
     Res = do_describe(DDL),
     ?assertMatch(
        {ok, {_, _,
-             [[<<"f">>, <<"varchar">>,   false, 1,  1],
-              [<<"s">>, <<"varchar">>,   false, 2,  2],
-              [<<"t">>, <<"timestamp">>, false, 3,  3],
-              [<<"w">>, <<"sint64">>, false, [], []],
-              [<<"p">>, <<"double">>, true,  [], []]]}},
+             [[<<"f">>, <<"varchar">>,   false, 1,  1, [], []],
+              [<<"s">>, <<"varchar">>,   false, 2,  2, [], []],
+              [<<"t">>, <<"timestamp">>, false, 3,  3, 15, <<"m">>],
+              [<<"w">>, <<"sint64">>, false, [], [], [], []],
+              [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
        Res).
+
+describe_table_columns_no_quantum_test() ->
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
+            riak_ql_lexer:get_tokens(
+                "CREATE TABLE fafa ("
+                " f varchar   not null,"
+                " s varchar   not null,"
+                " t timestamp not null,"
+                " w sint64    not null,"
+                " p double,"
+                " PRIMARY KEY (f, s, t))")),
+    Res = do_describe(DDL),
+    ?assertMatch(
+        {ok, {_, _,
+            [[<<"f">>, <<"varchar">>,   false, 1,  1, [], []],
+             [<<"s">>, <<"varchar">>,   false, 2,  2, [], []],
+             [<<"t">>, <<"timestamp">>, false, 3,  3, [], []],
+             [<<"w">>, <<"sint64">>, false, [], [], [], []],
+             [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
+        Res).
 
 validate_make_insert_row_basic_test() ->
     Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
