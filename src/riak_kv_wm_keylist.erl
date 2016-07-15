@@ -73,7 +73,8 @@
               riak,         %% local | {node(), atom()} - params for riak client
               allow_props_param, %% true if the user can also list props. (legacy API)
               timeout,      %% integer() - list keys timeout
-              security      %% security context
+              security,     %% security context
+              is_enabled :: boolean() %% Does the config for this node allow list_keys?
              }).
 -type context() :: #ctx{}.
 
@@ -88,7 +89,8 @@ init(Props) ->
               prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props),
               allow_props_param=proplists:get_value(allow_props_param, Props),
-              bucket_type=proplists:get_value(bucket_type, Props)
+              bucket_type=proplists:get_value(bucket_type, Props),
+              is_enabled=riak_core_util:job_type_enabled(list_keys)
              }}.
 
 -spec service_available(#wm_reqdata{}, context()) ->
@@ -134,6 +136,8 @@ is_authorized(ReqData, Ctx) ->
                     "instead.">>, ReqData), Ctx}
     end.
 
+forbidden(RD, Ctx = #ctx{is_enabled=false}) ->
+    {true, RD, Ctx};
 forbidden(RD, Ctx = #ctx{security=undefined}) ->
     {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
 forbidden(RD, Ctx) ->
