@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_utils: Common functions used by riak_kv_wm_* modules.
-%%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,6 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
+%% @doc Common functions used by riak_kv_wm_* modules.
 -module(riak_kv_wm_utils).
 
 %% webmachine resource exports
@@ -37,6 +36,7 @@
          any_to_list/1,
          any_to_bool/1,
          is_forbidden/1,
+         is_forbidden/2,
          jsonify_bucket_prop/1,
          erlify_bucket_prop/1,
          ensure_bucket_type/3,
@@ -255,6 +255,9 @@ any_to_bool(V) when is_boolean(V) ->
 is_forbidden(RD) ->
     is_null_origin(RD) or
     (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
+
+is_forbidden(RD, JobClass) ->
+    is_forbidden(RD) and not riak_core_util:job_class_enabled(JobClass).
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts
 %%      at CSRF, but is not a complete answer to the problem.
