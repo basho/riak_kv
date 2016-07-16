@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_pb_bucket: Expose KV bucket functionality to Protocol Buffers
-%%
-%% Copyright (c) 2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2012-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -97,11 +95,16 @@ encode(Message) ->
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpblistbucketsreq{type = Type, timeout=T, stream=S}=Req, State) ->
-    case check_bucket_type(Type) of
-        {ok, GoodType} ->
-            do_list_buckets(GoodType, T, S, Req, State);
-        error ->
-            {error, {format, "No bucket-type named '~s'", [Type]}, State}
+    case riak_core_util:job_class_enabled(list_buckets) of
+        true ->
+            case check_bucket_type(Type) of
+                {ok, GoodType} ->
+                    do_list_buckets(GoodType, T, S, Req, State);
+                error ->
+                    {error, {format, "No bucket-type named '~s'", [Type]}, State}
+            end;
+        _ ->
+            {error, "Operation 'list_buckets' is not enabled", State}
     end;
 
 %% this should remain for backwards compatibility
@@ -110,14 +113,19 @@ process(rpblistbucketsreq, State) ->
 
 %% Start streaming in list keys
 process(#rpblistkeysreq{type = Type, bucket=B,timeout=T}=Req, #state{client=C} = State) ->
-    %% stream_list_keys results will be processed by process_stream/3
-    case check_bucket_type(Type) of
-        {ok, GoodType} ->
-            Bucket = maybe_create_bucket_type(GoodType, B),
-	    {ok, ReqId} = C:stream_list_keys(Bucket, T),
-	    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
-        error ->
-            {error, {format, "No bucket-type named '~s'", [Type]}, State}
+    case riak_core_util:job_class_enabled(list_keys) of
+        true ->
+            %% stream_list_keys results will be processed by process_stream/3
+            case check_bucket_type(Type) of
+                {ok, GoodType} ->
+                    Bucket = maybe_create_bucket_type(GoodType, B),
+                    {ok, ReqId} = C:stream_list_keys(Bucket, T),
+                    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+                error ->
+                    {error, {format, "No bucket-type named '~s'", [Type]}, State}
+            end;
+        _ ->
+            {error, "Operation 'list_keys' is not enabled", State}
     end.
 
 %% @doc process_stream/3 callback. Handles streaming keys messages and
