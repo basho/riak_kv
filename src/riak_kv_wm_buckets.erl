@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_buckets - Webmachine resource for listing buckets.
-%%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Resource for listing Riak buckets over HTTP.
+%% @doc Webmachine resource for listing Riak buckets over HTTP.
 %%
 %% URLs that begin with `/types' are necessary for the new bucket
 %% types implementation in Riak 2.0, those that begin with `/buckets'
@@ -127,9 +125,9 @@ is_authorized(ReqData, Ctx) ->
     end.
 
 forbidden(RD, Ctx = #ctx{security=undefined}) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+    {riak_kv_wm_utils:is_forbidden(RD, list_buckets), RD, Ctx};
 forbidden(RD, Ctx) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
+    case riak_kv_wm_utils:is_forbidden(RD, list_buckets) of
         true ->
             {true, RD, Ctx};
         false ->

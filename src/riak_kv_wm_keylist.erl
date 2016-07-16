@@ -1,9 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_keylist - Webmachine resource for listing
-%%                      the keys in a bucket.
-%%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -21,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Resource for listing bucket keys over HTTP.
+%% @doc Webmachine resource for listing bucket keys over HTTP.
 %%
 %% URLs that begin with `/types' are necessary for the new bucket
 %% types implementation in Riak 2.0, those that begin with `/buckets'
@@ -89,8 +86,7 @@ init(Props) ->
               prefix=proplists:get_value(prefix, Props),
               riak=proplists:get_value(riak, Props),
               allow_props_param=proplists:get_value(allow_props_param, Props),
-              bucket_type=proplists:get_value(bucket_type, Props),
-              is_enabled=riak_core_util:job_type_enabled(list_keys)
+              bucket_type=proplists:get_value(bucket_type, Props)
              }}.
 
 -spec service_available(#wm_reqdata{}, context()) ->
@@ -136,12 +132,10 @@ is_authorized(ReqData, Ctx) ->
                     "instead.">>, ReqData), Ctx}
     end.
 
-forbidden(RD, Ctx = #ctx{is_enabled=false}) ->
-    {true, RD, Ctx};
 forbidden(RD, Ctx = #ctx{security=undefined}) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+    {riak_kv_wm_utils:is_forbidden(RD, list_keys), RD, Ctx};
 forbidden(RD, Ctx) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
+    case riak_kv_wm_utils:is_forbidden(RD, list_keys) of
         true ->
             {true, RD, Ctx};
         false ->
