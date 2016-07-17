@@ -62,7 +62,10 @@ submit(SQLString, DDL) when is_list(SQLString) ->
             Error;
         {'EXIT', Reason} ->  %% lexer problem
             {error, Reason};
-        {ok, SQL} ->
+        {ok, Compiled} ->
+            Type = proplists:get_value(type, Compiled),
+            {ok, SQL} = riak_kv_ts_util:build_sql_record(
+                Type, Compiled, undefined),
             submit(SQL, DDL)
     end;
 
