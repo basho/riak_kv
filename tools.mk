@@ -1,6 +1,6 @@
 #  -------------------------------------------------------------------
 #
-#  Copyright (c) 2014 Basho Technologies, Inc.
+#  Copyright (c) 2014-2016 Basho Technologies, Inc.
 #
 #  This file is provided to you under the Apache License,
 #  Version 2.0 (the "License"); you may not use this file
@@ -27,6 +27,13 @@
 REBAR ?= ./rebar
 REVISION ?= $(shell git rev-parse --short HEAD)
 PROJECT ?= $(shell basename `find src -name "*.app.src"` .app.src)
+REBAR_DEPS_DIR ?= deps
+
+ifeq ($(shell uname -s),Linux)
+ESED ?= sed -r
+else
+ESED ?= sed -E
+endif
 
 .PHONY: compile-no-deps test docs xref dialyzer-run dialyzer-quick dialyzer \
 		cleanplt upload-docs
@@ -51,7 +58,7 @@ xref: compile
 	${REBAR} xref skip_deps=true
 
 PLT ?= $(HOME)/.combo_dialyzer_plt
-LOCAL_PLT = .local_dialyzer_plt
+LOCAL_PLT ?= .local_dialyzer_plt
 DIALYZER_FLAGS ?= -Wunmatched_returns
 
 ${PLT}: compile
@@ -63,12 +70,12 @@ ${PLT}: compile
 	fi
 
 ${LOCAL_PLT}: compile
-	@if [ -d deps ]; then \
+	@if [ -d $(REBAR_DEPS_DIR) ]; then \
 		if [ -f $(LOCAL_PLT) ]; then \
-			dialyzer --check_plt --plt $(LOCAL_PLT) deps/*/ebin  && \
-			dialyzer --add_to_plt --plt $(LOCAL_PLT) --output_plt $(LOCAL_PLT) deps/*/ebin ; test $$? -ne 1; \
+			dialyzer --check_plt --plt $(LOCAL_PLT) $(REBAR_DEPS_DIR)/*/ebin  && \
+			dialyzer --add_to_plt --plt $(LOCAL_PLT) --output_plt $(LOCAL_PLT) $(REBAR_DEPS_DIR)/*/ebin ; test $$? -ne 1; \
 		else \
-			dialyzer --build_plt --output_plt $(LOCAL_PLT) deps/*/ebin ; test $$? -ne 1; \
+			dialyzer --build_plt --output_plt $(LOCAL_PLT) $(REBAR_DEPS_DIR)/*/ebin ; test $$? -ne 1; \
 		fi \
 	fi
 
@@ -109,21 +116,21 @@ dialyzer-run:
 		fi; \
 		dialyzer $(DIALYZER_FLAGS) --plts $${PLTS} -c ebin > dialyzer_warnings ; \
 		cat dialyzer.ignore-warnings \
-		| sed -E 's/^([^:]+:)[^:]+:/\1/' \
+		| $(ESED) 's/^([^:]+:)[^:]+:/\1/' \
 		| sort \
 		| uniq -c \
-		| sed -E '/.*\.erl: /!s/^[[:space:]]*[0-9]+[[:space:]]*//' \
+		| $(ESED) '/.*\.erl: /!s/^[[:space:]]*[0-9]+[[:space:]]*//' \
 		> dialyzer.ignore-warnings.tmp ; \
 		egrep -v "^[[:space:]]*(done|Checking|Proceeding|Compiling)" dialyzer_warnings \
-		| sed -E 's/^([^:]+:)[^:]+:/\1/' \
+		| $(ESED) 's/^([^:]+:)[^:]+:/\1/' \
 		| sort \
 		| uniq -c \
-		| sed -E '/.*\.erl: /!s/^[[:space:]]*[0-9]+[[:space:]]*//' \
+		| $(ESED) '/.*\.erl: /!s/^[[:space:]]*[0-9]+[[:space:]]*//' \
 		| grep -F -f dialyzer.ignore-warnings.tmp -v \
-		| sed -E 's/^[[:space:]]*[0-9]+[[:space:]]*//' \
-		| sed -E 's/([]\^:+?|()*.$${}\[])/\\\1/g' \
-		| sed -E 's/(\\\.erl\\\:)/\1\\d+:/g' \
-		| sed -E 's/^(.*)$$/^[[:space:]]*\1$$/g' \
+		| $(ESED) 's/^[[:space:]]*[0-9]+[[:space:]]*//' \
+		| $(ESED) 's/([]\^:+?|()*.$${}\[])/\\\1/g' \
+		| $(ESED) 's/(\\\.erl\\\:)/\1[[:digit:]]+:/g' \
+		| $(ESED) 's/^(.*)$$/^[[:space:]]*\1$$/g' \
 		> dialyzer_unhandled_warnings ; \
 		rm dialyzer.ignore-warnings.tmp; \
 		if [ $$(cat dialyzer_unhandled_warnings | wc -l) -gt 0 ]; then \
