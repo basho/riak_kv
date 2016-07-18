@@ -1,7 +1,32 @@
+%% -------------------------------------------------------------------
+%%
+%% Copyright (c) 2013-2016 Basho Technologies, Inc.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+
 -module(riak_kv_schema_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 -compile(export_all).
+
+-define(DEFAULT_ENABLED_JOB_CLASSES, [
+    list_buckets,
+    list_keys
+]).
 
 %% basic schema test will check to make sure that all defaults from the schema
 %% make it into the generated app.config
@@ -374,6 +399,21 @@ all_backend_multi_test() ->
     cuttlefish_unit:assert_not_configured(M6, "max_memory"),
     ok.
 
+job_class_enabled_test() ->
+    test_job_class_enabled(riak_core_schema()).
+
+test_job_class_enabled({true, RCSchema}) when erlang:is_list(RCSchema) ->
+    Config = cuttlefish_unit:generate_templated_config(
+        [RCSchema, "../priv/riak_kv.schema"], [],
+        riak_core_schema_tests:context() ++ context()),
+
+    cuttlefish_unit:assert_config(
+        Config, "riak_core.job_accept_class",
+        lists:sort(?DEFAULT_ENABLED_JOB_CLASSES)),
+    ok;
+test_job_class_enabled(_) ->
+    skip.
+
 %% this context() represents the substitution variables that rebar
 %% will use during the build process.  riak_core's schema file is
 %% written with some {{mustache_vars}} for substitution during
@@ -398,3 +438,54 @@ predefined_schema() ->
                                             {datatype, directory}
                                        ]}),
     {[], [Mapping], []}.
+
+%% Ensure that the riak_core_schema_tests module is loaded and return the
+%% path of the riak_core.schema file.
+riak_core_schema() ->
+    riak_core_schema(riak_core_dir()).
+riak_core_schema(RCDir) when erlang:is_list(RCDir) ->
+    Schema = filename:join([RCDir, "priv", "riak_core.schema"]),
+    case filelib:is_regular(Schema) of
+        true ->
+            case code:ensure_loaded(riak_core_schema_tests) of
+                {module, _} ->
+                    {true, Schema};
+                _ ->
+                    Search = filename:join(
+                        [RCDir, "**", "riak_core_schema_tests.beam"]),
+                    case filelib:wildcard(Search) of
+                        [Beam | _] ->
+                            case code:load_abs(filename:rootname(Beam)) of
+                                {module, _} ->
+                                    {true, Schema};
+                                Error ->
+                                    Error
+                            end;
+                        [] ->
+                            {error, enoent}
+                    end
+            end;
+        _ ->
+            {error, enoent}
+    end;
+riak_core_schema(Error) ->
+    Error.
+
+riak_core_dir() ->
+    TryDeps = case os:getenv("REBAR_DEPS_DIR") of
+        false ->
+            ["../deps", "../.."];
+        Dir ->
+            [Dir, "../deps"]
+    end,
+    riak_core_dir(TryDeps).
+riak_core_dir([Deps | TryDeps]) ->
+    Dir = filename:join(Deps, "riak_core"),
+    case filelib:is_dir(Dir) of
+        true ->
+            Dir;
+        _ ->
+            riak_core_dir(TryDeps)
+    end;
+riak_core_dir([]) ->
+    {error, enoent}.
