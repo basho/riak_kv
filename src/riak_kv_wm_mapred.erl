@@ -67,9 +67,9 @@ forbidden(RD, State) ->
             case {wrq:method(RD), wrq:req_body(RD)} of
                 {'POST', Body} when Body /= undefined ->
                     case riak_kv_mapred_json:parse_request(Body) of
-                        {ok, ParsedInputs, _ParsedQuery, _Timeout} ->
+                        {ok, ParsedInputs, ParsedQuery, _Timeout} ->
                             Permissions = riak_kv_mapred_term:get_required_permissions(ParsedInputs,
-                                                                                       _ParsedQuery),
+                                                                                       ParsedQuery),
                             Res = riak_core_security:check_permissions(
                                     Permissions,
                                     State#state.security),
