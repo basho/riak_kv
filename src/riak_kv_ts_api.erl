@@ -72,7 +72,10 @@ api_call_to_perm(query_create_table) ->
 api_call_to_perm(query_select) ->
     "riak_ts.query_select";
 api_call_to_perm(query_describe) ->
-    "riak_ts.query_describe".
+    "riak_ts.query_describe";
+%% INSERT query is a put, so let's cal it that
+api_call_to_perm(query_insert) ->
+    api_call_to_perm(put).
 
 %%
 -spec api_calls() -> [api_call()].
