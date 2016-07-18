@@ -649,3 +649,19 @@ end
   {datatype, bytesize},
   hidden
 ]}.
+
+%% @doc Whether to allow list buckets.
+%% @see async.enable.list_keys
+{mapping, "async.enable.list_buckets", "riak_core.job_accept_class", [
+    merge,
+    {datatype, flag},
+    {default, on}
+]}.
+
+%% @doc Whether to allow list keys.
+%% @see async.enable.list_buckets
+{mapping, "async.enable.list_keys", "riak_core.job_accept_class", [
+    merge,
+    {datatype, flag},
+    {default, on}
+]}.
