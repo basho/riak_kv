@@ -25,7 +25,8 @@
 
 -define(DEFAULT_ENABLED_JOB_CLASSES, [
     list_buckets,
-    list_keys
+    list_keys,
+    secondary_index
 ]).
 
 %% basic schema test will check to make sure that all defaults from the schema

@@ -131,7 +131,7 @@ is_authorized(ReqData, Ctx) ->
     end.
 
 forbidden(RD, Ctx = #ctx{security=undefined}) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
+    {riak_kv_wm_utils:is_forbidden(RD, secondary_index), RD, Ctx};
 forbidden(RD, Ctx) ->
     case riak_kv_wm_utils:is_forbidden(RD) of
         true ->
