@@ -257,7 +257,7 @@ is_forbidden(RD) ->
     (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
 
 is_forbidden(RD, JobClass) ->
-    is_forbidden(RD) and not riak_core_util:job_class_enabled(JobClass).
+    is_forbidden(RD) orelse not riak_core_util:job_class_enabled(JobClass).
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts
 %%      at CSRF, but is not a complete answer to the problem.
