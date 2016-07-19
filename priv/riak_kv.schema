@@ -673,3 +673,11 @@ end
     {datatype, flag},
     {default, on}
 ]}.
+
+%% @doc Whether to allow MapReduce queries.
+%% @see async.enable.map_reduce
+{mapping, "async.enable.map_reduce", "riak_core.job_accept_class", [
+    merge,
+    {datatype, flag},
+    {default, on}
+]}.
