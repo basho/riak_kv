@@ -667,7 +667,6 @@ end
 ]}.
 
 %% @doc Whether to allow 2i queries.
-%% @see async.enable.secondary_index
 {mapping, "async.enable.secondary_index", "riak_core.job_accept_class", [
     merge,
     {datatype, flag},
@@ -675,7 +674,6 @@ end
 ]}.
 
 %% @doc Whether to allow MapReduce queries.
-%% @see async.enable.map_reduce
 {mapping, "async.enable.map_reduce", "riak_core.job_accept_class", [
     merge,
     {datatype, flag},
