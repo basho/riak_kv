@@ -2,12 +2,18 @@
 
 -export([convert/2]).
 -export([current_version/0]).
+-export([first_version/0]).
 -export([is_sql_select_record/1]).
 
 -include("riak_kv_ts.hrl").
 
+-spec current_version() -> integer().
 current_version() ->
     select_record_version(?SQL_SELECT_RECORD_NAME).
+
+-spec first_version() -> integer().
+first_version() ->
+    1.
 
 %% Convert a select record to a different version.
 convert(Version, Select) when is_integer(Version) ->

@@ -213,8 +213,9 @@ start(_Type, _StartArgs) ->
                                            lists:last(riak_ql_ddl_compiler:get_compiler_capabilities())),
 
             riak_core_capability:register({riak_kv, sql_select_version},
-                                          lists:seq(1, riak_kv_select:current_version()),
-                                          riak_kv_select:current_version()),
+                                          lists:seq(riak_kv_select:current_version(), riak_kv_select:first_version(), -1),
+                                          riak_kv_select:first_version(),
+                                          riak_kv_select:first_version()),
 
             riak_kv_ts_newtype:recompile_ddl(riak_ql_ddl_compiler:get_compiler_version()),
 
