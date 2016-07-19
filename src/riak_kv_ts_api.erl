@@ -64,7 +64,7 @@ api_call_to_perm(put) ->
 api_call_to_perm(delete) ->
     "riak_ts.delete";
 api_call_to_perm(listkeys) ->
-    "riak_ts.listkeys";
+    "riak_ts.list_keys";
 api_call_to_perm(coverage) ->
     "riak_ts.coverage";
 api_call_to_perm(query_create_table) ->
