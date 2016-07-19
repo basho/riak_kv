@@ -58,9 +58,9 @@ is_authorized(ReqData, State) ->
     end.
 
 forbidden(RD, State = #state{security=undefined}) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, State};
+    {riak_kv_wm_utils:is_forbidden(RD, map_reduce), RD, State};
 forbidden(RD, State) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
+    case riak_kv_wm_utils:is_forbidden(RD, map_reduce) of
         true ->
             {true, RD, State};
         false ->
