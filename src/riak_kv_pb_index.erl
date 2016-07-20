@@ -100,11 +100,16 @@ validate_request(#rpbindexreq{qtype=QType, key=SKey,
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpbindexreq{} = Req, State) ->
-    case validate_request(Req) of
-        {error, Err} ->
-            {error, Err, State};
-        QueryVal ->
-            maybe_perform_query(QueryVal, Req, State)
+    case riak_core_util:job_class_enabled(secondary_index) of
+        true ->
+            case validate_request(Req) of
+                {error, Err} ->
+                    {error, Err, State};
+                QueryVal ->
+                    maybe_perform_query(QueryVal, Req, State)
+            end;
+        false ->
+            {error, "Secondary index queries have been disabled in the configuration", State}
     end.
 
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
