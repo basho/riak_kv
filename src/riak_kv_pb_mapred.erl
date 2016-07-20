@@ -84,22 +84,27 @@ encode(Message) ->
 %% Start map/reduce job - results will be processed in handle_info
 process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
         State) ->
-    case decode_mapred_query(MrReq, ContentType) of
-        {error, Reason} ->
-            {error, {format, Reason}, State};
-        {ok, Inputs, Query, Timeout} ->
-            %% check for link walk queries when security is enabled,
-            %% we don't allow them.
-            case {riak_core_security:is_enabled(),
-                  lists:keyfind(link, 1, Query)} of
-                {true, Links} when Links /= false ->
-                    %% we don't support link walking when security is
-                    %% enabled, return an error of some kind
-                    {error, {format, "Link walking is"
-                             " deprecated in Riak 2.0 and is"
-                             " not compatible with security."}, State};
-                _ ->
-                    pipe_mapreduce(Req, State, Inputs, Query, Timeout)
+    case riak_core_util:job_class_enabled(map_reduce) of
+        false ->
+            {error, "Operation 'map_reduce' is not enabled", State};
+        true ->
+            case decode_mapred_query(MrReq, ContentType) of
+                {error, Reason} ->
+                    {error, {format, Reason}, State};
+                {ok, Inputs, Query, Timeout} ->
+                    %% check for link walk queries when security is enabled,
+                    %% we don't allow them.
+                    case {riak_core_security:is_enabled(),
+                          lists:keyfind(link, 1, Query)} of
+                        {true, Links} when Links /= false ->
+                            %% we don't support link walking when security is
+                            %% enabled, return an error of some kind
+                            {error, {format, "Link walking is"
+                                     " deprecated in Riak 2.0 and is"
+                                     " not compatible with security."}, State};
+                        _ ->
+                            pipe_mapreduce(Req, State, Inputs, Query, Timeout)
+                    end
             end
     end.
 
