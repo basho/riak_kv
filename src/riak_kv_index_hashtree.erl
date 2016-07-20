@@ -82,7 +82,7 @@
                 build_time,
                 trees,
                 use_2i = false :: boolean(),
-                version :: undefined | v0}).
+                version :: undefined | non_neg_integer()}).
 
 -type state() :: #state{}.
 
@@ -141,7 +141,7 @@ async_delete(Items=[{_Id, _Key}|_], Tree) ->
 %% @doc Called by the entropy manager to finish the process used to acquire
 %%      remote vnode locks when starting an exchange. For more details,
 %%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}
--spec start_exchange_remote(pid(), atom(), term(), index_n(), pid()) -> ok.
+-spec start_exchange_remote(pid(), non_neg_integer(), term(), index_n(), pid()) -> ok.
 start_exchange_remote(FsmPid, Version, From, IndexN, Tree) ->
     gen_server:cast(Tree, {start_exchange_remote, FsmPid, Version, From, IndexN}).
 
@@ -197,20 +197,20 @@ get_lock(Tree, Type) ->
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process. Grab lock on
 %%      specific version.
--spec get_lock(pid(), any(), atom()) -> ok | not_built | already_locked | bad_version.
+-spec get_lock(pid(), any(), non_neg_integer()) -> ok | not_built | already_locked | bad_version.
 get_lock(Tree, Type, Version) ->
     get_lock(Tree, Type, Version, self()).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
--spec get_lock(pid(), any(), atom(), pid()) -> ok | not_built | already_locked.
+-spec get_lock(pid(), any(), non_neg_integer(), pid()) -> ok | not_built | already_locked.
 get_lock(Tree, Type, Version, Pid) ->
     gen_server:call(Tree, {get_lock, Type, Version, Pid}, infinity).
 
 %% @doc Get the version of the specified index_hashtree
--spec get_version(pid()) -> undefined | v0.
+-spec get_version(pid()) -> undefined | non_neg_integer().
 get_version(Tree) ->
-    gen_server:call(Tree, {get_version}, infinity).
+    gen_server:call(Tree, get_version, infinity).
 
 %% @doc Poke the specified index_hashtree to ensure the tree is
 %%      built/rebuilt as needed. This is periodically called by the
@@ -271,12 +271,14 @@ init([Index, VNPid, Opts]) ->
         Root ->
             %% For the patch we are not supporting an online upgrade for AAE. 2.2 will
             %% have logic so the old hashtree can continue to be used while the new version builds.
-            %%
-            {Path0, Version} = case application:get_env(riak_kv, hash_only_vclock) of
-                {ok, true} ->
-                    %% Using v0 for vclock hashing. Joining the version to the path to support
+            {Path0, Version} = case application:get_env(riak_kv, object_hash_version) of
+                {ok, V} when is_integer(V) ->
+                    %% Must add "v" because integer partition dirs. Joining the version to the path to support
                     %% easy downgrades where the new trees will be unable to be found by old code.
-                    {filename:join(Root, "v0"), v0};
+                    {filename:join(Root, "v" ++ integer_to_list(V)), V};
+                {ok, V} ->
+                    lager:error("Invalid non-integer object_hash_version: ~p. Defaulting to legacy.", [V]),
+                    {Root, undefined};
                 _ ->
                     {Root, undefined}
             end,
@@ -312,7 +314,7 @@ handle_call({get_lock, Type, Version, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Version, Pid, State),
     {reply, Reply, State2};
 
-handle_call({get_version}, _From, State=#state{version=Version}) ->
+handle_call(get_version, _From, State=#state{version=Version}) ->
     {reply, Version, State};
 
 handle_call({insert, Items, Options}, _From, State) ->
@@ -529,9 +531,7 @@ hash_object({Bucket, Key}, RObj0) ->
             true -> RObj0;
             false -> riak_object:from_binary(Bucket, Key, RObj0)
         end,
-        Hash = riak_object:hash(RObj),
-        %% Should we move this inside the riak_object function?
-        term_to_binary(Hash)
+        riak_object:hash(RObj)
     catch _:_ ->
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)
@@ -651,24 +651,20 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}, MarkType) ->
 
 %% This function never uses the Type field. Unsure why it is part of the API. Maybe was meant to be used
 %% by the background manager which could manage tokens based on Type atom. Best guess...
--spec do_get_lock(any(), atom(), pid(), state()) -> {not_built | ok | already_locked | bad_version, state()}.
+-spec do_get_lock(any(), non_neg_integer(), pid(), state()) -> {not_built | ok | already_locked | bad_version, state()}.
 do_get_lock(_, _, _, State) when State#state.built /= true ->
     lager:debug("Not built: ~p :: ~p", [State#state.index, State#state.built]),
     {not_built, State};
-do_get_lock(_Type, undefined, Pid, State=#state{lock=undefined, version=undefined}) ->
-    Ref = monitor(process, Pid),
-    State2 = State#state{lock=Ref},
-    {ok, State2};
-do_get_lock(_Type, v0, Pid, State=#state{lock=undefined, version=v0}) ->
-    Ref = monitor(process, Pid),
-    State2 = State#state{lock=Ref},
-    {ok, State2};
-do_get_lock(_Type, ReqVer, _Pid, State=#state{lock=undefined, version=Version, index=Index}) ->
-    lager:error("Hashtree ~p lock attempted for version: ~p while local tree has version: ~p", [Index, ReqVer, Version]),
-    {bad_version, State};
-do_get_lock(_, _, _, State) ->
+do_get_lock(_, _, _, State) when State#state.lock /= undefined ->
     lager:debug("Already locked: ~p", [State#state.index]),
-    {already_locked, State}.
+    {already_locked, State};
+do_get_lock(_Type, Version, Pid, State=#state{version=Version}) ->
+    Ref = monitor(process, Pid),
+    State2 = State#state{lock=Ref},
+    {ok, State2};
+do_get_lock(_Type, ReqVer, _Pid, State=#state{version=Version, index=Index}) ->
+    lager:error("Hashtree ~p lock attempted for version: ~p while local tree has version: ~p", [Index, ReqVer, Version]),
+    {bad_version, State}.
 
 -spec maybe_release_lock(reference(), state()) -> state().
 maybe_release_lock(Ref, State) ->

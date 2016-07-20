@@ -37,7 +37,6 @@
 -type index_n() :: {index(), pos_integer()}.
 -type vnode() :: {index(), node()}.
 
-%% Maybe add version to state so we can use it in the status output.
 -record(state, {local       :: vnode(),
                 remote      :: vnode(),
                 index_n     :: index_n(),
