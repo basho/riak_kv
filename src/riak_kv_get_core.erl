@@ -293,16 +293,22 @@ num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
 maybe_log_old_vclock(Results) ->
     case application:get_env(riak_kv, object_hash_version) of
         undefined ->
-          {[R1], Rest} = lists:split(1, [RObj || {_I, {ok, RObj}} <- Results]),
-          case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
-            [] ->
-              ok;
-            _ ->
-              lager:warning("Rewrite key on object bucket: ~p key: ~p before enabling new object_hash_version",
-                [riak_object:bucket(R1),riak_object:key(R1)])
-          end;
+            case [RObj || {_I, {ok, RObj}} <- Results] of
+                [] ->
+                    ok;
+                [_|[]] ->
+                    ok;
+                [R1|Rest] ->
+                    case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
+                        [] ->
+                            ok;
+                        _ ->
+                            lager:warning("Rewrite bucket: ~p key: ~p before enabling new object_hash_version",
+                              [riak_object:bucket(R1),riak_object:key(R1)])
+                    end
+            end;
         _ ->
-           ok
+            ok
     end.
 
 -ifdef(TEST).
