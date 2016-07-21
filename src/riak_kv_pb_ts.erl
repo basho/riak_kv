@@ -56,7 +56,7 @@ decode(Code, Bin) when Code >= 90, Code =< 103 ->
         #tsdelreq{table = Table} ->
             {ok, Msg, {riak_kv_ts_api:api_call_to_perm(delete), Table}};
         #tslistkeysreq{table = Table} ->
-            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(listkeys), Table}};
+            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(list_keys), Table}};
         #tscoveragereq{table = Table} ->
             {ok, Msg, {riak_kv_ts_api:api_call_to_perm(coverage), Table}}
     end.
