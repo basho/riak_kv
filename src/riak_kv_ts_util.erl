@@ -71,12 +71,13 @@ build_sql_record(select, SQL, Cover) ->
     F = proplists:get_value(fields, SQL),
     L = proplists:get_value(limit, SQL),
     W = proplists:get_value(where, SQL),
+    Mod = riak_ql_ddl:make_module_name(T),
     case is_binary(T) of
         true ->
             {ok,
              ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
                          'FROM'     = T,
-                         'WHERE'    = W,
+                         'WHERE'    = convert_where_timestamps(Mod, W),
                          'LIMIT'    = L,
                          helper_mod = riak_ql_ddl:make_module_name(T),
                          cover_context = Cover}
@@ -97,13 +98,57 @@ build_sql_record(insert, SQL, _Cover) ->
             V = proplists:get_value(values, SQL),
             {ok, #riak_sql_insert_v1{'INSERT'   = T,
                                      fields     = F,
-                                     values     = V,
+                                     values     = convert_insert_timestamps(Mod, F, V),
                                      helper_mod = Mod
                                     }};
         false ->
             {error, <<"Must provide exactly one table name">>}
     end.
 
+convert_where_timestamps(Mod, Where) ->
+    [replace_ast_timestamps(Mod, hd(Where))].
+
+replace_ast_timestamps(Mod, {Op, Item1, Item2}) when is_tuple(Item1) andalso is_tuple(Item2) ->
+    {Op, replace_ast_timestamps(Mod, Item1), replace_ast_timestamps(Mod, Item2)};
+replace_ast_timestamps(Mod, {Op, FieldName, {binary, Value}}) ->
+    {Op, FieldName, maybe_convert_to_epoch(Mod:get_field_type([FieldName]), Value)};
+replace_ast_timestamps(_Mod, {Op, Item1, Item2}) ->
+    {Op, Item1, Item2}.
+
+maybe_convert_to_epoch(timestamp, Value) ->
+    {integer, timestamp_to_epoch(Value)};
+maybe_convert_to_epoch(_Type, Value) ->
+    {binary, Value}.
+
+%% I haven't investigated why the values are a nested list
+convert_insert_timestamps(Mod, Fields, [Values]) ->
+    Types = lists:map(fun({identifier, [Column]}) ->
+                              Mod:get_field_type([Column])
+                      end, Fields),
+    TypeMap = lists:zip(Values, Types),
+    lager:warning("Values: ~p", [Values]),
+    lager:warning("TypeMap: ~p", [TypeMap]),
+    [lists:map(fun({binary, String}=Value) ->
+                       case lists:keyfind(Value, 1, TypeMap) of
+                           {Value, timestamp} ->
+                               {integer, timestamp_to_epoch(String)};
+                           _ ->
+                               Value
+                       end;
+                  (Value) ->
+                       Value
+               end, Values)].
+
+timestamp_to_epoch(Str) ->
+    ProcessOptions =
+        [
+         {default_timezone,
+          riak_core_metadata:get({riak_core, timezone},
+                                 string, [{default, "+00"}])},
+         {target_accuracy, second}
+        ],
+    {_, DT} = jam:normalize(jam:process(jam_iso8601:parse(Str), ProcessOptions)),
+    jam:to_epoch(DT, 1000).
 
 %% Useful key extractors for functions (e.g., in get or delete code
 %% paths) which are agnostic to whether they are dealing with TS or
