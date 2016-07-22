@@ -1,3 +1,25 @@
+%%%-------------------------------------------------------------------
+%%%
+%%% riak_kv_select: Upgrade and downgrade for the riak_select_v* records.
+%%%
+%%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
+%%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%%
+%%%-------------------------------------------------------------------
+
 -module(riak_kv_select).
 
 -export([convert/2]).
@@ -7,15 +29,18 @@
 
 -include("riak_kv_ts.hrl").
 
+%% Return the version as an integer that the select record is currently using.
 -spec current_version() -> integer().
 current_version() ->
     select_record_version(?SQL_SELECT_RECORD_NAME).
 
+%% Return the first version that was declared for the select record.
 -spec first_version() -> integer().
 first_version() ->
     1.
 
 %% Convert a select record to a different version.
+-spec convert(integer(), Select1::tuple()) -> Select2::tuple().
 convert(Version, Select) when is_integer(Version) ->
     CurrentVersion = select_record_version(element(1, Select)),
     if
@@ -55,6 +80,7 @@ select_record_version(RecordName) ->
     end.
 
 %%
+-spec is_sql_select_record(tuple()) -> boolean().
 is_sql_select_record(Query) when is_tuple(Query) ->
     case element(1,Query) of
         riak_select_v1 -> true;

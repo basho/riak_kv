@@ -66,18 +66,15 @@ sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
     {From, Select, Where}.
 
 %% Convert the proplist obtained from the QL parser
--spec build_sql_record(QLType::select|describe|insert,
-                       SQL::[proplists:property()], Cover::term()) ->
-        {error,binary()} | {ok, ?SQL_SELECT{}}.
 build_sql_record(select, SQL, Cover) ->
     T = proplists:get_value(tables, SQL),
     Fields = proplists:get_value(fields, SQL),
     L = proplists:get_value(limit, SQL),
     W = proplists:get_value(where, SQL),
     GroupBy = proplists:get_value(group_by, SQL),
-    Mod = riak_ql_ddl:make_module_name(T),
     case is_binary(T) of
         true ->
+            Mod = riak_ql_ddl:make_module_name(T),
             {ok,
              ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = Fields},
                          'FROM'     = T,
