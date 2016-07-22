@@ -217,17 +217,9 @@ cancel_exchanges() ->
 
 -spec init([]) -> {'ok',state()}.
 init([]) ->
-    %% Side-effects section
-    set_aae_throttle(0),
-    %% riak_kv.app has some sane limits already set, or config via Cuttlefish
-    %% If the value is not sane, the pattern match below will fail.
-    Limits = case app_helper:get_env(riak_kv, aae_throttle_limits, []) of
-                 [] ->
-                     ?DEFAULT_AAE_THROTTLE_LIMITS;
-                 OtherLs ->
-                     OtherLs
-             end,
-    ok = set_aae_throttle_limits(Limits),
+    riak_core_throttle:init(?AAE_THROTTLE_ENV_KEY, riak_kv,
+                            {aae_throttle_limits, ?DEFAULT_AAE_THROTTLE_LIMITS},
+                            {aae_throttle_kill_switch, false}),
 
     schedule_tick(),
 
@@ -781,15 +773,12 @@ set_aae_throttle(Milliseconds) when is_integer(Milliseconds), Milliseconds >= 0 
     riak_core_throttle:set_throttle(?AAE_THROTTLE_ENV_KEY, Milliseconds).
 
 get_aae_throttle_kill() ->
-    case app_helper:get_env(riak_kv, ?AAE_THROTTLE_KILL_ENV_KEY, undefined) of
-        true ->
-            true;
-        _ ->
-            false
-    end.
+    not riak_core_throttle:is_throttle_enabled(?AAE_THROTTLE_ENV_KEY).
 
-set_aae_throttle_kill(Bool) when Bool == true; Bool == false ->
-    application:set_env(riak_kv, ?AAE_THROTTLE_KILL_ENV_KEY, Bool).
+set_aae_throttle_kill(true) ->
+    riak_core_throttle:disable_throttle(?AAE_THROTTLE_ENV_KEY);
+set_aae_throttle_kill(false) ->
+    riak_core_throttle:enable_throttle(?AAE_THROTTLE_ENV_KEY).
 
 get_max_local_vnodeq() ->
     try
