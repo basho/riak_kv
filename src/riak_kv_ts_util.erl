@@ -71,9 +71,9 @@ build_sql_record(select, SQL, Cover) ->
     F = proplists:get_value(fields, SQL),
     L = proplists:get_value(limit, SQL),
     W = proplists:get_value(where, SQL),
-    Mod = riak_ql_ddl:make_module_name(T),
     case is_binary(T) of
         true ->
+            Mod = riak_ql_ddl:make_module_name(T),
             {ok,
              ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
                          'FROM'     = T,
