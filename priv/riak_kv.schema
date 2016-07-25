@@ -684,8 +684,7 @@ end
 %% This setting is DEPRECATED use riak_kv.query.timeseries.timeout instead
 {mapping, "timeseries_query_timeout_ms", "riak_kv.timeseries_query_timeout_ms", [
   {commented, 10000},
-  {datatype, integer},
-  hidden
+  {datatype, integer}
 ]}.
 
 %% @doc Timeout for Time Series queries, after which riak
@@ -704,8 +703,7 @@ end
 {mapping, "timeseries_query_max_quanta_span", "riak_kv.timeseries_query_max_quanta_span", [
   {commented, 5},
   {datatype, integer},
-  {validators, ["validate_max_quanta_span"]},
-  hidden
+  {validators, ["validate_max_quanta_span"]}
 ]}.
 
 %% @doc Maximum number of quanta that a query can span. Larger quanta spans
@@ -733,8 +731,7 @@ end
 {mapping, "timeseries_max_concurrent_queries", "riak_kv.timeseries_max_concurrent_queries", [
   {commented, 3},
   {datatype, integer},
-  {validators, ["validate_max_concurrent_queries"]},
-  hidden
+  {validators, ["validate_max_concurrent_queries"]}
 ]}.
 
 %% @doc The number of individual queries that can run at any one time.
