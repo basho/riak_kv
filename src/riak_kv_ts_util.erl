@@ -153,7 +153,7 @@ timestamp_to_epoch(Str) ->
                    jam:compile(
                      jam_iso8601:parse(Str), ProcessOptions)
                   ), second),
-    jam:to_epoch(Datetime, 1000).
+    jam:to_epoch(Datetime, 3).
 
 %% Useful key extractors for functions (e.g., in get or delete code
 %% paths) which are agnostic to whether they are dealing with TS or
