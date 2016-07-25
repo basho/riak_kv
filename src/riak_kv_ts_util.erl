@@ -105,16 +105,20 @@ build_sql_record(insert, SQL, _Cover) ->
             {error, <<"Must provide exactly one table name">>}
     end.
 
+convert_where_timestamps(_Mod, []) ->
+    [];
 convert_where_timestamps(Mod, Where) ->
     [replace_ast_timestamps(Mod, hd(Where))].
 
 replace_ast_timestamps(Mod, {Op, Item1, Item2}) when is_tuple(Item1) andalso is_tuple(Item2) ->
     {Op, replace_ast_timestamps(Mod, Item1), replace_ast_timestamps(Mod, Item2)};
 replace_ast_timestamps(Mod, {Op, FieldName, {binary, Value}}) ->
-    {Op, FieldName, maybe_convert_to_epoch(Mod:get_field_type([FieldName]), Value)};
+    {Op, FieldName, maybe_convert_to_epoch(catch Mod:get_field_type([FieldName]), Value)};
 replace_ast_timestamps(_Mod, {Op, Item1, Item2}) ->
     {Op, Item1, Item2}.
 
+maybe_convert_to_epoch({'EXIT', _}, Value) ->
+    {binary, Value};
 maybe_convert_to_epoch(timestamp, Value) ->
     {integer, timestamp_to_epoch(Value)};
 maybe_convert_to_epoch(_Type, Value) ->
@@ -123,11 +127,9 @@ maybe_convert_to_epoch(_Type, Value) ->
 %% I haven't investigated why the values are a nested list
 convert_insert_timestamps(Mod, Fields, [Values]) ->
     Types = lists:map(fun({identifier, [Column]}) ->
-                              Mod:get_field_type([Column])
+                              catch Mod:get_field_type([Column])
                       end, Fields),
     TypeMap = lists:zip(Values, Types),
-    lager:warning("Values: ~p", [Values]),
-    lager:warning("TypeMap: ~p", [TypeMap]),
     [lists:map(fun({binary, String}=Value) ->
                        case lists:keyfind(Value, 1, TypeMap) of
                            {Value, timestamp} ->
