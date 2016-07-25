@@ -88,7 +88,7 @@ service_available(RD, Ctx) ->
     end.
 
 is_authorized(RD, #ctx{table = Table} = Ctx) ->
-    case riak_kv_wm_ts_util:authorize(listkeys, Table, RD) of
+    case riak_kv_wm_ts_util:authorize(list_keys, Table, RD) of
         ok ->
             {true, RD, Ctx};
         {error, ErrorMsg} ->

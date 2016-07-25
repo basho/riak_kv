@@ -332,7 +332,7 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
 
 
 %% -----------
-%% listkeys
+%% list_keys
 %% -----------
 
 sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
