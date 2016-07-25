@@ -35,12 +35,13 @@
 
 %% enumerate all current SQL query types
 -type query_type() ::
-        ddl | select | describe | insert.
+        ddl | select | describe | insert | show_tables.
 %% and also their corresponding records (mainly for use in specs)
 -type sql_query_type_record() ::
         ?SQL_SELECT{} |
         #riak_sql_describe_v1{} |
-        #riak_sql_insert_v1{}.
+        #riak_sql_insert_v1{} |
+        #riak_sql_show_tables_v1{}.
 
 -type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
                                  [riak_pb_ts_codec:tscolumntype()],
@@ -74,7 +75,9 @@ submit(#riak_sql_describe_v1{}, DDL) ->
 submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
     do_insert(SQL);
 submit(SQL = ?SQL_SELECT{}, DDL) ->
-    do_select(SQL, DDL).
+    do_select(SQL, DDL);
+submit(#riak_sql_show_tables_v1{} = _SQL, _DDL) ->
+    do_show_tables().
 
 
 %% ---------------------
@@ -300,6 +303,21 @@ format_query_syntax_errors(Errors) ->
 empty_result() ->
     {[], [], []}.
 
+%%
+%% SHOW TABLES statement
+%%
+-spec do_show_tables() -> {ok, query_tabular_result()} | {error, term()}.
+do_show_tables() ->
+    DDLs = riak_kv_compile_tab:get_all_compiled_ddls(),
+    build_show_tables_result(DDLs).
+
+-spec build_show_tables_result([?DDL{}]) -> tuple().
+build_show_tables_result(DDLs) ->
+    ColumnNames = [<<"Table">>],
+    ColumnTypes = [varchar],
+    Rows = [[riak_ql_ddl:get_table(D)] || D <- DDLs],
+    {ok, {ColumnNames, ColumnTypes, Rows}}.
+
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
@@ -348,6 +366,26 @@ describe_table_columns_no_quantum_test() ->
              [<<"t">>, <<"timestamp">>, false, 3,  3, [], []],
              [<<"w">>, <<"sint64">>, false, [], [], [], []],
              [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
+        Res).
+
+show_tables_test() ->
+    {ddl, DDL1, []} =
+        riak_ql_parser:ql_parse(
+            riak_ql_lexer:get_tokens(
+                "CREATE TABLE fafa ("
+                " f varchar   not null,"
+                  " PRIMARY KEY ((f), "
+                " f))")),
+    {ddl, DDL2, []} =
+        riak_ql_parser:ql_parse(
+            riak_ql_lexer:get_tokens(
+                "CREATE TABLE lala ("
+                " f varchar   not null,"
+                " PRIMARY KEY ((f), "
+                " f))")),
+    Res = build_show_tables_result([DDL1, DDL2]),
+    ?assertMatch(
+        {ok, {[<<"Table">>], [varchar], [[<<"fafa">>], [<<"lala">>]]}},
         Res).
 
 validate_make_insert_row_basic_test() ->
