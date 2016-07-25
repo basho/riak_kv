@@ -146,11 +146,14 @@ timestamp_to_epoch(Str) ->
         [
          {default_timezone,
           riak_core_metadata:get({riak_core, timezone},
-                                 string, [{default, "+00"}])},
-         {target_accuracy, second}
+                                 string, [{default, "+00"}])}
         ],
-    {_, DT} = jam:normalize(jam:process(jam_iso8601:parse(Str), ProcessOptions)),
-    jam:to_epoch(DT, 1000).
+    Datetime = jam:expand(
+                 jam:normalize(
+                   jam:compile(
+                     jam_iso8601:parse(Str), ProcessOptions)
+                  ), second),
+    jam:to_epoch(Datetime, 1000).
 
 %% Useful key extractors for functions (e.g., in get or delete code
 %% paths) which are agnostic to whether they are dealing with TS or
