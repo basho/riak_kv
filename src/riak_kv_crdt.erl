@@ -27,7 +27,7 @@
 -export([to_binary/2, to_binary/1, from_binary/1]).
 -export([log_merge_errors/4, meta/2, merge_value/2]).
 %% MR helper funs
--export([value/1, counter_value/1, set_value/1, map_value/1]).
+-export([value/1, counter_value/1, gset_value/1, set_value/1, map_value/1]).
 %% Other helper funs
 -export([is_crdt/1, is_crdt/2, is_crdt_object/1, is_crdt_supported/1]).
 
@@ -132,6 +132,13 @@ counter_value(RObj) ->
 set_value(RObj) ->
     {{_Ctx, Set}, _Stats}  = value(RObj, ?SET_TYPE),
     Set.
+
+%% @doc convenience for (e.g.) MapReduce functions. Pass an object,
+%% get a 2.0+ GSet type value, or `[]' if no Set is present.
+-spec gset_value(riak_object:riak_object()) -> list().
+gset_value(RObj) ->
+    {{_Ctx, GSet}, _Stats}  = value(RObj, ?GSET_TYPE),
+    GSet.
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Map type value, or `[]' if no Map is present.
@@ -305,7 +312,8 @@ update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Op, ctx=undefined}) ->
         {error, _}=E -> E
     end;
 update_crdt(Dict, Actor, ?CRDT_OP{mod=Mod, op=Ops, ctx=OpCtx}) when Mod==?MAP_TYPE;
-                                                                    Mod==?SET_TYPE->
+                                                                    Mod==?SET_TYPE;
+                                                                    Mod==?GSET_TYPE->
     case orddict:find(Mod, Dict) of
         error ->
             %% No local replica of this CRDT, apply the ops to a new
@@ -476,7 +484,9 @@ to_record(?COUNTER_TYPE, Val) ->
 to_record(?MAP_TYPE, Val) ->
     ?MAP_TYPE(Val);
 to_record(?SET_TYPE, Val) ->
-    ?SET_TYPE(Val).
+    ?SET_TYPE(Val);
+to_record(?GSET_TYPE, Val) ->
+    ?GSET_TYPE(Val).
 
 %% @doc Check cluster capability for crdt support
 supported(Mod) ->
@@ -506,6 +516,8 @@ crdt_version(Mod) ->
 %% CRDT type
 to_mod("sets") ->
     ?SET_TYPE;
+to_mod("gsets") ->
+    ?GSET_TYPE;
 to_mod("counters") ->
     ?COUNTER_TYPE;
 to_mod("maps") ->
