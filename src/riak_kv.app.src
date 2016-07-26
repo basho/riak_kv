@@ -80,6 +80,8 @@
          %% undefined during a rolling upgrade from 1.0.
          {mapred_2i_pipe, true},
 
+         %% Cuttlefish defaults are maintained in the translations found in
+         %% riak_kv.schema
          {timeseries_query_timeout_ms, 10000},
 
          {timeseries_query_max_quanta_span, 5},
