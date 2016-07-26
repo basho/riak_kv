@@ -217,7 +217,8 @@ cancel_exchanges() ->
 
 -spec init([]) -> {'ok',state()}.
 init([]) ->
-    riak_core_throttle:init(?AAE_THROTTLE_ENV_KEY, riak_kv,
+    riak_core_throttle:init(riak_kv,
+                            ?AAE_THROTTLE_ENV_KEY,
                             {aae_throttle_limits, ?DEFAULT_AAE_THROTTLE_LIMITS},
                             {aae_throttle_kill_switch, false}),
 
@@ -767,18 +768,18 @@ requeue_exchange(LocalIdx, RemoteIdx, IndexN, State) ->
     end.
 
 get_aae_throttle() ->
-    riak_core_throttle:get_throttle(?AAE_THROTTLE_ENV_KEY).
+    riak_core_throttle:get_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY).
 
 set_aae_throttle(Milliseconds) when is_integer(Milliseconds), Milliseconds >= 0 ->
-    riak_core_throttle:set_throttle(?AAE_THROTTLE_ENV_KEY, Milliseconds).
+    riak_core_throttle:set_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY, Milliseconds).
 
 get_aae_throttle_kill() ->
-    not riak_core_throttle:is_throttle_enabled(?AAE_THROTTLE_ENV_KEY).
+    not riak_core_throttle:is_throttle_enabled(riak_kv, ?AAE_THROTTLE_ENV_KEY).
 
 set_aae_throttle_kill(true) ->
-    riak_core_throttle:disable_throttle(?AAE_THROTTLE_ENV_KEY);
+    riak_core_throttle:disable_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY);
 set_aae_throttle_kill(false) ->
-    riak_core_throttle:enable_throttle(?AAE_THROTTLE_ENV_KEY).
+    riak_core_throttle:enable_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY).
 
 get_max_local_vnodeq() ->
     try
@@ -793,7 +794,7 @@ get_max_local_vnodeq() ->
     end.
 
 get_aae_throttle_limits() ->
-    riak_core_throttle:get_limits(?AAE_THROTTLE_ENV_KEY).
+    riak_core_throttle:get_limits(riak_kv, ?AAE_THROTTLE_ENV_KEY).
 
 %% @doc Set AAE throttle limits list
 %%
@@ -802,7 +803,7 @@ get_aae_throttle_limits() ->
 %% List sorting is not required: the throttle is robust with any ordering.
 
 set_aae_throttle_limits(Limits) ->
-    riak_core_throttle:set_limits(?AAE_THROTTLE_ENV_KEY, Limits).
+    riak_core_throttle:set_limits(riak_kv, ?AAE_THROTTLE_ENV_KEY, Limits).
 
 query_and_set_aae_throttle(#state{last_throttle=LastThrottle} = State) ->
     case get_aae_throttle_kill() of
@@ -847,6 +848,7 @@ query_and_set_aae_throttle3({result, {MaxNds, BadNds}},
                 {{unknown_mailbox_sizes, node_list, BadNds}, BadNodes}
         end,
     NewThrottle = riak_core_throttle:set_throttle_by_load(
+                    riak_kv,
                     ?AAE_THROTTLE_ENV_KEY,
                     WorstVMax),
     perhaps_log_throttle_change(LastThrottle, NewThrottle,
