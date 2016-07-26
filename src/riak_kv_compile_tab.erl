@@ -171,7 +171,7 @@ get_ddl(BucketType) when is_binary(BucketType) ->
 get_all_compiled_ddls() ->
     case dets:match(?TABLE, {'_','_','$1','_','compiled'}) of
         [] ->
-            notfound;
+            [];
         Matches ->
             [DDL || [DDL] <- Matches]
     end.
