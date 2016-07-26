@@ -42,6 +42,7 @@
 -export([all_pairwise_exchanges/2]).
 -export([get_aae_throttle/0,
          set_aae_throttle/1,
+         is_aae_throttle_enabled/0,
          get_aae_throttle_kill/0,
          set_aae_throttle_kill/1,
          get_aae_throttle_limits/0,
@@ -772,6 +773,9 @@ get_aae_throttle() ->
 
 set_aae_throttle(Milliseconds) when is_integer(Milliseconds), Milliseconds >= 0 ->
     riak_core_throttle:set_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY, Milliseconds).
+
+is_aae_throttle_enabled() ->
+    riak_core_throttle:is_throttle_enabled(riak_kv, ?AAE_THROTTLE_ENV_KEY).
 
 get_aae_throttle_kill() ->
     not riak_core_throttle:is_throttle_enabled(riak_kv, ?AAE_THROTTLE_ENV_KEY).
