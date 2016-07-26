@@ -28,7 +28,7 @@
 -define(V2_TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?GSET_TYPE, ?SET_TYPE, ?MAP_TYPE]).
 -define(TOP_LEVEL_TYPES, ?V1_TOP_LEVEL_TYPES ++ ?V2_TOP_LEVEL_TYPES).
 -define(ALL_TYPES, ?TOP_LEVEL_TYPES ++ [?FLAG_TYPE, ?REG_TYPE]).
--define(EMBEDDED_TYPES, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
+-define(EMBEDDED_TYPES, [{map, ?MAP_TYPE}, {set, ?SET_TYPE}, {gset, ?GSET_TYPE},
                          {counter, ?EMCNTR_TYPE}, {flag, ?FLAG_TYPE},
                          {register, ?REG_TYPE}]).
 
