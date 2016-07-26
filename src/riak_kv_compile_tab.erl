@@ -24,7 +24,7 @@
 
 -export([
          delete_dets/1,
-         get_all_compiled_ddls/0,
+         get_all_table_names/0,
          get_compiled_ddl_version/1,
          get_ddl/1,
          get_state/1,
@@ -167,13 +167,14 @@ get_ddl(BucketType) when is_binary(BucketType) ->
     end.
 
 %%
--spec get_all_compiled_ddls() -> term() | notfound.
-get_all_compiled_ddls() ->
-    case dets:match(?TABLE, {'_','_','$1','_','compiled'}) of
+-spec get_all_table_names() -> term() | notfound.
+get_all_table_names() ->
+    case dets:match(?TABLE, {'$1','_','_','_','compiled'}) of
         [] ->
             [];
         Matches ->
-            [DDL || [DDL] <- Matches]
+            Tables = [DDL || [DDL] <- Matches],
+            lists:usort(Tables)
     end.
 
 %% Update the compilation state using the compiler pid as a key.
@@ -361,8 +362,8 @@ get_all_compiled_ddls_test() ->
             ok = insert(<<"my_type4">>, 8, {ddl_v1}, Pid4, compiled),
 
             ?assertEqual(
-                [{ddl_v1},{ddl_v1}],
-                get_all_compiled_ddls()
+                [<<"my_type2">>,<<"my_type4">>],
+                get_all_table_names()
             )
         end).
 -endif.

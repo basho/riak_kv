@@ -308,14 +308,14 @@ empty_result() ->
 %%
 -spec do_show_tables() -> {ok, query_tabular_result()} | {error, term()}.
 do_show_tables() ->
-    DDLs = riak_kv_compile_tab:get_all_compiled_ddls(),
-    build_show_tables_result(DDLs).
+    Tables = riak_kv_compile_tab:get_all_table_names(),
+    build_show_tables_result(Tables).
 
--spec build_show_tables_result([?DDL{}]) -> tuple().
-build_show_tables_result(DDLs) ->
+-spec build_show_tables_result([binary()]) -> tuple().
+build_show_tables_result(Tables) ->
     ColumnNames = [<<"Table">>],
     ColumnTypes = [varchar],
-    Rows = [[riak_ql_ddl:get_table(D)] || D <- DDLs],
+    Rows = [[T] || T <- Tables],
     {ok, {ColumnNames, ColumnTypes, Rows}}.
 
 %%%===================================================================
@@ -369,21 +369,7 @@ describe_table_columns_no_quantum_test() ->
         Res).
 
 show_tables_test() ->
-    {ddl, DDL1, []} =
-        riak_ql_parser:ql_parse(
-            riak_ql_lexer:get_tokens(
-                "CREATE TABLE fafa ("
-                " f varchar   not null,"
-                  " PRIMARY KEY ((f), "
-                " f))")),
-    {ddl, DDL2, []} =
-        riak_ql_parser:ql_parse(
-            riak_ql_lexer:get_tokens(
-                "CREATE TABLE lala ("
-                " f varchar   not null,"
-                " PRIMARY KEY ((f), "
-                " f))")),
-    Res = build_show_tables_result([DDL1, DDL2]),
+    Res = build_show_tables_result([<<"fafa">>,<<"lala">>]),
     ?assertMatch(
         {ok, {[<<"Table">>], [varchar], [[<<"fafa">>], [<<"lala">>]]}},
         Res).
