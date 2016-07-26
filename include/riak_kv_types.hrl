@@ -42,7 +42,7 @@
 %% number. `N' is incremented when any new version of any datatype is
 %% introduced, thus bumping the data type `Epoch'.
 -define(E1_DATATYPE_VERSIONS, [{?COUNTER_TYPE, 2}]).
--define(E2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2}, {?SET_TYPE, 2}, {?GSET_TYPE, 2},    {?COUNTER_TYPE, 2}]).
+-define(E2_DATATYPE_VERSIONS, [{?MAP_TYPE, 2}, {?SET_TYPE, 2}, {?GSET_TYPE, 2}, {?COUNTER_TYPE, 2}]).
 
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.
