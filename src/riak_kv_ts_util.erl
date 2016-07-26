@@ -45,6 +45,10 @@
 -export([explain_query/1, explain_query/2]).
 -export([explain_query_print/1]).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-compile(export_all).
+-endif.
 
 %% NOTE on table_to_bucket/1: Clients will work with table
 %% names. Those names map to a bucket type/bucket name tuple in Riak,
@@ -65,8 +69,16 @@ sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
                                 'WHERE'  = Where}) ->
     {From, Select, Where}.
 
+build_sql_record(Command, SQL, Cover) ->
+    try build_sql_record_int(Command, SQL, Cover) of
+        Return -> Return
+    catch
+        throw:Atom ->
+            {error, Atom}
+    end.
+
 %% Convert the proplist obtained from the QL parser
-build_sql_record(select, SQL, Cover) ->
+build_sql_record_int(select, SQL, Cover) ->
     T = proplists:get_value(tables, SQL),
     F = proplists:get_value(fields, SQL),
     L = proplists:get_value(limit, SQL),
@@ -85,10 +97,10 @@ build_sql_record(select, SQL, Cover) ->
         false ->
             {error, <<"Must provide exactly one table name">>}
     end;
-build_sql_record(describe, SQL, _Cover) ->
+build_sql_record_int(describe, SQL, _Cover) ->
     D = proplists:get_value(identifier, SQL),
     {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
-build_sql_record(insert, SQL, _Cover) ->
+build_sql_record_int(insert, SQL, _Cover) ->
     T = proplists:get_value(table, SQL),
     case is_binary(T) of
         true ->
@@ -113,15 +125,45 @@ convert_where_timestamps(Mod, Where) ->
 replace_ast_timestamps(Mod, {Op, Item1, Item2}) when is_tuple(Item1) andalso is_tuple(Item2) ->
     {Op, replace_ast_timestamps(Mod, Item1), replace_ast_timestamps(Mod, Item2)};
 replace_ast_timestamps(Mod, {Op, FieldName, {binary, Value}}) ->
-    {Op, FieldName, maybe_convert_to_epoch(catch Mod:get_field_type([FieldName]), Value)};
+    {Op, FieldName, maybe_convert_to_epoch(catch Mod:get_field_type([FieldName]), Value, Op)};
 replace_ast_timestamps(_Mod, {Op, Item1, Item2}) ->
     {Op, Item1, Item2}.
 
-maybe_convert_to_epoch({'EXIT', _}, Value) ->
+maybe_convert_to_epoch({'EXIT', _}, Value, _Op) ->
     {binary, Value};
-maybe_convert_to_epoch(timestamp, Value) ->
-    {integer, timestamp_to_epoch(Value)};
-maybe_convert_to_epoch(_Type, Value) ->
+maybe_convert_to_epoch(timestamp, Value, '>') ->
+    %% For strictly greater than, we increment any incomplete
+    %% date/time strings by one "unit", where the unit is the least
+    %% significant value provided by the user. "2016" becomes
+    %% "2017". "2016-07-05T11" becomes "2016-07-05T12".
+    Normal = timestamp_to_normalized(Value),
+    Epoch = case jam:is_complete(Normal) of
+                true ->
+                    to_epoch(Normal, 3);
+                false ->
+                    to_epoch(jam:expand(jam:increment(Normal, 1), second), 3)
+            end,
+    case is_atom(Epoch) of
+        true ->
+            throw(Epoch);
+        false ->
+            {integer, Epoch}
+    end;
+maybe_convert_to_epoch(timestamp, Value, _Op) ->
+    Normal = timestamp_to_normalized(Value),
+    Epoch = case jam:is_complete(Normal) of
+                true ->
+                    to_epoch(Normal, 3);
+                false ->
+                    to_epoch(jam:expand(Normal, second), 3)
+            end,
+    case is_atom(Epoch) of
+        true ->
+            throw(Epoch);
+        false ->
+            {integer, Epoch}
+    end;
+maybe_convert_to_epoch(_Type, Value, _Op) ->
     {binary, Value}.
 
 %% I haven't investigated why the values are a nested list
@@ -141,12 +183,40 @@ convert_insert_timestamps(Mod, Fields, [Values]) ->
                        Value
                end, Values)].
 
+get_default_timezone(Default) ->
+    try
+        riak_core_metadata:get({riak_core, timezone},
+                               string, [{default, Default}])
+            of
+        Value ->
+            Value
+    catch
+        _:_ -> Default
+    end.
+
+timestamp_to_normalized(Str) ->
+    ProcessOptions =
+        [
+         {default_timezone, get_default_timezone("+00")}
+        ],
+    Normal = jam:normalize(
+               jam:compile(
+                 jam_iso8601:parse(Str), ProcessOptions)
+              ),
+    case Normal of
+        undefined ->
+            throw(<<"Invalid date/time string">>);
+        _ ->
+            Normal
+    end.
+
+to_epoch(Normalized, Exponent) ->
+    jam:to_epoch(Normalized, Exponent).
+
 timestamp_to_epoch(Str) ->
     ProcessOptions =
         [
-         {default_timezone,
-          riak_core_metadata:get({riak_core, timezone},
-                                 string, [{default, "+00"}])}
+         {default_timezone, get_default_timezone("+00")}
         ],
     Datetime = jam:expand(
                  jam:normalize(
@@ -593,7 +663,6 @@ flat_format(Format, Args) ->
 %%%
 
 -ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
 
 helper_compile_def_to_module(SQL) ->
     Lexed = riak_ql_lexer:get_tokens(SQL),
@@ -694,5 +763,78 @@ validate_rows_bad_2_test() ->
         [1, 3, 4],
         validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
     ).
+
+bad_timestamp_test() ->
+    BadFormat = "20151T10",
+    BadQuery = lists:flatten(
+                 io_lib:format("select * from table1 "
+                               "where b > '~s' and "
+                               " b < '20151013T20:00:00'", [BadFormat])),
+    {_DDL, _Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table1 ("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
+    Lexed = riak_ql_lexer:get_tokens(BadQuery),
+    {ok, Q} = riak_ql_parser:parse(Lexed),
+    ?assertMatch({error, <<"Invalid date/time string">>},
+                 build_sql_record(select, Q, undefined)).
+
+good_timestamp_test() ->
+    GoodQuery = "select * from table1 "
+        " where b > '20151013T18:30' and "
+        " b < '20151013T20:00:00' ",
+    {_DDL, _Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table1 ("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
+    Lexed = riak_ql_lexer:get_tokens(GoodQuery),
+    {ok, Q} = riak_ql_parser:parse(Lexed),
+    {ok, Select} = build_sql_record(select, Q, undefined),
+    Where = Select?SQL_SELECT.'WHERE',
+    %% Navigate the tree looking for integer values for b
+    %% comparisons. Verify that we find both (hence `2' as our
+    %% equality)
+    ?assertEqual(2,
+                 check_integer_timestamps(
+                   hd(Where),
+                   %% The first value, the lower bound, is
+                   %% 20151013T18:31:00 because of the
+                   %% incomplete datetime string
+                   1444761060000,
+                   1444766400000)).
+
+check_integer_timestamps({_Op, A, B}, Lower, Upper) when is_tuple(A), is_tuple(B) ->
+    check_integer_timestamps(A, Lower, Upper) +
+        check_integer_timestamps(B, Lower, Upper);
+check_integer_timestamps({'<', <<"b">>, Compare}, _Lower, Upper) ->
+    ?assertEqual({integer, Upper}, Compare),
+    1;
+check_integer_timestamps({'>', <<"b">>, Compare}, Lower, _Upper) ->
+    ?assertEqual({integer, Lower}, Compare),
+    1;
+check_integer_timestamps(_, _, _) ->
+    0.
+
+timestamp_parsing_test() ->
+    BadFormat = "20151T10",
+    BadQuery = lists:flatten(
+                 io_lib:format("select * from table1 "
+                               "where b > '~s' and "
+                               " b < '201510T20:00:00'", [BadFormat])),
+    {_DDL, Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table1 ("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
+    ?assertEqual(timestamp, Mod:get_field_type([<<"b">>])),
+    Lexed = riak_ql_lexer:get_tokens(BadQuery),
+    {ok, Q} = riak_ql_parser:parse(Lexed),
+    ?assertMatch({error, <<"Invalid date/time string">>},
+                 build_sql_record(select, Q, undefined)).
 
 -endif.
