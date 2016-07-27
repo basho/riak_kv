@@ -144,9 +144,9 @@
 
 %% @doc Whether the distributed throttle for active anti-entropy is
 %% enabled.
-{mapping, "anti_entropy.throttle", "riak_kv.aae_throttle_kill_switch", [
+{mapping, "anti_entropy.throttle", "riak_kv.aae_throttle_enabled", [
   {default, on},
-  {datatype, {flag, off, on}},
+  {datatype, flag},
   hidden
 ]}.
 

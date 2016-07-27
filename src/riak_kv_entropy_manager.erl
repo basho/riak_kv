@@ -43,8 +43,8 @@
 -export([get_aae_throttle/0,
          set_aae_throttle/1,
          is_aae_throttle_enabled/0,
-         get_aae_throttle_kill/0,
-         set_aae_throttle_kill/1,
+         disable_aae_throttle/0,
+         enable_aae_throttle/0,
          get_aae_throttle_limits/0,
          set_aae_throttle_limits/1,
          get_max_local_vnodeq/0]).
@@ -82,8 +82,7 @@
 -define(DEFAULT_CONCURRENCY, 2).
 -define(DEFAULT_BUILD_LIMIT, {1, 3600000}). %% Once per hour
 -define(KV_ENTROPY_LOCK_TIMEOUT, app_helper:get_env(riak_kv, anti_entropy_lock_timeout, 10000)).
--define(AAE_THROTTLE_ENV_KEY, aae_throttle_sleep_time).
--define(AAE_THROTTLE_KILL_ENV_KEY, aae_throttle_kill_switch).
+-define(AAE_THROTTLE_KEY, aae_throttle).
 -define(DEFAULT_AAE_THROTTLE_LIMITS,
         [{-1,0}, {200,10}, {500,50}, {750,250}, {900,1000}, {1100,5000}]).
 
@@ -219,9 +218,9 @@ cancel_exchanges() ->
 -spec init([]) -> {'ok',state()}.
 init([]) ->
     riak_core_throttle:init(riak_kv,
-                            ?AAE_THROTTLE_ENV_KEY,
+                            ?AAE_THROTTLE_KEY,
                             {aae_throttle_limits, ?DEFAULT_AAE_THROTTLE_LIMITS},
-                            {aae_throttle_kill_switch, false}),
+                            {aae_throttle_enabled, true}),
 
     schedule_tick(),
 
@@ -769,21 +768,18 @@ requeue_exchange(LocalIdx, RemoteIdx, IndexN, State) ->
     end.
 
 get_aae_throttle() ->
-    riak_core_throttle:get_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY).
+    riak_core_throttle:get_throttle(riak_kv, ?AAE_THROTTLE_KEY).
 
 set_aae_throttle(Milliseconds) when is_integer(Milliseconds), Milliseconds >= 0 ->
-    riak_core_throttle:set_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY, Milliseconds).
+    riak_core_throttle:set_throttle(riak_kv, ?AAE_THROTTLE_KEY, Milliseconds).
 
 is_aae_throttle_enabled() ->
-    riak_core_throttle:is_throttle_enabled(riak_kv, ?AAE_THROTTLE_ENV_KEY).
+    riak_core_throttle:is_throttle_enabled(riak_kv, ?AAE_THROTTLE_KEY).
 
-get_aae_throttle_kill() ->
-    not riak_core_throttle:is_throttle_enabled(riak_kv, ?AAE_THROTTLE_ENV_KEY).
-
-set_aae_throttle_kill(true) ->
-    riak_core_throttle:disable_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY);
-set_aae_throttle_kill(false) ->
-    riak_core_throttle:enable_throttle(riak_kv, ?AAE_THROTTLE_ENV_KEY).
+disable_aae_throttle() ->
+    riak_core_throttle:disable_throttle(riak_kv, ?AAE_THROTTLE_KEY).
+enable_aae_throttle() ->
+    riak_core_throttle:enable_throttle(riak_kv, ?AAE_THROTTLE_KEY).
 
 get_max_local_vnodeq() ->
     try
@@ -798,7 +794,7 @@ get_max_local_vnodeq() ->
     end.
 
 get_aae_throttle_limits() ->
-    riak_core_throttle:get_limits(riak_kv, ?AAE_THROTTLE_ENV_KEY).
+    riak_core_throttle:get_limits(riak_kv, ?AAE_THROTTLE_KEY).
 
 %% @doc Set AAE throttle limits list
 %%
@@ -807,15 +803,13 @@ get_aae_throttle_limits() ->
 %% List sorting is not required: the throttle is robust with any ordering.
 
 set_aae_throttle_limits(Limits) ->
-    riak_core_throttle:set_limits(riak_kv, ?AAE_THROTTLE_ENV_KEY, Limits).
+    riak_core_throttle:set_limits(riak_kv, ?AAE_THROTTLE_KEY, Limits).
 
-query_and_set_aae_throttle(#state{last_throttle=LastThrottle} = State) ->
-    case get_aae_throttle_kill() of
-        false ->
-            query_and_set_aae_throttle2(State);
+query_and_set_aae_throttle(State) ->
+    case is_aae_throttle_enabled() of
         true ->
-            perhaps_log_throttle_change(LastThrottle, 0, kill_switch),
-            set_aae_throttle(0),
+            query_and_set_aae_throttle2(State);
+        false ->
             State#state{last_throttle=0}
     end.
 
@@ -830,13 +824,12 @@ query_and_set_aae_throttle2(#state{vnode_status_pid = undefined} = State) ->
 query_and_set_aae_throttle2(State) ->
     State.
 
-query_and_set_aae_throttle3({result, {MaxNds, BadNds}},
-                            #state{last_throttle=LastThrottle} = State) ->
+query_and_set_aae_throttle3({result, {MaxNds, BadNds}}, State) ->
     %% If a node is really hosed, then this RPC call is going to fail
     %% for that node.  We might also delay the 'tick' processing by
     %% several seconds.  But the tick processing is OK if it's delayed
     %% while we wait for slow nodes here.
-    {WorstVMax, WorstNode} =
+    {WorstVMax, _WorstNode} =
         case {BadNds, lists:reverse(lists:sort(MaxNds))} of
             {[], [{VMax, Node}|_]} ->
                 {VMax, Node};
@@ -853,23 +846,9 @@ query_and_set_aae_throttle3({result, {MaxNds, BadNds}},
         end,
     NewThrottle = riak_core_throttle:set_throttle_by_load(
                     riak_kv,
-                    ?AAE_THROTTLE_ENV_KEY,
+                    ?AAE_THROTTLE_KEY,
                     WorstVMax),
-    perhaps_log_throttle_change(LastThrottle, NewThrottle,
-                                {WorstVMax, WorstNode}),
-    set_aae_throttle(NewThrottle),
     State#state{last_throttle=NewThrottle}.
-
-perhaps_log_throttle_change(Last, New, kill_switch) when Last /= New ->
-    _ = lager:info("Changing AAE throttle from ~p -> ~p msec/key, "
-                   "based on kill switch on local node",
-                   [Last, New]);
-perhaps_log_throttle_change(Last, New, {WorstVMax, WorstNode}) when Last /= New ->
-    _ = lager:info("Changing AAE throttle from ~p -> ~p msec/key, "
-                   "based on maximum vnode mailbox size ~p from ~p",
-                   [Last, New, WorstVMax, WorstNode]);
-perhaps_log_throttle_change(_, _, _) ->
-    ok.
 
 %% Wrapper for meck interception for testing.
 multicall(A, B, C, D, E) ->
@@ -892,10 +871,10 @@ get_last_throttle(State) ->
     {State2#state.last_throttle, State2}.
 
 wait_for_vnode_status(State) ->
-    case get_aae_throttle_kill() of
-        true ->
-            State;
+    case is_aae_throttle_enabled() of
         false ->
+            State;
+        true ->
             receive
                 {'DOWN',_,_,_,_} = Msg ->
                     element(2, handle_info(Msg, State))

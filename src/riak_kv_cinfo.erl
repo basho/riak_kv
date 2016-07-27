@@ -54,7 +54,7 @@ aae_throttle(CPid) ->
                         [ThrottleLimits]).
 
 get_aae_throttle() ->
-    [{throttle_kill, riak_kv_entropy_manager:get_aae_throttle_kill()},
+    [{throttle_enabled, riak_kv_entropy_manager:is_aae_throttle_enabled()},
      {current_throttle, riak_kv_entropy_manager:get_aae_throttle()},
      {limits, riak_kv_entropy_manager:get_aae_throttle_limits()}].
 
