@@ -167,15 +167,11 @@ get_ddl(BucketType) when is_binary(BucketType) ->
     end.
 
 %%
--spec get_all_table_names() -> term() | notfound.
+-spec get_all_table_names() -> [binary()].
 get_all_table_names() ->
-    case dets:match(?TABLE, {'$1','_','_','_','compiled'}) of
-        [] ->
-            [];
-        Matches ->
-            Tables = [DDL || [DDL] <- Matches],
-            lists:usort(Tables)
-    end.
+    Matches = dets:match(?TABLE, {'$1','_','_','_','compiled'}),
+    Tables = [DDL || [DDL] <- Matches],
+    lists:usort(Tables).
 
 %% Update the compilation state using the compiler pid as a key.
 %% Since it has an active Pid, it is assumed to have a DDL version already.

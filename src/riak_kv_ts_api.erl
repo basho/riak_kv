@@ -78,13 +78,13 @@ api_call_to_perm(query_describe) ->
 api_call_to_perm(query_insert) ->
     api_call_to_perm(put);
 api_call_to_perm(query_show_tables) ->
-    api_call_to_perm(query_describe).
+    "riak_ts.query_show_tables".
 
 %%
 -spec api_calls() -> [api_call()].
 api_calls() ->
     [query_create_table, query_select, query_describe, query_insert,
-     get, put, delete, list_keys, coverage].
+     query_show_tables, get, put, delete, list_keys, coverage].
 
 
 -spec query(string() | riak_kv_qry:sql_query_type_record(), ?DDL{}) ->
