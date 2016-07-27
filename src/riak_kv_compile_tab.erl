@@ -24,6 +24,7 @@
 
 -export([
          delete_dets/1,
+         get_all_table_names/0,
          get_compiled_ddl_version/1,
          get_ddl/1,
          get_state/1,
@@ -163,6 +164,17 @@ get_ddl(BucketType) when is_binary(BucketType) ->
             DDL;
         [] ->
             notfound
+    end.
+
+%%
+-spec get_all_table_names() -> term() | notfound.
+get_all_table_names() ->
+    case dets:match(?TABLE, {'$1','_','_','_','compiled'}) of
+        [] ->
+            [];
+        Matches ->
+            Tables = [DDL || [DDL] <- Matches],
+            lists:usort(Tables)
     end.
 
 %% Update the compilation state using the compiler pid as a key.
@@ -334,6 +346,24 @@ update_legacy_ddl_test() ->
             ?assertEqual(
                 [[<<"my_type">>],[<<"my_type1">>],[<<"my_type2">>],[<<"my_type3">>]],
                 lists:sort(dets:match(?TABLE, {'$1',1,'_','_','_'}))
+            )
+        end).
+
+get_all_compiled_ddls_test() ->
+    ?in_process(
+        begin
+            Pid = spawn(fun() -> ok end),
+            Pid2 = spawn(fun() -> ok end),
+            Pid3 = spawn(fun() -> ok end),
+            Pid4 = spawn(fun() -> ok end),
+            ok = insert(<<"my_type1">>, 6, {ddl_v1}, Pid, compiling),
+            ok = insert(<<"my_type2">>, 7, {ddl_v1}, Pid2, compiled),
+            ok = insert(<<"my_type3">>, 6, {ddl_v1}, Pid3, compiling),
+            ok = insert(<<"my_type4">>, 8, {ddl_v1}, Pid4, compiled),
+
+            ?assertEqual(
+                [<<"my_type2">>,<<"my_type4">>],
+                get_all_table_names()
             )
         end).
 -endif.
