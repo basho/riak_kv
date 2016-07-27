@@ -156,7 +156,7 @@ process(M = #riak_sql_insert_v1{'INSERT' = Table}, State) ->
 
 process(#riak_sql_show_tables_v1{}, State) ->
     {ok, {ColNames, ColTypes, LdbNativeRows}} =
-        riak_kv_ts_api:query("SHOW TABLES", ?DDL{}),
+        riak_kv_qry:submit(#riak_sql_show_tables_v1{}, ?DDL{}),
     Rows = [list_to_tuple(R) || R <- LdbNativeRows],
     {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State}.
 
