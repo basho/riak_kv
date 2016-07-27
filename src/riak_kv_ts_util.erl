@@ -129,6 +129,28 @@ replace_ast_timestamps(Mod, {Op, FieldName, {binary, Value}}) ->
 replace_ast_timestamps(_Mod, {Op, Item1, Item2}) ->
     {Op, Item1, Item2}.
 
+do_epoch(String, CompleteFun, Exponent) ->
+    Normal = timestamp_to_normalized(String),
+    case jam:is_valid(Normal) of
+        false ->
+            throw(<<"Invalid date/time string">>);
+        true ->
+            ok
+    end,
+    Epoch = case jam:is_complete(Normal) of
+                true ->
+                    jam:to_epoch(Normal, Exponent);
+                false ->
+                    jam:to_epoch(CompleteFun(Normal), Exponent)
+            end,
+    case is_atom(Epoch) of
+        true ->
+            %% jam returns atoms if processing gives an error
+            throw(Epoch);
+        false ->
+            Epoch
+    end.
+
 maybe_convert_to_epoch({'EXIT', _}, Value, _Op) ->
     {binary, Value};
 maybe_convert_to_epoch(timestamp, Value, '>') ->
@@ -136,46 +158,28 @@ maybe_convert_to_epoch(timestamp, Value, '>') ->
     %% date/time strings by one "unit", where the unit is the least
     %% significant value provided by the user. "2016" becomes
     %% "2017". "2016-07-05T11" becomes "2016-07-05T12".
-    Normal = timestamp_to_normalized(Value),
-    Epoch = case jam:is_complete(Normal) of
-                true ->
-                    to_epoch(Normal, 3);
-                false ->
-                    to_epoch(jam:expand(jam:increment(Normal, 1), second), 3)
-            end,
-    case is_atom(Epoch) of
-        true ->
-            throw(Epoch);
-        false ->
-            {integer, Epoch}
-    end;
+    CompleteFun = fun(DT) -> jam:expand(jam:increment(DT, 1), second) end,
+    {integer, do_epoch(Value, CompleteFun, 3)};
 maybe_convert_to_epoch(timestamp, Value, _Op) ->
-    Normal = timestamp_to_normalized(Value),
-    Epoch = case jam:is_complete(Normal) of
-                true ->
-                    to_epoch(Normal, 3);
-                false ->
-                    to_epoch(jam:expand(Normal, second), 3)
-            end,
-    case is_atom(Epoch) of
-        true ->
-            throw(Epoch);
-        false ->
-            {integer, Epoch}
-    end;
+    CompleteFun = fun(DT) -> jam:expand(DT, second) end,
+    {integer, do_epoch(Value, CompleteFun, 3)};
 maybe_convert_to_epoch(_Type, Value, _Op) ->
     {binary, Value}.
 
 %% I haven't investigated why the values are a nested list
 convert_insert_timestamps(Mod, Fields, [Values]) ->
+    %% Inserted timestamps cannot be partial, so our function to
+    %% complete incomplete datetime values will throw an error
     Types = lists:map(fun({identifier, [Column]}) ->
                               catch Mod:get_field_type([Column])
                       end, Fields),
     TypeMap = lists:zip(Values, Types),
+
+    CompleteFun = fun(_) -> throw(<<"Incomplete date/time string">>) end,
     [lists:map(fun({binary, String}=Value) ->
                        case lists:keyfind(Value, 1, TypeMap) of
                            {Value, timestamp} ->
-                               {integer, timestamp_to_epoch(String)};
+                               {integer, do_epoch(String, CompleteFun, 3)};
                            _ ->
                                Value
                        end;
@@ -209,21 +213,6 @@ timestamp_to_normalized(Str) ->
         _ ->
             Normal
     end.
-
-to_epoch(Normalized, Exponent) ->
-    jam:to_epoch(Normalized, Exponent).
-
-timestamp_to_epoch(Str) ->
-    ProcessOptions =
-        [
-         {default_timezone, get_default_timezone("+00")}
-        ],
-    Datetime = jam:expand(
-                 jam:normalize(
-                   jam:compile(
-                     jam_iso8601:parse(Str), ProcessOptions)
-                  ), second),
-    jam:to_epoch(Datetime, 3).
 
 %% Useful key extractors for functions (e.g., in get or delete code
 %% paths) which are agnostic to whether they are dealing with TS or
