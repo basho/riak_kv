@@ -115,7 +115,9 @@ build_sql_record_int(insert, SQL, _Cover) ->
                                     }};
         false ->
             {error, <<"Must provide exactly one table name">>}
-    end.
+    end;
+build_sql_record(show_tables, _SQL, _Cover) ->
+    {ok, #riak_sql_show_tables_v1{}}.
 
 convert_where_timestamps(_Mod, []) ->
     [];
@@ -237,7 +239,8 @@ table_to_bucket(Table) when is_binary(Table) ->
 queried_table(?DDL{table = Table}) -> Table;
 queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
 queried_table(?SQL_SELECT{'FROM' = Table})               -> Table;
-queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table.
+queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table;
+queried_table(#riak_sql_show_tables_v1{})                -> <<>>.
 
 
 -spec get_table_ddl(binary()) ->

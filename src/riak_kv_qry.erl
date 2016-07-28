@@ -35,12 +35,13 @@
 
 %% enumerate all current SQL query types
 -type query_type() ::
-        ddl | select | describe | insert.
+        ddl | select | describe | insert | show_tables.
 %% and also their corresponding records (mainly for use in specs)
 -type sql_query_type_record() ::
         ?SQL_SELECT{} |
         #riak_sql_describe_v1{} |
-        #riak_sql_insert_v1{}.
+        #riak_sql_insert_v1{} |
+        #riak_sql_show_tables_v1{}.
 
 -type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
                                  [riak_pb_ts_codec:tscolumntype()],
@@ -74,7 +75,9 @@ submit(#riak_sql_describe_v1{}, DDL) ->
 submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
     do_insert(SQL);
 submit(SQL = ?SQL_SELECT{}, DDL) ->
-    do_select(SQL, DDL).
+    do_select(SQL, DDL);
+submit(#riak_sql_show_tables_v1{} = _SQL, _DDL) ->
+    do_show_tables().
 
 
 %% ---------------------
@@ -300,6 +303,21 @@ format_query_syntax_errors(Errors) ->
 empty_result() ->
     {[], [], []}.
 
+%%
+%% SHOW TABLES statement
+%%
+-spec do_show_tables() -> {ok, query_tabular_result()} | {error, term()}.
+do_show_tables() ->
+    Tables = riak_kv_compile_tab:get_all_table_names(),
+    build_show_tables_result(Tables).
+
+-spec build_show_tables_result([binary()]) -> tuple().
+build_show_tables_result(Tables) ->
+    ColumnNames = [<<"Table">>],
+    ColumnTypes = [varchar],
+    Rows = [[T] || T <- Tables],
+    {ok, {ColumnNames, ColumnTypes, Rows}}.
+
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
@@ -348,6 +366,12 @@ describe_table_columns_no_quantum_test() ->
              [<<"t">>, <<"timestamp">>, false, 3,  3, [], []],
              [<<"w">>, <<"sint64">>, false, [], [], [], []],
              [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
+        Res).
+
+show_tables_test() ->
+    Res = build_show_tables_result([<<"fafa">>,<<"lala">>]),
+    ?assertMatch(
+        {ok, {[<<"Table">>], [varchar], [[<<"fafa">>], [<<"lala">>]]}},
         Res).
 
 validate_make_insert_row_basic_test() ->

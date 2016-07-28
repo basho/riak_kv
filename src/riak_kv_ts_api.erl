@@ -46,15 +46,16 @@
 -include("riak_kv_ts.hrl").
 
 %% external API calls enumerated
--type query_api_call() :: query_create_table | query_select | query_describe | query_insert.
--type api_call() :: get | put | delete | listkeys | coverage | query_api_call().
+-type query_api_call() :: query_create_table | query_select | query_describe | query_insert | query_show_tables.
+-type api_call() :: get | put | delete | list_keys | coverage | query_api_call().
 -export_type([query_api_call/0, api_call/0]).
 
 -spec api_call_from_sql_type(riak_kv_qry:query_type()) -> query_api_call().
-api_call_from_sql_type(ddl)      -> query_create_table;
-api_call_from_sql_type(select)   -> query_select;
-api_call_from_sql_type(describe) -> query_describe;
-api_call_from_sql_type(insert)   -> query_insert.
+api_call_from_sql_type(ddl)         -> query_create_table;
+api_call_from_sql_type(select)      -> query_select;
+api_call_from_sql_type(describe)    -> query_describe;
+api_call_from_sql_type(show_tables) -> query_show_tables;
+api_call_from_sql_type(insert)      -> query_insert.
 
 -spec api_call_to_perm(api_call()) -> string().
 api_call_to_perm(get) ->
@@ -63,7 +64,7 @@ api_call_to_perm(put) ->
     "riak_ts.put";
 api_call_to_perm(delete) ->
     "riak_ts.delete";
-api_call_to_perm(listkeys) ->
+api_call_to_perm(list_keys) ->
     "riak_ts.list_keys";
 api_call_to_perm(coverage) ->
     "riak_ts.coverage";
@@ -73,15 +74,17 @@ api_call_to_perm(query_select) ->
     "riak_ts.query_select";
 api_call_to_perm(query_describe) ->
     "riak_ts.query_describe";
-%% INSERT query is a put, so let's cal it that
+%% INSERT query is a put, so let's call it that
 api_call_to_perm(query_insert) ->
-    api_call_to_perm(put).
+    api_call_to_perm(put);
+api_call_to_perm(query_show_tables) ->
+    "riak_ts.query_show_tables".
 
 %%
 -spec api_calls() -> [api_call()].
 api_calls() ->
     [query_create_table, query_select, query_describe, query_insert,
-     get, put, delete, listkeys, coverage].
+     query_show_tables, get, put, delete, list_keys, coverage].
 
 
 -spec query(string() | riak_kv_qry:sql_query_type_record(), ?DDL{}) ->

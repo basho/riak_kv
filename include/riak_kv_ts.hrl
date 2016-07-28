@@ -76,4 +76,9 @@
           helper_mod            :: atom()
         }).
 
+-record(riak_sql_show_tables_v1,
+        {
+            'SHOW_TABLES' = <<>>  :: binary()
+        }).
+
 -endif.
