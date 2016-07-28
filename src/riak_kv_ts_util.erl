@@ -116,7 +116,7 @@ build_sql_record_int(insert, SQL, _Cover) ->
         false ->
             {error, <<"Must provide exactly one table name">>}
     end;
-build_sql_record(show_tables, _SQL, _Cover) ->
+build_sql_record_int(show_tables, _SQL, _Cover) ->
     {ok, #riak_sql_show_tables_v1{}}.
 
 convert_where_timestamps(_Mod, []) ->
