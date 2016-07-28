@@ -168,26 +168,29 @@ maybe_convert_to_epoch(timestamp, Value, _Op) ->
 maybe_convert_to_epoch(_Type, Value, _Op) ->
     {binary, Value}.
 
-%% I haven't investigated why the values are a nested list
-convert_insert_timestamps(Mod, Fields, [Values]) ->
+convert_insert_timestamps(Mod, Fields, Rows) ->
+    lists:map(fun(Row) -> row_timestamp_translation(Mod, Fields, Row) end,
+              Rows).
+
+row_timestamp_translation(Mod, Fields, Row) ->
     %% Inserted timestamps cannot be partial, so our function to
     %% complete incomplete datetime values will throw an error
     Types = lists:map(fun({identifier, [Column]}) ->
                               catch Mod:get_field_type([Column])
                       end, Fields),
-    TypeMap = lists:zip(Values, Types),
+    TypeMap = lists:zip(Row, Types),
 
     CompleteFun = fun(_) -> throw(<<"Incomplete date/time string">>) end,
-    [lists:map(fun({binary, String}=Value) ->
-                       case lists:keyfind(Value, 1, TypeMap) of
-                           {Value, timestamp} ->
-                               {integer, do_epoch(String, CompleteFun, 3)};
-                           _ ->
-                               Value
-                       end;
-                  (Value) ->
-                       Value
-               end, Values)].
+    lists:map(fun({binary, String}=Value) ->
+                      case lists:keyfind(Value, 1, TypeMap) of
+                          {Value, timestamp} ->
+                              {integer, do_epoch(String, CompleteFun, 3)};
+                          _ ->
+                              Value
+                      end;
+                 (Value) ->
+                      Value
+              end, Row).
 
 get_default_timezone(Default) ->
     try
@@ -756,7 +759,7 @@ validate_rows_bad_2_test() ->
         validate_rows(Mod, [{}, {<<"f">>, <<"s">>, 11}, {a, <<"s">>, 12}, {"hithere"}])
     ).
 
-bad_timestamp_test() ->
+bad_timestamp_select_test() ->
     BadFormat = "20151T10",
     BadQuery = lists:flatten(
                  io_lib:format("select * from table1 "
@@ -773,7 +776,7 @@ bad_timestamp_test() ->
     ?assertMatch({error, <<"Invalid date/time string">>},
                  build_sql_record(select, Q, undefined)).
 
-good_timestamp_test() ->
+good_timestamp_select_test() ->
     GoodQuery = "select * from table1 "
         " where b > '20151013T18:30' and "
         " b < '20151013T20:00:00' ",
@@ -810,6 +813,46 @@ check_integer_timestamps({'>', <<"b">>, Compare}, Lower, _Upper) ->
     1;
 check_integer_timestamps(_, _, _) ->
     0.
+
+bad_timestamp_insert_test() ->
+    Incomplete = "2015-06-05T10:10",
+    BadInsert = lists:flatten(
+                  io_lib:format("insert into table1 values "
+                                " (1, '2015-06-05 10:10:10', 2), "
+                                " (3, '~s', 4)", [Incomplete])),
+    {_DDL, _Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table1 ("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
+    Lexed = riak_ql_lexer:get_tokens(BadInsert),
+    {ok, Q} = riak_ql_parser:parse(Lexed),
+    ?assertEqual({error, <<"Incomplete date/time string">>},
+                 build_sql_record(insert, Q, undefined)).
+
+good_timestamp_insert_test() ->
+    GoodInsert = "insert into table1 values "
+        " (1, '2015-06-05 10:10:10', 2), "
+        " (3, '2015-06-05 10:10:11', 4) ",
+    {_DDL, _Mod} = helper_compile_def_to_module(
+        "CREATE TABLE table1 ("
+        "a SINT64 NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
+    Lexed = riak_ql_lexer:get_tokens(GoodInsert),
+    {ok, Q} = riak_ql_parser:parse(Lexed),
+    {ok, Insert} = build_sql_record(insert, Q, undefined),
+    Values = Insert#riak_sql_insert_v1.values,
+
+    %% Verify all values are now integers
+    ?assertEqual([[], []],
+                 lists:map(fun(Row) ->
+                                   lists:filter(fun({integer, _}) -> false;
+                                                   (_) -> true end,
+                                                Row)
+                           end, Values)).
 
 timestamp_parsing_test() ->
     BadFormat = "20151T10",
