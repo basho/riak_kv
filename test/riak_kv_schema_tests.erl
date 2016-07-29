@@ -445,30 +445,23 @@ predefined_schema() ->
 %% path of the riak_core.schema file.
 riak_core_schema() ->
     riak_core_schema(riak_core_dir()).
-riak_core_schema(RCDir) when erlang:is_list(RCDir) ->
-    Schema = filename:join([RCDir, "priv", "riak_core.schema"]),
-    case filelib:is_regular(Schema) of
-        true ->
-            case code:ensure_loaded(riak_core_schema_tests) of
-                {module, _} ->
-                    {true, Schema};
-                _ ->
-                    Search = filename:join(
-                        [RCDir, "**", "riak_core_schema_tests.beam"]),
-                    case filelib:wildcard(Search) of
-                        [Beam | _] ->
-                            case code:load_abs(filename:rootname(Beam)) of
-                                {module, _} ->
-                                    {true, Schema};
-                                Error ->
-                                    Error
-                            end;
-                        [] ->
-                            {error, enoent}
-                    end
-            end;
+riak_core_schema({RCDir, Schema}) when erlang:is_list(RCDir) ->
+    case code:ensure_loaded(riak_core_schema_tests) of
+        {module, _} ->
+            {true, Schema};
         _ ->
-            {error, enoent}
+            Search = filename:join([RCDir, "**", "riak_core_schema_tests.beam"]),
+            case filelib:wildcard(Search) of
+                [Beam | _] ->
+                    case code:load_abs(filename:rootname(Beam)) of
+                        {module, _} ->
+                            {true, Schema};
+                        Error ->
+                            Error
+                    end;
+                [] ->
+                    {error, enoent}
+            end
     end;
 riak_core_schema(Error) ->
     Error.
@@ -482,10 +475,11 @@ riak_core_dir() ->
     end,
     riak_core_dir(TryDeps).
 riak_core_dir([Deps | TryDeps]) ->
-    Dir = filename:join(Deps, "riak_core"),
-    case filelib:is_dir(Dir) of
+    RCDir   = filename:join(Deps, "riak_core"),
+    Schema  = filename:join([RCDir, "priv", "riak_core.schema"]),
+    case filelib:is_regular(Schema) of
         true ->
-            Dir;
+            {RCDir, Schema};
         _ ->
             riak_core_dir(TryDeps)
     end;
