@@ -79,12 +79,8 @@ compile_group_by(_, [], Acc, Q) ->
     {ok, Q?SQL_SELECT{ group_by = lists:reverse(Acc) }};
 compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
         when is_binary(FieldName) ->
-    case Mod:get_field_position([FieldName]) of
-        undefined ->
-            {error, {group_by_field_invalid, FieldName}};
-        Pos when is_integer(Pos) ->
-            compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q)
-    end.
+    Pos = Mod:get_field_position([FieldName]),
+    compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q).
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -2279,6 +2275,20 @@ group_by_two_fields_test() ->
     ?assertEqual(
         [{2,<<"b">>},{1,<<"a">>}],
         Q2?SQL_SELECT.group_by
+    ).
+
+group_by_column_not_in_the_table_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE mytab("
+        "a TIMESTAMP NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a,b), a,b))"),
+    {ok, Q1} = get_query(
+        "SELECT x FROM tab1 "
+        "WHERE a = 1 AND b = 2 GROUP BY x"),
+    ?assertError(
+        {unknown_column,{<<"x">>,[<<"a">>,<<"b">>]}},
+        compile(DDL, Q1, 100)
     ).
 
 negate_an_aggregation_function_test() ->

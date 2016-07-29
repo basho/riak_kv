@@ -64,6 +64,7 @@
           cover_context = undefined :: term(), %% for parallel queries
           %% prolly a mistake to put this here - should be in DDL
           local_key,
+          %% since v2
           group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}]
         }).
 
