@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_pb_index: Expose secondary index queries to Protocol Buffers
-%%
-%% Copyright (c) 2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2013-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -109,7 +107,7 @@ process(#rpbindexreq{} = Req, State) ->
                     maybe_perform_query(QueryVal, Req, State)
             end;
         false ->
-            {error, "Secondary index queries have been disabled in the configuration", State}
+            {error, "Operation 'secondary_index' is not enabled", State}
     end.
 
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
