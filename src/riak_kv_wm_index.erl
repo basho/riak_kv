@@ -103,6 +103,7 @@ init(Props) ->
 %% @doc Determine whether or not a connection to Riak
 %%      can be established. Also, extract query params.
 service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
+    lager:info("2i query job submitted via HTTP from ~p", [wrq:peer(RD)]),
     Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->

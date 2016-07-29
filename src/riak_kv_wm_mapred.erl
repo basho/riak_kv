@@ -43,6 +43,7 @@ init(_) ->
     {ok, #state{}}.
 
 is_authorized(ReqData, State) ->
+    lager:info("MapReduce job submitted via HTTP from ~p", [wrq:peer(ReqData)]),
     case riak_api_web_security:is_authorized(ReqData) of
         false ->
             {"Basic realm=\"Riak\"", ReqData, State};
