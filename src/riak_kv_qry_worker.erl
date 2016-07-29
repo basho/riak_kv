@@ -49,12 +49,17 @@
 -define(NO_MAX_RESULTS, no_max_results).
 -define(NO_PG_SORT, undefined).
 
+%% accumulators for different types of query results.
+-type rows_acc()      :: [{non_neg_integer(), list()}].
+-type aggregate_acc() :: [{binary(), term()}].
+-type group_by_acc()  :: {group_by, InitialState::term(), Groups::dict()}.
+
 -record(state, {
           qry           = none                :: none | ?SQL_SELECT{},
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
-          result        = []                  :: [{non_neg_integer(), list()}] | [{binary(), term()}] | any(),
+          result        = []                  :: rows_acc() | aggregate_acc() | group_by_acc(),
           run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun()
          }).
 
