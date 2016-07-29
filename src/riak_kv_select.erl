@@ -69,7 +69,8 @@ downgrade_select([2,1=To|Tail], Select1) ->
     Select2 = setelement(1, Select1, riak_select_v1),
     %% The group_by field might not be the default value but it is safe to
     %% downgrade because it is not used by remote vnodes.
-    Select3 = erlang:delete_element(?SQL_SELECT.group_by, Select2),
+    V2GroupByIndex = 13,
+    Select3 = erlang:delete_element(V2GroupByIndex, Select2),
     downgrade_select([To|Tail], Select3).
 
 %%
