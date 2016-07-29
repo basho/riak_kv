@@ -256,8 +256,24 @@ is_forbidden(RD) ->
     is_null_origin(RD) or
     (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
 
+%% Like is_forbidden/1, but also checks if the job class is disabled,
+%% and logs the reason the job is forbidden when applicable
+-spec is_forbidden(#wm_reqdata{}, atom()) -> boolean().
 is_forbidden(RD, JobClass) ->
-    is_forbidden(RD) orelse not riak_core_util:job_class_enabled(JobClass).
+    Checks = [{fun() -> is_null_origin(RD) end,
+               null_origin},
+              {fun() -> (app_helper:get_env(riak_kv, secure_referer_check, true) andalso
+                         not is_valid_referer(RD)) end,
+               invalid_referer},
+              {fun() -> not riak_core_util:job_class_enabled(JobClass) end,
+               job_class_disabled}],
+    case lists:dropwhile(fun({Check, _Reason}) -> not Check() end, Checks) of
+        [] -> %% None of the checks returned true: no reason to forbid this
+            false;
+        [{_FailedCheck, Reason} | _] ->
+            lager:warning("Job of type '~p' is forbidden for reason '~p'", [JobClass, Reason]),
+            true
+    end.
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts
 %%      at CSRF, but is not a complete answer to the problem.
