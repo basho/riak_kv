@@ -84,8 +84,10 @@ encode(Message) ->
 %% Start map/reduce job - results will be processed in handle_info
 process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req,
         State) ->
+    lager:info("Received map_reduce job via protocol buffers"),
     case riak_core_util:job_class_enabled(map_reduce) of
         false ->
+            lager:warning("Got map_reduce job, but map_reduce is disabled in the node config"),
             {error, "Operation 'map_reduce' is not enabled", State};
         true ->
             case decode_mapred_query(MrReq, ContentType) of

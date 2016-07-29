@@ -95,6 +95,7 @@ encode(Message) ->
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpblistbucketsreq{type = Type, timeout=T, stream=S}=Req, State) ->
+    lager:info("Received list_buckets job via protocol buffers"),
     case riak_core_util:job_class_enabled(list_buckets) of
         true ->
             case check_bucket_type(Type) of
@@ -104,6 +105,7 @@ process(#rpblistbucketsreq{type = Type, timeout=T, stream=S}=Req, State) ->
                     {error, {format, "No bucket-type named '~s'", [Type]}, State}
             end;
         _ ->
+            lager:warning("Got list_buckets job, but list_buckets is disabled in the node config"),
             {error, "Operation 'list_buckets' is not enabled", State}
     end;
 
@@ -113,6 +115,7 @@ process(rpblistbucketsreq, State) ->
 
 %% Start streaming in list keys
 process(#rpblistkeysreq{type = Type, bucket=B,timeout=T}=Req, #state{client=C} = State) ->
+    lager:info("Received list_keys job via protocol buffers"),
     case riak_core_util:job_class_enabled(list_keys) of
         true ->
             %% stream_list_keys results will be processed by process_stream/3
@@ -125,6 +128,7 @@ process(#rpblistkeysreq{type = Type, bucket=B,timeout=T}=Req, #state{client=C} =
                     {error, {format, "No bucket-type named '~s'", [Type]}, State}
             end;
         _ ->
+            lager:warning("Got list_keys job, but list_keys is disabled in the node config"),
             {error, "Operation 'list_keys' is not enabled", State}
     end.
 
