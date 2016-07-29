@@ -40,7 +40,8 @@
          expire_trees/0,
          clear_trees/0]).
 -export([all_pairwise_exchanges/2]).
--export([get_aae_throttle/0,
+-export([throttle/0,
+         get_aae_throttle/0,
          set_aae_throttle/1,
          is_aae_throttle_enabled/0,
          disable_aae_throttle/0,
@@ -767,6 +768,9 @@ requeue_exchange(LocalIdx, RemoteIdx, IndexN, State) ->
             State#state{exchange_queue=Exchanges}
     end.
 
+throttle() ->
+    riak_core_throttle:throttle(riak_kv, ?AAE_THROTTLE_KEY).
+
 get_aae_throttle() ->
     riak_core_throttle:get_throttle(riak_kv, ?AAE_THROTTLE_KEY).
 
@@ -837,12 +841,10 @@ query_and_set_aae_throttle3({result, {MaxNds, BadNds}}, State) ->
                 %% If anyone couldn't respond, let's assume the worst.
                 %% If that node is actually down, then the net_kernel
                 %% will mark it down for us soon, and then we'll
-                %% calculate a real value after that.  Note that a
-                %% tuple as WorstVMax will always be bigger than an
-                %% integer, so we can avoid using false information
-                %% like WorstVMax=99999999999999 and also give
-                %% something meaningful in the user's info msg.
-                {{unknown_mailbox_sizes, node_list, BadNds}, BadNodes}
+                %% calculate a real value after that.
+                lager:info("Could not determine mailbox sizes for nodes: ~p",
+                           [BadNds]),
+                {max, BadNodes}
         end,
     NewThrottle = riak_core_throttle:set_throttle_by_load(
                     riak_kv,
