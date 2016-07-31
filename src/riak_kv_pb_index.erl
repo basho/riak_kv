@@ -98,8 +98,11 @@ validate_request(#rpbindexreq{qtype=QType, key=SKey,
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpbindexreq{} = Req, State) ->
-    lager:info("Received 2i query job via protocol buffers"),
-    case riak_core_util:job_class_enabled(secondary_index) of
+    Class = 'secondary_index',
+    Accept = riak_core_util:job_class_enabled(Class),
+    _ = riak_core_util:report_job_request_disposition(
+            Accept, Class, ?MODULE, process, ?LINE, protobuf),
+    case Accept of
         true ->
             case validate_request(Req) of
                 {error, Err} ->
@@ -107,9 +110,10 @@ process(#rpbindexreq{} = Req, State) ->
                 QueryVal ->
                     maybe_perform_query(QueryVal, Req, State)
             end;
-        false ->
-            lager:warning("Got 2i query job, but 2i queries are disabled in the node config"),
-            {error, "Operation 'secondary_index' is not enabled", State}
+        _ ->
+            {error,
+                riak_core_util:job_class_disabled_message(binary, Class),
+                State}
     end.
 
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->

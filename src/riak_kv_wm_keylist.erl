@@ -70,8 +70,7 @@
               riak,         %% local | {node(), atom()} - params for riak client
               allow_props_param, %% true if the user can also list props. (legacy API)
               timeout,      %% integer() - list keys timeout
-              security,     %% security context
-              is_enabled :: boolean() %% Does the config for this node allow list_keys?
+              security      %% security context
              }).
 -type context() :: #ctx{}.
 
@@ -97,7 +96,6 @@ init(Props) ->
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
 service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
-    lager:info("list_keys job submitted via HTTP from ~p", [wrq:peer(RD)]),
     Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->

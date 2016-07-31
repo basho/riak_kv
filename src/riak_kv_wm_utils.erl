@@ -252,27 +252,42 @@ any_to_bool(V) when is_integer(V) ->
 any_to_bool(V) when is_boolean(V) ->
     V.
 
+-spec is_forbidden(#wm_reqdata{}) -> boolean().
+%% @doc Determine whether the request is forbidden.
 is_forbidden(RD) ->
-    is_null_origin(RD) or
-    (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
+    % TODO: what log level(s) here?
+    case is_null_origin(RD) of
+        true ->
+            _ = lager:info(
+                    "Request from ~p denied due to null origin",
+                    [{wrq:scheme(RD), wrq:peer(RD)}]),
+            true;
+        _ ->
+            case app_helper:get_env(riak_kv, secure_referer_check, true)
+                    andalso not is_valid_referer(RD) of
+                true ->
+                    _ = lager:info(
+                            "Request from ~p denied due to invalid referrer",
+                            [{wrq:scheme(RD), wrq:peer(RD)}]),
+                    true;
+                _ ->
+                    false
+            end
+    end.
 
-%% Like is_forbidden/1, but also checks if the job class is disabled,
-%% and logs the reason the job is forbidden when applicable
 -spec is_forbidden(#wm_reqdata{}, atom()) -> boolean().
+%% @doc Like is_forbidden/1, but also checks if the job class is enabled.
 is_forbidden(RD, JobClass) ->
-    Checks = [{fun() -> is_null_origin(RD) end,
-               null_origin},
-              {fun() -> (app_helper:get_env(riak_kv, secure_referer_check, true) andalso
-                         not is_valid_referer(RD)) end,
-               invalid_referer},
-              {fun() -> not riak_core_util:job_class_enabled(JobClass) end,
-               job_class_disabled}],
-    case lists:dropwhile(fun({Check, _Reason}) -> not Check() end, Checks) of
-        [] -> %% None of the checks returned true: no reason to forbid this
-            false;
-        [{_FailedCheck, Reason} | _] ->
-            lager:warning("Job of type '~p' is forbidden for reason '~p'", [JobClass, Reason]),
-            true
+    % Logging for non-job criteria is performed by is_forbidden/1.
+    case is_forbidden(RD) of
+        true ->
+            true;
+        _ ->
+            Accept = riak_core_util:job_class_enabled(JobClass),
+            _ = riak_core_util:report_job_request_disposition(
+                    Accept, JobClass, ?MODULE, is_forbidden, ?LINE,
+                    {wrq:scheme(RD), wrq:peer(RD)}),
+            not Accept
     end.
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts

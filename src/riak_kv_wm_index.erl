@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_index - Webmachine resource for running index queries.
-%%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Resource for running queries on secondary indexes.
+%% @doc Webmachine resource for running queries on secondary indexes.
 %%
 %% Available operations:
 %%
@@ -103,7 +101,6 @@ init(Props) ->
 %% @doc Determine whether or not a connection to Riak
 %%      can be established. Also, extract query params.
 service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
-    lager:info("2i query job submitted via HTTP from ~p", [wrq:peer(RD)]),
     Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
     case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
@@ -350,7 +347,7 @@ handle_streaming_index_query(RD, Ctx) ->
                 RD),
 
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
-    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0),
 
     {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
     StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
@@ -438,7 +435,7 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     Timeout = Ctx#ctx.timeout,
 
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
-    Opts = riak_index:add_timeout_opt(Timeout, Opts0), 
+    Opts = riak_index:add_timeout_opt(Timeout, Opts0),
 
     %% Do the index lookup...
     case Client:get_index(Bucket, Query, Opts) of

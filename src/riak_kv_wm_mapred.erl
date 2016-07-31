@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_mapred: webmachine resource for mapreduce requests
-%%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -43,7 +41,6 @@ init(_) ->
     {ok, #state{}}.
 
 is_authorized(ReqData, State) ->
-    lager:info("MapReduce job submitted via HTTP from ~p", [wrq:peer(ReqData)]),
     case riak_api_web_security:is_authorized(ReqData) of
         false ->
             {"Basic realm=\"Riak\"", ReqData, State};

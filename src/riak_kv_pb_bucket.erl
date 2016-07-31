@@ -94,19 +94,24 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpblistbucketsreq{type = Type, timeout=T, stream=S}=Req, State) ->
-    lager:info("Received list_buckets job via protocol buffers"),
-    case riak_core_util:job_class_enabled(list_buckets) of
+process(#rpblistbucketsreq{type = Type, timeout = T, stream = S} = Req, State) ->
+    Class = 'list_buckets',
+    Accept = riak_core_util:job_class_enabled(Class),
+    _ = riak_core_util:report_job_request_disposition(
+            Accept, Class, ?MODULE, process, ?LINE, protobuf),
+    case Accept of
         true ->
             case check_bucket_type(Type) of
                 {ok, GoodType} ->
                     do_list_buckets(GoodType, T, S, Req, State);
                 error ->
-                    {error, {format, "No bucket-type named '~s'", [Type]}, State}
+                    {error,
+                        {format, "No bucket-type named '~s'", [Type]}, State}
             end;
         _ ->
-            lager:warning("Got list_buckets job, but list_buckets is disabled in the node config"),
-            {error, "Operation 'list_buckets' is not enabled", State}
+            {error,
+                riak_core_util:job_class_disabled_message(binary, Class),
+                State}
     end;
 
 %% this should remain for backwards compatibility
@@ -114,22 +119,29 @@ process(rpblistbucketsreq, State) ->
     process(#rpblistbucketsreq{}, State);
 
 %% Start streaming in list keys
-process(#rpblistkeysreq{type = Type, bucket=B,timeout=T}=Req, #state{client=C} = State) ->
-    lager:info("Received list_keys job via protocol buffers"),
-    case riak_core_util:job_class_enabled(list_keys) of
+process(#rpblistkeysreq{type = Type, bucket = B,timeout = T} = Req,
+        #state{client = Client} = State) ->
+    Class = 'list_keys',
+    Accept = riak_core_util:job_class_enabled(Class),
+    _ = riak_core_util:report_job_request_disposition(
+            Accept, Class, ?MODULE, process, ?LINE, protobuf),
+    case Accept of
         true ->
             %% stream_list_keys results will be processed by process_stream/3
             case check_bucket_type(Type) of
                 {ok, GoodType} ->
                     Bucket = maybe_create_bucket_type(GoodType, B),
-                    {ok, ReqId} = C:stream_list_keys(Bucket, T),
-                    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+                    {ok, ReqId} = Client:stream_list_keys(Bucket, T),
+                    {reply, {stream, ReqId},
+                        State#state{req = Req, req_ctx = ReqId}};
                 error ->
-                    {error, {format, "No bucket-type named '~s'", [Type]}, State}
+                    {error,
+                        {format, "No bucket-type named '~s'", [Type]}, State}
             end;
         _ ->
-            lager:warning("Got list_keys job, but list_keys is disabled in the node config"),
-            {error, "Operation 'list_keys' is not enabled", State}
+            {error,
+                riak_core_util:job_class_disabled_message(binary, Class),
+                State}
     end.
 
 %% @doc process_stream/3 callback. Handles streaming keys messages and
