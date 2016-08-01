@@ -48,26 +48,6 @@
           max_results :: integer() | undefined
          }).
 
-%% TODO these types will be improved over the duration of the time series project
-%% -type selection()  :: term().
-%% -type filter()     :: term().
-%% -type operator()   :: term().
-%% -type sorter()     :: term().
-%% -type combinator() :: term().
-%% -type limit()      :: any().
-
-%% -record(riak_kv_li_index_v1, {
-%% 	  bucket        = <<>>  :: binary(),
-%% 	  partition_key = <<>>  :: binary(),
-%% 	  is_executable = false :: boolean(),
-%% 	  selections    = []    :: [selection()],
-%% 	  filters       = []    :: [filter()],
-%% 	  operators     = []    :: [operator()],
-%% 	  sorters       = []    :: [sorter()],
-%% 	  combinators   = []    :: [combinator()],
-%% 	  limit         = none  :: limit()
-%% 	 }).
-
 -define(KV_INDEX_Q, #riak_kv_index_v3).
 
 -endif.
