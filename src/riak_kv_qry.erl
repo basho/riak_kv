@@ -217,25 +217,25 @@ do_describe(?DDL{fields = FieldSpecs,
 %% the following two functions are identical, for the way fields and
 %% keys are represented as of 2015-12-18; duplication here is a hint
 %% of things to come.
--spec column_pk_position_or_blank(binary(), [#param_v1{}]) -> integer() | [].
+-spec column_pk_position_or_blank(binary(), [?PARAM{}]) -> integer() | [].
 column_pk_position_or_blank(Col, KSpec) ->
     count_to_position(Col, KSpec, 1).
 
--spec column_lk_position_or_blank(binary(), [#param_v1{}]) -> integer() | [].
+-spec column_lk_position_or_blank(binary(), [?PARAM{}]) -> integer() | [].
 column_lk_position_or_blank(Col, KSpec) ->
     count_to_position(Col, KSpec, 1).
 
 %% Extract the quantum column information, if it exists in the table definition
 %% and put in two additional columns
--spec columns_quantum_or_blank(Col :: binary(), PKSpec :: [#param_v1{}|#hash_fn_v1{}]) ->
+-spec columns_quantum_or_blank(Col :: binary(), PKSpec :: [?PARAM{}|#hash_fn_v1{}]) ->
       [binary() | []].
-columns_quantum_or_blank(Col, #hash_fn_v1{args = [#param_v1{name = [Col]}, Interval, Unit]}) ->
+columns_quantum_or_blank(Col, #hash_fn_v1{args = [?PARAM{name = [Col]}, Interval, Unit]}) ->
     [Interval, list_to_binary(io_lib:format("~p", [Unit]))];
 columns_quantum_or_blank(_Col, _PKSpec) ->
     [[], []].
 
 %% Find the field associated with the quantum, if there is one
--spec find_quantum_field([#param_v1{}|#hash_fn_v1{}]) -> [] | #hash_fn_v1{}.
+-spec find_quantum_field([?PARAM{}|#hash_fn_v1{}]) -> [] | #hash_fn_v1{}.
 find_quantum_field([]) ->
     [];
 find_quantum_field([Q = #hash_fn_v1{}|_]) ->
@@ -245,9 +245,9 @@ find_quantum_field([_|T]) ->
 
 count_to_position(_, [], _) ->
     [];
-count_to_position(Col, [#param_v1{name = [Col]} | _], Pos) ->
+count_to_position(Col, [?PARAM{name = [Col]} | _], Pos) ->
     Pos;
-count_to_position(Col, [#hash_fn_v1{args = [#param_v1{name = [Col]} | _]} | _], Pos) ->
+count_to_position(Col, [#hash_fn_v1{args = [?PARAM{name = [Col]} | _]} | _], Pos) ->
     Pos;
 count_to_position(Col, [_ | Rest], Pos) ->
     count_to_position(Col, Rest, Pos + 1).
