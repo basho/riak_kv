@@ -47,7 +47,23 @@
         }).
 
 -define(GROUP_BY_DEFAULT, []).
-
+-record(riak_select_v1,
+        {
+          'SELECT'              :: #riak_sel_clause_v1{},
+          'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
+          'WHERE'       = []    :: [riak_ql_ddl:filter()],
+          'ORDER BY'    = []    :: [riak_kv_qry_compiler:sorter()],
+          'LIMIT'       = []    :: [riak_kv_qry_compiler:limit()],
+          helper_mod            :: atom(),
+          %% will include groups when we get that far
+          partition_key = none  :: none | #key_v1{},
+          %% indicates whether this query has already been compiled to a sub query
+          is_executable = false :: boolean(),
+          type          = sql   :: sql | timeseries,
+          cover_context = undefined :: term(), %% for parallel queries
+          %% prolly a mistake to put this here - should be in DDL
+          local_key
+        }).
 -record(riak_select_v2,
         {
           'SELECT'              :: #riak_sel_clause_v1{},

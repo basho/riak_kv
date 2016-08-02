@@ -58,20 +58,41 @@ convert(Version, Select) when is_integer(Version) ->
 upgrade_select([_], Select) ->
     Select;
 upgrade_select([1,2 = To|Tail], Select1) ->
-    Select2 = setelement(1, Select1, riak_select_v2),
-    Select3 = erlang:append_element(Select2, ?GROUP_BY_DEFAULT),
-    upgrade_select([To|Tail], Select3).
+    Select2 = #riak_select_v2{
+        'SELECT'      = Select1#riak_select_v1.'SELECT',
+        'FROM'        = Select1#riak_select_v1.'FROM',
+        'WHERE'       = Select1#riak_select_v1.'WHERE',
+        'ORDER BY'    = Select1#riak_select_v1.'ORDER BY',
+        'LIMIT'       = Select1#riak_select_v1.'LIMIT',
+        helper_mod    = Select1#riak_select_v1.helper_mod,
+        partition_key = Select1#riak_select_v1.partition_key,
+        is_executable = Select1#riak_select_v1.is_executable,
+        type          = Select1#riak_select_v1.type,
+        cover_context = Select1#riak_select_v1.cover_context,
+        local_key     = Select1#riak_select_v1.local_key,
+        group_by      = ?GROUP_BY_DEFAULT
+    },
+    upgrade_select([To|Tail], Select2).
+
 
 %% Iterate over the versions backwards to downgrade, from 3 to 2 then 2 to 1 etc.
 downgrade_select([_], Select) ->
     Select;
 downgrade_select([2,1=To|Tail], Select1) ->
-    Select2 = setelement(1, Select1, riak_select_v1),
-    %% The group_by field might not be the default value but it is safe to
-    %% downgrade because it is not used by remote vnodes.
-    V2GroupByIndex = 13,
-    Select3 = erlang:delete_element(V2GroupByIndex, Select2),
-    downgrade_select([To|Tail], Select3).
+    Select2 = #riak_select_v1{
+        'SELECT'      = Select1#riak_select_v2.'SELECT',
+        'FROM'        = Select1#riak_select_v2.'FROM',
+        'WHERE'       = Select1#riak_select_v2.'WHERE',
+        'ORDER BY'    = Select1#riak_select_v2.'ORDER BY',
+        'LIMIT'       = Select1#riak_select_v2.'LIMIT',
+        helper_mod    = Select1#riak_select_v2.helper_mod,
+        partition_key = Select1#riak_select_v2.partition_key,
+        is_executable = Select1#riak_select_v2.is_executable,
+        type          = Select1#riak_select_v2.type,
+        cover_context = Select1#riak_select_v2.cover_context,
+        local_key     = Select1#riak_select_v2.local_key
+    },
+    downgrade_select([To|Tail], Select2).
 
 %%
 select_record_version(RecordName) ->
@@ -82,14 +103,9 @@ select_record_version(RecordName) ->
 
 %%
 -spec is_sql_select_record(tuple()) -> boolean().
-is_sql_select_record(Query) when is_tuple(Query) ->
-    case element(1,Query) of
-        riak_select_v1 -> true;
-        riak_select_v2 -> true;
-        _              -> false
-    end;
-is_sql_select_record(_) ->
-    false.
+is_sql_select_record(#riak_select_v1{ }) -> true;
+is_sql_select_record(#riak_select_v2{ }) -> true;
+is_sql_select_record(_)                  -> false.
 
 %%%
 %%% TESTS
