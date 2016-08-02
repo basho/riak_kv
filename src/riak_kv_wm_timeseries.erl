@@ -363,7 +363,7 @@ convert_field(T, F, timestamp, V) ->
 
 ensure_lk_order_and_strip(LK, FVList) ->
     %% exclude fields not in LK
-    [V || V <- [proplists:get_value(F, FVList) || #param_v1{name = F} <- LK],
+    [V || V <- [proplists:get_value(F, FVList) || ?SQL_PARAM{name = F} <- LK],
           V /= undefined].
 
 

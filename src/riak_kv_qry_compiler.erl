@@ -490,7 +490,7 @@ find_quantum_field_index_in_key2([], _) ->
     notfound;
 find_quantum_field_index_in_key2([#hash_fn_v1{ mod = riak_ql_quanta,
                                                fn = quantum,
-                                               args = [#param_v1{name = [X]}, Y, Z] }|_], Index) ->
+                                               args = [?SQL_PARAM{name = [X]}, Y, Z] }|_], Index) ->
     {X,Y,Z,Index};
 find_quantum_field_index_in_key2([_|Tail], Index) ->
     find_quantum_field_index_in_key2(Tail, Index+1).
@@ -596,14 +596,14 @@ find_quantum_fields(?DDL{ partition_key = #key_v1{ ast = PKAST } }) ->
 %%
 quantum_fn_to_field_name(#hash_fn_v1{ mod = riak_ql_quanta,
                                       fn = quantum,
-                                      args = [#param_v1{name = [Name]}|_ ] }) ->
+                                      args = [?SQL_PARAM{name = [Name]}|_ ] }) ->
     Name.
 
 check_if_timeseries(?DDL{table = T, partition_key = PK, local_key = LK0} = DDL,
                     [W]) ->
     try
         #key_v1{ast = PartitionKeyAST} = PK,
-        PartitionFields = [X || #param_v1{name = X} <- PartitionKeyAST],
+        PartitionFields = [X || ?SQL_PARAM{name = X} <- PartitionKeyAST],
         LK = LK0#key_v1{ast = lists:sublist(LK0#key_v1.ast, length(PartitionKeyAST))},
         QuantumFieldName = quantum_field_name(DDL),
         StrippedW = strip(W, []),
@@ -818,7 +818,7 @@ rewrite2([], [], _Mod, Acc) ->
 rewrite2([], _W, _Mod, _Acc) ->
     %% the rewrite should have consumed all the passed in values
     {error, {invalid_rewrite, _W}};
-rewrite2([#param_v1{name = [FieldName]} | T], Where1, Mod, Acc) ->
+rewrite2([?SQL_PARAM{name = [FieldName]} | T], Where1, Mod, Acc) ->
     Type = Mod:get_field_type([FieldName]),
     case lists:keytake(FieldName, 2, Where1) of
         false                           ->
@@ -952,12 +952,12 @@ get_ddl(SQL) ->
 
 get_standard_pk() ->
     #key_v1{ast = [
-                   #param_v1{name = [<<"location">>]},
-                   #param_v1{name = [<<"user">>]},
+                   ?SQL_PARAM{name = [<<"location">>]},
+                   ?SQL_PARAM{name = [<<"user">>]},
                    #hash_fn_v1{mod = riak_ql_quanta,
                                fn = quantum,
                                args = [
-                                       #param_v1{name = [<<"time">>]},
+                                       ?SQL_PARAM{name = [<<"time">>]},
                                        15,
                                        s
                                       ],
@@ -967,9 +967,9 @@ get_standard_pk() ->
 
 get_standard_lk() ->
     #key_v1{ast = [
-                   #param_v1{name = [<<"location">>]},
-                   #param_v1{name = [<<"user">>]},
-                   #param_v1{name = [<<"time">>]}
+                   ?SQL_PARAM{name = [<<"location">>]},
+                   ?SQL_PARAM{name = [<<"user">>]},
+                   ?SQL_PARAM{name = [<<"time">>]}
                   ]}.
 
 %%
@@ -1016,8 +1016,8 @@ simple_rewrite_test() ->
     ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
-                         #param_v1{name = [<<"geohash">>]},
-                         #param_v1{name = [<<"time">>]}
+                         ?SQL_PARAM{name = [<<"geohash">>]},
+                         ?SQL_PARAM{name = [<<"time">>]}
                         ]},
     W   = [
            {'=', <<"geohash">>, {word, "yardle"}},
@@ -1040,8 +1040,8 @@ simple_rewrite_fail_1_test() ->
     ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
-                         #param_v1{name = [<<"geohash">>]},
-                         #param_v1{name = [<<"user">>]}
+                         ?SQL_PARAM{name = [<<"geohash">>]},
+                         ?SQL_PARAM{name = [<<"user">>]}
                         ]},
     W   = [
            {'=', <<"geohash">>, {"word", "yardle"}}
@@ -1055,8 +1055,8 @@ simple_rewrite_fail_2_test() ->
     ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
-                         #param_v1{name = [<<"geohash">>]},
-                         #param_v1{name = [<<"user">>]}
+                         ?SQL_PARAM{name = [<<"geohash">>]},
+                         ?SQL_PARAM{name = [<<"user">>]}
                         ]},
     W   = [
            {'=', <<"user">>, {"word", "yardle"}}
@@ -1070,9 +1070,9 @@ simple_rewrite_fail_3_test() ->
     ?DDL{table = T} = get_standard_ddl(),
     Mod = riak_ql_ddl:make_module_name(T),
     LK  = #key_v1{ast = [
-                         #param_v1{name = [<<"geohash">>]},
-                         #param_v1{name = [<<"user">>]},
-                         #param_v1{name = [<<"temperature">>]}
+                         ?SQL_PARAM{name = [<<"geohash">>]},
+                         ?SQL_PARAM{name = [<<"user">>]},
+                         ?SQL_PARAM{name = [<<"temperature">>]}
                         ]},
     W   = [
            {'=', <<"geohash">>, {"word", "yardle"}}
