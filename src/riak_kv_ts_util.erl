@@ -80,7 +80,7 @@ build_sql_record(Command, SQL, Cover) ->
 %% Convert the proplist obtained from the QL parser
 build_sql_record_int(select, SQL, Cover) ->
     T = proplists:get_value(tables, SQL),
-    Fields = proplists:get_value(fields, SQL),
+    F = proplists:get_value(fields, SQL),
     L = proplists:get_value(limit, SQL),
     W = proplists:get_value(where, SQL),
     GroupBy = proplists:get_value(group_by, SQL),
@@ -88,7 +88,7 @@ build_sql_record_int(select, SQL, Cover) ->
         true ->
             Mod = riak_ql_ddl:make_module_name(T),
             {ok,
-             ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = Fields},
+             ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
                          'FROM'     = T,
                          'WHERE'    = convert_where_timestamps(Mod, W),
                          'LIMIT'    = L,
