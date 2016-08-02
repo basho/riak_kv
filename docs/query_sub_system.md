@@ -47,7 +47,7 @@ A query is processed through the the riak_ql lexer/parser and validation pipelin
 
 ![Query Sub System](https://raw.githubusercontent.com/basho/riak_kv/feature_gg_documents_and_architecture/docs/query_sub_system.png)
 
-The actual client connection process depends on whether or not it protobuffs or http is being used to connect.
+The actual client connection process depends on whether or not protobuffs or http is being used to connect.
 
 ---
 
@@ -93,6 +93,8 @@ The value `riak_kv.query.timeseries.max_quanta_span` in `riak.config` controls h
 The default it 5 (in practice this means 4, unless your written queries land exactly on quanta boundaries.)
 
 **Note**: this value is again derived from a 'rule of thumb' - the TS team would love to hear the results of experiments under real workloads.
+
+**Note**: it is now possible to specify TS tables that don't use a quantum function, merely composite keys. In this world a partition key is set like `PRIMARY KEY((family, series), family, series, additionalkey1, additionalkey2)`. Queries against tables like this are like queries that span a single quantum in quantised data.
 
 ---
 
