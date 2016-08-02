@@ -173,14 +173,12 @@ convert_insert_timestamps(Mod, Fields, Rows) ->
               Rows).
 
 row_timestamp_translation(Mod, Fields, Row) ->
-    %% Inserted timestamps cannot be partial, so our function to
-    %% complete incomplete datetime values will throw an error
     Types = lists:map(fun({identifier, [Column]}) ->
                               catch Mod:get_field_type([Column])
                       end, Fields),
     TypeMap = lists:zip(Row, Types),
 
-    CompleteFun = fun(_) -> throw(<<"Incomplete date/time string">>) end,
+    CompleteFun = fun(DT) -> jam:expand(DT, second) end,
     lists:map(fun({binary, String}=Value) ->
                       case lists:keyfind(Value, 1, TypeMap) of
                           {Value, timestamp} ->
@@ -814,27 +812,14 @@ check_integer_timestamps({'>', <<"b">>, Compare}, Lower, _Upper) ->
 check_integer_timestamps(_, _, _) ->
     0.
 
-bad_timestamp_insert_test() ->
-    Incomplete = "2015-06-05T10:10",
-    BadInsert = lists:flatten(
-                  io_lib:format("insert into table1 values "
-                                " (1, '2015-06-05 10:10:10', 2), "
-                                " (3, '~s', 4)", [Incomplete])),
-    {_DDL, _Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table1 ("
-        "a SINT64 NOT NULL, "
-        "b TIMESTAMP NOT NULL, "
-        "c SINT64 NOT NULL, "
-        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
-    Lexed = riak_ql_lexer:get_tokens(BadInsert),
-    {ok, Q} = riak_ql_parser:parse(Lexed),
-    ?assertEqual({error, <<"Incomplete date/time string">>},
-                 build_sql_record(insert, Q, undefined)).
-
 good_timestamp_insert_test() ->
     GoodInsert = "insert into table1 values "
-        " (1, '2015-06-05 10:10:10', 2), "
-        " (3, '2015-06-05 10:10:11', 4) ",
+        " (1, '2015', 2), "
+        " (1, '2015-06', 2), "
+        " (1, '2015-06-05', 2), "
+        " (1, '2015-06-05 10', 2), "
+        " (1, '2015-06-05 10:10:11', 2), "
+        " (1, '2015-06-05 10:10:11Z', 2) ",
     {_DDL, _Mod} = helper_compile_def_to_module(
         "CREATE TABLE table1 ("
         "a SINT64 NOT NULL, "
@@ -847,12 +832,16 @@ good_timestamp_insert_test() ->
     Values = Insert#riak_sql_insert_v1.values,
 
     %% Verify all values are now integers
-    ?assertEqual([[], []],
-                 lists:map(fun(Row) ->
-                                   lists:filter(fun({integer, _}) -> false;
-                                                   (_) -> true end,
-                                                Row)
-                           end, Values)).
+    ?assertEqual([],
+                 lists:filtermap(fun(Row) ->
+                                         case lists:filter(fun({integer, _}) -> false;
+                                                              (_) -> true end, Row) of
+                                             [] ->
+                                                 false;
+                                             _ ->
+                                                 true
+                                         end
+                                 end, Values)).
 
 timestamp_parsing_test() ->
     BadFormat = "20151T10",
