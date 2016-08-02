@@ -366,7 +366,7 @@ try_compile_ddl(DDL) ->
 make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
                                      fields = Fields}, Mod) ->
     %% 1. use elements in Key to form a complete data record:
-    KeyFields = [F || ?PARAM{name = [F]} <- LKAst],
+    KeyFields = [F || ?SQL_PARAM{name = [F]} <- LKAst],
     AllFields = [F || #riak_field_v1{name = F} <- Fields],
     Got = length(CompoundKey),
     Need = length(KeyFields),
@@ -405,7 +405,7 @@ encode_typeval_key(TypeVals) ->
 lk_to_pk(LKVals, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
                         fields = Fields}, Mod)
   when is_tuple(LKVals) andalso size(LKVals) == length(LKAst) ->
-    KeyFields = [F || ?PARAM{name = [F]} <- LKAst],
+    KeyFields = [F || ?SQL_PARAM{name = [F]} <- LKAst],
     AllFields = [F || #riak_field_v1{name = F} <- Fields],
     DummyObject = build_dummy_object_from_keyed_values(
                     lists:zip(KeyFields, tuple_to_list(LKVals)), AllFields),
@@ -638,7 +638,7 @@ extract_time_boundaries(FieldName, WhereList) ->
 identify_quantum_field(#key_v1{ast = KeyList}) ->
     HashFn = find_hash_fn(KeyList),
     P_V1 = hd(HashFn#hash_fn_v1.args),
-    hd(P_V1?PARAM.name).
+    hd(P_V1?SQL_PARAM.name).
 
 find_hash_fn([]) ->
     throw(wtf);

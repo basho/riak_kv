@@ -379,7 +379,7 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
         {ok, ReqId} ->
             ColumnInfo =
                 [Mod:get_field_type(N)
-                 || ?PARAM{name = N} <- DDL?DDL.local_key#key_v1.ast],
+                 || ?SQL_PARAM{name = N} <- DDL?DDL.local_key#key_v1.ast],
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
                                                  column_info = ColumnInfo}};
         {error, Reason} ->
