@@ -35,7 +35,7 @@
 
 %% enumerate all current SQL query types
 -type query_type() ::
-        ddl | select | describe | insert | show_tables.
+        ddl | explain | describe | insert | select | show_tables.
 %% and also their corresponding records (mainly for use in specs)
 -type sql_query_type_record() ::
         ?SQL_SELECT{} |
@@ -77,8 +77,9 @@ submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
 submit(SQL = ?SQL_SELECT{}, DDL) ->
     do_select(SQL, DDL);
 submit(#riak_sql_show_tables_v1{} = _SQL, _DDL) ->
-    do_show_tables().
-
+    do_show_tables();
+submit(#riak_sql_explain_query_v1{'EXPLAIN' = Select}, DDL) ->
+    do_explain_query(DDL, Select).
 
 %% ---------------------
 %% local functions
@@ -318,6 +319,30 @@ build_show_tables_result(Tables) ->
     Rows = [[T] || T <- Tables],
     {ok, {ColumnNames, ColumnTypes, Rows}}.
 
+%%
+%% EXPLAIN statement
+%%
+-spec do_explain_query(DDL :: ?DDL{},
+                       Select :: ?SQL_SELECT{}) ->
+                       {ok, query_tabular_result()} | {error, term()}.
+do_explain_query(DDL, Select) ->
+    ColumnNames = [
+        <<"Subquery">>,
+        <<"Range Scan Start Key">>,
+        <<"Is Start Inclusive?">>,
+        <<"Range Scan End Key">>,
+        <<"Is End Inclusive?">>,
+        <<"Filter">>],
+    ColumnTypes = [
+        integer,
+        varchar,
+        boolean,
+        varchar,
+        boolean,
+        varchar],
+    Rows = riak_kv_ts_util:explain_query(DDL, Select),
+    {ok, {ColumnNames, ColumnTypes, Rows}}.
+
 %%%===================================================================
 %%% Unit tests
 %%%===================================================================
@@ -373,6 +398,35 @@ show_tables_test() ->
     ?assertMatch(
         {ok, {[<<"Table">>], [varchar], [[<<"fafa">>], [<<"lala">>]]}},
         Res).
+
+explain_query_test() ->
+    {ddl, DDL, []} =
+        riak_ql_parser:ql_parse(
+            riak_ql_lexer:get_tokens(
+                "CREATE TABLE tab ("
+                "a SINT64 NOT NULL,"
+                "b TIMESTAMP NOT NULL,"
+                "c VARCHAR NOT NULL,"
+                "d SINT64,"
+                "e BOOLEAN,"
+                "PRIMARY KEY  ((c, QUANTUM(b, 1, 's')), c,b,a))")),
+    riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
+    SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND d=15 AND e=true",
+    {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
+    {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, undefined),
+    Res = do_explain_query(DDL, Select),
+    ExpectedRows =
+        [{1,"c = 'hola', b = 1",false,"c = 'hola', b = 1000",false,
+         "a = 319 AND d = 15 AND e = true"},
+        {2,"c = 'hola', b = 1000",false,"c = 'hola', b = 2000",false,
+            "a = 319 AND d = 15 AND e = true"}],
+    ?assertMatch(
+        {ok, {_, _, ExpectedRows}},
+        Res),
+    Res1 = submit("EXPLAIN " ++ SQL, DDL),
+    ?assertMatch(
+        {ok, {_, _, ExpectedRows}},
+        Res1).
 
 validate_make_insert_row_basic_test() ->
     Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],

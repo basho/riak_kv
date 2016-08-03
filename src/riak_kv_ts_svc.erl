@@ -159,7 +159,10 @@ process(#riak_sql_show_tables_v1{}, State) ->
     {ok, {ColNames, ColTypes, LdbNativeRows}} =
         riak_kv_qry:submit(#riak_sql_show_tables_v1{}, ?DDL{}),
     Rows = [list_to_tuple(R) || R <- LdbNativeRows],
-    {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State}.
+    {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State};
+
+process(M = #riak_sql_explain_query_v1{'EXPLAIN' = ?SQL_SELECT{'FROM' = Table}}, State) ->
+    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State).
 
 %% There is no two-tuple variants of process_stream for tslistkeysresp
 %% as TS list_keys senders always use backpressure.
