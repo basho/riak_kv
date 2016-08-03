@@ -131,7 +131,7 @@ replace_ast_timestamps(Mod, {Op, FieldName, {binary, Value}}) ->
 replace_ast_timestamps(_Mod, {Op, Item1, Item2}) ->
     {Op, Item1, Item2}.
 
-do_epoch(String, CompleteFun, Exponent) ->
+do_epoch(String, CompleteFun, PostCompleteFun, Exponent) ->
     Normal = timestamp_to_normalized(String),
     case jam:is_valid(Normal) of
         false ->
@@ -143,7 +143,7 @@ do_epoch(String, CompleteFun, Exponent) ->
                 true ->
                     jam:to_epoch(Normal, Exponent);
                 false ->
-                    jam:to_epoch(CompleteFun(Normal), Exponent)
+                    PostCompleteFun(jam:to_epoch(CompleteFun(Normal), Exponent))
             end,
     case is_atom(Epoch) of
         true ->
@@ -155,16 +155,22 @@ do_epoch(String, CompleteFun, Exponent) ->
 
 maybe_convert_to_epoch({'EXIT', _}, Value, _Op) ->
     {binary, Value};
-maybe_convert_to_epoch(timestamp, Value, '>') ->
-    %% For strictly greater than, we increment any incomplete
-    %% date/time strings by one "unit", where the unit is the least
-    %% significant value provided by the user. "2016" becomes
-    %% "2017". "2016-07-05T11" becomes "2016-07-05T12".
+maybe_convert_to_epoch(timestamp, Value, Op) when Op == '>'; Op == '<=' ->
+    %% For strictly greater-than or less-than-equal-to, we increment
+    %% any incomplete date/time strings by one "unit", where the unit
+    %% is the least significant value provided by the user. "2016"
+    %% becomes "2017". "2016-07-05T11" becomes "2016-07-05T12".
+    %%
+    %% The result is then decremented by 1ms to maintain the proper
+    %% semantics. The alternative would be to convert the operator in
+    %% the syntax tree (from > to >=, or from <= to <).
     CompleteFun = fun(DT) -> jam:expand(jam:increment(DT, 1), second) end,
-    {integer, do_epoch(Value, CompleteFun, 3)};
+    PostCompleteFun = fun(Epoch) -> Epoch - 1 end,
+    {integer, do_epoch(Value, CompleteFun, PostCompleteFun, 3)};
 maybe_convert_to_epoch(timestamp, Value, _Op) ->
     CompleteFun = fun(DT) -> jam:expand(DT, second) end,
-    {integer, do_epoch(Value, CompleteFun, 3)};
+    PostCompleteFun = fun(Epoch) -> Epoch end,
+    {integer, do_epoch(Value, CompleteFun, PostCompleteFun, 3)};
 maybe_convert_to_epoch(_Type, Value, _Op) ->
     {binary, Value}.
 
@@ -179,10 +185,12 @@ row_timestamp_translation(Mod, Fields, Row) ->
     TypeMap = lists:zip(Row, Types),
 
     CompleteFun = fun(DT) -> jam:expand(DT, second) end,
+    PostCompleteFun = fun(Epoch) -> Epoch end,
     lists:map(fun({binary, String}=Value) ->
                       case lists:keyfind(Value, 1, TypeMap) of
                           {Value, timestamp} ->
-                              {integer, do_epoch(String, CompleteFun, 3)};
+                              {integer, do_epoch(String, CompleteFun,
+                                                 PostCompleteFun, 3)};
                           _ ->
                               Value
                       end;
@@ -777,7 +785,7 @@ bad_timestamp_select_test() ->
 good_timestamp_select_test() ->
     GoodQuery = "select * from table1 "
         " where b > '20151013T18:30' and "
-        " b < '20151013T20:00:00' ",
+        " b <= '20151013T19' ",
     {_DDL, _Mod} = helper_compile_def_to_module(
         "CREATE TABLE table1 ("
         "a SINT64 NOT NULL, "
@@ -795,15 +803,18 @@ good_timestamp_select_test() ->
                  check_integer_timestamps(
                    hd(Where),
                    %% The first value, the lower bound, is
-                   %% 20151013T18:31:00 because of the
-                   %% incomplete datetime string
-                   1444761060000,
-                   1444766400000)).
+                   %% 20151013T18:31:00 (- 1ms) because of the
+                   %% incomplete datetime string. The upper bound is
+                   %% 20151013T20:00:00 (- 1ms) for the same reason.
+                   1444761059999,
+                   1444766399999)).
 
+%% This is not a general-purpose tool, it is tuned specifically to the
+%% needs of `good_timestamp_select_test'.
 check_integer_timestamps({_Op, A, B}, Lower, Upper) when is_tuple(A), is_tuple(B) ->
     check_integer_timestamps(A, Lower, Upper) +
         check_integer_timestamps(B, Lower, Upper);
-check_integer_timestamps({'<', <<"b">>, Compare}, _Lower, Upper) ->
+check_integer_timestamps({'<=', <<"b">>, Compare}, _Lower, Upper) ->
     ?assertEqual({integer, Upper}, Compare),
     1;
 check_integer_timestamps({'>', <<"b">>, Compare}, Lower, _Upper) ->
