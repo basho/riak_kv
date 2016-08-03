@@ -40,10 +40,10 @@ set_aae_throttle_test() ->
         V <- [5,6]].
 
 set_aae_throttle_limits_test() ->
-    {error, _} = ?TM:set_aae_throttle_limits([]),
-    {error, _} = ?TM:set_aae_throttle_limits([{5,7}]),
-    {error, _} = ?TM:set_aae_throttle_limits([{-1,x}]),
-    {error, _} = ?TM:set_aae_throttle_limits([{-1,0}, {x,7}]),
+    ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([])),
+    ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([{5,7}])),
+    ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([{-1,x}])),
+    ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([{-1,0}, {x,7}])),
     ok = ?TM:set_aae_throttle_limits([{-1,0}, {100, 500}, {100, 500},
                                       {100, 500}, {100, 500}, {100, 500}]).
 
@@ -60,7 +60,7 @@ side_effects_test_() ->
                                           {30, LittleWait}, {50, BigWait}])
      end,
      fun(_) ->
-             ?TM:set_aae_throttle_kill(false),
+             ?TM:enable_aae_throttle(),
              erase(inner_iters),
              meck:unload(?TM),
              ?TM:set_aae_throttle(0)
@@ -95,10 +95,10 @@ side_effects_test_() ->
              %% Put kill switch test in the middle, to try to catch
              %% problems after the switch is turned off again.
              Tests2 = [{fun(_,_,_,_,_) -> { [BadRPC_result], []} end, 0}],
-             ?TM:set_aae_throttle_kill(true),
+             ?TM:disable_aae_throttle(),
              State20 = lists:foldl(Eval, State10, Tests2),
              ok = verify_mailbox_is_empty(),
-             ?TM:set_aae_throttle_kill(false),
+             ?TM:enable_aae_throttle(),
 
              Tests3 = [{fun(_,_,_,_,_) -> {[{31,nd}], []} end, LittleWait},
                        {fun(_,_,_,_,_) -> {[{2,nd}], []} end, 0}],
