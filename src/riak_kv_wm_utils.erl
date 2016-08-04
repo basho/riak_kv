@@ -36,7 +36,7 @@
          any_to_list/1,
          any_to_bool/1,
          is_forbidden/1,
-         is_forbidden/2,
+         is_forbidden/3,
          jsonify_bucket_prop/1,
          erlify_bucket_prop/1,
          ensure_bucket_type/3,
@@ -275,19 +275,35 @@ is_forbidden(RD) ->
             end
     end.
 
--spec is_forbidden(#wm_reqdata{}, atom()) -> boolean().
+-spec is_forbidden(#wm_reqdata{}, term(), term())
+        -> {boolean(), #wm_reqdata{}, term()}.
 %% @doc Like is_forbidden/1, but also checks if the job class is enabled.
-is_forbidden(RD, JobClass) ->
+%% May modify RequestData, if we choose to include why it's forbidden.
+%% ReqContext is passed through untouched, so that the result tuple can be
+%% returned directly by WM forbidden callbacks.
+is_forbidden(ReqData, JobClass, ReqContext) ->
     % Logging for non-job criteria is performed by is_forbidden/1.
-    case is_forbidden(RD) of
+    case is_forbidden(ReqData) of
         true ->
-            true;
+            {true, ReqData, ReqContext};
         _ ->
             Accept = riak_core_util:job_class_enabled(JobClass),
             _ = riak_core_util:report_job_request_disposition(
                     Accept, JobClass, ?MODULE, is_forbidden, ?LINE,
-                    {wrq:scheme(RD), wrq:peer(RD)}),
-            not Accept
+                    {wrq:scheme(ReqData), wrq:peer(ReqData)}),
+            case Accept of
+                true ->
+                    {false, ReqData, ReqContext};
+                _ ->
+                    {true,
+                        wrq:append_to_resp_body(
+                            unicode:characters_to_binary(
+                                riak_core_util:job_class_disabled_message(
+                                    text, JobClass), utf8, utf8),
+                            wrq:set_resp_header(
+                                "Content-Type", "text/plain", ReqData)),
+                        ReqContext}
+            end
     end.
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts

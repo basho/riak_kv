@@ -81,7 +81,7 @@ encode(Message) ->
 
 %% Start map/reduce job - results will be processed in handle_info
 process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req, State) ->
-    Class = 'map_reduce',
+    Class = {riak_kv, map_reduce},
     Accept = riak_core_util:job_class_enabled(Class),
     _ = riak_core_util:report_job_request_disposition(
             Accept, Class, ?MODULE, process, ?LINE, protobuf),

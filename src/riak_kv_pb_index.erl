@@ -97,8 +97,13 @@ validate_request(#rpbindexreq{qtype=QType, key=SKey,
     end.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbindexreq{} = Req, State) ->
-    Class = 'secondary_index',
+process(#rpbindexreq{stream = S} = Req, State) ->
+    Class = case S of
+        true ->
+            {riak_kv, stream_secondary_index};
+        _ ->
+            {riak_kv, secondary_index}
+    end,
     Accept = riak_core_util:job_class_enabled(Class),
     _ = riak_core_util:report_job_request_disposition(
             Accept, Class, ?MODULE, process, ?LINE, protobuf),

@@ -128,25 +128,43 @@ is_authorized(ReqData, Ctx) ->
                     "instead.">>, ReqData), Ctx}
     end.
 
-forbidden(RD, Ctx = #ctx{security=undefined}) ->
-    {riak_kv_wm_utils:is_forbidden(RD, secondary_index), RD, Ctx};
-forbidden(RD, Ctx) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
-        true ->
-            {true, RD, Ctx};
+-spec forbidden(#wm_reqdata{}, context())
+        -> {boolean(), #wm_reqdata{}, context()}.
+forbidden(ReqDataIn, #ctx{security = undefined} = Context) ->
+    Class = request_class(ReqDataIn),
+    riak_kv_wm_utils:is_forbidden(ReqDataIn, Class, Context);
+forbidden(ReqDataIn, #ctx{bucket_type = BT, security = Sec} = Context) ->
+    Class = request_class(ReqDataIn),
+    {Answer, ReqData, _} = Result =
+        riak_kv_wm_utils:is_forbidden(ReqDataIn, Class, Context),
+    case Answer of
         false ->
-            Bucket = list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, wrq:path_info(bucket, RD))),
-            Res = riak_core_security:check_permission({"riak_kv.index",
-                                                       {Ctx#ctx.bucket_type,
-                                                        Bucket}},
-                                                      Ctx#ctx.security),
-            case Res of
+            Bucket = erlang:list_to_binary(
+                riak_kv_wm_utils:maybe_decode_uri(
+                    ReqData, wrq:path_info(bucket, ReqData))),
+            case riak_core_security:check_permission(
+                    {"riak_kv.index", BT, Bucket}, Sec) of
                 {false, Error, _} ->
-                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
-                    {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
+                    {true,
+                        wrq:append_to_resp_body(
+                            unicode:characters_to_binary(Error, utf8, utf8),
+                            wrq:set_resp_header(
+                                "Content-Type", "text/plain", ReqData)),
+                        Context};
                 {true, _} ->
-                    {false, RD, Ctx}
-            end
+                    {false, ReqData, Context}
+            end;
+        _ ->
+            Result
+    end.
+
+-spec request_class(#wm_reqdata{}) -> term().
+request_class(ReqData) ->
+    case wrq:get_qs_value(?Q_STREAM, ?Q_FALSE, ReqData) of
+        ?Q_TRUE ->
+            {riak_kv, stream_secondary_index};
+        _ ->
+            {riak_kv, secondary_index}
     end.
 
 -spec malformed_request(#wm_reqdata{}, context()) ->

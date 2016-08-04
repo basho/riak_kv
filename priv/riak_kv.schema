@@ -651,31 +651,57 @@ end
 ]}.
 
 %% @doc Whether to allow list buckets.
-%% @see async.enable.list_keys
-{mapping, "async.enable.list_buckets", "riak_core.job_accept_class", [
+{mapping, "cluster.job.riak_kv.list_buckets", "riak_core.job_accept_class", [
     merge,
-    {datatype, flag},
-    {default, on}
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
+]}.
+
+%% @doc Whether to allow streaming list buckets.
+{mapping, "cluster.job.riak_kv.stream_list_buckets", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
 ]}.
 
 %% @doc Whether to allow list keys.
-%% @see async.enable.list_buckets
-{mapping, "async.enable.list_keys", "riak_core.job_accept_class", [
+{mapping, "cluster.job.riak_kv.list_keys", "riak_core.job_accept_class", [
     merge,
-    {datatype, flag},
-    {default, on}
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
 ]}.
 
-%% @doc Whether to allow 2i queries.
-{mapping, "async.enable.secondary_index", "riak_core.job_accept_class", [
+%% @doc Whether to allow streaming list keys.
+{mapping, "cluster.job.riak_kv.stream_list_keys", "riak_core.job_accept_class", [
     merge,
-    {datatype, flag},
-    {default, on}
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
 ]}.
 
-%% @doc Whether to allow MapReduce queries.
-{mapping, "async.enable.map_reduce", "riak_core.job_accept_class", [
+%% @doc Whether to allow secondary index queries.
+{mapping, "cluster.job.riak_kv.secondary_index", "riak_core.job_accept_class", [
     merge,
-    {datatype, flag},
-    {default, on}
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
+]}.
+
+%% @doc Whether to allow streaming secondary index queries.
+{mapping, "cluster.job.riak_kv.stream_secondary_index", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
+]}.
+
+%% @doc Whether to allow term-based map-reduce.
+{mapping, "cluster.job.riak_kv.map_reduce", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
+]}.
+
+%% @doc Whether to allow JavaScript map-reduce.
+{mapping, "cluster.job.riak_kv.map_reduce_js", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
 ]}.

@@ -95,7 +95,12 @@ encode(Message) ->
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpblistbucketsreq{type = Type, timeout = T, stream = S} = Req, State) ->
-    Class = 'list_buckets',
+    Class = case S of
+        true ->
+            {riak_kv, stream_list_buckets};
+        _ ->
+            {riak_kv, list_buckets}
+    end,
     Accept = riak_core_util:job_class_enabled(Class),
     _ = riak_core_util:report_job_request_disposition(
             Accept, Class, ?MODULE, process, ?LINE, protobuf),
@@ -119,9 +124,10 @@ process(rpblistbucketsreq, State) ->
     process(#rpblistbucketsreq{}, State);
 
 %% Start streaming in list keys
-process(#rpblistkeysreq{type = Type, bucket = B,timeout = T} = Req,
+process(#rpblistkeysreq{type = Type, bucket = B, timeout = T} = Req,
         #state{client = Client} = State) ->
-    Class = 'list_keys',
+    % at present list-keys always streams
+    Class = {riak_kv, stream_list_keys},
     Accept = riak_core_util:job_class_enabled(Class),
     _ = riak_core_util:report_job_request_disposition(
             Accept, Class, ?MODULE, process, ?LINE, protobuf),

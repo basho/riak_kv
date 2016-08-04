@@ -24,10 +24,14 @@
 -compile(export_all).
 
 -define(DEFAULT_ENABLED_JOB_CLASSES, [
-    list_buckets,
-    list_keys,
-    secondary_index,
-    map_reduce
+    {riak_kv, list_buckets},
+    {riak_kv, list_keys},
+    {riak_kv, map_reduce_js},
+    {riak_kv, map_reduce},
+    {riak_kv, secondary_index},
+    {riak_kv, stream_list_buckets},
+    {riak_kv, stream_list_keys},
+    {riak_kv, stream_secondary_index}
 ]).
 
 %% basic schema test will check to make sure that all defaults from the schema
