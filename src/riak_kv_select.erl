@@ -29,35 +29,60 @@
 
 -include("riak_kv_ts.hrl").
 
+-type select_rec_version() :: v2 | v1.
+-export_type([select_rec_version/0]).
+
 %% Return the version as an integer that the select record is currently using.
--spec current_version() -> integer().
+-spec current_version() -> select_rec_version().
 current_version() ->
     select_record_version(?SQL_SELECT_RECORD_NAME).
 
 %% Return the first version that was declared for the select record.
--spec first_version() -> integer().
+-spec first_version() -> select_rec_version().
 first_version() ->
-    1.
+    v1.
 
 %% Convert a select record to a different version.
--spec convert(integer(), Select1::tuple()) -> Select2::tuple().
-convert(Version, Select) when is_integer(Version) ->
+-spec convert(select_rec_version(), Select1::tuple()) -> Select2::tuple().
+convert(Version, Select) when is_atom(Version) ->
     CurrentVersion = select_record_version(element(1, Select)),
-    if
-        Version == CurrentVersion ->
+    case is_greater(Version, CurrentVersion) of
+        equal ->
             Select;
-        Version > CurrentVersion ->
-            VersionSteps = lists:seq(CurrentVersion, Version),
+        true  ->
+            VersionSteps = sublist_elements(CurrentVersion, Version, [v1,v2]),
             upgrade_select(VersionSteps, Select);
-        Version < CurrentVersion ->
-            VersionSteps = lists:seq(CurrentVersion, Version, -1),
+        false ->
+            VersionSteps = sublist_elements(CurrentVersion, Version, [v2,v1]),
             downgrade_select(VersionSteps, Select)
     end.
+
+%% Return a sublist within a list when only the start and end elements within
+%% the list are known, not the index.
+sublist_elements(_, _, []) ->
+    [];
+sublist_elements(From, To, [From|Tail]) ->
+    [From|sublist_elements_inner(To, Tail)];
+sublist_elements(From, To, [_|Tail]) ->
+    sublist_elements(From, To, Tail).
+
+%%
+sublist_elements_inner(_, []) ->
+    [];
+sublist_elements_inner(To, [To|_]) ->
+    [To];
+sublist_elements_inner(To, [Other|    Tail]) ->
+    [Other|sublist_elements_inner(To, Tail)].
+
+%%
+is_greater(V, V)  -> equal;
+is_greater(v1,v2) -> false;
+is_greater(v2,v1) -> true.
 
 %% Iterate over the versions and upgrade the record, from 1 to 2, 2 to 3 etc.
 upgrade_select([_], Select) ->
     Select;
-upgrade_select([1,2 = To|Tail], Select1) ->
+upgrade_select([v1,v2 = To|Tail], Select1) ->
     Select2 = #riak_select_v2{
         'SELECT'      = Select1#riak_select_v1.'SELECT',
         'FROM'        = Select1#riak_select_v1.'FROM',
@@ -78,7 +103,7 @@ upgrade_select([1,2 = To|Tail], Select1) ->
 %% Iterate over the versions backwards to downgrade, from 3 to 2 then 2 to 1 etc.
 downgrade_select([_], Select) ->
     Select;
-downgrade_select([2,1=To|Tail], Select1) ->
+downgrade_select([v2,v1=To|Tail], Select1) ->
     Select2 = #riak_select_v1{
         'SELECT'      = Select1#riak_select_v2.'SELECT',
         'FROM'        = Select1#riak_select_v2.'FROM',
@@ -97,8 +122,8 @@ downgrade_select([2,1=To|Tail], Select1) ->
 %%
 select_record_version(RecordName) ->
     case RecordName of
-        riak_select_v1 -> 1;
-        riak_select_v2 -> 2
+        riak_select_v1 -> v1;
+        riak_select_v2 -> v2
     end.
 
 %%
@@ -125,27 +150,39 @@ new_select_v2() ->
 upgrade_select_1_2_test() ->
     ?assertEqual(
         new_select_v2(),
-        convert(2, new_select_v1())
+        convert(v2, new_select_v1())
     ).
 
 downgrade_select_2_1_test() ->
     ?assertEqual(
         new_select_v1(),
-        convert(1, new_select_v2())
+        convert(v1, new_select_v2())
     ).
 
 convert_when_equal_1_1_test() ->
     Select = setelement(2,new_select_v1(),oko),
     ?assertEqual(
         Select,
-        convert(1, Select)
+        convert(v1, Select)
     ).
 
 convert_when_equal_2_2_test() ->
     Select = setelement(2,new_select_v2(),oko),
     ?assertEqual(
         Select,
-        convert(2, Select)
+        convert(v2, Select)
+    ).
+
+sublist_elements_1_test() ->
+    ?assertEqual(
+        [b,c,d],
+        sublist_elements(b,d,[a,b,c,d,e])
+    ).
+
+sublist_elements_2_test() ->
+    ?assertEqual(
+        [a,b],
+        sublist_elements(a,b,[a,b,c,d,e])
     ).
 
 -endif.
