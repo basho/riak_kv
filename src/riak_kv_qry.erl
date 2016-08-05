@@ -420,10 +420,10 @@ explain_query_test() ->
     {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, undefined),
     Res = do_explain_query(DDL, Select),
     ExpectedRows =
-        [{1,"c = 'hola', b = 1",false,"c = 'hola', b = 1000",false,
-         "a = 319 AND d = 15 AND e = true"},
-        {2,"c = 'hola', b = 1000",false,"c = 'hola', b = 2000",false,
-            "a = 319 AND d = 15 AND e = true"}],
+        [[1,"c = 'hola', b = 1",false,"c = 'hola', b = 1000",false,
+         "a = 319 AND d = 15 AND e = true"],
+         [2,"c = 'hola', b = 1000",false,"c = 'hola', b = 2000",false,
+            "a = 319 AND d = 15 AND e = true"]],
     ?assertMatch(
         {ok, {_, _, ExpectedRows}},
         Res),
