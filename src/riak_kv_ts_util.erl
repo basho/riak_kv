@@ -133,7 +133,7 @@ replace_ast_timestamps(Mod, {Op, FieldName, {binary, Value}}) ->
 replace_ast_timestamps(_Mod, {Op, Item1, Item2}) ->
     {Op, Item1, Item2}.
 
-do_epoch(String, CompleteFun, Exponent) ->
+do_epoch(String, CompleteFun, PostCompleteFun, Exponent) ->
     Normal = timestamp_to_normalized(String),
     case jam:is_valid(Normal) of
         false ->
@@ -145,7 +145,7 @@ do_epoch(String, CompleteFun, Exponent) ->
                 true ->
                     jam:to_epoch(Normal, Exponent);
                 false ->
-                    jam:to_epoch(CompleteFun(Normal), Exponent)
+                    PostCompleteFun(jam:to_epoch(CompleteFun(Normal), Exponent))
             end,
     case is_atom(Epoch) of
         true ->
@@ -157,16 +157,22 @@ do_epoch(String, CompleteFun, Exponent) ->
 
 maybe_convert_to_epoch({'EXIT', _}, Value, _Op) ->
     {binary, Value};
-maybe_convert_to_epoch(timestamp, Value, '>') ->
-    %% For strictly greater than, we increment any incomplete
-    %% date/time strings by one "unit", where the unit is the least
-    %% significant value provided by the user. "2016" becomes
-    %% "2017". "2016-07-05T11" becomes "2016-07-05T12".
+maybe_convert_to_epoch(timestamp, Value, Op) when Op == '>'; Op == '<=' ->
+    %% For strictly greater-than or less-than-equal-to, we increment
+    %% any incomplete date/time strings by one "unit", where the unit
+    %% is the least significant value provided by the user. "2016"
+    %% becomes "2017". "2016-07-05T11" becomes "2016-07-05T12".
+    %%
+    %% The result is then decremented by 1ms to maintain the proper
+    %% semantics. The alternative would be to convert the operator in
+    %% the syntax tree (from > to >=, or from <= to <).
     CompleteFun = fun(DT) -> jam:expand(jam:increment(DT, 1), second) end,
-    {integer, do_epoch(Value, CompleteFun, 3)};
+    PostCompleteFun = fun(Epoch) -> Epoch - 1 end,
+    {integer, do_epoch(Value, CompleteFun, PostCompleteFun, 3)};
 maybe_convert_to_epoch(timestamp, Value, _Op) ->
     CompleteFun = fun(DT) -> jam:expand(DT, second) end,
-    {integer, do_epoch(Value, CompleteFun, 3)};
+    PostCompleteFun = fun(Epoch) -> Epoch end,
+    {integer, do_epoch(Value, CompleteFun, PostCompleteFun, 3)};
 maybe_convert_to_epoch(_Type, Value, _Op) ->
     {binary, Value}.
 
@@ -175,18 +181,18 @@ convert_insert_timestamps(Mod, Fields, Rows) ->
               Rows).
 
 row_timestamp_translation(Mod, Fields, Row) ->
-    %% Inserted timestamps cannot be partial, so our function to
-    %% complete incomplete datetime values will throw an error
     Types = lists:map(fun({identifier, [Column]}) ->
                               catch Mod:get_field_type([Column])
                       end, Fields),
     TypeMap = lists:zip(Row, Types),
 
-    CompleteFun = fun(_) -> throw(<<"Incomplete date/time string">>) end,
+    CompleteFun = fun(DT) -> jam:expand(DT, second) end,
+    PostCompleteFun = fun(Epoch) -> Epoch end,
     lists:map(fun({binary, String}=Value) ->
                       case lists:keyfind(Value, 1, TypeMap) of
                           {Value, timestamp} ->
-                              {integer, do_epoch(String, CompleteFun, 3)};
+                              {integer, do_epoch(String, CompleteFun,
+                                                 PostCompleteFun, 3)};
                           _ ->
                               Value
                       end;
@@ -368,7 +374,7 @@ try_compile_ddl(DDL) ->
 make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
                                      fields = Fields}, Mod) ->
     %% 1. use elements in Key to form a complete data record:
-    KeyFields = [F || #param_v1{name = [F]} <- LKAst],
+    KeyFields = [F || ?SQL_PARAM{name = [F]} <- LKAst],
     AllFields = [F || #riak_field_v1{name = F} <- Fields],
     Got = length(CompoundKey),
     Need = length(KeyFields),
@@ -407,7 +413,7 @@ encode_typeval_key(TypeVals) ->
 lk_to_pk(LKVals, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
                         fields = Fields}, Mod)
   when is_tuple(LKVals) andalso size(LKVals) == length(LKAst) ->
-    KeyFields = [F || #param_v1{name = [F]} <- LKAst],
+    KeyFields = [F || ?SQL_PARAM{name = [F]} <- LKAst],
     AllFields = [F || #riak_field_v1{name = F} <- Fields],
     DummyObject = build_dummy_object_from_keyed_values(
                     lists:zip(KeyFields, tuple_to_list(LKVals)), AllFields),
@@ -640,7 +646,7 @@ extract_time_boundaries(FieldName, WhereList) ->
 identify_quantum_field(#key_v1{ast = KeyList}) ->
     HashFn = find_hash_fn(KeyList),
     P_V1 = hd(HashFn#hash_fn_v1.args),
-    hd(P_V1#param_v1.name).
+    hd(P_V1?SQL_PARAM.name).
 
 find_hash_fn([]) ->
     throw(wtf);
@@ -781,7 +787,7 @@ bad_timestamp_select_test() ->
 good_timestamp_select_test() ->
     GoodQuery = "select * from table1 "
         " where b > '20151013T18:30' and "
-        " b < '20151013T20:00:00' ",
+        " b <= '20151013T19' ",
     {_DDL, _Mod} = helper_compile_def_to_module(
         "CREATE TABLE table1 ("
         "a SINT64 NOT NULL, "
@@ -799,15 +805,18 @@ good_timestamp_select_test() ->
                  check_integer_timestamps(
                    hd(Where),
                    %% The first value, the lower bound, is
-                   %% 20151013T18:31:00 because of the
-                   %% incomplete datetime string
-                   1444761060000,
-                   1444766400000)).
+                   %% 20151013T18:31:00 (- 1ms) because of the
+                   %% incomplete datetime string. The upper bound is
+                   %% 20151013T20:00:00 (- 1ms) for the same reason.
+                   1444761059999,
+                   1444766399999)).
 
+%% This is not a general-purpose tool, it is tuned specifically to the
+%% needs of `good_timestamp_select_test'.
 check_integer_timestamps({_Op, A, B}, Lower, Upper) when is_tuple(A), is_tuple(B) ->
     check_integer_timestamps(A, Lower, Upper) +
         check_integer_timestamps(B, Lower, Upper);
-check_integer_timestamps({'<', <<"b">>, Compare}, _Lower, Upper) ->
+check_integer_timestamps({'<=', <<"b">>, Compare}, _Lower, Upper) ->
     ?assertEqual({integer, Upper}, Compare),
     1;
 check_integer_timestamps({'>', <<"b">>, Compare}, Lower, _Upper) ->
@@ -816,27 +825,14 @@ check_integer_timestamps({'>', <<"b">>, Compare}, Lower, _Upper) ->
 check_integer_timestamps(_, _, _) ->
     0.
 
-bad_timestamp_insert_test() ->
-    Incomplete = "2015-06-05T10:10",
-    BadInsert = lists:flatten(
-                  io_lib:format("insert into table1 values "
-                                " (1, '2015-06-05 10:10:10', 2), "
-                                " (3, '~s', 4)", [Incomplete])),
-    {_DDL, _Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table1 ("
-        "a SINT64 NOT NULL, "
-        "b TIMESTAMP NOT NULL, "
-        "c SINT64 NOT NULL, "
-        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
-    Lexed = riak_ql_lexer:get_tokens(BadInsert),
-    {ok, Q} = riak_ql_parser:parse(Lexed),
-    ?assertEqual({error, <<"Incomplete date/time string">>},
-                 build_sql_record(insert, Q, undefined)).
-
 good_timestamp_insert_test() ->
     GoodInsert = "insert into table1 values "
-        " (1, '2015-06-05 10:10:10', 2), "
-        " (3, '2015-06-05 10:10:11', 4) ",
+        " (1, '2015', 2), "
+        " (1, '2015-06', 2), "
+        " (1, '2015-06-05', 2), "
+        " (1, '2015-06-05 10', 2), "
+        " (1, '2015-06-05 10:10:11', 2), "
+        " (1, '2015-06-05 10:10:11Z', 2) ",
     {_DDL, _Mod} = helper_compile_def_to_module(
         "CREATE TABLE table1 ("
         "a SINT64 NOT NULL, "
@@ -849,12 +845,16 @@ good_timestamp_insert_test() ->
     Values = Insert#riak_sql_insert_v1.values,
 
     %% Verify all values are now integers
-    ?assertEqual([[], []],
-                 lists:map(fun(Row) ->
-                                   lists:filter(fun({integer, _}) -> false;
-                                                   (_) -> true end,
-                                                Row)
-                           end, Values)).
+    ?assertEqual([],
+                 lists:filtermap(fun(Row) ->
+                                         case lists:filter(fun({integer, _}) -> false;
+                                                              (_) -> true end, Row) of
+                                             [] ->
+                                                 false;
+                                             _ ->
+                                                 true
+                                         end
+                                 end, Values)).
 
 timestamp_parsing_test() ->
     BadFormat = "20151T10",

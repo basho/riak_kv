@@ -684,16 +684,36 @@ end
 %% This setting is DEPRECATED use riak_kv.query.timeseries.timeout instead
 {mapping, "timeseries_query_timeout_ms", "riak_kv.timeseries_query_timeout_ms", [
   {commented, 10000},
-  {datatype, integer},
-  hidden
+  {datatype, integer}
 ]}.
 
 %% @doc Timeout for Time Series queries, after which riak
 %% will return a timeout error - default is 10,000 miliseconds
 {mapping, "riak_kv.query.timeseries.timeout", "riak_kv.timeseries_query_timeout_ms", [
-  {default, "10000ms"},
+  {default, "10s"},
   {datatype, {duration, ms}}
 ]}.
+
+{translation,
+  "riak_kv.timeseries_query_timeout_ms",
+  fun(Conf) ->
+    New = cuttlefish:conf_get("riak_kv.query.timeseries.timeout", Conf, undefined),
+    Old = cuttlefish:conf_get("timeseries_query_timeout_ms", Conf, undefined),
+    case Old of
+      undefined ->
+        case New of
+          undefined -> 10000;
+          New -> New
+        end;
+      Old ->
+        cuttlefish_error:print("timeseries_query_timeout_ms in riak.conf is deprecated"),
+        case New of
+          undefined -> Old;
+          New -> New
+        end
+    end
+  end
+}.
 
 %% @see riak_kv.query.timeseries.max_quanta_span
 %% @doc Maximum number of quanta that a query can span. Larger quanta spans
@@ -704,8 +724,7 @@ end
 {mapping, "timeseries_query_max_quanta_span", "riak_kv.timeseries_query_max_quanta_span", [
   {commented, 5},
   {datatype, integer},
-  {validators, ["validate_max_quanta_span"]},
-  hidden
+  {validators, ["validate_max_quanta_span"]}
 ]}.
 
 %% @doc Maximum number of quanta that a query can span. Larger quanta spans
@@ -725,6 +744,27 @@ end
      (_) -> false
   end}.
 
+{translation,
+  "riak_kv.timeseries_query_max_quanta_span",
+  fun(Conf) ->
+    New = cuttlefish:conf_get("riak_kv.query.timeseries.max_quanta_span", Conf, undefined),
+    Old = cuttlefish:conf_get("timeseries_query_max_quanta_span", Conf, undefined),
+    case Old of
+      undefined ->
+        case New of
+          undefined -> 5;
+          New -> New
+        end;
+      Old ->
+        cuttlefish_error:print("timeseries_query_max_quanta_span in riak.conf is deprecated"),
+        case New of
+          undefined -> Old;
+          New -> New
+        end
+    end
+  end
+}.
+
 %% @see riak_kv.query.timeseries.max_concurrent_queries
 %% @doc The number of individual queries that can run at any one time.
 %% This is the number per node in the cluster so the total number of
@@ -733,8 +773,7 @@ end
 {mapping, "timeseries_max_concurrent_queries", "riak_kv.timeseries_max_concurrent_queries", [
   {commented, 3},
   {datatype, integer},
-  {validators, ["validate_max_concurrent_queries"]},
-  hidden
+  {validators, ["validate_max_concurrent_queries"]}
 ]}.
 
 %% @doc The number of individual queries that can run at any one time.
@@ -752,3 +791,25 @@ end
   fun(Value) when is_integer(Value) andalso Value > 1 andalso Value =< 1000 -> true;
      (_) -> false
   end}.
+
+{translation,
+  "riak_kv.timeseries_max_concurrent_queries",
+  fun(Conf) ->
+    New = cuttlefish:conf_get("riak_kv.query.timeseries.max_concurrent_queries", Conf, undefined),
+    Old = cuttlefish:conf_get("timeseries_max_concurrent_queries", Conf, undefined),
+    case Old of
+      undefined ->
+        case New of
+          undefined -> 3;
+          New -> New
+        end;
+      Old ->
+        cuttlefish_error:print("timeseries_max_concurrent_queries in riak.conf is deprecated"),
+        case New of
+          undefined -> Old;
+          New -> New
+        end
+    end
+  end
+}.
+

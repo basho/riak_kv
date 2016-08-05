@@ -123,7 +123,7 @@ local_key(Mod) ->
 ddl_local_key(?DDL{local_key = #key_v1{ast = Ast}}) ->
     [ param_name(P) || P <- Ast].
 
-param_name(#param_v1{name=[Name]}) ->
+param_name(?SQL_PARAM{name=[Name]}) ->
     Name.
 
 local_key_fields_and_types(Mod) ->
