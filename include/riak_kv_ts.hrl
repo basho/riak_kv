@@ -102,4 +102,9 @@
             'SHOW_TABLES' = <<>>  :: binary()
         }).
 
+-record(riak_sql_explain_query_v1,
+        {
+            'EXPLAIN' = ?SQL_SELECT{} :: ?SQL_SELECT{}
+        }).
+
 -endif.

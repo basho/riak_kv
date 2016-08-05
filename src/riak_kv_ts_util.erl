@@ -28,6 +28,7 @@
          apply_timeseries_bucket_props/3,
          build_sql_record/3,
          encode_typeval_key/1,
+         explain_query/1, explain_query/2,
          get_column_types/2,
          get_table_ddl/1,
          lk/1,
@@ -36,14 +37,12 @@
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
+         row_to_key/3,
          sql_record_to_tuple/1,
          sql_to_cover/6,
          table_to_bucket/1,
-         validate_rows/2,
-         row_to_key/3
+         validate_rows/2
         ]).
--export([explain_query/1, explain_query/2]).
--export([explain_query_print/1]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -98,6 +97,12 @@ build_sql_record_int(select, SQL, Cover) ->
             };
         false ->
             {error, <<"Must provide exactly one table name">>}
+    end;
+build_sql_record_int(explain, SQL, Cover) ->
+    case build_sql_record_int(select, SQL, Cover) of
+        {ok, Select} ->
+            {ok, #riak_sql_explain_query_v1{'EXPLAIN' = Select }};
+        Error -> Error
     end;
 build_sql_record_int(describe, SQL, _Cover) ->
     D = proplists:get_value(identifier, SQL),
@@ -251,8 +256,10 @@ queried_table(?DDL{table = Table}) -> Table;
 queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
 queried_table(?SQL_SELECT{'FROM' = Table})               -> Table;
 queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table;
-queried_table(#riak_sql_show_tables_v1{})                -> <<>>.
-
+queried_table(#riak_sql_show_tables_v1{})                -> <<>>;
+queried_table(
+    #riak_sql_explain_query_v1{'EXPLAIN'=?SQL_SELECT{'FROM' = Table}}) ->
+        Table.
 
 -spec get_table_ddl(binary()) ->
                            {ok, module(), ?DDL{}} |
@@ -420,18 +427,6 @@ lk_to_pk(LKVals, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
     encode_typeval_key(
       riak_ql_ddl:get_partition_key(DDL, DummyObject, Mod)).
 
-
-%% Print the query explanation to the shell.
-explain_query_print(QueryString) ->
-    explain_query_print2(1, explain_query(QueryString)).
-
-explain_query_print2(_, []) ->
-    ok;
-explain_query_print2(Index, [{Start, End, Filter}|Tail]) ->
-    io:format("SUB QUERY ~p~n~s ~s~n~s~n",
-        [Index,Start,filter_to_string(Filter),End]),
-    explain_query_print2(Index+1, Tail).
-
 %% Show some debug info about how a query is compiled into sub queries
 %% and what key ranges are created.
 explain_query(QueryString) ->
@@ -445,11 +440,21 @@ explain_query(QueryString) ->
 %%
 %% Have a flexible API because it is a debugging function.
 explain_query(DDL, ?SQL_SELECT{} = Select) ->
-    {ok, SubQueries} = riak_kv_qry_compiler:compile(DDL, Select, 10000),
-    [explain_sub_query(SQ) || SQ <- SubQueries];
+    case riak_kv_qry_compiler:compile(DDL, Select, 10000) of
+        {ok, SubQueries} ->
+            {_Total, Rows} = lists:foldl(fun index_subquery/2, {1,[]}, SubQueries),
+            lists:reverse(Rows);
+        Error ->
+            Error
+    end;
 explain_query(DDL, QueryString) ->
     {ok, Select} = explain_compile_query(QueryString),
     explain_query(DDL, Select).
+
+%%
+index_subquery(SQ, {Idx, Acc}) ->
+    Row = explain_sub_query(Idx, SQ),
+    {Idx + 1, [Row | Acc]}.
 
 %%
 explain_compile_query(QueryString) ->
@@ -457,48 +462,45 @@ explain_compile_query(QueryString) ->
     build_sql_record(select, Q, undefined).
 
 %%
-explain_sub_query(?SQL_SELECT{ 'WHERE' = SubQueryWhere }) ->
+explain_sub_query(Index, ?SQL_SELECT{ 'WHERE' = SubQueryWhere }) ->
     {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
     {_, EndKey1} = lists:keyfind(endkey, 1, SubQueryWhere),
     {_, Filter} = lists:keyfind(filter, 1, SubQueryWhere),
-    explain_query_keys(StartKey1, EndKey1, Filter).
+    StartKey2 = string:join([key_to_string(Key) || Key <- StartKey1], ", "),
+    EndKey2 = string:join([key_to_string(Key) || Key <- EndKey1], ", "),
+    StartInclusive = lists:keymember(start_inclusive, 1, StartKey1),
+    EndInclusive = lists:keymember(end_inclusive, 1, EndKey1),
+    [Index, StartKey2, StartInclusive, EndKey2, EndInclusive, filter_to_string(Filter)].
 
 %%
-explain_query_keys(StartKey1, EndKey1, Filter) ->
-    StartKey2 = [[key_element_to_string(V), $/] || {_,_,V} <- StartKey1],
-    EndKey2 = [[key_element_to_string(V), $/] || {_,_,V} <- EndKey1],
-    case lists:keyfind(start_inclusive, 1, StartKey1) of
-        {start_inclusive,true} ->
-            StartKey3 = [">= ", StartKey2];
-        _ ->
-            StartKey3 = [">  ", StartKey2]
-    end,
-    case lists:keyfind(end_inclusive, 1, EndKey1) of
-        {end_inclusive,true} ->
-            EndKey3 = ["<= ", EndKey2];
-        _ ->
-            EndKey3 = ["<  ", EndKey2]
-    end,
-    {StartKey3, EndKey3, Filter}.
-
-%%
-key_element_to_string(V) when is_binary(V) -> varchar_quotes(V);
+key_element_to_string(V) when is_binary(V) -> binary_to_list(V);
 key_element_to_string(V) when is_float(V) -> mochinum:digits(V);
-key_element_to_string(V) -> io_lib:format("~p", [V]).
+key_element_to_string(V) -> lists:flatten(io_lib:format("~p", [V])).
 
 %%
+%% This one quotes values which should be quoted for assignment
+element_to_quoted_string(V) when is_binary(V) -> varchar_quotes(V);
+element_to_quoted_string(V) when is_float(V) -> mochinum:digits(V);
+element_to_quoted_string(V) -> lists:flatten(io_lib:format("~p", [V])).
+
+%%
+-spec key_to_string({binary(),any(),term()}) -> string().
+key_to_string({Field, _Op, Value}) ->
+    lists:flatten(io_lib:format("~s = ~s",
+        [key_element_to_string(Field), element_to_quoted_string(Value)])).
+
+%%
+-spec filter_to_string([]| {const,any()} | {atom(),any(),any()}) ->
+    string().
 filter_to_string([]) ->
-    "NO FILTER";
-filter_to_string(Filter) ->
-    ["FILTER ", filter_to_string2(Filter)].
-
-%%
-filter_to_string2({const,V}) ->
+    [];
+filter_to_string({const,V}) ->
+    element_to_quoted_string(V);
+filter_to_string({field,V,_}) ->
     key_element_to_string(V);
-filter_to_string2({field,V,_}) ->
-    V;
-filter_to_string2({Op, A, B}) ->
-    [filter_to_string2(A), op_to_string(Op), filter_to_string2(B)].
+filter_to_string({Op, A, B}) ->
+    lists:flatten(io_lib:format("(~s~s~s)",
+        [filter_to_string(A), op_to_string(Op), filter_to_string(B)])).
 
 %%
 op_to_string(and_) -> " AND ";
@@ -506,8 +508,8 @@ op_to_string(or_) -> " OR ";
 op_to_string(Op) -> " " ++ atom_to_list(Op) ++ " ".
 
 %%
-varchar_quotes(V) ->
-    <<"'", V/binary, "'">>.
+varchar_quotes(V) when is_binary(V) ->
+    lists:flatten(io_lib:format("'~s'", [V])).
 
 %% Give validate_rows/2 a DDL Module and a list of decoded rows,
 %% and it will return a list of invalid rows indexes.
