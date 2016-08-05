@@ -206,13 +206,16 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
     ZQueries = lists:zip(Indices, SubQueries),
     %% all subqueries have the same select clause
     ?SQL_SELECT{'SELECT' = Sel} = Qry1,
-    #riak_sel_clause_v1{initial_state = InitialState1} = Sel,
-    InitialState2 =
+    #riak_sel_clause_v1{initial_state = InitialState} = Sel,
+    %% The initial state from the query compiler is used as a template for each
+    %% new group row. Group by is a special case because the select is
+    %% a typical aggregate, but we need a dict to store it for each group.
+    InitialResult =
         case sql_select_calc_type(Qry1) of
             group_by ->
-                {group_by, InitialState1, dict:new()};
+                {group_by, InitialState, dict:new()};
             _ ->
-                InitialState1
+                InitialState
         end,
     SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
     ok = RunSubQs(SubQs),
@@ -220,7 +223,7 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
                      receiver_pid = ReceiverPid,
                      qry          = Qry1,
                      sub_qrys     = Indices,
-                     result       = InitialState2 }}.
+                     result       = InitialResult }}.
 
 %%
 add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
