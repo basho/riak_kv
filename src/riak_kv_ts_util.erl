@@ -499,7 +499,7 @@ filter_to_string({const,V}) ->
 filter_to_string({field,V,_}) ->
     key_element_to_string(V);
 filter_to_string({Op, A, B}) ->
-    lists:flatten(io_lib:format("~s~s~s",
+    lists:flatten(io_lib:format("(~s~s~s)",
         [filter_to_string(A), op_to_string(Op), filter_to_string(B)])).
 
 %%

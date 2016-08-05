@@ -413,17 +413,18 @@ explain_query_test() ->
                 "c VARCHAR NOT NULL,"
                 "d SINT64,"
                 "e BOOLEAN,"
+                "f VARCHAR,"
                 "PRIMARY KEY  ((c, QUANTUM(b, 1, 's')), c,b,a))")),
     riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
-    SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND d=15 AND e=true",
+    SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND f='adios'))",
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
     {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, undefined),
     Res = do_explain_query(DDL, Select),
     ExpectedRows =
         [[1,"c = 'hola', b = 1",false,"c = 'hola', b = 1000",false,
-         "a = 319 AND d = 15 AND e = true"],
+            "(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))"],
          [2,"c = 'hola', b = 1000",false,"c = 'hola', b = 2000",false,
-            "a = 319 AND d = 15 AND e = true"]],
+            "(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))"]],
     ?assertMatch(
         {ok, {_, _, ExpectedRows}},
         Res),
