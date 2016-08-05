@@ -340,8 +340,12 @@ do_explain_query(DDL, Select) ->
         varchar,
         boolean,
         varchar],
-    Rows = riak_kv_ts_util:explain_query(DDL, Select),
-    {ok, {ColumnNames, ColumnTypes, Rows}}.
+    case riak_kv_ts_util:explain_query(DDL, Select) of
+        {error, Error} ->
+            {error, Error};
+        Rows ->
+            {ok, {ColumnNames, ColumnTypes, Rows}}
+    end.
 
 %%%===================================================================
 %%% Unit tests

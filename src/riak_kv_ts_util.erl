@@ -440,9 +440,13 @@ explain_query(QueryString) ->
 %%
 %% Have a flexible API because it is a debugging function.
 explain_query(DDL, ?SQL_SELECT{} = Select) ->
-    {ok, SubQueries} = riak_kv_qry_compiler:compile(DDL, Select, 10000),
-    {_Total, Rows} = lists:foldl(fun index_subquery/2, {1,[]}, SubQueries),
-    lists:reverse(Rows);
+    case riak_kv_qry_compiler:compile(DDL, Select, 10000) of
+        {ok, SubQueries} ->
+            {_Total, Rows} = lists:foldl(fun index_subquery/2, {1,[]}, SubQueries),
+            lists:reverse(Rows);
+        Error ->
+            Error
+    end;
 explain_query(DDL, QueryString) ->
     {ok, Select} = explain_compile_query(QueryString),
     explain_query(DDL, Select).
