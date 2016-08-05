@@ -104,7 +104,7 @@
 
 -record(riak_sql_explain_query_v1,
         {
-            'EXPLAIN' = #riak_select_v1{} :: #riak_select_v1{}
+            'EXPLAIN' = ?SQL_SELECT{} :: ?SQL_SELECT{}
         }).
 
 -endif.
