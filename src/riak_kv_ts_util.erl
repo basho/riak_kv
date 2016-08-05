@@ -83,6 +83,7 @@ build_sql_record_int(select, SQL, Cover) ->
     F = proplists:get_value(fields, SQL),
     L = proplists:get_value(limit, SQL),
     W = proplists:get_value(where, SQL),
+    GroupBy = proplists:get_value(group_by, SQL),
     case is_binary(T) of
         true ->
             Mod = riak_ql_ddl:make_module_name(T),
@@ -91,8 +92,9 @@ build_sql_record_int(select, SQL, Cover) ->
                          'FROM'     = T,
                          'WHERE'    = convert_where_timestamps(Mod, W),
                          'LIMIT'    = L,
-                         helper_mod = riak_ql_ddl:make_module_name(T),
-                         cover_context = Cover}
+                         helper_mod = Mod,
+                         cover_context = Cover,
+                         group_by = GroupBy }
             };
         false ->
             {error, <<"Must provide exactly one table name">>}
@@ -455,7 +457,7 @@ explain_compile_query(QueryString) ->
     build_sql_record(select, Q, undefined).
 
 %%
-explain_sub_query(#riak_select_v1{ 'WHERE' = SubQueryWhere }) ->
+explain_sub_query(?SQL_SELECT{ 'WHERE' = SubQueryWhere }) ->
     {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
     {_, EndKey1} = lists:keyfind(endkey, 1, SubQueryWhere),
     {_, Filter} = lists:keyfind(filter, 1, SubQueryWhere),

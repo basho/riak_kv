@@ -58,18 +58,29 @@
     {ok, [?SQL_SELECT{}]} | {error, any()}.
 compile(?DDL{}, ?SQL_SELECT{is_executable = true}, _MaxSubQueries) ->
     {error, 'query is already compiled'};
-compile(?DDL{} = DDL,
-        ?SQL_SELECT{is_executable = false, 'SELECT' = Sel} = Q, MaxSubQueries) ->
-    if Sel#riak_sel_clause_v1.clause == [] ->
-            {error, 'full table scan not implemented'};
-        el/=se ->
-            case compile_select_clause(DDL, Q) of
-                {ok, S} ->
-                    compile_where_clause(DDL, Q?SQL_SELECT{'SELECT' = S}, MaxSubQueries);
-                {error, _} = Error ->
-                    Error
-            end
+compile(?DDL{ table = T} = DDL,
+        ?SQL_SELECT{is_executable = false} = Q1, MaxSubQueries) ->
+    Mod = riak_ql_ddl:make_module_name(T),
+    case maybe_compile_group_by(Mod, compile_select_clause(DDL, Q1), Q1) of
+        {ok, Q2} ->
+            compile_where_clause(DDL, Q2, MaxSubQueries);
+        {error, _} = Error ->
+            Error
     end.
+
+%%
+maybe_compile_group_by(_, {error,_} = E, _) ->
+    E;
+maybe_compile_group_by(Mod, {ok, Sel3}, ?SQL_SELECT{ group_by = GroupBy } = Q1) ->
+    compile_group_by(Mod, GroupBy, [], Q1?SQL_SELECT{ 'SELECT' = Sel3 }).
+
+%%
+compile_group_by(_, [], Acc, Q) ->
+    {ok, Q?SQL_SELECT{ group_by = lists:reverse(Acc) }};
+compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
+        when is_binary(FieldName) ->
+    Pos = Mod:get_field_position([FieldName]),
+    compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q).
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -108,8 +119,9 @@ expand_query(?DDL{local_key = LK, partition_key = PK},
 
 %% Calulate the final result for an aggregate.
 -spec finalise_aggregate(#riak_sel_clause_v1{}, [any()]) -> [any()].
-finalise_aggregate(#riak_sel_clause_v1{ calc_type = aggregate,
-                                        finalisers = FinaliserFns }, Row) ->
+finalise_aggregate(#riak_sel_clause_v1{ calc_type = CalcType,
+                                        finalisers = FinaliserFns }, Row)
+                    when CalcType == aggregate; CalcType == group_by ->
     finalise_aggregate2(FinaliserFns, Row, Row).
 
 %%
@@ -170,27 +182,33 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
     %% whole query
     Acc = {sets:new(), #riak_sel_clause_v1{ }},
     %% iterate from the right so we can append to the head of lists
-    {ResultTypeSet, Q2} = lists:foldl(CompileColFn, Acc, Sel),
+    {ResultTypeSet, Sel1} = lists:foldl(CompileColFn, Acc, Sel),
 
     {ColTypes, Errors} = my_mapfoldl(
         fun(ColASTX, Errors) ->
             infer_col_type(DDL, ColASTX, Errors)
         end, [], Sel),
 
-    case sets:is_element(aggregate, ResultTypeSet) of
-        true  ->
-            Q3 = Q2#riak_sel_clause_v1{
+    IsGroupBy = (Q?SQL_SELECT.group_by /= []),
+    IsAggregate = sets:is_element(aggregate, ResultTypeSet),
+    if
+        IsGroupBy ->
+            Sel2 = Sel1#riak_sel_clause_v1{
+                   calc_type = group_by,
+                   col_names = get_col_names(DDL, Q) };
+        IsAggregate ->
+            Sel2 = Sel1#riak_sel_clause_v1{
                    calc_type = aggregate,
                    col_names = get_col_names(DDL, Q) };
-        false ->
-            Q3 = Q2#riak_sel_clause_v1{
+        not IsAggregate ->
+            Sel2 = Sel1#riak_sel_clause_v1{
                    calc_type = rows,
                    initial_state = [],
                    col_names = get_col_names(DDL, Q) }
     end,
     case Errors of
       [] ->
-          {ok, Q3#riak_sel_clause_v1{
+          {ok, Sel2#riak_sel_clause_v1{
               col_names = get_col_names(DDL, Q),
               col_return_types = lists:flatten(ColTypes) }};
       [_|_] ->
@@ -1911,7 +1929,7 @@ sum_sum_finalise_test() ->
       ).
 
 extract_stateful_function_1_test() ->
-    {ok, #riak_select_v1{ 'SELECT' = #riak_sel_clause_v1{ clause = [Select] } }} =
+    {ok, ?SQL_SELECT{ 'SELECT' = #riak_sel_clause_v1{ clause = [Select] } }} =
         get_query(
         "SELECT COUNT(col1) + COUNT(col2) FROM mytab "
         "WHERE myfamily = 'familyX' "
@@ -2098,7 +2116,7 @@ flexible_keys_1_test() ->
         [{startkey,[{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1}]},
           {endkey, [{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1000}]},
           {filter,[]}],
-        Select#riak_select_v1.'WHERE'
+        Select?SQL_SELECT.'WHERE'
     ).
 
 %% two element key with quantum
@@ -2110,7 +2128,7 @@ flexible_keys_2_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM tab4 WHERE a > 0 AND a < 1000"),
     ?assertMatch(
-        {ok, [#riak_select_v1{}]},
+        {ok, [?SQL_SELECT{}]},
         compile(DDL, Q, 100)
     ).
 
@@ -2146,7 +2164,7 @@ no_quantum_in_query_1_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM tab1 WHERE a = 1 AND b = 1"),
     ?assertMatch(
-        {ok, [#riak_select_v1{
+        {ok, [?SQL_SELECT{
             'WHERE' =
                 [{startkey,[{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
                  {endkey,  [{<<"a">>,timestamp,1},{<<"b">>,varchar,1}]},
@@ -2174,7 +2192,7 @@ no_quantum_in_query_2_test() ->
          {endkey, Key},
          {filter,[]},
          {end_inclusive,true}],
-        Select#riak_select_v1.'WHERE'
+        Select?SQL_SELECT.'WHERE'
     ).
 
 
@@ -2196,7 +2214,7 @@ no_quantum_in_query_3_test() ->
          {endkey, Key},
          {filter,{'=',{field,<<"d">>,boolean},{const, true}}},
          {end_inclusive,true}],
-        Select#riak_select_v1.'WHERE'
+        Select?SQL_SELECT.'WHERE'
     ).
 
 %% one element key
@@ -2213,7 +2231,7 @@ no_quantum_in_query_4_test() ->
           {endkey,[{<<"a">>,timestamp,1000}]},
           {filter,[]},
           {end_inclusive,true}],
-        Select#riak_select_v1.'WHERE'
+        Select?SQL_SELECT.'WHERE'
     ).
 
 two_element_key_range_cannot_match_test() ->
@@ -2227,6 +2245,50 @@ two_element_key_range_cannot_match_test() ->
     ?assertMatch(
         {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, <<_/binary>>}},
         compile(DDL, Q, 100)
+    ).
+
+group_by_one_field_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE mytab("
+        "a TIMESTAMP NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a,b), a,b))"),
+    {ok, Q1} = get_query(
+        "SELECT b FROM tab1 "
+        "WHERE a = 1 AND b = 2 GROUP BY b"),
+    {ok, [Q2]} = compile(DDL, Q1, 100),
+    ?assertEqual(
+        [{2,<<"b">>}],
+        Q2?SQL_SELECT.group_by
+    ).
+
+group_by_two_fields_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE mytab("
+        "a TIMESTAMP NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a,b), a,b))"),
+    {ok, Q1} = get_query(
+        "SELECT b FROM tab1 "
+        "WHERE a = 1 AND b = 2 GROUP BY b, a"),
+    {ok, [Q2]} = compile(DDL, Q1, 100),
+    ?assertEqual(
+        [{2,<<"b">>},{1,<<"a">>}],
+        Q2?SQL_SELECT.group_by
+    ).
+
+group_by_column_not_in_the_table_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE mytab("
+        "a TIMESTAMP NOT NULL, "
+        "b TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((a,b), a,b))"),
+    {ok, Q1} = get_query(
+        "SELECT x FROM tab1 "
+        "WHERE a = 1 AND b = 2 GROUP BY x"),
+    ?assertError(
+        {unknown_column,{<<"x">>,[<<"a">>,<<"b">>]}},
+        compile(DDL, Q1, 100)
     ).
 
 negate_an_aggregation_function_test() ->

@@ -483,11 +483,10 @@ build_list({_K, _V}=KV, Acc) ->
 
 range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                                               ref=Ref}) ->
-    {_, Bucket, Qry} = proplists:lookup(index, Opts),
+    {_, Bucket, Qry1} = proplists:lookup(index, Opts),
+    Qry2 = riak_kv_select:convert(riak_kv_select:current_version(), Qry1),
     ?SQL_SELECT{'WHERE'    = W,
-                helper_mod = _Mod,
-                local_key  =  #key_v1{ast = LKAST},
-                partition_key = #key_v1{ast = _PKAST}} = Qry,
+                local_key  =  #key_v1{ast = LKAST}} = Qry2,
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
     LocalKeyLen = length(LKAST),

@@ -212,6 +212,11 @@ start(_Type, _StartArgs) ->
                                            riak_ql_ddl_compiler:get_compiler_capabilities(),
                                            lists:last(riak_ql_ddl_compiler:get_compiler_capabilities())),
 
+            riak_core_capability:register({riak_kv, sql_select_version},
+                                          [v2,v1],
+                                          riak_kv_select:first_version(),
+                                          riak_kv_select:first_version()),
+
             riak_kv_ts_newtype:recompile_ddl(riak_ql_ddl_compiler:get_compiler_version()),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
