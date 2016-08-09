@@ -144,7 +144,7 @@ forbidden(ReqDataIn,
     case Answer of
         false ->
             case riak_core_security:check_permission(
-                    {"riak_kv.list_keys", BT, B}, Sec) of
+                    {"riak_kv.list_keys", {BT, B}}, Sec) of
                 {false, Error, _} ->
                     {true,
                         wrq:append_to_resp_body(

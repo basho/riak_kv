@@ -143,7 +143,7 @@ forbidden(ReqDataIn, #ctx{bucket_type = BT, security = Sec} = Context) ->
                 riak_kv_wm_utils:maybe_decode_uri(
                     ReqData, wrq:path_info(bucket, ReqData))),
             case riak_core_security:check_permission(
-                    {"riak_kv.index", BT, Bucket}, Sec) of
+                    {"riak_kv.index", {BT, Bucket}}, Sec) of
                 {false, Error, _} ->
                     {true,
                         wrq:append_to_resp_body(

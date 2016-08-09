@@ -84,7 +84,7 @@ security_forbidden('POST', Body,
         {ok, ParsedInputs, ParsedQuery, _Timeout} ->
             Perms = riak_kv_mapred_term:get_required_permissions(
                 ParsedInputs, ParsedQuery),
-            case riak_core_security:check_permission(Perms, Sec) of
+            case riak_core_security:check_permissions(Perms, Sec) of
                 {false, Error, _} ->
                     {true,
                         wrq:append_to_resp_body(
