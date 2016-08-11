@@ -41,7 +41,8 @@
          sql_record_to_tuple/1,
          sql_to_cover/6,
          table_to_bucket/1,
-         validate_rows/2
+         validate_rows/2,
+         varchar_to_timestamp/1
         ]).
 
 -ifdef(TEST).
@@ -98,15 +99,18 @@ build_sql_record_int(select, SQL, Cover) ->
         false ->
             {error, <<"Must provide exactly one table name">>}
     end;
+
 build_sql_record_int(explain, SQL, Cover) ->
     case build_sql_record_int(select, SQL, Cover) of
         {ok, Select} ->
             {ok, #riak_sql_explain_query_v1{'EXPLAIN' = Select }};
         Error -> Error
     end;
+
 build_sql_record_int(describe, SQL, _Cover) ->
     D = proplists:get_value(identifier, SQL),
     {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
+
 build_sql_record_int(insert, SQL, _Cover) ->
     T = proplists:get_value(table, SQL),
     case is_binary(T) of
@@ -115,9 +119,18 @@ build_sql_record_int(insert, SQL, _Cover) ->
             %% If columns are not specified, all columns are implied
             F = riak_ql_ddl:insert_sql_columns(Mod, proplists:get_value(fields, SQL, [])),
             V = proplists:get_value(values, SQL),
+            %% In order to convert timestamps given as strings, rather
+            %% than doing this here, we pass V (Values) as is and
+            %% relegate the timestamp conversion to
+            %% riak_kv_qry:do_insert. The conversion will take place
+            %% after checking for too many values wrt the number of
+            %% Fields. Otherwise, this check would need to be done
+            %% twice as the timestamp conversion code needs to have
+            %% the Types available (and check that length(Types) ==
+            %% length(Values)).
             {ok, #riak_sql_insert_v1{'INSERT'   = T,
                                      fields     = F,
-                                     values     = convert_insert_timestamps(Mod, F, V),
+                                     values     = V,
                                      helper_mod = Mod
                                     }};
         false ->
@@ -181,29 +194,6 @@ maybe_convert_to_epoch(timestamp, Value, _Op) ->
 maybe_convert_to_epoch(_Type, Value, _Op) ->
     {binary, Value}.
 
-convert_insert_timestamps(Mod, Fields, Rows) ->
-    lists:map(fun(Row) -> row_timestamp_translation(Mod, Fields, Row) end,
-              Rows).
-
-row_timestamp_translation(Mod, Fields, Row) ->
-    Types = lists:map(fun({identifier, [Column]}) ->
-                              catch Mod:get_field_type([Column])
-                      end, Fields),
-    TypeMap = lists:zip(Row, Types),
-
-    CompleteFun = fun(DT) -> jam:expand(DT, second) end,
-    PostCompleteFun = fun(Epoch) -> Epoch end,
-    lists:map(fun({binary, String}=Value) ->
-                      case lists:keyfind(Value, 1, TypeMap) of
-                          {Value, timestamp} ->
-                              {integer, do_epoch(String, CompleteFun,
-                                                 PostCompleteFun, 3)};
-                          _ ->
-                              Value
-                      end;
-                 (Value) ->
-                      Value
-              end, Row).
 
 get_default_timezone(Default) ->
     try
@@ -231,6 +221,12 @@ timestamp_to_normalized(Str) ->
         _ ->
             Normal
     end.
+
+varchar_to_timestamp(String) ->
+    CompleteFun = fun(DT) -> jam:expand(DT, second) end,
+    PostCompleteFun = fun(Epoch) -> Epoch end,
+    do_epoch(String, CompleteFun, PostCompleteFun, 3).
+
 
 %% Useful key extractors for functions (e.g., in get or delete code
 %% paths) which are agnostic to whether they are dealing with TS or
@@ -826,37 +822,6 @@ check_integer_timestamps({'>', <<"b">>, Compare}, Lower, _Upper) ->
     1;
 check_integer_timestamps(_, _, _) ->
     0.
-
-good_timestamp_insert_test() ->
-    GoodInsert = "insert into table1 values "
-        " (1, '2015', 2), "
-        " (1, '2015-06', 2), "
-        " (1, '2015-06-05', 2), "
-        " (1, '2015-06-05 10', 2), "
-        " (1, '2015-06-05 10:10:11', 2), "
-        " (1, '2015-06-05 10:10:11Z', 2) ",
-    {_DDL, _Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table1 ("
-        "a SINT64 NOT NULL, "
-        "b TIMESTAMP NOT NULL, "
-        "c SINT64 NOT NULL, "
-        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
-    Lexed = riak_ql_lexer:get_tokens(GoodInsert),
-    {ok, Q} = riak_ql_parser:parse(Lexed),
-    {ok, Insert} = build_sql_record(insert, Q, undefined),
-    Values = Insert#riak_sql_insert_v1.values,
-
-    %% Verify all values are now integers
-    ?assertEqual([],
-                 lists:filtermap(fun(Row) ->
-                                         case lists:filter(fun({integer, _}) -> false;
-                                                              (_) -> true end, Row) of
-                                             [] ->
-                                                 false;
-                                             _ ->
-                                                 true
-                                         end
-                                 end, Values)).
 
 timestamp_parsing_test() ->
     BadFormat = "20151T10",
