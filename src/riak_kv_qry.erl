@@ -79,7 +79,7 @@ submit(SQL = ?SQL_SELECT{}, DDL) ->
 submit(#riak_sql_show_tables_v1{} = _SQL, _DDL) ->
     do_show_tables();
 submit(#riak_sql_explain_query_v1{'EXPLAIN' = Select}, DDL) ->
-    do_explain_query(DDL, Select).
+    do_explain(DDL, Select).
 
 %% ---------------------
 %% local functions
@@ -322,10 +322,10 @@ build_show_tables_result(Tables) ->
 %%
 %% EXPLAIN statement
 %%
--spec do_explain_query(DDL :: ?DDL{},
-                       Select :: ?SQL_SELECT{}) ->
-                       {ok, query_tabular_result()} | {error, term()}.
-do_explain_query(DDL, Select) ->
+-spec do_explain(DDL :: ?DDL{},
+                 Select :: ?SQL_SELECT{}) ->
+                        {ok, query_tabular_result()} | {error, term()}.
+do_explain(DDL, Select) ->
     ColumnNames = [
         <<"Subquery">>,
         <<"Range Scan Start Key">>,
@@ -419,7 +419,7 @@ explain_query_test() ->
     SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND f='adios'))",
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
     {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, undefined),
-    Res = do_explain_query(DDL, Select),
+    Res = do_explain(DDL, Select),
     ExpectedRows =
         [[1,"c = 'hola', b = 1",false,"c = 'hola', b = 1000",false,
             "(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))"],
