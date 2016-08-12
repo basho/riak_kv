@@ -486,7 +486,7 @@ format_coverage(Table, CoverKey, NVal) ->
         fun({{Key, Node}, _}) ->
             Exponent = trunc(math:log(RingSize)/math:log(2)),
             Number = Key bsr (160-Exponent),
-            lists:flatten(io_lib:format("~s:~b", [Node, Number]))
+            lists:flatten(io_lib:format("~s/~b", [Node, Number]))
         end, Coverage),
     string:join(VNodes, ", ").
 
