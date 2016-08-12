@@ -488,7 +488,7 @@ format_coverage(Table, CoverKey, NVal) ->
             Number = Key bsr (160-Exponent),
             lists:flatten(io_lib:format("~s/~b", [Node, Number]))
         end, Coverage),
-    string:join(VNodes, ", ").
+    string:join(lists:sort(VNodes), ", ").
 
 %%
 key_element_to_string(V) when is_binary(V) -> binary_to_list(V);
