@@ -214,7 +214,6 @@ start(_Type, _StartArgs) ->
 
             riak_core_capability:register({riak_kv, sql_select_version},
                                           [v2,v1],
-                                          riak_kv_select:first_version(),
                                           riak_kv_select:first_version()),
 
             riak_kv_ts_newtype:recompile_ddl(riak_ql_ddl_compiler:get_compiler_version()),
