@@ -349,6 +349,7 @@ build_show_tables_result(Tables) ->
 do_explain(DDL, Select) ->
     ColumnNames = [
         <<"Subquery">>,
+        <<"Coverage Plan">>,
         <<"Range Scan Start Key">>,
         <<"Is Start Inclusive?">>,
         <<"Range Scan End Key">>,
@@ -356,6 +357,7 @@ do_explain(DDL, Select) ->
         <<"Filter">>],
     ColumnTypes = [
         integer,
+        varchar,
         varchar,
         boolean,
         varchar,
@@ -440,11 +442,36 @@ explain_query_test() ->
     SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND f='adios'))",
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
     {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, undefined),
+    meck:new(riak_client),
+    meck:new(riak_core_apl),
+    meck:new(riak_core_bucket),
+    meck:new(riak_core_claimant),
+    meck:expect(riak_client, ring_size, fun() -> 8 end),
+    meck:expect(riak_core_claimant, get_bucket_type, fun(_, _) -> [{n_val, 3}] end),
+    meck:expect(riak_core_bucket, get_bucket, fun(_) -> [{chash_keyfun,{riak_core_util,chash_std_keyfun}}] end),
+    meck:expect(riak_core_apl, get_primary_apl,
+        fun(_, 3, riak_kv) ->
+            [{{35195593916248939066258330623111144003363405826,
+                'dev1@127.0.0.1'},
+                primary},
+             {{274031556999544297163190906134303066185487351809,
+                'dev1@127.0.0.1'},
+                primary},
+             {{296867520082839655260123481645494988367611297792,
+                'dev1@127.0.0.1'},
+                primary}]
+        end),
+    ?assert(meck:validate(riak_client)),
+    ?assert(meck:validate(riak_core_apl)),
+    ?assert(meck:validate(riak_core_bucket)),
+    ?assert(meck:validate(riak_core_claimant)),
     Res = do_explain(DDL, Select),
     ExpectedRows =
-        [[1,"c = 'hola', b = 1",false,"c = 'hola', b = 1000",false,
+        [[1,"dev1@127.0.0.1:0, dev1@127.0.0.1:1, dev1@127.0.0.1:1",
+            "c = 'hola', b = 1",false,"c = 'hola', b = 1000",false,
             "(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))"],
-         [2,"c = 'hola', b = 1000",false,"c = 'hola', b = 2000",false,
+        [2,"dev1@127.0.0.1:0, dev1@127.0.0.1:1, dev1@127.0.0.1:1",
+            "c = 'hola', b = 1000",false,"c = 'hola', b = 2000",false,
             "(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))"]],
     ?assertMatch(
         {ok, {_, _, ExpectedRows}},
@@ -452,7 +479,11 @@ explain_query_test() ->
     Res1 = submit("EXPLAIN " ++ SQL, DDL),
     ?assertMatch(
         {ok, {_, _, ExpectedRows}},
-        Res1).
+        Res1),
+    meck:unload(riak_client),
+    meck:unload(riak_core_apl),
+    meck:unload(riak_core_bucket),
+    meck:unload(riak_core_claimant).
 
 validate_make_insert_row_basic_test() ->
     Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],

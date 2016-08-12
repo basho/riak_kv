@@ -47,6 +47,7 @@
 -export([ensemble/1]).
 -export([get_cover/3, get_cover/4, get_cover/5, replace_cover/6, replace_cover/7]).
 -export([vnode_target/1]).
+-export([ring_size/0]).
 
 -include_lib("riak_core/include/riak_core_vnode.hrl").
 
