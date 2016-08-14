@@ -23,10 +23,11 @@
 -module(riak_kv_qry_coverage_plan).
 
 -export([
+         cover_to_proplist/1,
          create_plan/5,
          create_plan/6,
-         replace_chunk/7,
-         cover_to_proplist/1
+         make_key/3,
+         replace_chunk/7
         ]).
 
 -include("riak_kv_ts.hrl").

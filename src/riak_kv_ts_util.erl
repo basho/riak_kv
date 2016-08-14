@@ -435,10 +435,18 @@ explain_query(QueryString) ->
 %% string.
 %%
 %% Have a flexible API because it is a debugging function.
-explain_query(DDL, ?SQL_SELECT{} = Select) ->
+explain_query(DDL, ?SQL_SELECT{'FROM' = Table} = Select) ->
+    Props = riak_core_bucket_type:get(Table),
+    NVal = proplists:get_value(n_val, Props),
     case riak_kv_qry_compiler:compile(DDL, Select, 10000) of
         {ok, SubQueries} ->
-            {_Total, Rows} = lists:foldl(fun index_subquery/2, {1,[]}, SubQueries),
+            {_Total, Rows} =
+                lists:foldl(
+                    fun(SQ, {Idx, Acc}) ->
+                        Row = explain_sub_query(Idx, NVal, SQ),
+                        {Idx + 1, [Row | Acc]}
+                    end,
+                    {1,[]}, SubQueries),
             lists:reverse(Rows);
         Error ->
             Error
@@ -448,17 +456,17 @@ explain_query(DDL, QueryString) ->
     explain_query(DDL, Select).
 
 %%
-index_subquery(SQ, {Idx, Acc}) ->
-    Row = explain_sub_query(Idx, SQ),
-    {Idx + 1, [Row | Acc]}.
-
-%%
 explain_compile_query(QueryString) ->
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(QueryString)),
     build_sql_record(select, Q, undefined).
 
 %%
-explain_sub_query(Index, ?SQL_SELECT{ 'WHERE' = SubQueryWhere }) ->
+explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
+                                           'WHERE' = SubQueryWhere,
+                                           helper_mod = HelperMod,
+                                           partition_key = PartitionKey}) ->
+    CoverKey = riak_kv_qry_coverage_plan:make_key(HelperMod, PartitionKey, SubQueryWhere),
+    Coverage = format_coverage(Table, CoverKey, NVal),
     {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
     {_, EndKey1} = lists:keyfind(endkey, 1, SubQueryWhere),
     {_, Filter} = lists:keyfind(filter, 1, SubQueryWhere),
@@ -466,7 +474,21 @@ explain_sub_query(Index, ?SQL_SELECT{ 'WHERE' = SubQueryWhere }) ->
     EndKey2 = string:join([key_to_string(Key) || Key <- EndKey1], ", "),
     StartInclusive = lists:keymember(start_inclusive, 1, StartKey1),
     EndInclusive = lists:keymember(end_inclusive, 1, EndKey1),
-    [Index, StartKey2, StartInclusive, EndKey2, EndInclusive, filter_to_string(Filter)].
+    [Index, Coverage, StartKey2, StartInclusive, EndKey2, EndInclusive, filter_to_string(Filter)].
+
+%%
+format_coverage(Table, CoverKey, NVal) ->
+    Bucket = table_to_bucket(Table),
+    DocIdx = riak_core_util:chash_key({Bucket, CoverKey}),
+    Coverage = riak_core_apl:get_primary_apl(DocIdx, NVal, riak_kv),
+    RingSize = riak_client:ring_size(),
+    VNodes = lists:map(
+        fun({{Key, Node}, _}) ->
+            Exponent = trunc(math:log(RingSize)/math:log(2)),
+            Number = Key bsr (160-Exponent),
+            lists:flatten(io_lib:format("~s/~b", [Node, Number]))
+        end, Coverage),
+    string:join(lists:sort(VNodes), ", ").
 
 %%
 key_element_to_string(V) when is_binary(V) -> binary_to_list(V);
