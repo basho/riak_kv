@@ -467,10 +467,10 @@ explain_query_test() ->
     ?assert(meck:validate(riak_core_claimant)),
     Res = do_explain(DDL, Select),
     ExpectedRows =
-        [[1,"dev1@127.0.0.1:0, dev1@127.0.0.1:1, dev1@127.0.0.1:1",
+        [[1,"dev1@127.0.0.1/0, dev1@127.0.0.1/1, dev1@127.0.0.1/1",
             "c = 'hola', b = 1",false,"c = 'hola', b = 1000",false,
             "(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))"],
-        [2,"dev1@127.0.0.1:0, dev1@127.0.0.1:1, dev1@127.0.0.1:1",
+        [2,"dev1@127.0.0.1/0, dev1@127.0.0.1/1, dev1@127.0.0.1/1",
             "c = 'hola', b = 1000",false,"c = 'hola', b = 2000",false,
             "(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))"]],
     ?assertMatch(
