@@ -293,7 +293,7 @@ num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
 maybe_log_old_vclock(Results) ->
     case application:get_env(riak_kv, object_hash_version) of
         undefined ->
-            case [RObj || {_I, {ok, RObj}} <- Results] of
+            case [RObj || {_Idx, {ok, RObj}} <- Results] of
                 [] ->
                     ok;
                 [_|[]] ->
