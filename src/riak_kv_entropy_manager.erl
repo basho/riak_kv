@@ -35,7 +35,7 @@
          get_lock/2,
          release_lock/1,
          requeue_poke/1,
-         start_exchange_remote/3,
+         start_exchange_remote/4,
          exchange_status/4,
          expire_trees/0,
          clear_trees/0]).
@@ -117,15 +117,16 @@ release_lock(Pid) ->
 %%      then forwarded to the relevant index_hashtree to acquire a tree lock.
 %%      If both locks are acquired, the pid of the remote index_hashtree is
 %%      returned.
--spec start_exchange_remote({index(), node()}, index_n(), pid())
+-spec start_exchange_remote({index(), node()}, index_n(), pid(), non_neg_integer())
                            -> {remote_exchange, pid()} |
                               {remote_exchange, anti_entropy_disabled} |
                               {remote_exchange, max_concurrency} |
                               {remote_exchange, not_built} |
-                              {remote_exchange, already_locked}.
-start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid) ->
+                              {remote_exchange, already_locked} |
+                              {remote_exchange, bad_version}.
+start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid, Version) ->
     gen_server:call({?MODULE, Node},
-                    {start_exchange_remote, FsmPid, Index, IndexN},
+                    {start_exchange_remote, FsmPid, Index, IndexN, Version},
                     infinity).
 
 %% @doc Used by {@link riak_kv_index_hashtree} to requeue a poke on
@@ -267,7 +268,7 @@ handle_call(disable, _From, State) ->
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
-handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
+handle_call({start_exchange_remote, FsmPid, Index, IndexN, Version}, From, State) ->
     case {enabled(),
           orddict:find(Index, State#state.trees)} of
         {false, _} ->
@@ -279,7 +280,7 @@ handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
                 {ok, State2} ->
                     %% Concurrency lock acquired, now forward to index_hashtree
                     %% to acquire tree lock.
-                    riak_kv_index_hashtree:start_exchange_remote(FsmPid, From, IndexN, Tree),
+                    riak_kv_index_hashtree:start_exchange_remote(FsmPid, Version, From, IndexN, Tree),
                     {noreply, State2};
                 {Reply, State2} ->
                     {reply, {remote_exchange, Reply}, State2}

@@ -623,12 +623,26 @@ get_value(Object=#r_object{}) ->
     [{_M,Value}] = get_contents(Object),
     Value.
 
-%% @doc calculates the hash of a riak object
--spec hash(riak_object()) -> integer().
+%% @doc calculates the canonical hash of a riak object using sorted vclock
+-spec hash(riak_object()) -> binary().
 hash(Obj=#r_object{}) ->
-    Vclock = vclock(Obj),
-    UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
-    erlang:phash2(to_binary(v0, UpdObj)).
+    case application:get_env(riak_kv, object_hash_version) of
+        {ok, 0} ->
+            Hash = erlang:phash2(to_binary(v0, lists:sort(vclock(Obj)))),
+            term_to_binary(Hash);
+        {ok, V} ->
+            lager:error("Invalid or unknown object_hash_version: ~p. Defaulting to legacy object hash", [V]),
+            legacy_hash(Obj);
+        _ ->
+            legacy_hash(Obj)
+    end.
+
+%% @private return the legacy full object hash of the riak_object
+-spec legacy_hash(riak_object()) -> binary().
+legacy_hash(Obj=#r_object{}) ->
+    UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
+    Hash = erlang:phash2(to_binary(v0, UpdObj)),
+    term_to_binary(Hash).
 
 %% @doc  Set the updated metadata of an object to M.
 -spec update_metadata(riak_object(), riak_object_dict()) -> riak_object().

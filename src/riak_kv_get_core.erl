@@ -220,9 +220,11 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                          true ->
                              delete;
                          _ ->
+                             maybe_log_old_vclock(Results),
                              nop
                      end;
                  [] ->
+                     maybe_log_old_vclock(Results),
                      nop;
                  _ ->
                      {read_repair, ReadRepairs, MObj}
@@ -284,6 +286,30 @@ num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
             GetCore
     end.
 
+%% @private Print a warning if objects are not equal. Only called on case of no read-repair
+%% This situation could happen with pre 2.1 vclocks in very rare cases. Fixing the object
+%% requires the user to rewrite the object in 2.1+ of Riak. Logic is disabled when using
+%% a defined version of aae hashing as it's no longer needed.
+maybe_log_old_vclock(Results) ->
+    case application:get_env(riak_kv, object_hash_version) of
+        undefined ->
+            case [RObj || {_Idx, {ok, RObj}} <- Results] of
+                [] ->
+                    ok;
+                [_|[]] ->
+                    ok;
+                [R1|Rest] ->
+                    case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
+                        [] ->
+                            ok;
+                        _ ->
+                            lager:warning("Rewrite bucket: ~p key: ~p before enabling new object_hash_version",
+                              [riak_object:bucket(R1),riak_object:key(R1)])
+                    end
+            end;
+        _ ->
+            ok
+    end.
 
 -ifdef(TEST).
 %% simple sanity tests
