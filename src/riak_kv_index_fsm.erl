@@ -48,7 +48,8 @@
          plan/2,
          process_results/3,
          process_results/2,
-         finish/2]).
+         finish/2,
+         identity/1]).
 -export([use_ack_backpressure/0,
          req/3]).
 
@@ -98,6 +99,19 @@ index_req(Bucket, ItemFilter, Query) ->
                                   qry=Query}
     end.
 
+%% Because instances of index fsm may be started on different nodes
+%% (particularly, on different nodes with differing versions of the
+%% beams), passing a fun object to where the call is made is likely to
+%% cause a badfun error the moment the function object is called.
+%% This happens to work when the module beam on the remote node
+%% contains the compiled code the received function object refers to;
+%% but all chances are off when 'index' and/or 'uniq' properties are
+%% different between the caller and target beams.
+%%
+%% To avoid badfuns, we export the function we are passing as an
+%% argument, for the caller to refer to it safely.
+identity(X) -> X.
+
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
@@ -113,7 +127,7 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, riak_core_coverage_plan]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod]) ->
-    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod, fun(X) -> X end]);
+    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod, fun ?MODULE:identity/1]);
 %% The KeyConvFn is needed to infer the PK from LK in TS keys, and use
 %% that to correctly create the coverage plan.  For details, see
 %% github/riak_kv/pulls/1404
