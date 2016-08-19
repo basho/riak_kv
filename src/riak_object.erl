@@ -259,7 +259,7 @@ compare_content_dates(C1,C2) ->
             C1 < C2
     end.
 
-%% @doc Merge the contents and vclocks of OldObject and NewObject.
+%% @doc  Merge the contents and vclocks of OldObject and NewObject.
 %%       Note: This function calls apply_updates on NewObject.
 %%       Depending on whether DVV is enabled or not, then may merge
 %%       dropping dotted and dominated siblings, otherwise keeps all
@@ -276,7 +276,8 @@ merge(OldObject, NewObject) ->
             merge_write_once(OldObject, NewObj1);
         _ ->
             DVV = dvv_enabled(Bucket),
-            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
+            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3,
+                                                 [NewObject, OldObject, DVV]),
             ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
             OldObject#r_object{contents=Contents,
                 vclock=vclock:merge([OldObject#r_object.vclock,
@@ -319,7 +320,7 @@ merge_contents(NewObject, OldObject, true) ->
     MergeAcc = prune_object_siblings(NewObject, vclock(OldObject), MergeAcc0),
     #merge_acc{crdt=CRDT, error=Error} = MergeAcc,
     riak_kv_crdt:log_merge_errors(Bucket, Key, CRDT, Error),
-    merge_acc_to_contents(MergeAcc).
+    merge_acc_to_contents(Bucket, MergeAcc).
 
 %% Optimisation. To save converting every meta dict to a list sorting,
 %% comparing, and coverting back again, we use this optimisation, that
@@ -362,10 +363,11 @@ compare_metadata(#r_content{metadata=MA}, #r_content{metadata=MB}) ->
 prune_object_siblings(Object, Clock) ->
     prune_object_siblings(Object, Clock, #merge_acc{}).
 
--spec prune_object_siblings(riak_object(), vclock:vclock(), merge_acc()) -> merge_acc().
+-spec prune_object_siblings(riak_object(), vclock:vclock(), merge_acc())
+                           -> merge_acc().
 prune_object_siblings(Object, Clock, MergeAcc) ->
-    lists:foldl(fun(Content, Acc) ->
-                        fold_contents(Content, Acc, Clock)
+    lists:foldl(fun(Contents, Acc) ->
+                        fold_contents(Contents, Acc, Clock)
                 end,
                 MergeAcc,
                 Object#r_object.contents).
@@ -392,7 +394,8 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
     #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
     case get_dot(Dict) of
         {ok, {Dot, PureDot}} ->
-            case {vclock:descends_dot(Clock, Dot), is_drop_candidate(PureDot, Drop)} of
+            case {vclock:descends_dot(Clock, Dot),
+                  is_drop_candidate(PureDot, Drop)} of
                 {true, true} ->
                     %% When the exact same dot is present in both
                     %% objects siblings, we keep that value. Without
@@ -419,7 +422,8 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% value that is the result of a PUT that
                     %% reconciled this sibling value, we can therefore
                     %% (potentialy, see above) drop this value.
-                    MergeAcc#merge_acc{drop=add_drop_candidate(PureDot, C0, Drop)};
+                    MergeAcc#merge_acc{drop=add_drop_candidate(PureDot, C0,
+                                                               Drop)};
                 {false, _} ->
                     %% The other object's vclock does not contain (or
                     %% dominate) this sibling's `dot'. That means this
@@ -491,8 +495,9 @@ get_drop_candidate(Dot, Dict) ->
 %% types it should really only ever contain one or the other (and the
 %% accumulated CRDTs should have a single value), but it is better to
 %% be safe.
--spec merge_acc_to_contents(merge_acc()) -> list(r_content()).
-merge_acc_to_contents(MergeAcc) ->
+-spec merge_acc_to_contents(riak_object:bucket(), merge_acc())
+                           -> list(r_content()).
+merge_acc_to_contents(Bucket, MergeAcc) ->
     #merge_acc{keep=Keep, crdt=CRDTs} = MergeAcc,
     %% Convert the non-CRDT sibling values back to dict metadata values.
     %%
@@ -505,13 +510,22 @@ merge_acc_to_contents(MergeAcc) ->
     %% `r_content' entries.  by generating their metadata entry and
     %% binary encoding their contents. Bucket Types should ensure this
     %% accumulator only has one entry ever.
-    orddict:fold(fun(_Type, {Meta, CRDT}, {_, Contents}) ->
-                         {riak_kv_crdt:to_mod(CRDT),
-                          [{r_content, riak_kv_crdt:meta(Meta, CRDT),
-                           riak_kv_crdt:to_binary(CRDT)} | Contents]}
-                 end,
-                 {undefined, Keep2},
-                 CRDTs).
+
+    case orddict:size(CRDTs) > 0 of
+        true ->
+            BProps = riak_core_bucket:get_bucket(Bucket),
+            orddict:fold(
+              fun(_Type, {Meta, CRDT0}, {_, Contents}) ->
+                      CRDT = riak_kv_crdt:maybe_apply_props(BProps, CRDT0),
+                      {riak_kv_crdt:to_mod(CRDT),
+                       [{r_content, riak_kv_crdt:meta(Meta, CRDT),
+                         riak_kv_crdt:to_binary(CRDT)} | Contents]}
+              end,
+              {undefined, Keep2},
+              CRDTs);
+        false ->
+            {undefined, Keep2}
+    end.
 
 %% @private Get the dot from the passed metadata dict (if present and
 %% valid). It turns out, due to weirdness, it is possible to have two
@@ -797,12 +811,12 @@ vclock_header(Doc) ->
 to_json(Obj) ->
     lager:warning("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
     riak_object_json:encode(Obj).
- 
+
 %% @deprecated Use `riak_object_json:decode' now.
 from_json(JsonObj) ->
     lager:warning("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
     riak_object_json:decode(JsonObj).
- 
+
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
     case dict:find(clean, M) of
         error -> true;

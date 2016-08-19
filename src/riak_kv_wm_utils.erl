@@ -364,6 +364,8 @@ jsonify_bucket_prop({Prop, Value}) ->
 %%      of bucket properties to their Erlang form.
 erlify_bucket_prop({?JSON_DATATYPE, Type}) when is_binary(Type) ->
     {datatype, binary_to_existing_atom(Type, utf8)};
+erlify_bucket_prop({?JSON_HLL_PRECISION, P}) when is_binary(P) ->
+    {hll_precision, P};
 erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
     case {proplists:get_value(?JSON_MOD, Props),
           proplists:get_value(?JSON_FUN, Props)} of
