@@ -223,6 +223,8 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                              maybe_log_old_vclock(Results),
                              nop
                      end;
+                 [] when ObjState == notfound ->
+                     nop;
                  [] ->
                      maybe_log_old_vclock(Results),
                      nop;
@@ -291,7 +293,8 @@ num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
 %% requires the user to rewrite the object in 2.1+ of Riak. Logic is disabled when using
 %% a defined version of aae hashing as it's no longer needed.
 maybe_log_old_vclock(Results) ->
-    case application:get_env(riak_kv, object_hash_version) of
+%%  The entropy manager will return a version IIF all hashtrees are upgraded
+    case riak_kv_entropy_manager:get_version() of
         undefined ->
             case [RObj || {_Idx, {ok, RObj}} <- Results] of
                 [] ->
@@ -303,7 +306,8 @@ maybe_log_old_vclock(Results) ->
                         [] ->
                             ok;
                         _ ->
-                            lager:warning("Rewrite bucket: ~p key: ~p before enabling new object_hash_version",
+                            lager:warning("Bucket: ~p Key: ~p should be rewritten to guarantee
+                              compatability with AAE version 0",
                               [riak_object:bucket(R1),riak_object:key(R1)])
                     end
             end;

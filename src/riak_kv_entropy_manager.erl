@@ -38,7 +38,8 @@
          start_exchange_remote/4,
          exchange_status/4,
          expire_trees/0,
-         clear_trees/0]).
+         clear_trees/0,
+         get_version/0]).
 -export([all_pairwise_exchanges/2]).
 -export([throttle/0,
          get_aae_throttle/0,
@@ -66,16 +67,18 @@
 -type vnode() :: {index(), node()}.
 -type exchange() :: {index(), index(), index_n()}.
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
+-type version() :: undefined | non_neg_integer().
 
 -record(state, {mode           = automatic :: automatic | manual,
-                trees          = []        :: [{index(), pid()}],
+                trees          = []        :: [{index(), {pid(), version()}}],
                 tree_queue     = []        :: [{index(), pid()}],
                 locks          = []        :: [{pid(), reference()}],
                 build_tokens   = 0         :: non_neg_integer(),
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}],
                 vnode_status_pid = undefined :: 'undefined' | pid(),
-                last_throttle  = undefined :: 'undefined' | non_neg_integer()
+                last_throttle  = undefined :: 'undefined' | non_neg_integer(),
+                version        = version()
                }).
 
 -type state() :: #state{}.
@@ -190,6 +193,9 @@ expire_trees() ->
 clear_trees() ->
     gen_server:cast(?MODULE, clear_trees).
 
+get_version()
+    gen_server:call(?MODULE, get_version, infinity).
+
 %% @doc Manually trigger hashtree exchanges.
 %%      -- If an index is provided, trigger exchanges between the index and all
 %%         sibling indices for all index_n.
@@ -265,6 +271,8 @@ handle_call(disable, _From, State) ->
     application:set_env(riak_kv, anti_entropy, {off, Opts}),
     _ = [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
     {reply, ok, State};
+handle_call(get_version, _From, State=#state{version=Version}) ->
+    {reply, Version, State};
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
@@ -416,10 +424,17 @@ maybe_reload_hashtrees(Ring, State) ->
 -spec reload_hashtrees(riak_core_ring(), state()) -> state().
 reload_hashtrees(Ring, State=#state{trees=Trees}) ->
     Indices = riak_core_ring:my_indices(Ring),
+    %% BRIAN update this logic to include versions and kick off upgrade process if necessary
     Existing = dict:from_list(Trees),
     MissingIdx = [Idx || Idx <- Indices,
                          not dict:is_key(Idx, Existing)],
-    _ = [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx],
+    case MissingIdx of
+        [] ->
+            %%BRIAN Check if we need to do an upgrade and set our version
+            ok;
+        _ ->
+            _ = [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx]
+    end,
     State.
 
 add_hashtree_pid(Index, Pid, State) ->
@@ -430,12 +445,13 @@ add_hashtree_pid(false, _Index, Pid, State) ->
     State;
 add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees}) ->
     case orddict:find(Index, Trees) of
-        {ok, Pid} ->
+        {ok, {Pid, _Version}} ->
             %% Already know about this hashtree
             State;
         _ ->
             monitor(process, Pid),
-            Trees2 = orddict:store(Index, Pid, Trees),
+            Version = riak_kv_index_hashtree:get_version(Pid),
+            Trees2 = orddict:store(Index, {Pid, Version}, Trees),
             State2 = State#state{trees=Trees2},
             State3 = add_index_exchanges(Index, State2),
             State3
@@ -540,6 +556,7 @@ tick(State) ->
     State3 = lists:foldl(fun(_,S) ->
                                  maybe_poke_tree(S)
                          end, State2, lists:seq(1,10)),
+    %% BRIAN Check to see if all trees are updated and then trigger destroy.
     State4 = maybe_exchange(Ring, State3),
     State4.
 

@@ -38,6 +38,7 @@
 
 -export([get_lock/2,
          get_lock/3,
+         get_lock_and_version/2,
          compare/3,
          compare/4,
          compare/5,
@@ -47,7 +48,7 @@
          estimate_keys/1,
          estimate_keys/2,
          hash_index_data/1,
-         hash_object/2,
+         hash_object/3,
          update/2,
          update/3,
          start_exchange_remote/5,
@@ -83,6 +84,7 @@
                 path,
                 build_time,
                 trees,
+                version_update_trees,
                 use_2i = false :: boolean(),
                 version :: undefined | non_neg_integer()}).
 
@@ -199,7 +201,7 @@ get_trees({test, Pid}) ->
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process.
--spec get_lock(pid(), any()) -> ok | not_built | already_locked | bad_version.
+-spec get_lock(pid(), any()) -> ok | not_built | already_locked.
 get_lock(Tree, Type) ->
     get_lock(Tree, Type, get_version(Tree), self()).
 
@@ -220,6 +222,12 @@ get_lock(Tree, Type, Version, Pid) ->
 -spec get_version(pid()) -> undefined | non_neg_integer().
 get_version(Tree) ->
     gen_server:call(Tree, get_version, infinity).
+
+%% @doc Acquire the lock and return the version for the specified index_hashtree if not already
+%%      locked.
+-spec get_lock_and_version(pid(), any()) -> {ok | not_built | already_locked, undefined | non_neg_integer()}.
+get_lock_and_version(Tree, Type) ->
+    {get_lock(Tree, Type) , get_version(Tree)}.
 
 %% @doc Poke the specified index_hashtree to ensure the tree is
 %%      built/rebuilt as needed. This is periodically called by the
@@ -278,16 +286,11 @@ init([Index, VNPid, Opts]) ->
             end,
             ignore;
         Root ->
-            %% For the patch we are not supporting an online upgrade for AAE. 2.2 will
-            %% have logic so the old hashtree can continue to be used while the new version builds.
-            {Path0, Version} = case application:get_env(riak_kv, object_hash_version) of
-                {ok, V} when is_integer(V) ->
+            {Path0, Version} = case determine_version(Root, Index, Opts) of
+                V when is_integer(V) ->
                     %% Must add "v" because integer partition dirs. Joining the version to the path to support
                     %% easy downgrades where the new trees will be unable to be found by old code.
                     {filename:join(Root, "v" ++ integer_to_list(V)), V};
-                {ok, V} ->
-                    lager:error("Invalid non-integer object_hash_version: ~p. Defaulting to legacy.", [V]),
-                    {Root, undefined};
                 _ ->
                     {Root, undefined}
             end,
@@ -500,6 +503,30 @@ determine_data_root() ->
             end
     end.
 
+%% @doc Determine the version this tree should use at startup. If update atom is in Opts
+%%      then we immediately use version in capabilities. Otherwise check if capabilities
+%%      has flipped to a version yet and if it has, check if we've already upgraded by
+%%      looking for versioned AAE directory.
+-spec determine_version(undefined | list(), non_neg_integer(), list()) -> undefined | non_neg_integer().
+determine_version(Root, Index, Opts) ->
+    case lists:member(upgrade, Opts) of
+        true ->
+            riak_core_capability:get({riak_kv, object_hash_version}, undefined);
+        false ->
+            case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
+                V when is_integer(V) ->
+                    %% Check if the v[Version]/Index dir exists
+                    case filelib:is_dir(filename:join(filename:join(Root, "v" ++ integer_to_list(V)),integer_to_list(Index))) of
+                        true ->
+                            V;
+                        false ->
+                            undefined
+                    end;
+                _ ->
+                    undefined
+            end
+    end.
+
 %% @doc Init the trees.
 %%
 %%      MarkEmpty is a boolean dictating whether we're marking the tree empty for the
@@ -527,14 +554,15 @@ load_built(#state{trees=Trees}) ->
 
 %% Generate a hash value for a `riak_object'
 -spec hash_object({riak_object:bucket(), riak_object:key()},
-                  riak_object_t2b() | riak_object:riak_object()) -> binary().
-hash_object({Bucket, Key}, RObj0) ->
+                  riak_object_t2b() | riak_object:riak_object(),
+                  undefined | non_neg_integer()) -> binary().
+hash_object({Bucket, Key}, RObj0, Version) ->
     try
         RObj = case riak_object:is_robject(RObj0) of
             true -> RObj0;
             false -> riak_object:from_binary(Bucket, Key, RObj0)
         end,
-        riak_object:hash(RObj)
+        riak_object:hash(RObj, Version)
     catch _:_ ->
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)
@@ -608,9 +636,10 @@ fold_fun(Tree, _HasIndexTree = true) ->
 
 -spec object_fold_fun(pid()) -> fun().
 object_fold_fun(Tree) ->
+    Version = get_version(Tree),
     fun(BKey={Bucket,Key}, RObj, BinBKey) ->
             IndexN = riak_kv_util:get_index_n({Bucket, Key}),
-            insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
+            insert([{IndexN, BinBKey, hash_object(BKey, RObj, Version)}],
                    [if_missing],
                    Tree)
     end.
@@ -740,19 +769,19 @@ valid_time({X,Y,Z}) when is_integer(X) and is_integer(Y) and is_integer(Z) ->
 valid_time(_) ->
     false.
 
-do_insert(Items, Opts, State=#state{trees=Trees}) ->
+do_insert(Items, Opts, State=#state{trees=Trees, version=Version}) ->
     HasIndex = has_index_tree(Trees),
-    do_insert_expanded(expand_items(HasIndex, Items), Opts, State).
+    do_insert_expanded(expand_items(HasIndex, Items, Version), Opts, State).
 
-expand_items(HasIndex, Items) ->
+expand_items(HasIndex, Items, Version) ->
     lists:foldl(fun(I, Acc) ->
-                        expand_item(HasIndex, I, Acc)
+                        expand_item(HasIndex, I, Version, Acc)
                 end, [], Items).
 
-expand_item(Has2ITree, {object, BKey, RObj}, Others) ->
+expand_item(Has2ITree, {object, BKey, RObj}, Version, Others) ->
     IndexN = riak_kv_util:get_index_n(BKey),
     BinBKey = term_to_binary(BKey),
-    ObjHash = hash_object(BKey, RObj),
+    ObjHash = hash_object(BKey, RObj, Version),
     Item0 = {IndexN, BinBKey, ObjHash},
     case Has2ITree of
         false ->

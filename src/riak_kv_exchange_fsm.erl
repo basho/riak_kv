@@ -112,9 +112,8 @@ prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
                                               local_tree=Tree}) ->
     case riak_kv_entropy_manager:get_lock(exchange) of
         ok ->
-            Version = riak_kv_index_hashtree:get_version(Tree),
-            case riak_kv_index_hashtree:get_lock(Tree, local_fsm, Version) of
-                ok ->
+            case riak_kv_index_hashtree:get_lock_and_version(Tree, local_fsm) of
+                {ok, Version} ->
                     remote_exchange_request(RemoteVN, IndexN, Version),
                     Timer = gen_fsm:send_event_after(State#state.timeout,
                                                      timeout),
