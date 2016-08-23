@@ -74,8 +74,7 @@ validate_request(#rpbindexreq{term_regex = TermRe} = Req) ->
     {ValRe, ValErr} = ensure_compiled_re(TermRe),
     case ValRe of
       error ->
-          {error, {format, "Invalid term regular expression ~p : ~p",
-                   [TermRe, ValErr]}};
+          {error, {format, "Invalid term regular expression ~p : ~p", [TermRe, ValErr]}};
       _ ->
         validate_query(Req)
     end.
@@ -125,9 +124,7 @@ validate_request_and_maybe_perform_query(Req, State) ->
   end.
 
 error_accept(Class, State) ->
-  {error,
-   riak_core_util:job_class_disabled_message(binary, Class),
-   State}.
+  {error, riak_core_util:job_class_disabled_message(binary, Class), State}.
 
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #rpbindexreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout,

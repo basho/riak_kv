@@ -96,8 +96,6 @@ process(Req, State) ->
         {true, buckets} ->
             maybe_do_list_buckets(Req, State);
         {true, keys} ->
-            %% at present list-keys always streams
-            %% Start streaming in list keys
             maybe_stream_list_keys(Req, State);
         {false, _} ->
             error_accept(Class, State)
@@ -115,6 +113,7 @@ determine_class_and_listing(#rpblistbucketsreq{stream = true}) ->
 determine_class_and_listing(#rpblistbucketsreq{stream = false}) ->
     {{riak_kv, list_buckets}, buckets};
 determine_class_and_listing(#rpblistkeysreq{}) ->
+    %% at present list-keys always streams
     {{riak_kv, stream_list_keys}, keys}.
 
 maybe_stream_list_keys(#rpblistkeysreq{type = Type, bucket = B, timeout = T} = Req,
@@ -123,20 +122,16 @@ maybe_stream_list_keys(#rpblistkeysreq{type = Type, bucket = B, timeout = T} = R
         {ok, GoodType} ->
             Bucket = maybe_create_bucket_type(GoodType, B),
             {ok, ReqId} = Client:stream_list_keys(Bucket, T),
-            {reply, {stream, ReqId},
-             State#state{req = Req, req_ctx = ReqId}};
+            {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
         error ->
             error_no_bucket_type(Type, State)
     end.
 
 error_no_bucket_type(Type, State) ->
-    {error,
-     {format, "No bucket-type named '~s'", [Type]}, State}.
+    {error, {format, "No bucket-type named '~s'", [Type]}, State}.
 
 error_accept(Class, State) ->
-    {error,
-     riak_core_util:job_class_disabled_message(binary, Class),
-     State}.
+    {error, riak_core_util:job_class_disabled_message(binary, Class), State}.
 
 maybe_do_list_buckets(#rpblistbucketsreq{type = Type, timeout = T, stream = S} = Req, State) ->
     case check_bucket_type(Type) of
