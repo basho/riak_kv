@@ -64,7 +64,7 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    {ok, _, _} = riak_kv_compile_tab:new(app_helper:get_env(riak_core, platform_data_dir)),
+    {ok, _} = riak_kv_compile_tab:new(app_helper:get_env(riak_core, platform_data_dir)),
 
     RestartStrategy = one_for_one,
     MaxRestarts = 1000,
