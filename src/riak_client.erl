@@ -1077,7 +1077,12 @@ recv_timeout(Options) ->
         undefined ->
             %% If no reply timeout given, use the FSM timeout + 100ms to give it a chance
             %% to respond.
-            proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) + 100;
+            case proplists:get_value(timeout, Options, ?DEFAULT_TIMEOUT) of
+                infinity ->
+                    infinity;
+                Finity ->
+                    Finity + 100
+            end;
         Timeout ->
             %% Otherwise use the directly supplied timeout.
             Timeout

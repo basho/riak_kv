@@ -285,10 +285,7 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
                                   key    = CompoundKey,
                                   timeout = Timeout},
              State) ->
-    Options =
-        if Timeout == undefined -> [];
-           true -> [{timeout, Timeout}]
-        end,
+    Options = maybe_add_timeout_prop(Timeout, []),
     %%CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
     %% decoding is done per wire protocol (ttb or pb), see riak_kv_ts.erl
     Mod = riak_ql_ddl:make_module_name(Table),
@@ -320,10 +317,7 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
                                   vclock  = VClock,
                                   timeout  = Timeout},
              State) ->
-    Options =
-        if Timeout == undefined -> [];
-           true -> [{timeout, Timeout}]
-        end,
+    Options = maybe_add_timeout_prop(Timeout, []),
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
     Mod = riak_ql_ddl:make_module_name(Table),
     case riak_kv_ts_api:delete_data(
@@ -376,7 +370,9 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 
     Result =
         riak_client:stream_list_keys(
-          riak_kv_ts_util:table_to_bucket(Table), Timeout, KeyConvFn,
+          riak_kv_ts_util:table_to_bucket(Table),
+          zero_to_infinity(Timeout),
+          KeyConvFn,
           {riak_client, [node(), undefined]}),
     case Result of
         {ok, ReqId} ->
@@ -499,6 +495,15 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
             {reply, make_missing_helper_module_resp(Table, BucketProps), State}
     end.
 
+
+%% In #ts{get,delete,listkeys}req.timeout, a value of 0 means infinity
+maybe_add_timeout_prop(undefined, Options) ->
+    Options;
+maybe_add_timeout_prop(Value, Options) ->
+    lists:keystore(timeout, 1, Options, {timeout, zero_to_infinity(Value)}).
+
+zero_to_infinity(0) -> infinity;
+zero_to_infinity(X) -> X.
 
 
 %%
