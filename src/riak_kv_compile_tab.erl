@@ -47,7 +47,7 @@
 
 %% 
 -spec new(file:name()) ->
-         {ok, dets:tab_name(), dets:tab_name()} | {error, any(), any()}.
+         {ok, dets:tab_name(), dets:tab_name()} | error.
 new(FileDir) ->
     FilePath = filename:join(FileDir, [?TABLE, ".dets"]),
     lager:debug("Opening DDL DETS table ~s", [FilePath]),
@@ -57,7 +57,7 @@ new(FileDir) ->
 %% Open both old and new copies of the DETS table.  Assume old table is
 %% canonical and force entries in the new table to be recompiled.
 -spec new_table_result({ok, dets:tab_name()} | {error, any()}) ->
-                       {ok, dets:tab_name()} | {error, any(), any()}.
+                       {ok, dets:tab_name()} | error.
 new_table_result({ok, Dets}) ->
     %% Clean up any lingering records stuck in the compiling state
     mark_compiling_for_retry(),
