@@ -86,7 +86,7 @@ encode(Message) ->
 
 %% this should remain for backwards compatibility
 process(rpblistbucketsreq, State) ->
-    process(#rpblistbucketsreq{}, State);
+    process(#rpblistbucketsreq{stream = false}, State);
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(Req, State) ->
