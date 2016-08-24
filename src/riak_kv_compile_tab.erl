@@ -34,7 +34,6 @@
          new/1,
          update_state/2]).
 
--define(LEGACY_TABLE, ?MODULE).
 -define(TABLE, riak_kv_compile_tab_v2).
 
 -type compiling_state() :: compiling | compiled | failed | retrying.
@@ -48,37 +47,23 @@
 
 %% 
 -spec new(file:name()) ->
-         {ok, dets:tab_name(), dets:tab_name()} | {error, any(), any()}.
+         {ok, dets:tab_name(), dets:tab_name()} | error.
 new(FileDir) ->
-    LegacyFilePath = filename:join(FileDir, [?LEGACY_TABLE, ".dets"]),
-    lager:debug("Opening legacy DDL DETS table ~s", [LegacyFilePath]),
     FilePath = filename:join(FileDir, [?TABLE, ".dets"]),
     lager:debug("Opening DDL DETS table ~s", [FilePath]),
-    Result1 = dets:open_file(?LEGACY_TABLE, [{type, set}, {repair, force}, {file, LegacyFilePath}]),
     Result2 = dets:open_file(?TABLE, [{type, set}, {repair, force}, {file, FilePath}]),
-    new_table_result(Result1, Result2).
+    new_table_result(Result2).
 
 %% Open both old and new copies of the DETS table.  Assume old table is
 %% canonical and force entries in the new table to be recompiled.
--spec new_table_result({ok, dets:tab_name()} | {error, any()},
-                       {ok, dets:tab_name()} | {error, any()}) ->
-                       {ok, dets:tab_name(), dets:tab_name()} | {error, any(), any()}.
-new_table_result({ok, LegacyDets}, {ok, Dets}) ->
-    %% Convert all legacy DDL compilation records to current format
-    upgrade_legacy_records(),
-
+-spec new_table_result({ok, dets:tab_name()} | {error, any()}) ->
+                       {ok, dets:tab_name()} | error.
+new_table_result({ok, Dets}) ->
     %% Clean up any lingering records stuck in the compiling state
     mark_compiling_for_retry(),
-    {ok, LegacyDets, Dets};
-new_table_result({error, Reason}, {ok, _}) ->
-    lager:error("Could not open ~p because of ~p", [?LEGACY_TABLE, Reason]),
-    error;
-new_table_result({ok, _}, {error, Reason}) ->
+    {ok, Dets};
+new_table_result({error, Reason}) ->
     lager:error("Could not open ~p because of ~p", [?TABLE, Reason]),
-    error;
-new_table_result({error, Reason}, {error, Reason2}) ->
-    lager:error("Could not open ~p because of ~p nor ~p because of ~p",
-        [?LEGACY_TABLE, Reason, ?TABLE, Reason2]),
     error.
 
 %% Useful testing tool
@@ -87,10 +72,7 @@ new_table_result({error, Reason}, {error, Reason2}) ->
 delete_dets(FileDir) ->
     FilePath = filename:join(FileDir, [?TABLE, ".dets"]),
     dets:close(FilePath),
-    file:delete(FilePath),
-    FilePath2 = filename:join(FileDir, [?LEGACY_TABLE, ".dets"]),
-    dets:close(FilePath2),
-    file:delete(FilePath2).
+    file:delete(FilePath).
 
 %%
 -spec insert(BucketType :: binary(),
@@ -101,25 +83,15 @@ delete_dets(FileDir) ->
 insert(BucketType, DDLVersion, DDL, CompilerPid, State) ->
     lager:info("DDL DETS Update: ~p, ~p, ~p, ~p, ~p",
                [BucketType, DDLVersion, DDL, CompilerPid, State]),
-
-    Result1 = dets:insert(?LEGACY_TABLE, {BucketType, DDL, CompilerPid, State}),
-    dets:sync(?LEGACY_TABLE),
     Result2 = dets:insert(?TABLE, {BucketType, DDLVersion, DDL, CompilerPid, State}),
     dets:sync(?TABLE),
-    insert_result(Result1, Result2).
+    insert_result(Result2).
 
--spec insert_result(ok | {error, any()}, ok | {error, any()}) -> ok | error.
-insert_result(ok, ok) ->
+-spec insert_result(ok | {error, any()}) -> ok | error.
+insert_result(ok) ->
     ok;
-insert_result({error, Reason}, ok) ->
-    lager:error("Could not write to ~p because of ~p", [?LEGACY_TABLE, Reason]),
-    error;
-insert_result(ok, {error, Reason}) ->
+insert_result({error, Reason}) ->
     lager:error("Could not write to ~p because of ~p", [?TABLE, Reason]),
-    error;
-insert_result({error, Reason}, {error, Reason2}) ->
-    lager:error("Could not write to ~p because of ~p nor ~p because of ~p",
-        [?LEGACY_TABLE, Reason, ?TABLE, Reason2]),
     error.
 
 %% Check if the bucket type is in the compiling state.
@@ -203,19 +175,6 @@ get_ddl_records_needing_recompiling(DDLVersion) ->
     lager:info("Recompile the DDL of these bucket types ~p", [Tables]),
     Tables.
 
-%% TODO: Remove this once 1.2 support has been removed
-%% Convert all pre-1.3 records to include the DDL compiler version in the
-%% DETS table.  Simply recompile everything all the time since we don't
-%% know if this is an upgrade following a downgrade or not.
--spec upgrade_legacy_records() -> ok.
-upgrade_legacy_records() ->
-    LegacyVersion = 1,
-    OldVersions = dets:match(?LEGACY_TABLE, {'$1','$2','$3','$4'}),
-    lists:foreach(fun([BucketType, DDL, Pid, _State]) ->
-                       ok = dets:insert(?TABLE, {BucketType, LegacyVersion, DDL, Pid, retrying})
-                  end, OldVersions),
-    ok.
-
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -236,19 +195,6 @@ upgrade_legacy_records() ->
         test_ok -> ok
     end
 ).
-
-insert_version_test() ->
-    ?in_process(
-        begin
-            Pid = spawn(fun() -> ok end),
-            ok = insert(<<"my_type">>, 2, {ddl_v1}, Pid, compiling),
-            First = dets:match(?LEGACY_TABLE, {'$1','$2','$3','$4'}),
-            Second = dets:match(?TABLE, {'$1','_','$2','$3','$4'}),
-            ?assertEqual(
-                First,
-                Second
-            )
-        end).
 
 insert_test() ->
     ?in_process(
@@ -324,24 +270,6 @@ recompile_ddl_test() ->
                  <<"my_type3">>
                 ],
                 lists:sort(get_ddl_records_needing_recompiling(8))
-            )
-        end).
-
-update_legacy_ddl_test() ->
-    ?in_process(
-        begin
-            Pid = spawn(fun() -> ok end),
-            Pid2 = spawn(fun() -> ok end),
-            Pid3 = spawn(fun() -> ok end),
-            Pid4 = spawn(fun() -> ok end),
-            ok = dets:insert(?LEGACY_TABLE, {<<"my_type">>, {ddl_v1}, Pid, compiled}),
-            ok = dets:insert(?LEGACY_TABLE, {<<"my_type1">>, {ddl_v1}, Pid2, compiled}),
-            ok = dets:insert(?LEGACY_TABLE, {<<"my_type2">>, {ddl_v1}, Pid3, compiled}),
-            ok = dets:insert(?LEGACY_TABLE, {<<"my_type3">>, {ddl_v1}, Pid4, compiled}),
-            upgrade_legacy_records(),
-            ?assertEqual(
-                [[<<"my_type">>],[<<"my_type1">>],[<<"my_type2">>],[<<"my_type3">>]],
-                lists:sort(dets:match(?TABLE, {'$1',1,'_','_','_'}))
             )
         end).
 
