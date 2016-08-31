@@ -49,6 +49,7 @@
          refresh_index_data/4,
          request_hashtree_pid/1,
          request_hashtree_pid/2,
+         upgrade_hashtree/1,
          reformat_object/2,
          stop_fold/1,
          get_modstate/1]).
@@ -220,6 +221,7 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
                     end,
             Opts = [use_2i || lists:member(indexes, ModCaps)]
                    ++ [vnode_empty || Empty],
+            %% BRIAN add logic to add upgrade atom to start if upgrade was triggered
             case riak_kv_index_hashtree:start(Index, self(), Opts) of
                 {ok, Trees} ->
                     monitor(process, Trees),
@@ -423,6 +425,12 @@ request_hashtree_pid(Partition, Sender) ->
                                    {hashtree_pid, node()},
                                    Sender,
                                    riak_kv_vnode_master).
+%% @doc Destroy and restart the hashtrees associated with Index.
+%%      Upgrade atom is passed into arguments for hashtree start
+%%      which will cause the hashtree to start at highest supported
+%%      version.
+-spec upgrade_hashtree(index()) -> ok.
+%% BRIAN stop then destroy hashtree.
 
 %% Used by {@link riak_kv_exchange_fsm} to force a vnode to update the hashtree
 %% for repaired keys. Typically, repairing keys will trigger read repair that

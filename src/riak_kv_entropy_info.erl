@@ -30,7 +30,8 @@
          compute_tree_info/0,
          compute_tree_info/1,
          exchanges/2,
-         all_exchanges/2]).
+         all_exchanges/2,
+         all_sibling_exchanges_complete/0]).
 
 -define(ETS, ets_riak_kv_entropy).
 
@@ -238,6 +239,15 @@ compute_exchange_info({M,F}, Ring, Index, #index_info{exchanges=Exchanges,
     {_, LastAll} = hd(AllTime2),
     {_, Recent} = hd(lists:reverse(AllTime2)),
     {Index, Recent, LastAll, stat_tuple(Repaired)}.
+
+-spec all_sibling_exchanges_complete() -> boolean().
+all_sibling_exchanges_complete() ->
+    case [Idx || {Idx, {_Time, undefined, _Stats}} <- compute_exchange_info()] of
+        [] ->
+            true;
+        _ ->
+            false
+    end.
 
 %% Merge two lists together based on the key at position 1. When both lists
 %% contain the same key, the value associated with `L1' is kept.

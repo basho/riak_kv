@@ -84,7 +84,6 @@
                 path,
                 build_time,
                 trees,
-                version_update_trees,
                 use_2i = false :: boolean(),
                 version :: undefined | non_neg_integer()}).
 
@@ -934,7 +933,20 @@ do_compare(Id, Remote, AccFun, Acc, From, State) ->
 do_poke(State) ->
     State1 = maybe_rebuild(maybe_expire(State)),
     State2 = maybe_build(State1),
-    State2.
+    State3 = maybe_upgrade(State2),
+    State3.
+
+-spec maybe_upgrade(state()) -> state().
+maybe_upgrade(State=#state{lock=undefined, built=true, version=undefined}) ->
+    case riak_kv_entropy_manager:get_version() of
+        undefined ->
+            State;
+        0 ->
+            riak_kv_vnode:upgrade_hashtree(State#state.index),
+            State
+    end;
+maybe_upgrade(State) ->
+    State.
 
 -spec maybe_expire(state()) -> state().
 maybe_expire(State=#state{lock=undefined, built=true, expired=false}) ->

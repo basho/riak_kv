@@ -35,11 +35,13 @@
          get_lock/2,
          release_lock/1,
          requeue_poke/1,
+         start_exchange_remote/3,
          start_exchange_remote/4,
          exchange_status/4,
          expire_trees/0,
          clear_trees/0,
-         get_version/0]).
+         get_version/0,
+         get_pending_version/0]).
 -export([all_pairwise_exchanges/2]).
 -export([throttle/0,
          get_aae_throttle/0,
@@ -70,15 +72,17 @@
 -type version() :: undefined | non_neg_integer().
 
 -record(state, {mode           = automatic :: automatic | manual,
-                trees          = []        :: [{index(), {pid(), version()}}],
+                trees          = []        :: [{index(), pid()}],
                 tree_queue     = []        :: [{index(), pid()}],
+                trees_version  = []        :: [{index(), version()}],
                 locks          = []        :: [{pid(), reference()}],
                 build_tokens   = 0         :: non_neg_integer(),
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}],
                 vnode_status_pid = undefined :: 'undefined' | pid(),
                 last_throttle  = undefined :: 'undefined' | non_neg_integer(),
-                version        = version()
+                version        = undefined :: version(),
+                pending_version = undefined :: version()
                }).
 
 -type state() :: #state{}.
@@ -119,7 +123,17 @@ release_lock(Pid) ->
 %%      will try to acquire a concurrency lock. If successsful, the request is
 %%      then forwarded to the relevant index_hashtree to acquire a tree lock.
 %%      If both locks are acquired, the pid of the remote index_hashtree is
-%%      returned.
+%%      returned. This function assumes an undefined version of the hashtree
+-spec start_exchange_remote({index(), node()}, index_n(), pid())
+                           -> {remote_exchange, pid()} |
+                              {remote_exchange, anti_entropy_disabled} |
+                              {remote_exchange, max_concurrency} |
+                              {remote_exchange, not_built} |
+                              {remote_exchange, already_locked} |
+                              {remote_exchange, bad_version}.
+start_exchange_remote(VNode, IndexN, FsmPid) ->
+    start_exchange_remote(VNode, IndexN, FsmPid, undefined).
+
 -spec start_exchange_remote({index(), node()}, index_n(), pid(), non_neg_integer())
                            -> {remote_exchange, pid()} |
                               {remote_exchange, anti_entropy_disabled} |
@@ -193,8 +207,11 @@ expire_trees() ->
 clear_trees() ->
     gen_server:cast(?MODULE, clear_trees).
 
-get_version()
+get_version() ->
     gen_server:call(?MODULE, get_version, infinity).
+
+get_pending_version() ->
+    gen_server:call(?MODULE, get_pending_version, infinity).
 
 %% @doc Manually trigger hashtree exchanges.
 %%      -- If an index is provided, trigger exchanges between the index and all
@@ -272,6 +289,8 @@ handle_call(disable, _From, State) ->
     _ = [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
     {reply, ok, State};
 handle_call(get_version, _From, State=#state{version=Version}) ->
+    {reply, Version, State};
+handle_call(get_pending_version, _From, State=#state{pending_version=Version}) ->
     {reply, Version, State};
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
@@ -424,13 +443,11 @@ maybe_reload_hashtrees(Ring, State) ->
 -spec reload_hashtrees(riak_core_ring(), state()) -> state().
 reload_hashtrees(Ring, State=#state{trees=Trees}) ->
     Indices = riak_core_ring:my_indices(Ring),
-    %% BRIAN update this logic to include versions and kick off upgrade process if necessary
     Existing = dict:from_list(Trees),
     MissingIdx = [Idx || Idx <- Indices,
                          not dict:is_key(Idx, Existing)],
     case MissingIdx of
         [] ->
-            %%BRIAN Check if we need to do an upgrade and set our version
             ok;
         _ ->
             _ = [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx]
@@ -443,16 +460,16 @@ add_hashtree_pid(Index, Pid, State) ->
 add_hashtree_pid(false, _Index, Pid, State) ->
     riak_kv_index_hashtree:stop(Pid),
     State;
-add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees}) ->
+add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees, trees_version=VTrees}) ->
     case orddict:find(Index, Trees) of
-        {ok, {Pid, _Version}} ->
+        {ok, Pid} ->
             %% Already know about this hashtree
             State;
         _ ->
             monitor(process, Pid),
-            Version = riak_kv_index_hashtree:get_version(Pid),
-            Trees2 = orddict:store(Index, {Pid, Version}, Trees),
-            State2 = State#state{trees=Trees2},
+            Trees2 = orddict:store(Index, Pid, Trees),
+            VTrees2 = orrdict:store(Index, riak_kv_index_hashtree:get_version(Pid), VTrees),
+            State2 = State#state{trees=Trees2, trees_version=VTrees2},
             State3 = add_index_exchanges(Index, State2),
             State3
     end.
@@ -503,8 +520,9 @@ maybe_clear_exchange(Ref, Status, State) ->
 
 -spec maybe_clear_registered_tree(pid(), state()) -> state().
 maybe_clear_registered_tree(Pid, State) when is_pid(Pid) ->
-    Trees = lists:keydelete(Pid, 2, State#state.trees),
-    State#state{trees=Trees};
+    {value, {Index, Pid}, Trees} = lists:keytake(Pid, 2, State#state.trees),
+    VTrees = orddict:erase(Index, State#state.trees_version),
+    State#state{trees=Trees, trees_version=VTrees};
 maybe_clear_registered_tree(_, State) ->
     State.
 
@@ -553,12 +571,12 @@ tick(State) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     State1 = query_and_set_aae_throttle(State),
     State2 = maybe_reload_hashtrees(Ring, State1),
-    State3 = lists:foldl(fun(_,S) ->
+    State3 = maybe_start_upgrade(State2),
+    State4 = lists:foldl(fun(_,S) ->
                                  maybe_poke_tree(S)
-                         end, State2, lists:seq(1,10)),
-    %% BRIAN Check to see if all trees are updated and then trigger destroy.
-    State4 = maybe_exchange(Ring, State3),
-    State4.
+                         end, State3, lists:seq(1,10)),
+    State5 = maybe_exchange(Ring, State4),
+    State5.
 
 -spec maybe_poke_tree(state()) -> state().
 maybe_poke_tree(State=#state{trees=[]}) ->
@@ -567,6 +585,39 @@ maybe_poke_tree(State) ->
     {Tree, State2} = next_tree(State),
     riak_kv_index_hashtree:poke(Tree),
     State2.
+
+-spec maybe_start_upgrade(state()) -> state().
+maybe_start_upgrade(State=#state{version=undefined, pending_version=undefined}) ->
+    case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
+        0 ->
+            maybe_upgrade(State);
+        undefined ->
+            State
+    end;
+maybe_start_upgrade(State) ->
+    State.
+
+-spec maybe_upgrade(state()) -> state().
+maybe_upgrade(State=#state{trees_version = VTrees}) ->
+    case [Idx || {Idx, undefined} <- VTrees] of
+        [] ->
+            State;
+        %% No trees have been upgraded, need to wait for exchanges
+        Trees when length(Trees) == length(VTrees) ->
+            check_exchanges_and_upgrade(State);
+        %% Upgrade already started, set pending_version
+        _ ->
+            State#state{pending_version=0}
+    end.
+
+-spec check_exchanges_and_upgrade(state()) -> state().
+check_exchanges_and_upgrade(State) ->
+    case riak_kv_entropy_info:all_sibling_exchanges_complete() of
+        true ->
+            State#state{pending_version=0};
+        false ->
+            State
+    end.
 
 %%%===================================================================
 %%% Exchanging

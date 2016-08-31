@@ -624,10 +624,11 @@ get_value(Object=#r_object{}) ->
     Value.
 
 %% @doc calculates the canonical hash of a riak object
-%%      Old API which uses the capabilities definition by default.
+%%      Old API which uses the version .
 -spec hash(riak_object()) -> binary().
 hash(Obj=#r_object{}) ->
-    case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
+    %% BRIAN What to do here needs more discussion(race condition due to tick, vnode startup, etc)
+    case riak_kv_entropy_manager:get_version() of
         0 ->
             vclock_hash(Obj);
         undefined ->
