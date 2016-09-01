@@ -41,7 +41,8 @@
          expire_trees/0,
          clear_trees/0,
          get_version/0,
-         get_pending_version/0]).
+         get_pending_version/0,
+         get_trees_version/0]).
 -export([all_pairwise_exchanges/2]).
 -export([throttle/0,
          get_aae_throttle/0,
@@ -213,6 +214,9 @@ get_version() ->
 get_pending_version() ->
     gen_server:call(?MODULE, get_pending_version, infinity).
 
+get_trees_version() ->
+    gen_server:call(?MODULE, get_trees_version, infinity).
+
 %% @doc Manually trigger hashtree exchanges.
 %%      -- If an index is provided, trigger exchanges between the index and all
 %%         sibling indices for all index_n.
@@ -292,6 +296,9 @@ handle_call(get_version, _From, State=#state{version=Version}) ->
     {reply, Version, State};
 handle_call(get_pending_version, _From, State=#state{pending_version=Version}) ->
     {reply, Version, State};
+handle_call(get_trees_version, _From, State=#state{trees=Trees}) ->
+    VTrees = [{Idx, riak_kv_index_hashtree:get_version(Pid)} || {Idx, Pid} <- Trees],
+    {reply, VTrees, State};
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
@@ -468,7 +475,7 @@ add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees, trees_version=VTree
         _ ->
             monitor(process, Pid),
             Trees2 = orddict:store(Index, Pid, Trees),
-            VTrees2 = orrdict:store(Index, riak_kv_index_hashtree:get_version(Pid), VTrees),
+            VTrees2 = orddict:store(Index, riak_kv_index_hashtree:get_version(Pid), VTrees),
             State2 = State#state{trees=Trees2, trees_version=VTrees2},
             State3 = add_index_exchanges(Index, State2),
             State4 = check_upgrade(State3),
@@ -521,9 +528,13 @@ maybe_clear_exchange(Ref, Status, State) ->
 
 -spec maybe_clear_registered_tree(pid(), state()) -> state().
 maybe_clear_registered_tree(Pid, State) when is_pid(Pid) ->
-    {value, {Index, Pid}, Trees} = lists:keytake(Pid, 2, State#state.trees),
-    VTrees = orddict:erase(Index, State#state.trees_version),
-    State#state{trees=Trees, trees_version=VTrees};
+    case lists:keytake(Pid, 2, State#state.trees) of
+        false ->
+            State;
+        {value, {Index, Pid}, Trees} ->
+            VTrees = orddict:erase(Index, State#state.trees_version),
+            State#state{trees=Trees, trees_version=VTrees}
+    end;
 maybe_clear_registered_tree(_, State) ->
     State.
 
@@ -605,6 +616,7 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
             State;
         %% No trees have been upgraded, need to wait for exchanges
         Trees when length(Trees) == length(VTrees) ->
+            lager:info("Checking exchanges to attempt hashtree upgrade"),
             check_exchanges_and_upgrade(State);
         %% Upgrade already started, set pending_version
         _ ->
@@ -615,8 +627,10 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
 check_exchanges_and_upgrade(State) ->
     case riak_kv_entropy_info:all_sibling_exchanges_complete() of
         true ->
+            lager:info("Starting upgrade"),
             State#state{pending_version=0};
         false ->
+            lager:info("Exchanges incomplete, delaying upgrade"),
             State
     end.
 

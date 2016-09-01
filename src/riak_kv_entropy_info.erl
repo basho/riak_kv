@@ -242,7 +242,7 @@ compute_exchange_info({M,F}, Ring, Index, #index_info{exchanges=Exchanges,
 
 -spec all_sibling_exchanges_complete() -> boolean().
 all_sibling_exchanges_complete() ->
-    case [Idx || {Idx, {_Time, undefined, _Stats}} <- compute_exchange_info()] of
+    case [Idx || {Idx, _Time, undefined, _Stats} <- compute_exchange_info()] of
         [] ->
             true;
         _ ->
