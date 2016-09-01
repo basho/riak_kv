@@ -417,8 +417,12 @@ test_job_class_enabled({true, RCSchema}) when erlang:is_list(RCSchema) ->
         Config, "riak_core.job_accept_class",
         lists:sort(?DEFAULT_ENABLED_JOB_CLASSES)),
     ok;
-test_job_class_enabled(_) ->
-    skip.
+test_job_class_enabled({error, enoent}) ->
+    % If riak_core is not present, or eunit hasn't been run there, the
+    % necessary schema and/or beam file won't be found. If we fail the test
+    % buildbot won't pass because the riak_core .eunit files haven't been built.
+    ?debugMsg("Supporting riak_core components not present,"
+        " skipping job_class_enabled test").
 
 %% this context() represents the substitution variables that rebar
 %% will use during the build process.  riak_core's schema file is
@@ -455,8 +459,10 @@ riak_core_schema({RCDir, Schema}) when erlang:is_list(RCDir) ->
             {true, Schema};
         _ ->
             Search = filename:join([RCDir, "**", "riak_core_schema_tests.beam"]),
+            % ?debugFmt("Checking ~s", [Search]),
             case filelib:wildcard(Search) of
                 [Beam | _] ->
+                    % ?debugFmt("Loading ~s", [Beam]),
                     case code:load_abs(filename:rootname(Beam)) of
                         {module, _} ->
                             {true, Schema};
@@ -481,6 +487,7 @@ riak_core_dir() ->
 riak_core_dir([Deps | TryDeps]) ->
     RCDir   = filename:join(Deps, "riak_core"),
     Schema  = filename:join([RCDir, "priv", "riak_core.schema"]),
+    % ?debugFmt("Checking ~s and ~s", [RCDir, Schema]),
     case filelib:is_regular(Schema) of
         true ->
             {RCDir, Schema};
