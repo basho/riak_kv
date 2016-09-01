@@ -790,7 +790,7 @@ expand_item(Has2ITree, {object, BKey, RObj}, Version, Others) ->
             Hash2i =  hash_index_data(IndexData),
             [Item0, {?INDEX_2I_N, BinBKey, Hash2i} | Others]
     end;
-expand_item(_, Item, Others) ->
+expand_item(_, Item, _Version, Others) ->
     [Item | Others].
 
 -spec do_insert_expanded([{index_n(), binary(), binary()}], proplist(),

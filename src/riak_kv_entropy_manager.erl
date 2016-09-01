@@ -632,7 +632,7 @@ check_upgrade(State=#state{pending_version=Version,trees_version=VTrees}) ->
         not dict:is_key(Idx, Existing)],
     case MissingIdx of
         [] ->
-            case [Idx || {Idx, Version} <- VTrees] of
+            case [Idx || {Idx, V} <- VTrees, V == Version] of
                 [] ->
                     State;
                 Trees when length(Trees) == length(VTrees) ->

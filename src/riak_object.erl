@@ -650,7 +650,7 @@ legacy_hash(Obj=#r_object{}) ->
     term_to_binary(Hash).
 
 %% @private return the hash of the vclock
--spec legacy_hash(riak_object()) -> binary().
+-spec vclock_hash(riak_object()) -> binary().
 vclock_hash(Obj=#r_object{}) ->
     Hash = erlang:phash2(to_binary(v0, lists:sort(vclock(Obj)))),
     term_to_binary(Hash).
