@@ -21,6 +21,8 @@
 
 -export([tree_built/2,
          tree_built/3,
+         clear_tree_build/1,
+         clear_tree_build/2,
          exchange_complete/4,
          exchange_complete/5,
          create_table/0,
@@ -75,6 +77,15 @@ tree_built(Index, Time) ->
 -spec tree_built(atom(), index(), t_now()) -> ok.
 tree_built(Type, Index, Time) ->
     update_index_info({Type, Index}, {tree_built, Time}).
+
+%% @see clear_tree_build/2
+clear_tree_build(Index) ->
+    clear_tree_build(riak_kv, Index).
+
+%% @doc Set tree_built time to undefined
+-spec clear_tree_build(atom(), index()) -> ok.
+clear_tree_build(Type, Index) ->
+    update_index_info({Type, Index}, {tree_built, undefined}).
 
 %% @see exchange_complete/5
 -spec exchange_complete(index(), index(), index_n(), non_neg_integer()) -> ok.

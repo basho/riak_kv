@@ -432,7 +432,7 @@ request_hashtree_pid(Partition, Sender) ->
 upgrade_hashtree(Partition) ->
     %% Should this be synchronous?
     riak_core_vnode_master:command({Partition, node()},
-                                   upgrade_hashtree,
+                                   {upgrade_hashtree, node()},
                                    riak_kv_vnode_master).
 
 %% Used by {@link riak_kv_exchange_fsm} to force a vnode to update the hashtree
@@ -742,10 +742,24 @@ handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
             case HT of
                 undefined ->
                     {reply, {error, wrong_node}, State};
-                _ ->
-                    _ = riak_kv_index_hashtree:destroy(HT),
-                    riak_kv_index_hashtree:sync_stop(HT),
-                    maybe_create_hashtrees(State#state{upgrade_hashtree=true})
+                _  ->
+                    case {riak_kv_index_hashtree:get_version(HT),
+                        riak_kv_entropy_manager:get_pending_version()} of
+                        {undefined, undefined} ->
+                            {noreply, State};
+                        {undefined, _} ->
+                            lager:info("BRIAN Destroying Hashtree: ~p", [HT]),
+                            _ = riak_kv_index_hashtree:destroy(HT),
+                            lager:info("BRIAN Clearing Hashtree Build Info: ~p", [HT]),
+                            riak_kv_entropy_info:clear_tree_build(State#state.idx),
+                            lager:info("BRIAN Stopping Hashtree: ~p", [HT]),
+                            riak_kv_index_hashtree:stop(HT),
+                            State1 = State#state{upgrade_hashtree=true,hashtrees=undefined},
+                            lager:info("BRIAN Starting New Hashtree: ~p", [HT]),
+                            maybe_create_hashtrees(State1);
+                        _ ->
+                            {noreply, State}
+                    end
             end;
         _ ->
             {reply, {error, wrong_node}, State}

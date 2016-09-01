@@ -938,7 +938,7 @@ do_poke(State) ->
 
 -spec maybe_upgrade(state()) -> state().
 maybe_upgrade(State=#state{lock=undefined, built=true, version=undefined}) ->
-    case riak_kv_entropy_manager:get_version() of
+    case riak_kv_entropy_manager:get_pending_version() of
         undefined ->
             State;
         0 ->

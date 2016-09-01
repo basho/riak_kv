@@ -583,7 +583,7 @@ tick(State) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     State1 = query_and_set_aae_throttle(State),
     State2 = maybe_reload_hashtrees(Ring, State1),
-    State3 = maybe_start_upgrade(State2),
+    State3 = maybe_start_upgrade(Ring, State2),
     State4 = lists:foldl(fun(_,S) ->
                                  maybe_poke_tree(S)
                          end, State3, lists:seq(1,10)),
@@ -598,15 +598,16 @@ maybe_poke_tree(State) ->
     riak_kv_index_hashtree:poke(Tree),
     State2.
 
--spec maybe_start_upgrade(state()) -> state().
-maybe_start_upgrade(State=#state{version=undefined, pending_version=undefined}) ->
+-spec maybe_start_upgrade(riak_core_ring(),state()) -> state().
+maybe_start_upgrade(Ring, State=#state{trees=Trees, version=undefined, pending_version=undefined}) ->
+    Indices = riak_core_ring:my_indices(Ring),
     case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
-        0 ->
+        0 when length(Trees) == length(Indices) ->
             maybe_upgrade(State);
-        undefined ->
+        _ ->
             State
     end;
-maybe_start_upgrade(State) ->
+maybe_start_upgrade(_Ring, State) ->
     State.
 
 -spec maybe_upgrade(state()) -> state().
@@ -616,7 +617,6 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
             State;
         %% No trees have been upgraded, need to wait for exchanges
         Trees when length(Trees) == length(VTrees) ->
-            lager:info("Checking exchanges to attempt hashtree upgrade"),
             check_exchanges_and_upgrade(State);
         %% Upgrade already started, set pending_version
         _ ->
@@ -627,10 +627,9 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
 check_exchanges_and_upgrade(State) ->
     case riak_kv_entropy_info:all_sibling_exchanges_complete() of
         true ->
-            lager:info("Starting upgrade"),
+            lager:info("Starting AAE hashtree upgrade"),
             State#state{pending_version=0};
         false ->
-            lager:info("Exchanges incomplete, delaying upgrade"),
             State
     end.
 
@@ -650,6 +649,7 @@ check_upgrade(State=#state{pending_version=Version,trees_version=VTrees}) ->
                 [] ->
                     State;
                 Trees when length(Trees) == length(VTrees) ->
+                    lager:info("Local AAE hashtrees have completed upgrade to version: ~p",[Version]),
                     State#state{version=Version, pending_version=undefined}
             end;
         _ ->
