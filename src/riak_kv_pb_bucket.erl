@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_pb_bucket: Expose KV bucket functionality to Protocol Buffers
-%%
-%% Copyright (c) 2012 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2012-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -68,57 +66,81 @@ init() ->
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
-    case Msg of
-        rpblistbucketsreq ->
-            %% backwards compat
-            {ok, Msg, {"riak_kv.list_buckets", <<"default">>}};
-        #rpblistbucketsreq{} ->
-            Type = case Msg#rpblistbucketsreq.type of
-                       undefined ->
-                           <<"default">>;
-                       T ->
-                           T
-                   end,
-            {ok, Msg, {"riak_kv.list_buckets", Type}};
-        #rpblistkeysreq{} ->
-            Type = case Msg#rpblistkeysreq.type of
-                       undefined ->
-                           <<"default">>;
-                       T ->
-                           T
-                   end,
-            {ok, Msg, {"riak_kv.list_keys", {Type,
-                                                Msg#rpblistkeysreq.bucket}}}
-    end.
+    handle_decoded(Msg).
+
+handle_decoded(rpblistbucketsreq = Msg) ->
+    %% backwards compat
+    {ok, Msg, {"riak_kv.list_buckets", <<"default">>}};
+handle_decoded(#rpblistbucketsreq{} = Msg) ->
+    Type = convert_type(Msg#rpblistbucketsreq.type),
+    {ok, Msg, {"riak_kv.list_buckets", Type}};
+handle_decoded(#rpblistkeysreq{} = Msg) ->
+    Type = convert_type(Msg#rpblistkeysreq.type),
+    {ok, Msg, {"riak_kv.list_keys", {Type,
+                                     Msg#rpblistkeysreq.bucket}}}.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
+
+%% this should remain for backwards compatibility
+process(rpblistbucketsreq, State) ->
+    process(#rpblistbucketsreq{stream = false}, State);
+
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpblistbucketsreq{type = Type, timeout=T, stream=S}=Req, State) ->
+process(Req, State) ->
+    {Class, Listing} = determine_class_and_listing(Req),
+    Accept = determine_accept_and_report_job_disposition(Class),
+    case {Accept, Listing} of
+        {true, buckets} ->
+            maybe_do_list_buckets(Req, State);
+        {true, keys} ->
+            maybe_stream_list_keys(Req, State);
+        {false, _} ->
+            error_accept(Class, State)
+    end.
+
+
+determine_accept_and_report_job_disposition(Class) ->
+    Accept = riak_core_util:job_class_enabled(Class),
+    _ = riak_core_util:report_job_request_disposition(
+        Accept, Class, ?MODULE, process, ?LINE, protobuf),
+    Accept.
+
+determine_class_and_listing(#rpblistbucketsreq{stream = true}) ->
+    {{riak_kv, stream_list_buckets}, buckets};
+determine_class_and_listing(#rpblistbucketsreq{stream = false}) ->
+    {{riak_kv, list_buckets}, buckets};
+determine_class_and_listing(#rpblistkeysreq{}) ->
+    %% at present list-keys always streams
+    {{riak_kv, stream_list_keys}, keys}.
+
+maybe_stream_list_keys(#rpblistkeysreq{type = Type, bucket = B, timeout = T} = Req,
+                       #state{client = Client} = State) ->
+    case check_bucket_type(Type) of
+        {ok, GoodType} ->
+            Bucket = maybe_create_bucket_type(GoodType, B),
+            {ok, ReqId} = Client:stream_list_keys(Bucket, T),
+            {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
+        error ->
+            error_no_bucket_type(Type, State)
+    end.
+
+error_no_bucket_type(Type, State) ->
+    {error, {format, "No bucket-type named '~s'", [Type]}, State}.
+
+error_accept(Class, State) ->
+    {error, riak_core_util:job_class_disabled_message(binary, Class), State}.
+
+maybe_do_list_buckets(#rpblistbucketsreq{type = Type, timeout = T, stream = S} = Req, State) ->
     case check_bucket_type(Type) of
         {ok, GoodType} ->
             do_list_buckets(GoodType, T, S, Req, State);
         error ->
-            {error, {format, "No bucket-type named '~s'", [Type]}, State}
-    end;
-
-%% this should remain for backwards compatibility
-process(rpblistbucketsreq, State) ->
-    process(#rpblistbucketsreq{}, State);
-
-%% Start streaming in list keys
-process(#rpblistkeysreq{type = Type, bucket=B,timeout=T}=Req, #state{client=C} = State) ->
-    %% stream_list_keys results will be processed by process_stream/3
-    case check_bucket_type(Type) of
-        {ok, GoodType} ->
-            Bucket = maybe_create_bucket_type(GoodType, B),
-	    {ok, ReqId} = C:stream_list_keys(Bucket, T),
-	    {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
-        error ->
-            {error, {format, "No bucket-type named '~s'", [Type]}, State}
+            error_no_bucket_type(Type, State)
     end.
+
 
 %% @doc process_stream/3 callback. Handles streaming keys messages and
 %% streaming buckets.
@@ -202,3 +224,9 @@ bucket_type(undefined, B) ->
     {<<"default">>, B};
 bucket_type(T, B) ->
     {T, B}.
+
+
+convert_type(undefined) ->
+    <<"default">>;
+convert_type(T) ->
+    T.
