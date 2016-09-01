@@ -613,8 +613,9 @@ maybe_start_upgrade(_Ring, State) ->
 -spec maybe_upgrade(state()) -> state().
 maybe_upgrade(State=#state{trees_version = VTrees}) ->
     case [Idx || {Idx, undefined} <- VTrees] of
+        %% Upgrade is done already, set version in state
         [] ->
-            State;
+            State#state{version=0};
         %% No trees have been upgraded, need to wait for exchanges
         Trees when length(Trees) == length(VTrees) ->
             check_exchanges_and_upgrade(State);

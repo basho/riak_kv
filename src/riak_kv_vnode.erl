@@ -748,14 +748,9 @@ handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
                         {undefined, undefined} ->
                             {noreply, State};
                         {undefined, _} ->
-                            lager:info("BRIAN Destroying Hashtree: ~p", [HT]),
                             _ = riak_kv_index_hashtree:destroy(HT),
-                            lager:info("BRIAN Clearing Hashtree Build Info: ~p", [HT]),
                             riak_kv_entropy_info:clear_tree_build(State#state.idx),
-                            lager:info("BRIAN Stopping Hashtree: ~p", [HT]),
-                            riak_kv_index_hashtree:stop(HT),
                             State1 = State#state{upgrade_hashtree=true,hashtrees=undefined},
-                            lager:info("BRIAN Starting New Hashtree: ~p", [HT]),
                             maybe_create_hashtrees(State1);
                         _ ->
                             {noreply, State}
@@ -1231,6 +1226,7 @@ terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) 
     %% process in the riak_kv application, on graceful shutdown riak_kv and
     %% riak_core can complete their shutdown before the hashtree is written
     %% to disk causing the hashtree to be closed dirty.
+    lager:info("BRIAN BRIAN BRIAN"),
     riak_kv_index_hashtree:sync_stop(Trees),
     riak_kv_stat:unregister_vnode_stats(Idx),
     ok.
