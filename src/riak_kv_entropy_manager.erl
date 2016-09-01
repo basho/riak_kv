@@ -471,7 +471,8 @@ add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees, trees_version=VTree
             VTrees2 = orrdict:store(Index, riak_kv_index_hashtree:get_version(Pid), VTrees),
             State2 = State#state{trees=Trees2, trees_version=VTrees2},
             State3 = add_index_exchanges(Index, State2),
-            State3
+            State4 = check_upgrade(State3),
+            State4
     end.
 
 -spec do_get_lock(any(),pid(),state())
@@ -618,6 +619,29 @@ check_exchanges_and_upgrade(State) ->
         false ->
             State
     end.
+
+-spec check_upgrade(state()) -> state().
+check_upgrade(State=#state{pending_version=undefined}) ->
+    State;
+check_upgrade(State=#state{pending_version=Version,trees_version=VTrees}) ->
+    %% Verify we have all partitions registered with a hashtree, version
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    Indices = riak_core_ring:my_indices(Ring),
+    Existing = dict:from_list(VTrees),
+    MissingIdx = [Idx || Idx <- Indices,
+        not dict:is_key(Idx, Existing)],
+    case MissingIdx of
+        [] ->
+            case [Idx || {Idx, Version} <- VTrees] of
+                [] ->
+                    State;
+                Trees when length(Trees) == length(VTrees) ->
+                    State#state{version=Version, pending_version=undefined}
+            end;
+        _ ->
+            State
+    end.
+
 
 %%%===================================================================
 %%% Exchanging

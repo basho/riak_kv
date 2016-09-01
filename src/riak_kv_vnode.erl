@@ -148,6 +148,7 @@
                 handoffs_rejected = 0 :: integer(),
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid(),
+                upgrade_hashtree = false :: boolean(),
                 md_cache :: ets:tab(),
                 md_cache_size :: pos_integer(),
                 counter :: #counter_state{},
@@ -207,8 +208,8 @@ maybe_create_hashtrees(State) ->
 
 -spec maybe_create_hashtrees(boolean(), state()) -> state().
 maybe_create_hashtrees(false, State) ->
-    State;
-maybe_create_hashtrees(true, State=#state{idx=Index,
+    State#state{upgrade_hashtree=false};
+maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
                                           mod=Mod, modstate=ModState}) ->
     %% Only maintain a hashtree if a primary vnode
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
@@ -220,12 +221,12 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
                         {false, _, _} -> false
                     end,
             Opts = [use_2i || lists:member(indexes, ModCaps)]
-                   ++ [vnode_empty || Empty],
-            %% BRIAN add logic to add upgrade atom to start if upgrade was triggered
+                   ++ [vnode_empty || Empty]
+                   ++ [upgrade || Upgrade],
             case riak_kv_index_hashtree:start(Index, self(), Opts) of
                 {ok, Trees} ->
                     monitor(process, Trees),
-                    State#state{hashtrees=Trees};
+                    State#state{hashtrees=Trees, upgrade_hashtree=false};
                 Error ->
                     lager:info("riak_kv/~p: unable to start index_hashtree: ~p",
                                [Index, Error]),
@@ -233,7 +234,7 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
                     State#state{hashtrees=undefined}
             end;
         _ ->
-            State
+            State#state{upgrade_hashtree=false}
     end.
 
 %% @doc Reveal the underlying module state for testing
@@ -425,12 +426,14 @@ request_hashtree_pid(Partition, Sender) ->
                                    {hashtree_pid, node()},
                                    Sender,
                                    riak_kv_vnode_master).
-%% @doc Destroy and restart the hashtrees associated with Index.
-%%      Upgrade atom is passed into arguments for hashtree start
-%%      which will cause the hashtree to start at highest supported
-%%      version.
+
+%% @doc Destroy and restart the hashtrees associated with Partitions vnode.
 -spec upgrade_hashtree(index()) -> ok.
-%% BRIAN stop then destroy hashtree.
+upgrade_hashtree(Partition) ->
+    %% Should this be synchronous?
+    riak_core_vnode_master:command({Partition, node()},
+                                   upgrade_hashtree,
+                                   riak_kv_vnode_master).
 
 %% Used by {@link riak_kv_exchange_fsm} to force a vnode to update the hashtree
 %% for repaired keys. Typically, repairing keys will trigger read repair that
@@ -730,6 +733,22 @@ handle_command({fold_indexes, FoldIndexFun, Acc}, Sender, State=#state{mod=Mod, 
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
+    end;
+
+handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
+    %% Make sure we dont kick off an upgrade during a possible handoff
+    case node() of
+        Node ->
+            case HT of
+                undefined ->
+                    {reply, {error, wrong_node}, State};
+                _ ->
+                    _ = riak_kv_index_hashtree:destroy(HT),
+                    riak_kv_index_hashtree:sync_stop(HT),
+                    maybe_create_hashtrees(State#state{upgrade_hashtree=true})
+            end;
+        _ ->
+            {reply, {error, wrong_node}, State}
     end;
 
 %% Commands originating from inside this vnode
