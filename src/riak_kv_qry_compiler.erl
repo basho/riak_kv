@@ -745,9 +745,22 @@ break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(Qu
                                                      Starts > Ends ->
             error({lower_bound_must_be_less_than_upper_bound,
                    ?E_TSMSG_LOWER_BOUND_MUST_BE_LESS_THAN_UPPER_BOUND});
+        {_, {{GT,_,{_,Starts}}, {LT,_,{_,Ends}}}} when is_integer(Starts),
+                                                       is_integer(Ends),
+                                                       ((Starts == Ends andalso (GT /= '>=' orelse LT /= '<='))
+                                                        orelse
+                                                        ((Starts == (Ends - 1)) andalso GT /= '>=' andalso LT /= '<=')
+                                                       ) ->
+            %% Two scenarios:
+            %% * Upper and lower bounds are the same, in which case
+            %%   both comparison operators must include the equal sign
+            %% * Upper and lower bounds are adjacent, in which case
+            %%   one comparison operator must include the equal sign
+            error({lower_and_upper_bounds_are_equal_when_no_equals_operator,
+                   ?E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR});
         {_, {{'>',_,{_,Starts}}, {'<',_,{_,Ends}}}} when is_integer(Starts),
                                                          is_integer(Ends),
-                                                         Starts == Ends ->
+                                                         Starts == (Ends - 1) ->
             %% catch when the filter values for time bounds are equal but we're
             %% using greater than or less than so could never match, if >= or <=
             %% were used on either side then
