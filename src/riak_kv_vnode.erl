@@ -428,11 +428,11 @@ request_hashtree_pid(Partition, Sender) ->
                                    riak_kv_vnode_master).
 
 %% @doc Destroy and restart the hashtrees associated with Partitions vnode.
--spec upgrade_hashtree(index()) -> ok.
+-spec upgrade_hashtree(index()) -> ok | {error, wrong_node}.
 upgrade_hashtree(Partition) ->
-    %% Should this be synchronous?
     riak_core_vnode_master:command({Partition, node()},
                                    {upgrade_hashtree, node()},
+                                   ignore,
                                    riak_kv_vnode_master).
 
 %% Used by {@link riak_kv_exchange_fsm} to force a vnode to update the hashtree
@@ -746,14 +746,16 @@ handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
                     case {riak_kv_index_hashtree:get_version(HT),
                         riak_kv_entropy_manager:get_pending_version()} of
                         {undefined, undefined} ->
-                            {noreply, State};
+                            {reply, ok, State};
                         {undefined, _} ->
                             _ = riak_kv_index_hashtree:destroy(HT),
+                            riak_kv_index_hashtree:stop(HT),
                             riak_kv_entropy_info:clear_tree_build(State#state.idx),
                             State1 = State#state{upgrade_hashtree=true,hashtrees=undefined},
-                            maybe_create_hashtrees(State1);
+                            maybe_create_hashtrees(State1),
+                            {reply, ok, State1};
                         _ ->
-                            {noreply, State}
+                            {reply, ok, State}
                     end
             end;
         _ ->
@@ -1226,7 +1228,6 @@ terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) 
     %% process in the riak_kv application, on graceful shutdown riak_kv and
     %% riak_core can complete their shutdown before the hashtree is written
     %% to disk causing the hashtree to be closed dirty.
-    lager:info("BRIAN BRIAN BRIAN"),
     riak_kv_index_hashtree:sync_stop(Trees),
     riak_kv_stat:unregister_vnode_stats(Idx),
     ok.
