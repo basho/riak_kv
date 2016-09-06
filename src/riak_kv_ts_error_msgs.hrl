@@ -70,7 +70,7 @@
 
 -define(
     E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR,
-    <<"The upper and lower boundaries are equal or adjacent and the comparison makes no sense.">>
+    <<"The upper and lower boundaries are equal or adjacent. No results are possible.">>
 ).
 
 -define(
