@@ -49,7 +49,17 @@
 start(_Type, _StartArgs) ->
     riak_core_util:start_app_deps(riak_kv),
 
-    FSM_Limit = app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT),
+    FSM_Limit = case app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT) of
+                    undefined ->
+                        %% If it's explicitly set to 'undefined', that means "no limit".
+                        %% sidejob doesn't have an option to specify "infinity" but if
+                        %% we make the limit equal to the node's global process limit,
+                        %% then we're pretty much guaranteed to never exceed that:
+                        erlang:system_info(process_limit);
+                    Limit when is_integer(Limit) ->
+                        Limit
+                end,
+
     sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
     sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit),
 
