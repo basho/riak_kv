@@ -184,6 +184,7 @@ start(_Type, _StartArgs) ->
 
             riak_core_capability:register({riak_kv, crdt},
                                           [?TOP_LEVEL_TYPES,
+                                           ?V1_TOP_LEVEL_TYPES ++
                                            ?V2_TOP_LEVEL_TYPES,
                                            ?V1_TOP_LEVEL_TYPES,
                                            []],
