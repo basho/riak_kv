@@ -290,8 +290,9 @@ num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
 
 %% @private Print a warning if objects are not equal. Only called on case of no read-repair
 %% This situation could happen with pre 2.1 vclocks in very rare cases. Fixing the object
-%% requires the user to rewrite the object in 2.1+ of Riak. Logic is disabled when using
-%% a defined version of aae hashing as it's no longer needed.
+%% requires the user to rewrite the object in 2.1+ of Riak. Logic is enabled when capabilities
+%% returns a version(all nodes at least 2.2) and the entropy_manager does not yet have a
+%% defined version.
 maybe_log_old_vclock(Results) ->
     case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
         undefined ->
@@ -301,7 +302,7 @@ maybe_log_old_vclock(Results) ->
             case [RObj || {_Idx, {ok, RObj}} <- Results] of
                 [] ->
                     ok;
-                [_|[]] ->
+                [_] ->
                     ok;
                 _ when Version == 0 ->
                     ok;

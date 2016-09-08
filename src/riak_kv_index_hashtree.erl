@@ -213,7 +213,7 @@ get_lock(Tree, Type, Version) ->
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
--spec get_lock(pid(), any(), non_neg_integer(), pid()) -> ok | not_built | already_locked.
+-spec get_lock(pid(), any(), non_neg_integer(), pid()) -> ok | not_built | already_locked | bad_version.
 get_lock(Tree, Type, Version, Pid) ->
     gen_server:call(Tree, {get_lock, Type, Version, Pid}, infinity).
 
@@ -937,13 +937,19 @@ do_poke(State) ->
     State3.
 
 -spec maybe_upgrade(state()) -> state().
-maybe_upgrade(State=#state{lock=undefined, built=true, version=undefined}) ->
+maybe_upgrade(State=#state{lock=undefined, built=true, version=undefined, index=Index}) ->
     case riak_kv_entropy_manager:get_pending_version() of
         undefined ->
             State;
         0 ->
-            riak_kv_vnode:upgrade_hashtree(State#state.index),
-            State
+            case get_all_locks(upgrade, Index, self()) of
+                true ->
+                    riak_kv_vnode:upgrade_hashtree(Index),
+                    State;
+                _ ->
+                    riak_kv_entropy_manager:requeue_poke(State#state.index),
+                    State
+            end
     end;
 maybe_upgrade(State) ->
     State.
@@ -1074,7 +1080,7 @@ close_trees(State=#state{trees=Trees}) ->
     _ = [hashtree:close(Tree) || {_IdxN, Tree} <- Trees2],
     State#state{trees=undefined}.
 
--spec get_all_locks(build | rehash, index(), pid()) -> boolean().
+-spec get_all_locks(build | rehash | upgrade, index(), pid()) -> boolean().
 get_all_locks(Type, Index, Pid) ->
     try riak_kv_entropy_manager:get_lock(Type, Pid) of
         ok ->
@@ -1095,6 +1101,11 @@ get_all_locks(Type, Index, Pid) ->
 
 maybe_get_vnode_lock(rehash, _Partition, _Pid) ->
     %% rehash operations do not need a vnode lock
+    ok;
+maybe_get_vnode_lock(upgrade, _Partition, _Pid) ->
+    %% upgrade operations do not need a vnode lock
+    %% The subsequent build following the hashtree
+    %% restart will trigger a build and get a vnode_lock
     ok;
 maybe_get_vnode_lock(build, Partition, Pid) ->
     maybe_get_vnode_lock(Partition, Pid).

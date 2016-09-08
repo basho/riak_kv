@@ -73,9 +73,9 @@
 -type version() :: undefined | non_neg_integer().
 
 -record(state, {mode           = automatic :: automatic | manual,
-                trees          = []        :: [{index(), pid()}],
-                tree_queue     = []        :: [{index(), pid()}],
-                trees_version  = []        :: [{index(), version()}],
+                trees          = []        :: orddict:orddict(index(), pid()),
+                tree_queue     = []        :: orddict:orddict(index(), pid()),
+                trees_version  = []        :: orddict:orddict(index(), version()),
                 locks          = []        :: [{pid(), reference()}],
                 build_tokens   = 0         :: non_neg_integer(),
                 exchange_queue = []        :: [exchange()],
@@ -121,10 +121,11 @@ release_lock(Pid) ->
 
 %% @doc Acquire the necessary locks for an entropy exchange with the specified
 %%      remote vnode. The request is sent to the remote entropy manager which
-%%      will try to acquire a concurrency lock. If successsful, the request is
+%%      will try to acquire a concurrency lock. If successful, the request is
 %%      then forwarded to the relevant index_hashtree to acquire a tree lock.
 %%      If both locks are acquired, the pid of the remote index_hashtree is
 %%      returned. This function assumes an undefined version of the hashtree
+%%      and is left over for support for mixed clusters with pre-2.2 nodes
 -spec start_exchange_remote({index(), node()}, index_n(), pid())
                            -> {remote_exchange, pid()} |
                               {remote_exchange, anti_entropy_disabled} |
@@ -196,24 +197,33 @@ set_debug(Enabled) ->
     end,
     ok.
 
+-spec enable() -> ok.
 enable() ->
     gen_server:call(?MODULE, enable, infinity).
 
+-spec disable() -> ok.
 disable() ->
     gen_server:call(?MODULE, disable, infinity).
 
+
+-spec expire_trees() -> ok.
 expire_trees() ->
     gen_server:cast(?MODULE, expire_trees).
 
+-spec clear_trees() -> ok.
 clear_trees() ->
     gen_server:cast(?MODULE, clear_trees).
 
+-spec get_version() -> version().
 get_version() ->
     gen_server:call(?MODULE, get_version, infinity).
 
+-spec get_pending_version() -> version().
 get_pending_version() ->
     gen_server:call(?MODULE, get_pending_version, infinity).
 
+%% For testing to quickly verify tree versions match up with manager version
+-spec get_trees_version() -> [{index(), version()}].
 get_trees_version() ->
     gen_server:call(?MODULE, get_trees_version, infinity).
 
@@ -453,12 +463,7 @@ reload_hashtrees(Ring, State=#state{trees=Trees}) ->
     Existing = dict:from_list(Trees),
     MissingIdx = [Idx || Idx <- Indices,
                          not dict:is_key(Idx, Existing)],
-    case MissingIdx of
-        [] ->
-            ok;
-        _ ->
-            _ = [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx]
-    end,
+    _ = [riak_kv_vnode:request_hashtree_pid(Idx) || Idx <- MissingIdx],
     State.
 
 add_hashtree_pid(Index, Pid, State) ->
@@ -502,14 +507,24 @@ do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
             end
     end.
 
-check_lock_type(build, State=#state{build_tokens=Tokens}) ->
+-spec check_lock_type(any(), state()) -> build_limit_reached | {ok, state()}.
+check_lock_type(Type, State) ->
+    case Type of
+        build->
+            do_get_build_token(State);
+        upgrade ->
+            do_get_build_token(State);
+        _ ->
+            {ok, State}
+    end.
+
+-spec do_get_build_token(state()) -> build_limit_reached | {ok, state()}.
+do_get_build_token(State=#state{build_tokens=Tokens}) ->
     if Tokens > 0 ->
             {ok, State#state{build_tokens=Tokens-1}};
        true ->
             build_limit_reached
-    end;
-check_lock_type(_Type, State) ->
-    {ok, State}.
+    end.
 
 -spec maybe_release_lock(reference(), state()) -> state().
 maybe_release_lock(Ref, State) ->
@@ -628,7 +643,7 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
 check_exchanges_and_upgrade(State) ->
     case riak_kv_entropy_info:all_sibling_exchanges_complete() of
         true ->
-            lager:info("Starting AAE hashtree upgrade"),
+            lager:notice("Starting AAE hashtree upgrade"),
             State#state{pending_version=0};
         false ->
             State
@@ -637,21 +652,22 @@ check_exchanges_and_upgrade(State) ->
 -spec check_upgrade(state()) -> state().
 check_upgrade(State=#state{pending_version=undefined}) ->
     State;
-check_upgrade(State=#state{pending_version=Version,trees_version=VTrees}) ->
+check_upgrade(State=#state{pending_version=PendingVersion,trees_version=VTrees}) ->
     %% Verify we have all partitions registered with a hashtree, version
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Indices = riak_core_ring:my_indices(Ring),
-    Existing = dict:from_list(VTrees),
     MissingIdx = [Idx || Idx <- Indices,
-        not dict:is_key(Idx, Existing)],
+        not orddict:is_key(Idx, VTrees)],
     case MissingIdx of
         [] ->
-            case [Idx || {Idx, V} <- VTrees, V == Version] of
+            case [Idx || {Idx, V} <- VTrees, V == PendingVersion] of
                 [] ->
                     State;
                 Trees when length(Trees) == length(VTrees) ->
-                    lager:info("Local AAE hashtrees have completed upgrade to version: ~p",[Version]),
-                    State#state{version=Version, pending_version=undefined}
+                    lager:notice("Local AAE hashtrees have completed upgrade to version: ~p",[PendingVersion]),
+                    State#state{version=PendingVersion, pending_version=undefined};
+                _Trees ->
+                    State
             end;
         _ ->
             State

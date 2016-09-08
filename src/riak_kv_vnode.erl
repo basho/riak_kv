@@ -749,10 +749,8 @@ handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
                             {reply, ok, State};
                         {undefined, _} ->
                             _ = riak_kv_index_hashtree:destroy(HT),
-                            riak_kv_index_hashtree:stop(HT),
                             riak_kv_entropy_info:clear_tree_build(State#state.idx),
                             State1 = State#state{upgrade_hashtree=true,hashtrees=undefined},
-                            maybe_create_hashtrees(State1),
                             {reply, ok, State1};
                         _ ->
                             {reply, ok, State}

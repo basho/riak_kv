@@ -652,7 +652,7 @@ legacy_hash(Obj=#r_object{}) ->
 %% @private return the hash of the vclock
 -spec vclock_hash(riak_object()) -> binary().
 vclock_hash(Obj=#r_object{}) ->
-    Hash = erlang:phash2(to_binary(v0, lists:sort(vclock(Obj)))),
+    Hash = erlang:phash2(lists:sort(vclock(Obj))),
     term_to_binary(Hash).
 
 %% @doc  Set the updated metadata of an object to M.

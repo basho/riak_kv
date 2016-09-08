@@ -223,7 +223,6 @@ responsible_preflists(Index) ->
 
 -spec responsible_preflists(index(), riak_core_ring()) -> [index_n()].
 responsible_preflists(Index, Ring) ->
-    %% Does this work with custom N's in bucket_types??
     AllN = riak_core_bucket:all_n(Ring),
     responsible_preflists(Index, AllN, Ring).
 
