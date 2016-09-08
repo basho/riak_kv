@@ -70,8 +70,7 @@
 
 -define(
     E_TSMSG_LOWER_AND_UPPER_BOUNDS_ARE_EQUAL_WHEN_NO_EQUALS_OPERATOR,
-    <<"The upper and lower boundaries are equal but the query uses the greater and less than operators.  ",
-      "Change the bounds time or use the greater/less than or equals to on either side.">>
+    <<"The upper and lower boundaries are equal or adjacent. No results are possible.">>
 ).
 
 -define(
