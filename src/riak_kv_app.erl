@@ -49,20 +49,7 @@
 start(_Type, _StartArgs) ->
     riak_core_util:start_app_deps(riak_kv),
 
-    FSM_Limit = case app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT) of
-                    undefined ->
-                        %% If it's explicitly set to 'undefined', that means "no limit".
-                        %% sidejob doesn't have an option to specify "infinity" but if
-                        %% we make the limit equal to the node's global process limit,
-                        %% then we're pretty much guaranteed to never exceed that:
-                        erlang:system_info(process_limit);
-                    Limit when is_integer(Limit) ->
-                        Limit;
-                    BadValue ->
-                        lager:critical("Bad value provided for riak_kv.fsm_limit - ~p. "
-                                       "Must be an integer or 'undefined'", [BadValue]),
-                        throw({error, bad_fsm_limit})
-                end,
+    FSM_Limit = find_fsm_limit(),
 
     sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
     sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit),
@@ -341,6 +328,22 @@ wait_for_put_fsms(N) ->
 
 wait_for_put_fsms() ->
     wait_for_put_fsms(?MAX_FLUSH_PUT_FSM_RETRIES).
+
+find_fsm_limit() ->
+    case app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT) of
+        undefined ->
+            %% If it's explicitly set to 'undefined', that means "no limit".
+            %% sidejob doesn't have an option to specify "infinity" but if
+            %% we make the limit equal to the node's global process limit,
+            %% then we're pretty much guaranteed to never exceed that:
+            erlang:system_info(process_limit);
+        Limit when is_integer(Limit) ->
+            Limit;
+        BadValue ->
+            lager:critical("Bad value provided for riak_kv.fsm_limit: ~p. "
+                           "Must be an integer or 'undefined'", [BadValue]),
+            throw({error, bad_fsm_limit})
+    end.
 
 get_object_format_modes() ->
     %% TODO: clearly, this isn't ideal if we have more versions
