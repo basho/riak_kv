@@ -26,6 +26,10 @@
 -export([finalise_aggregate/2]).
 -export([run_select/2, run_select/3]).
 
+-ifdef(TEST).
+-compile(export_all).
+-endif.
+
 -type compiled_select() :: fun((_,_) -> riak_pb_ts_codec:ldbvalue()).
 -export_type([compiled_select/0]).
 
@@ -2320,5 +2324,91 @@ coverage_context_not_a_tuple_or_invalid_checksum_test() ->
     ?assertEqual(
        {error, invalid_coverage_context_checksum},
        compile(get_ddl("create table t (a timestamp not null, primary key ((quantum(a,1,d)), a))"), Q, 100)).
+
+times_have_gap_test_() ->
+    BadRanges = [
+                 {
+                   {'>=', 100},
+                   {'<=', 99},
+                   lower_bound_must_be_less_than_upper_bound
+                 },
+                 {
+                   {'>', 100},
+                   {'<=', 99},
+                   lower_bound_must_be_less_than_upper_bound
+                 },
+                 {
+                   {'>=', 100},
+                   {'<', 99},
+                   lower_bound_must_be_less_than_upper_bound
+                 },
+                 {
+                   {'>', 100},
+                   {'<', 99},
+                   lower_bound_must_be_less_than_upper_bound
+                 },
+                 {
+                   {'>', 99},
+                   {'<', 99},
+                   lower_and_upper_bounds_are_equal_when_no_equals_operator
+                 },
+                 {
+                   {'>=', 99},
+                   {'<', 99},
+                   lower_and_upper_bounds_are_equal_when_no_equals_operator
+                 },
+                 {
+                   {'>', 99},
+                   {'<=', 99},
+                   lower_and_upper_bounds_are_equal_when_no_equals_operator
+                 },
+                 {
+                   {'>', 99},
+                   {'<', 100},
+                   lower_and_upper_bounds_are_equal_when_no_equals_operator
+                 }
+                ],
+    GoodRanges = [
+                  {
+                    {'>=', 99},
+                    {'<', 100}
+                  },
+                  {
+                    {'>', 99},
+                    {'<=', 100}
+                  },
+                  {
+                    {'>', 99},
+                    {'<', 101}
+                  },
+                  {
+                    {'>=', 99},
+                    {'<', 101}
+                  },
+                  {
+                    {'>=', 99},
+                    {'<=', 101}
+                  }
+                 ],
+
+    lists:map(
+      fun({{Op1, Val1}, {Op2, Val2}, Error}) ->
+              ?_assertError(
+                 {Error, _},
+                 break_out_timeseries(
+                   [{Op1, <<"qfield">>, {integer, Val1}},
+                    {Op2, <<"qfield">>, {integer, Val2}}],
+                   [], <<"qfield">>))
+      end, BadRanges)
+        ++
+    lists:map(
+      fun({{Op1, Val1}, {Op2, Val2}}) ->
+              ?_assertMatch(
+                 {_, _, _},
+                 break_out_timeseries(
+                   [{Op1, <<"qfield">>, {integer, Val1}},
+                    {Op2, <<"qfield">>, {integer, Val2}}],
+                   [], <<"qfield">>))
+      end, GoodRanges).
 
 -endif.
