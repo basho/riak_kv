@@ -57,7 +57,11 @@ start(_Type, _StartArgs) ->
                         %% then we're pretty much guaranteed to never exceed that:
                         erlang:system_info(process_limit);
                     Limit when is_integer(Limit) ->
-                        Limit
+                        Limit;
+                    BadValue ->
+                        lager:critical("Bad value provided for riak_kv.fsm_limit - ~p. "
+                                       "Must be an integer or 'undefined'", [BadValue]),
+                        throw({error, bad_fsm_limit})
                 end,
 
     sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
