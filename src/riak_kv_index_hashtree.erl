@@ -694,7 +694,7 @@ do_get_lock(_Type, Version, Pid, State=#state{version=Version}) ->
     State2 = State#state{lock=Ref},
     {ok, State2};
 do_get_lock(_Type, ReqVer, _Pid, State=#state{version=Version, index=Index}) ->
-    lager:error("Hashtree ~p lock attempted for version: ~p while local tree has version: ~p", [Index, ReqVer, Version]),
+    lager:debug("Hashtree ~p lock attempted for version: ~p while local tree has version: ~p", [Index, ReqVer, Version]),
     {bad_version, State}.
 
 -spec maybe_release_lock(reference(), state()) -> state().
