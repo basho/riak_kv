@@ -71,11 +71,12 @@
 -type exchange() :: {index(), index(), index_n()}.
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
 -type version() :: undefined | non_neg_integer().
+-type orddict(Key, Val) :: [{Key, Val}].
 
 -record(state, {mode           = automatic :: automatic | manual,
-                trees          = []        :: orddict:orddict(index(), pid()),
-                tree_queue     = []        :: orddict:orddict(index(), pid()),
-                trees_version  = []        :: orddict:orddict(index(), version()),
+                trees          = []        :: orddict(index(), pid()),
+                tree_queue     = []        :: orddict(index(), pid()),
+                trees_version  = []        :: orddict(index(), version()),
                 locks          = []        :: [{pid(), reference()}],
                 build_tokens   = 0         :: non_neg_integer(),
                 exchange_queue = []        :: [exchange()],
