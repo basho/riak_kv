@@ -136,7 +136,7 @@ release_lock(Pid) ->
 start_exchange_remote(VNode, IndexN, FsmPid) ->
     start_exchange_remote(VNode, IndexN, FsmPid, undefined).
 
--spec start_exchange_remote({index(), node()}, index_n(), pid(), non_neg_integer())
+-spec start_exchange_remote({index(), node()}, index_n(), pid(), version())
                            -> {remote_exchange, pid()} |
                               {remote_exchange, anti_entropy_disabled} |
                               {remote_exchange, max_concurrency} |
@@ -645,7 +645,7 @@ check_exchanges_and_upgrade(State) ->
         true ->
             lager:notice("Starting AAE hashtree upgrade"),
             State#state{pending_version=0};
-        false ->
+        _ ->
             State
     end.
 

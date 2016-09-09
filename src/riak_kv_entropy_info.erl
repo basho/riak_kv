@@ -42,7 +42,7 @@
 -type exchange_id() :: {index(), index_n()}.
 -type orddict(K,V) :: [{K,V}].
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
--type t_now() :: erlang:timestamp().
+-type t_now() :: undefined | erlang:timestamp().
 
 -record(simple_stat, {last, min, max, count, sum}).
 
