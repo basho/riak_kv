@@ -84,7 +84,7 @@
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
--export([hash/1, approximate_size/2]).
+-export([hash/1, hash/2, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
@@ -637,12 +637,37 @@ get_value(Object=#r_object{}) ->
     [{_M,Value}] = get_contents(Object),
     Value.
 
-%% @doc calculates the hash of a riak object
--spec hash(riak_object()) -> integer().
+%% @doc calculates the canonical hash of a riak object
+%%      Old API which uses the version .
+-spec hash(riak_object()) -> binary().
 hash(Obj=#r_object{}) ->
-    Vclock = vclock(Obj),
-    UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
-    erlang:phash2(to_binary(v0, UpdObj)).
+    %% BRIAN What to do here needs more discussion(race condition due to tick, vnode startup, etc)
+    case riak_kv_entropy_manager:get_version() of
+        0 ->
+            vclock_hash(Obj);
+        undefined ->
+            legacy_hash(Obj)
+    end.
+
+%% @doc calculates the canonical hash of a riak object depending on version
+-spec hash(riak_object(), non_neg_integer() | undefined) -> binary().
+hash(Obj=#r_object{}, _Version=0) ->
+    vclock_hash(Obj);
+hash(Obj=#r_object{}, _Version) ->
+    legacy_hash(Obj).
+
+%% @private return the legacy full object hash of the riak_object
+-spec legacy_hash(riak_object()) -> binary().
+legacy_hash(Obj=#r_object{}) ->
+    UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
+    Hash = erlang:phash2(to_binary(v0, UpdObj)),
+    term_to_binary(Hash).
+
+%% @private return the hash of the vclock
+-spec vclock_hash(riak_object()) -> binary().
+vclock_hash(Obj=#r_object{}) ->
+    Hash = erlang:phash2(lists:sort(vclock(Obj))),
+    term_to_binary(Hash).
 
 %% @doc  Set the updated metadata of an object to M.
 -spec update_metadata(riak_object(), riak_object_dict()) -> riak_object().
