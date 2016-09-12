@@ -75,6 +75,7 @@
 -type riak_object_t2b() :: binary().
 -type hashtree() :: hashtree:hashtree().
 -type update_callback() :: fun(() -> term()).
+-type version() :: undefined | non_neg_integer().
 
 -record(state, {index,
                 vnode_pid,
@@ -85,7 +86,7 @@
                 build_time,
                 trees,
                 use_2i = false :: boolean(),
-                version :: undefined | non_neg_integer()}).
+                version :: version()}).
 
 -type state() :: #state{}.
 
@@ -207,24 +208,24 @@ get_lock(Tree, Type) ->
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the calling process. Grab lock on
 %%      specific version.
--spec get_lock(pid(), any(), non_neg_integer()) -> ok | not_built | already_locked | bad_version.
+-spec get_lock(pid(), any(), version()) -> ok | not_built | already_locked | bad_version.
 get_lock(Tree, Type, Version) ->
     get_lock(Tree, Type, Version, self()).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
--spec get_lock(pid(), any(), non_neg_integer(), pid()) -> ok | not_built | already_locked | bad_version.
+-spec get_lock(pid(), any(),version(), pid()) -> ok | not_built | already_locked | bad_version.
 get_lock(Tree, Type, Version, Pid) ->
     gen_server:call(Tree, {get_lock, Type, Version, Pid}, infinity).
 
 %% @doc Get the version of the specified index_hashtree
--spec get_version(pid()) -> undefined | non_neg_integer().
+-spec get_version(pid()) -> version().
 get_version(Tree) ->
     gen_server:call(Tree, get_version, infinity).
 
 %% @doc Acquire the lock and return the version for the specified index_hashtree if not already
 %%      locked.
--spec get_lock_and_version(pid(), any()) -> {ok | not_built | already_locked, undefined | non_neg_integer()}.
+-spec get_lock_and_version(pid(), any()) -> {ok | not_built | already_locked, version()}.
 get_lock_and_version(Tree, Type) ->
     {get_lock(Tree, Type) , get_version(Tree)}.
 
