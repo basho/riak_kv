@@ -356,7 +356,7 @@ do_explain(DDL, Select) ->
         <<"Is End Inclusive?">>,
         <<"Filter">>],
     ColumnTypes = [
-        integer,
+        sint64,
         varchar,
         varchar,
         boolean,
