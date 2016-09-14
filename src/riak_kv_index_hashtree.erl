@@ -509,7 +509,7 @@ determine_data_root() ->
 %%      looking for versioned AAE directory.
 -spec determine_version(undefined | list(), non_neg_integer(), list()) -> undefined | non_neg_integer().
 determine_version(Root, Index, Opts) ->
-    case application:get_env(riak_kv, force_hashtree_upgrade)
+    case application:get_env(riak_kv, force_hashtree_upgrade) of
         {ok, true} -> 
             0;
          _ ->
