@@ -509,22 +509,27 @@ determine_data_root() ->
 %%      looking for versioned AAE directory.
 -spec determine_version(undefined | list(), non_neg_integer(), list()) -> undefined | non_neg_integer().
 determine_version(Root, Index, Opts) ->
-    case lists:member(upgrade, Opts) of
-        true ->
-            riak_core_capability:get({riak_kv, object_hash_version}, undefined);
-        false ->
-            case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
-                V when is_integer(V) ->
-                    %% Check if the v[Version]/Index dir exists
-                    case filelib:is_dir(filename:join(filename:join(Root, "v" ++ integer_to_list(V)),integer_to_list(Index))) of
-                        true ->
-                            V;
-                        false ->
-                            undefined
-                    end;
-                _ ->
-                    undefined
-            end
+    case application:get_env(riak_kv, force_hashtree_upgrade)
+        {ok, true} -> 
+            0;
+         _ ->
+            case lists:member(upgrade, Opts) of
+                true ->
+                   riak_core_capability:get({riak_kv, object_hash_version}, undefined);
+               false ->
+                   case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
+                       V when is_integer(V) ->
+                           %% Check if the v[Version]/Index dir exists
+                           case filelib:is_dir(filename:join(filename:join(Root, "v" ++ integer_to_list(V)),integer_to_list(Index))) of
+                               true ->
+                                   V;
+                               false ->
+                                   undefined
+                           end;
+                       _ ->
+                           undefined
+                   end
+           end
     end.
 
 %% @doc Init the trees.
