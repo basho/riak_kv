@@ -474,7 +474,13 @@ explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
     EndKey2 = string:join([key_to_string(Key) || Key <- EndKey1], ", "),
     StartInclusive = lists:keymember(start_inclusive, 1, StartKey1),
     EndInclusive = lists:keymember(end_inclusive, 1, EndKey1),
-    [Index, Coverage, StartKey2, StartInclusive, EndKey2, EndInclusive, filter_to_string(Filter)].
+    [Index,
+     list_to_binary(Coverage),
+     list_to_binary(StartKey2),
+     StartInclusive,
+     list_to_binary(EndKey2),
+     EndInclusive,
+     list_to_binary(filter_to_string(Filter))].
 
 %%
 format_coverage(Table, CoverKey, NVal) ->
