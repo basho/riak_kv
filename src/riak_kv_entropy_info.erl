@@ -247,8 +247,12 @@ compute_exchange_info({M,F}, Ring, Index, #index_info{exchanges=Exchanges,
     AllTime = merge_to_first(KnownTime, Defaults),
     %% Rely upon fact that undefined < tuple
     AllTime2 = lists:keysort(2, AllTime),
-    {_, LastAll} = hd(AllTime2),
-    {_, Recent} = hd(lists:reverse(AllTime2)),
+    {LastAll, Recent} = case AllTime2 of
+                            [] ->
+                                {undefined, undefined};
+                            _ ->
+                                {element(2, hd(AllTime2)), element(2, lists:last(AllTime2))}
+                        end,
     {Index, Recent, LastAll, stat_tuple(Repaired)}.
 
 -spec all_sibling_exchanges_complete() -> boolean().
