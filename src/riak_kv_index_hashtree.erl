@@ -75,7 +75,7 @@
 -type riak_object_t2b() :: binary().
 -type hashtree() :: hashtree:hashtree().
 -type update_callback() :: fun(() -> term()).
--type version() :: undefined | non_neg_integer().
+-type version() :: legacy | non_neg_integer().
 
 -record(state, {index,
                 vnode_pid,
@@ -86,7 +86,7 @@
                 build_time,
                 trees,
                 use_2i = false :: boolean(),
-                version :: version()}).
+                version = legacy :: version()}).
 
 -type state() :: #state{}.
 
@@ -145,7 +145,7 @@ async_delete(Items=[{_Id, _Key}|_], Tree) ->
 %% @doc Called by the entropy manager to finish the process used to acquire
 %%      remote vnode locks when starting an exchange. For more details,
 %%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}
--spec start_exchange_remote(pid(), non_neg_integer(), term(), index_n(), pid()) -> ok.
+-spec start_exchange_remote(pid(), version(), term(), index_n(), pid()) -> ok.
 start_exchange_remote(FsmPid, Version, From, IndexN, Tree) ->
     gen_server:cast(Tree, {start_exchange_remote, FsmPid, Version, From, IndexN}).
 
@@ -292,7 +292,7 @@ init([Index, VNPid, Opts]) ->
                     %% easy downgrades where the new trees will be unable to be found by old code.
                     {filename:join(Root, "v" ++ integer_to_list(V)), V};
                 _ ->
-                    {Root, undefined}
+                    {Root, legacy}
             end,
             Path = filename:join(Path0, integer_to_list(Index)),
             monitor(process, VNPid),
@@ -507,25 +507,55 @@ determine_data_root() ->
 %%      then we immediately use version in capabilities. Otherwise check if capabilities
 %%      has flipped to a version yet and if it has, check if we've already upgraded by
 %%      looking for versioned AAE directory.
--spec determine_version(undefined | list(), non_neg_integer(), list()) -> undefined | non_neg_integer().
+-spec determine_version(list(), index(), list()) -> version().
 determine_version(Root, Index, Opts) ->
-    case lists:member(upgrade, Opts) of
+    case force_upgrade(Opts) of
         true ->
-            riak_core_capability:get({riak_kv, object_hash_version}, undefined);
-        false ->
-            case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
-                V when is_integer(V) ->
-                    %% Check if the v[Version]/Index dir exists
-                    case filelib:is_dir(filename:join(filename:join(Root, "v" ++ integer_to_list(V)),integer_to_list(Index))) of
-                        true ->
-                            V;
-                        false ->
-                            undefined
-                    end;
-                _ ->
-                    undefined
-            end
+            get_cap_hash_version();
+        _ ->
+            find_version(Root, Index)
     end.
+
+-spec force_upgrade(list()) -> boolean().
+force_upgrade(Opts) ->
+    check_upgrade_opts(Opts, check_upgrade_env()).
+
+-spec check_upgrade_opts(list(), boolean()) -> boolean().
+check_upgrade_opts(_Opts, true) ->
+    true;
+check_upgrade_opts(Opts, _) ->
+    lists:member(upgrade, Opts).
+
+-spec check_upgrade_env() -> boolean().
+check_upgrade_env() ->
+    case application:get_env(riak_kv, force_hashtree_upgrade, false) of
+        true ->
+            true;
+        false ->
+            false;
+        Value ->
+            lager:error("Unsupported non-boolean value for environment variable force_hashtree_upgrade ~p",[Value]),
+            false
+    end.
+
+-spec get_cap_hash_version() -> version().
+get_cap_hash_version() ->
+    riak_core_capability:get({riak_kv, object_hash_version}, legacy).
+
+-spec find_version(list(), index()) -> version().
+find_version(Root, Index) ->
+    check_root_version(Root, Index, get_cap_hash_version()).
+
+-spec check_root_version(list(), index(), version()) -> version().
+check_root_version(Root, Index, Version) when is_integer(Version) ->
+    case filelib:is_dir(filename:join(filename:join(Root, "v" ++ integer_to_list(Version)),integer_to_list(Index))) of
+        true ->
+            Version;
+        false ->
+            legacy
+    end;
+check_root_version(_Root, _Index, Version) ->
+    Version.
 
 %% @doc Init the trees.
 %%
@@ -555,7 +585,7 @@ load_built(#state{trees=Trees}) ->
 %% Generate a hash value for a `riak_object'
 -spec hash_object({riak_object:bucket(), riak_object:key()},
                   riak_object_t2b() | riak_object:riak_object(),
-                  undefined | non_neg_integer()) -> binary().
+                  version()) -> binary().
 hash_object({Bucket, Key}, RObj0, Version) ->
     try
         RObj = case riak_object:is_robject(RObj0) of
@@ -683,7 +713,7 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}, MarkType) ->
 
 %% This function never uses the Type field. Unsure why it is part of the API. Maybe was meant to be used
 %% by the background manager which could manage tokens based on Type atom. Best guess...
--spec do_get_lock(any(), non_neg_integer(), pid(), state()) -> {not_built | ok | already_locked | bad_version, state()}.
+-spec do_get_lock(any(), version(), pid(), state()) -> {not_built | ok | already_locked | bad_version, state()}.
 do_get_lock(_, _, _, State) when State#state.built /= true ->
     lager:debug("Not built: ~p :: ~p", [State#state.index, State#state.built]),
     {not_built, State};
@@ -938,9 +968,9 @@ do_poke(State) ->
     State3.
 
 -spec maybe_upgrade(state()) -> state().
-maybe_upgrade(State=#state{lock=undefined, built=true, version=undefined, index=Index}) ->
+maybe_upgrade(State=#state{lock=undefined, built=true, version=legacy, index=Index}) ->
     case riak_kv_entropy_manager:get_pending_version() of
-        undefined ->
+        legacy ->
             State;
         0 ->
             case get_all_locks(upgrade, Index, self()) of
