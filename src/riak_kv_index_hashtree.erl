@@ -528,10 +528,13 @@ check_upgrade_opts(Opts, _) ->
 
 -spec check_upgrade_env() -> boolean().
 check_upgrade_env() ->
-    case application:get_env(riak_kv, force_hashtree_upgrade) of
-        {ok, true} ->
+    case application:get_env(riak_kv, force_hashtree_upgrade, false) of
+        true ->
             true;
-        _ ->
+        false ->
+            false;
+        Value ->
+            lager:error("Unsupported non-boolean value for environment variable force_hashtree_upgrade ~p",[Value]),
             false
     end.
 
