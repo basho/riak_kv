@@ -507,30 +507,52 @@ determine_data_root() ->
 %%      then we immediately use version in capabilities. Otherwise check if capabilities
 %%      has flipped to a version yet and if it has, check if we've already upgraded by
 %%      looking for versioned AAE directory.
--spec determine_version(undefined | list(), non_neg_integer(), list()) -> legacy | non_neg_integer().
+-spec determine_version(list(), index(), list()) -> version().
 determine_version(Root, Index, Opts) ->
-    case application:get_env(riak_kv, force_hashtree_upgrade) of
-        {ok, true} -> 
-            0;
-         _ ->
-            case lists:member(upgrade, Opts) of
-                true ->
-                   riak_core_capability:get({riak_kv, object_hash_version}, legacy);
-               false ->
-                   case riak_core_capability:get({riak_kv, object_hash_version}, legacy) of
-                       V when is_integer(V) ->
-                           %% Check if the v[Version]/Index dir exists
-                           case filelib:is_dir(filename:join(filename:join(Root, "v" ++ integer_to_list(V)),integer_to_list(Index))) of
-                               true ->
-                                   V;
-                               false ->
-                                   legacy
-                           end;
-                       _ ->
-                           legacy
-                   end
-           end
+    case force_upgrade(Opts) of
+        true ->
+            get_cap_hash_version();
+        _ ->
+            find_version(Root, Index)
     end.
+
+-spec force_upgrade(list()) -> boolean().
+force_upgrade(Opts) ->
+    check_upgrade_opts(Opts, check_upgrade_env()).
+
+-spec check_upgrade_opts(list(), boolean()) -> boolean().
+check_upgrade_opts(_Opts, true) ->
+    true;
+check_upgrade_opts(Opts, _) ->
+    lists:member(upgrade, Opts).
+
+-spec check_upgrade_env() -> boolean().
+check_upgrade_env() ->
+    case application:get_env(riak_kv, force_hashtree_upgrade) of
+        {ok, true} ->
+            true;
+        _ ->
+            false
+    end.
+
+-spec get_cap_hash_version() -> version().
+get_cap_hash_version() ->
+    riak_core_capability:get({riak_kv, object_hash_version}, legacy).
+
+-spec find_version(list(), index()) -> version().
+find_version(Root, Index) ->
+    check_root_version(Root, Index, get_cap_hash_version()).
+
+-spec check_root_version(list(), index(), version()) -> version().
+check_root_version(Root, Index, Version) when is_integer(Version) ->
+    case filelib:is_dir(filename:join(filename:join(Root, "v" ++ integer_to_list(Version)),integer_to_list(Index))) of
+        true ->
+            Version;
+        false ->
+            legacy
+    end;
+check_root_version(_Root, _Index, Version) ->
+    Version.
 
 %% @doc Init the trees.
 %%

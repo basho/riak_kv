@@ -223,16 +223,11 @@ get_version() ->
 
 -spec get_partition_version(index()) -> version().
 get_partition_version(Index) ->
-    try
-        case ets:lookup(?ETS, Index) of
-            [] ->
-                legacy;
-            [{Index, Version}] ->
-                Version
-        end
-    catch
-        _:_ ->
-            legacy
+    case ets:lookup(?ETS, Index) of
+        [] ->
+            legacy;
+        [{Index, Version}] ->
+            Version
     end.
 
 -spec get_pending_version() -> version().
@@ -667,8 +662,8 @@ check_exchanges_and_upgrade(State) ->
             %% Now check nodes who havent reported success in the ETS table
             {ok, Ring} = riak_core_ring_manager:get_my_ring(),
             Nodes = riak_core_ring:all_members(Ring),
-            case check_remote_exchanges(Nodes,[]) of
-                complete ->
+            case check_all_remote_exchanges_complete(Nodes) of
+                true ->
                     lager:notice("Starting AAE hashtree upgrade"),
                     State#state{pending_version=0};
                 _ ->
@@ -678,24 +673,20 @@ check_exchanges_and_upgrade(State) ->
             State
     end.
 
--spec check_remote_exchanges(list(), list()) -> complete | incomplete.
-check_remote_exchanges([], Acc) ->
-    case hd(lists:sort(Acc)) of
-        true ->
-            complete;
-        false ->
-            incomplete
-    end;
-check_remote_exchanges([Node|Nodes], Acc0) ->
+-spec check_all_remote_exchanges_complete(list()) -> boolean().
+check_all_remote_exchanges_complete(Nodes) ->
+    lists:all(fun maybe_check_and_record_remote_exchange/1, Nodes).
+
+-spec maybe_check_and_record_remote_exchange(node()) -> boolean().
+maybe_check_and_record_remote_exchange(Node) ->
     case ets:lookup(?ETS, Node) of
         [{Node, true}] ->
-            Acc = Acc0 ++ [true];
+            true;
         _ ->
             Result = check_remote_exchange(Node),
             ets:insert(?ETS, {Node, Result}),
-            Acc = Acc0 ++ [Result]
-    end,
-    check_remote_exchanges(Nodes, Acc).
+            Result
+    end.
 
 -spec check_remote_exchange(node()) -> boolean().
 check_remote_exchange(Node) ->
