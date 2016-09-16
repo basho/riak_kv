@@ -639,9 +639,9 @@ get_value(Object=#r_object{}) ->
 
 %% @doc calculates the canonical hash of a riak object
 %%      Old API which uses the version .
+%% DEPRECATED
 -spec hash(riak_object()) -> binary().
 hash(Obj=#r_object{}) ->
-    %% BRIAN What to do here needs more discussion(race condition due to tick, vnode startup, etc)
     case riak_kv_entropy_manager:get_version() of
         0 ->
             vclock_hash(Obj);

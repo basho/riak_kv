@@ -41,6 +41,7 @@
          expire_trees/0,
          clear_trees/0,
          get_version/0,
+         get_partition_version/1,
          get_pending_version/0,
          get_trees_version/0]).
 -export([all_pairwise_exchanges/2]).
@@ -219,6 +220,20 @@ clear_trees() ->
 -spec get_version() -> version().
 get_version() ->
     gen_server:call(?MODULE, get_version, infinity).
+
+-spec get_partition_version(index()) -> version().
+get_partition_version(Index) ->
+    try
+        case ets:lookup(?ETS, Index) of
+            [] ->
+                legacy;
+            [{Index, Version}] ->
+                Version
+        end
+    catch
+        _:_ ->
+            legacy
+    end.
 
 -spec get_pending_version() -> version().
 get_pending_version() ->
@@ -482,8 +497,10 @@ add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees, trees_version=VTree
             State;
         _ ->
             monitor(process, Pid),
+            Version = riak_kv_index_hashtree:get_version(Pid),
             Trees2 = orddict:store(Index, Pid, Trees),
-            VTrees2 = orddict:store(Index, riak_kv_index_hashtree:get_version(Pid), VTrees),
+            VTrees2 = orddict:store(Index, Version, VTrees),
+            ets:insert(?ETS, {Index, Version}),
             State2 = State#state{trees=Trees2, trees_version=VTrees2},
             State3 = add_index_exchanges(Index, State2),
             State4 = check_upgrade(State3),
@@ -550,6 +567,7 @@ maybe_clear_registered_tree(Pid, State) when is_pid(Pid) ->
         false ->
             State;
         {value, {Index, Pid}, Trees} ->
+            ets:delete(?ETS, Index),
             VTrees = orddict:erase(Index, State#state.trees_version),
             State#state{trees=Trees, trees_version=VTrees}
     end;
@@ -646,10 +664,48 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
 check_exchanges_and_upgrade(State) ->
     case riak_kv_entropy_info:all_sibling_exchanges_complete() of
         true ->
-            lager:notice("Starting AAE hashtree upgrade"),
-            State#state{pending_version=0};
+            %% Now check nodes who havent reported success in the ETS table
+            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+            Nodes = riak_core_ring:all_members(Ring),
+            case check_remote_exchanges(Nodes,[]) of
+                complete ->
+                    lager:notice("Starting AAE hashtree upgrade"),
+                    State#state{pending_version=0};
+                _ ->
+                    State
+            end;
         _ ->
             State
+    end.
+
+-spec check_remote_exchanges(list(), list()) -> complete | incomplete.
+check_remote_exchanges([], Acc) ->
+    case hd(lists:sort(Acc)) of
+        true ->
+            complete;
+        false ->
+            incomplete
+    end;
+check_remote_exchanges([Node|Nodes], Acc0) ->
+    case ets:lookup(?ETS, Node) of
+        [{Node, true}] ->
+            Acc = Acc0 ++ [true];
+        _ ->
+            Result = check_remote_exchange(Node),
+            ets:insert(?ETS, {Node, Result}),
+            Acc = Acc0 ++ [Result]
+    end,
+    check_remote_exchanges(Nodes, Acc).
+
+-spec check_remote_exchange(node()) -> boolean().
+check_remote_exchange(Node) ->
+    case rpc:call(Node, riak_kv_entropy_info, all_sibling_exchanges_complete, [], 10000) of
+        Result when is_boolean(Result) ->
+            Result;
+        {badrpc, _Reason} ->
+            false;
+        _ ->
+            false
     end.
 
 -spec check_upgrade(state()) -> state().
