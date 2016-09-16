@@ -202,8 +202,8 @@ start(_Type, _StartArgs) ->
                                           disabled),
 
             riak_core_capability:register({riak_kv, object_hash_version},
-                                          [0, undefined],
-                                          undefined),
+                                          [0, legacy],
+                                          legacy),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.

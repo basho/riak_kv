@@ -70,7 +70,7 @@
 -type vnode() :: {index(), node()}.
 -type exchange() :: {index(), index(), index_n()}.
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
--type version() :: undefined | non_neg_integer().
+-type version() :: legacy | non_neg_integer().
 -type orddict(Key, Val) :: [{Key, Val}].
 
 -record(state, {mode           = automatic :: automatic | manual,
@@ -83,8 +83,8 @@
                 exchanges      = []        :: [{index(), reference(), pid()}],
                 vnode_status_pid = undefined :: 'undefined' | pid(),
                 last_throttle  = undefined :: 'undefined' | non_neg_integer(),
-                version        = undefined :: version(),
-                pending_version = undefined :: version()
+                version        = legacy :: version(),
+                pending_version = legacy :: version()
                }).
 
 -type state() :: #state{}.
@@ -95,6 +95,7 @@
 -define(AAE_THROTTLE_KEY, aae_throttle).
 -define(DEFAULT_AAE_THROTTLE_LIMITS,
         [{-1,0}, {200,10}, {500,50}, {750,250}, {900,1000}, {1100,5000}]).
+-define(ETS, entropy_manager_ets).
 
 %%%===================================================================
 %%% API
@@ -125,7 +126,7 @@ release_lock(Pid) ->
 %%      will try to acquire a concurrency lock. If successful, the request is
 %%      then forwarded to the relevant index_hashtree to acquire a tree lock.
 %%      If both locks are acquired, the pid of the remote index_hashtree is
-%%      returned. This function assumes an undefined version of the hashtree
+%%      returned. This function assumes a legacy version of the hashtree
 %%      and is left over for support for mixed clusters with pre-2.2 nodes
 -spec start_exchange_remote({index(), node()}, index_n(), pid())
                            -> {remote_exchange, pid()} |
@@ -135,7 +136,7 @@ release_lock(Pid) ->
                               {remote_exchange, already_locked} |
                               {remote_exchange, bad_version}.
 start_exchange_remote(VNode, IndexN, FsmPid) ->
-    start_exchange_remote(VNode, IndexN, FsmPid, undefined).
+    start_exchange_remote(VNode, IndexN, FsmPid, legacy).
 
 -spec start_exchange_remote({index(), node()}, index_n(), pid(), version())
                            -> {remote_exchange, pid()} |
@@ -261,6 +262,7 @@ init([]) ->
                             ?AAE_THROTTLE_KEY,
                             {aae_throttle_limits, ?DEFAULT_AAE_THROTTLE_LIMITS},
                             {aae_throttle_enabled, true}),
+    ?ETS = ets:new(?ETS, [named_table, {read_concurrency, true}]),
 
     schedule_tick(),
 
@@ -615,9 +617,9 @@ maybe_poke_tree(State) ->
     State2.
 
 -spec maybe_start_upgrade(riak_core_ring(),state()) -> state().
-maybe_start_upgrade(Ring, State=#state{trees=Trees, version=undefined, pending_version=undefined}) ->
+maybe_start_upgrade(Ring, State=#state{trees=Trees, version=legacy, pending_version=legacy}) ->
     Indices = riak_core_ring:my_indices(Ring),
-    case riak_core_capability:get({riak_kv, object_hash_version}, undefined) of
+    case riak_core_capability:get({riak_kv, object_hash_version}, legacy) of
         0 when length(Trees) == length(Indices) ->
             maybe_upgrade(State);
         _ ->
@@ -628,7 +630,7 @@ maybe_start_upgrade(_Ring, State) ->
 
 -spec maybe_upgrade(state()) -> state().
 maybe_upgrade(State=#state{trees_version = VTrees}) ->
-    case [Idx || {Idx, undefined} <- VTrees] of
+    case [Idx || {Idx, legacy} <- VTrees] of
         %% Upgrade is done already, set version in state
         [] ->
             State#state{version=0};
@@ -651,7 +653,7 @@ check_exchanges_and_upgrade(State) ->
     end.
 
 -spec check_upgrade(state()) -> state().
-check_upgrade(State=#state{pending_version=undefined}) ->
+check_upgrade(State=#state{pending_version=legacy}) ->
     State;
 check_upgrade(State=#state{pending_version=PendingVersion,trees_version=VTrees}) ->
     %% Verify we have all partitions registered with a hashtree, version
@@ -666,7 +668,7 @@ check_upgrade(State=#state{pending_version=PendingVersion,trees_version=VTrees})
                     State;
                 Trees when length(Trees) == length(VTrees) ->
                     lager:notice("Local AAE hashtrees have completed upgrade to version: ~p",[PendingVersion]),
-                    State#state{version=PendingVersion, pending_version=undefined};
+                    State#state{version=PendingVersion, pending_version=legacy};
                 _Trees ->
                     State
             end;

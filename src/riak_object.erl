@@ -645,12 +645,12 @@ hash(Obj=#r_object{}) ->
     case riak_kv_entropy_manager:get_version() of
         0 ->
             vclock_hash(Obj);
-        undefined ->
+        legacy ->
             legacy_hash(Obj)
     end.
 
 %% @doc calculates the canonical hash of a riak object depending on version
--spec hash(riak_object(), non_neg_integer() | undefined) -> binary().
+-spec hash(riak_object(), non_neg_integer() | legacy) -> binary().
 hash(Obj=#r_object{}, _Version=0) ->
     vclock_hash(Obj);
 hash(Obj=#r_object{}, _Version) ->

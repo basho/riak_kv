@@ -746,9 +746,9 @@ handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
                 _  ->
                     case {riak_kv_index_hashtree:get_version(HT),
                         riak_kv_entropy_manager:get_pending_version()} of
-                        {undefined, undefined} ->
+                        {legacy, legacy} ->
                             {reply, ok, State};
-                        {undefined, _} ->
+                        {legacy, _} ->
                             lager:notice("Destroying and upgrading index_hashtree for Index: ~p", [State#state.idx]),
                             _ = riak_kv_index_hashtree:destroy(HT),
                             riak_kv_entropy_info:clear_tree_build(State#state.idx),
