@@ -721,7 +721,7 @@ object_size(Object) ->
 
 simple_test_() ->
     Config = [{test, true}, {test_table_opts, [public]}],
-    backend_test_util:standard_test(?MODULE, Config).
+    backend_test_util:standard_test_gen(?MODULE, Config).
 
 ttl_test_() ->
     Config = [{ttl, 15}],
