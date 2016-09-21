@@ -25,7 +25,34 @@
 
 -define(TM, riak_kv_entropy_manager).
 
-set_aae_throttle_test() ->
+-export([test_set_aae_throttle/0, test_set_aae_throttle_limits/0]).
+
+cleanup(TOPid) ->
+    exit(TOPid, kill),
+    MonitorRef = erlang:monitor(process, TOPid),
+    receive
+        {'DOWN', MonitorRef, _, _, _} -> ok
+    end.
+
+setup() ->
+    {ok, TOPid} = riak_core_table_owner:start_link(),
+    unlink(TOPid),
+    riak_core_throttle:init(),
+    TOPid.
+
+
+simple_throttle_test_() ->
+    {setup,
+        fun setup/0,
+        fun cleanup/1,
+        [
+         {test, ?MODULE, test_set_aae_throttle},
+         {test, ?MODULE, test_set_aae_throttle_limits}
+        ]
+    }.
+
+
+test_set_aae_throttle() ->
     try
         _ = ?TM:set_aae_throttle(-4),
         error(u)
@@ -39,7 +66,7 @@ set_aae_throttle_test() ->
     [begin ?TM:set_aae_throttle(V), V = ?TM:get_aae_throttle() end ||
         V <- [5,6]].
 
-set_aae_throttle_limits_test() ->
+test_set_aae_throttle_limits() ->
     ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([])),
     ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([{5,7}])),
     ?assertError(invalid_throttle_limits, ?TM:set_aae_throttle_limits([{-1,x}])),
@@ -55,15 +82,18 @@ side_effects_test_() ->
     LittleWait = 10,
     {setup,
      fun() ->
+             TOPid = setup(),
              meck:new(?TM, [passthrough]),
              ?TM:set_aae_throttle_limits([{-1, 0},
-                                          {30, LittleWait}, {50, BigWait}])
+                                          {30, LittleWait}, {50, BigWait}]),
+             TOPid
      end,
-     fun(_) ->
+     fun(TOPid) ->
              ?TM:enable_aae_throttle(),
              erase(inner_iters),
              meck:unload(?TM),
-             ?TM:set_aae_throttle(0)
+             ?TM:set_aae_throttle(0),
+             cleanup(TOPid)
      end,
      [
       ?_test(

@@ -219,7 +219,12 @@ clear_trees() ->
 
 -spec get_version() -> version().
 get_version() ->
-    gen_server:call(?MODULE, get_version, infinity).
+    case ets:lookup(?ETS, version) of
+        [] ->
+            legacy;
+        [{version, Version}] ->
+            Version
+    end.
 
 -spec get_partition_version(index()) -> version().
 get_partition_version(Index) ->
@@ -646,6 +651,7 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
     case [Idx || {Idx, legacy} <- VTrees] of
         %% Upgrade is done already, set version in state
         [] ->
+            ets:insert(?ETS, {version, 0}),
             State#state{version=0};
         %% No trees have been upgraded, need to wait for exchanges
         Trees when length(Trees) == length(VTrees) ->
@@ -715,6 +721,7 @@ check_upgrade(State=#state{pending_version=PendingVersion,trees_version=VTrees})
                     State;
                 Trees when length(Trees) == length(VTrees) ->
                     lager:notice("Local AAE hashtrees have completed upgrade to version: ~p",[PendingVersion]),
+                    ets:insert(?ETS, {version, PendingVersion}),
                     State#state{version=PendingVersion, pending_version=legacy};
                 _Trees ->
                     State
