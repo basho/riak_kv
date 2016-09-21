@@ -32,7 +32,7 @@
 %% Supervisor callbacks
 -export([init/1]).
 
--define(SERVER,     ?MODULE).
+-define(SERVER, ?MODULE).
 
 %%%===================================================================
 %%% API functions
@@ -62,18 +62,22 @@ init([]) ->
     MaxQ    = 3,
 
     MakeNamesFn = fun(N) ->
-			  Int   = integer_to_list(N),
-			  _Name = list_to_atom("riak_kv_qry_" ++ Int)
-		  end,
+                          Int   = integer_to_list(N),
+                          _Name = list_to_atom("riak_kv_qry_" ++ Int)
+                  end,
     Names = [MakeNamesFn(X) || X <- lists:seq(1, NumFSMs)],
     Riak_kv_qrys = [{X, {riak_kv_qry_worker, start_link, [X]},
-		     Restart, Shutdown, Type, [riak_kv_qry_worker]} || X <- Names],
+                     Restart, Shutdown, Type, [riak_kv_qry_worker]} || X <- Names],
 
     Riak_kv_qry_q = {riak_kv_qry_queue,
-		     {riak_kv_qry_queue, start_link, [MaxQ]},
-		     Restart, Shutdown, Type, [riak_kv_qry_queue]},
+                     {riak_kv_qry_queue, start_link, [MaxQ]},
+                     Restart, Shutdown, Type, [riak_kv_qry_queue]},
+
+    Riak_kv_qry_b = {riak_kv_qry_buffers,
+                     {riak_kv_qry_buffers, start_link, []},
+                     Restart, Shutdown, Type, [riak_kv_qry_buffers]},
 
     {ok, {SupFlags, [
-		     Riak_kv_qry_q |
-		     Riak_kv_qrys
-		    ]}}.
+                     Riak_kv_qry_q, Riak_kv_qry_b |
+                     Riak_kv_qrys
+                    ]}}.

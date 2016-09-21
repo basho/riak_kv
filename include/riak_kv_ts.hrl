@@ -29,8 +29,8 @@
 %% For dialyzer types
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
--define(SQL_SELECT, #riak_select_v2).
--define(SQL_SELECT_RECORD_NAME, riak_select_v2).
+-define(SQL_SELECT, #riak_select_v3).
+-define(SQL_SELECT_RECORD_NAME, riak_select_v3).
 
 %% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
@@ -52,8 +52,8 @@
           'SELECT'              :: #riak_sel_clause_v1{},
           'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
           'WHERE'       = []    :: [riak_ql_ddl:filter()],
-          'ORDER BY'    = []    :: [riak_kv_qry_compiler:sorter()],
-          'LIMIT'       = []    :: [riak_kv_qry_compiler:limit()],
+          'ORDER BY'            :: undefined | [riak_kv_qry_compiler:sorter()],
+          'LIMIT'               :: undefined | riak_kv_qry_compiler:limit(),
           helper_mod            :: atom(),
           %% will include groups when we get that far
           partition_key = none  :: none | #key_v1{},
@@ -69,8 +69,29 @@
           'SELECT'              :: #riak_sel_clause_v1{},
           'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
           'WHERE'       = []    :: [riak_ql_ddl:filter()],
-          'ORDER BY'    = []    :: [riak_kv_qry_compiler:sorter()],
-          'LIMIT'       = []    :: [riak_kv_qry_compiler:limit()],
+          'ORDER BY'            :: undefined | [riak_kv_qry_compiler:sorter()],
+          'LIMIT'               :: undefined | riak_kv_qry_compiler:limit(),
+          helper_mod            :: atom(),
+          %% will include groups when we get that far
+          partition_key = none  :: none | #key_v1{},
+          %% indicates whether this query has already been compiled to a sub query
+          is_executable = false :: boolean(),
+          type          = sql   :: sql | timeseries,
+          cover_context = undefined :: term(), %% for parallel queries
+          %% prolly a mistake to put this here - should be in DDL
+          local_key,
+          %% since v2
+          group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}]
+        }).
+-record(riak_select_v3,
+        {
+          'SELECT'              :: #riak_sel_clause_v1{},
+          'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
+          'WHERE'       = []    :: [riak_ql_ddl:filter()],
+          'ORDER BY'            :: undefined | [riak_kv_qry_compiler:sorter()],
+          'LIMIT'               :: undefined | riak_kv_qry_compiler:limit(),
+          'OFFSET'              :: undefined | riak_kv_qry_compiler:offset(),
+          'ONLY'        = false :: boolean(),
           helper_mod            :: atom(),
           %% will include groups when we get that far
           partition_key = none  :: none | #key_v1{},

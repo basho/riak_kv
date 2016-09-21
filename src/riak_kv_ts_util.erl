@@ -63,11 +63,13 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_ts.hrl").
 
+-spec sql_record_to_tuple(?SQL_SELECT{}) -> {binary(), [tuple(2) | tuple(3)], list(), [tuple(2)]}.
 %% riak_ql_ddl:is_query_valid expects a tuple, not a SQL record
 sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
                                 'SELECT' = #riak_sel_clause_v1{clause=Select},
-                                'WHERE'  = Where}) ->
-    {From, Select, Where}.
+                                'WHERE'  = Where,
+                                'ORDER BY' = OrderBy}) ->
+    {From, Select, Where, OrderBy}.
 
 build_sql_record(Command, SQL, Cover) ->
     try build_sql_record_int(Command, SQL, Cover) of
@@ -81,8 +83,11 @@ build_sql_record(Command, SQL, Cover) ->
 build_sql_record_int(select, SQL, Cover) ->
     T = proplists:get_value(tables, SQL),
     F = proplists:get_value(fields, SQL),
-    L = proplists:get_value(limit, SQL),
-    W = proplists:get_value(where, SQL),
+    W = proplists:get_value(where,  SQL),
+    L = proplists:get_value(limit,  SQL),
+    O = proplists:get_value(offset, SQL),
+    Y = proplists:get_value(only,   SQL),
+    OrderBy = proplists:get_value(order_by, SQL),
     GroupBy = proplists:get_value(group_by, SQL),
     case is_binary(T) of
         true ->
@@ -92,6 +97,9 @@ build_sql_record_int(select, SQL, Cover) ->
                          'FROM'     = T,
                          'WHERE'    = convert_where_timestamps(Mod, W),
                          'LIMIT'    = L,
+                         'OFFSET'   = O,
+                         'ONLY'     = Y,
+                         'ORDER BY' = OrderBy,
                          helper_mod = Mod,
                          cover_context = Cover,
                          group_by = GroupBy }
@@ -438,7 +446,7 @@ explain_query(QueryString) ->
 explain_query(DDL, ?SQL_SELECT{'FROM' = Table} = Select) ->
     Props = riak_core_bucket_type:get(Table),
     NVal = proplists:get_value(n_val, Props),
-    case riak_kv_qry_compiler:compile(DDL, Select, 10000) of
+    case riak_kv_qry_compiler:compile(DDL, Select) of
         {ok, SubQueries} ->
             {_Total, Rows} =
                 lists:foldl(

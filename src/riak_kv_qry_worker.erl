@@ -60,7 +60,9 @@
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
           result        = []                  :: rows_acc() | aggregate_acc() | group_by_acc(),
-          run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun()
+          run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun(),
+          qbuf_ref                            :: undefined | riak_kv_qry_buffers:qbuf_ref(),
+          orig_qry                            :: undefined | ?SQL_SELECT{}
          }).
 
 %%%===================================================================
@@ -200,7 +202,7 @@ pop_next_query() ->
     self() ! pop_next_query.
 
 %%
-execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
+execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
               #state{ run_sub_qs_fn = RunSubQs } = State) ->
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
@@ -223,10 +225,11 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
                      receiver_pid = ReceiverPid,
                      qry          = Qry1,
                      sub_qrys     = Indices,
-                     result       = InitialResult }}.
+                     result       = InitialResult,
+                     qbuf_ref     = QBufRef}}.
 
 %%
-add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
+add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs} = State) ->
     case lists:member(SubQId, SubQs) of
         true ->
             try
@@ -235,8 +238,8 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
                 State#state{result   = QueryResult2,
                             sub_qrys = NSubQ}
             catch
-              error:divide_by_zero ->
-                  cancel_error_query(divide_by_zero, State)
+                error:divide_by_zero ->
+                    cancel_error_query(divide_by_zero, State)
             end;
         false ->
             %% discard; Don't touch state as it may have already 'finished'.
@@ -244,16 +247,20 @@ add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
     end.
 
 %%
-run_select_on_chunk(SubQId, Chunk, #state{ qry = Query,
-                                           result = QueryResult1 }) ->
+run_select_on_chunk(SubQId, Chunk, #state{qry = Query,
+                                          result = QueryResult1,
+                                          qbuf_ref = QBufRef}) ->
     DecodedChunk = decode_results(lists:flatten(Chunk)),
     SelClause = sql_select_clause(Query),
     case sql_select_calc_type(Query) of
         rows ->
-            run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1);
+            run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, QBufRef);
         aggregate ->
+            %% query buffers don't enter at this stage: QueryResult is always a
+            %% single row for aggregate SELECTs
             run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1);
         group_by ->
+            %% ditto
             run_select_on_group(Query, SelClause, DecodedChunk, QueryResult1)
     end.
 
@@ -285,10 +292,14 @@ select_group(Query, Row) ->
     [lists:nth(N, Row) || {N,_} <- GroupByFields].
 
 %% Run the selection clause on results that accumulate rows
-run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1) ->
+run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, undefined) ->
     IndexedChunks =
         [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
-    [{SubQId, IndexedChunks} | QueryResult1].
+    [{SubQId, IndexedChunks} | QueryResult1];
+run_select_on_rows_chunk(_SubQId, SelClause, DecodedChunk, _QueryResult1, QBufRef) ->
+    IndexedChunks =
+        [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
+    _ = riak_kv_qry_buffers:batch_put(QBufRef, IndexedChunks).
 
 %%
 run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
@@ -300,7 +311,9 @@ run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
 %%
 -spec cancel_error_query(Error::any(), State1::#state{}) ->
         State2::#state{}.
-cancel_error_query(Error, #state{ receiver_pid = ReceiverPid}) ->
+cancel_error_query(Error, #state{qbuf_ref = QBufRef,
+                                 receiver_pid = ReceiverPid}) ->
+    _ = riak_kv_qry_buffers:delete_qbuf(QBufRef),  %% is a noop on undefined
     ReceiverPid ! {error, Error},
     pop_next_query(),
     new_state().
@@ -326,12 +339,34 @@ subqueries_done(QId, #state{qid          = QId,
                                    {[riak_pb_ts_codec:tscolumnname()],
                                     [riak_pb_ts_codec:tscolumntype()],
                                     [[riak_pb_ts_codec:ldbvalue()]]}.
-prepare_final_results(#state{
-        result = IndexedChunks,
-        qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select }}) ->
+prepare_final_results(#state{qbuf_ref = undefined,
+                             result = IndexedChunks,
+                             qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select}}) ->
     %% sort by index, to reassemble according to coverage plan
     {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
     prepare_final_results2(Select, lists:append(R2));
+
+prepare_final_results(#state{qbuf_ref = QBufRef,
+                             qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select,
+                                               'LIMIT'  = Limit,
+                                               'OFFSET' = Offset}} = State) ->
+    case riak_kv_qry_buffers:fetch_limit(QBufRef, Limit, Offset) of
+        {ok, {_ColNames, _ColTypes, FetchedRows}} ->
+            prepare_final_results2(Select, FetchedRows);
+        {error, qbuf_not_ready} ->
+            riak_kv_qry_buffers:set_ready_waiting_process(
+              QBufRef, self()),
+            receive
+                {qbuf_ready, QBufRef} ->
+                    prepare_final_results(State)
+            after 60000 ->
+                    cancel_error_query(qbuf_timeout, State)
+            end;
+        {error, bad_qbuf_ref} ->
+            %% the query buffer is gone: we can still retry (should we, really?)
+            cancel_error_query(bad_qbuf_ref, State)
+    end;
+
 prepare_final_results(#state{
         result = Aggregate1,
         qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate} = Select }} = State) ->

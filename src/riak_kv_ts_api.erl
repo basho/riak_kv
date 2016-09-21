@@ -374,7 +374,7 @@ compile_to_per_quantum_queries(Mod, SQL) ->
             case riak_ql_ddl:is_query_valid(
                    Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(SQL)) of
                 true ->
-                    riak_kv_qry_compiler:compile(DDL, SQL, undefined);
+                    riak_kv_qry_compiler:compile(DDL, SQL);
                 {false, _Errors} ->
                     {error, invalid_query}
             end

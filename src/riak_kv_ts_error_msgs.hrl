@@ -92,3 +92,9 @@
    iolist_to_binary(
      ["Too many subqueries (",integer_to_list(N),")"])
 ).
+
+-define(
+   E_NON_UNIQUE_ORDERBY_FIELDS(N),
+   iolist_to_binary(
+     ["Column ",N," appears more than once in ORDER BY list"])
+).
