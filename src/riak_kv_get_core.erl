@@ -310,7 +310,7 @@ maybe_log_old_vclock(Results) ->
                         [] ->
                             ok;
                         _ ->
-                            lager:warning("Bucket: ~p Key: ~p should be rewritten to guarantee
+                            object:warning("Bucket: ~p Key: ~p should be rewritten to guarantee
                               compatability with AAE version 0",
                                 [riak_object:bucket(R1),riak_object:key(R1)])
                     end
