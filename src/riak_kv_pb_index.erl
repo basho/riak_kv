@@ -102,7 +102,7 @@ process(#rpbindexreq{stream = S} = Req, State) ->
     Class = case S of
         true ->
             {riak_kv, stream_secondary_index};
-        false ->
+        _ -> % NB: any other value should be interpreted as false
             {riak_kv, secondary_index}
     end,
     Accept = riak_core_util:job_class_enabled(Class),

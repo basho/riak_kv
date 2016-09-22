@@ -110,7 +110,9 @@ determine_accept_and_report_job_disposition(Class) ->
 
 determine_class_and_listing(#rpblistbucketsreq{stream = true}) ->
     {{riak_kv, stream_list_buckets}, buckets};
-determine_class_and_listing(#rpblistbucketsreq{stream = false}) ->
+%% Protobuf does _not_ set optional booleans to `false` per the spec.
+%% Therefore, if it's not explicitly `true` it must be `false`.
+determine_class_and_listing(#rpblistbucketsreq{stream = _Stream}) ->
     {{riak_kv, list_buckets}, buckets};
 determine_class_and_listing(#rpblistkeysreq{}) ->
     %% at present list-keys always streams
