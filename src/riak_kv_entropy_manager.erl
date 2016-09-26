@@ -523,23 +523,33 @@ do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
 -spec do_start_exchange_remote(pid(), index(), index_n(), version(), term(), state())
                   -> {reply|noreply, term(), state()}.
 do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State) ->
-    case {enabled(),
-          orddict:find(Index, State#state.trees)} of
-        {false, _} ->
-            {reply, {remote_exchange, anti_entropy_disabled}, State};
-        {_, error} ->
-            {reply, {remote_exchange, not_built}, State};
-        {_, {ok, Tree}} ->
-            case do_get_lock(exchange_remote, FsmPid, State) of
-                {ok, State2} ->
-                    %% Concurrency lock acquired, now forward to index_hashtree
-                    %% to acquire tree lock.
-                    riak_kv_index_hashtree:start_exchange_remote(FsmPid, Version, From, IndexN, Tree),
-                    {noreply, State2};
-                {Reply, State2} ->
-                    {reply, {remote_exchange, Reply}, State2}
-            end
+    Enabled = enabled(),
+    TreeResult = orddict:find(Index, State#state.trees),
+    maybe_start_exchange_remote(Enabled, TreeResult, FsmPid, IndexN, Version, From, State).
+
+-spec maybe_start_exchange_remote(Enabled::boolean(),
+                                  TreeResult::{ok, term()} | error,
+                                  FsmPid::pid(),
+                                  IndexN::index_n(),
+                                  Version::version(),
+                                  From::term(),
+                                  State::state()) ->
+    {noreply, state()} | {reply, term(), state()}.
+maybe_start_exchange_remote(false, _, _FsmPid, _IndexN, _Version, _From, State) ->
+    {reply, {remote_exchange, anti_entropy_disabled}, State};
+maybe_start_exchange_remote(_, error, _FsmPid,  _IndexN, _Version, _From, State) ->
+    {reply, {remote_exchange, not_built}, State};
+maybe_start_exchange_remote(true, {ok, Tree}, FsmPid, IndexN, Version, From, State) ->
+    case do_get_lock(exchange_remote, FsmPid, State) of
+        {ok, State2} ->
+            %% Concurrency lock acquired, now forward to index_hashtree
+            %% to acquire tree lock.
+            riak_kv_index_hashtree:start_exchange_remote(FsmPid, Version, From, IndexN, Tree),
+            {noreply, State2};
+        {Reply, State2} ->
+            {reply, {remote_exchange, Reply}, State2}
     end.
+
 
 -spec check_lock_type(any(), state()) -> build_limit_reached | {ok, state()}.
 check_lock_type(Type, State) ->
