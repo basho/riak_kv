@@ -141,7 +141,6 @@ async_delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
 async_delete(Items=[{_Id, _Key}|_], Tree) ->
     catch gen_server:cast(Tree, {delete, Items}).
 
-%
 %% @doc Called by the entropy manager to finish the process used to acquire
 %%      remote vnode locks when starting an exchange. For more details,
 %%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}

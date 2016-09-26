@@ -146,6 +146,10 @@ start_exchange_remote(VNode, IndexN, FsmPid) ->
                               {remote_exchange, not_built} |
                               {remote_exchange, already_locked} |
                               {remote_exchange, bad_version}.
+start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid, legacy) ->
+    gen_server:call({?MODULE, Node},
+                    {start_exchange_remote, FsmPid, Index, IndexN},
+                    infinity);                        
 start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid, Version) ->
     gen_server:call({?MODULE, Node},
                     {start_exchange_remote, FsmPid, Index, IndexN, Version},
@@ -330,24 +334,13 @@ handle_call(get_trees_version, _From, State=#state{trees=Trees}) ->
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
+%% To support compatibility with pre 2.2 nodes.
+handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
+    {Type, Reply, State2} = do_start_exchange_remote(FsmPid, Index, IndexN, legacy, From, State),
+    {Type, Reply, State2};
 handle_call({start_exchange_remote, FsmPid, Index, IndexN, Version}, From, State) ->
-    case {enabled(),
-          orddict:find(Index, State#state.trees)} of
-        {false, _} ->
-            {reply, {remote_exchange, anti_entropy_disabled}, State};
-        {_, error} ->
-            {reply, {remote_exchange, not_built}, State};
-        {_, {ok, Tree}} ->
-            case do_get_lock(exchange_remote, FsmPid, State) of
-                {ok, State2} ->
-                    %% Concurrency lock acquired, now forward to index_hashtree
-                    %% to acquire tree lock.
-                    riak_kv_index_hashtree:start_exchange_remote(FsmPid, Version, From, IndexN, Tree),
-                    {noreply, State2};
-                {Reply, State2} ->
-                    {reply, {remote_exchange, Reply}, State2}
-            end
-    end;
+    {Type, Reply, State2} = do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State),
+    {Type, Reply, State2};
 handle_call({cancel_exchange, Index}, _From, State) ->
     case lists:keyfind(Index, 1, State#state.exchanges) of
         false ->
@@ -526,6 +519,37 @@ do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
                     {Error, State}
             end
     end.
+
+-spec do_start_exchange_remote(pid(), index(), index_n(), version(), term(), state())
+                  -> {reply|noreply, term(), state()}.
+do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State) ->
+    Enabled = enabled(),
+    TreeResult = orddict:find(Index, State#state.trees),
+    maybe_start_exchange_remote(Enabled, TreeResult, FsmPid, IndexN, Version, From, State).
+
+-spec maybe_start_exchange_remote(Enabled::boolean(),
+                                  TreeResult::{ok, term()} | error,
+                                  FsmPid::pid(),
+                                  IndexN::index_n(),
+                                  Version::version(),
+                                  From::term(),
+                                  State::state()) ->
+    {noreply, state()} | {reply, term(), state()}.
+maybe_start_exchange_remote(false, _, _FsmPid, _IndexN, _Version, _From, State) ->
+    {reply, {remote_exchange, anti_entropy_disabled}, State};
+maybe_start_exchange_remote(_, error, _FsmPid,  _IndexN, _Version, _From, State) ->
+    {reply, {remote_exchange, not_built}, State};
+maybe_start_exchange_remote(true, {ok, Tree}, FsmPid, IndexN, Version, From, State) ->
+    case do_get_lock(exchange_remote, FsmPid, State) of
+        {ok, State2} ->
+            %% Concurrency lock acquired, now forward to index_hashtree
+            %% to acquire tree lock.
+            riak_kv_index_hashtree:start_exchange_remote(FsmPid, Version, From, IndexN, Tree),
+            {noreply, State2};
+        {Reply, State2} ->
+            {reply, {remote_exchange, Reply}, State2}
+    end.
+
 
 -spec check_lock_type(any(), state()) -> build_limit_reached | {ok, state()}.
 check_lock_type(Type, State) ->
