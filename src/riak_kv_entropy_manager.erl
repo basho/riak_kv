@@ -146,6 +146,10 @@ start_exchange_remote(VNode, IndexN, FsmPid) ->
                               {remote_exchange, not_built} |
                               {remote_exchange, already_locked} |
                               {remote_exchange, bad_version}.
+start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid, legacy) ->
+    gen_server:call({?MODULE, Node},
+                    {start_exchange_remote, FsmPid, Index, IndexN},
+                    infinity);                        
 start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid, Version) ->
     gen_server:call({?MODULE, Node},
                     {start_exchange_remote, FsmPid, Index, IndexN, Version},
@@ -330,24 +334,13 @@ handle_call(get_trees_version, _From, State=#state{trees=Trees}) ->
 handle_call({get_lock, Type, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Pid, State),
     {reply, Reply, State2};
+%% To support compatibility with pre 2.2 nodes.
+handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
+    {Type, Reply, State2} = do_start_exchange_remote(FsmPid, Index, IndexN, legacy),
+    {Type, Reply, State2};
 handle_call({start_exchange_remote, FsmPid, Index, IndexN, Version}, From, State) ->
-    case {enabled(),
-          orddict:find(Index, State#state.trees)} of
-        {false, _} ->
-            {reply, {remote_exchange, anti_entropy_disabled}, State};
-        {_, error} ->
-            {reply, {remote_exchange, not_built}, State};
-        {_, {ok, Tree}} ->
-            case do_get_lock(exchange_remote, FsmPid, State) of
-                {ok, State2} ->
-                    %% Concurrency lock acquired, now forward to index_hashtree
-                    %% to acquire tree lock.
-                    riak_kv_index_hashtree:start_exchange_remote(FsmPid, Version, From, IndexN, Tree),
-                    {noreply, State2};
-                {Reply, State2} ->
-                    {reply, {remote_exchange, Reply}, State2}
-            end
-    end;
+    {Type, Reply, State2} = do_start_exchange_remote(FsmPid, Index, IndexN, Version),
+    {Type, Reply, State2};
 handle_call({cancel_exchange, Index}, _From, State) ->
     case lists:keyfind(Index, 1, State#state.exchanges) of
         false ->
@@ -524,6 +517,27 @@ do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
                     {ok, State3};
                 Error ->
                     {Error, State}
+            end
+    end.
+
+-spec do_start_exchange_remote(pid(), index(), index_n(), version()) 
+                  -> {reply|noreply, term(), state()}.
+do_start_exchange_remote(FsmPid, Index, IndexN, Version) ->
+    case {enabled(),
+          orddict:find(Index, State#state.trees)} of
+        {false, _} ->
+            {reply, {remote_exchange, anti_entropy_disabled}, State};
+        {_, error} ->
+            {reply, {remote_exchange, not_built}, State};
+        {_, {ok, Tree}} ->
+            case do_get_lock(exchange_remote, FsmPid, State) of
+                {ok, State2} ->
+                    %% Concurrency lock acquired, now forward to index_hashtree
+                    %% to acquire tree lock.
+                    riak_kv_index_hashtree:start_exchange_remote(FsmPid, Version, From, IndexN, Tree),
+                    {noreply, State2};
+                {Reply, State2} ->
+                    {reply, {remote_exchange, Reply}, State2}
             end
     end.
 

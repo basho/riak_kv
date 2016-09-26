@@ -51,6 +51,7 @@
          hash_object/3,
          update/2,
          update/3,
+         start_exchange_remote/4,
          start_exchange_remote/5,
          delete/2,
          async_delete/2,
@@ -141,10 +142,12 @@ async_delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
 async_delete(Items=[{_Id, _Key}|_], Tree) ->
     catch gen_server:cast(Tree, {delete, Items}).
 
-%
 %% @doc Called by the entropy manager to finish the process used to acquire
 %%      remote vnode locks when starting an exchange. For more details,
 %%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}
+-spec start_exchange_remote(pid(), term(), index_n(), pid()) -> ok.
+start_exchange_remote(FsmPid, From, IndexN, Tree) ->
+    start_exchange_remote(FsmPid, legacy, From, IndexN, Tree).
 -spec start_exchange_remote(pid(), version(), term(), index_n(), pid()) -> ok.
 start_exchange_remote(FsmPid, Version, From, IndexN, Tree) ->
     gen_server:cast(Tree, {start_exchange_remote, FsmPid, Version, From, IndexN}).
