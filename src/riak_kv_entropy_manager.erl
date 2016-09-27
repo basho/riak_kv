@@ -336,11 +336,9 @@ handle_call({get_lock, Type, Pid}, _From, State) ->
     {reply, Reply, State2};
 %% To support compatibility with pre 2.2 nodes.
 handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
-    {Type, Reply, State2} = do_start_exchange_remote(FsmPid, Index, IndexN, legacy, From, State),
-    {Type, Reply, State2};
+    do_start_exchange_remote(FsmPid, Index, IndexN, legacy, From, State);
 handle_call({start_exchange_remote, FsmPid, Index, IndexN, Version}, From, State) ->
-    {Type, Reply, State2} = do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State),
-    {Type, Reply, State2};
+    do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State);
 handle_call({cancel_exchange, Index}, _From, State) ->
     case lists:keyfind(Index, 1, State#state.exchanges) of
         false ->
@@ -521,7 +519,7 @@ do_get_lock(Type, Pid, State=#state{locks=Locks}) ->
     end.
 
 -spec do_start_exchange_remote(pid(), index(), index_n(), version(), term(), state())
-                  -> {reply|noreply, term(), state()}.
+                  -> {reply, term(), state()} | {noreply, state()}.
 do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State) ->
     Enabled = enabled(),
     TreeResult = orddict:find(Index, State#state.trees),
