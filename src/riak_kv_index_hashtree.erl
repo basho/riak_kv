@@ -63,7 +63,8 @@
          destroy/1,
          index_2i_n/0,
          get_trees/1,
-         get_version/1]).
+         get_version/1,
+         built/1).
 
 -export([poke/1,
          get_build_time/1]).
@@ -222,6 +223,11 @@ get_lock(Tree, Type, Version, Pid) ->
 get_version(Tree) ->
     gen_server:call(Tree, get_version, infinity).
 
+%% @doc Return a boolean of trees build status
+-spec built(pid()) -> boolean().
+built(Tree) ->
+    gen_server:call(Tree, built, infinity).
+
 %% @doc Acquire the lock and return the version for the specified index_hashtree if not already
 %%      locked.
 -spec get_lock_and_version(pid(), any()) -> {ok | not_built | already_locked, version()}.
@@ -327,6 +333,11 @@ handle_call({get_lock, Type, Version, Pid}, _From, State) ->
 
 handle_call(get_version, _From, State=#state{version=Version}) ->
     {reply, Version, State};
+
+handle_call(built, _From, State=#state{built=true}) ->
+    {reply, true, State};
+handle_call(get_built, _From, State) ->
+    {reply, false, State};
 
 handle_call({insert, Items, Options}, _From, State) ->
     State2 = do_insert(Items, Options, State),

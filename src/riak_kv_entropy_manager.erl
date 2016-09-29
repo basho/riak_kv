@@ -555,7 +555,7 @@ check_lock_type(Type, State) ->
         build->
             do_get_build_token(State);
         upgrade ->
-            do_get_build_token(State);
+            maybe_get_upgrade_token(State);
         _ ->
             {ok, State}
     end.
@@ -567,6 +567,32 @@ do_get_build_token(State=#state{build_tokens=Tokens}) ->
        true ->
             build_limit_reached
     end.
+
+-spec maybe_get_build_token(state()) -> build_limit_reached | {ok, state()}.
+maybe_get_build_token(State=#state{trees_version=VTrees}) ->
+    case [Idx || {Idx, Version} <- VTrees, Version /= legacy] of
+        %% All legacy trees, allow build token
+        [] ->
+            do_get_build_token(State);
+        %% Some trees upgraded. Confirm the upgraded trees are built
+        %% before allowing another build token for an upgrade
+        Indexes ->
+            check_built_upgraded_trees(Indexes, State)
+    end.
+
+-spec check_built_upgraded_trees(list(), state()) -> build_limit_reached | {ok, state()}.
+check_built_upgraded_trees(Indexes, State=#state{trees=Trees}) ->
+    TreePids = [element(2,orddict:find(Index, Trees)) || Index <- Indexes]
+    case lists:all(fun check_built/1, TreePids) of
+        true ->
+            do_get_build_token(State);
+        _ -> 
+            build_limit_reached
+    end.
+
+-spec check_built(pid()) -> boolean().
+check_built(Pid) ->
+    riak_kv_index_hashtree:built(Pid).
 
 -spec maybe_release_lock(reference(), state()) -> state().
 maybe_release_lock(Ref, State) ->
