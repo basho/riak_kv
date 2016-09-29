@@ -582,7 +582,7 @@ maybe_get_build_token(State=#state{trees_version=VTrees}) ->
 
 -spec check_built_upgraded_trees(list(), state()) -> build_limit_reached | {ok, state()}.
 check_built_upgraded_trees(Indexes, State=#state{trees=Trees}) ->
-    TreePids = [element(2,orddict:find(Index, Trees)) || Index <- Indexes]
+    TreePids = [element(2,orddict:find(Index, Trees)) || Index <- Indexes],
     case lists:all(fun check_built/1, TreePids) of
         true ->
             do_get_build_token(State);
