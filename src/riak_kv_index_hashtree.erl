@@ -64,7 +64,7 @@
          index_2i_n/0,
          get_trees/1,
          get_version/1,
-         built/1).
+         built/1]).
 
 -export([poke/1,
          get_build_time/1]).
