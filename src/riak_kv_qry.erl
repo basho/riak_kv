@@ -66,7 +66,7 @@ submit(SQLString, DDL) when is_list(SQLString) ->
         {ok, Compiled} ->
             Type = proplists:get_value(type, Compiled),
             {ok, SQL} = riak_kv_ts_util:build_sql_record(
-                Type, Compiled, undefined),
+                Type, Compiled, []),
             submit(SQL, DDL)
     end;
 
@@ -481,7 +481,7 @@ explain_query_test() ->
     riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND f='adios'))",
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
-    {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, undefined),
+    {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, []),
     meck:new(riak_client),
     meck:new(riak_core_apl),
     meck:new(riak_core_bucket),
@@ -574,7 +574,7 @@ good_timestamp_insert_test() ->
         "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
     Lexed = riak_ql_lexer:get_tokens(GoodInsert),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    {ok, Insert} = riak_kv_ts_util:build_sql_record(insert, Q, undefined),
+    {ok, Insert} = riak_kv_ts_util:build_sql_record(insert, Q, []),
     Res = xlate_insert_to_putdata(
             Insert#riak_sql_insert_v1.values,
             [1,2,3], {undefined, undefined, undefined},

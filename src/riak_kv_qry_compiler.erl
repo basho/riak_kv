@@ -970,7 +970,7 @@ get_query(String) ->
 get_query(String, Cover) ->
     Lexed = riak_ql_lexer:get_tokens(String),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    riak_kv_ts_util:build_sql_record(select, Q, Cover).
+    riak_kv_ts_util:build_sql_record(select, Q, [{cover, Cover}]).
 
 get_long_ddl() ->
     SQL = "CREATE TABLE GeoCheckin " ++

@@ -71,55 +71,67 @@ sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
                                 'ORDER BY' = OrderBy}) ->
     {From, Select, Where, OrderBy}.
 
-build_sql_record(Command, SQL, Cover) ->
-    try build_sql_record_int(Command, SQL, Cover) of
-        Return -> Return
+-spec build_sql_record(riak_kv_qry:query_type(), proplists:proplist(), proplists:proplist()) ->
+                              {ok, ?SQL_SELECT{}} | {error, any()}.
+build_sql_record(Command, SQL, Options) ->
+    try build_sql_record_int(Command, SQL, Options) of
+        {ok, Record} ->
+            {ok, Record};
+        ER ->
+            ER
     catch
         throw:Atom ->
             {error, Atom}
     end.
 
+
 %% Convert the proplist obtained from the QL parser
-build_sql_record_int(select, SQL, Cover) ->
-    T = proplists:get_value(tables, SQL),
-    F = proplists:get_value(fields, SQL),
-    W = proplists:get_value(where,  SQL),
-    L = proplists:get_value(limit,  SQL),
-    O = proplists:get_value(offset, SQL),
-    Y = proplists:get_value(only,   SQL),
-    OrderBy = proplists:get_value(order_by, SQL),
-    GroupBy = proplists:get_value(group_by, SQL),
-    case is_binary(T) of
-        true ->
-            Mod = riak_ql_ddl:make_module_name(T),
-            {ok,
-             ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
-                         'FROM'     = T,
-                         'WHERE'    = convert_where_timestamps(Mod, W),
-                         'LIMIT'    = L,
-                         'OFFSET'   = O,
-                         'ONLY'     = Y,
-                         'ORDER BY' = OrderBy,
-                         helper_mod = Mod,
-                         cover_context = Cover,
-                         group_by = GroupBy }
-            };
-        false ->
-            {error, <<"Must provide exactly one table name">>}
+build_sql_record_int(select, SQL, Options) ->
+    AllowQBufReuse = proplists:get_value(allow_qbuf_reuse, Options),
+    Cover          = proplists:get_value(cover, Options),
+    Cover = proplists:get_value(cover, Options),
+    if not (Cover == undefined orelse is_binary(Cover)) ->
+            {error, bad_coverage_context};
+       el/=se ->
+            T = proplists:get_value(tables, SQL),
+            F = proplists:get_value(fields, SQL),
+            W = proplists:get_value(where,  SQL),
+            L = proplists:get_value(limit,  SQL),
+            O = proplists:get_value(offset, SQL),
+            OrderBy = proplists:get_value(order_by, SQL),
+            GroupBy = proplists:get_value(group_by, SQL),
+            case is_binary(T) of
+                true ->
+                    Mod = riak_ql_ddl:make_module_name(T),
+                    {ok,
+                     ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
+                                 'FROM'     = T,
+                                 'WHERE'    = convert_where_timestamps(Mod, W),
+                                 'LIMIT'    = L,
+                                 'OFFSET'   = O,
+                                 'ORDER BY' = OrderBy,
+                                 helper_mod = Mod,
+                                 cover_context = Cover,
+                                 allow_qbuf_reuse = AllowQBufReuse,
+                                 group_by = GroupBy }
+                    };
+                false ->
+                    {error, <<"Must provide exactly one table name">>}
+            end
     end;
 
-build_sql_record_int(explain, SQL, Cover) ->
-    case build_sql_record_int(select, SQL, Cover) of
+build_sql_record_int(explain, SQL, Options) ->
+    case build_sql_record_int(select, SQL, Options) of
         {ok, Select} ->
-            {ok, #riak_sql_explain_query_v1{'EXPLAIN' = Select }};
+            {ok, #riak_sql_explain_query_v1{'EXPLAIN' = Select}};
         Error -> Error
     end;
 
-build_sql_record_int(describe, SQL, _Cover) ->
+build_sql_record_int(describe, SQL, _Options) ->
     D = proplists:get_value(identifier, SQL),
     {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
 
-build_sql_record_int(insert, SQL, _Cover) ->
+build_sql_record_int(insert, SQL, _Options) ->
     T = proplists:get_value(table, SQL),
     case is_binary(T) of
         true ->
@@ -144,7 +156,7 @@ build_sql_record_int(insert, SQL, _Cover) ->
         false ->
             {error, <<"Must provide exactly one table name">>}
     end;
-build_sql_record_int(show_tables, _SQL, _Cover) ->
+build_sql_record_int(show_tables, _SQL, _Options) ->
     {ok, #riak_sql_show_tables_v1{}}.
 
 convert_where_timestamps(_Mod, []) ->
@@ -466,7 +478,7 @@ explain_query(DDL, QueryString) ->
 %%
 explain_compile_query(QueryString) ->
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(QueryString)),
-    build_sql_record(select, Q, undefined).
+    build_sql_record(select, Q, []).
 
 %%
 explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
@@ -816,7 +828,7 @@ bad_timestamp_select_test() ->
     Lexed = riak_ql_lexer:get_tokens(BadQuery),
     {ok, Q} = riak_ql_parser:parse(Lexed),
     ?assertMatch({error, <<"Invalid date/time string">>},
-                 build_sql_record(select, Q, undefined)).
+                 build_sql_record(select, Q, [])).
 
 good_timestamp_select_test() ->
     GoodQuery = "select * from table1 "
@@ -830,7 +842,7 @@ good_timestamp_select_test() ->
         "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
     Lexed = riak_ql_lexer:get_tokens(GoodQuery),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    {ok, Select} = build_sql_record(select, Q, undefined),
+    {ok, Select} = build_sql_record(select, Q, []),
     Where = Select?SQL_SELECT.'WHERE',
     %% Navigate the tree looking for integer values for b
     %% comparisons. Verify that we find both (hence `2' as our
@@ -875,6 +887,6 @@ timestamp_parsing_test() ->
     Lexed = riak_ql_lexer:get_tokens(BadQuery),
     {ok, Q} = riak_ql_parser:parse(Lexed),
     ?assertMatch({error, <<"Invalid date/time string">>},
-                 build_sql_record(select, Q, undefined)).
+                 build_sql_record(select, Q, [])).
 
 -endif.

@@ -249,7 +249,7 @@ compile_query(QueryStr) ->
             Res;
         {Type, Compiled} ->
             {ok, SQL} = riak_kv_ts_util:build_sql_record(
-                          Type, Compiled, undefined),
+                          Type, Compiled, []),
             {Type, SQL, undefined}
     end.
 

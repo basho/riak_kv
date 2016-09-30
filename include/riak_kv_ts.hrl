@@ -91,7 +91,6 @@
           'ORDER BY'            :: undefined | [riak_kv_qry_compiler:sorter()],
           'LIMIT'               :: undefined | riak_kv_qry_compiler:limit(),
           'OFFSET'              :: undefined | riak_kv_qry_compiler:offset(),
-          'ONLY'        = false :: boolean(),
           helper_mod            :: atom(),
           %% will include groups when we get that far
           partition_key = none  :: none | #key_v1{},
@@ -99,6 +98,7 @@
           is_executable = false :: boolean(),
           type          = sql   :: sql | timeseries,
           cover_context = undefined :: term(), %% for parallel queries
+          allow_qbuf_reuse = false  :: boolean(),  %% control reuse of query buffers
           %% prolly a mistake to put this here - should be in DDL
           local_key,
           %% since v2

@@ -106,7 +106,6 @@ upgrade_select([v2,v3 = To|Tail], Select1) ->
         'ORDER BY'    = Select1#riak_select_v2.'ORDER BY',
         'LIMIT'       = Select1#riak_select_v2.'LIMIT',
         'OFFSET'      = 0,
-        'ONLY'        = false,
         helper_mod    = Select1#riak_select_v2.helper_mod,
         partition_key = Select1#riak_select_v2.partition_key,
         is_executable = Select1#riak_select_v2.is_executable,

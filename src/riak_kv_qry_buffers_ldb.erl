@@ -43,31 +43,14 @@ new_table(Table, Root) ->
     Options = [{create_if_missing, true},
                {error_if_exists, true},
                {write_buffer_size, ?LDB_WRITE_BUFFER_SIZE},
-               %% {sst_block_size, pos_integer()} |
-               %% {block_restart_interval, pos_integer()} |
-               %% {block_size_steps, pos_integer()} |
-               %% {paranoid_checks, boolean()} |
                {verify_compactions, false},
                {compression, false},
-               %% {use_bloomfilter, boolean() | pos_integer()} |
-               %% {total_memory, ?LDB_TOTAL_MEMORY},
-               %% {total_leveldb_mem, pos_integer()} |
-               %% {total_leveldb_mem_percent, pos_integer()} |
-               %% {time_series, boolean()} |
+               %% this prevents leveldb from autoexpiring records:
                {is_internal_db, true}
-               %% {limited_developer_mem, boolean()} |
-               %% {eleveldb_threads, pos_integer()} |
-               %% {fadvise_willneed, boolean()} |
-               %% {block_cache_threshold, pos_integer()} |
-               %% {delete_threshold, pos_integer()} |
-               %% {tiered_slow_level, pos_integer()} |
-               %% {tiered_fast_prefix, string()} |
-               %% {tiered_slow_prefix, string()} |
-               %% {cache_object_warming, boolean()}
               ],
     case eleveldb:open(Path, Options) of
         {ok, LdbRef} ->
-            lager:info("new LdbRef ~p in ", [LdbRef, Path]),
+            lager:info("new LdbRef ~p in ~p", [LdbRef, Path]),
             {ok, LdbRef};
         {error, _} = ErrorReason ->
             ErrorReason
