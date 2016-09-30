@@ -570,15 +570,8 @@ do_get_build_token(State=#state{build_tokens=Tokens}) ->
 
 -spec maybe_get_upgrade_token(state()) -> build_limit_reached | {ok, state()}.
 maybe_get_upgrade_token(State=#state{trees_version=VTrees}) ->
-    case [Idx || {Idx, Version} <- VTrees, Version /= legacy] of
-        %% All legacy trees, allow build token
-        [] ->
-            do_get_build_token(State);
-        %% Some trees upgraded. Confirm the upgraded trees are built
-        %% before allowing another build token for an upgrade
-        Indexes ->
-            check_built_upgraded_trees(Indexes, State)
-    end.
+    Indexes = [Idx || {Idx, Version} <- VTrees, Version /= legacy],
+    check_built_upgraded_trees(Indexes, State).
 
 -spec check_built_upgraded_trees(list(), state()) -> build_limit_reached | {ok, state()}.
 check_built_upgraded_trees(Indexes, State=#state{trees=Trees}) ->
