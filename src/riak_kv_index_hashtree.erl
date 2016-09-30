@@ -336,7 +336,7 @@ handle_call(get_version, _From, State=#state{version=Version}) ->
 
 handle_call(built, _From, State=#state{built=true}) ->
     {reply, true, State};
-handle_call(get_built, _From, State) ->
+handle_call(built, _From, State) ->
     {reply, false, State};
 
 handle_call({insert, Items, Options}, _From, State) ->
