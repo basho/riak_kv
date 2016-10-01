@@ -60,7 +60,6 @@
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
           result        = []                  :: rows_acc() | aggregate_acc() | group_by_acc(),
-          run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun(),
           qbuf_ref                            :: undefined | riak_kv_qry_buffers:qbuf_ref(),
           orig_qry                            :: undefined | ?SQL_SELECT{}
          }).
@@ -203,7 +202,7 @@ pop_next_query() ->
 
 %%
 execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
-              #state{ run_sub_qs_fn = RunSubQs } = State) ->
+              State) ->
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
     %% all subqueries have the same select clause
@@ -220,7 +219,7 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
                 InitialState
         end,
     SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
-    ok = RunSubQs(SubQs),
+    ok = run_sub_qs_fn(SubQs),
     {ok, State#state{qid          = QId,
                      receiver_pid = ReceiverPid,
                      qry          = Qry1,
