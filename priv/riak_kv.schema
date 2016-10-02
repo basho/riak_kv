@@ -144,9 +144,9 @@
 
 %% @doc Whether the distributed throttle for active anti-entropy is
 %% enabled.
-{mapping, "anti_entropy.throttle", "riak_kv.aae_throttle_kill_switch", [
+{mapping, "anti_entropy.throttle", "riak_kv.aae_throttle_enabled", [
   {default, on},
-  {datatype, {flag, off, on}},
+  {datatype, flag},
   hidden
 ]}.
 
@@ -185,25 +185,7 @@
 
 {translation,
  "riak_kv.aae_throttle_limits",
- fun(Conf) ->
-   %% Grab all of the possible names of tiers so we can ensure that
-   %% both mailbox_size and delay are included for each tier.
-   TierNamesM = cuttlefish_variable:fuzzy_matches(["anti_entropy", "throttle", "$tier", "mailbox_size"], Conf),
-   TierNamesD = cuttlefish_variable:fuzzy_matches(["anti_entropy", "throttle", "$tier", "delay"], Conf),
-   TierNames = lists:usort(TierNamesM ++ TierNamesD),
-   Throttles = lists:sort(lists:foldl(
-     fun({"$tier", Tier}, Settings) ->
-         Mbox = cuttlefish:conf_get(["anti_entropy", "throttle", Tier, "mailbox_size"], Conf),
-         Delay = cuttlefish:conf_get(["anti_entropy", "throttle", Tier, "delay"], Conf),
-         [{Mbox - 1, Delay}|Settings]
-     end, [], TierNames)),
-   case Throttles of
-       %% -1 is a magic "minimum" bound and must be included, so if it
-       %% isn't present we call it invalid
-       [{-1,_}|_] -> Throttles;
-       _ -> cuttlefish:invalid("anti_entropy.throttle tiers must include a tier with mailbox_size 0")
-   end
-end
+ riak_core_throttle:create_limits_translator_fun("anti_entropy", "mailbox_size")
 }.
 
 %% @see leveldb.bloomfilter
@@ -648,6 +630,71 @@ end
   {default, "100GB"},
   {datatype, bytesize},
   hidden
+]}.
+
+
+%% @doc Whether to allow list buckets.
+{mapping, "cluster.job.riak_kv.list_buckets", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
+%% @doc Whether to allow streaming list buckets.
+{mapping, "cluster.job.riak_kv.stream_list_buckets", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
+%% @doc Whether to allow list keys.
+{mapping, "cluster.job.riak_kv.list_keys", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
+%% @doc Whether to allow streaming list keys.
+{mapping, "cluster.job.riak_kv.stream_list_keys", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
+%% @doc Whether to allow secondary index queries.
+{mapping, "cluster.job.riak_kv.secondary_index", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
+%% @doc Whether to allow streaming secondary index queries.
+{mapping, "cluster.job.riak_kv.stream_secondary_index", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
+%% @doc Whether to allow term-based map-reduce.
+{mapping, "cluster.job.riak_kv.map_reduce", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
+%% @doc Whether to allow JavaScript map-reduce.
+{mapping, "cluster.job.riak_kv.map_reduce_js", "riak_core.job_accept_class", [
+    merge,
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
 ]}.
 
 %% @doc Number of concurrent queries to run per node

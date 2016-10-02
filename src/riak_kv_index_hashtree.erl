@@ -37,6 +37,8 @@
          terminate/2, code_change/3]).
 
 -export([get_lock/2,
+         get_lock/3,
+         get_lock_and_version/2,
          compare/3,
          compare/4,
          compare/5,
@@ -46,19 +48,23 @@
          estimate_keys/1,
          estimate_keys/2,
          hash_index_data/1,
-         hash_object/2,
+         hash_object/3,
          update/2,
-         start_exchange_remote/4,
+         update/3,
+         start_exchange_remote/5,
          delete/2,
          async_delete/2,
          insert/3,
          async_insert/3,
          stop/1,
+         sync_stop/1,
          clear/1,
          expire/1,
          destroy/1,
          index_2i_n/0,
-         get_trees/1]).
+         get_trees/1,
+         get_version/1,
+         built/1]).
 
 -export([poke/1,
          get_build_time/1]).
@@ -69,6 +75,8 @@
 -type proplist() :: proplists:proplist().
 -type riak_object_t2b() :: binary().
 -type hashtree() :: hashtree:hashtree().
+-type update_callback() :: fun(() -> term()).
+-type version() :: legacy | non_neg_integer().
 
 -record(state, {index,
                 vnode_pid,
@@ -78,7 +86,8 @@
                 path,
                 build_time,
                 trees,
-                use_2i = false :: boolean()}).
+                use_2i = false :: boolean(),
+                version = legacy :: version()}).
 
 -type state() :: #state{}.
 
@@ -133,18 +142,24 @@ async_delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
 async_delete(Items=[{_Id, _Key}|_], Tree) ->
     catch gen_server:cast(Tree, {delete, Items}).
 
-%
 %% @doc Called by the entropy manager to finish the process used to acquire
 %%      remote vnode locks when starting an exchange. For more details,
 %%      see {@link riak_kv_entropy_manager:start_exchange_remote/3}
--spec start_exchange_remote(pid(), term(), index_n(), pid()) -> ok.
-start_exchange_remote(FsmPid, From, IndexN, Tree) ->
-    gen_server:cast(Tree, {start_exchange_remote, FsmPid, From, IndexN}).
+-spec start_exchange_remote(pid(), version(), term(), index_n(), pid()) -> ok.
+start_exchange_remote(FsmPid, Version, From, IndexN, Tree) ->
+    gen_server:cast(Tree, {start_exchange_remote, FsmPid, Version, From, IndexN}).
 
 %% @doc Update all hashtrees managed by the provided index_hashtree pid.
 -spec update(index_n(), pid()) -> ok | not_responsible.
 update(Id, Tree) ->
-    gen_server:call(Tree, {update_tree, Id}, infinity).
+    update(Id, Tree, undefined).
+
+%% @doc Update all hashtrees managed by the provided index_hashtree pid.
+-spec update(index_n(), pid(), undefined | update_callback()) -> ok | not_responsible.
+update(Id, Tree, undefined) ->
+    gen_server:call(Tree, {update_tree, Id, undefined}, infinity);
+update(Id, Tree, Callback) when is_function(Callback) ->
+    gen_server:call(Tree, {update_tree, Id, Callback}, infinity).
 
 %% @doc Return a hash bucket from the tree identified by the given tree id
 %%      that is managed by the provided index_hashtree.
@@ -188,13 +203,36 @@ get_trees({test, Pid}) ->
 %%      locked, and associate the lock with the calling process.
 -spec get_lock(pid(), any()) -> ok | not_built | already_locked.
 get_lock(Tree, Type) ->
-    get_lock(Tree, Type, self()).
+    get_lock(Tree, Type, get_version(Tree), self()).
+
+%% @doc Acquire the lock for the specified index_hashtree if not already
+%%      locked, and associate the lock with the calling process. Grab lock on
+%%      specific version.
+-spec get_lock(pid(), any(), version()) -> ok | not_built | already_locked | bad_version.
+get_lock(Tree, Type, Version) ->
+    get_lock(Tree, Type, Version, self()).
 
 %% @doc Acquire the lock for the specified index_hashtree if not already
 %%      locked, and associate the lock with the provided pid.
--spec get_lock(pid(), any(), pid()) -> ok | not_built | already_locked.
-get_lock(Tree, Type, Pid) ->
-    gen_server:call(Tree, {get_lock, Type, Pid}, infinity).
+-spec get_lock(pid(), any(),version(), pid()) -> ok | not_built | already_locked | bad_version.
+get_lock(Tree, Type, Version, Pid) ->
+    gen_server:call(Tree, {get_lock, Type, Version, Pid}, infinity).
+
+%% @doc Get the version of the specified index_hashtree
+-spec get_version(pid()) -> version().
+get_version(Tree) ->
+    gen_server:call(Tree, get_version, infinity).
+
+%% @doc Return a boolean of trees build status
+-spec built(pid()) -> boolean().
+built(Tree) ->
+    gen_server:call(Tree, built, infinity).
+
+%% @doc Acquire the lock and return the version for the specified index_hashtree if not already
+%%      locked.
+-spec get_lock_and_version(pid(), any()) -> {ok | not_built | already_locked, version()}.
+get_lock_and_version(Tree, Type) ->
+    {get_lock(Tree, Type) , get_version(Tree)}.
 
 %% @doc Poke the specified index_hashtree to ensure the tree is
 %%      built/rebuilt as needed. This is periodically called by the
@@ -206,6 +244,12 @@ poke(Tree) ->
 %% @doc Terminate the specified index_hashtree.
 stop(Tree) ->
     gen_server:cast(Tree, stop).
+
+%% @doc Terminate the specified index_hashtree and wait for exit
+sync_stop(undefined) ->
+    ok;
+sync_stop(Tree) ->
+    gen_server:call(Tree, stop).
 
 %% @doc Destroy the specified index_hashtree, which will destroy all
 %%      associated hashtrees and terminate.
@@ -219,7 +263,7 @@ clear(Tree) ->
 
 %% @doc Expire the specified index_hashtree
 expire(Tree) ->
-    gen_server:call(Tree, expire, infinity).
+    gen_server:cast(Tree, expire).
 
 %% @doc Estimate total number of keys in index_hashtree
 estimate_keys(Tree) ->
@@ -247,7 +291,15 @@ init([Index, VNPid, Opts]) ->
             end,
             ignore;
         Root ->
-            Path = filename:join(Root, integer_to_list(Index)),
+            {Path0, Version} = case determine_version(Root, Index, Opts) of
+                V when is_integer(V) ->
+                    %% Must add "v" because integer partition dirs. Joining the version to the path to support
+                    %% easy downgrades where the new trees will be unable to be found by old code.
+                    {filename:join(Root, "v" ++ integer_to_list(V)), V};
+                _ ->
+                    {Root, legacy}
+            end,
+            Path = filename:join(Path0, integer_to_list(Index)),
             monitor(process, VNPid),
             Use2i = lists:member(use_2i, Opts),
             VNEmpty = lists:member(vnode_empty, Opts),
@@ -256,9 +308,10 @@ init([Index, VNPid, Opts]) ->
                            trees=orddict:new(),
                            built=false,
                            use_2i=Use2i,
-                           path=Path},
+                           path=Path,
+                           version=Version},
             IndexNs = responsible_preflists(State),
-            State2 = init_trees(IndexNs, State),
+            State2 = init_trees(IndexNs, VNEmpty, State),
             %% If vnode is empty, mark tree as built without performing fold
             case VNEmpty of
                 true ->
@@ -271,12 +324,20 @@ init([Index, VNPid, Opts]) ->
     end.
 
 handle_call({new_tree, Id}, _From, State) ->
-    State2 = do_new_tree(Id, State),
+    State2 = do_new_tree(Id, State, mark_open),
     {reply, ok, State2};
 
-handle_call({get_lock, Type, Pid}, _From, State) ->
-    {Reply, State2} = do_get_lock(Type, Pid, State),
+handle_call({get_lock, Type, Version, Pid}, _From, State) ->
+    {Reply, State2} = do_get_lock(Type, Version, Pid, State),
     {reply, Reply, State2};
+
+handle_call(get_version, _From, State=#state{version=Version}) ->
+    {reply, Version, State};
+
+handle_call(built, _From, State=#state{built=true}) ->
+    {reply, true, State};
+handle_call(built, _From, State) ->
+    {reply, false, State};
 
 handle_call({insert, Items, Options}, _From, State) ->
     State2 = do_insert(Items, Options, State),
@@ -289,18 +350,15 @@ handle_call({delete, Items}, _From, State) ->
 handle_call(get_trees, _From, #state{trees=Trees}=State) ->
     {reply, Trees, State};
 
-handle_call({update_tree, Id}, From, State) ->
+handle_call({update_tree, Id, Callback}, From, State) ->
     lager:debug("Updating tree: (vnode)=~p (preflist)=~p", [State#state.index, Id]),
     apply_tree(Id,
-               fun(Tree) ->
-                       {SnapTree, Tree2} = hashtree:update_snapshot(Tree),
-                       spawn_link(fun() ->
-                                          _ = hashtree:update_perform(SnapTree),
-                                          gen_server:reply(From, ok)
-                                  end),
-                       {noreply, Tree2}
-               end,
-               State);
+        fun(Tree) ->
+            NewTree = snapshot_and_async_update_tree(Tree, Id, From, Callback),
+            {noreply, NewTree}
+            end,
+        State
+    );
 
 handle_call({exchange_bucket, Id, Level, Bucket}, _From, State) ->
     apply_tree(Id,
@@ -330,11 +388,6 @@ handle_call(clear, _From, State) ->
     State2 = clear_tree(State),
     {reply, ok, State2};
 
-handle_call(expire, _From, State) ->
-    State2 = State#state{expired=true},
-    lager:info("Manually expired tree: ~p", [State#state.index]),
-    {reply, ok, State2};
-
 handle_call(estimate_keys, _From,  State=#state{trees=Trees}) ->
     EstimateNrKeys =
         orddict:fold(fun(_, Tree, Acc) ->
@@ -353,6 +406,10 @@ handle_call({estimate_keys, IndexN}, _From,  State=#state{trees=Trees}) ->
             {reply, not_responsible, State}
     end;
 
+handle_call(stop, _From, State0) ->
+    State1 = close_trees(State0),
+    {stop, normal, ok, State1};
+
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -361,9 +418,9 @@ handle_cast(poke, State) ->
     State2 = do_poke(State),
     {noreply, State2};
 
-handle_cast(stop, State) ->
-    close_trees(State),
-    {stop, normal, State};
+handle_cast(stop, State0) ->
+    State1 = close_trees(State0),
+    {stop, normal, State1};
 
 handle_cast({insert, Items, Options}, State) ->
     State2 = do_insert(Items, Options, State),
@@ -381,9 +438,14 @@ handle_cast(build_finished, State) ->
     State2 = do_build_finished(State),
     {noreply, State2};
 
-handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
+handle_cast(expire, State) ->
+    State2 = State#state{expired=true},
+    lager:info("Manually expired tree: ~p", [State#state.index]),
+    {noreply, State2};
+
+handle_cast({start_exchange_remote, FsmPid, Version, From, _IndexN}, State) ->
     %% Concurrency lock already acquired, try to acquire tree lock.
-    case do_get_lock(remote_fsm, FsmPid, State) of
+    case do_get_lock(remote_fsm, Version, FsmPid, State) of
         {ok, State2} ->
             gen_server:reply(From, {remote_exchange, self()}),
             {noreply, State2};
@@ -392,13 +454,30 @@ handle_cast({start_exchange_remote, FsmPid, From, _IndexN}, State) ->
             {noreply, State2}
     end;
 
+handle_cast({updated, Id}, State) ->
+    Fun = fun(Tree) ->
+              {noreply, hashtree:set_next_rebuild(Tree, incremental)}
+          end,
+    apply_tree(Id, Fun, State);
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'DOWN', _, _, Pid, _}, State) when Pid == State#state.vnode_pid ->
+handle_info({'DOWN', _, _, Pid, Reason}, State0=#state{trees=Trees0, vnode_pid=VnodePid})
+  when Pid == VnodePid ->
     %% vnode has terminated, exit as well
-    close_trees(State),
-    {stop, normal, State};
+    %% exiting as quickly as possible to reduce the window on the vnode restart
+    %% and force full rebuild for next restart
+    Trees = case Reason of
+                normal ->
+                    Trees0;
+                shutdown ->
+                    Trees0;
+                _ ->
+                    [hashtree:set_next_rebuild(Tree, full) || {_IdxN, Tree} <- Trees0]
+            end,
+    State1 = close_trees(State0#state{trees=Trees}),
+    {stop, normal, State1};
 handle_info({'DOWN', Ref, _, _, _}, State) ->
     State2 = maybe_release_lock(Ref, State),
     {noreply, State2};
@@ -434,11 +513,73 @@ determine_data_root() ->
             end
     end.
 
--spec init_trees([index_n()], state()) -> state().
-init_trees(IndexNs, State) ->
-    State2 = lists:foldl(fun(Id, StateAcc) ->
-                                 do_new_tree(Id, StateAcc)
-                         end, State, IndexNs),
+%% @doc Determine the version this tree should use at startup. If update atom is in Opts
+%%      then we immediately use version in capabilities. Otherwise check if capabilities
+%%      has flipped to a version yet and if it has, check if we've already upgraded by
+%%      looking for versioned AAE directory.
+-spec determine_version(list(), index(), list()) -> version().
+determine_version(Root, Index, Opts) ->
+    case force_upgrade(Opts) of
+        true ->
+            get_cap_hash_version();
+        _ ->
+            find_version(Root, Index)
+    end.
+
+-spec force_upgrade(list()) -> boolean().
+force_upgrade(Opts) ->
+    check_upgrade_opts(Opts, check_upgrade_env()).
+
+-spec check_upgrade_opts(list(), boolean()) -> boolean().
+check_upgrade_opts(_Opts, true) ->
+    true;
+check_upgrade_opts(Opts, _) ->
+    lists:member(upgrade, Opts).
+
+-spec check_upgrade_env() -> boolean().
+check_upgrade_env() ->
+    case application:get_env(riak_kv, force_hashtree_upgrade, false) of
+        true ->
+            true;
+        false ->
+            false;
+        Value ->
+            lager:error("Unsupported non-boolean value for environment variable force_hashtree_upgrade ~p",[Value]),
+            false
+    end.
+
+-spec get_cap_hash_version() -> version().
+get_cap_hash_version() ->
+    riak_core_capability:get({riak_kv, object_hash_version}, legacy).
+
+-spec find_version(list(), index()) -> version().
+find_version(Root, Index) ->
+    check_root_version(Root, Index, get_cap_hash_version()).
+
+-spec check_root_version(list(), index(), version()) -> version().
+check_root_version(Root, Index, Version) when is_integer(Version) ->
+    case filelib:is_dir(filename:join(filename:join(Root, "v" ++ integer_to_list(Version)),integer_to_list(Index))) of
+        true ->
+            Version;
+        false ->
+            legacy
+    end;
+check_root_version(_Root, _Index, Version) ->
+    Version.
+
+%% @doc Init the trees.
+%%
+%%      MarkEmpty is a boolean dictating whether we're marking the tree empty for the
+%%      the first creation or just marking it open instead.
+-spec init_trees([index_n()], boolean(), state()) -> state().
+init_trees(IndexNs, MarkEmpty, State) ->
+    State2 = lists:foldl(
+               fun(Id, StateAcc) ->
+                   case MarkEmpty of
+                       true  -> do_new_tree(Id, StateAcc, mark_empty);
+                       false -> do_new_tree(Id, StateAcc, mark_open)
+                   end
+               end, State, IndexNs),
     State2#state{built=false, expired=false}.
 
 -spec load_built(state()) -> boolean().
@@ -453,15 +594,15 @@ load_built(#state{trees=Trees}) ->
 
 %% Generate a hash value for a `riak_object'
 -spec hash_object({riak_object:bucket(), riak_object:key()},
-                  riak_object_t2b() | riak_object:riak_object()) -> binary().
-hash_object({Bucket, Key}, RObj0) ->
+                  riak_object_t2b() | riak_object:riak_object(),
+                  version()) -> binary().
+hash_object({Bucket, Key}, RObj0, Version) ->
     try
         RObj = case riak_object:is_robject(RObj0) of
             true -> RObj0;
             false -> riak_object:from_binary(Bucket, Key, RObj0)
         end,
-        Hash = riak_object:hash(RObj),
-        term_to_binary(Hash)
+        riak_object:hash(RObj, Version)
     catch _:_ ->
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)
@@ -483,7 +624,7 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 fold_keys(Partition, Tree, HasIndexTree) ->
     FoldFun = fold_fun(Tree, HasIndexTree),
     Req = riak_core_util:make_fold_req(FoldFun,
-                                       0, false, 
+                                       0, false,
                                        [aae_reconstruction,
                                         {iterator_refresh, true}]),
     riak_core_vnode_master:sync_command({Partition, node()},
@@ -535,9 +676,10 @@ fold_fun(Tree, _HasIndexTree = true) ->
 
 -spec object_fold_fun(pid()) -> fun().
 object_fold_fun(Tree) ->
+    Version = get_version(Tree),
     fun(BKey={Bucket,Key}, RObj, BinBKey) ->
             IndexN = riak_kv_util:get_index_n({Bucket, Key}),
-            insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
+            insert([{IndexN, BinBKey, hash_object(BKey, RObj, Version)}],
                    [if_missing],
                    Tree)
     end.
@@ -555,35 +697,46 @@ index_fold_fun(Tree) ->
 index_2i_n() ->
     ?INDEX_2I_N.
 
-%% Generate a new {@link //riak_core/hashtree} for the specified `index_n'. If this is
-%% the first hashtree created by this index_hashtree, then open/create a new
-%% on-disk store at `segment_path'. Otherwise, re-use the store from the first
-%% tree. In other words, all hashtrees for a given index_hashtree are stored in
-%% the same on-disk store.
--spec do_new_tree(index_n(), state()) -> state().
-do_new_tree(Id, State=#state{trees=Trees, path=Path}) ->
+%% @doc Generate a new {@link hashtree} for the specified `index_n'. If this is
+%%      the first hashtree created by this index_hashtree, then open/create a new
+%%      on-disk store at `segment_path'. Otherwise, re-use the store from the first
+%%      tree. In other words, all hashtrees for a given index_hashtree are stored in
+%%      the same on-disk store.
+%%
+%%      Also, write to the tree-id's `opened' meta and check if `opened' =:= `closed'.
+-spec do_new_tree(index_n(), state(), mark_open|mark_empty) -> state().
+do_new_tree(Id, State=#state{trees=Trees, path=Path}, MarkType) ->
     Index = State#state.index,
     IdBin = tree_id(Id),
-    NewTree = case Trees of
+    NewTree0 = case Trees of
                   [] ->
                       hashtree:new({Index,IdBin}, [{segment_path, Path}]);
                   [{_,Other}|_] ->
                       hashtree:new({Index,IdBin}, Other)
-              end,
-    Trees2 = orddict:store(Id, NewTree, Trees),
+               end,
+    NewTree1 = case MarkType of
+                   mark_empty -> hashtree:mark_open_empty(Id, NewTree0);
+                   mark_open  -> hashtree:mark_open_and_check(Id, NewTree0)
+               end,
+    Trees2 = orddict:store(Id, NewTree1, Trees),
     State#state{trees=Trees2}.
 
--spec do_get_lock(any(), pid(), state()) -> {not_built | ok | already_locked, state()}.
-do_get_lock(_, _, State) when State#state.built /= true ->
+%% This function never uses the Type field. Unsure why it is part of the API. Maybe was meant to be used
+%% by the background manager which could manage tokens based on Type atom. Best guess...
+-spec do_get_lock(any(), version(), pid(), state()) -> {not_built | ok | already_locked | bad_version, state()}.
+do_get_lock(_, _, _, State) when State#state.built /= true ->
     lager:debug("Not built: ~p :: ~p", [State#state.index, State#state.built]),
     {not_built, State};
-do_get_lock(_Type, Pid, State=#state{lock=undefined}) ->
+do_get_lock(_, _, _, State) when State#state.lock /= undefined ->
+    lager:debug("Already locked: ~p", [State#state.index]),
+    {already_locked, State};
+do_get_lock(_Type, Version, Pid, State=#state{version=Version}) ->
     Ref = monitor(process, Pid),
     State2 = State#state{lock=Ref},
     {ok, State2};
-do_get_lock(_, _, State) ->
-    lager:debug("Already locked: ~p", [State#state.index]),
-    {already_locked, State}.
+do_get_lock(_Type, ReqVer, _Pid, State=#state{version=Version, index=Index}) ->
+    lager:debug("Hashtree ~p lock attempted for version: ~p while local tree has version: ~p", [Index, ReqVer, Version]),
+    {bad_version, State}.
 
 -spec maybe_release_lock(reference(), state()) -> state().
 maybe_release_lock(Ref, State) ->
@@ -619,14 +772,17 @@ apply_tree(Id, Fun, State=#state{trees=Trees}) ->
     end.
 
 -spec do_build_finished(state()) -> state().
-do_build_finished(State=#state{index=Index, built=_Pid}) ->
+do_build_finished(State=#state{index=Index, built=_Pid, trees=Trees0}) ->
     lager:debug("Finished build: ~p", [Index]),
-    {_,Tree0} = hd(State#state.trees),
+    Trees = orddict:map(fun(_Id, Tree) ->
+                            hashtree:flush_buffer(Tree)
+                        end, Trees0),
+    {_, Tree0} = hd(Trees),
     BuildTime = get_build_time(Tree0),
     _ = hashtree:write_meta(<<"built">>, <<1>>, Tree0),
     _ = hashtree:write_meta(<<"build_time">>, term_to_binary(BuildTime), Tree0),
     riak_kv_entropy_info:tree_built(Index, BuildTime),
-    State#state{built=true, build_time=BuildTime, expired=false}.
+    State#state{built=true, build_time=BuildTime, expired=false, trees=Trees}.
 
 %% Determine the build time for all trees associated with this
 %% index. The build time is stored as metadata in the on-disk file. If
@@ -653,19 +809,19 @@ valid_time({X,Y,Z}) when is_integer(X) and is_integer(Y) and is_integer(Z) ->
 valid_time(_) ->
     false.
 
-do_insert(Items, Opts, State=#state{trees=Trees}) ->
+do_insert(Items, Opts, State=#state{trees=Trees, version=Version}) ->
     HasIndex = has_index_tree(Trees),
-    do_insert_expanded(expand_items(HasIndex, Items), Opts, State).
+    do_insert_expanded(expand_items(HasIndex, Items, Version), Opts, State).
 
-expand_items(HasIndex, Items) ->
+expand_items(HasIndex, Items, Version) ->
     lists:foldl(fun(I, Acc) ->
-                        expand_item(HasIndex, I, Acc)
+                        expand_item(HasIndex, I, Version, Acc)
                 end, [], Items).
 
-expand_item(Has2ITree, {object, BKey, RObj}, Others) ->
+expand_item(Has2ITree, {object, BKey, RObj}, Version, Others) ->
     IndexN = riak_kv_util:get_index_n(BKey),
     BinBKey = term_to_binary(BKey),
-    ObjHash = hash_object(BKey, RObj),
+    ObjHash = hash_object(BKey, RObj, Version),
     Item0 = {IndexN, BinBKey, ObjHash},
     case Has2ITree of
         false ->
@@ -675,7 +831,7 @@ expand_item(Has2ITree, {object, BKey, RObj}, Others) ->
             Hash2i =  hash_index_data(IndexData),
             [Item0, {?INDEX_2I_N, BinBKey, Hash2i} | Others]
     end;
-expand_item(_, Item, Others) ->
+expand_item(_, Item, _Version, Others) ->
     [Item | Others].
 
 -spec do_insert_expanded([{index_n(), binary(), binary()}], proplist(),
@@ -683,7 +839,7 @@ expand_item(_, Item, Others) ->
 do_insert_expanded([], _Opts, State) ->
     State;
 do_insert_expanded([{Id, Key, Hash}|Rest], Opts, State=#state{trees=Trees}) ->
-    State2 = 
+    State2 =
     case orddict:find(Id, Trees) of
         {ok, Tree} ->
             Tree2 = hashtree:insert(Key, Hash, Tree, Opts),
@@ -782,7 +938,7 @@ handle_unexpected_key(Id, Key, State=#state{index=Partition}) ->
                     %% be resolved whenever trees are eventually rebuilt, either
                     %% after normal expiration or after a future unexpected value
                     %% triggers the alternate case clause above.
-                    State2 = do_new_tree(Id, State),
+                    State2 = do_new_tree(Id, State, mark_open),
                     State2
             end
     end.
@@ -818,7 +974,26 @@ do_compare(Id, Remote, AccFun, Acc, From, State) ->
 do_poke(State) ->
     State1 = maybe_rebuild(maybe_expire(State)),
     State2 = maybe_build(State1),
-    State2.
+    State3 = maybe_upgrade(State2),
+    State3.
+
+-spec maybe_upgrade(state()) -> state().
+maybe_upgrade(State=#state{lock=undefined, built=true, version=legacy, index=Index}) ->
+    case riak_kv_entropy_manager:get_pending_version() of
+        legacy ->
+            State;
+        0 ->
+            case get_all_locks(upgrade, Index, self()) of
+                true ->
+                    riak_kv_vnode:upgrade_hashtree(Index),
+                    State;
+                _ ->
+                    riak_kv_entropy_manager:requeue_poke(State#state.index),
+                    State
+            end
+    end;
+maybe_upgrade(State) ->
+    State.
 
 -spec maybe_expire(state()) -> state().
 maybe_expire(State=#state{lock=undefined, built=true, expired=false}) ->
@@ -842,12 +1017,12 @@ clear_tree(State=#state{index=Index}) ->
     lager:info("Clearing AAE tree: ~p", [Index]),
     IndexNs = responsible_preflists(State),
     State2 = destroy_trees(State),
-    State3 = init_trees(IndexNs, State2#state{trees=orddict:new()}),
+    State3 = init_trees(IndexNs, true, State2#state{trees=orddict:new()}),
     State3#state{built=false, expired=false}.
 
 destroy_trees(State) ->
     State2 = close_trees(State),
-    {_,Tree0} = hd(State2#state.trees),
+    {_,Tree0} = hd(State#state.trees), % deliberately using state with live db ref
     _ = hashtree:destroy(Tree0),
     State2.
 
@@ -879,7 +1054,7 @@ build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
         {true, build} ->
             lager:info("Starting AAE tree build: ~p", [Index]),
             fold_keys(Index, Self, has_index_tree(Trees)),
-            lager:info("Finished AAE tree build: ~p", [Index]), 
+            lager:info("Finished AAE tree build: ~p", [Index]),
             gen_server:cast(Self, build_finished);
         {true, rehash} ->
             lager:debug("Starting AAE tree rehash: ~p", [Index]),
@@ -919,20 +1094,36 @@ maybe_rebuild(State) ->
 has_index_tree(Trees) ->
     orddict:is_key(?INDEX_2I_N, Trees).
 
+close_trees(State=#state{trees=undefined}) ->
+    State;
 close_trees(State=#state{trees=Trees}) ->
     Trees2 = [begin
                   NewTree = try
-                                hashtree:flush_buffer(Tree)
-                            catch _:_ ->
+                                case hashtree:next_rebuild(Tree) of
+                                    %% Not marking close cleanly to avoid the
+                                    %% cost of a full rebuild on shutdown.
+                                    full ->
+                                        lager:info("Deliberately marking KV hashtree ~p"
+                                                   ++ " for full rebuild on next restart",
+                                                   [IdxN]),
+                                        hashtree:flush_buffer(Tree);
+                                    incremental ->
+                                        HT = hashtree:update_tree(Tree),
+                                        hashtree:mark_clean_close(IdxN, HT)
+                                end
+                            catch _:Err ->
+                                    lager:warning("Failed to flush/update trees"
+                                                  ++ " during close | Error: ~p", [Err]),
                                     Tree
                             end,
                   {IdxN, NewTree}
               end || {IdxN, Tree} <- Trees],
-    Trees3 = [{IdxN, hashtree:close(Tree)} || {IdxN, Tree} <- Trees2],
-    State#state{trees=Trees3}.
+    _ = [hashtree:close(Tree) || {_IdxN, Tree} <- Trees2],
+    State#state{trees=undefined}.
 
+-spec get_all_locks(build | rehash | upgrade, index(), pid()) -> boolean().
 get_all_locks(Type, Index, Pid) ->
-    case riak_kv_entropy_manager:get_lock(Type, Pid) of
+    try riak_kv_entropy_manager:get_lock(Type, Pid) of
         ok ->
             case maybe_get_vnode_lock(Type, Index, Pid) of
                 ok ->
@@ -940,12 +1131,22 @@ get_all_locks(Type, Index, Pid) ->
                 _ ->
                     false
             end;
-        _ ->
+        Other ->
+            lager:debug("Could not get lock: ~p", [Other]),
             false
+    catch exit:{timeout,_} ->
+        riak_kv_entropy_manager:release_lock(Pid),
+        lager:debug("Could not get lock due to timeout."),
+        false
     end.
 
 maybe_get_vnode_lock(rehash, _Partition, _Pid) ->
     %% rehash operations do not need a vnode lock
+    ok;
+maybe_get_vnode_lock(upgrade, _Partition, _Pid) ->
+    %% upgrade operations do not need a vnode lock
+    %% The subsequent build following the hashtree
+    %% restart will trigger a build and get a vnode_lock
     ok;
 maybe_get_vnode_lock(build, Partition, Pid) ->
     maybe_get_vnode_lock(Partition, Pid).
@@ -966,3 +1167,27 @@ maybe_get_vnode_lock(SrcPartition, Pid) ->
         false ->
             ok
     end.
+
+snapshot_and_async_update_tree(Tree, Id, From, Callback) ->
+    {SnapTree, Tree2} = hashtree:update_snapshot(Tree),
+    Tree3 = hashtree:set_next_rebuild(Tree2, full),
+    Self = self(),
+    spawn_link(
+        fun() ->
+            try maybe_callback(Callback)
+            catch
+                _:E ->
+                    lager:error(
+                        "An error occurred in update callback: ~p.  "
+                        "Ignoring error and proceeding with update.", [E])
+            end,
+            _ = hashtree:update_perform(SnapTree),
+            gen_server:cast(Self, {updated, Id}),
+            gen_server:reply(From, ok)
+        end),
+    Tree3.
+
+maybe_callback(undefined) ->
+    ok;
+maybe_callback(Callback) ->
+    Callback().

@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_buckets - Webmachine resource for listing buckets.
-%%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Resource for listing Riak buckets over HTTP.
+%% @doc Webmachine resource for listing Riak buckets over HTTP.
 %%
 %% URLs that begin with `/types' are necessary for the new bucket
 %% types implementation in Riak 2.0, those that begin with `/buckets'
@@ -126,23 +124,40 @@ is_authorized(ReqData, Ctx) ->
                     "instead.">>, ReqData), Ctx}
     end.
 
-forbidden(RD, Ctx = #ctx{security=undefined}) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, Ctx};
-forbidden(RD, Ctx) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
-        true ->
-            {true, RD, Ctx};
+-spec forbidden(#wm_reqdata{}, context())
+        -> {boolean(), #wm_reqdata{}, context()}.
+forbidden(ReqDataIn, #ctx{security = undefined} = Context) ->
+    Class = request_class(ReqDataIn),
+    riak_kv_wm_utils:is_forbidden(ReqDataIn, Class, Context);
+forbidden(ReqDataIn, #ctx{bucket_type = BT, security = Sec} = Context) ->
+    Class = request_class(ReqDataIn),
+    {Answer, ReqData, _} = Result =
+        riak_kv_wm_utils:is_forbidden(ReqDataIn, Class, Context),
+    case Answer of
         false ->
-            Res = riak_core_security:check_permission({"riak_kv.list_buckets",
-                                                       Ctx#ctx.bucket_type},
-                                                      Ctx#ctx.security),
-            case Res of
+            case riak_core_security:check_permission(
+                    {"riak_kv.list_buckets", BT}, Sec) of
                 {false, Error, _} ->
-                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
-                    {true, wrq:append_to_resp_body(unicode:characters_to_binary(Error, utf8, utf8), RD1), Ctx};
+                    {true,
+                        wrq:append_to_resp_body(
+                            unicode:characters_to_binary(Error, utf8, utf8),
+                            wrq:set_resp_header(
+                                "Content-Type", "text/plain", ReqData)),
+                        Context};
                 {true, _} ->
-                    {false, RD, Ctx}
-            end
+                    {false, ReqData, Context}
+            end;
+        _ ->
+            Result
+    end.
+
+-spec request_class(#wm_reqdata{}) -> term().
+request_class(ReqData) ->
+    case wrq:get_qs_value(?Q_BUCKETS, ReqData) of
+        ?Q_STREAM ->
+            {riak_kv, stream_list_buckets};
+        _ ->
+            {riak_kv, list_buckets}
     end.
 
 -spec content_types_provided(#wm_reqdata{}, context()) ->
