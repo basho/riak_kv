@@ -45,10 +45,6 @@
 
 -include("riak_kv_ts.hrl").
 
--define(NO_SIDEEFFECTS, []).
--define(NO_MAX_RESULTS, no_max_results).
--define(NO_PG_SORT, undefined).
-
 %% accumulators for different types of query results.
 -type rows_acc()      :: [{non_neg_integer(), list()}].
 -type aggregate_acc() :: [{binary(), term()}].
@@ -269,7 +265,7 @@ add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
                     cancel_error_query(divide_by_zero, State)
             end;
         false ->
-            %% discard; Don't touch state as it may have already 'finished'.
+            lager:warning("unexpected chunk received for non-existing query ~p when state is ~p", [SubQId, State]),
             State
     end.
 
