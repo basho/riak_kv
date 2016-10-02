@@ -143,7 +143,7 @@ get_total_size() ->
 
 -spec batch_put(qbuf_ref(), [data_row()]) ->
                        {ok, watermark_status()} | {error, bad_qbuf_ref|overfull}.
-%% @doc Emulate a batch put
+%% @doc Emulate a batch put.
 batch_put(QBufRef, Data) ->
     gen_server:call(?SERVER, {batch_put, QBufRef, Data}).
 
@@ -383,14 +383,14 @@ do_get_total_size(#state{total_size = TotalSize} = State) ->
     {reply, TotalSize, State}.
 
 
-do_get_or_create_qbuf(SQL = ?SQL_SELECT{allow_qbuf_reuse = AllowQBufReuse}, NSubqueries,
+do_get_or_create_qbuf(SQL, NSubqueries,
                       OrigDDL, Options,
                       #state{qbufs            = QBufs0,
                              soft_watermark   = SoftWMark,
                              root_path        = RootPath,
                              total_size       = TotalSize,
                              qbuf_expire_msec = DefaultQBufExpireMsec} = State0) ->
-    case maybe_ensure_qref(SQL, QBufs0, AllowQBufReuse) of
+    case maybe_ensure_qref(SQL, QBufs0) of
         {ok, {existing, QBufRef}} ->
             lager:info("reusing existing query buffer ~p for ~p", [QBufRef, SQL]),
             State9 = touch_qbuf(QBufRef, State0),
@@ -425,9 +425,9 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{allow_qbuf_reuse = AllowQBufReuse}, NSub
             {reply, {error, Reason}, State0}
     end.
 
-maybe_ensure_qref(SQL, QBufs, true) ->
+maybe_ensure_qref(?SQL_SELECT{allow_qbuf_reuse = true} = SQL, QBufs) ->
     ensure_qref(SQL, QBufs);
-maybe_ensure_qref(_SQL, _QBufs, false) ->
+maybe_ensure_qref(?SQL_SELECT{allow_qbuf_reuse = false}, _QBufs) ->
     AlwaysUniqueRef = crypto:rand_bytes(8),
     {ok, {new, <<1, AlwaysUniqueRef/binary>>}}.
 

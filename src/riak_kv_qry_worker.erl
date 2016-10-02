@@ -59,7 +59,10 @@
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
-          result        = []                  :: rows_acc() | aggregate_acc() | group_by_acc(),
+          fsm_queue          = []             :: [list()],
+          n_running_fsms     = 0              :: non_neg_integer(),
+          max_n_running_fsms = 5              :: pos_integer(),
+          result             = []             :: rows_acc() | aggregate_acc() | group_by_acc(),
           qbuf_ref                            :: undefined | riak_kv_qry_buffers:qbuf_ref(),
           orig_qry                            :: undefined | ?SQL_SELECT{}
          }).
@@ -96,10 +99,14 @@ handle_info(pop_next_query, State1) ->
     QueryWork = riak_kv_qry_queue:blocking_pop(),
     {ok, State2} = execute_query(QueryWork, State1),
     {noreply, State2};
+
 handle_info({{_, QId}, done}, #state{ qid = QId } = State) ->
     {noreply, subqueries_done(QId, State)};
-handle_info({{SubQId, QId}, {results, Chunk}}, #state{ qid = QId } = State) ->
-    {noreply, add_subquery_result(SubQId, Chunk, State)};
+
+handle_info({{SubQId, QId}, {results, Chunk}}, #state{qid = QId} = State) ->
+    {noreply, throttling_spawn_index_fsms(
+                add_subquery_result(SubQId, Chunk, State))};
+
 handle_info({{SubQId, QId}, {error, Reason} = Error},
             #state{receiver_pid = ReceiverPid,
                    qid    = QId,
@@ -135,9 +142,9 @@ code_change(_OldVsn, State, _Extra) ->
 new_state() ->
     #state{ }.
 
-run_sub_qs_fn([]) ->
-    ok;
-run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q1}, {qid, QId}} | T]) ->
+prepare_fsm_options([], Acc) ->
+    lists:reverse(Acc);
+prepare_fsm_options([{{qry, ?SQL_SELECT{cover_context = undefined} = Q1}, {qid, QId}} | T], Acc) ->
     Table = Q1?SQL_SELECT.'FROM',
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     %% fix these up too
@@ -146,11 +153,10 @@ run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q1}, {qid, QId}} 
     KeyConvFn = make_key_conversion_fun(Table),
     Q2 = convert_query_to_cluster_version(Q1),
     Opts = [Bucket, none, Q2, Timeout, all, undefined, {Q2, Bucket}, riak_kv_qry_coverage_plan, KeyConvFn],
-    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
-    run_sub_qs_fn(T);
+    prepare_fsm_options(T, [[{raw, QId, Me}, Opts] | Acc]);
 %% if cover_context in the SQL record is *not* undefined, we've been
 %% given a mini coverage plan to map to a single vnode/quantum
-run_sub_qs_fn([{{qry, Q1}, {qid, QId}} | T]) ->
+prepare_fsm_options([{{qry, Q1}, {qid, QId}} | T], Acc) ->
     Table = Q1?SQL_SELECT.'FROM',
     {ok, CoverProps} =
         riak_kv_pb_coverage:checksum_binary_to_term(Q1?SQL_SELECT.cover_context),
@@ -162,8 +168,8 @@ run_sub_qs_fn([{{qry, Q1}, {qid, QId}} | T]) ->
     KeyConvFn = make_key_conversion_fun(Table),
     Q2 = convert_query_to_cluster_version(Q1),
     Opts = [Bucket, none, Q2, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan, KeyConvFn],
-    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
-    run_sub_qs_fn(T).
+    prepare_fsm_options(T, [[{raw, QId, Me}, Opts] | Acc]).
+
 
 make_key_conversion_fun(Table) ->
     Mod = riak_ql_ddl:make_module_name(Table),
@@ -202,7 +208,7 @@ pop_next_query() ->
 
 %%
 execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
-              State) ->
+              State0) ->
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
     %% all subqueries have the same select clause
@@ -219,23 +225,45 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
                 InitialState
         end,
     SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
-    ok = run_sub_qs_fn(SubQs),
-    {ok, State#state{qid          = QId,
-                     receiver_pid = ReceiverPid,
-                     qry          = Qry1,
-                     sub_qrys     = Indices,
-                     result       = InitialResult,
-                     qbuf_ref     = QBufRef}}.
+    FsmOptsList = prepare_fsm_options(SubQs, []),
+    State = State0#state{qid            = QId,
+                         receiver_pid   = ReceiverPid,
+                         qry            = Qry1,
+                         sub_qrys       = Indices,
+                         fsm_queue      = FsmOptsList,
+                         n_running_fsms = 0,
+                         result         = InitialResult,
+                         qbuf_ref       = QBufRef},
+    %% Start spawning index fsms, keeping at most
+    %% #state.max_n_running_fsms running simultaneously.
+    %% Notifications to proceed to the next fsm are sent to us, in the
+    %% form of 'chunk_done' atom,
+    {ok, throttling_spawn_index_fsms(State)}.
 
 %%
-add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs} = State) ->
+throttling_spawn_index_fsms(#state{fsm_queue = [Opts | Rest],
+                                   n_running_fsms = NRunning,
+                                   max_n_running_fsms = SubqFsmSpawnThrottle} = State)
+  when NRunning < SubqFsmSpawnThrottle ->
+    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), Opts),
+    throttling_spawn_index_fsms(State#state{fsm_queue = Rest,
+                                            n_running_fsms = NRunning + 1});
+throttling_spawn_index_fsms(State) ->
+    State.
+
+
+
+%%
+add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
+                                          n_running_fsms = NRunning} = State) ->
     case lists:member(SubQId, SubQs) of
         true ->
             try
                 QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
                 NSubQ = lists:delete(SubQId, SubQs),
-                State#state{result   = QueryResult2,
-                            sub_qrys = NSubQ}
+                State#state{result         = QueryResult2,
+                            n_running_fsms = NRunning - 1,
+                            sub_qrys       = NSubQ}
             catch
                 error:divide_by_zero ->
                     cancel_error_query(divide_by_zero, State)
