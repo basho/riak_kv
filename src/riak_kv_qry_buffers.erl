@@ -268,8 +268,9 @@ init(Options) ->
         filename:join(
           app_helper:get_prop_or_env(data_root, Options, eleveldb),  %% reuse eleveldb own root_path
           "query_buffers"),
+    %% don't bother recovering any leftover tables
     os:cmd(
-      fmt("rm -rf ~s/*", [RootPath])),
+      fmt("rm -rf '~s'/*", [RootPath])),
     State =
         #state{soft_watermark =
                    proplists:get_value(soft_watermark, Options, ?SOFT_WATERMARK),
@@ -443,7 +444,7 @@ do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
               ddl = ?DDL{table = Table}} ->
             ok = eleveldb:close(LdbRef),
             os:cmd(
-              fmt("rm -rf ~s", [filename:join(RootPath, Table)])),
+              fmt("rm -rf '~s'", [filename:join(RootPath, Table)])),
             {reply, ok, State0#state{qbufs = lists:keydelete(QBufRef, 1, QBufs0)}}
     end.
 
