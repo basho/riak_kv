@@ -45,6 +45,9 @@
 
 -include("riak_kv_ts.hrl").
 
+-define(MAX_RUNNING_FSMS, 5).
+-define(MAX_QUERY_DATA_SIZE, 5*1024*1024*1024).
+
 %% accumulators for different types of query results.
 -type rows_acc()      :: [{non_neg_integer(), list()}].
 -type aggregate_acc() :: [{binary(), term()}].
@@ -55,12 +58,22 @@
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
-          fsm_queue          = []             :: [list()],
-          n_running_fsms     = 0              :: non_neg_integer(),
-          max_n_running_fsms = 5              :: pos_integer(),
-          result             = []             :: rows_acc() | aggregate_acc() | group_by_acc(),
-          qbuf_ref                            :: undefined | riak_kv_qry_buffers:qbuf_ref(),
-          orig_qry                            :: undefined | ?SQL_SELECT{}
+          %% overload protection:
+          %% 1. Maintain a limited number of running fsms (i.e.,
+          %%    process at most that many subqueries at a time):
+          fsm_queue          = []                   :: [list()],
+          n_running_fsms     = 0                    :: non_neg_integer(),
+          max_running_fsms   = ?MAX_RUNNING_FSMS    :: pos_integer(),
+          %% 2. Estimate query size (wget-style):
+          n_subqueries_done  = 0                    :: non_neg_integer(),
+          total_query_data   = 0                    :: non_neg_integer(),
+          max_query_data     = ?MAX_QUERY_DATA_SIZE :: non_neg_integer(),
+          %% For queries not backed by query buffers, results are
+          %% accumulated in memory:
+          result             = []                   :: rows_acc() | aggregate_acc() | group_by_acc(),
+          %% Query buffer support
+          qbuf_ref                 :: undefined | riak_kv_qry_buffers:qbuf_ref(),
+          orig_qry                 :: undefined | ?SQL_SELECT{}
          }).
 
 %%%===================================================================
@@ -101,7 +114,8 @@ handle_info({{_, QId}, done}, #state{ qid = QId } = State) ->
 
 handle_info({{SubQId, QId}, {results, Chunk}}, #state{qid = QId} = State) ->
     {noreply, throttling_spawn_index_fsms(
-                add_subquery_result(SubQId, Chunk, State))};
+                estimate_query_size(
+                  add_subquery_result(SubQId, Chunk, State)))};
 
 handle_info({{SubQId, QId}, {error, Reason} = Error},
             #state{receiver_pid = ReceiverPid,
@@ -239,7 +253,7 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
 %%
 throttling_spawn_index_fsms(#state{fsm_queue = [Opts | Rest],
                                    n_running_fsms = NRunning,
-                                   max_n_running_fsms = SubqFsmSpawnThrottle} = State)
+                                   max_running_fsms = SubqFsmSpawnThrottle} = State)
   when NRunning < SubqFsmSpawnThrottle ->
     {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), Opts),
     throttling_spawn_index_fsms(State#state{fsm_queue = Rest,
@@ -248,18 +262,53 @@ throttling_spawn_index_fsms(State) ->
     State.
 
 
+estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
+  when NSubqueriesDone < 2  ->
+    State;
+estimate_query_size(#state{total_query_data  = CurrentTotalSize,
+                           n_subqueries_done = NSubqueriesDone,
+                           max_query_data    = MaxQueryData,
+                           qbuf_ref = QBufRef,
+                           orig_qry = ?SQL_SELECT{'LIMIT' = Limit}} = State)
+  when QBufRef /= undefined,
+       is_integer(Limit) ->
+    %% query buffer-backed, has a LIMIT: consider the latter
+    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
+    ProjectedLimitData = Limit * BytesPerChunk,
+    if ProjectedLimitData > MaxQueryData ->
+            cancel_error_query(query_data_too_big, State);
+       el/=se ->
+            State
+    end;
+estimate_query_size(#state{total_query_data  = CurrentTotalSize,
+                           n_subqueries_done = NSubqueriesDone,
+                           max_query_data    = MaxQueryData,
+                           sub_qrys          = NSubQsToGo} = State) ->
+    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
+    ProjectedGrandTotal = CurrentTotalSize + BytesPerChunk * length(NSubQsToGo),
+    if ProjectedGrandTotal > MaxQueryData ->
+            cancel_error_query(query_data_too_big, State);
+       el/=se ->
+            State
+    end.
+
 
 %%
 add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
+                                          total_query_data = TotalQueryData,
+                                          n_subqueries_done = NSubqueriesDone,
                                           n_running_fsms = NRunning} = State) ->
     case lists:member(SubQId, SubQs) of
         true ->
             try
-                QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
+                QueryResult = run_select_on_chunk(SubQId, Chunk, State),
                 NSubQ = lists:delete(SubQId, SubQs),
-                State#state{result         = QueryResult2,
-                            n_running_fsms = NRunning - 1,
-                            sub_qrys       = NSubQ}
+                ThisChunkData = erlang:external_size(Chunk),
+                State#state{result            = QueryResult,
+                            total_query_data  = TotalQueryData + ThisChunkData,
+                            n_subqueries_done = NSubqueriesDone + 1,
+                            n_running_fsms    = NRunning - 1,
+                            sub_qrys          = NSubQ}
             catch
                 error:divide_by_zero ->
                     cancel_error_query(divide_by_zero, State)
