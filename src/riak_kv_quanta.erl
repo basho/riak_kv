@@ -246,10 +246,10 @@ year_gen() ->
     {choose(1, 40), y}.
 
 quanta_gen() ->
-    oneof([month_gen(),
-           year_gen(),
-           {choose(1,2000), h},
-           {choose(1, 60), m}]).
+    oneof([{choose(1, 2000), d},
+           {choose(1,   24), h},
+           {choose(1,   60), m},
+           {choose(1,   60), s}]).
 
 -endif.
 
