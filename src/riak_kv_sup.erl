@@ -67,12 +67,6 @@ init([]) ->
     JSSup = {riak_kv_js_sup,
              {riak_kv_js_sup, start_link, []},
              permanent, infinity, supervisor, [riak_kv_js_sup]},
-    GetFsmSup = {riak_kv_get_fsm_sup,
-                 {riak_kv_get_fsm_sup, start_link, []},
-                 permanent, infinity, supervisor, [riak_kv_get_fsm_sup]},
-    PutFsmSup = {riak_kv_put_fsm_sup,
-                 {riak_kv_put_fsm_sup, start_link, []},
-                 permanent, infinity, supervisor, [riak_kv_put_fsm_sup]},
     FastPutSup = {riak_kv_w1c_sup,
                  {riak_kv_w1c_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_w1c_sup]},
@@ -105,8 +99,6 @@ init([]) ->
     % Build the process list...
     Processes = lists:flatten([
         ?IF(HasStorageBackend, VMaster, []),
-        GetFsmSup,
-        PutFsmSup,
         FastPutSup,
         DeleteSup,
         SinkFsmSup,

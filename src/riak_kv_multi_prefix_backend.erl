@@ -703,7 +703,7 @@ backend_can_index_reformat(Mod, ModState) ->
 
 %%                        %% Run the standard backend test...
 %%                        Config = sample_config(),
-%%                        backend_test_util:standard_test(?MODULE, Config)
+%%                        backend_test_util:standard_test_fun(?MODULE, Config)
 %%                end
 %%               }
 %%       end,
