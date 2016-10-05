@@ -231,7 +231,7 @@ encode_value(V) ->
 %%      to decode
 accept_value("application/x-erlang-binary",MD, V) ->
     case dict:find(?MD_ENCODING, MD) of
-        gzip ->
+        {ok, "gzip"} ->
             binary_to_term(zlib:gunzip(V));
         _ ->
             binary_to_term(V)
