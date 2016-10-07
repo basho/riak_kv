@@ -814,6 +814,17 @@ add_types2([{Op, LHS, RHS} | T], Mod, Acc) when Op =:= and_ orelse
                                                 Op =:= or_  ->
     NewAcc = {Op, add_types2([LHS], Mod, []), add_types2([RHS], Mod, [])},
     add_types2(T, Mod, [NewAcc | Acc]);
+add_types2([{NullOp, {identifier, Field}} | T], Mod, Acc) when NullOp =:= is_null orelse
+                                                                 NullOp =:= is_not_null ->
+    EqOp = case NullOp of
+        is_null -> '=';
+        is_not_null -> '!='
+    end,
+    %% cast to varchar since nullable types do not exist w/i the leveldb backend,
+    %% otherwise said NULL as [] bleeds due to basic datatype selection.
+    NewType = 'varchar',
+    NewAcc = {EqOp, {field, Field, NewType}, {const, ?SQL_NULL}},
+    add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
     NewType = Mod:get_field_type([Field]),
     NewAcc = {Op, {field, Field, NewType}, {const, normalise(Val, NewType)}},
@@ -1038,6 +1049,25 @@ simple_filter_typing_test() ->
                  }
                 },
                 {'=', {field, <<"extra">>, sint64}, {const, 1}}
+               },
+    ?assertEqual(Expected, Got).
+
+%%
+%% test for IS [NOT] NULL filters
+%%
+is_null_filter_typing_test() ->
+    ?DDL{table = T} = get_long_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
+    Filter = [
+               {and_,
+                   {is_null, {identifier, <<"weather">>}},
+                   {is_not_null, {identifier, <<"temperature">>}}
+               }
+             ],
+    Got = add_types_to_filter(Filter, Mod),
+    Expected = {and_,
+                {'=', {field, <<"weather">>, varchar}, {const, ?SQL_NULL}},
+                {'!=', {field, <<"temperature">>, varchar}, {const, ?SQL_NULL}}
                },
     ?assertEqual(Expected, Got).
 
