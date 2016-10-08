@@ -586,12 +586,7 @@ fold_fun(HashtreePid, _HasIndexTree = true) ->
     end.
 
 -spec object_fold_fun(pid()) -> fun().
-<<<<<<< HEAD
-object_fold_fun(Tree) ->
-=======
 object_fold_fun(HashtreePid) ->
-    Version = get_version(HashtreePid),
->>>>>>> d77c26f... Handle potential errors in vnode fold request call when rebuilding.
     fun(BKey={Bucket,Key}, RObj, BinBKey) ->
             IndexN = riak_kv_util:get_index_n({Bucket, Key}),
             insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
