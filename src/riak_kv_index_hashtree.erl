@@ -612,8 +612,9 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 -spec fold_keys(index(), pid(), partition(), boolean()) -> ok.
 fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
     FoldFun = fold_fun(HashtreePid, HasIndexTree),
+    {Limit, Wait} = get_build_throttle(),
     Req = riak_core_util:make_fold_req(FoldFun,
-                                       0, false,
+                                       {0, {Limit, Wait}}, false,
                                        [aae_reconstruction,
                                         {iterator_refresh, true}]),
     Result = riak_core_vnode_master:sync_command({Partition, node()},
@@ -624,10 +625,10 @@ fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
 
 %% The accumulator in the fold is the number of bytes hashed
 %% modulo the "build limit" size. If we get an int back, everything is ok
-handle_fold_keys_result(Result, Index, HashtreePid) when is_integer(Result) ->
+handle_fold_keys_result({Result, {_Limit, _Delay}}, HashtreePid, Index) when is_integer(Result) ->
     lager:info("Finished AAE tree build: ~p", [Index]),
     gen_server:cast(HashtreePid, build_finished);
-handle_fold_keys_result(Result, Index, HashtreePid) ->
+handle_fold_keys_result(Result, HashtreePid, Index) ->
     lager:error("Failed to build hashtree for index ~p. Result was: ~p", [Index, Result]),
     gen_server:cast(HashtreePid, build_failed).
 
@@ -642,9 +643,10 @@ maybe_throttle_build(RObjBin, Limit, Wait, Acc) ->
     if (Limit =/= 0) andalso (Acc2 > Limit) ->
             lager:debug("Throttling AAE build for ~b ms", [Wait]),
             timer:sleep(Wait),
-            0;
+            NewLimit = get_build_throttle(),
+            {0, NewLimit};
        true ->
-            Acc2
+            {Acc2, {Limit, Wait}}
     end.
 
 %% @doc Generate the folding function
@@ -652,8 +654,7 @@ maybe_throttle_build(RObjBin, Limit, Wait, Acc) ->
 -spec fold_fun(pid(), boolean()) -> fun().
 fold_fun(HashtreePid, _HasIndexTree = false) ->
     ObjectFoldFun = object_fold_fun(HashtreePid),
-    {Limit, Wait} = get_build_throttle(),
-    fun(BKey, RObj, Acc) ->
+    fun(BKey, RObj, {Acc, {Limit, Wait}}) ->
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
             Acc2 = maybe_throttle_build(RObj, Limit, Wait, Acc),
@@ -663,8 +664,7 @@ fold_fun(HashtreePid, _HasIndexTree = true) ->
     %% Index AAE backend, so hash the indexes
     ObjectFoldFun = object_fold_fun(HashtreePid),
     IndexFoldFun = index_fold_fun(HashtreePid),
-    {Limit, Wait} = get_build_throttle(),
-    fun(BKey = {Bucket, Key}, BinObj, Acc) ->
+    fun(BKey = {Bucket, Key}, BinObj, {Acc, {Limit, Wait}}) ->
             RObj = riak_object:from_binary(Bucket, Key, BinObj),
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
