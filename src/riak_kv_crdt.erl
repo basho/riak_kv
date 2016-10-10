@@ -398,7 +398,7 @@ meta(undefined, ?CRDT{ctype=CType}) ->
     M3 = dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now), M2),
     dict:store(?MD_CTYPE, CType, M3);
 meta(Meta, _CRDT) ->
-    Meta.
+    drop_the_dot(Meta).
 
 %% Just a simple take the largest for meta values based on last mod
 merge_meta(CType, Meta1, Meta2) ->
