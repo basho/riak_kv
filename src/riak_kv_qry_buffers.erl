@@ -77,8 +77,6 @@
 
 -export_type([qbuf_ref/0, qbuf_options/0, watermark_status/0, data_row/0]).
 
--type ldb_error() :: atom().  %% elaborate?
-
 -include("riak_kv_ts.hrl").
 
 -define(SERVER, ?MODULE).
@@ -97,7 +95,7 @@
 
 -spec get_or_create_qbuf(?SQL_SELECT{}, non_neg_integer(), ?DDL{}, proplists:proplist()) ->
                                 {ok, {new|existing, qbuf_ref()}} |
-                                {error, query_non_pageable|no_space}.
+                                {error, query_non_pageable|total_qbuf_size_limit_reached}.
 %% @doc (Maybe create and) return a new query buffer and set it up for
 %%      receiving chunks of data from qry_worker.  Options can contain
 %%      `expire_msec` property, which will override the standard
@@ -398,7 +396,7 @@ do_get_or_create_qbuf(SQL, NSubqueries,
             {reply, {ok, {existing, QBufRef}}, State9};
         {ok, {new, QBufRef}} ->
             if TotalSize > SoftWMark ->
-                    {reply, {error, no_space}, State0};
+                    {reply, {error, total_qbuf_size_limit_reached}, State0};
                el/=se ->
                     DDL = ?DDL{table = Table} = sql_to_ddl(OrigDDL, SQL),
                     lager:info("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
@@ -442,9 +440,7 @@ do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
             {reply, {error, qbuf_not_ready}, State0};
         #qbuf{ldb_ref = LdbRef,
               ddl = ?DDL{table = Table}} ->
-            ok = eleveldb:close(LdbRef),
-            os:cmd(
-              fmt("rm -rf '~s'", [filename:join(RootPath, Table)])),
+            ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
             {reply, ok, State0#state{qbufs = lists:keydelete(QBufRef, 1, QBufs0)}}
     end.
 
@@ -484,7 +480,7 @@ do_batch_put(QBufRef, Data, #state{qbufs          = QBufs0,
 
 -spec maybe_add_chunk(#qbuf{}, [data_row()],
                       non_neg_integer(), non_neg_integer()) ->
-                             {ok, #qbuf{}, non_neg_integer()} | {error, no_space | ldb_error()}.
+                             {ok, #qbuf{}, non_neg_integer()} | {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
 maybe_add_chunk(#qbuf{ldb_ref       = LdbRef,
                       orig_qry      = ?SQL_SELECT{'ORDER BY' = OrderBy},
                       chunks_got    = ChunksGot0,
@@ -496,7 +492,7 @@ maybe_add_chunk(#qbuf{ldb_ref       = LdbRef,
                 TotalSize, HardWatermark) ->
     ChunkSize = compute_chunk_size(Data),
     if TotalSize + ChunkSize > HardWatermark ->
-            {error, no_space};
+            {error, total_qbuf_size_limit_reached};
        el/=se ->
             %% ChunkId will be used to construct a new and unique key
             %% for each record. Ideally, this should be the serial
@@ -788,9 +784,7 @@ kill_qbuf(QBufRef, #state{root_path = RootPath,
                            QBufRef, 1, QBufs0)}.
 
 kill_qbuf(RootPath, Table, LdbRef) ->
-    ok = eleveldb:close(LdbRef),
-    Cmd = fmt("rm -rf '~s'", [filename:join(RootPath, Table)]),
-    _ = os:cmd(Cmd),
+    ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
     ok.
 
 

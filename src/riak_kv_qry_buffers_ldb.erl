@@ -26,6 +26,7 @@
 -module(riak_kv_qry_buffers_ldb).
 
 -export([new_table/2,
+         delete_table/3,
          add_rows/5,
          fetch_rows/3]).
 
@@ -33,6 +34,9 @@
 %% leveldb instance parameters
 -define(LDB_WRITE_BUFFER_SIZE, 10*1024*1024).  %% 10 M should be enough for everybody
 
+
+-type errors() :: ldb_put_failed.
+-export_type([errors/0]).
 
 -spec new_table(binary(), string()) -> {ok, eleveldb:db_ref()} | {error, term()}.
 new_table(Table, Root) ->
@@ -53,9 +57,16 @@ new_table(Table, Root) ->
             lager:info("new LdbRef ~p in ~p", [LdbRef, Path]),
             {ok, LdbRef};
         {error, _} = ErrorReason ->
+            _ = os:cmd(fmt("rm -rf '~s'", [Path])),
             ErrorReason
     end.
 
+-spec delete_table(binary(), eleveldb:db_ref(), string()) -> ok.
+delete_table(Table, LdbRef, Root) ->
+    ok = eleveldb:close(LdbRef),
+    _ = os:cmd(
+          fmt("rm -rf '~s'", [filename:join(Root, Table)])),
+    ok.
 
 
 -spec add_rows(eleveldb:db_ref(), [riak_kv_qry_buffers:data_row()], integer(),
