@@ -483,11 +483,15 @@ build_list({_K, _V}=KV, Acc) ->
 
 range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
                                               ref=Ref}) ->
-    {_, Bucket, Qry1} = proplists:lookup(index, Opts),
+    {_, {BucketType,_} = Bucket, Qry1} = proplists:lookup(index, Opts),
     Qry2 = riak_kv_select:convert(riak_kv_select:current_version(), Qry1),
     ?SQL_SELECT{'WHERE'    = W,
-                helper_mod = Mod,
-                local_key  =  #key_v1{ast = LKAST}} = Qry2,
+                local_key  = #key_v1{ast = LKAST}} = Qry2,
+    %% always rebuild the module name, do not use the name from the select
+    %% record because it was built in a different node which may have a
+    %% different module name because of compile versions in mixed version
+    %% clusters
+    Mod = riak_ql_ddl:make_module_name(BucketType),
     {startkey, StartK} = proplists:lookup(startkey, W),
     {endkey,   EndK}   = proplists:lookup(endkey, W),
     FieldOrders = Mod:field_orders(),
