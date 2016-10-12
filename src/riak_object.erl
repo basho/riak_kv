@@ -462,11 +462,11 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% CRDT binary start tag. Either way, gather the
                     %% error for later logging.
                     MergeAcc#merge_acc{error=[E | Error]};
-                {CRDT, [{Dict, Value}], []} ->
+                {CRDT, [{Dict, Value}], E} when is_list(E)->
                     %% The sibling value was not a CRDT, but a
                     %% (legacy?) un-dotted user opaque value. Add it
                     %% to the list of values to keep.
-                    MergeAcc#merge_acc{keep=[C0|Keep]};
+                    MergeAcc#merge_acc{keep=[C0|Keep], error=E ++ Error};
                 {CRDT2, [], []} ->
                     %% The sibling was a CRDT and the CRDT accumulator
                     %% has been updated.
