@@ -188,7 +188,7 @@ log_unknown_ddl_version(Table, DDL) ->
         [DDL, Table, riak_ql_ddl:current_version()]).
 
 %%
--spec actually_compile_ddl(BucketType::binary()) -> pid().
+-spec actually_compile_ddl(BucketType::binary()) -> ok | {error, term()}.
 actually_compile_ddl(BucketType) ->
     lager:info("Starting DDL compilation of ~ts", [BucketType]),
     Self = self(),
@@ -327,9 +327,9 @@ log_storing_downgraded_ddl(BucketType, DDLVersion) when is_atom(DDLVersion) ->
 
 %%
 log_cannot_downgrade_to_version(BucketType, Version) ->
-    lager:warn("Cannot downgrade table ~ts to version ~p, "
-               "table will be disablded under this version",
-                [BucketType, Version]).
+    lager:warning("Cannot downgrade table ~ts to version ~p, "
+                  "table will be disablded under this version",
+                  [BucketType, Version]).
 
 %%
 log_ddl_upgrade(DDL, DDLs) ->

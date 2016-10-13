@@ -34,6 +34,8 @@
 
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
+-type matchspec_value() :: '_' | '$1'.
+
 %% the table for TS 1.4 and below
 -define(TABLE2, riak_kv_compile_tab_v2).
 %% the table for TS 1.5
@@ -47,10 +49,10 @@
 %% This row still requires a new table because the dets key index is
 %% defaulted to 1.  All values default to underscores for simple matching.
 -record(row_v3, {
-    table = '_' :: binary(),
+    table         = '_' :: matchspec_value() | binary(),
     %% dets key, a composite of the table name and ddl version
-    table_version = '_' :: {binary(), riak_ql_ddl:ddl_version()},
-    ddl = '_' :: riak_ql_ddl:any_ddl()
+    table_version = '_' :: matchspec_value() | {binary(), riak_ql_ddl:ddl_version()},
+    ddl           = '_' :: matchspec_value() | riak_ql_ddl:any_ddl()
  }).
 
 %% do not repair the table when we're testing, because it is always a one-shot
