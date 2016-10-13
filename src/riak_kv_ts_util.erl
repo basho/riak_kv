@@ -41,7 +41,7 @@
          responsible_row_preflists/2,
          row_to_key/3,
          sql_record_to_tuple/1,
-         sql_to_cover/4, sql_to_cover/6,
+         sql_to_cover/6,
          table_to_bucket/1,
          validate_rows/2,
          varchar_to_timestamp/1
@@ -64,6 +64,7 @@
 %% bucket tuple. This function is a convenient mechanism for doing so
 %% and making that transition more obvious.
 
+%%-include("riak_kv_wm_raw.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_ts.hrl").
 
@@ -632,24 +633,6 @@ sql_to_cover(Client, [SQL|Tail], Bucket, Replace, Unavail, Accum) ->
             sql_to_cover(Client, Tail, Bucket, Replace, Unavail, [Entry|Accum])
     end.
 
-%% Result from riak_client:get_cover is a nested list of coverage plan
-%% because KV coverage requests are designed that way, but in our case
-%% all we want is the singleton head
-
-%% If any of the results from get_cover are errors, we want that tuple
-%% to be the sole return value
-sql_to_cover(_Client, [], _Bucket, Accum) ->
-    lists:reverse(Accum);
-sql_to_cover(Client, [SQL|Tail], Bucket, Accum) ->
-    case Client:get_cover(riak_kv_qry_coverage_plan, Bucket, undefined,
-                          {SQL, Bucket}) of
-        {error, Error} ->
-            {error, Error};
-        [Cover] ->
-            {Description, RangeReplacement} = reverse_sql(SQL),
-            sql_to_cover(Client, Tail, Bucket, [{Cover, RangeReplacement,
-                                                 Description}|Accum])
-    end.
 
 
 %% Generate a human-readable description of the target
@@ -744,7 +727,7 @@ create_table_not_supported_message(Table) ->
 identify_quantum_field(#key_v1{ast = KeyList}) ->
     HashFn = find_hash_fn(KeyList),
     P_V1 = hd(HashFn#hash_fn_v1.args),
-    hd(P_V1#param_v1.name).
+    hd(P_V1?SQL_PARAM.name).
 
 find_hash_fn([]) ->
     throw(wtf);

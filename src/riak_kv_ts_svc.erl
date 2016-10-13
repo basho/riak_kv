@@ -313,6 +313,7 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
         if Timeout == undefined -> [];
            true -> [{timeout, Timeout}]
         end,
+    %%CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
     %% decoding is done per wire protocol (ttb or pb), see riak_kv_ts.erl
     Mod = riak_ql_ddl:make_module_name(Table),
     case riak_kv_ts_api:get_data(
