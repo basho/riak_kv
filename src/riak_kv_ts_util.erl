@@ -38,7 +38,6 @@
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
-         responsible_row_preflists/2,
          row_to_key/3,
          sql_record_to_tuple/1,
          sql_to_cover/6,
@@ -558,7 +557,7 @@ validate_rows(Mod, Rows) ->
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
 
-row_to_key(Row, DDL, Mod) ->
+row_to_key(Row, DDL, Mod) when is_tuple(Row) ->
     encode_typeval_key(
       riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
@@ -701,6 +700,10 @@ check_table_feature_supported(DDLRecCap, DecodedReq) ->
     end.
 
 %%
+is_table_supported(_, << >>) ->
+    %% an empty binary for the table name means that the request is not for a
+    %% specific table e.g. SHOW TABLES
+    true;
 is_table_supported(DDLRecCap, Table) when is_binary(Table) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     MinCap = Mod:get_min_required_ddl_cap(),
@@ -741,14 +744,6 @@ find_hash_fn([_H|T]) ->
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
-
-responsible_row_preflists(Table, Row) when is_binary(Table), is_list(Row) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    Key = row_to_key(Row, Mod:get_ddl(), Mod),
-    Bucket = table_to_bucket(Table),
-    BucketProps = riak_core_bucket:get_bucket(Bucket),
-    <<Index:160/integer>>  = riak_core_util:chash_key({Bucket, Key}, BucketProps),
-    riak_kv_util:responsible_preflists(Index).
 
 %%%
 %%% TESTS
