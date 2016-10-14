@@ -523,7 +523,7 @@ do_register_stat(Name, {function, F}) ->
 %% Defaults to `{slide_uniform, {60, 1028}}' (a uniform sliding window
 %% of 60 seconds, with a uniform sample of at most 1028 entries)
 get_sample_type(Name) ->
-    SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide_uniform, {60, 1028}}),
+    SampleType0 = app_helper:get_env(riak_kv, stat_sample_type, {slide, 60}),
     app_helper:get_env(riak_kv, Name, SampleType0).
 
 %% @doc produce the legacy blob of stats for display.
