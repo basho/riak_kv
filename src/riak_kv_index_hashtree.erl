@@ -728,14 +728,14 @@ handle_unexpected_key(Id, Key, State=#state{index=Partition}) ->
             %% N to 4, and the object now maps to preflist '{<index>, 4}' which
             %% may not have an existing hashtree if there were previously no
             %% objects with N=4.
-            lager:info("Partition/tree ~p/~p does not exist to hold object ~p",
-                       [Partition, Id, Key]),
+            lager:debug("Partition/tree ~p/~p does not exist to hold object ~p",
+                        [Partition, Id, Key]),
             case State#state.built of
                 true ->
                     %% If the tree is already built, clear the tree to trigger
                     %% a rebuild that will re-distribute objects into the
                     %% proper hashtrees based on current N values.
-                    lager:info("Clearing tree to trigger future rebuild"),
+                    lager:debug("Clearing tree to trigger future rebuild"),
                     clear_tree(State);
                 _ ->
                     %% Initialize a new index_n tree to prevent future errors.
