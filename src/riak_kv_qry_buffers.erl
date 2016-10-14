@@ -533,7 +533,7 @@ do_set_ready_waiting_process(QBufRef, Pid, #state{qbufs = QBufs0} = State0) ->
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
         #qbuf{is_ready = true} ->
-            %% qbuf is already ready: don't wait for the bext
+            %% qbuf is already ready: don't wait for the next
             %% batch_put to turn round and notify the process (because
             %% there will be no more batch puts)
             Pid ! {qbuf_ready, QBufRef},

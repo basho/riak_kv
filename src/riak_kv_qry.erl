@@ -294,12 +294,10 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                               riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL, QBufRef))
                         end,
                     case maybe_create_query_buffer(SQL, length(SubQueries), DDL, []) of
-                        {error, _Reason} ->
-                            %% query buffers are optional;
-                            %% whatever the reason, we still carry
-                            %% on without query buffers hoping the
-                            %% query still can be served
-                            FullCycle(undefined);
+                        {error, Reason} ->
+                            %% query buffers are non-optional for
+                            %% ORDER BY queries
+                            {error, {qbuf_create_error, Reason}};
                         {ok, undefined} ->
                             %% query buffer path not advisable (query
                             %% has no ORDER BY)

@@ -311,7 +311,9 @@ add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
                             sub_qrys          = NSubQ}
             catch
                 error:divide_by_zero ->
-                    cancel_error_query(divide_by_zero, State)
+                    cancel_error_query(divide_by_zero, State);
+                throw:{qbuf_error, Reason} ->
+                    cancel_error_query(Reason, State)
             end;
         false ->
             lager:warning("unexpected chunk received for non-existing query ~p when state is ~p", [SubQId, State]),
@@ -371,7 +373,12 @@ run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, undefine
 run_select_on_rows_chunk(_SubQId, SelClause, DecodedChunk, _QueryResult1, QBufRef) ->
     IndexedChunks =
         [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
-    _ = riak_kv_qry_buffers:batch_put(QBufRef, IndexedChunks).
+    case riak_kv_qry_buffers:batch_put(QBufRef, IndexedChunks) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            throw({qbuf_error, Reason})
+    end.
 
 %%
 run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->

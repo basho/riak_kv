@@ -51,6 +51,9 @@
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
 -define(E_NOTFOUND,          1021).
+-define(E_SELECT_RESULT_TOO_BIG, 1022).
+-define(E_QBUF_CREATE_ERROR,     1023).
+-define(E_QBUF_LDB_ERROR,        1024).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -459,6 +462,13 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             {reply, make_too_many_insert_values_resp(BadRowIdxs), State};
         {error, {undefined_fields, BadFields}} ->
             {reply, make_undefined_field_in_insert_resp(BadFields), State};
+        %% from the qbuf subsystem
+        {error, select_result_too_big} ->
+            {reply, make_select_result_too_big_error(), State};
+        {error, {qbuf_create_error, Reason}} ->
+            {reply, make_qbuf_create_error(Reason), State};
+        {error, {qbuf_ldb_error, Reason}} ->
+            {reply, make_qbuf_ldb_error(Reason), State};
 
         %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
@@ -563,6 +573,21 @@ make_undefined_field_in_insert_resp(BadFields) ->
     make_rpberrresp(
       ?E_BAD_QUERY,
       flat_format("undefined fields: ~s", [string:join(BadFields, ", ")])).
+
+make_qbuf_create_error(Reason) ->
+    make_rpberrresp(
+      ?E_QBUF_CREATE_ERROR,
+      flat_format("Failed to set up query buffer for an ORDER BY query (~p)", [Reason])).
+
+make_select_result_too_big_error() ->
+    make_rpberrresp(
+      ?E_SELECT_RESULT_TOO_BIG,
+      flat_format("Projected result of a SELECT query is too big", [])).
+
+make_qbuf_ldb_error(Reason) ->
+    make_rpberrresp(
+      ?E_QBUF_LDB_ERROR,
+      flat_format("Query buffer I/O error: ~p", [Reason])).
 
 make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(

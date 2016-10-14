@@ -56,9 +56,10 @@ new_table(Table, Root) ->
         {ok, LdbRef} ->
             lager:info("new LdbRef ~p in ~p", [LdbRef, Path]),
             {ok, LdbRef};
-        {error, _} = ErrorReason ->
+        {error, {Atom, _Message} = LdbError} ->
+            lager:warning("qbuf eleveldb:open(~s) failed: ~p", [Path, LdbError]),
             _ = os:cmd(fmt("rm -rf '~s'", [Path])),
-            ErrorReason
+            {error, Atom}
     end.
 
 -spec delete_table(binary(), eleveldb:db_ref(), string()) -> ok.
