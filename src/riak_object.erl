@@ -985,7 +985,7 @@ sibs_of_binary(Count, SibsBin, Result) ->
     sibs_of_binary(Count-1, SibsRest, [Sib | Result]).
 
 sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary, Rest/binary>>) ->
-    <<LMMega:32/integer, LMSecs:32/integer, LMMicro:32/integer, VTagLen:8/integer, VTag:VTagLen/binary, Deleted:1/binary-unit:8, MetaRestBin/binary>> = MetaBin,
+    <<LMMega:32/integer, LMSecs:24/integer, LMMicro:24/integer, VTagLen:8/integer, VTag:VTagLen/binary, Deleted:1/binary-unit:8, MetaRestBin/binary>> = MetaBin,
 
     MDList0 = deleted_meta(Deleted, []),
     MDList1 = last_mod_meta({LMMega, LMSecs, LMMicro}, MDList0),
@@ -1065,8 +1065,8 @@ meta_bin(MD) ->
               end,
     VTagLen = byte_size(VTagBin),
     LastModBin = case LastModVal of
-                     undefined -> <<0:32/integer, 0:32/integer, 0:32/integer>>;
-                     {Mega,Secs,Micro} -> <<Mega:32/integer, Secs:32/integer, Micro:32/integer>>
+                     undefined -> <<0:32/integer, 0:24/integer, 0:24/integer>>;
+                     {Mega,Secs,Micro} -> <<Mega:32/integer, Secs:24/integer, Micro:24/integer>>
                  end,
     <<LastModBin/binary, VTagLen:8/integer, VTagBin:VTagLen/binary,
       Deleted:1/binary-unit:8, RestBin/binary>>.
