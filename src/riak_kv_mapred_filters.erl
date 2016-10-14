@@ -97,7 +97,14 @@ to_lower(_) ->
 tokenize(Args) ->
     Seps = riak_kv_mapred_filters:to_string(lists:nth(1, Args)),
     TokenNum = lists:nth(2, Args),
-    fun(V) -> list_to_binary(lists:nth(TokenNum, string:tokens(to_string(V), Seps))) end.
+    fun(V) ->
+        Tokens = string:tokens(to_string(V), Seps),
+        case length(Tokens) < TokenNum of
+            true -> [];
+            false ->
+                list_to_binary(lists:nth(TokenNum, Tokens))
+        end
+    end.
 
 urldecode(_) ->
     fun(V) -> {_, V1} = hd(mochiweb_util:parse_qs("x=" ++ to_string(V))), V1 end.
@@ -368,6 +375,10 @@ to_lower_test() ->
 tokenize_test() ->
     F = compose([{riak_kv_mapred_filters, tokenize, ["-", 3]}]),
     F("12-20-2010") =:= "2010".
+
+tokenize_too_few_tokens_test() ->
+    F = compose([{riak_kv_mapred_filters, tokenize, ["-", 4]}]),
+    F("12-20-2010") =:= [].
 
 % filters
 
