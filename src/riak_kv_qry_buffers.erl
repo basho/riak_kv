@@ -55,12 +55,14 @@
          fetch_limit/3,         %% emulate SELECT
          get_or_create_qbuf/4,  %% new Query arrives, with some Options
          get_qbuf_expiry/1,
+         get_max_query_data_size/0,
          get_qbuf_orig_query/1, %% original query used at creation of this qbuf
          get_qbuf_size/1,       %% table size (as reported by leveldb:get_size, or really the file size)
          get_qbufs/0,           %% list all query buffer refs and is_ flags in a proplist
          get_total_size/0,      %% get total size of all temp tables
          is_qbuf_ready/1,       %% are there results ready for this Query?
          qbuf_exists/1,         %% is there a temp table for this Query?
+         set_max_query_data_size/1,
          set_qbuf_expiry/2,
          set_ready_waiting_process/2,  %% notify a Pid when all chunks are here
 
@@ -87,6 +89,7 @@
 -define(HARD_WATERMARK, 4096*1024*1024).  %% 4G
 -define(INCOMPLETE_QBUF_RELEASE_MSEC, 1*60*1000).  %% clean up incomplete buffers since last add_chunk
 -define(QBUF_EXPIRE_MSEC, 5*1000).                 %% drop buffers clients are not interested in
+-define(MAX_QUERY_DATA_SIZE, 5*1024*1024*1024).
 
 
 %%%===================================================================
@@ -130,7 +133,7 @@ get_qbuf_orig_query(QBufRef) ->
 
 -spec get_qbuf_size(qbuf_ref()) ->
                            {ok, non_neg_integer()} | {error, bad_qbuf_ref}.
-%% @doc Report the size on disk of the backing files for this query.
+%% @doc Report the qbuf total size (not the size of the files backing this buffer).
 get_qbuf_size(QBufRef) ->
     gen_server:call(?SERVER, {get_qbuf_size, QBufRef}).
 
@@ -168,6 +171,17 @@ get_qbuf_expiry(QBufRef) ->
 %% @doc Set this query buffer expiry period.
 set_qbuf_expiry(QBufRef, NewExpiry) ->
     gen_server:call(?SERVER, {set_qbuf_expiry, QBufRef, NewExpiry}).
+
+-spec get_max_query_data_size() -> non_neg_integer().
+%% @doc Get the max query buffer size
+get_max_query_data_size() ->
+    gen_server:call(?SERVER, get_max_query_data_size).
+
+-spec set_max_query_data_size(non_neg_integer()) -> ok.
+%% @doc Get the max query buffer size
+set_max_query_data_size(Value) ->
+    gen_server:call(?SERVER, {set_max_query_data_size, Value}).
+
 
 %% Utility functions that don't need or use the gen_server
 
@@ -249,6 +263,8 @@ make_qref(_) ->
           incomplete_qbuf_release_msec :: non_neg_integer(),
           %% drop complete query buffers after this long since serving last query
           qbuf_expire_msec :: non_neg_integer(),
+          %% max query size
+          max_query_data_size :: non_neg_integer(),
           %% dir containing qbuf ldb files
           root_path :: string()
          }).
@@ -278,6 +294,8 @@ init(Options) ->
                    proplists:get_value(incomplete_qbuf_release_msec, Options, ?INCOMPLETE_QBUF_RELEASE_MSEC),
                qbuf_expire_msec =
                    proplists:get_value(qbuf_expire_msec, Options, ?QBUF_EXPIRE_MSEC),
+               max_query_data_size =
+                   proplists:get_value(max_query_data_size, Options, ?MAX_QUERY_DATA_SIZE),
                root_path =
                    proplists:get_value(root_path, Options, RootPath)
               },
@@ -329,7 +347,13 @@ handle_call({get_qbuf_expiry, QBufRef}, _From, State) ->
     do_get_qbuf_expiry(QBufRef, State);
 
 handle_call({set_qbuf_expiry, QBufRef, NewExpiry}, _From, State) ->
-    do_set_qbuf_expiry(QBufRef, NewExpiry, State).
+    do_set_qbuf_expiry(QBufRef, NewExpiry, State);
+
+handle_call(get_max_query_data_size, _From, State) ->
+    do_get_max_query_data_size(State);
+
+handle_call({set_max_query_data_size, Value}, _From, State) ->
+    do_set_max_query_data_size(Value, State).
 
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
@@ -629,6 +653,14 @@ do_set_qbuf_expiry(QBufRef, NewExpiry, #state{qbufs = QBufs0} = State0) ->
                                             QBufRef, 1, QBufs0, {QBufRef, QBuf9})},
             {reply, ok, State9}
     end.
+
+
+do_get_max_query_data_size(#state{max_query_data_size = Value} = State) ->
+    {reply, Value, State}.
+
+do_set_max_query_data_size(Value, State0) ->
+    State9 = State0#state{max_query_data_size = Value},
+    {reply, ok, State9}.
 
 
 do_reap_expired_qbufs(#state{qbufs = QBufs0,

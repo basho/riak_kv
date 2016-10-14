@@ -46,7 +46,6 @@
 -include("riak_kv_ts.hrl").
 
 -define(MAX_RUNNING_FSMS, 5).
--define(MAX_QUERY_DATA_SIZE, 5*1024*1024*1024).
 
 %% accumulators for different types of query results.
 -type rows_acc()      :: [{non_neg_integer(), list()}].
@@ -67,7 +66,7 @@
           %% 2. Estimate query size (wget-style):
           n_subqueries_done  = 0                    :: non_neg_integer(),
           total_query_data   = 0                    :: non_neg_integer(),
-          max_query_data     = ?MAX_QUERY_DATA_SIZE :: non_neg_integer(),
+          max_query_data                            :: non_neg_integer(),
           %% For queries not backed by query buffers, results are
           %% accumulated in memory:
           result             = []                   :: rows_acc() | aggregate_acc() | group_by_acc(),
@@ -243,6 +242,7 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
                          fsm_queue      = FsmOptsList,
                          n_running_fsms = 0,
                          result         = InitialResult,
+                         max_query_data = riak_kv_qry_buffers:get_max_query_data_size(),
                          qbuf_ref       = QBufRef},
     %% Start spawning index fsms, keeping at most
     %% #state.max_n_running_fsms running simultaneously.
@@ -276,7 +276,7 @@ estimate_query_size(#state{total_query_data  = CurrentTotalSize,
     BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
     ProjectedLimitData = Limit * BytesPerChunk,
     if ProjectedLimitData > MaxQueryData ->
-            cancel_error_query(query_data_too_big, State);
+            cancel_error_query(select_result_too_big, State);
        el/=se ->
             State
     end;
@@ -287,7 +287,7 @@ estimate_query_size(#state{total_query_data  = CurrentTotalSize,
     BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
     ProjectedGrandTotal = CurrentTotalSize + BytesPerChunk * length(NSubQsToGo),
     if ProjectedGrandTotal > MaxQueryData ->
-            cancel_error_query(query_data_too_big, State);
+            cancel_error_query(select_result_too_big, State);
        el/=se ->
             State
     end.
