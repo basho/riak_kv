@@ -164,6 +164,9 @@ convert_where_timestamps(_Mod, []) ->
 convert_where_timestamps(Mod, Where) ->
     [replace_ast_timestamps(Mod, hd(Where))].
 
+replace_ast_timestamps(_Mod, {NullOp, Item1}) when NullOp =:= is_null orelse
+                                                   NullOp =:= is_not_null ->
+    {NullOp, Item1};
 replace_ast_timestamps(Mod, {Op, Item1, Item2}) when is_tuple(Item1) andalso is_tuple(Item2) ->
     {Op, replace_ast_timestamps(Mod, Item1), replace_ast_timestamps(Mod, Item2)};
 replace_ast_timestamps(Mod, {Op, FieldName, {binary, Value}}) ->
