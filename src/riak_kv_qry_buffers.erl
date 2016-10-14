@@ -143,7 +143,7 @@ get_total_size() ->
     gen_server:call(?SERVER, get_total_size).
 
 -spec batch_put(qbuf_ref(), [data_row()]) ->
-                       {ok, watermark_status()} | {error, bad_qbuf_ref|overfull}.
+                       ok | {error, bad_qbuf_ref|overfull}.
 %% @doc Emulate a batch put.
 batch_put(QBufRef, Data) ->
     gen_server:call(?SERVER, {batch_put, QBufRef, Data}).
