@@ -282,9 +282,7 @@ init(Options) ->
         filename:join(
           app_helper:get_prop_or_env(data_root, Options, eleveldb),  %% reuse eleveldb own root_path
           "query_buffers"),
-    %% don't bother recovering any leftover tables
-    os:cmd(
-      fmt("rm -rf '~s'/*", [RootPath])),
+    _ = prepare_qbuf_dir(RootPath),
     State =
         #state{soft_watermark =
                    proplists:get_value(soft_watermark, Options, ?SOFT_WATERMARK),
@@ -302,6 +300,26 @@ init(Options) ->
     Self = self(),
     _TickerPid = spawn_link(fun() -> schedule_tick(Self) end),
     {ok, State}.
+
+prepare_qbuf_dir(RootPath) ->
+    %% don't bother recovering any leftover tables
+    case os:cmd(
+           fmt("rm -rf '~s'", [RootPath])) of
+        "" ->
+            fine;
+        StdErr1 ->
+            lager:warning("Found old data in qbuf dir \"~s\" could not be removed: ~s", [RootPath, StdErr1]),
+            not_quite_but_what_else_can_we_do
+            %% eleveldb:open may fail, users beware
+    end,
+    case os:cmd(
+           fmt("mkdir -p '~s'/*", [RootPath])) of
+        "" ->
+            ok;
+        StdErr2 ->
+            lager:warning("Could not create qbuf dir \"~s\": ~s", [RootPath, StdErr2]),
+            {error, qbuf_create_root_dir}
+    end.
 
 schedule_tick(Pid) ->
     Pid ! tick,
