@@ -385,14 +385,14 @@
 %% warning in the logs.
 {mapping, "object.size.warning_threshold", "riak_kv.warn_object_size", [
   {datatype, bytesize},
-  {default, "5MB"}
+  {default, "50KB"}
 ]}.
 
 %% @doc Writing an object bigger than this will send a failure to the
 %% client.
 {mapping, "object.size.maximum", "riak_kv.max_object_size", [
   {datatype, bytesize},
-  {default, "50MB"}
+  {default, "500KB"}
 ]}.
 
 %% @doc Writing an object with more than this number of siblings will
