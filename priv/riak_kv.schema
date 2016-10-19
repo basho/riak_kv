@@ -650,6 +650,23 @@ end
   hidden
 ]}.
 
+%% @doc The maximum number of quanta a query can span.
+{mapping, "max_query_quanta", "riak_kv.max_query_quanta", [
+  {default, 5000},
+  {datatype, integer},
+  hidden
+]}.
+
+{translation, "riak_kv.max_query_quanta",
+ fun(Conf) ->
+  TheLimit = cuttlefish:conf_get("max_query_quanta", Conf),
+  case TheLimit of
+      Int when is_integer(Int) -> Int;
+      _ ->
+          cuttlefish:invalid("max_query_quanta must be an integer")
+  end
+ end
+}.
 %% @doc Number of concurrent queries to run per node
 {mapping, "riak_kv.query.concurrent_queries", "riak_kv.concurrent_queries", [
   {default, 3},

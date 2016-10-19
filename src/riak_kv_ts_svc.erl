@@ -54,6 +54,7 @@
 -define(E_SELECT_RESULT_TOO_BIG, 1022).
 -define(E_QBUF_CREATE_ERROR,     1023).
 -define(E_QBUF_LDB_ERROR,        1024).
+-define(E_QUANTA_LIMIT,          1025).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -475,6 +476,8 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
         {error, invalid_coverage_context_checksum} ->
             {reply, make_rpberrresp(?E_SUBMIT, "Query coverage context fails checksum"), State};
+        {error, {too_many_subqueries, NQuanta, MaxQueryQuanta}} ->
+            {reply, make_max_query_quanta_resp(NQuanta, MaxQueryQuanta), State};
 
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
@@ -588,6 +591,11 @@ make_qbuf_ldb_error(Reason) ->
     make_rpberrresp(
       ?E_QBUF_LDB_ERROR,
       flat_format("Query buffer I/O error: ~p", [Reason])).
+
+make_max_query_quanta_resp(NQuanta, MaxQueryQuanta) ->
+    make_rpberrresp(
+      ?E_QUANTA_LIMIT,
+      flat_format("Query spans too many quanta (~b, max ~b)", [NQuanta, MaxQueryQuanta])).
 
 make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(

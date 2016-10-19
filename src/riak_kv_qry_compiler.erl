@@ -59,6 +59,12 @@
 ]).
 -export_type([where_props/0]).
 
+-define(MAX_QUERY_QUANTA, 1000).  %% cap the number of subqueries the compiler will emit
+%% Note that when such a query begins to be actually executed, the
+%% chunks will need to be really small, for the result to be within
+%% max query size.
+
+
 -spec compile(?DDL{}, ?SQL_SELECT{}) ->
     {ok, [?SQL_SELECT{}]} | {error, any()}.
 compile(?DDL{}, ?SQL_SELECT{is_executable = true}) ->
@@ -138,13 +144,17 @@ compile_where_clause(?DDL{} = DDL,
                           {ok, [?SQL_SELECT{}]} | {error, term()}.
 expand_query(?DDL{local_key = LK, partition_key = PK},
              ?SQL_SELECT{} = Q1, Where1) ->
-    Wheres = expand_where(Where1, PK),
-    Q2 = Q1?SQL_SELECT{is_executable = true,
-                       type          = timeseries,
-                       local_key     = LK,
-                       partition_key = PK},
-    SubQueries = [Q2?SQL_SELECT{ 'WHERE' = X } || X <- Wheres],
-    {ok, SubQueries}.
+    case expand_where(Where1, PK) of
+        {ok, Wheres} ->
+            Q2 = Q1?SQL_SELECT{is_executable = true,
+                               type          = timeseries,
+                               local_key     = LK,
+                               partition_key = PK},
+            SubQueries = [Q2?SQL_SELECT{ 'WHERE' = X } || X <- Wheres],
+            {ok, SubQueries};
+        ErrorReason ->
+            ErrorReason
+    end.
 
 %% Calulate the final result for an aggregate.
 -spec finalise_aggregate(#riak_sel_clause_v1{}, [any()]) -> [any()].
@@ -522,7 +532,7 @@ expand_where(Where, PartitionKey) ->
         {QField, QSize, QUnit, QIndex} ->
             hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, Where);
         notfound ->
-            [Where]
+            {ok, [Where]}
     end.
 
 %% Return the parameters for the quantum function and it's index in the
@@ -572,11 +582,20 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, Where1) ->
             true  -> Max1 + 1;
             false -> Max1
         end,
-    {_NoSubQueries, Boundaries} =
-        riak_ql_quanta:quanta(Min2, Max2, QSize, QUnit),
-    %% use the maximum value that has not been incremented, we still use
-    %% the end_inclusive flag because the end key is not used to hash
-    make_wheres(Where2, QField, Min2, Max1, Boundaries).
+    %% sanity check for the number of quanta we can handle
+    MaxQueryQuanta = app_helper:get_env(riak_kv, max_query_quanta, ?MAX_QUERY_QUANTA),
+    NQuanta = (Max2 - Min2) div riak_ql_quanta:unit_to_millis(QSize, QUnit),
+    case NQuanta < MaxQueryQuanta of
+        true ->
+            {_NoSubQueries, Boundaries} =
+                riak_ql_quanta:quanta(Min2, Max2, QSize, QUnit),
+            %% use the maximum value that has not been incremented, we still use
+            %% the end_inclusive flag because the end key is not used to hash
+            {ok, make_wheres(Where2, QField, Min2, Max1, Boundaries)};
+        false ->
+            lager:info("query spans too many quanta (~b, max ~b)", [NQuanta, MaxQueryQuanta]),
+            {error, {too_many_subqueries, NQuanta, MaxQueryQuanta}}
+    end.
 
 make_wheres(Where, QField, Min, Max, Boundaries) ->
     {HeadOption, TailOption, NewWhere} = extract_options(Where),
