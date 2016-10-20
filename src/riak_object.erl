@@ -95,7 +95,7 @@
 -export([to_json/1, from_json/1]).
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
--export([to_binary/2, to_binary/3, from_binary/3, from_binary/4, to_binary_version/4, binary_version/1]).
+-export([to_binary/2, to_binary/3, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1]).
 -export([update_last_modified/1, update_last_modified/2]).
@@ -955,14 +955,6 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
     riak_object() | {error, 'bad_object_format'}.
--spec from_binary(bucket(),key(),binary(),encoding()) ->
-    riak_object() | {error, 'bad_object_format'}.
-
-%% Keep deprecated interface around, because I have a feeling someone
-%% will still try to use it
-
-from_binary(B,K,ObjTerm, _Enc) ->
-    from_binary(B, K, ObjTerm).
 
 from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
     binary_to_term(ObjTerm);
@@ -1509,14 +1501,10 @@ packObj_test() ->
     Obj = riak_object:new(<<"bucket">>, <<"key">>, [{<<"field1">>, 1}, {<<"field2">>, 2.123}]),
     PackedErl = riak_object:to_binary(v1, Obj, erlang),
     PackedMsg = riak_object:to_binary(v1, Obj, msgpack),
-    ObjErl = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl, erlang),
-    ObjMsg = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg, msgpack),
-    ObjErl2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl),
-    ObjMsg2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg),
+    ObjErl = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl),
+    ObjMsg = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg),
     ?assertEqual(Obj, ObjErl),
-    ?assertEqual(Obj, ObjMsg),
-    ?assertEqual(Obj, ObjErl2),
-    ?assertEqual(Obj, ObjMsg2).
+    ?assertEqual(Obj, ObjMsg).
 
 dotted_values_reconcile() ->
     {B, K} = {<<"b">>, <<"k">>},
