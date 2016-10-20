@@ -98,3 +98,7 @@
    iolist_to_binary(
      ["Column ",N," appears more than once in ORDER BY list"])
 ).
+
+-define(
+   E_ORDER_BY_WITH_AGGREGATE_CALC_TYPE,
+   <<"ORDER BY/LIMIT/OFFSET clauses not supported for queries containing an aggregate function.">>).

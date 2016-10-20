@@ -88,6 +88,10 @@ compile_order_by({error,_} = E) ->
     E;
 compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = undefined} = Q}) ->
     {ok, Q};
+compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = OrderBy,
+                                  'SELECT' = #riak_sel_clause_v1{calc_type = CalcType}}})
+  when OrderBy /= undefined andalso CalcType /= rows ->
+    {error, {order_by_with_aggregate_calc_type, ?E_ORDER_BY_WITH_AGGREGATE_CALC_TYPE}};
 compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = OrderBy} = Q}) ->
     case non_unique_identifiers(OrderBy) of
         [] ->
@@ -2376,6 +2380,21 @@ group_by_column_not_in_the_table_test() ->
         {unknown_column,{<<"x">>,[<<"a">>,<<"b">>]}},
         compile(DDL, Q1)
     ).
+
+order_by_with_aggregate_calc_type_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "b sint64, "
+        "PRIMARY KEY ((a), a))"),
+    {ok, Q} = get_query(
+        "SELECT min(b) FROM t "
+        "WHERE a = 1 LIMIT 6"),
+    ?assertMatch(
+        {error, {order_by_with_aggregate_calc_type, <<_/binary>>}},
+        compile(DDL, Q)
+    ).
+
 
 negate_an_aggregation_function_test() ->
     {ok, Rec} = get_query(
