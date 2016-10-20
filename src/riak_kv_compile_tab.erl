@@ -24,6 +24,7 @@
 
 -export([
          delete_dets/1,
+         delete_table_ddls/1,
          get_all_table_names/0,
          get_compiled_ddl_versions/1,
          get_ddl/2,
@@ -75,6 +76,12 @@ new(Dir) ->
 delete_dets(FileDir) ->
     _ = dets:close(file_v3(FileDir)),
     _ = file:delete(file_v3(FileDir)).
+
+%% Delete all DDL records for a given bucket type.
+-spec delete_table_ddls(binary()) -> ok.
+delete_table_ddls(BucketType) when is_binary(BucketType) ->
+    ok = dets:match_delete(?TABLE2, {BucketType, '_', '_', '_', '_'}),
+    ok = dets:match_delete(?TABLE3, #row_v3{table = BucketType}).
 
 %%
 file_v2(Dir) ->
@@ -243,4 +250,16 @@ get_ddl_test() ->
                 get_ddl(<<"my_type">>, v1)
             )
         end).
+
+delete_table_ddls_test() ->
+    ?in_process(
+        begin
+            ok = insert(<<"my_type">>, #ddl_v1{local_key = #key_v1{ }}),
+            ok = delete_table_ddls(<<"my_type">>),
+            ?assertEqual(
+                notfound,
+                get_ddl(<<"my_type">>, v1)
+            )
+        end).
+
 -endif.

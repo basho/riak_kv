@@ -90,7 +90,7 @@ handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
 handle_cast({new_type, BucketType}, State) ->
-    ok = do_new_type(BucketType),
+    ok = do_maybe_new_type(BucketType),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -114,9 +114,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%%
 
 %% We rely on the claimant to not give us new DDLs after the bucket
-%% type is activated, at least until we have a system in place for
-%% managing DDL versioning
-do_new_type(Table) ->
+%% type is activated but changes to a bucket type can still be made
+%% before activation
+do_maybe_new_type(Table) ->
     case retrieve_ddl_from_metadata(Table) of
         undefined ->
             %% this bucket type name does not exist in the metadata!
@@ -125,22 +125,36 @@ do_new_type(Table) ->
             CurrentVersion = riak_ql_ddl:current_version(),
             case riak_kv_compile_tab:get_ddl(Table, CurrentVersion) of
                 notfound ->
-                    try
-                        ok = prepare_ddl_versions(Table, CurrentVersion, DDL),
-                        actually_compile_ddl(Table)
-                    catch
-                        throw:unknown_ddl_version ->
-                            log_unknown_ddl_version(Table, DDL),
-                            ok
-                    end;
+                    do_new_type(Table, DDL);
                 {ok, DDL} ->
-                    log_new_type_is_duplicate(Table);
-                {ok, _StoredDDL} ->
-                    %% there is a different DDL for the same table/version
-                    %% FIXME recompile anyway? That is the current behaviour
-                    %% this cannot happen because of the is_compiled check
-                    ok
+                    ok = log_new_type_is_duplicate(Table);
+                {ok, StoredDDL} ->
+                    %% a DDL with the same name already exists in the dets table
+                    %% that does not match the one we have received from the
+                    %% ring.
+                    %%
+                    %% this can happen because the bucket type is allowed to be
+                    %% modified before activation, so clear the previous data
+                    %% and recompile the incoming DDL
+                    %%
+                    %% delete the old records because the new records may not
+                    %% overwrite all the downgraded versions we create
+                    ok = log_overwriting_ddl(DDL, StoredDDL),
+                    ok = riak_kv_compile_tab:delete_table_ddls(Table),
+                    ok = do_new_type(Table, DDL)
             end
+    end.
+
+%%
+do_new_type(Table, DDL) when is_binary(Table) ->
+    CurrentVersion = riak_ql_ddl:current_version(),
+    try
+        ok = prepare_ddl_versions(Table, CurrentVersion, DDL),
+        actually_compile_ddl(Table)
+    catch
+        throw:unknown_ddl_version ->
+            log_unknown_ddl_version(Table, DDL),
+            ok
     end.
 
 prepare_ddl_versions(Table, CurrentVersion, DDL) when is_binary(Table), is_atom(CurrentVersion) ->
@@ -160,6 +174,10 @@ prepare_ddl_versions(Table, CurrentVersion, DDL) when is_binary(Table), is_atom(
     % lager:info("DDLs ~p", [UpgradedDDLs]),
     [ok = riak_kv_compile_tab:insert(Table, DDLx) || DDLx <- UpgradedDDLs],
     ok.
+
+%%
+log_overwriting_ddl(DDL, StoredDDL) ->
+    lager:info("Overwriting DDL ~p with new DDL ~p", [StoredDDL, DDL]).
 
 %%
 is_known_ddl_version(CurrentVersion, DDL) ->
