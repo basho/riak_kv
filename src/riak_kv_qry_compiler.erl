@@ -650,12 +650,12 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, MaxSubQueries, Where1) ->
             {error, {too_many_subqueries, ?E_TOO_MANY_SUBQUERIES(NoSubQueries)}}
     end.
 
-make_wheres(Where, QField, Min, Max, Boundaries) when Min > Max ->
-    make_wheres(Where, QField, Max, Min, Boundaries);
-make_wheres(Where, QField, Min, Max, Boundaries) ->
+make_wheres(Where, QField, LowerBound, UpperBound, Boundaries) when LowerBound > UpperBound ->
+    make_wheres(Where, QField, UpperBound, LowerBound, Boundaries);
+make_wheres(Where, QField, LowerBound, UpperBound, Boundaries) ->
     {HeadOption, TailOption, NewWhere} = extract_options(Where),
-    Starts = [Min | Boundaries],
-    Ends   = Boundaries ++ [Max],
+    Starts = [LowerBound | Boundaries],
+    Ends   = Boundaries ++ [UpperBound],
     [HdW | Ws] = make_w2(Starts, Ends, QField, NewWhere, []),
     %% add the head options to the head
     %% add the tail options to the tail
