@@ -530,7 +530,7 @@ col_index_and_type_of(Fields, ColumnName) ->
 
 %%
 -spec expand_where(riak_ql_ddl:filter(), #key_v1{}) ->
-        [where_props()] | {error, any()}.
+                          {ok, [where_props()]} | {error, atom()}.
 expand_where(Where, PartitionKey) ->
     case find_quantum_field_index_in_key(PartitionKey) of
         {QField, QSize, QUnit, QIndex} ->
