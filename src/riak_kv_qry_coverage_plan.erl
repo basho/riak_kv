@@ -126,6 +126,8 @@ drop_nodes(Vnodes, DownNodes) ->
 make_key(Mod, PartitionKey, Where) ->
     {startkey, StartKey} = proplists:lookup(startkey, Where),
     {endkey, EndKey} = proplists:lookup(endkey, Where),
+    %% the keys may have been swapped if DESC was specified on this tables local
+    %% key, but always take the lowest comparable key to hash on.
     StartKey2 = [{Field, Val} || {Field, _Type, Val} <- min(StartKey, EndKey)],
     Key = riak_ql_ddl:make_key(Mod, PartitionKey, StartKey2),
     riak_kv_ts_util:encode_typeval_key(Key).
