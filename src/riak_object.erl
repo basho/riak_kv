@@ -319,8 +319,7 @@ merge(OldObject, NewObject) ->
     end.
 
 %% @doc Special case write_once merge, in the case where the write_once property is
-%%      set on the bucket (type).  In this case, take the lesser (in lexical order)
-%%      of the SHA1 hash of each object.
+%%      set on the bucket (type).  In this case, take the vclock timestamp.
 %%
 -spec merge_write_once(riak_object(), riak_object()) -> riak_object().
 merge_write_once(OldObject, NewObject) ->
