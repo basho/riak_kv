@@ -1202,6 +1202,23 @@ decode_vclock(Method, VClock) ->
 
 -ifdef(TEST).
 
+w1c_merge_test() ->
+    B = {<<"bogus_w1c">>, <<"a_bucket">>},
+    K1 = <<"w1c key 1">>,
+    K2 = <<"w1c key 2">>,
+    V = <<"value">>,
+    O1 = riak_kv_w1c_worker:w1c_vclock(riak_object:new(B,K1,V)),
+    timer:sleep(2000),
+    O2 = riak_kv_w1c_worker:w1c_vclock(riak_object:new(B,K2,V)),
+    ?assertEqual(O2, merge_write_once(O1, O2)),
+    ?assertEqual(O2, merge_write_once(O2, O1)),
+    NewO1 = riak_kv_w1c_worker:w1c_vclock(riak_object:new(B,K2,V)),
+    timer:sleep(2000),
+    NewO2 = riak_kv_w1c_worker:w1c_vclock(riak_object:new(B,K1,V)),
+    ?assertEqual(NewO2, merge_write_once(NewO1, NewO2)),
+    ?assertEqual(NewO2, merge_write_once(NewO2, NewO1)).
+
+
 object_test() ->
     B = <<"buckets_are_binaries">>,
     K = <<"keys are binaries">>,

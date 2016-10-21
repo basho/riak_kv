@@ -20,6 +20,10 @@
 
 -behaviour(gen_server).
 
+-ifdef(TEST).
+-compile(export_all).
+-endif.
+
 %% API
 -export([start_link/1, put/2, async_put/8, async_put_replies/2,
          ts_batch_put/8, ts_batch_put_encoded/2,
