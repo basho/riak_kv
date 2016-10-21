@@ -202,6 +202,8 @@ make_insert_row([], _Positions, Row, _FieldTypes) ->
     %% Out of entries in the value - row is populated with default values
     %% so if we run out of data for implicit/explicit fieldnames can just return
     {ok, Row};
+make_insert_row([{identifier, _Identifier} | _Values], _Positions, _Row, _FieldTypes) ->
+    {error, identifier_unexpected};
 make_insert_row([TypedVal | Values], [Pos | Positions], Row, FieldTypes) ->
     %% Note the Type in TypedVal = {Type, _} is what the value was
     %% parsed into, while its counterpart in FieldTypes is what DDL
@@ -561,6 +563,22 @@ validate_xlate_insert_to_putdata_too_many_values_test() ->
               [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
     Positions = [3, 1, 2, 4],
     Result = xlate_insert_to_putdata(Values, Positions, Empty, [double, varchar, varchar, binary]),
+    ?assertEqual(
+        {error,{too_many_insert_values, [1]}},
+        Result
+    ).
+
+validate_xlate_insert_to_putdata_unexpected_identifier_test() ->
+    Empty = list_to_tuple(lists:duplicate(4, undefined)),
+    Values = [[{integer, 4}, {identifier, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}, {integer, 7}],
+              [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
+    Positions = [3, 1, 2, 4],
+    Result = xlate_insert_to_putdata(Values, Positions, Empty, [double, varchar, varchar, binary]),
+    %% TODO: the error for an insert which may span multiple rows  currently
+    %% only supports a single reason due to levels above and below, most
+    %% constraining being the translation of too_many_insert_values into the
+    %% human-readable message:
+    %% {error,{1003,<<"Invalid data found at row index(es) 1">>}}
     ?assertEqual(
         {error,{too_many_insert_values, [1]}},
         Result
