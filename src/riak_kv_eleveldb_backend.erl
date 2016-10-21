@@ -922,12 +922,12 @@ to_md_key(Key) ->
 simple_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
-    backend_test_util:standard_test(?MODULE, []).
+    backend_test_util:standard_test_gen(?MODULE, []).
 
 custom_config_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, ""),
-    backend_test_util:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).
+    backend_test_util:standard_test_gen(?MODULE, [{data_root, "test/eleveldb-backend"}]).
 
 retry_test_() ->
     {spawn, [fun retry/0, fun retry_fail/0]}.

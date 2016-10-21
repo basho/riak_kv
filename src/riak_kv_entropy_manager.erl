@@ -39,13 +39,23 @@
          release_lock/1,
          requeue_poke/1,
          start_exchange_remote/3,
+         start_exchange_remote/4,
          exchange_status/4,
-         maybe_add_sweep_participant/0]).
+         maybe_add_sweep_participant/0,
+         expire_trees/0,
+         clear_trees/0,
+         get_version/0,
+         get_partition_version/1,
+         get_pending_version/0,
+         get_trees_version/0]).
+
 -export([all_pairwise_exchanges/2]).
--export([get_aae_throttle/0,
+-export([throttle/0,
+         get_aae_throttle/0,
          set_aae_throttle/1,
-         get_aae_throttle_kill/0,
-         set_aae_throttle_kill/1,
+         is_aae_throttle_enabled/0,
+         disable_aae_throttle/0,
+         enable_aae_throttle/0,
          get_aae_throttle_limits/0,
          set_aae_throttle_limits/1,
          get_max_local_vnodeq/0]).
@@ -66,6 +76,8 @@
 -type vnode() :: {index(), node()}.
 -type exchange() :: {index(), index(), index_n()}.
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
+-type version() :: legacy | non_neg_integer().
+-type orddict(Key, Val) :: [{Key, Val}].
 
 -record(lock, {pid :: pid(),
                ref :: reference(),
@@ -74,21 +86,27 @@
               }).
 
 -record(state, {mode           = automatic :: automatic | manual,
-                trees          = []        :: [{index(), pid()}],
-                tree_queue     = []        :: [{index(), pid()}],
+                trees          = []        :: orddict(index(), pid()),
+                tree_queue     = []        :: orddict(index(), pid()),
+                trees_version  = []        :: orddict(index(), version()),
                 locks          = []        :: [#lock{}],
                 exchange_queue = []        :: [exchange()],
                 exchanges      = []        :: [{index(), reference(), pid()}],
                 vnode_status_pid = undefined :: 'undefined' | pid(),
-                last_throttle  = undefined :: 'undefined' | non_neg_integer()
+                last_throttle  = undefined :: 'undefined' | non_neg_integer(),
+                version        = legacy :: version(),
+                pending_version = legacy :: version()
                }).
 
 -type state() :: #state{}.
 
 -define(DEFAULT_CONCURRENCY, 2).
 -define(DEFAULT_BUILD_CONCURRENCY, 1).
--define(AAE_THROTTLE_ENV_KEY, aae_throttle_sleep_time).
--define(AAE_THROTTLE_KILL_ENV_KEY, aae_throttle_kill_switch).
+-define(KV_ENTROPY_LOCK_TIMEOUT, app_helper:get_env(riak_kv, anti_entropy_lock_timeout, 10000)).
+-define(AAE_THROTTLE_KEY, aae_throttle).
+-define(DEFAULT_AAE_THROTTLE_LIMITS,
+        [{-1,0}, {200,10}, {500,50}, {750,250}, {900,1000}, {1100,5000}]).
+-define(ETS, entropy_manager_ets).
 
 %%%===================================================================
 %%% API
@@ -112,27 +130,46 @@ get_lock(Type, Pid) ->
 
 -spec get_lock(any(), pid(), index() | undefined) -> ok | max_concurrency.
 get_lock(Type, Pid, Index) ->
-    gen_server:call(?MODULE, {get_lock, Type, Pid, Index}, infinity).
+    gen_server:call(?MODULE, {get_lock, Type, Pid, Index}, ?KV_ENTROPY_LOCK_TIMEOUT).
 
--spec release_lock(non_neg_integer()) -> ok.
-release_lock(Index) ->
-    gen_server:call(?MODULE, {release_lock, Index}, infinity).
+-spec release_lock(pid() | non_neg_integer()) -> ok.
+release_lock(Index) when is_integer(Index) ->
+    gen_server:call(?MODULE, {release_lock, Index}, infinity);
+
+release_lock(Pid) when is_pid(Pid) ->
+    gen_server:cast(?MODULE, {release_lock, Pid}).
 
 %% @doc Acquire the necessary locks for an entropy exchange with the specified
 %%      remote vnode. The request is sent to the remote entropy manager which
-%%      will try to acquire a concurrency lock. If successsful, the request is
+%%      will try to acquire a concurrency lock. If successful, the request is
 %%      then forwarded to the relevant index_hashtree to acquire a tree lock.
 %%      If both locks are acquired, the pid of the remote index_hashtree is
-%%      returned.
+%%      returned. This function assumes a legacy version of the hashtree
+%%      and is left over for support for mixed clusters with pre-2.2 nodes
 -spec start_exchange_remote({index(), node()}, index_n(), pid())
                            -> {remote_exchange, pid()} |
                               {remote_exchange, anti_entropy_disabled} |
                               {remote_exchange, max_concurrency} |
                               {remote_exchange, not_built} |
-                              {remote_exchange, already_locked}.
-start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid) ->
+                              {remote_exchange, already_locked} |
+                              {remote_exchange, bad_version}.
+start_exchange_remote(VNode, IndexN, FsmPid) ->
+    start_exchange_remote(VNode, IndexN, FsmPid, legacy).
+
+-spec start_exchange_remote({index(), node()}, index_n(), pid(), version())
+                           -> {remote_exchange, pid()} |
+                              {remote_exchange, anti_entropy_disabled} |
+                              {remote_exchange, max_concurrency} |
+                              {remote_exchange, not_built} |
+                              {remote_exchange, already_locked} |
+                              {remote_exchange, bad_version}.
+start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid, legacy) ->
     gen_server:call({?MODULE, Node},
                     {start_exchange_remote, FsmPid, Index, IndexN},
+                    infinity);                        
+start_exchange_remote(_VNode={Index, Node}, IndexN, FsmPid, Version) ->
+    gen_server:call({?MODULE, Node},
+                    {start_exchange_remote, FsmPid, Index, IndexN, Version},
                     infinity).
 
 %% @doc Used by {@link riak_kv_index_hashtree} to requeue a poke on
@@ -184,9 +221,11 @@ set_debug(Enabled) ->
     end,
     ok.
 
+-spec enable() -> ok.
 enable() ->
     gen_server:call(?MODULE, enable, infinity).
 
+-spec disable() -> ok.
 disable() ->
     gen_server:call(?MODULE, disable, infinity).
 
@@ -212,6 +251,41 @@ add_sweep_participant() ->
 
 remove_sweep_participant() ->
     riak_kv_sweeper:remove_sweep_participant(riak_kv_index_hashtree).
+
+-spec expire_trees() -> ok.
+expire_trees() ->
+    gen_server:cast(?MODULE, expire_trees).
+
+-spec clear_trees() -> ok.
+clear_trees() ->
+    gen_server:cast(?MODULE, clear_trees).
+
+-spec get_version() -> version().
+get_version() ->
+    case ets:lookup(?ETS, version) of
+        [] ->
+            legacy;
+        [{version, Version}] ->
+            Version
+    end.
+
+-spec get_partition_version(index()) -> version().
+get_partition_version(Index) ->
+    case ets:lookup(?ETS, Index) of
+        [] ->
+            legacy;
+        [{Index, Version}] ->
+            Version
+    end.
+
+-spec get_pending_version() -> version().
+get_pending_version() ->
+    gen_server:call(?MODULE, get_pending_version, infinity).
+
+%% For testing to quickly verify tree versions match up with manager version
+-spec get_trees_version() -> [{index(), version()}].
+get_trees_version() ->
+    gen_server:call(?MODULE, get_trees_version, infinity).
 
 %% @doc Manually trigger hashtree exchanges.
 %%      -- If an index is provided, trigger exchanges between the index and all
@@ -242,25 +316,12 @@ cancel_exchanges() ->
 
 -spec init([]) -> {'ok',state()}.
 init([]) ->
-    %% Side-effects section
-    set_aae_throttle(0),
-    %% riak_kv.app has some sane limits already set, or config via Cuttlefish
-    %% If the value is not sane, the pattern match below will fail.
-    Limits = case app_helper:get_env(riak_kv, aae_throttle_limits, []) of
-                 [] ->
-                     [{-1,0}, {200,10}, {500,50}, {750,250}, {900,1000}, {1100,5000}];
-                 OtherLs ->
-                     OtherLs
-             end,
-    case set_aae_throttle_limits(Limits) of
-        ok ->
-            ok;
-        {error, DiagProps} ->
-            _ = [lager:error("aae_throttle_limits/anti_entropy.throttle.limits "
-                         "list fails this test: ~p\n", [Check]) ||
-                {Check, false} <- DiagProps],
-            error(invalid_aae_throttle_limits)
-    end,
+    riak_core_throttle:init(riak_kv,
+                            ?AAE_THROTTLE_KEY,
+                            {aae_throttle_limits, ?DEFAULT_AAE_THROTTLE_LIMITS},
+                            {aae_throttle_enabled, true}),
+    ?ETS = ets:new(?ETS, [named_table, {read_concurrency, true}]),
+
     schedule_tick(),
 
     {_, Opts} = settings(),
@@ -310,24 +371,18 @@ handle_call({get_lock, Type, Pid, Index}, _From, State) ->
 handle_call({release_lock, Index}, _From, State) ->
     State2 = maybe_release_lock(Index, State),
     {reply, ok, State2};
+handle_call(get_version, _From, State=#state{version=Version}) ->
+    {reply, Version, State};
+handle_call(get_pending_version, _From, State=#state{pending_version=Version}) ->
+    {reply, Version, State};
+handle_call(get_trees_version, _From, State=#state{trees=Trees}) ->
+    VTrees = [{Idx, riak_kv_index_hashtree:get_version(Pid)} || {Idx, Pid} <- Trees],
+    {reply, VTrees, State};
+%% To support compatibility with pre 2.2 nodes.
 handle_call({start_exchange_remote, FsmPid, Index, IndexN}, From, State) ->
-    case {enabled(),
-          orddict:find(Index, State#state.trees)} of
-        {false, _} ->
-            {reply, {remote_exchange, anti_entropy_disabled}, State};
-        {_, error} ->
-            {reply, {remote_exchange, not_built}, State};
-        {_, {ok, Tree}} ->
-            case do_get_lock(exchange_remote, FsmPid, Index, State) of
-                {ok, State2} ->
-                    %% Concurrency lock acquired, now forward to index_hashtree
-                    %% to acquire tree lock.
-                    riak_kv_index_hashtree:start_exchange_remote(FsmPid, From, IndexN, Tree),
-                    {noreply, State2};
-                {Reply, State2} ->
-                    {reply, {remote_exchange, Reply}, State2}
-            end
-    end;
+    do_start_exchange_remote(FsmPid, Index, IndexN, legacy, From, State);
+handle_call({start_exchange_remote, FsmPid, Index, IndexN, Version}, From, State) ->
+    do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State);
 handle_call({cancel_exchange, Index}, _From, State) ->
     case lists:keyfind(Index, 1, State#state.exchanges) of
         false ->
@@ -345,12 +400,23 @@ handle_call(cancel_exchanges, _From, State=#state{exchanges=Exchanges}) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
+handle_cast({release_lock, Pid}, S) ->
+    S2 = maybe_release_lock(Pid, S),
+    {noreply, S2};
+
 handle_cast({requeue_poke, Index}, State) ->
     State2 = requeue_poke(Index, State),
     {noreply, State2};
 handle_cast({exchange_status, Pid, LocalVN, RemoteVN, IndexN, Reply}, State) ->
     State2 = do_exchange_status(Pid, LocalVN, RemoteVN, IndexN, Reply, State),
     {noreply, State2};
+handle_cast(clear_trees, S) ->
+    clear_all_exchanges(S#state.exchanges),
+    clear_all_trees(S#state.trees),
+    {noreply, S};
+handle_cast(expire_trees, S) ->
+    ok = expire_all_trees(S#state.trees),
+    {noreply, S};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -392,6 +458,19 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+clear_all_exchanges(Exchanges) ->
+    [begin
+         exit(Pid, kill),
+         Index
+     end || {Index, _Ref, Pid} <- Exchanges].
+
+clear_all_trees(Trees) ->
+    [riak_kv_index_hashtree:clear(TPid) || {_, TPid} <- Trees].
+
+expire_all_trees(Trees) ->
+    _ = [riak_kv_index_hashtree:expire(TPid) || {_, TPid} <- Trees],
+    ok.
+
 -spec settings() -> {boolean(), proplists:proplist()}.
 settings() ->
     case app_helper:get_env(riak_kv, anti_entropy, {off, []}) of
@@ -432,17 +511,21 @@ add_hashtree_pid(Index, Pid, State) ->
 add_hashtree_pid(false, _Index, Pid, State) ->
     riak_kv_index_hashtree:stop(Pid),
     State;
-add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees}) ->
+add_hashtree_pid(true, Index, Pid, State=#state{trees=Trees, trees_version=VTrees}) ->
     case orddict:find(Index, Trees) of
         {ok, Pid} ->
             %% Already know about this hashtree
             State;
         _ ->
             monitor(process, Pid),
+            Version = riak_kv_index_hashtree:get_version(Pid),
             Trees2 = orddict:store(Index, Pid, Trees),
-            State2 = State#state{trees=Trees2},
+            VTrees2 = orddict:store(Index, Version, VTrees),
+            ets:insert(?ETS, {Index, Version}),
+            State2 = State#state{trees=Trees2, trees_version=VTrees2},
             State3 = add_index_exchanges(Index, State2),
-            State3
+            State4 = check_upgrade(State3),
+            State4
     end.
 
 -spec do_get_lock(any(),pid(), non_neg_integer(), state())
@@ -467,11 +550,9 @@ do_get_lock(Type, Pid, Index, State=#state{locks=Locks}) ->
     end.
 
 check_lock_type(build, Locks) ->
-    Limit =
-        app_helper:get_env(riak_kv,
-                           anti_entropy_build_concurrency,
-                           ?DEFAULT_BUILD_CONCURRENCY),
-    case get_nr_of_locks(build, Locks) >= Limit of
+    Limit = app_helper:get_env(riak_kv, anti_entropy_build_concurrency, ?DEFAULT_BUILD_CONCURRENCY),
+    NumLocks = get_nr_of_locks(build, Locks) + get_nr_of_locks(upgrade, Locks),
+    case NumLocks >= Limit of
         true ->
             build_limit_reached;
         false ->
@@ -482,6 +563,37 @@ check_lock_type(_Type, _Locks) ->
 
 get_nr_of_locks(Type, Locks) ->
    length([Lock || Lock <- Locks, Lock#lock.type == Type]).
+
+-spec do_start_exchange_remote(pid(), index(), index_n(), version(), term(), state())
+                  -> {reply, term(), state()} | {noreply, state()}.
+do_start_exchange_remote(FsmPid, Index, IndexN, Version, From, State) ->
+    Enabled = enabled(),
+    TreeResult = orddict:find(Index, State#state.trees),
+    maybe_start_exchange_remote(Enabled, TreeResult, FsmPid, Index, IndexN, Version, From, State).
+
+-spec maybe_start_exchange_remote(Enabled::boolean(),
+                                  TreeResult::{ok, term()} | error,
+                                  FsmPid::pid(),
+                                  Index::index(),
+                                  IndexN::index_n(),
+                                  Version::version(),
+                                  From::term(),
+                                  State::state()) ->
+    {noreply, state()} | {reply, term(), state()}.
+maybe_start_exchange_remote(false, _, _FsmPid, _Index, _IndexN, _Version, _From, State) ->
+    {reply, {remote_exchange, anti_entropy_disabled}, State};
+maybe_start_exchange_remote(_, error, _FsmPid,  _Index, _IndexN, _Version, _From, State) ->
+    {reply, {remote_exchange, not_built}, State};
+maybe_start_exchange_remote(true, {ok, Tree}, FsmPid, Index, IndexN, Version, From, State) ->
+    case do_get_lock(exchange_remote, FsmPid, Index, State) of
+        {ok, State2} ->
+            %% Concurrency lock acquired, now forward to index_hashtree
+            %% to acquire tree lock.
+            riak_kv_index_hashtree:start_exchange_remote(FsmPid, Version, From, IndexN, Tree),
+            {noreply, State2};
+        {Reply, State2} ->
+            {reply, {remote_exchange, Reply}, State2}
+    end.
 
 -spec maybe_release_lock(reference() |non_neg_integer(), state()) -> state().
 maybe_release_lock(Ref, State) when is_reference(Ref) ->
@@ -503,8 +615,14 @@ maybe_clear_exchange(Ref, Status, State) ->
 
 -spec maybe_clear_registered_tree(pid(), state()) -> state().
 maybe_clear_registered_tree(Pid, State) when is_pid(Pid) ->
-    Trees = lists:keydelete(Pid, 2, State#state.trees),
-    State#state{trees=Trees};
+    case lists:keytake(Pid, 2, State#state.trees) of
+        false ->
+            State;
+        {value, {Index, Pid}, Trees} ->
+            ets:delete(?ETS, Index),
+            VTrees = orddict:erase(Index, State#state.trees_version),
+            State#state{trees=Trees, trees_version=VTrees}
+    end;
 maybe_clear_registered_tree(_, State) ->
     State.
 
@@ -553,11 +671,12 @@ tick(State) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     State1 = query_and_set_aae_throttle(State),
     State2 = maybe_reload_hashtrees(Ring, State1),
-    State3 = lists:foldl(fun(_,S) ->
+    State3 = maybe_start_upgrade(Ring, State2),
+    State4 = lists:foldl(fun(_,S) ->
                                  maybe_poke_tree(S)
-                         end, State2, lists:seq(1,10)),
-    State4 = maybe_exchange(Ring, State3),
-    State4.
+                         end, State3, lists:seq(1,10)),
+    State5 = maybe_exchange(Ring, State4),
+    State5.
 
 -spec maybe_poke_tree(state()) -> state().
 maybe_poke_tree(State=#state{trees=[]}) ->
@@ -566,6 +685,103 @@ maybe_poke_tree(State) ->
     {Tree, State2} = next_tree(State),
     riak_kv_index_hashtree:poke(Tree),
     State2.
+
+-spec maybe_start_upgrade(riak_core_ring(),state()) -> state().
+maybe_start_upgrade(Ring, State=#state{trees=Trees, version=legacy, pending_version=legacy}) ->
+    Indices = riak_core_ring:my_indices(Ring),
+    case riak_core_capability:get({riak_kv, object_hash_version}, legacy) of
+        0 when length(Trees) == length(Indices) ->
+            maybe_upgrade(State);
+        _ ->
+            State
+    end;
+maybe_start_upgrade(_Ring, State) ->
+    State.
+
+-spec maybe_upgrade(state()) -> state().
+maybe_upgrade(State=#state{trees_version = VTrees}) ->
+    case [Idx || {Idx, legacy} <- VTrees] of
+        %% Upgrade is done already, set version in state
+        [] ->
+            ets:insert(?ETS, {version, 0}),
+            State#state{version=0};
+        %% No trees have been upgraded, need to wait for exchanges
+        Trees when length(Trees) == length(VTrees) ->
+            check_exchanges_and_upgrade(State);
+        %% Upgrade already started, set pending_version
+        _ ->
+            State#state{pending_version=0}
+    end.
+
+-spec check_exchanges_and_upgrade(state()) -> state().
+check_exchanges_and_upgrade(State) ->
+    case riak_kv_entropy_info:all_sibling_exchanges_complete() of
+        true ->
+            %% Now check nodes who havent reported success in the ETS table
+            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+            Nodes = riak_core_ring:all_members(Ring),
+            case check_all_remote_exchanges_complete(Nodes) of
+                true ->
+                    lager:notice("Starting AAE hashtree upgrade"),
+                    State#state{pending_version=0};
+                _ ->
+                    State
+            end;
+        _ ->
+            State
+    end.
+
+-spec check_all_remote_exchanges_complete(list()) -> boolean().
+check_all_remote_exchanges_complete(Nodes) ->
+    lists:all(fun maybe_check_and_record_remote_exchange/1, Nodes).
+
+-spec maybe_check_and_record_remote_exchange(node()) -> boolean().
+maybe_check_and_record_remote_exchange(Node) ->
+    case ets:lookup(?ETS, Node) of
+        [{Node, true}] ->
+            true;
+        _ ->
+            Result = check_remote_exchange(Node),
+            ets:insert(?ETS, {Node, Result}),
+            Result
+    end.
+
+-spec check_remote_exchange(node()) -> boolean().
+check_remote_exchange(Node) ->
+    case rpc:call(Node, riak_kv_entropy_info, all_sibling_exchanges_complete, [], 10000) of
+        Result when is_boolean(Result) ->
+            Result;
+        {badrpc, _Reason} ->
+            false;
+        _ ->
+            false
+    end.
+
+-spec check_upgrade(state()) -> state().
+check_upgrade(State=#state{pending_version=legacy}) ->
+    State;
+check_upgrade(State=#state{pending_version=PendingVersion,trees_version=VTrees}) ->
+    %% Verify we have all partitions registered with a hashtree, version
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    Indices = riak_core_ring:my_indices(Ring),
+    MissingIdx = [Idx || Idx <- Indices,
+        not orddict:is_key(Idx, VTrees)],
+    case MissingIdx of
+        [] ->
+            case [Idx || {Idx, V} <- VTrees, V == PendingVersion] of
+                [] ->
+                    State;
+                Trees when length(Trees) == length(VTrees) ->
+                    lager:notice("Local AAE hashtrees have completed upgrade to version: ~p",[PendingVersion]),
+                    ets:insert(?ETS, {version, PendingVersion}),
+                    State#state{version=PendingVersion, pending_version=legacy};
+                _Trees ->
+                    State
+            end;
+        _ ->
+            State
+    end.
+
 
 %%%===================================================================
 %%% Exchanging
@@ -785,22 +1001,22 @@ requeue_exchange(LocalIdx, RemoteIdx, IndexN, State) ->
             State#state{exchange_queue=Exchanges}
     end.
 
+throttle() ->
+    riak_core_throttle:throttle(riak_kv, ?AAE_THROTTLE_KEY).
+
 get_aae_throttle() ->
-    app_helper:get_env(riak_kv, ?AAE_THROTTLE_ENV_KEY, 0).
+    riak_core_throttle:get_throttle(riak_kv, ?AAE_THROTTLE_KEY).
 
 set_aae_throttle(Milliseconds) when is_integer(Milliseconds), Milliseconds >= 0 ->
-    application:set_env(riak_kv, ?AAE_THROTTLE_ENV_KEY, Milliseconds).
+    riak_core_throttle:set_throttle(riak_kv, ?AAE_THROTTLE_KEY, Milliseconds).
 
-get_aae_throttle_kill() ->
-    case app_helper:get_env(riak_kv, ?AAE_THROTTLE_KILL_ENV_KEY, undefined) of
-        true ->
-            true;
-        _ ->
-            false
-    end.
+is_aae_throttle_enabled() ->
+    riak_core_throttle:is_throttle_enabled(riak_kv, ?AAE_THROTTLE_KEY).
 
-set_aae_throttle_kill(Bool) when Bool == true; Bool == false ->
-    application:set_env(riak_kv, ?AAE_THROTTLE_KILL_ENV_KEY, Bool).
+disable_aae_throttle() ->
+    riak_core_throttle:disable_throttle(riak_kv, ?AAE_THROTTLE_KEY).
+enable_aae_throttle() ->
+    riak_core_throttle:enable_throttle(riak_kv, ?AAE_THROTTLE_KEY).
 
 get_max_local_vnodeq() ->
     try
@@ -815,8 +1031,7 @@ get_max_local_vnodeq() ->
     end.
 
 get_aae_throttle_limits() ->
-    %% init() should have already set a sane default, so the default below should never be used.
-    app_helper:get_env(riak_kv, aae_throttle_limits, [{-1, 0}]).
+    riak_core_throttle:get_limits(riak_kv, ?AAE_THROTTLE_KEY).
 
 %% @doc Set AAE throttle limits list
 %%
@@ -825,27 +1040,13 @@ get_aae_throttle_limits() ->
 %% List sorting is not required: the throttle is robust with any ordering.
 
 set_aae_throttle_limits(Limits) ->
-    case {lists:keyfind(-1, 1, Limits),
-          catch lists:all(fun({Min, Lim}) ->
-                                  is_integer(Min) andalso is_integer(Lim) andalso
-                                      Lim >= 0
-                          end, Limits)} of
-        {{-1, _}, true} ->
-            lager:info("Setting AAE throttle limits: ~p\n", [Limits]),
-            application:set_env(riak_kv, aae_throttle_limits, Limits),
-            ok;
-        {Else1, Else2} ->
-            {error, [{negative_one_length_is_present, Else1},
-                     {all_sleep_times_are_non_negative_integers, Else2}]}
-    end.
+    riak_core_throttle:set_limits(riak_kv, ?AAE_THROTTLE_KEY, Limits).
 
-query_and_set_aae_throttle(#state{last_throttle=LastThrottle} = State) ->
-    case get_aae_throttle_kill() of
-        false ->
-            query_and_set_aae_throttle2(State);
+query_and_set_aae_throttle(State) ->
+    case is_aae_throttle_enabled() of
         true ->
-            perhaps_log_throttle_change(LastThrottle, 0, kill_switch),
-            set_aae_throttle(0),
+            query_and_set_aae_throttle2(State);
+        false ->
             State#state{last_throttle=0}
     end.
 
@@ -860,14 +1061,12 @@ query_and_set_aae_throttle2(#state{vnode_status_pid = undefined} = State) ->
 query_and_set_aae_throttle2(State) ->
     State.
 
-query_and_set_aae_throttle3({result, {MaxNds, BadNds}},
-                            #state{last_throttle=LastThrottle} = State) ->
-    Limits = lists:sort(get_aae_throttle_limits()),
+query_and_set_aae_throttle3({result, {MaxNds, BadNds}}, State) ->
     %% If a node is really hosed, then this RPC call is going to fail
     %% for that node.  We might also delay the 'tick' processing by
     %% several seconds.  But the tick processing is OK if it's delayed
     %% while we wait for slow nodes here.
-    {WorstVMax, WorstNode} =
+    {WorstVMax, _WorstNode} =
         case {BadNds, lists:reverse(lists:sort(MaxNds))} of
             {[], [{VMax, Node}|_]} ->
                 {VMax, Node};
@@ -875,30 +1074,16 @@ query_and_set_aae_throttle3({result, {MaxNds, BadNds}},
                 %% If anyone couldn't respond, let's assume the worst.
                 %% If that node is actually down, then the net_kernel
                 %% will mark it down for us soon, and then we'll
-                %% calculate a real value after that.  Note that a
-                %% tuple as WorstVMax will always be bigger than an
-                %% integer, so we can avoid using false information
-                %% like WorstVMax=99999999999999 and also give
-                %% something meaningful in the user's info msg.
-                {{unknown_mailbox_sizes, node_list, BadNds}, BadNodes}
+                %% calculate a real value after that.
+                lager:info("Could not determine mailbox sizes for nodes: ~p",
+                           [BadNds]),
+                {max, BadNodes}
         end,
-    {Sat, _NonSat} = lists:partition(fun({X, _Limit}) -> X < WorstVMax end, Limits),
-    [{_, NewThrottle}|_] = lists:reverse(lists:sort(Sat)),
-    perhaps_log_throttle_change(LastThrottle, NewThrottle,
-                                {WorstVMax, WorstNode}),
-    set_aae_throttle(NewThrottle),
+    NewThrottle = riak_core_throttle:set_throttle_by_load(
+                    riak_kv,
+                    ?AAE_THROTTLE_KEY,
+                    WorstVMax),
     State#state{last_throttle=NewThrottle}.
-
-perhaps_log_throttle_change(Last, New, kill_switch) when Last /= New ->
-    _ = lager:info("Changing AAE throttle from ~p -> ~p msec/key, "
-                   "based on kill switch on local node",
-                   [Last, New]);
-perhaps_log_throttle_change(Last, New, {WorstVMax, WorstNode}) when Last /= New ->
-    _ = lager:info("Changing AAE throttle from ~p -> ~p msec/key, "
-                   "based on maximum vnode mailbox size ~p from ~p",
-                   [Last, New, WorstVMax, WorstNode]);
-perhaps_log_throttle_change(_, _, _) ->
-    ok.
 
 %% Wrapper for meck interception for testing.
 multicall(A, B, C, D, E) ->
@@ -921,10 +1106,10 @@ get_last_throttle(State) ->
     {State2#state.last_throttle, State2}.
 
 wait_for_vnode_status(State) ->
-    case get_aae_throttle_kill() of
-        true ->
-            State;
+    case is_aae_throttle_enabled() of
         false ->
+            State;
+        true ->
             receive
                 {'DOWN',_,_,_,_} = Msg ->
                     element(2, handle_info(Msg, State))

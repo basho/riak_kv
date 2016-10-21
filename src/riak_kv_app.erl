@@ -49,22 +49,16 @@
 start(_Type, _StartArgs) ->
     riak_core_util:start_app_deps(riak_kv),
 
-    FSM_Limit = app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT),
-    Status = case FSM_Limit of
-                 undefined ->
-                     disabled;
-                 _ ->
-                     sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
-                     sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit),
-                     enabled
-             end,
+    FSM_Limit = find_fsm_limit(),
+
+    sidejob:new_resource(riak_kv_put_fsm_sj, sidejob_supervisor, FSM_Limit),
+    sidejob:new_resource(riak_kv_get_fsm_sj, sidejob_supervisor, FSM_Limit),
+
     Base = [riak_core_stat:prefix(), riak_kv],
     riak_kv_exometer_sidejob:new_entry(Base ++ [put_fsm, sidejob],
-				       riak_kv_put_fsm_sj, "node_put_fsm",
-				       [{status, Status}]),
+				       riak_kv_put_fsm_sj, "node_put_fsm", []),
     riak_kv_exometer_sidejob:new_entry(Base ++ [get_fsm, sidejob],
-                                       riak_kv_get_fsm_sj, "node_get_fsm",
-				       [{status, Status}]),
+                                       riak_kv_get_fsm_sj, "node_get_fsm", []),
 
     case app_helper:get_env(riak_kv, direct_stats, false) of
         true ->
@@ -192,16 +186,26 @@ start(_Type, _StartArgs) ->
                                           encode_zlib),
 
             riak_core_capability:register({riak_kv, crdt},
-                                          [?TOP_LEVEL_TYPES, [pncounter], []],
+                                          [?TOP_LEVEL_TYPES,
+                                           ?V1_TOP_LEVEL_TYPES ++
+                                           ?V2_TOP_LEVEL_TYPES,
+                                           ?V1_TOP_LEVEL_TYPES,
+                                           []],
                                           []),
 
             riak_core_capability:register({riak_kv, crdt_epoch_versions},
-                                          [?E2_DATATYPE_VERSIONS, ?E1_DATATYPE_VERSIONS],
+                                          [?E3_DATATYPE_VERSIONS,
+                                           ?E2_DATATYPE_VERSIONS,
+                                           ?E1_DATATYPE_VERSIONS],
                                           ?E1_DATATYPE_VERSIONS),
 
             riak_core_capability:register({riak_kv, put_fsm_ack_execute},
                                           [enabled, disabled],
                                           disabled),
+
+            riak_core_capability:register({riak_kv, object_hash_version},
+                                          [0, legacy],
+                                          legacy),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
@@ -331,6 +335,22 @@ wait_for_put_fsms(N) ->
 
 wait_for_put_fsms() ->
     wait_for_put_fsms(?MAX_FLUSH_PUT_FSM_RETRIES).
+
+find_fsm_limit() ->
+    case app_helper:get_env(riak_kv, fsm_limit, ?DEFAULT_FSM_LIMIT) of
+        undefined ->
+            %% If it's explicitly set to 'undefined', that means "no limit".
+            %% sidejob doesn't have an option to specify "infinity" but if
+            %% we make the limit equal to the node's global process limit,
+            %% then we're pretty much guaranteed to never exceed that:
+            erlang:system_info(process_limit);
+        Limit when is_integer(Limit) ->
+            Limit;
+        BadValue ->
+            lager:critical("Bad value provided for riak_kv.fsm_limit: ~p. "
+                           "Must be an integer or 'undefined'", [BadValue]),
+            throw({error, bad_fsm_limit})
+    end.
 
 get_object_format_modes() ->
     %% TODO: clearly, this isn't ideal if we have more versions

@@ -21,6 +21,8 @@
 
 -export([tree_built/2,
          tree_built/3,
+         clear_tree_build/1,
+         clear_tree_build/2,
          exchange_complete/4,
          exchange_complete/5,
          create_table/0,
@@ -30,7 +32,8 @@
          compute_tree_info/0,
          compute_tree_info/1,
          exchanges/2,
-         all_exchanges/2]).
+         all_exchanges/2,
+         all_sibling_exchanges_complete/0]).
 
 -define(ETS, ets_riak_kv_entropy).
 
@@ -39,7 +42,7 @@
 -type exchange_id() :: {index(), index_n()}.
 -type orddict(K,V) :: [{K,V}].
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
--type t_now() :: erlang:timestamp().
+-type t_now() :: undefined | erlang:timestamp().
 
 -record(simple_stat, {last, min, max, count, sum}).
 
@@ -74,6 +77,15 @@ tree_built(Index, Time) ->
 -spec tree_built(atom(), index(), t_now()) -> ok.
 tree_built(Type, Index, Time) ->
     update_index_info({Type, Index}, {tree_built, Time}).
+
+%% @see clear_tree_build/2
+clear_tree_build(Index) ->
+    clear_tree_build(riak_kv, Index).
+
+%% @doc Set tree_built time to undefined
+-spec clear_tree_build(atom(), index()) -> ok.
+clear_tree_build(Type, Index) ->
+    update_index_info({Type, Index}, {tree_built, undefined}).
 
 %% @see exchange_complete/5
 -spec exchange_complete(index(), index(), index_n(), non_neg_integer()) -> ok.
@@ -158,6 +170,26 @@ exchanges(Index, IndexN) ->
 %% store the new info back into the ETS table.
 -spec update_index_info({atom(), index()}, term()) -> ok.
 update_index_info(Key, Cmd) ->
+    Id = {{?MODULE, Key}, self()},
+    TransFun = fun() -> update_index_info_impl(Key, Cmd) end,
+    global:trans(Id, TransFun, [node()]).
+
+update_index_info_impl(Key, Cmd) ->
+    %% There used to be a race condition bug in this function, triggered
+    %% by two processes updating data for the same index at the same time.
+    %% We are fixing it by wrapping this code in a call to global:trans,
+    %% which feels like a quick and dirty fix, but works great and seems
+    %% to have fine enough performance characteristics from our tests.
+    %% We'll need to look out for any additional future use of the global
+    %% module though, since all calls to set_lock/trans on a given node
+    %% use the same ETS table behind the scenes, which could lead to
+    %% contention if lots of different pieces of code are all relying on
+    %% it at once.
+    %%
+    %% If we find that the call to global:trans is a bottleneck, we can
+    %% explore other options (probably either synchronizing updates through
+    %% a pool of workers, or maybe some sort of CRDT-style conflict
+    %% resolution mechanism).
     Info = case ets:lookup(?ETS, {index, Key}) of
                [] ->
                    #index_info{};
@@ -215,9 +247,22 @@ compute_exchange_info({M,F}, Ring, Index, #index_info{exchanges=Exchanges,
     AllTime = merge_to_first(KnownTime, Defaults),
     %% Rely upon fact that undefined < tuple
     AllTime2 = lists:keysort(2, AllTime),
-    {_, LastAll} = hd(AllTime2),
-    {_, Recent} = hd(lists:reverse(AllTime2)),
+    {LastAll, Recent} = case AllTime2 of
+                            [] ->
+                                {undefined, undefined};
+                            _ ->
+                                {element(2, hd(AllTime2)), element(2, lists:last(AllTime2))}
+                        end,
     {Index, Recent, LastAll, stat_tuple(Repaired)}.
+
+-spec all_sibling_exchanges_complete() -> boolean().
+all_sibling_exchanges_complete() ->
+    case [Idx || {Idx, _Time, undefined, _Stats} <- compute_exchange_info()] of
+        [] ->
+            true;
+        _ ->
+            false
+    end.
 
 %% Merge two lists together based on the key at position 1. When both lists
 %% contain the same key, the value associated with `L1' is kept.

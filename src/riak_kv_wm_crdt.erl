@@ -41,6 +41,7 @@
 %%   <dl>
 %%     <dt>counter</dt><dd>an integer</dd>
 %%     <dt>set</dt><dd>an array of strings</dd>
+%%     <dt>hll</dt><dd>a unique cardinality estimate of a set</dd>
 %%     <dt>map</dt><dd>an object where the fields are as described below.</dd>
 %%   </dl>
 %%
@@ -80,6 +81,11 @@
 %%                     `"remove"', `"remove_all"' fields. `"add"' and `"remove"' should refer to
 %%                     single string values, while `"add_all"' and `"remove_all"' should be arrays
 %%                     of strings. The `"context"' field may be included.</dd>
+%%     <dt>hll</dt><dd>An object containing any combination of `"add"',
+%%                     `"add_all"' fields. `"add"' should refer to single string
+%%                     values, while `"add_all"' and should be arrays of
+%%                     strings. The `"context"' field may be included, but has
+%%                     no effect.</dd>
 %%     <dt>map</dt><dd>An object containing any of the fields `"remove"', or `"update"'.
 %%                     `"remove"' should be a list of field names as described above.
 %%                     `"update"` should be an object containing fields and the operation to apply

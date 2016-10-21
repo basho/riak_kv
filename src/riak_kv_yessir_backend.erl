@@ -473,7 +473,7 @@ t0_number1(_BucketSuffix, Bucket, Key) ->
 -ifdef(TEST).
 simple_test() ->
    Config = [],
-   backend_test_util:standard_test(?MODULE, Config).
+   backend_test_util:standard_test_fun(?MODULE, Config).
 
 -ifdef(EQC).
 eqc_test() ->

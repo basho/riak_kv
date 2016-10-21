@@ -227,9 +227,13 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                          true ->
                              delete;
                          _ ->
+                             maybe_log_old_vclock(Results),
                              nop
                      end;
+                 [] when ObjState == notfound ->
+                     nop;
                  [] ->
+                     maybe_log_old_vclock(Results),
                      nop;
                  _ ->
                      {read_repair, ReadRepairs, MObj}
@@ -303,6 +307,36 @@ num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
             GetCore
     end.
 
+%% @private Print a warning if objects are not equal. Only called on case of no read-repair
+%% This situation could happen with pre 2.1 vclocks in very rare cases. Fixing the object
+%% requires the user to rewrite the object in 2.1+ of Riak. Logic is enabled when capabilities
+%% returns a version(all nodes at least 2.2) and the entropy_manager is not yet version 0
+maybe_log_old_vclock(Results) ->
+    case riak_core_capability:get({riak_kv, object_hash_version}, legacy) of
+        legacy ->
+            ok;
+        0 ->
+            Version = riak_kv_entropy_manager:get_version(),
+            case [RObj || {_Idx, {ok, RObj}} <- Results] of
+                [] ->
+                    ok;
+                [_] ->
+                    ok;
+                _ when Version == 0 ->
+                    ok;
+                [R1|Rest] ->
+                    case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
+                        [] ->
+                            ok;
+                        _ ->
+                            object:warning("Bucket: ~p Key: ~p should be rewritten to guarantee
+                              compatability with AAE version 0",
+                                [riak_object:bucket(R1),riak_object:key(R1)])
+                    end
+            end;
+        _ ->
+            ok
+    end.
 
 -ifdef(TEST).
 %% simple sanity tests

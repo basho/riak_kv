@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_utils: Common functions used by riak_kv_wm_* modules.
-%%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,6 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
+%% @doc Common functions used by riak_kv_wm_* modules.
 -module(riak_kv_wm_utils).
 
 %% webmachine resource exports
@@ -33,10 +32,11 @@
          format_uri/4,
          format_uri/5,
          encode_value/1,
-         accept_value/2,
+         accept_value/3,
          any_to_list/1,
          any_to_bool/1,
          is_forbidden/1,
+         is_forbidden/3,
          jsonify_bucket_prop/1,
          erlify_bucket_prop/1,
          ensure_bucket_type/3,
@@ -226,12 +226,18 @@ encode_value(V) when is_binary(V) ->
 encode_value(V) ->
     term_to_binary(V).
 
--spec accept_value(string(), binary()) -> term().
+-spec accept_value(string(), riak_kv_wm_utils_dict(), binary()) -> term().
 %% @doc Accept the object value as a binary - content type can be used
 %%      to decode
-accept_value("application/x-erlang-binary",V) ->
-    binary_to_term(V);
-accept_value(_Ctype, V) ->
+accept_value("application/x-erlang-binary",MD, V) ->
+    case dict:find(?MD_ENCODING, MD) of
+        {ok, "gzip"} ->
+            binary_to_term(zlib:gunzip(V));
+        _ ->
+            binary_to_term(V)
+    end;
+
+accept_value(_Ctype, _MD, V) ->
     V.
 
 any_to_list(V) when is_list(V) ->
@@ -252,9 +258,59 @@ any_to_bool(V) when is_integer(V) ->
 any_to_bool(V) when is_boolean(V) ->
     V.
 
+-spec is_forbidden(#wm_reqdata{}) -> boolean().
+%% @doc Determine whether the request is forbidden.
 is_forbidden(RD) ->
-    is_null_origin(RD) or
-    (app_helper:get_env(riak_kv,secure_referer_check,true) and not is_valid_referer(RD)).
+    % TODO: what log level(s) here?
+    case is_null_origin(RD) of
+        true ->
+            _ = lager:info(
+                    "Request from ~p denied due to null origin",
+                    [{wrq:scheme(RD), wrq:peer(RD)}]),
+            true;
+        _ ->
+            case app_helper:get_env(riak_kv, secure_referer_check, true)
+                    andalso not is_valid_referer(RD) of
+                true ->
+                    _ = lager:info(
+                            "Request from ~p denied due to invalid referrer",
+                            [{wrq:scheme(RD), wrq:peer(RD)}]),
+                    true;
+                _ ->
+                    false
+            end
+    end.
+
+-spec is_forbidden(#wm_reqdata{}, term(), term())
+        -> {boolean(), #wm_reqdata{}, term()}.
+%% @doc Like is_forbidden/1, but also checks if the job class is enabled.
+%% May modify RequestData, if we choose to include why it's forbidden.
+%% ReqContext is passed through untouched, so that the result tuple can be
+%% returned directly by WM forbidden callbacks.
+is_forbidden(ReqData, JobClass, ReqContext) ->
+    % Logging for non-job criteria is performed by is_forbidden/1.
+    case is_forbidden(ReqData) of
+        true ->
+            {true, ReqData, ReqContext};
+        _ ->
+            Accept = riak_core_util:job_class_enabled(JobClass),
+            _ = riak_core_util:report_job_request_disposition(
+                    Accept, JobClass, ?MODULE, is_forbidden, ?LINE,
+                    {wrq:scheme(ReqData), wrq:peer(ReqData)}),
+            case Accept of
+                true ->
+                    {false, ReqData, ReqContext};
+                _ ->
+                    {true,
+                        wrq:append_to_resp_body(
+                            unicode:characters_to_binary(
+                                riak_core_util:job_class_disabled_message(
+                                    text, JobClass), utf8, utf8),
+                            wrq:set_resp_header(
+                                "Content-Type", "text/plain", ReqData)),
+                        ReqContext}
+            end
+    end.
 
 %% @doc Check if the Origin header is "null". This is useful to look for attempts
 %%      at CSRF, but is not a complete answer to the problem.
@@ -364,6 +420,8 @@ jsonify_bucket_prop({Prop, Value}) ->
 %%      of bucket properties to their Erlang form.
 erlify_bucket_prop({?JSON_DATATYPE, Type}) when is_binary(Type) ->
     {datatype, binary_to_existing_atom(Type, utf8)};
+erlify_bucket_prop({?JSON_HLL_PRECISION, P}) when is_binary(P) ->
+    {hll_precision, P};
 erlify_bucket_prop({?JSON_LINKFUN, {struct, Props}}) ->
     case {proplists:get_value(?JSON_MOD, Props),
           proplists:get_value(?JSON_FUN, Props)} of
