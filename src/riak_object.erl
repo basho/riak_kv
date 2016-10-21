@@ -325,13 +325,13 @@ merge(OldObject, NewObject) ->
 -spec merge_write_once(riak_object(), riak_object()) -> riak_object().
 merge_write_once(OldObject, NewObject) ->
     ok = riak_kv_stat:update(write_once_merge),
-    case crypto:hash(sha, term_to_binary(OldObject)) =< crypto:hash(sha, term_to_binary(NewObject)) of
-        true ->
-            OldObject;
-        _ ->
-            NewObject
-    end.
+    pick_last_w1c_timestamp({OldObject, vclock:get_timestamp(<<0:8>>, OldObject#r_object.vclock)},
+                            {NewObject, vclock:get_timestamp(<<0:8>>, NewObject#r_object.vclock)}).
 
+pick_last_w1c_timestamp({O1, T1}, {_O2, T2}) when T1 > T2 ->
+    O1;
+pick_last_w1c_timestamp({_O1, _T1}, {O2, _T2}) ->
+    O2.
 
 %% @doc Merge the r_objects contents by converting the inner dict to
 %%      a list, ensuring a sane order, and merging into a unique list.
