@@ -56,12 +56,6 @@
          get_or_create_qbuf/4,  %% new Query arrives, with some Options
          get_qbuf_expiry/1,
          get_max_query_data_size/0,
-         get_qbuf_orig_query/1, %% original query used at creation of this qbuf
-         get_qbuf_size/1,       %% table size (as reported by leveldb:get_size, or really the file size)
-         get_qbufs/0,           %% list all query buffer refs and is_ flags in a proplist
-         get_total_size/0,      %% get total size of all temp tables
-         is_qbuf_ready/1,       %% are there results ready for this Query?
-         qbuf_exists/1,         %% is there a temp table for this Query?
          set_max_query_data_size/1,
          set_qbuf_expiry/2,
          set_ready_waiting_process/2,  %% notify a Pid when all chunks are here
@@ -110,37 +104,6 @@ get_or_create_qbuf(SQL, NSubqueries, OrigDDL, Options) ->
 %% @doc Dispose of this query buffer (do nothing if it does not exist).
 delete_qbuf(QBufRef) ->
     gen_server:call(?SERVER, {delete_qbuf, QBufRef}).
-
--spec get_qbufs() -> [{qbuf_ref(), proplists:proplist()}].
-%% @doc List active qbufs, with properties
-get_qbufs() ->
-    gen_server:call(?SERVER, get_qbufs).
-
--spec qbuf_exists(qbuf_ref()) -> boolean().
-%% @doc Check if there is a query buffer for this Query.
-qbuf_exists(QBufRef) ->
-    gen_server:call(?SERVER, {qbuf_exists, QBufRef}).
-
--spec is_qbuf_ready(qbuf_ref()) -> boolean().
-%% @doc Check if results are ready for this Query.
-is_qbuf_ready(QBufRef) ->
-    gen_server:call(?SERVER, {is_qbuf_ready, QBufRef}).
-
--spec get_qbuf_orig_query(qbuf_ref()) -> {ok, ?SQL_SELECT{}} | {error, bad_qbuf_ref}.
-%% @doc Get the original SQL used when this qbuf was created.
-get_qbuf_orig_query(QBufRef) ->
-    gen_server:call(?SERVER, {get_qbuf_orig_query, QBufRef}).
-
--spec get_qbuf_size(qbuf_ref()) ->
-                           {ok, non_neg_integer()} | {error, bad_qbuf_ref}.
-%% @doc Report the qbuf total size (not the size of the files backing this buffer).
-get_qbuf_size(QBufRef) ->
-    gen_server:call(?SERVER, {get_qbuf_size, QBufRef}).
-
--spec get_total_size() -> non_neg_integer().
-%% @doc Compute the total size of all temp tables.
-get_total_size() ->
-    gen_server:call(?SERVER, get_total_size).
 
 -spec batch_put(qbuf_ref(), [data_row()]) ->
                        ok | {error, bad_qbuf_ref|overfull}.
@@ -328,29 +291,11 @@ schedule_tick(Pid) ->
 
 -spec handle_call(term(), pid() | {pid(), term()}, #state{}) -> {reply, term(), #state{}}.
 %% @private
-handle_call(get_qbufs, _From, State) ->
-    do_get_qbufs(State);
-
-handle_call(get_total_size, _From, State) ->
-    do_get_total_size(State);
-
 handle_call({get_or_create_qbuf, SQL, NSubqueries, OrigDDL, Options}, _From, State) ->
     do_get_or_create_qbuf(SQL, NSubqueries, OrigDDL, Options, State);
 
 handle_call({delete_qbuf, QBufRef}, _From, State) ->
     do_delete_qbuf(QBufRef, State);
-
-handle_call({qbuf_exists, QBufRef}, _From, State) ->
-    do_qbuf_exists(QBufRef, State);
-
-handle_call({get_qbuf_size, QBufRef}, _From, State) ->
-    do_get_qbuf_size(QBufRef, State);
-
-handle_call({get_qbuf_orig_query, QBufRef}, _From, State) ->
-    do_get_qbuf_orig_query(QBufRef, State);
-
-handle_call({is_qbuf_ready, QBufRef}, _From, State) ->
-    do_is_qbuf_ready(QBufRef, State);
 
 handle_call({batch_put, QBufRef, Data}, _From, State) ->
     do_batch_put(QBufRef, Data, State);
@@ -407,22 +352,6 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% do_thing functions
 %%%===================================================================
-
-do_get_qbufs(#state{qbufs = QBufs} = State) ->
-    Res = [{Ref, [{orig_qry, OrigQry},
-                  {is_ready, IsReady},
-                  {last_accessed, LastAccessed},
-                  {total_records, TotalRecords}]}
-           || {Ref, #qbuf{orig_qry      = OrigQry,
-                          is_ready      = IsReady,
-                          last_accessed = LastAccessed,
-                          total_records = TotalRecords}} <- QBufs],
-    {reply, Res, State}.
-
-
-do_get_total_size(#state{total_size = TotalSize} = State) ->
-    {reply, TotalSize, State}.
-
 
 do_get_or_create_qbuf(SQL, NSubqueries,
                       OrigDDL, Options,
@@ -484,15 +413,6 @@ do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
               ddl = ?DDL{table = Table}} ->
             ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
             {reply, ok, State0#state{qbufs = lists:keydelete(QBufRef, 1, QBufs0)}}
-    end.
-
-
-do_qbuf_exists(QBufRef, #state{qbufs = QBufs} = State) ->
-    case get_qbuf_record(QBufRef, QBufs) of
-        false ->
-            {reply, false, State};
-        _QBuf ->
-            {reply, true, State}
     end.
 
 
@@ -586,41 +506,6 @@ do_set_ready_waiting_process(QBufRef, Pid, #state{qbufs = QBufs0} = State0) ->
             State9 = State0#state{qbufs = lists:keyreplace(
                                             QBufRef, 1, QBufs0, {QBufRef, QBuf9})},
             {reply, ok, State9}
-    end.
-
-%% chunk_range(Rows, TsFieldIndex) ->
-%%     TSColumn = [lists:nth(TsFieldIndex, Row) || Row <- Rows],
-%%     {min(TSColumn), max(TSColumn)}.
-
-
-do_get_qbuf_size(QBufRef, #state{qbufs = QBufs} = State) ->
-    case get_qbuf_record(QBufRef, QBufs) of
-        false ->
-            {reply, {error, bad_qbuf_ref}, State};
-        #qbuf{is_ready = false} ->
-            {reply, {error, qbuf_not_ready}, State};
-        #qbuf{size = Size} ->
-            {reply, {ok, Size}, State}
-    end.
-
-do_get_qbuf_orig_query(QBufRef, #state{qbufs = QBufs} = State) ->
-    case get_qbuf_record(QBufRef, QBufs) of
-        false ->
-            {reply, {error, bad_qbuf_ref}, State};
-        #qbuf{is_ready = false} ->
-            {reply, {error, qbuf_not_ready}, State};
-        #qbuf{orig_qry = OrigQry} ->
-            {reply, {ok, OrigQry}, State}
-    end.
-
-do_is_qbuf_ready(QBufRef, #state{qbufs = QBufs} = State) ->
-    case get_qbuf_record(QBufRef, QBufs) of
-        false ->
-            {reply, {error, bad_qbuf_ref}, State};
-        #qbuf{is_ready = false} ->
-            {reply, {error, qbuf_not_ready}, State};
-        #qbuf{is_ready = IsReady} ->
-            {reply, {ok, IsReady}, State}
     end.
 
 
