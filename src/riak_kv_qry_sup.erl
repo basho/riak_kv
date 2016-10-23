@@ -59,7 +59,6 @@ init([]) ->
     Type = worker,
 
     NumFSMs = app_helper:get_env(riak_kv, timeseries_max_concurrent_queries),
-    MaxQ    = 3,
 
     MakeNamesFn = fun(N) ->
                           Int   = integer_to_list(N),
@@ -70,11 +69,22 @@ init([]) ->
                      Restart, Shutdown, Type, [riak_kv_qry_worker]} || X <- Names],
 
     Riak_kv_qry_q = {riak_kv_qry_queue,
-                     {riak_kv_qry_queue, start_link, [MaxQ]},
+                     {riak_kv_qry_queue, start_link,
+                      [
+                       app_helper:get_env(riak_kv, timeseries_query_queue_length)
+                      ]},
                      Restart, Shutdown, Type, [riak_kv_qry_queue]},
 
     Riak_kv_qry_b = {riak_kv_qry_buffers,
-                     {riak_kv_qry_buffers, start_link, []},
+                     {riak_kv_qry_buffers, start_link,
+                      [
+                       [app_helper:get_env(riak_kv, timeseries_query_buffers_root_path),
+                       app_helper:get_env(riak_kv, timeseries_query_max_returned_data_size),
+                       app_helper:get_env(riak_kv, timeseries_query_buffers_soft_watermark),
+                       app_helper:get_env(riak_kv, timeseries_query_buffers_hard_watermark),
+                       app_helper:get_env(riak_kv, timeseries_query_buffers_expire_ms),
+                       app_helper:get_env(riak_kv, timeseries_query_buffers_incomplete_release_ms)
+                      ]]},
                      Restart, Shutdown, Type, [riak_kv_qry_buffers]},
 
     {ok, {SupFlags, [

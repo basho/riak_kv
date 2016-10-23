@@ -43,7 +43,7 @@
 
 -behaviour(gen_server).
 
--export([start_link/0,
+-export([start_link/1,
          init/1,
          handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3
@@ -77,14 +77,6 @@
 
 -define(SERVER, ?MODULE).
 
-%% defaults for #state{} fields, settable in the Options proplist for
-%% gen_server:init/1
--define(SOFT_WATERMARK, 1024*1024*1024).  %% 1G
--define(HARD_WATERMARK, 4096*1024*1024).  %% 4G
--define(INCOMPLETE_QBUF_RELEASE_MSEC, 1*60*1000).  %% clean up incomplete buffers since last add_chunk
--define(QBUF_EXPIRE_MSEC, 5*1000).                 %% drop buffers clients are not interested in
--define(MAX_QUERY_DATA_SIZE, 5*1024*1024*1024).
-
 
 %%%===================================================================
 %%% API
@@ -93,7 +85,7 @@
 -spec get_or_create_qbuf(?SQL_SELECT{}, non_neg_integer(), ?DDL{}, proplists:proplist()) ->
                                 {ok, {new|existing, qbuf_ref()}} |
                                 {error, query_non_pageable|total_qbuf_size_limit_reached}.
-%% @doc (Maybe create and) return a new query buffer and set it up for
+%% @doc (Maybe create and) return a query buffer ref, set up for
 %%      receiving chunks of data from qry_worker.  Options can contain
 %%      `expire_msec` property, which will override the standard
 %%      expiry time from State.
@@ -233,33 +225,26 @@ make_qref(_) ->
          }).
 
 
--spec start_link() -> {ok, pid()} | ignore | {error, term()}.
-start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+-spec start_link(list()) -> {ok, pid()} | ignore | {error, term()}.
+start_link(Args) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, Args, []).
 
 
--spec init(proplists:proplist()) -> {ok, #state{}}.
-%% @private
-init(Options) ->
-    RootPath =
-        filename:join(
-          app_helper:get_prop_or_env(data_root, Options, eleveldb),  %% reuse eleveldb own root_path
-          "query_buffers"),
+-spec init([string() | integer()]) -> {ok, #state{}}.
+init([RootPath, MaxRetSize,
+      SoftWatermark, HardWatermark,
+      QBufExpireMsec, IncompleteQBufReleaseMsec]) ->
     _ = prepare_qbuf_dir(RootPath),
     State =
-        #state{soft_watermark =
-                   proplists:get_value(soft_watermark, Options, ?SOFT_WATERMARK),
-               hard_watermark =
-                   proplists:get_value(hard_watermark, Options, ?HARD_WATERMARK),
-               incomplete_qbuf_release_msec =
-                   proplists:get_value(incomplete_qbuf_release_msec, Options, ?INCOMPLETE_QBUF_RELEASE_MSEC),
-               qbuf_expire_msec =
-                   proplists:get_value(qbuf_expire_msec, Options, ?QBUF_EXPIRE_MSEC),
-               max_query_data_size =
-                   proplists:get_value(max_query_data_size, Options, ?MAX_QUERY_DATA_SIZE),
-               root_path =
-                   proplists:get_value(root_path, Options, RootPath)
+        #state{root_path                    = RootPath,
+               max_query_data_size          = MaxRetSize,
+               soft_watermark               = SoftWatermark,
+               hard_watermark               = HardWatermark,
+               qbuf_expire_msec             = QBufExpireMsec,
+               incomplete_qbuf_release_msec = IncompleteQBufReleaseMsec
               },
+
+    lager:info("query_buffers_data_root ~p", [RootPath]),
     Self = self(),
     _TickerPid = spawn_link(fun() -> schedule_tick(Self) end),
     {ok, State}.
