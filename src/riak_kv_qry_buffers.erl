@@ -243,9 +243,7 @@ init([RootPath, MaxRetSize,
                qbuf_expire_msec             = QBufExpireMsec,
                incomplete_qbuf_release_msec = IncompleteQBufReleaseMsec
               },
-
-    Self = self(),
-    _TickerPid = spawn_link(fun() -> schedule_tick(Self) end),
+    spawn_link(fun() -> schedule_tick() end),
     {ok, State}.
 
 prepare_qbuf_dir(RootPath) ->
@@ -266,10 +264,10 @@ prepare_qbuf_dir(RootPath) ->
             {error, qbuf_create_root_dir}
     end.
 
-schedule_tick(Pid) ->
+schedule_tick() ->
     gen_server:cast(?SERVER, tick),
     timer:sleep(1000),
-    schedule_tick(Pid).
+    schedule_tick().
 
 -spec handle_call(term(), pid() | {pid(), term()}, #state{}) -> {reply, term(), #state{}}.
 %% @private
