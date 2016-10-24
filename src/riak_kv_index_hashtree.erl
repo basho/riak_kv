@@ -655,12 +655,12 @@ hash_index_data(IndexData) when is_list(IndexData) ->
     riak_core_util:sha(Bin).
 
 
-do_participate_in_sweep(Pid, #state{index = Index, trees = Trees} = State) ->
+do_participate_in_sweep(Pid, #state{index = Index, trees = Trees, version = Version} = State) ->
     Locked = get_all_locks(build, Index, Pid),
     case Locked of
         true ->
             State2 = clear_tree(State),
-            FoldFun = fold_fun(self(), has_index_tree(Trees)),
+            FoldFun = fold_fun(self(), has_index_tree(Trees), Version),
             InitialAcc = 0,
             {reply, {ok, FoldFun, InitialAcc}, State2#state{built=Pid}};
         _ ->
@@ -669,17 +669,17 @@ do_participate_in_sweep(Pid, #state{index = Index, trees = Trees} = State) ->
 
 %% @doc Generate the folding function
 %% for a riak fold_req
--spec fold_fun(pid(), boolean()) -> fun().
-fold_fun(Tree, _HasIndexTree = false) ->
-    ObjectFoldFun = object_fold_fun(Tree),
+-spec fold_fun(pid(), boolean(), version()) -> fun().
+fold_fun(Tree, _HasIndexTree = false, Version) ->
+    ObjectFoldFun = object_fold_fun(Tree, Version),
     fun({BKey, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey, BucketProps),
             {ok, Acc}
     end;
-fold_fun(Tree, _HasIndexTree = true) ->
+fold_fun(Tree, _HasIndexTree = true, Version) ->
     %% Index AAE backend, so hash the indexes
-    ObjectFoldFun = object_fold_fun(Tree),
+    ObjectFoldFun = object_fold_fun(Tree, Version),
     IndexFoldFun = index_fold_fun(Tree),
     fun({BKey, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             BinBKey = term_to_binary(BKey),
@@ -688,9 +688,8 @@ fold_fun(Tree, _HasIndexTree = true) ->
             {ok, Acc}
     end.
 
--spec object_fold_fun(pid()) -> fun().
-object_fold_fun(Tree) ->
-    Version = get_version(Tree),
+-spec object_fold_fun(pid(), version()) -> fun().
+object_fold_fun(Tree, Version) ->
     fun(BKey, RObj, BinBKey, BucketProps) ->
             IndexN = riak_kv_util:get_index_n(BKey, BucketProps),
             insert([{IndexN, BinBKey, hash_object(BKey, RObj, Version)}],
