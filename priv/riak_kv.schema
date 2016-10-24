@@ -830,8 +830,20 @@ end
 {mapping, "riak_kv.query.timeseries.qbuf_root_path", "riak_kv.timeseries_query_buffers_root_path", [
   {datatype, directory},
   {default, "$(platform_data_dir)/query_buffers"},
+  {validators, ["validate_timeseries_query_buffers_root_path"]}
   hidden
 ]}.
+
+{validator,
+  "validate_timeseries_query_buffers_root_path",
+  "must be an absolute path with no .. elements",
+  fun(Dir) ->
+     case catch filename:split(Dir) of
+         ["/"|Rest] ->
+             not lists:member("..", Rest);
+         _ -> false
+     end
+  end}.
 
 %% @doc Max size (in bytes) of all query buffers below which new
 %% queries can be accepted. Does not affect existing queries for which
