@@ -150,7 +150,7 @@ make_qref(?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{col_names = ColNames},
   when OrderBy /= undefined ->
     Part0 = erlang:phash2(From),
     Part1 = erlang:phash2(ColNames),
-    Part2 = erlang:phash2(lists:sort(Where)),
+    Part2 = erlang:phash2(Where),
     Part3 = erlang:phash2(OrderBy),
     {ok,
      <<0,       %% marks an organic qref (1 = random qref for one-shot queries)
