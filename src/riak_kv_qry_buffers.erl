@@ -363,9 +363,10 @@ do_get_or_create_qbuf(SQL, NSubqueries,
             State9 = touch_qbuf(QBufRef, State0),
             {reply, {ok, {existing, QBufRef}}, State9};
         {ok, {new, QBufRef}} ->
-            if TotalSize > SoftWMark ->
+            case TotalSize > SoftWMark of
+                true ->
                     {reply, {error, total_qbuf_size_limit_reached}, State0};
-               el/=se ->
+                false ->
                     DDL = ?DDL{table = Table} = sql_to_ddl(OrigDDL, SQL),
                     lager:info("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
                     case riak_kv_qry_buffers_ldb:new_table(Table, RootPath) of
@@ -450,9 +451,10 @@ maybe_add_chunk(#qbuf{ldb_ref       = LdbRef,
                 Data,
                 TotalSize, HardWatermark) ->
     ChunkSize = compute_chunk_size(Data),
-    if TotalSize + ChunkSize > HardWatermark ->
+    case TotalSize + ChunkSize > HardWatermark of
+        true ->
             {error, total_qbuf_size_limit_reached};
-       el/=se ->
+        false ->
             %% ChunkId will be used to construct a new and unique key
             %% for each record. Ideally, this should be the serial
             %% number of the subquery.
@@ -524,9 +526,10 @@ do_fetch_limit(QBufRef,
                     ColNames = [Name || #riak_field_v1{name = Name} <- QBufFields],
                     ColTypes = [Type || #riak_field_v1{type = Type} <- QBufFields],
                     State9 =
-                        if not AllowQBufReuse ->  %% this is a one-shot query: delete it now
+                        case AllowQBufReuse of
+                            false ->  %% this is a one-shot query: delete it now
                                 kill_qbuf(QBufRef, State0);
-                           el/=se ->
+                            true ->
                                 touch_qbuf(QBufRef, State0)
                         end,
                     {reply, {ok, {ColNames, ColTypes, Rows}}, State9}
@@ -575,11 +578,12 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
                                expire_msec = ExpireMsec,  %% qbuf-specific, possibly overriden
                                last_accessed = LastAccessed}}) ->
                   ExpiresOn = advance_timestamp(LastAccessed, ExpireMsec),
-                  if ExpiresOn < Now ->
+                  case ExpiresOn < Now of
+                      true ->
                           ok = kill_qbuf(RootPath, Table, LdbRef),
                           lager:debug("Reaped expired qbuf ~p", [Table]),
                           false;
-                     el/=se ->
+                      false ->
                           true
                   end;
              ({_QBufRef, #qbuf{is_ready = false,
@@ -587,11 +591,12 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
                                ddl = ?DDL{table = Table},
                                last_accessed = LastAccessed}}) ->
                   ExpiresOn = advance_timestamp(LastAccessed, IncompleteQbufReleaseMsec),
-                  if ExpiresOn < Now ->
+                  case ExpiresOn < Now of
+                      true ->
                           ok = kill_qbuf(RootPath, Table, LdbRef),
                           lager:debug("Reaped incompletely filled qbuf ~p", [Table]),
                           false;
-                     el/=se ->
+                      false ->
                           true
                   end
           end,
