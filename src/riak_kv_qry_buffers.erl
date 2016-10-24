@@ -208,6 +208,7 @@ make_qref(_) ->
          }).
 
 -record(state, {
+          status :: init_in_progress | {init_failed, Reason::term()} | ready,
           qbufs = [] :: [{qbuf_ref(), #qbuf{}}],
           total_size = 0 :: non_neg_integer(),
           %% no new queries; accumulation allowed
@@ -234,9 +235,10 @@ start_link(Args) ->
 init([RootPath, MaxRetSize,
       SoftWatermark, HardWatermark,
       QBufExpireMsec, IncompleteQBufReleaseMsec]) ->
-    _ = prepare_qbuf_dir(RootPath),
+    spawn(fun() -> prepare_qbuf_dir(RootPath) end),
     State =
-        #state{root_path                    = RootPath,
+        #state{status                       = init_in_progress,
+               root_path                    = RootPath,
                max_query_data_size          = MaxRetSize,
                soft_watermark               = SoftWatermark,
                hard_watermark               = HardWatermark,
@@ -250,18 +252,18 @@ prepare_qbuf_dir(RootPath) ->
     %% don't bother recovering any leftover tables
     case riak_kv_ts_util:rm_rf(RootPath) of
         ok ->
-            ok;
+            gen_server:cast(?SERVER, {prepare_qbuf_dir, ok});
         {error, Reason1} ->
             lager:warning("Found old data in qbuf dir \"~s\" could not be removed: ~p", [RootPath, Reason1]),
-            not_quite_but_what_else_can_we_do
+            gen_server:cast(?SERVER, {prepare_qbuf_dir, ok})
             %% eleveldb:open may fail, users beware
     end,
     case filelib:ensure_dir(RootPath) of
         ok ->
-            ok;
+            gen_server:cast(?SERVER, {prepare_qbuf_dir, ok});
         {error, Reason2} ->
             lager:warning("Could not create qbuf dir \"~s\": ~p", [RootPath, Reason2]),
-            {error, qbuf_create_root_dir}
+            gen_server:cast(?SERVER, {prepare_qbuf_dir, {fail, Reason2}})
     end.
 
 schedule_tick() ->
@@ -270,7 +272,13 @@ schedule_tick() ->
     schedule_tick().
 
 -spec handle_call(term(), pid() | {pid(), term()}, #state{}) -> {reply, term(), #state{}}.
-%% @private
+handle_call(_Req, _From, State = #state{status = init_in_progress}) ->
+    {reply, {error, not_ready}, State};
+handle_call(_Req, _From, State = #state{status = {init_failed, _Reason}}) ->
+    %% don't report Reason: init_failed should be enough for smart
+    %% clients to look for it in the logs
+    {reply, {error, init_failed}, State};
+
 handle_call({get_or_create_qbuf, SQL, NSubqueries, OrigDDL, Options}, _From, State) ->
     do_get_or_create_qbuf(SQL, NSubqueries, OrigDDL, Options, State);
 
@@ -300,6 +308,10 @@ handle_call({set_max_query_data_size, Value}, _From, State) ->
 
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
+handle_cast({prepare_qbuf_dir, ok}, State) ->
+    {noreply, State#state{status = ready}};
+handle_cast({prepare_qbuf_dir, {error, Reason}}, State) ->
+    {noreply, State#state{status = {init_failed, Reason}}};
 handle_cast(tick, State) ->
     do_reap_expired_qbufs(State);
 handle_cast(_Msg, State) ->
