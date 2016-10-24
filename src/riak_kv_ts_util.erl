@@ -712,7 +712,12 @@ rm_rf(Dir) ->
     rm_direntries(Dir, filelib:wildcard("*", flat_format("~s", [Dir]))).
 
 rm_direntries(Dir, []) ->
-    file:del_dir(Dir);
+    case file:del_dir(Dir) of
+        {error, enoent} ->
+            ok;
+        OkOrOther ->
+            OkOrOther
+    end;
 rm_direntries(Dir, [F|Rest]) ->
     Entry = filename:join(Dir, F),
     Res =
