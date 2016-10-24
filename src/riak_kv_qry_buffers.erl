@@ -267,7 +267,7 @@ prepare_qbuf_dir(RootPath) ->
     end.
 
 schedule_tick(Pid) ->
-    Pid ! tick,
+    gen_server:cast(?SERVER, tick),
     timer:sleep(1000),
     schedule_tick(Pid).
 
@@ -302,18 +302,17 @@ handle_call({set_max_query_data_size, Value}, _From, State) ->
 
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
-%% @private
+handle_cast(tick, State) ->
+    do_reap_expired_qbufs(State);
 handle_cast(_Msg, State) ->
     lager:warning("Not handling cast message ~p", [_Msg]),
     {noreply, State}.
 
 
 -spec handle_info(term(), #state{}) -> {noreply, #state{}}.
-handle_info(tick, State) ->
-    do_reap_expired_qbufs(State);
 handle_info({streaming_end, _Ref}, State) ->
     %% ignore streaming_end messages when they arrive to indicate
-    %% eleveldb:fold has reached the end of range
+    %% eleveldb:fold has reached an end of range
     {noreply, State};
 handle_info(_Msg, State) ->
     lager:warning("Not handling info message ~p", [_Msg]),
