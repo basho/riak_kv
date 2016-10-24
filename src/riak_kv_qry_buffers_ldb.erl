@@ -41,7 +41,7 @@
 -spec new_table(binary(), string()) -> {ok, eleveldb:db_ref()} | {error, term()}.
 new_table(Table, Root) ->
     Path = filename:join(Root, binary_to_list(Table)),
-    _ = os:cmd(fmt("mkdir -p '~s'", [Path])),
+    _ = filelib:ensure_dir(Path),
     %% Important settings are is_internal_db and write_buffer_size;
     %% others are set here provisionally, or keps at default values
     Options = [{create_if_missing, true},
@@ -58,15 +58,14 @@ new_table(Table, Root) ->
             {ok, LdbRef};
         {error, {Atom, _Message} = LdbError} ->
             lager:warning("qbuf eleveldb:open(~s) failed: ~p", [Path, LdbError]),
-            _ = os:cmd(fmt("rm -rf '~s'", [Path])),
+            riak_kv_ts_util:rm_rf(Path),
             {error, Atom}
     end.
 
 -spec delete_table(binary(), eleveldb:db_ref(), string()) -> ok.
 delete_table(Table, LdbRef, Root) ->
     ok = eleveldb:close(LdbRef),
-    _ = os:cmd(
-          fmt("rm -rf '~s'", [filename:join(Root, Table)])),
+    riak_kv_ts_util:rm_rf(filename:join(Root, Table)),
     ok.
 
 
@@ -167,7 +166,3 @@ fetch_rows(LdbRef, Offset, LimitOrUndef) ->
         %% {error, Reason} ->
         %%     {error, Reason}
     end.
-
-
-fmt(F, A) ->
-    lists:flatten(io_lib:format(F, A)).

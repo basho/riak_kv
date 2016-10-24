@@ -244,28 +244,25 @@ init([RootPath, MaxRetSize,
                incomplete_qbuf_release_msec = IncompleteQBufReleaseMsec
               },
 
-    lager:info("query_buffers_data_root ~p", [RootPath]),
     Self = self(),
     _TickerPid = spawn_link(fun() -> schedule_tick(Self) end),
     {ok, State}.
 
 prepare_qbuf_dir(RootPath) ->
     %% don't bother recovering any leftover tables
-    case os:cmd(
-           fmt("rm -rf '~s'", [RootPath])) of
-        "" ->
-            fine;
-        StdErr1 ->
-            lager:warning("Found old data in qbuf dir \"~s\" could not be removed: ~s", [RootPath, StdErr1]),
+    case riak_kv_ts_util:rm_rf(RootPath) of
+        ok ->
+            ok;
+        {error, Reason1} ->
+            lager:warning("Found old data in qbuf dir \"~s\" could not be removed: ~p", [RootPath, Reason1]),
             not_quite_but_what_else_can_we_do
             %% eleveldb:open may fail, users beware
     end,
-    case os:cmd(
-           fmt("mkdir -p '~s'/*", [RootPath])) of
-        "" ->
+    case filelib:ensure_dir(RootPath) of
+        ok ->
             ok;
-        StdErr2 ->
-            lager:warning("Could not create qbuf dir \"~s\": ~s", [RootPath, StdErr2]),
+        {error, Reason2} ->
+            lager:warning("Could not create qbuf dir \"~s\": ~p", [RootPath, Reason2]),
             {error, qbuf_create_root_dir}
     end.
 
@@ -324,12 +321,18 @@ handle_info(_Msg, State) ->
 
 
 -spec terminate(term(), #state{}) -> term().
-%% @private
-terminate(_Reason, _State) ->
+terminate(_Reason, #state{qbufs = QBufs,
+                          root_path = RootPath}) ->
+    [lager:info("cleaning up ~b buffer(s)", [length(QBufs)]) || QBufs /= []],
+    lists:foreach(
+      fun({_QBufRef, #qbuf{ldb_ref = LdbRef,
+                           ddl = ?DDL{table = Table}}}) ->
+              kill_qbuf(RootPath, Table, LdbRef)
+      end,
+      QBufs),
     ok.
 
 -spec code_change(term() | {down, term()}, #state{}, term()) -> {ok, #state{}}.
-%% @private
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
