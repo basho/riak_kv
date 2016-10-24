@@ -28,10 +28,10 @@
 %%   RIAK_TEST_NODE="dev1@127.0.0.1"
 %%   RIAK_TEST_COOKIE="riak"
 %%   RIAK_EUNIT_NODE="eunit@127.0.0.1"
+-module(rest_url_encoding_test).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--module(rest_url_encoding_test).
 -compile(export_all).
 
 url_encoding_test_() ->
