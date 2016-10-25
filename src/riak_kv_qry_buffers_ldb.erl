@@ -86,7 +86,7 @@ add_rows(LdbRef, Rows, ChunkId,
                   %% a. Form a new key from ORDER BY fields
                   KeyRaw = [lists:nth(Pos, Row) || Pos <- KeyFieldPositions],
                   %% b. Negate values in columns marked as DESC in ORDER BY clause
-                  KeyOrd = [maybe_negate(F, AscDesc, Nulls)
+                  KeyOrd = [make_sorted_keys(F, AscDesc, Nulls)
                             || {F, {AscDesc, Nulls}} <- lists:zip(KeyRaw, OrdByFieldQualifiers)],
                   %% c. Combine with chunk id and row idx to ensure uniqueness, and encode.
                   KeyEnc = sext:encode({KeyOrd, ChunkId, Idx}),
@@ -101,21 +101,21 @@ add_rows(LdbRef, Rows, ChunkId,
             {error, ldb_put_failed}
     end.
 
-maybe_negate([], desc, nulls_first) ->
+make_sorted_keys([], desc, nulls_first) ->
     0;     %% sort before entupled value
-maybe_negate([], asc, nulls_last) ->
+make_sorted_keys([], asc, nulls_last) ->
     <<>>;  %% sort after entupled value
-maybe_negate([], desc, nulls_last) ->
+make_sorted_keys([], desc, nulls_last) ->
     <<>>;
-maybe_negate([], asc, nulls_first) ->
+make_sorted_keys([], asc, nulls_first) ->
     0;
-maybe_negate(F, asc, _) ->
+make_sorted_keys(F, asc, _) ->
     {F};
-maybe_negate(F, desc, _) when is_number(F) ->
+make_sorted_keys(F, desc, _) when is_number(F) ->
     {-F};
-maybe_negate(F, desc, _) when is_binary(F) ->
+make_sorted_keys(F, desc, _) when is_binary(F) ->
     {[<<bnot X>> || <<X>> <= F]};
-maybe_negate(F, desc, _) when is_boolean(F) ->
+make_sorted_keys(F, desc, _) when is_boolean(F) ->
     {not F}.
 
 
