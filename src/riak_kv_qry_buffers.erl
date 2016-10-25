@@ -53,7 +53,7 @@
          batch_put/2,           %% emulate INSERT (new Chunk collected by worker for a query Ref)
          delete_qbuf/1,         %% drop a table by Ref
          fetch_limit/3,         %% emulate SELECT
-         get_or_create_qbuf/4,  %% new Query arrives, with some Options
+         get_or_create_qbuf/5,  %% new Query arrives, with some Options
          get_qbuf_expiry/1,
          get_max_query_data_size/0,
          set_max_query_data_size/1,
@@ -82,15 +82,18 @@
 %%% API
 %%%===================================================================
 
--spec get_or_create_qbuf(?SQL_SELECT{}, non_neg_integer(), ?DDL{}, proplists:proplist()) ->
+-spec get_or_create_qbuf(?SQL_SELECT{}, non_neg_integer(),
+                         #riak_sel_clause_v1{}, [riak_kv_qry_compiler:sorter()],
+                         proplists:proplist()) ->
                                 {ok, {new|existing, qbuf_ref()}} |
                                 {error, query_non_pageable|total_qbuf_size_limit_reached}.
 %% @doc (Maybe create and) return a query buffer ref, set up for
 %%      receiving chunks of data from qry_worker.  Options can contain
 %%      `expire_msec` property, which will override the standard
 %%      expiry time from State.
-get_or_create_qbuf(SQL, NSubqueries, OrigDDL, Options) ->
-    gen_server:call(?SERVER, {get_or_create_qbuf, SQL, NSubqueries, OrigDDL, Options}).
+get_or_create_qbuf(SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) ->
+    gen_server:call(?SERVER, {get_or_create_qbuf, SQL, NSubqueries,
+                              CompiledSelect, CompiledOrderBy, Options}).
 
 -spec delete_qbuf(qbuf_ref()) -> ok.
 %% @doc Dispose of this query buffer (do nothing if it does not exist).
@@ -279,8 +282,8 @@ handle_call(_Req, _From, State = #state{status = {init_failed, _Reason}}) ->
     %% clients to look for it in the logs
     {reply, {error, init_failed}, State};
 
-handle_call({get_or_create_qbuf, SQL, NSubqueries, OrigDDL, Options}, _From, State) ->
-    do_get_or_create_qbuf(SQL, NSubqueries, OrigDDL, Options, State);
+handle_call({get_or_create_qbuf, SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options}, _From, State) ->
+    do_get_or_create_qbuf(SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options, State);
 
 handle_call({delete_qbuf, QBufRef}, _From, State) ->
     do_delete_qbuf(QBufRef, State);
@@ -350,8 +353,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%% do_thing functions
 %%%===================================================================
 
-do_get_or_create_qbuf(SQL, NSubqueries,
-                      OrigDDL, Options,
+do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
+                      NSubqueries, CompiledSelect, CompiledOrderBy,
+                      Options,
                       #state{qbufs            = QBufs0,
                              soft_watermark   = SoftWMark,
                              root_path        = RootPath,
@@ -367,7 +371,8 @@ do_get_or_create_qbuf(SQL, NSubqueries,
                 true ->
                     {reply, {error, total_qbuf_size_limit_reached}, State0};
                 false ->
-                    DDL = ?DDL{table = Table} = sql_to_ddl(OrigDDL, SQL),
+                    DDL = ?DDL{table = Table} =
+                        sql_to_ddl(OrigTable, CompiledSelect, CompiledOrderBy),
                     lager:info("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
                     case riak_kv_qry_buffers_ldb:new_table(Table, RootPath) of
                         {ok, LdbRef} ->
@@ -620,23 +625,13 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
 %% original query comes here not compiled and therefore, has fields
 %% appearing as `{identifier, Field}` rather than `Field` (and has no
 %% types).
-sql_to_ddl(OrigDDL, OrigSQL) ->
-    %% We compile the original SQL again (only the parts we need,
-    %% i.e., without WHERE or GROUP BY). We can match on {ok, SQL}
-    %% because any errors will have been detected when the compilation
-    %% chain was run on the query in riak_kv_qry_compiler.
-    {ok, CompiledSelect} = riak_kv_qry_compiler:compile_select_clause(OrigDDL, OrigSQL),
-    {ok, ?SQL_SELECT{'SELECT'   = Select,
-                     'FROM'     = From,
-                     'ORDER BY' = OrderBy}} =
-        riak_kv_qry_compiler:compile_order_by(
-          {ok, OrigSQL?SQL_SELECT{'SELECT' = CompiledSelect}}),
-    ?DDL{table         = make_qbuf_id(From, Select, OrderBy),
-         fields        = make_fields_from_select(Select),
+sql_to_ddl(Table, CompiledSelect, CompiledOrderBy) ->
+    ?DDL{table         = make_qbuf_id(Table, CompiledSelect, CompiledOrderBy),
+         fields        = make_fields_from_select(CompiledSelect),
          partition_key = none,
          %% this ensures the right natural order in the newly created
          %% eleveldb
-         local_key     = make_lk_from_orderby(OrderBy)}.
+         local_key     = make_lk_from_orderby(CompiledOrderBy)}.
 
 make_qbuf_id(From, Select, OrderBy) ->
     list_to_binary(

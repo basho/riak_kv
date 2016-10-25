@@ -288,12 +288,18 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                 {error,_} = Error ->
                     Error;
                 {ok, SubQueries} ->
+                    %% these fields are used to create a DDL for the query buffer table;
+                    %% we extract them here to avoid doing another compilation of OrigQry
+                    %% in riak_kv_qry_buffers:get_or_create_qbuf
+                    ?SQL_SELECT{'SELECT' = CompiledSelect,
+                                'ORDER BY' = CompiledOrderBy} = hd(SubQueries),
                     FullCycle =
                         fun(QBufRef) ->
                             maybe_await_query_results(
                               riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL, QBufRef))
                         end,
-                    case maybe_create_query_buffer(SQL, length(SubQueries), DDL, []) of
+                    case maybe_create_query_buffer(
+                           SQL, length(SubQueries), CompiledSelect, CompiledOrderBy, []) of
                         {error, Reason} ->
                             %% query buffers are non-optional for
                             %% ORDER BY queries
@@ -318,15 +324,18 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
     end.
 
 
--spec maybe_create_query_buffer(?SQL_SELECT{}, pos_integer(), ?DDL{}, proplists:proplist()) ->
+-spec maybe_create_query_buffer(?SQL_SELECT{}, pos_integer(),
+                                #riak_sel_clause_v1{}, [riak_kv_qry_compiler:sorter()],
+                                proplists:proplist()) ->
                                        {ok, {new|existing, riak_kv_qry_buffers:qbuf_ref()} |
                                              undefined} |
                                        {error, any()}.
 maybe_create_query_buffer(?SQL_SELECT{'ORDER BY' = undefined},  %% LIMIT implies ORDER BY
-                          _NSubQueries, _DDL, _Options) ->
+                          _NSubQueries, _CompiledSelect, _CompiledOrderBy, _Options) ->
     {ok, undefined};
-maybe_create_query_buffer(SQL, NSubqueries, DDL, Options) ->
-    case riak_kv_qry_buffers:get_or_create_qbuf(SQL, NSubqueries, DDL, Options) of
+maybe_create_query_buffer(SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) ->
+    case riak_kv_qry_buffers:get_or_create_qbuf(
+           SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) of
         {ok, QBufRefNewOrExisting} ->
             {ok, QBufRefNewOrExisting};
         {error, Reason} ->
