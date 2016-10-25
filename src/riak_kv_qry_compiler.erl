@@ -51,12 +51,11 @@
 -type sorter()           :: {binary(), asc|desc, nulls_first|nulls_last}.
 
 
--export_type([
-    combinator/0,
-    limit/0, offset/0,
-    operator/0,
-    sorter/0
-]).
+-export_type([combinator/0,
+              limit/0,
+              offset/0,
+              operator/0,
+              sorter/0]).
 -export_type([where_props/0]).
 
 -define(MAX_QUERY_QUANTA, 1000).  %% cap the number of subqueries the compiler will emit
@@ -2379,6 +2378,53 @@ group_by_column_not_in_the_table_test() ->
     ?assertError(
         {unknown_column,{<<"x">>,[<<"a">>,<<"b">>]}},
         compile(DDL, Q1)
+    ).
+
+order_by_with_pass_1_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "b sint64, "
+        "PRIMARY KEY ((a), a))"),
+    {ok, Q1} = get_query(
+        "SELECT b FROM t "
+        "WHERE a = 1 LIMIT 6"),
+    {ok, [Q2]} = compile(DDL, Q1),
+    ?assertEqual(
+        [],
+        Q2?SQL_SELECT.'ORDER BY'
+    ),
+    ?assertEqual(
+        6,
+        Q2?SQL_SELECT.'LIMIT'
+    ),
+    ?assertEqual(
+        0,
+        Q2?SQL_SELECT.'OFFSET'
+    ).
+
+order_by_with_pass_2_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "b sint64, "
+        "c sint64, "
+        "PRIMARY KEY ((a), a))"),
+    {ok, Q1} = get_query(
+        "SELECT b FROM t "
+        "WHERE a = 1 ORDER BY a asc, c, b nulls first limit 11 offset 3"),
+    {ok, [Q2]} = compile(DDL, Q1),
+    ?assertEqual(
+        [{<<"a">>, asc, nulls_last}, {<<"c">>, asc, nulls_last}, {<<"b">>, asc, nulls_first}],
+        Q2?SQL_SELECT.'ORDER BY'
+    ),
+    ?assertEqual(
+        11,
+        Q2?SQL_SELECT.'LIMIT'
+    ),
+    ?assertEqual(
+        3,
+        Q2?SQL_SELECT.'OFFSET'
     ).
 
 order_by_with_aggregate_calc_type_test() ->
