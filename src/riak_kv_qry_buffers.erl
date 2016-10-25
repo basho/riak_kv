@@ -76,7 +76,7 @@
 -include("riak_kv_ts.hrl").
 
 -define(SERVER, ?MODULE).
-
+-define(TIMER_TICK_MSEC, 1000).
 
 %%%===================================================================
 %%% API
@@ -271,7 +271,7 @@ prepare_qbuf_dir(RootPath) ->
 
 schedule_tick() ->
     gen_server:cast(?SERVER, tick),
-    timer:sleep(1000),
+    timer:sleep(?TIMER_TICK_MSEC),
     schedule_tick().
 
 -spec handle_call(term(), pid() | {pid(), term()}, #state{}) -> {reply, term(), #state{}}.
