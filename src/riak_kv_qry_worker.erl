@@ -439,7 +439,7 @@ prepare_final_results(#state{qbuf_ref = QBufRef,
             prepare_final_results2(Select, FetchedRows);
         {error, qbuf_not_ready} ->
             riak_kv_qry_buffers:set_ready_waiting_process(
-              QBufRef, self()),
+              QBufRef, fun(Msg) -> self() ! Msg end),
             receive
                 {qbuf_ready, QBufRef} ->
                     prepare_final_results(State)

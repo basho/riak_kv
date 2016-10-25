@@ -58,7 +58,7 @@
          get_max_query_data_size/0,
          set_max_query_data_size/1,
          set_qbuf_expiry/2,
-         set_ready_waiting_process/2,  %% notify a Pid when all chunks are here
+         set_ready_waiting_process/2,  %% notify a process when all chunks are here
 
          %% utility functions
          make_qref/1
@@ -106,10 +106,10 @@ delete_qbuf(QBufRef) ->
 batch_put(QBufRef, Data) ->
     gen_server:call(?SERVER, {batch_put, QBufRef, Data}).
 
--spec set_ready_waiting_process(qbuf_ref(), pid()) -> ok | {error, bad_qbuf_ref}.
+-spec set_ready_waiting_process(qbuf_ref(), function()) -> ok | {error, bad_qbuf_ref}.
 %% @doc Set a process to notify on qbuf completion
-set_ready_waiting_process(QBufRef, Pid) ->
-    gen_server:call(?SERVER, {set_ready_waiting_process, QBufRef, Pid}).
+set_ready_waiting_process(QBufRef, SelfNotifierFun) ->
+    gen_server:call(?SERVER, {set_ready_waiting_process, QBufRef, SelfNotifierFun}).
 
 -spec fetch_limit(qbuf_ref(), undefined | pos_integer(), undefined | non_neg_integer()) ->
                     {ok, riak_kv_qry:query_tabular_result()} |
@@ -206,8 +206,9 @@ make_qref(_) ->
           %% precomputed key field positions
           key_field_positions :: [non_neg_integer()],
 
-          %% process waiting for this qbuf ready status
-          ready_waiting_pid :: pid() | undefined
+          %% a fun to notify some process waiting for this qbuf ready
+          %% status
+          ready_waiting_notifier :: function() | undefined
          }).
 
 -record(state, {
@@ -291,8 +292,8 @@ handle_call({delete_qbuf, QBufRef}, _From, State) ->
 handle_call({batch_put, QBufRef, Data}, _From, State) ->
     do_batch_put(QBufRef, Data, State);
 
-handle_call({set_ready_waiting_process, QBufRef, Pid}, _From, State) ->
-    do_set_ready_waiting_process(QBufRef, Pid, State);
+handle_call({set_ready_waiting_process, QBufRef, SelfNotifierFun}, _From, State) ->
+    do_set_ready_waiting_process(QBufRef, SelfNotifierFun, State);
 
 handle_call({fetch_limit, QBufRef, Limit, Offset}, _From, State) ->
     do_fetch_limit(QBufRef, Limit, Offset, State);
@@ -431,12 +432,12 @@ do_batch_put(QBufRef, Data, #state{qbufs          = QBufs0,
             case maybe_add_chunk(
                    QBuf0, Data, TotalSize0, HardWatermark) of
                 {ok, #qbuf{is_ready = IsReady,
-                           ready_waiting_pid = ReadyWaitingPid} = QBuf} ->
+                           ready_waiting_notifier = SelfNotifierFun} = QBuf} ->
                     State9 = State0#state{total_size = TotalSize0 + QBuf#qbuf.size,
                                           qbufs = lists:keyreplace(
                                                     QBufRef, 1, QBufs0, {QBufRef, QBuf})},
                     maybe_inform_waiting_process(
-                      IsReady, ReadyWaitingPid, QBufRef),
+                      IsReady, SelfNotifierFun, QBufRef),
                     {reply, ok, State9};
                 {error, Reason} ->
                     {reply, {error, Reason}, State0}
@@ -487,14 +488,13 @@ get_ordby_field_qualifiers({_, Dir, NullsGroup}) ->
     {Dir, NullsGroup}.
 
 
-maybe_inform_waiting_process(true, Pid, QBufRef) when is_pid(Pid) ->
-    lager:debug("notifying waiting pid ~p", [Pid]),
-    Pid ! {qbuf_ready, QBufRef};
-maybe_inform_waiting_process(_IsReady, _Pid, _QBufRef) ->
+maybe_inform_waiting_process(true, SelfNotifierFun, QBufRef) when is_function(SelfNotifierFun) ->
+    SelfNotifierFun({qbuf_ready, QBufRef});
+maybe_inform_waiting_process(_IsReady, _SelfNotifierFun, _QBufRef) ->
     nop.
 
 
-do_set_ready_waiting_process(QBufRef, Pid, #state{qbufs = QBufs0} = State0) ->
+do_set_ready_waiting_process(QBufRef, SelfNotifierFun, #state{qbufs = QBufs0} = State0) ->
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
@@ -502,11 +502,10 @@ do_set_ready_waiting_process(QBufRef, Pid, #state{qbufs = QBufs0} = State0) ->
             %% qbuf is already ready: don't wait for the next
             %% batch_put to turn round and notify the process (because
             %% there will be no more batch puts)
-            Pid ! {qbuf_ready, QBufRef},
+            SelfNotifierFun({qbuf_ready, QBufRef}),
             {reply, ok, State0};
         QBuf0 ->
-            lager:debug("set to notify process ~p on qbuf ~p completion", [Pid, QBufRef]),
-            QBuf9 = QBuf0#qbuf{ready_waiting_pid = Pid},
+            QBuf9 = QBuf0#qbuf{ready_waiting_notifier = SelfNotifierFun},
             State9 = State0#state{qbufs = lists:keyreplace(
                                             QBufRef, 1, QBufs0, {QBufRef, QBuf9})},
             {reply, ok, State9}
