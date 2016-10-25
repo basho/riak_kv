@@ -733,13 +733,13 @@ end
 {mapping, "riak_kv.query.timeseries.max_quanta_span", "riak_kv.timeseries_query_max_quanta_span", [
   {default, 5000},
   {datatype, integer},
-  {validators, ["validate_max_quanta_span"]}
+  {validators, ["validate_timeseries_query_max_quanta_span"]}
 ]}.
 
 {validator,
-  "validate_max_quanta_span",
+  "validate_timeseries_query_max_quanta_span",
   "must be an integer > 0 and =< 10000",
-  fun(Value) when is_integer(Value) andalso Value > 1 andalso Value =< 10000 -> true;
+  fun(Value) when is_integer(Value) andalso Value > 0 andalso Value =< 10000 -> true;
      (_) -> false
   end}.
 
@@ -766,13 +766,13 @@ end
 
 %% @doc Largest estimated size of the data a query can return to the client.
 {mapping, "riak_kv.query.timeseries.max_returned_data_size", "riak_kv.timeseries_query_max_returned_data_size", [
-  {default, 1*1000*1000},
+  {default, 10*1000*1000},
   {datatype, integer},
-  {validators, ["validate_max_returned_data_size"]}
+  {validators, ["validate_timeseries_query_max_returned_data_size"]}
 ]}.
 
 {validator,
-  "validate_max_returned_data_size",
+  "validate_timeseries_query_max_returned_data_size",
   "must be an integer > 0 and =< 10000000 (10M)",
   fun(Value) when is_integer(Value) andalso Value > 1 andalso Value =< 10000000 -> true;
      (_) -> false
@@ -830,20 +830,9 @@ end
 {mapping, "riak_kv.query.timeseries.qbuf_root_path", "riak_kv.timeseries_query_buffers_root_path", [
   {datatype, directory},
   {default, "$(platform_data_dir)/query_buffers"},
-  {validators, ["validate_timeseries_query_buffers_root_path"]}
+  {validators, ["validate_timeseries_query_buffers_root_path"]},
   hidden
 ]}.
-
-{validator,
-  "validate_timeseries_query_buffers_root_path",
-  "must be an absolute path with no .. elements",
-  fun(Dir) ->
-     case catch filename:split(Dir) of
-         ["/"|Rest] ->
-             not lists:member("..", Rest);
-         _ -> false
-     end
-  end}.
 
 %% @doc Max size (in bytes) of all query buffers below which new
 %% queries can be accepted. Does not affect existing queries for which
@@ -881,13 +870,13 @@ end
 %% for longer than this value (rounded upward to the next whole
 %% second) will be deleted.
 {mapping, "riak_kv.query.timeseries.qbuf_expire_ms", "riak_kv.timeseries_query_buffers_expire_ms", [
-  {default, 5*1000},
+  {default, 5000},
   {datatype, integer},
   {validators, ["validate_timeseries_query_buffers_expire_ms"]}
 ]}.
 
 {validator,
-  "validate_",
+  "validate_timeseries_query_buffers_expire_ms",
   "must be an integer > 0",
   fun(Value) when is_integer(Value) andalso Value > 0 -> true;
      (_) -> false
@@ -898,7 +887,7 @@ end
 %% to the next whole second) will be cancelled. It should not be
 %% greater than @see riak_kv.query.timeseries.timeout.
 {mapping, "riak_kv.query.timeseries.qbuf_incomplete_release_ms", "riak_kv.timeseries_query_buffers_incomplete_release_ms", [
-  {default, 9*1000},
+  {default, 9000},
   {datatype, integer},
   {validators, ["validate_timeseries_query_buffers_incomplete_release_ms"]}
 ]}.
@@ -909,4 +898,3 @@ end
   fun(Value) when is_integer(Value) andalso Value > 0 -> true;
      (_) -> false
   end}.
-
