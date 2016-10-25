@@ -86,8 +86,8 @@ add_rows(LdbRef, Rows, ChunkId,
                   %% a. Form a new key from ORDER BY fields
                   KeyRaw = [lists:nth(Pos, Row) || Pos <- KeyFieldPositions],
                   %% b. Negate values in columns marked as DESC in ORDER BY clause
-                  KeyOrd = [maybe_negate(F, Dir, NullsGroup)
-                            || {F, {Dir, NullsGroup}} <- lists:zip(KeyRaw, OrdByFieldQualifiers)],
+                  KeyOrd = [maybe_negate(F, AscDesc, Nulls)
+                            || {F, {AscDesc, Nulls}} <- lists:zip(KeyRaw, OrdByFieldQualifiers)],
                   %% c. Combine with chunk id and row idx to ensure uniqueness, and encode.
                   KeyEnc = sext:encode({KeyOrd, ChunkId, Idx}),
                   %% d. Encode the record (don't bother constructing a

@@ -484,8 +484,8 @@ maybe_add_chunk(#qbuf{ldb_ref       = LdbRef,
             end
     end.
 
-get_ordby_field_qualifiers({_, Dir, NullsGroup}) ->
-    {Dir, NullsGroup}.
+get_ordby_field_qualifiers({_, AscDesc, Nulls}) ->
+    {AscDesc, Nulls}.
 
 
 maybe_inform_waiting_process(true, SelfNotifierFun, QBufRef) when is_function(SelfNotifierFun) ->
@@ -648,7 +648,7 @@ make_fields_from_select(#riak_sel_clause_v1{col_return_types = ColReturnTypes,
 %% store OrderingDirection in ?SQL_PARAM where it belongs. Until then,
 %% we keep the ordering qualifiers in a makeshift #qbuf{} field outside DDL.
 make_lk_from_orderby(OrderBy) ->
-    #key_v1{ast = [?SQL_PARAM{name = [Field]} || {Field, _Dir, _NullsGroup} <- OrderBy]}.
+    #key_v1{ast = [?SQL_PARAM{name = [Field]} || {Field, _AscDesc, _Nulls} <- OrderBy]}.
 
 get_lk_field_positions(?DDL{fields = Fields, local_key = #key_v1{ast = LKAST}}) ->
     AsProplist =
@@ -661,8 +661,8 @@ join_fields(CC) ->
     iolist_to_binary(
       string:join(
         lists:map(
-          fun({F, Dir, NullsGroup}) ->
-                  fmt("~s.~c~c", [F, qualifier_char(Dir), qualifier_char(NullsGroup)]);
+          fun({F, AscDesc, Nulls}) ->
+                  fmt("~s.~c~c", [F, qualifier_char(AscDesc), qualifier_char(Nulls)]);
              (F) ->
                   fmt("~s", [F])
           end,
