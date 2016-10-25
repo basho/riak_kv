@@ -145,24 +145,17 @@ fetch_rows(LdbRef, Offset, LimitOrUndef) ->
            (_KV, {_, _, _, Acc}) ->
                 throw({break, Acc})
         end,
-    FoldRes =
+    {ok, Fetched} =
         try eleveldb:fold(
               LdbRef, FetchLimitFn,
               {Offset, LimitOrUndef, 0, []},
               [{fold_method, streaming}]) of
             {_, _, _N, Acc} ->
                 {ok, Acc}
-            %% {error, _Reason} = ER ->
-            %%     ER
         catch
             {break, Acc} ->
                 {ok, Acc}
         end,
-    case FoldRes of
-        {ok, Fetched} ->
-            Decoded =
-                [sext:decode(Row) || Row <- lists:reverse(Fetched)],
-            {ok, Decoded}
-        %% {error, Reason} ->
-        %%     {error, Reason}
-    end.
+    Decoded =
+        [sext:decode(Row) || Row <- lists:reverse(Fetched)],
+    {ok, Decoded}.
