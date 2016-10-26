@@ -773,8 +773,8 @@ end
 
 {validator,
   "validate_timeseries_query_max_returned_data_size",
-  "must be an integer > 0 and =< 10000000 (10M)",
-  fun(Value) when is_integer(Value) andalso Value > 1 andalso Value =< 10000000 -> true;
+  "must be an integer > 0",
+  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
      (_) -> false
   end}.
 
