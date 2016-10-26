@@ -96,11 +96,11 @@
 %% disk are modified.
 -ifdef(TEST).
 %% Use values so that test compile doesn't give 'unused vars' warning.
--define(INDEX(A,B,C), _=element(1,{A,B,C}), ok).
+-define(INDEX(A,B,C), _=element(1,{{_A1, _A2} = A,B,C}), ok).
 -define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
 -define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), _=element(1, {BProps}), false).
 -else.
--define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
+-define(INDEX(Objects, Reason, Partition), yz_kv:index(Objects, Reason, Partition)).
 -define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
 -define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), yz_kv:is_search_enabled_for_bucket(BProps)).
 -endif.
@@ -1458,7 +1458,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
-            ?INDEX(RObj, delete, Idx),
+            ?INDEX({RObj, no_old_object}, delete, Idx),
             delete_from_hashtree(Bucket, Key, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
@@ -1486,8 +1486,8 @@ prepare_put(State=#state{vnodeid=VId,
     %% old object to know how the indexes have changed.
     IndexBackend = is_indexed_backend(Mod, Bucket, ModState),
     IsSearchable = ?IS_SEARCH_ENABLED_FOR_BUCKET(BProps),
-    RequiresReadBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
-    case RequiresReadBeforeWrite of
+    SkipReqdBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
+    case SkipReqdBeforeWrite of
         true ->
             prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State);
         false ->
@@ -1509,7 +1509,7 @@ prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State) ->
         false ->
             RObj
     end,
-    {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State}.
+    {{true, {ObjToStore, no_old_object}}, PutArgs#putargs{is_index = false}, State}.
 
 prepare_read_before_write_put(#state{mod = Mod,
                                      modstate = ModState,
@@ -1540,26 +1540,19 @@ prepare_put_existing_object(#state{idx =Idx} = State,
     {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
     case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
         {oldobj, OldObj} ->
-            {{false, OldObj}, PutArgs, State2};
+            {{false, {OldObj, no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
             AMObj = enforce_allow_mult(NewObj, BProps),
             IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
             ObjToStore0 = maybe_prune_vclock(PruneTime, AMObj, BProps),
             ObjectToStore = maybe_do_crdt_update(Coord, CRDTOp, ActorId, ObjToStore0),
-            %% maybe_clean_search_siblings(BProps, OldObj),
-            determine_put_result(ObjectToStore, Idx, PutArgs, State2, IndexSpecs, IndexBackend)
+            determine_put_result(ObjectToStore, OldObj, Idx, PutArgs, State2, IndexSpecs, IndexBackend)
     end.
 
-%%maybe_clean_search_siblings(BProps, _OldObj) ->
-%%    case ?IS_SEARCH_ENABLED_FOR_BUCKET(BProps) of
-%%        true -> ok; %% clean_index_siblings(OldObj);
-%%        _ -> ok
-%%    end.
-
-determine_put_result({error, E}, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
+determine_put_result({error, E}, _, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
     {{fail, Idx, E}, PutArgs, State};
-determine_put_result(ObjToStore, _Idx, PutArgs, State, IndexSpecs, IndexBackend) ->
-    {{true, ObjToStore},
+determine_put_result(ObjToStore, OldObj, _Idx, PutArgs, State, IndexSpecs, IndexBackend) ->
+    {{true, {ObjToStore, OldObj}},
      PutArgs#putargs{index_specs = IndexSpecs,
                      is_index    = IndexBackend}, State}.
 
@@ -1598,7 +1591,7 @@ prepare_put_new_object(#state{idx =Idx} = State,
     {EpochId, State2} = new_key_epoch(State),
     RObj2 = maybe_update_vclock(Coord, RObj, EpochId, StartTime),
     RObj3 = maybe_do_crdt_update(Coord, CRDTOp, EpochId, RObj2),
-    determine_put_result(RObj3, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
+    determine_put_result(RObj3, no_old_object, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
 
 get_old_object_or_fake(true, Bucket, Key, Mod, ModState, _CacheClock) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
@@ -1654,17 +1647,17 @@ get_crdt_mod(Atom) when is_atom(Atom) -> Atom.
 
 perform_put({fail, _, _}=Reply, State, _PutArgs) ->
     {Reply, State};
-perform_put({false, Obj},
+perform_put({false, {Obj, _OldObj}},
             #state{idx=Idx}=State,
             #putargs{returnbody=true,
                      reqid=ReqID}) ->
     {{dw, Idx, Obj, ReqID}, State};
-perform_put({false, _Obj},
+perform_put({false, {_Obj, _OldObj}},
             #state{idx=Idx}=State,
             #putargs{returnbody=false,
                      reqid=ReqId}) ->
     {{dw, Idx, ReqId}, State};
-perform_put({true, Obj},
+perform_put({true, {_Obj, _OldObj}=Objects},
             State,
             #putargs{returnbody=RB,
                      bkey=BKey,
@@ -1677,13 +1670,13 @@ perform_put({true, Obj},
       false ->
         MaxCheckFlag = do_max_check
     end,
-    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
+    {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
     {Reply, State2}.
 
-actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, Obj, IndexSpecs, RB, ReqID, do_max_check, State).
+actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
+    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, State).
 
-actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag,
+actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFlag,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
@@ -1692,12 +1685,12 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag,
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
-            ?INDEX(Obj, put, Idx),
-            case RB of
+            ?INDEX({Obj, OldObj}, put, Idx),
+            Reply = case RB of
                 true ->
-                    Reply = {dw, Idx, Obj, ReqID};
+                    {dw, Idx, Obj, ReqID};
                 false ->
-                    Reply = {dw, Idx, ReqID}
+                    {dw, Idx, ReqID}
             end;
         {{error, Reason, UpdModState}, _EncodedVal} ->
             Reply = {fail, Idx, Reason}
@@ -1723,7 +1716,7 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
                                bkey=BKey,
                                reqid=undefined,
                                index_specs=[]},
-            case perform_put({true, RObj}, State, PutArgs) of
+            case perform_put({true, {RObj, no_old_object}}, State, PutArgs) of
                 {{fail, _, Reason}, UpdState}  ->
                     Reply = {error, Reason};
                 {_, UpdState} ->
@@ -2107,7 +2100,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     update_hashtree(Bucket, Key, DiffObj, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
-                    ?INDEX(DiffObj, handoff, Idx),
+                    ?INDEX({DiffObj, no_old_object}, handoff, Idx),
                     InnerRes;
                 {InnerRes, _Val} ->
                     InnerRes
@@ -2133,7 +2126,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                             update_hashtree(Bucket, Key, AMObj, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
-                            ?INDEX(AMObj, handoff, Idx),
+                            ?INDEX({AMObj, OldObj}, handoff, Idx),
                             InnerRes;
                         {InnerRes, _EncodedVal} ->
                             InnerRes
