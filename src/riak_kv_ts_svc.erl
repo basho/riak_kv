@@ -51,9 +51,11 @@
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
 -define(E_NOTFOUND,          1021).
+-define(E_INVALID_DELETE,    1022).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
+-define(EMPTYRESPONSE, {[], [], []}).
 
 -export([decode_query_common/2,
          process/2,
@@ -148,6 +150,14 @@ process({DDL = ?DDL{}, WithProperties}, State) ->
 
 process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
+
+process(M = #riak_sql_delete_query_v1{}, State) ->
+    case riak_kv_qry:submit(M, ?DDL{}) of
+        ok ->
+            {reply, make_tsqueryresp(?EMPTYRESPONSE), State};
+        {error, Err} ->
+            {reply, make_rpberrresp(?E_INVALID_DELETE, Err), State}
+    end;
 
 process(M = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);

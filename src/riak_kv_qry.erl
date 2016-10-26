@@ -79,7 +79,9 @@ submit(SQL = ?SQL_SELECT{}, DDL) ->
 submit(#riak_sql_show_tables_v1{} = _SQL, _DDL) ->
     do_show_tables();
 submit(#riak_sql_explain_query_v1{'EXPLAIN' = Select}, DDL) ->
-    do_explain(DDL, Select).
+    do_explain(DDL, Select);
+submit(#riak_sql_delete_query_v1{} = Q, _DDL) ->
+    do_delete(Q).
 
 %% ---------------------
 %% local functions
@@ -368,6 +370,26 @@ do_explain(DDL, Select) ->
             {error, Error};
         Rows ->
             {ok, {ColumnNames, ColumnTypes, Rows}}
+    end.
+
+%%
+%% Single Key DELETE statement
+%%
+
+do_delete(#riak_sql_delete_query_v1{'FROM'     = F,
+                                    'WHERE'    = W,
+                                    helper_mod = Mod}) ->
+    case Mod:get_delete_key(W) of
+        {ok, Key} -> 
+            case riak_kv_ts_api:delete_data(Key, F) of
+                ok                -> ok;
+                {error, notfound} -> ok;
+                {err, Err}        -> Msg1 = io_lib:format("Delete failed: ~p", [Err]),
+                              {err, Msg1}
+            end;
+        {false, Err} -> 
+            Msg2 = io_lib:format("Unable to get delete key: ~p", [Err]),
+            {err, Msg2}
     end.
 
 %%%===================================================================

@@ -136,8 +136,22 @@ build_sql_record_int(insert, SQL, _Cover) ->
         false ->
             {error, <<"Must provide exactly one table name">>}
     end;
+
 build_sql_record_int(show_tables, _SQL, _Cover) ->
-    {ok, #riak_sql_show_tables_v1{}}.
+    {ok, #riak_sql_show_tables_v1{}};
+
+build_sql_record_int(delete, SQL, _Cover) ->
+    T = proplists:get_value(table, SQL),
+    case is_binary(T) of
+        true ->
+            Mod = riak_ql_ddl:make_module_name(T),
+            W = proplists:get_value(where, SQL),
+            {ok, #riak_sql_delete_query_v1{'FROM'     = T,
+                                           'WHERE'    = W,
+                                           helper_mod = Mod}};
+         false ->
+            {error, <<"Must provide exactly one table name">>}
+    end.
 
 convert_where_timestamps(_Mod, []) ->
     [];
@@ -256,6 +270,7 @@ queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
 queried_table(?SQL_SELECT{'FROM' = Table})               -> Table;
 queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table;
 queried_table(#riak_sql_show_tables_v1{})                -> <<>>;
+queried_table(#riak_sql_delete_query_v1{'FROM' = Table}) -> Table;
 queried_table(
     #riak_sql_explain_query_v1{'EXPLAIN'=?SQL_SELECT{'FROM' = Table}}) ->
         Table.
