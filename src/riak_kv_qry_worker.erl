@@ -46,6 +46,7 @@
 -include("riak_kv_ts.hrl").
 
 -define(MAX_RUNNING_FSMS, 5).
+-define(SUBQUERY_FSM_TIMEOUT, 10000).
 
 %% accumulators for different types of query results.
 -type rows_acc()      :: [{non_neg_integer(), list()}].
@@ -152,30 +153,25 @@ new_state() ->
 
 prepare_fsm_options([], Acc) ->
     lists:reverse(Acc);
-prepare_fsm_options([{{qry, ?SQL_SELECT{cover_context = undefined} = Q1}, {qid, QId}} | T], Acc) ->
+prepare_fsm_options([{{qry, ?SQL_SELECT{cover_context = CoverContext} = Q1}, {qid, QId}} | T], Acc) ->
     Table = Q1?SQL_SELECT.'FROM',
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
-    %% fix these up too
-    Timeout = {timeout, 10000},
+    Timeout = {timeout, ?SUBQUERY_FSM_TIMEOUT},
     Me = self(),
     KeyConvFn = make_key_conversion_fun(Table),
     Q2 = convert_query_to_cluster_version(Q1),
-    Opts = [Bucket, none, Q2, Timeout, all, undefined, {Q2, Bucket}, riak_kv_qry_coverage_plan, KeyConvFn],
-    prepare_fsm_options(T, [[{raw, QId, Me}, Opts] | Acc]);
-%% if cover_context in the SQL record is *not* undefined, we've been
-%% given a mini coverage plan to map to a single vnode/quantum
-prepare_fsm_options([{{qry, Q1}, {qid, QId}} | T], Acc) ->
-    Table = Q1?SQL_SELECT.'FROM',
-    {ok, CoverProps} =
-        riak_kv_pb_coverage:checksum_binary_to_term(Q1?SQL_SELECT.cover_context),
-    CoverageFn = riak_client:vnode_target(CoverProps),
-    Bucket = riak_kv_ts_util:table_to_bucket(Table),
-    %% fix these up too
-    Timeout = {timeout, 10000},
-    Me = self(),
-    KeyConvFn = make_key_conversion_fun(Table),
-    Q2 = convert_query_to_cluster_version(Q1),
-    Opts = [Bucket, none, Q2, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan, KeyConvFn],
+    CoverageParameter =
+        case CoverContext of
+            undefined ->
+                {Q2, Bucket};
+            _Defined ->
+                %% if cover_context in the SQL record is *not* undefined, we've been
+                %% given a mini coverage plan to map to a single vnode/quantum
+                {ok, CoverProps} =
+                    riak_kv_pb_coverage:checksum_binary_to_term(CoverContext),
+                riak_client:vnode_target(CoverProps)
+        end,
+    Opts = [Bucket, none, Q2, Timeout, all, undefined, CoverageParameter, riak_kv_qry_coverage_plan, KeyConvFn],
     prepare_fsm_options(T, [[{raw, QId, Me}, Opts] | Acc]).
 
 
