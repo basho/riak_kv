@@ -98,9 +98,11 @@
 %% Use values so that test compile doesn't give 'unused vars' warning.
 -define(INDEX(A,B,C), _=element(1,{A,B,C}), ok).
 -define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
+-define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), _=element(1, {BProps}), false).
 -else.
 -define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
 -define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
+-define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), yz_kv:is_search_enabled_for_bucket(BProps)).
 -endif.
 
 -ifdef(TEST).
@@ -1476,147 +1478,169 @@ prepare_put(State=#state{vnodeid=VId,
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
-                             starttime=StartTime}) ->
+                             starttime=StartTime,
+                             bprops = BProps}) ->
     %% Can we avoid reading the existing object? If this is not an
     %% index backend, and the bucket is set to last-write-wins, then
     %% no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
+    IndexBackend = is_indexed_backend(Mod, Bucket, ModState),
+    IsSearchable = ?IS_SEARCH_ENABLED_FOR_BUCKET(BProps),
+    RequiresReadBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
+    case RequiresReadBeforeWrite of
+        true ->
+            prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State);
+        false ->
+            prepare_read_before_write_put(State, PutArgs, IndexBackend, IsSearchable)
+    end.
+
+is_indexed_backend(Mod, Bucket, ModState) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
-    case LWW andalso not IndexBackend of
+    IndexBackend.
+
+prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State) ->
+    ObjToStore = case Coord of
         true ->
-            ObjToStore =
-                case Coord of
-                    true ->
-                        %% Do we need to use epochs here? I guess we
-                        %% don't care, and since we don't read, we
-                        %% can't.
-                        riak_object:increment_vclock(RObj, VId, StartTime);
-                    false ->
-                        RObj
-                end,
-            {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State};
+            %% Do we need to use epochs here? I guess we
+            %% don't care, and since we don't read, we
+            %% can't.
+            riak_object:increment_vclock(RObj, VId, StartTime);
         false ->
-            prepare_put(State, PutArgs, IndexBackend)
-    end.
-prepare_put(State=#state{mod=Mod,
-                         modstate=ModState,
-                         idx=Idx,
-                         md_cache=MDCache},
-            PutArgs=#putargs{bkey={Bucket, Key}=BKey,
-                             robj=RObj,
-                             bprops=BProps,
-                             coord=Coord,
-                             lww=LWW,
-                             starttime=StartTime,
-                             prunetime=PruneTime,
-                             crdt_op = CRDTOp},
-            IndexBackend) ->
+            RObj
+    end,
+    {{true, ObjToStore}, PutArgs#putargs{is_index = false}, State}.
+
+prepare_read_before_write_put(#state{mod = Mod,
+                                     modstate = ModState,
+                                     md_cache = MDCache}=State,
+                              #putargs{bkey={Bucket, Key}=BKey,
+                                       robj=RObj}=PutArgs,
+                              IndexBackend, IsSearchable) ->
     {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
 
-    RequiresGet =
-        case CacheClock of
-            undefined ->
-                true;
-            Clock ->
-                %% We need to perform a local get, to merge contents,
-                %% if the local object has events unseen by the
-                %% incoming object. If the incoming object descends
-                %% the cache (i.e. has seen all its events) no need to
-                %% do a local get and merge, just overwrite.
-                not riak_object:vclock_descends(RObj, Clock)
-        end,
-    GetReply =
-        case RequiresGet of
-            true ->
-                case do_get_object(Bucket, Key, Mod, ModState) of
-                    {error, not_found, _UpdModState} ->
-                        ok;
-                    {ok, TheOldObj, _UpdModState} ->
-                        {ok, TheOldObj}
-                end;
-            false ->
-                FakeObj0 = riak_object:new(Bucket, Key, <<>>),
-                FakeObj = riak_object:set_vclock(FakeObj0, CacheClock),
-                {ok, FakeObj}
-        end,
+    RequiresGet = determine_requires_get(CacheClock, RObj, IsSearchable),
+    GetReply = get_old_object_or_fake(RequiresGet, Bucket, Key, Mod, ModState, CacheClock),
     case GetReply of
-        ok ->
-            case IndexBackend of
-                true ->
-                    IndexSpecs = riak_object:index_specs(RObj);
-                false ->
-                    IndexSpecs = []
-            end,
-            %% local not found, start a per key epoch
-            {EpochId, State2} = new_key_epoch(State),
-            case prepare_new_put(Coord, RObj, EpochId, StartTime, CRDTOp) of
-                {error, E} ->
-                    {{fail, Idx, E}, PutArgs, State2};
-                ObjToStore ->
-                    {{true, ObjToStore},
-                     PutArgs#putargs{index_specs=IndexSpecs,
-                                     is_index=IndexBackend}, State2}
-            end;
+        not_found ->
+            prepare_put_new_object(State, PutArgs, IndexBackend);
         {ok, OldObj} ->
-            {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
-            case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
-                {oldobj, OldObj1} ->
-                    {{false, OldObj1}, PutArgs, State2};
-                {newobj, NewObj} ->
-                    AMObj = enforce_allow_mult(NewObj, BProps),
-                    IndexSpecs = case IndexBackend of
-                                     true ->
-                                         case CacheData /= undefined andalso
-                                             RequiresGet == false of
-                                             true ->
-                                                 NewData = riak_object:index_data(AMObj),
-                                                 riak_object:diff_index_data(NewData,
-                                                                             CacheData);
-                                             false ->
-                                                 riak_object:diff_index_specs(AMObj,
-                                                                              OldObj)
-                                         end;
-                                     false ->
-                                         []
-                                 end,
-                    ObjToStore = case PruneTime of
-                                     undefined ->
-                                         AMObj;
-                                     _ ->
-                                         riak_object:prune_vclock(AMObj, PruneTime, BProps)
-                                 end,
-                    case handle_crdt(Coord, CRDTOp, ActorId, ObjToStore) of
-                        {error, E} ->
-                            {{fail, Idx, E}, PutArgs, State2};
-                        ObjToStore2 ->
-                            {{true, ObjToStore2},
-                             PutArgs#putargs{index_specs=IndexSpecs,
-                                             is_index=IndexBackend}, State2}
-                    end
-            end
+            prepare_put_existing_object(State, PutArgs, OldObj, IndexBackend, CacheData, RequiresGet)
     end.
+
+prepare_put_existing_object(#state{idx =Idx} = State,
+                    #putargs{coord=Coord,
+                             robj = RObj,
+                             lww=LWW,
+                             starttime = StartTime,
+                             bprops = BProps,
+                             prunetime=PruneTime,
+                             crdt_op = CRDTOp}=PutArgs,
+                            OldObj, IndexBackend, CacheData, RequiresGet) ->
+    {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
+    case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
+        {oldobj, OldObj} ->
+            {{false, OldObj}, PutArgs, State2};
+        {newobj, NewObj} ->
+            AMObj = enforce_allow_mult(NewObj, BProps),
+            IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
+            ObjToStore0 = maybe_prune_vclock(PruneTime, AMObj, BProps),
+            ObjectToStore = maybe_do_crdt_update(Coord, CRDTOp, ActorId, ObjToStore0),
+            %% maybe_clean_search_siblings(BProps, OldObj),
+            determine_put_result(ObjectToStore, Idx, PutArgs, State2, IndexSpecs, IndexBackend)
+    end.
+
+%%maybe_clean_search_siblings(BProps, _OldObj) ->
+%%    case ?IS_SEARCH_ENABLED_FOR_BUCKET(BProps) of
+%%        true -> ok; %% clean_index_siblings(OldObj);
+%%        _ -> ok
+%%    end.
+
+determine_put_result({error, E}, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
+    {{fail, Idx, E}, PutArgs, State};
+determine_put_result(ObjToStore, _Idx, PutArgs, State, IndexSpecs, IndexBackend) ->
+    {{true, ObjToStore},
+     PutArgs#putargs{index_specs = IndexSpecs,
+                     is_index    = IndexBackend}, State}.
+
+maybe_prune_vclock(_PruneTime=undefined, RObj, _BProps) ->
+    RObj;
+maybe_prune_vclock(PruneTime, RObj, BProps) ->
+    riak_object:prune_vclock(RObj, PruneTime, BProps).
+
+get_index_specs(_IndexedBackend=true, CacheData, RequiresGet, NewObj, OldObj) ->
+    case CacheData /= undefined andalso
+         RequiresGet == false of
+        true ->
+            NewData = riak_object:index_data(NewObj),
+            riak_object:diff_index_data(NewData,
+                                        CacheData);
+        false ->
+            riak_object:diff_index_specs(NewObj,
+                                         OldObj)
+    end;
+
+get_index_specs(_IndexedBackend=false, _CacheData, _RequiresGet, _NewObj, _OldObj) ->
+    [].
+
+prepare_put_new_object(#state{idx =Idx} = State,
+               #putargs{robj = RObj,
+                        coord=Coord,
+                        starttime=StartTime,
+                        crdt_op=CRDTOp} = PutArgs,
+                       IndexBackend) ->
+    IndexSpecs = case IndexBackend of
+                     true ->
+                         riak_object:index_specs(RObj);
+                     false ->
+                         []
+                 end,
+    {EpochId, State2} = new_key_epoch(State),
+    RObj2 = maybe_update_vclock(Coord, RObj, EpochId, StartTime),
+    RObj3 = maybe_do_crdt_update(Coord, CRDTOp, EpochId, RObj2),
+    determine_put_result(RObj3, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
+
+get_old_object_or_fake(true, Bucket, Key, Mod, ModState, _CacheClock) ->
+    case do_get_object(Bucket, Key, Mod, ModState) of
+        {error, not_found, _UpdModState} ->
+            not_found;
+        {ok, TheOldObj, _UpdModState} ->
+            {ok, TheOldObj}
+    end;
+get_old_object_or_fake(false, Bucket, Key, _Mod, _ModState, CacheClock) ->
+    FakeObj0 = riak_object:new(Bucket, Key, <<>>),
+    FakeObj = riak_object:set_vclock(FakeObj0, CacheClock),
+    {ok, FakeObj}.
+
+determine_requires_get(CacheClock, RObj, IsSearchable) ->
+    RequiresGet =
+    case CacheClock of
+        undefined ->
+            true;
+        Clock ->
+            %% We need to perform a local get, to merge contents,
+            %% if the local object has events unseen by the
+            %% incoming object. If the incoming object descends
+            %% the cache (i.e. has seen all its events) no need to
+            %% do a local get and merge, just overwrite.
+            not riak_object:vclock_descends(RObj, Clock) orelse IsSearchable
+    end,
+    RequiresGet.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
 %% NOTE the `VId' is a new epoch actor for this object
-prepare_new_put(true, RObj, VId, StartTime, undefined) ->
+maybe_update_vclock(_Coord=true, RObj, VId, StartTime) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
-prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
-    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
-    %% coordinating a _NEW_ crdt operation means
-    %% creating + updating the crdt.
-    %% Make a new crdt, stuff it in the riak_object
-    do_crdt_update(VClockUp, VId, CRDTOp);
-prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+maybe_update_vclock(_Coord=false, RObj, _VId, _StartTime) ->
     %% @TODO Not coordindating, not found local, is there an entry for
     %% us in the clock? If so, mark as dirty
     RObj.
 
-handle_crdt(_, undefined, _VId, RObj) ->
+maybe_do_crdt_update(_Coord = _, undefined, _VId, RObj) ->
     RObj;
-handle_crdt(true, CRDTOp, VId, RObj) ->
+maybe_do_crdt_update(_Coord = true, CRDTOp, VId, RObj) ->
     do_crdt_update(RObj, VId, CRDTOp);
-handle_crdt(false, _CRDTOp, _Vid, RObj) ->
+maybe_do_crdt_update(_Coord = false, _CRDTOp, _Vid, RObj) ->
     RObj.
 
 do_crdt_update(RObj, VId, CRDTOp) ->
