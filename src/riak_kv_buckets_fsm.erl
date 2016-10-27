@@ -68,7 +68,7 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
     ?DTRACE(?C_BUCKETS_INIT, [2, FilterX],
             [<<"other">>, ClientNode, PidStr]),
     %% Construct the bucket listing request
-    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+    Req = riak_kv_requests:new_listbuckets_request(ItemFilter),
 
     %% Note riak_core_coverage_fsm now expects a plan function, not a mod, to be returned
 
