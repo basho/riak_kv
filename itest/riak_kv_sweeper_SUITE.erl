@@ -81,7 +81,7 @@ new_meck_sweep_particpant(Name, TestCasePid) ->
     meck:new(Name, [non_strict, no_link]),
     meck:expect(Name, participate_in_sweep,
                 fun(Index, _Pid) ->
-                        TestCasePid!{ok, participate_in_sweep},
+                        TestCasePid ! {ok, participate_in_sweep},
                         InitialAcc = 0,
                         {ok, Name:visit_object_fun(Index), InitialAcc}
                 end),
@@ -93,13 +93,13 @@ new_meck_sweep_particpant(Name, TestCasePid) ->
                 end),
     meck:expect(Name, successfull_sweep,
                 fun(Index, _FinalAcc) ->
-                        TestCasePid!{ok, successfull_sweep, Index},
+                        TestCasePid ! {ok, successfull_sweep, Index},
                         ok
                 end),
 
     meck:expect(Name, failed_sweep,
                 fun(Index, _Reason) ->
-                        TestCasePid!{ok, failed_sweep, Index},
+                        TestCasePid ! {ok, failed_sweep, Index},
                         ok
                 end),
 
@@ -119,7 +119,7 @@ meck_new_backend(TestCasePid) ->
                                                      InitialObj = riak_object:to_binary(v1, riak_object:new(NBin, NBin, <<>>)),
                                                      CompleteFoldReq(NBin, NBin, InitialObj, Acc)
                                              end, InitialAcc, Keys),
-                        TestCasePid!{ok, fold_complete},
+                        TestCasePid ! {ok, fold_complete},
                         Result
                 end),
 
