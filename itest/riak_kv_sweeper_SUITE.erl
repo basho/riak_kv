@@ -4,7 +4,7 @@
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
--include_lib("riak_kv/include/riak_kv_sweeper.hrl").
+-include("riak_kv_sweeper.hrl").
 
 %%--------------------------------------------------------------------
 %% COMMON TEST CALLBACK FUNCTIONS
@@ -262,7 +262,6 @@ receive_msg(Msg, TimeoutMsecs) ->
 
 all_tests() ->
     lists:foldl(
-
       fun({F, A}, Acc) ->
               case {A, re:run(atom_to_list(F), "_test$")} of
                   {1, {match, _}} -> [F|Acc];
