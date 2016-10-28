@@ -78,7 +78,7 @@ delete_dets(FileDir) ->
 -spec insert(BucketType :: binary(),
              DDLVersion :: riak_ql_component:component_version(),
              DDL :: term(),
-             CompilerPid :: pid(),
+             CompilerPid :: pid()|'undefined',
              State :: compiling_state()) -> ok | error.
 insert(BucketType, DDLVersion, DDL, CompilerPid, State) ->
     lager:info("DDL DETS Update: ~p, ~p, ~p, ~p, ~p",
