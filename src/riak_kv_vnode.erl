@@ -950,14 +950,6 @@ handle_coverage_request(kv_index_request, Req, FilterVNodes, Sender, State) ->
                 end,
     handle_coverage_index(Bucket, ItemFilter, Query, FilterVNodes, Sender, State, ResultFun).
 
--spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
-prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
-        RE =/= undefined ->
-    {ok, CompiledRE} = re:compile(RE),
-    Q#riak_kv_index_v3{term_regex=CompiledRE};
-prepare_index_query(Q) ->
-    Q.
-
 %% @doc Batch size for results is set to 2i max_results if that is less
 %% than the default size. Without this the vnode may send back to the FSM
 %% more items than could ever be sent back to the client.
@@ -980,15 +972,8 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             ok = riak_kv_stat:update(vnode_index_read),
 
             BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
-            Opts = [{index, Bucket, prepare_index_query(Query)},
-                    {bucket, Bucket}, {buffer_size, BufSize}],
-            %% @HACK
-            %% Really this should be decided in the backend
-            %% if there was a index_query fun.
-            FoldType = case riak_index:return_body(Query) of
-                           true -> fold_objects;
-                           false -> fold_keys
-                       end,
+            Opts = [{index, Bucket, Query}, {bucket, Bucket}, {buffer_size, BufSize}],
+            FoldType = fold_type_for_query(Query),
             handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                                     FilterVNodes, Sender, Opts, State);
         false ->
@@ -2028,6 +2013,15 @@ options_for_folding_and_backend(Opts, true) ->
     [async_fold | Opts];
 options_for_folding_and_backend(Opts, false) ->
     Opts.
+
+fold_type_for_query(Query) ->
+    %% @HACK
+    %% Really this should be decided in the backend
+    %% if there was a index_query fun.
+    case riak_index:return_body(Query) of
+        true -> fold_objects;
+        false -> fold_keys
+    end.
 
 %% @private
 maybe_enable_iterator_refresh(Capabilities, Opts) ->
