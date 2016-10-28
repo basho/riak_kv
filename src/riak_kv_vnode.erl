@@ -568,13 +568,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
     case Bucket of
         '_' ->
             {ok, Capabilities} = Mod:capabilities(ModState),
-            AsyncBackend = lists:member(async_fold, Capabilities),
-            case AsyncFolding andalso AsyncBackend of
-                true ->
-                    Opts = [async_fold];
-                false ->
-                    Opts = []
-            end,
+            Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, []),
             BufferFun =
                 fun(Results) ->
                         UniqueResults = lists:usort(Results),
@@ -584,13 +578,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
             ModFun = fold_buckets;
         _ ->
             {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-            AsyncBackend = lists:member(async_fold, Capabilities),
-            case AsyncFolding andalso AsyncBackend of
-                true ->
-                    Opts = [async_fold, {bucket, Bucket}];
-                false ->
-                    Opts = [{bucket, Bucket}]
-            end,
+            Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, [{bucket, Bucket}]),
             BufferFun =
                 fun(Results) ->
                         Caller ! {ReqId, {kl, Idx, Results}}
@@ -945,13 +933,7 @@ handle_coverage_request(kv_listbuckets_request,
     FoldFun = fold_fun(buckets, BufferMod, Filter, undefined),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(ModState),
-    AsyncBackend = lists:member(async_fold, Capabilities),
-    case AsyncFolding andalso AsyncBackend of
-        true ->
-            Opts = [async_fold];
-        false ->
-            Opts = []
-    end,
+    Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, []),
     case list(FoldFun, FinishFun, Mod, fold_buckets, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
@@ -995,7 +977,6 @@ handle_coverage_index(Bucket, ItemFilter, Query,
     IndexBackend = lists:member(indexes, Capabilities),
     case IndexBackend of
         true ->
-            %% Update stats...
             ok = riak_kv_stat:update(vnode_index_read),
 
             ResultFun = ResultFunFun(Bucket, Sender),
@@ -1042,13 +1023,7 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-    AsyncBackend = lists:member(async_fold, Capabilities),
-    Opts = case AsyncFolding andalso AsyncBackend of
-               true ->
-                   [async_fold | Opts0];
-               false ->
-                   Opts0
-           end,
+    Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
@@ -2044,14 +2019,16 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
     end.
 
 %% @private
+-spec maybe_enable_async_fold(boolean(), list(), list()) -> list().
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
     AsyncBackend = lists:member(async_fold, Capabilities),
-    case AsyncFolding andalso AsyncBackend of
-        true ->
-            [async_fold|Opts];
-        false ->
-            Opts
-    end.
+    options_for_folding_and_backend(Opts, AsyncFolding andalso AsyncBackend).
+
+-spec options_for_folding_and_backend(list(), UseAsyncFolding :: boolean()) -> list().
+options_for_folding_and_backend(Opts, true) ->
+    [async_fold | Opts];
+options_for_folding_and_backend(Opts, false) ->
+    Opts.
 
 %% @private
 maybe_enable_iterator_refresh(Capabilities, Opts) ->
