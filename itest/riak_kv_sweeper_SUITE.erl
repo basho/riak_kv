@@ -14,22 +14,6 @@ suite() ->
     [{timetrap, {minutes, 1}}].
 
 
-init_per_suite(Config) ->
-    Config.
-
-
-end_per_suite(_Config) ->
-    ok.
-
-
-init_per_group(_GroupName, Config) ->
-    Config.
-
-
-end_per_group(_GroupName, _Config) ->
-    ok.
-
-
 init_per_testcase(_TestCase, Config) ->
     file:delete(riak_kv_sweeper:sweep_file()),
     application:set_env(riak_kv, sweep_participants, undefined),
