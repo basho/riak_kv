@@ -24,7 +24,7 @@
 
 -export([
          delete_dets/1,
-         get_all_table_names/0,
+         get_table_status_pairs/0,
          get_compiled_ddl_version/1,
          get_ddl/1,
          get_state/1,
@@ -138,12 +138,25 @@ get_ddl(BucketType) when is_binary(BucketType) ->
             notfound
     end.
 
-%%
--spec get_all_table_names() -> [binary()].
-get_all_table_names() ->
-    Matches = dets:match(?TABLE, {'$1','_','_','_','compiled'}),
-    Tables = [DDL || [DDL] <- Matches],
+%% Get the list of {TableName, Status} pairs, no matter what status they are in.
+-spec get_table_status_pairs() ->[{binary(), binary()}].
+get_table_status_pairs() ->
+    Matches = dets:match(?TABLE, {'$1','_','_','_','$2'}),
+    Tables = [ {Table, map_table_state_to_status(State)} ||
+        [Table, State] <- Matches ],
     lists:usort(Tables).
+
+-spec map_table_state_to_status(atom()) -> binary().
+map_table_state_to_status('compiled') ->
+    <<"Active">>;
+map_table_state_to_status('retrying') ->
+    <<"Not Active">>;
+map_table_state_to_status('compiling') ->
+    <<"Not Active">>;
+map_table_state_to_status('failed') ->
+    <<"Failed">>;
+map_table_state_to_status(_TableState) ->
+    <<"Unknown">>.
 
 %% Update the compilation state using the compiler pid as a key.
 %% Since it has an active Pid, it is assumed to have a DDL version already.
@@ -273,21 +286,29 @@ recompile_ddl_test() ->
             )
         end).
 
-get_all_compiled_ddls_test() ->
+get_table_status_pairs_test() ->
     ?in_process(
         begin
             Pid = spawn(fun() -> ok end),
             Pid2 = spawn(fun() -> ok end),
             Pid3 = spawn(fun() -> ok end),
             Pid4 = spawn(fun() -> ok end),
+            Pid5 = spawn(fun() -> ok end),
             ok = insert(<<"my_type1">>, 6, {ddl_v1}, Pid, compiling),
             ok = insert(<<"my_type2">>, 7, {ddl_v1}, Pid2, compiled),
-            ok = insert(<<"my_type3">>, 6, {ddl_v1}, Pid3, compiling),
-            ok = insert(<<"my_type4">>, 8, {ddl_v1}, Pid4, compiled),
+            ok = insert(<<"my_type3">>, 6, {ddl_v1}, Pid3, retrying),
+            ok = insert(<<"my_type4">>, 8, {ddl_v1}, Pid4, failed),
+            ok = insert(<<"my_type5">>, 8, {ddl_v1}, Pid5, compiled),
 
             ?assertEqual(
-                [<<"my_type2">>,<<"my_type4">>],
-                get_all_table_names()
+                [
+                    {<<"my_type1">>, <<"Not Active">>},
+                    {<<"my_type2">>, <<"Active">>},
+                    {<<"my_type3">>, <<"Not Active">>},
+                    {<<"my_type4">>, <<"Failed">>},
+                    {<<"my_type5">>, <<"Active">>}
+                ],
+                get_table_status_pairs()
             )
-        end).
+    end).
 -endif.
