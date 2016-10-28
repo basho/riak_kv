@@ -590,7 +590,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
             FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
             ModFun = fold_keys
     end,
-    Buffer = BufferMod:new(BufferSize, BufferFun),
+    Buffer = riak_kv_fold_buffer:new(BufferSize, BufferFun),
     FinishFun =
         fun(Buffer1) ->
                 riak_kv_fold_buffer:flush(Buffer1),
@@ -810,7 +810,7 @@ handle_command({get_index_entries, Opts},
                                     throw(index_reformat_client_died)
                             end
                         end,
-                    Buffer = BufferMod:new(BufferSize, ResultFun),
+                    Buffer = riak_kv_fold_buffer:new(BufferSize, ResultFun),
                     FoldFun = fun(B, K, Buf) -> BufferMod:add({B, K}, Buf) end,
                     FinishFun =
                         fun(FinalBuffer) ->
@@ -936,7 +936,7 @@ handle_coverage_request(kv_listbuckets_request,
     Filter = riak_kv_coverage_filter:build_filter(ItemFilter),
     BufferMod = riak_kv_fold_buffer,
 
-    Buffer = BufferMod:new(BufferSize, result_fun(Sender)),
+    Buffer = riak_kv_fold_buffer:new(BufferSize, result_fun(Sender)),
     FoldFun = fold_fun(buckets, BufferMod, Filter, undefined),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(ModState),
@@ -1080,7 +1080,7 @@ handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
     BufferMod = riak_kv_fold_buffer,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
-    Buffer = BufferMod:new(BufferSize, ResultFun),
+    Buffer = riak_kv_fold_buffer:new(BufferSize, ResultFun),
     Extras = fold_extras_keys(Index, Bucket),
     FoldFun = fold_fun(range_scan, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
