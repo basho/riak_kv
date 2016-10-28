@@ -249,7 +249,7 @@ all_tests() ->
 
 
 is_testcase({F, 1}) ->
-    match =:= re:run(atom_to_list(F), "scheduler_test$", [{capture, none}]);
+    match =:= re:run(atom_to_list(F), "_test$", [{capture, none}]);
 is_testcase({_, _}) ->
     false.
 
