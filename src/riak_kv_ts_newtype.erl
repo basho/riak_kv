@@ -181,13 +181,16 @@ flush_exit_message(CompilerPid) ->
         1000 -> ok
     end.
 
+%% Allows a `riak_test' intercept
+create_process(Fun) ->
+    proc_lib:spawn_link(Fun).
+
 %%
 -spec start_compilation(BucketType::binary(), DDL::?DDL{}) -> pid().
 start_compilation(BucketType, DDL) ->
-    Pid = proc_lib:spawn_link(
-        fun() ->
-            ok = compile_and_store(ddl_ebin_directory(), DDL)
-        end),
+    Pid = create_process(fun() ->
+                                 ok = compile_and_store(ddl_ebin_directory(), DDL)
+                         end),
     lager:info("Starting DDL compilation of ~s on Pid ~p", [BucketType, Pid]),
     ok = riak_kv_compile_tab:insert(BucketType, riak_ql_ddl_compiler:get_compiler_version(), DDL, Pid, compiling),
     Pid.

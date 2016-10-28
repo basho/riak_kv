@@ -45,7 +45,7 @@
          S == failed orelse
          S == retrying)).
 
-%% 
+%%
 -spec new(file:name()) ->
          {ok, dets:tab_name(), dets:tab_name()} | error.
 new(FileDir) ->
@@ -78,7 +78,7 @@ delete_dets(FileDir) ->
 -spec insert(BucketType :: binary(),
              DDLVersion :: riak_ql_component:component_version(),
              DDL :: term(),
-             CompilerPid :: pid(),
+             CompilerPid :: pid()|'undefined',
              State :: compiling_state()) -> ok | error.
 insert(BucketType, DDLVersion, DDL, CompilerPid, State) ->
     lager:info("DDL DETS Update: ~p, ~p, ~p, ~p, ~p",
@@ -145,20 +145,38 @@ get_all_table_names() ->
     Tables = [DDL || [DDL] <- Matches],
     lists:usort(Tables).
 
-%% Update the compilation state using the compiler pid as a key.
-%% Since it has an active Pid, it is assumed to have a DDL version already.
+%% Transition a compilation record from state `compiling'.
+%%
+%% The PID of the process responsible for compiling a DDL is an
+%% important hook into the DETS table. When the `riak_kv_ts_newtype'
+%% process receives an `EXIT' message indicating a compilation has
+%% succeeded or failed, the process that terminated is used to
+%% identify the relevant record to transition the state from
+%% `compiling' to `compiled' or `failed'.
+%%
+%% Another valid state transition, also using the PIDs as a key, is
+%% `compiling' to `retrying', called from `mark_compiling_for_retry/0'
+%% when a node launches after terminating during a DDL compilation.
 -spec update_state(CompilerPid :: pid(), State :: compiling_state()) ->
         ok | error | notfound.
 update_state(CompilerPid, State) when is_pid(CompilerPid),
-                                       ?is_compiling_state(State) ->
-    case dets:match(?TABLE, {'$1','$2','$3',CompilerPid,'_'}) of
+                                      ?is_compiling_state(State) ->
+    case dets:match(?TABLE, {'$1','$2','$3',CompilerPid,compiling}) of
         [[BucketType, DDLVersion, DDL]] ->
-            insert(BucketType, DDLVersion, DDL, CompilerPid, State);
+            %% Replace the PID with `undefined' because it's no longer
+            %% a live process. Prior to TS 1.5 the PID was left in the
+            %% table to potentially aid with log file investigation in
+            %% the case of a compilation failure, so users who've
+            %% ugpraded from earlier version of TS will still have old
+            %% PIDs in their DETS table.
+            insert(BucketType, DDLVersion, DDL, undefined, State);
         [] ->
             notfound
     end.
 
-%% Mark any lingering compilations as being retried
+%% Mark any compilations as being retried. Used during node launch for
+%% any compilation processes that were interrupted while the node
+%% stopped.
 -spec mark_compiling_for_retry() -> ok.
 mark_compiling_for_retry() ->
     CompilingPids = dets:match(?TABLE, {'_','_','_','$1',compiling}),
