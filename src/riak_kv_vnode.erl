@@ -952,8 +952,8 @@ handle_coverage_request(kv_index_request, Req, FilterVNodes, Sender, State) ->
     ItemFilter = riak_kv_requests:get_item_filter(Req),
     Query = riak_kv_requests:get_query(Req),
     ResultFun = case riak_kv_requests:get_ack_backpressure(Req) of
-                    true -> fun result_fun_ack/2;
-                    false -> fun result_fun/2
+                    true  -> result_fun_ack(Bucket, Sender);
+                    false -> result_fun(Bucket, Sender)
                 end,
     handle_coverage_index(Bucket, ItemFilter, Query, FilterVNodes, Sender, State, ResultFun).
 
@@ -979,14 +979,13 @@ handle_coverage_index(Bucket, ItemFilter, Query,
                       State=#state{mod=Mod,
                                    key_buf_size=DefaultBufSz,
                                    modstate=ModState},
-                      ResultFunFun) ->
+                      ResultFun) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
     case IndexBackend of
         true ->
             ok = riak_kv_stat:update(vnode_index_read),
 
-            ResultFun = ResultFunFun(Bucket, Sender),
             BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
             Opts = [{index, Bucket, prepare_index_query(Query)},
                     {bucket, Bucket}, {buffer_size, BufSize}],
