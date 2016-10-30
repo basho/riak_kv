@@ -246,6 +246,20 @@ scheduler_test(Config) ->
     [receive_msg({ok, successfull_sweep, I}) || I <- Indices],
     ok.
 
+%% TODO - Why are we not monitoring the worker process doing the fold ?
+scheduler_worker_process_crashed_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    meck_new_backend(self()),
+    SP = new_meck_sweep_particpant(sweep_observer_1, self()),
+    new_meck_visit_function(sweep_observer_1, {throw, crash}),
+    riak_kv_sweeper:add_sweep_participant(SP),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    [timeout = receive_msg({ok, successfull_sweep, I}) || I <- Indices],
+    {_SPs, Sweeps} = riak_kv_sweeper:status(),
+    true = [ 1 || #sweep{state = running} <- Sweeps ] > 0,
+    ok.
+
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
