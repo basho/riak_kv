@@ -69,23 +69,10 @@ new_meck_sweep_particpant(Name, TestCasePid) ->
                         InitialAcc = 0,
                         {ok, Name:visit_object_fun(Index), InitialAcc}
                 end),
-    meck:expect(Name, visit_object_fun,
-                fun(_Index) ->
-                        fun({{_Bucket, _Key}, _RObj}, Acc, _Opts = []) ->
-                                {ok, Acc}
-                        end
-                end),
-    meck:expect(Name, successfull_sweep,
-                fun(Index, _FinalAcc) ->
-                        TestCasePid ! {ok, successfull_sweep, Index},
-                        ok
-                end),
 
-    meck:expect(Name, failed_sweep,
-                fun(Index, _Reason) ->
-                        TestCasePid ! {ok, failed_sweep, Index},
-                        ok
-                end),
+    new_meck_visit_function(Name),
+    meck_new_successfull_sweep_function(Name, TestCasePid),
+    meck_new_failed_sweep_function(Name, TestCasePid),
 
     #sweep_participant{description = atom_to_list(Name) ++ " sweep participant",
                        module = Name,
@@ -93,6 +80,42 @@ new_meck_sweep_particpant(Name, TestCasePid) ->
                        run_interval = 60,       % TODO this is secondsb
                        options = []}.
 
+new_meck_visit_function(Name) ->
+    new_meck_visit_function(Name, no_errors).
+
+new_meck_visit_function(Name, Behavior) ->
+    meck:expect(Name, visit_object_fun, visit_function(Behavior)).
+
+meck_new_successfull_sweep_function(Name, TestCasePid) ->
+    meck:expect(Name, successfull_sweep, successfull_sweep_function(TestCasePid)).
+
+meck_new_failed_sweep_function(Name, TestCasePid) ->
+    meck:expect(Name, failed_sweep_function, failed_sweep_function(TestCasePid)).
+
+visit_function({throw, Error}) ->
+    fun(_Index) ->
+        fun({{_Bucket, _Key}, _RObj}, _Acc, _Opts = []) ->
+                throw(Error)
+        end
+    end;
+visit_function(_) ->
+    fun(_Index) ->
+        fun({{_Bucket, _Key}, _RObj}, Acc, _Opts = []) ->
+                {ok, Acc}
+        end
+    end.
+
+successfull_sweep_function(TestCasePid) ->
+    fun(Index, _FinalAcc) ->
+            TestCasePid ! {ok, successfull_sweep, Index},
+            ok
+    end.
+
+failed_sweep_function(TestCasePid) ->
+    fun(Index, _Reason) ->
+            TestCasePid ! {ok, failed_sweep, Index},
+            ok
+    end.
 
 meck_new_backend(TestCasePid) ->
     Keys = [integer_to_binary(N) || N <- lists:seq(1, 100)],
