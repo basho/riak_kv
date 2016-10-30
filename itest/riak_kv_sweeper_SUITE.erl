@@ -19,7 +19,7 @@ init_per_testcase(_TestCase, Config) ->
     application:set_env(riak_kv, sweep_participants, undefined),
     application:set_env(riak_kv, sweep_window, always),
     application:set_env(riak_kv, sweeper_scheduler, false),
-    application:set_env(riak_kv, sweep_tick, 100),
+    application:set_env(riak_kv, sweep_tick, 10), % MSecs
 
     VNodeIndices = new_meck_riak_core_modules(2),
     riak_kv_sweeper:start_link(),
@@ -77,7 +77,7 @@ new_meck_sweep_particpant(Name, TestCasePid) ->
     #sweep_participant{description = atom_to_list(Name) ++ " sweep participant",
                        module = Name,
                        fun_type = ?OBSERV_FUN,
-                       run_interval = 60,       % TODO this is secondsb
+                       run_interval = 60,       % Secs
                        options = []}.
 
 new_meck_visit_function(Name) ->
@@ -257,6 +257,22 @@ scheduler_worker_process_crashed_test(Config) ->
     [timeout = receive_msg({ok, successfull_sweep, I}) || I <- Indices],
     {_SPs, Sweeps} = riak_kv_sweeper:status(),
     true = [ 1 || #sweep{state = running} <- Sweeps ] > 0,
+    ok.
+
+
+scheduler_run_interval_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    meck_new_backend(self()),
+    SP = new_meck_sweep_particpant(sweep_observer_1, self()),
+    SP1 = SP#sweep_participant{run_interval = 1},
+    new_meck_visit_function(sweep_observer_1),
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    [ok = receive_msg({ok, successfull_sweep, I}) || I <- Indices],
+    %% Waiting for 2500 msecs because at least 1 second must elapse
+    %% before a sweep is re-run using the run_interval (now - ts) > 1,
+    %% see kv_sweeper:expired
+    [ok = receive_msg({ok, successfull_sweep, I}, 2500) || I <- Indices],
     ok.
 
 
