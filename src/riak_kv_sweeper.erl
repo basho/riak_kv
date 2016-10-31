@@ -381,18 +381,9 @@ disable_participant(Sweep, Module) ->
 stop_sweep(Sweep) ->
     send_to_sweep_worker(stop, Sweep).
 
-send_to_sweep_worker(Msg, #sweep{index = Index, pid = Pid}) when is_pid(Pid)->
-    Ref = make_ref(),
-    Pid ! {Msg, self(), Ref},
-    receive
-        {ack, Ref} ->
-            ok;
-        {Response, Ref} ->
-            Response
-    after 4000 ->
-        lager:error("No response from sweep proc index ~p ~p", [Index, Pid]),
-        false
-    end;
+send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid)->
+    lager:debug("Send to sweep worker ~p: ~p", [Pid, Msg]),
+    Pid ! Msg;
 send_to_sweep_worker(Msg, #sweep{index = Index}) ->
     lager:info("no pid ~p to ~p " , [Msg, Index]),
     no_pid.
@@ -874,21 +865,18 @@ maybe_receive_request(Acc) ->
 
 maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc, Wait) ->
     receive
-        {stop, From, Ref} ->
+        stop ->
             Active1 =
                 [ActiveSP#sweep_participant{fail_reason = sweep_stop } ||
                  #sweep_participant{} = ActiveSP <- Active],
             Acc1 = #sa{active_p = [],  failed_p = Active1 ++ Fail},
-            From ! {ack, Ref},
             throw({stop_sweep, Acc1});
-        {{disable, Module}, From, Ref} ->
+        {disable, Module} ->
             case lists:keytake(Module, #sweep_participant.module, Active) of
                 {value, SP, Active1} ->
-                    From ! {ack, Ref},
                     Acc#sa{active_p = Active1,
                            failed_p = [SP#sweep_participant{fail_reason = disable} | Fail]};
                 _ ->
-                    From ! {ack, Ref},
                     Acc
             end
     after Wait ->
