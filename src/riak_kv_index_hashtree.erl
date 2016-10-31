@@ -222,7 +222,9 @@ get_lock(Index, Type, Version, Pid) when is_integer(Index) ->
     lookup_tree_and_call(Index, {get_lock, Type, Version, Pid}).
 
 %% @doc Get the version of the specified index_hashtree
--spec get_version(pid()) -> version().
+-spec get_version(index() | pid()) -> version().
+get_version(Tree) when is_integer(Tree) ->
+    lookup_tree_and_call(Tree, get_version);
 get_version(Tree) ->
     gen_server:call(Tree, get_version, infinity).
 
