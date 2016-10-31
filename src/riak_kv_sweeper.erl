@@ -341,7 +341,7 @@ maybe_estimate_keys(_Index, false, _) ->
 get_estimtate(Index) ->
     Pid = self(),
     %% riak_kv_index_hashtree release lock when the process die
-    spawn(fun() ->
+    proc_lib:spawn(fun() ->
                 Estimate =
                     case riak_kv_index_hashtree:get_lock(Index, estimate) of
                         ok ->
