@@ -70,7 +70,7 @@ new_meck_sweep_particpant(Name, TestCasePid) ->
                         {ok, Name:visit_object_fun(Index), InitialAcc}
                 end),
 
-    new_meck_visit_function(Name),
+    meck_new_visit_function(Name),
     meck_new_successfull_sweep_function(Name, TestCasePid),
     meck_new_failed_sweep_function(Name, TestCasePid),
 
@@ -80,10 +80,10 @@ new_meck_sweep_particpant(Name, TestCasePid) ->
                        run_interval = 60,       % Secs
                        options = []}.
 
-new_meck_visit_function(Name) ->
-    new_meck_visit_function(Name, no_errors).
+meck_new_visit_function(Name) ->
+    meck_new_visit_function(Name, no_errors).
 
-new_meck_visit_function(Name, Behavior) ->
+meck_new_visit_function(Name, Behavior) ->
     meck:expect(Name, visit_object_fun, visit_function(Behavior)).
 
 meck_new_successfull_sweep_function(Name, TestCasePid) ->
@@ -283,7 +283,7 @@ scheduler_worker_process_crashed_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     meck_new_backend(self()),
     SP = new_meck_sweep_particpant(sweep_observer_1, self()),
-    new_meck_visit_function(sweep_observer_1, {throw, crash}),
+    meck_new_visit_function(sweep_observer_1, {throw, crash}),
     riak_kv_sweeper:add_sweep_participant(SP),
     riak_kv_sweeper:enable_sweep_scheduling(),
     [timeout = receive_msg({ok, successfull_sweep, sweep_observer_1, I}) || I <- Indices],
@@ -297,7 +297,7 @@ scheduler_run_interval_test(Config) ->
     meck_new_backend(self()),
     SP = new_meck_sweep_particpant(sweep_observer_1, self()),
     SP1 = SP#sweep_participant{run_interval = 1},
-    new_meck_visit_function(sweep_observer_1),
+    meck_new_visit_function(sweep_observer_1),
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
 
@@ -320,7 +320,7 @@ stop_all_scheduled_sweeps_test(Config) ->
 
     meck_new_backend(self(), NumKeys),
     SP = new_meck_sweep_particpant(sweep_observer_1, self()),
-    new_meck_visit_function(sweep_observer_1, {wait_after_keys, WaitAfterKeys, WaitMSecs}),
+    meck_new_visit_function(sweep_observer_1, {wait_after_keys, WaitAfterKeys, WaitMSecs}),
     riak_kv_sweeper:add_sweep_participant(SP),
     riak_kv_sweeper:enable_sweep_scheduling(),
     timer:sleep(2*SweepTick),
@@ -339,7 +339,7 @@ stop_all_scheduled_sweeps_race_condition_test(Config) ->
 
     meck_new_backend(self(), NumKeys),
     SP = new_meck_sweep_particpant(sweep_observer_1, self()),
-    new_meck_visit_function(sweep_observer_1, {wait_after_keys, WaitAfterKeys, WaitMSecs}),
+    meck_new_visit_function(sweep_observer_1, {wait_after_keys, WaitAfterKeys, WaitMSecs}),
     riak_kv_sweeper:add_sweep_participant(SP),
     riak_kv_sweeper:enable_sweep_scheduling(),
     Running = riak_kv_sweeper:stop_all_sweeps(),
