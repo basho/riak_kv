@@ -475,7 +475,7 @@ kv_or_ts_details(RObj, {ok, LocalKey}) ->
     MD1 = dict:erase(?MD_TS_LOCAL_KEY, MD),
     RObj1 = riak_object:update_metadata(RObj, MD1),
     {RObj1, {riak_object:key(RObj), LocalKey},
-     fun(O) -> riak_object:to_binary(v1, O, msgpack) end};
+     fun(O) -> riak_object:to_binary(v1, O, erlang) end};
 kv_or_ts_details(RObj, error) ->
     {RObj, riak_object:key(RObj), fun(O) -> riak_object:to_binary(v1, O) end}.
 

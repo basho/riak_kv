@@ -510,8 +510,7 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     Options = [
                {start_key,   StartKey2},
                {end_key,     EndKey2},
-               {fold_method, streaming},
-               {encoding,    msgpack} | range_scan_additional_options(W)
+               {fold_method, streaming} | range_scan_additional_options(W)
               ],
     KeyFolder = fun() ->
                         Vals = eleveldb:fold(Ref, FoldFun, [], Options),
