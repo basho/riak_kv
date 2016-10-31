@@ -348,10 +348,14 @@ get_estimtate(Index) ->
                             case riak_kv_index_hashtree:estimate_keys(Index) of
                                 {ok, EstimatedNrKeys} ->
                                     EstimatedNrKeys;
-                                _ ->
+                                Other ->
+                                    lager:info("Failed to get estimate for ~p, got result"
+                                               " ~p. Defaulting to 0...", [Index, Other]),
                                     0
                             end;
                         _ ->
+                            lager:info("Failed to get lock for index ~p for estimate, "
+                                       "defaulting to 0...", [Index]),
                             0
                     end,
                 Pid ! {estimate, Estimate}
