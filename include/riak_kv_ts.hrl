@@ -92,7 +92,6 @@
           'WHERE'       = []    :: [riak_ql_ddl:filter()],
           'ORDER BY'            :: undefined | [riak_kv_qry_compiler:sorter()],
           'LIMIT'               :: undefined | riak_kv_qry_compiler:limit(),
-          'OFFSET'              :: undefined | riak_kv_qry_compiler:offset(),
           helper_mod            :: atom(),
           %% will include groups when we get that far
           partition_key = none  :: none | #key_v1{},
@@ -104,8 +103,10 @@
           %% prolly a mistake to put this here - should be in DDL
           local_key,
           %% since v2
-          group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}]
-        }).
+          group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}],
+          %% since v3
+          'OFFSET'              :: undefined | riak_kv_qry_compiler:offset()
+       }).
 
 -record(riak_sql_describe_v1,
         {
