@@ -1067,6 +1067,7 @@ maybe_build(State) ->
 build_or_rehash(Self, State=#state{index=Index}) ->
     case load_built(State) of
         false ->
+            lager:debug("Triggering manual sweep for ~p", [Index]),
             riak_kv_sweeper:sweep(Index);
         true  ->
             Locked = get_all_locks(rehash, Index, self()),
