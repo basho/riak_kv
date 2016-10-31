@@ -386,17 +386,10 @@ disable_sweep_participant_in_running_sweep(Module, Sweeps) ->
        lists:keymember(Module, #sweep_participant.module, ActiveP)].
 
 disable_participant(Sweep, Module) ->
-    send_to_sweep_worker({disable, Module}, Sweep).
+    riak_kv_sweeper_fold:send_to_sweep_worker({disable, Module}, Sweep).
 
 stop_sweep(Sweep) ->
-    send_to_sweep_worker(stop, Sweep).
-
-send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid)->
-    lager:debug("Send to sweep worker ~p: ~p", [Pid, Msg]),
-    Pid ! Msg;
-send_to_sweep_worker(Msg, #sweep{index = Index}) ->
-    lager:info("no pid ~p to ~p " , [Msg, Index]),
-    no_pid.
+    riak_kv_sweeper_fold:send_to_sweep_worker(stop, Sweep).
 
 in_sweep_window() ->
     {_, {Hour, _, _}} = calendar:local_time(),

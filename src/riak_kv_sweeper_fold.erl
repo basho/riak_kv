@@ -28,6 +28,7 @@
 
 -export([do_sweep/8]).
 -export([get_sweep_throttle/0]).
+-export([send_to_sweep_worker/2]).
 
 -define(MAX_SWEEP_CRASHES, 10).
 %% Throttle used when sweeping over K/V data: {Type, Limit, Wait}.
@@ -174,6 +175,12 @@ get_sweep_throttle() ->
             {Type, Limit, Sleep}
     end.
 
+send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid)->
+    lager:debug("Send to sweep worker ~p: ~p", [Pid, Msg]),
+    Pid ! Msg;
+send_to_sweep_worker(Msg, #sweep{index = Index}) ->
+    lager:info("no pid ~p to ~p " , [Msg, Index]),
+    no_pid.
 
 maybe_receive_request(Acc) ->
     maybe_receive_request(Acc, 0).
