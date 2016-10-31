@@ -672,7 +672,7 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, 
     CompleteFoldReq = make_complete_fold_req(),
     InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
     case Mod:fold_objects(CompleteFoldReq, InitialAcc, Opts, ModState) of
-        #sa{} = Acc ->
+        {ok, #sa{} = Acc} ->
             inform_participants(Acc, Index),
             {reply, Acc, VnodeState};
         {async, Work} ->
