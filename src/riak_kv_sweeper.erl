@@ -688,6 +688,7 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, 
     case Mod:fold_objects(CompleteFoldReq, InitialAcc, Opts, ModState) of
         {ok, #sa{} = Acc} ->
             inform_participants(Acc, Index),
+            ?MODULE:sweep_result(Index, format_result(Acc)),
             {reply, Acc, VnodeState};
         {async, Work} ->
             FinishFun =

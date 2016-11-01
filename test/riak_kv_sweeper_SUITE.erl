@@ -214,6 +214,22 @@ remove_participant_persistent_test() ->
     ok.
 
 
+sweep_request_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    application:set_env(riak_kv, sweeper_window, always),
+    SP = new_meck_sweep_particpant(sweep_observer_1, self()),
+    meck_new_backend(self()),
+    riak_kv_sweeper:add_sweep_participant(SP),
+
+    I0 = pick(Indices),
+    riak_kv_sweeper:sweep(I0),
+    ok = receive_msg({ok, successfull_sweep, I0}),
+
+    I1 = pick(Indices),
+    riak_kv_sweeper:sweep(I1),
+    ok = receive_msg({ok, successfull_sweep, I1}).
+
+
 scheduler_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     meck_new_backend(self()),
