@@ -66,6 +66,7 @@
 %% API functions
 %% ====================================================================
 -export([start_link/0,
+         stop/0,
          add_sweep_participant/1,
          remove_sweep_participant/1,
          status/0,
@@ -79,8 +80,14 @@
          get_sweep_throttle/0,
          do_sweep/8]).
 
+%% Exported only for testing
+-export([sweep_file/0]).
+
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+stop() ->
+    gen_server:call(?MODULE, stop).
 
 %% @doc Add callback module that will be asked to participate in sweeps.
 -spec add_sweep_participant(#sweep_participant{}) -> ok.
@@ -183,7 +190,11 @@ handle_call(status, _From, State) ->
 
 handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
     [stop_sweep(Sweep) || Sweep <- get_running_sweeps(Sweeps)],
-    {reply, ok, State}.
+    {reply, ok, State};
+
+handle_call(stop, _From, #state{sweeps = Sweeps} = State) ->
+    [stop_sweep(Sweep) || Sweep <- get_running_sweeps(Sweeps)],
+    {stop, normal, ok, State}.
 
 handle_cast({update_started_sweep, Index, ActiveParticipants, Estimate}, State) ->
     State1 = update_started_sweep(Index, ActiveParticipants, Estimate, State),
@@ -659,6 +670,9 @@ get_persistent_sweeps() ->
         _ ->
             dict:new()
     end.
+
+sweep_file() ->
+    sweep_file(?SWEEPS_FILE).
 
 sweep_file(File) ->
      PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
