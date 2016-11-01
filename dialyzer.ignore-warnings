@@ -12,6 +12,7 @@ Unknown functions:
   yz_kv:index/3
   yz_kv:index_binary/5
   yz_kv:should_handoff/1
+  object:warning/2
 Unknown types:
   base64:ascii_binary/0
   mochijson2:json_object/0
