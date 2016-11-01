@@ -1,6 +1,5 @@
 -module(riak_kv_sweeper_SUITE).
 
-%% Note: This directive should only be used in test suites.
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
@@ -261,13 +260,13 @@ receive_msg(Msg, TimeoutMsecs) ->
 
 
 all_tests() ->
-    lists:foldl(
-      fun({F, A}, Acc) ->
-              case {A, re:run(atom_to_list(F), "_test$")} of
-                  {1, {match, _}} -> [F|Acc];
-                  _ -> Acc
-              end
-      end, [], ?MODULE:module_info(exports)).
+    [F || {F, A} <- ?MODULE:module_info(exports), is_testcase({F, A})].
+
+
+is_testcase({F, 1}) ->
+    match =:= re:run(atom_to_list(F), "scheduler_test$", [{capture, none}]);
+is_testcase({_, _}) ->
+    false.
 
 %% watch:remove_file_changed_action(ct).
 %% watch:add_file_changed_action({ct, fun(_) -> ct:run_test({suite, riak_kv_sweeper_SUITE}) end}).
