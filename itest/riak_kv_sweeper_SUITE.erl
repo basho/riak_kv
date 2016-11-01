@@ -218,20 +218,6 @@ add_participant_persistent_test(_Config) ->
     ok.
 
 
-add_participant_scheduler_test(Config) ->
-    Indices = ?config(vnode_indices, Config),
-    meck_new_backend(self()),
-    SP1 = new_meck_sweep_particpant(sweep_observer_1, self()),
-    SP2 = new_meck_sweep_particpant(sweep_observer_2, self()),
-    riak_kv_sweeper:add_sweep_participant(SP1),
-    riak_kv_sweeper:enable_sweep_scheduling(),
-    [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}) || I <- Indices],
-    riak_kv_sweeper:add_sweep_participant(SP2),
-    [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}) || I <- Indices],
-    [ok = receive_msg({ok, successfull_sweep, sweep_observer_2, I}) || I <- Indices],
-    ok.
-
-
 remove_participant_test(_Config) ->
     SP = new_meck_sweep_particpant(sweep_observer_1, self()),
     riak_kv_sweeper:add_sweep_participant(SP),
@@ -347,9 +333,32 @@ stop_all_scheduled_sweeps_race_condition_test(Config) ->
     [timeout = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, SweepRunTimeMsecs) || I <- Indices],
     ok.
 
+scheduler_add_participant_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    meck_new_backend(self()),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+
+    SP1 = new_meck_sweep_particpant(sweep_observer_1, self()),
+    riak_kv_sweeper:add_sweep_participant(SP1#sweep_participant{run_interval = 1}),
+    [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}) || I <- Indices],
+    [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+
+    SP2 = new_meck_sweep_particpant(sweep_observer_2, self()),
+    riak_kv_sweeper:add_sweep_participant(SP2#sweep_participant{run_interval = 1}),
+    [ok = receive_msg({ok, successfull_sweep, sweep_observer_2, I}) || I <- Indices],
+    [ok = receive_msg({ok, successfull_sweep, sweep_observer_2, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+    ok.
+
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
+
+%% Waiting for 2500 msecs because at least 1 second must elapse
+%% before a sweep is re-run using the run_interval (now - ts) > 1,
+%% see kv_sweeper:expired
+min_scheduler_response_time_msecs() ->
+    2500.
 
 pick(List) when length(List) > 0 ->
     N = random:uniform(length(List)),
