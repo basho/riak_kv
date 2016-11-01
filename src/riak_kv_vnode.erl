@@ -2,7 +2,7 @@
 %%
 %% riak_kv_vnode: VNode Implementation
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -95,9 +95,11 @@
 %% disk are modified.
 -ifdef(TEST).
 %% Use values so that test compile doesn't give 'unused vars' warning.
--define(INDEX(A,B,C), _=element(1,{A,B,C}), ok).
+-define(INDEX(A,B,C), _=element(1,{{_A1, _A2} = A,B,C}), ok).
+-define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), _=element(1, {BProps}), false).
 -else.
 -define(INDEX(Obj, Reason, Partition), yz_kv:index(Obj, Reason, Partition)).
+-define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), yz_kv:is_search_enabled_for_bucket(BProps)).
 -endif.
 
 -ifdef(TEST).
@@ -1258,8 +1260,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        readrepair = ReadRepair,
                        prunetime=PruneTime,
                        crdt_op = CRDTOp},
-    {PrepPutRes, UpdPutArgs} = prepare_put(State, PutArgs),
-    {Reply, UpdState} = perform_put(PrepPutRes, State, UpdPutArgs),
+    {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
+    {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
@@ -1298,143 +1300,160 @@ prepare_put(State=#state{vnodeid=VId,
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
-                             starttime=StartTime}) ->
+                             starttime=StartTime,
+                             bprops = BProps}) ->
     %% Can we avoid reading the existing object? If this is not an
     %% index backend, and the bucket is set to last-write-wins, then
     %% no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
+    IndexBackend = is_indexed_backend(Mod, Bucket, ModState),
+    IsSearchable = ?IS_SEARCH_ENABLED_FOR_BUCKET(BProps),
+    SkipReadBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
+    case SkipReadBeforeWrite of
+        true ->
+            prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State);
+        false ->
+            prepare_read_before_write_put(State, PutArgs, IndexBackend, IsSearchable)
+    end.
+
+is_indexed_backend(Mod, Bucket, ModState) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
-    case LWW andalso not IndexBackend of
+    IndexBackend.
+
+prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State) ->
+    ObjToStore = case Coord of
         true ->
-            ObjToStore =
-                case Coord of
-                    true ->
-                        riak_object:increment_vclock(RObj, VId, StartTime);
-                    false ->
-                        RObj
-                end,
-            {{true, ObjToStore}, PutArgs#putargs{is_index = false}};
+            %% Do we need to use epochs here? I guess we
+            %% don't care, and since we don't read, we
+            %% can't.
+            riak_object:increment_vclock(RObj, VId, StartTime);
         false ->
-            prepare_put(State, PutArgs, IndexBackend)
-    end.
-prepare_put(#state{vnodeid=VId,
-                   mod=Mod,
-                   modstate=ModState,
-                   idx=Idx,
-                   md_cache=MDCache},
-            PutArgs=#putargs{bkey={Bucket, Key}=BKey,
-                             robj=RObj,
-                             bprops=BProps,
-                             coord=Coord,
-                             lww=LWW,
-                             starttime=StartTime,
-                             prunetime=PruneTime,
-                             crdt_op = CRDTOp},
-            IndexBackend) ->
+            RObj
+    end,
+    {{true, {ObjToStore, no_old_object}}, PutArgs#putargs{is_index = false}, State}.
+
+prepare_read_before_write_put(#state{mod = Mod,
+                                     modstate = ModState,
+                                     md_cache = MDCache}=State,
+                              #putargs{bkey={Bucket, Key}=BKey,
+                                       robj=RObj}=PutArgs,
+                              IndexBackend, IsSearchable) ->
     {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
 
-    RequiresGet =
-        case CacheClock of
-            undefined ->
-                true;
-            Clock ->
-                case vclock:descends(riak_object:vclock(RObj), Clock) of
-                    true ->
-                        false;
-                    _ ->
-                        true
-                end
-        end,
-    GetReply =
-        case RequiresGet of
-            true ->
-                case do_get_object(Bucket, Key, Mod, ModState) of
-                    {error, not_found, _UpdModState} ->
-                        ok;
-                    {ok, TheOldObj, _UpdModState} ->
-                        {ok, TheOldObj}
-                end;
-            false ->
-                FakeObj0 = riak_object:new(Bucket, Key, <<>>),
-                FakeObj = riak_object:set_vclock(FakeObj0, CacheClock),
-                {ok, FakeObj}
-        end,
+    RequiresGet = determine_requires_get(CacheClock, RObj, IsSearchable),
+    GetReply = get_old_object_or_fake(RequiresGet, Bucket, Key, Mod, ModState, CacheClock),
     case GetReply of
-        ok ->
-            case IndexBackend of
-                true ->
-                    IndexSpecs = riak_object:index_specs(RObj);
-                false ->
-                    IndexSpecs = []
-            end,
-            case prepare_new_put(Coord, RObj, VId, StartTime, CRDTOp) of
-                {error, E} ->
-                    {{fail, Idx, E}, PutArgs};
-                ObjToStore ->
-                    {{true, ObjToStore},
-                     PutArgs#putargs{index_specs=IndexSpecs,
-                                     is_index=IndexBackend}}
-            end;
+        not_found ->
+            prepare_put_new_object(State, PutArgs, IndexBackend);
         {ok, OldObj} ->
-            case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
-                {oldobj, OldObj1} ->
-                    {{false, OldObj1}, PutArgs};
-                {newobj, NewObj} ->
-                    VC = riak_object:vclock(NewObj),
-                    AMObj = enforce_allow_mult(NewObj, BProps),
-                    IndexSpecs = case IndexBackend of
-                                     true ->
-                                         case CacheData /= undefined andalso
-                                             RequiresGet == false of
-                                             true ->
-                                                 NewData = riak_object:index_data(AMObj),
-                                                 riak_object:diff_index_data(NewData,
-                                                                             CacheData);
-                                             false ->
-                                                 riak_object:diff_index_specs(AMObj,
-                                                                              OldObj)
-                                         end;
-                                    false ->
-                                         []
-                    end,
-                    ObjToStore = case PruneTime of
-                                     undefined ->
-                                         AMObj;
-                                     _ ->
-                                         riak_object:set_vclock(AMObj,
-                                                                vclock:prune(VC,
-                                                                             PruneTime,
-                                                                             BProps))
-                    end,
-                    case handle_crdt(Coord, CRDTOp, VId, ObjToStore) of
-                        {error, E} ->
-                            {{fail, Idx, E}, PutArgs};
-                        ObjToStore2 ->
-                            {{true, ObjToStore2},
-                             PutArgs#putargs{index_specs=IndexSpecs,
-                                             is_index=IndexBackend}}
-                    end
-            end
+            prepare_put_existing_object(State, PutArgs, OldObj, IndexBackend, CacheData, RequiresGet)
     end.
 
+prepare_put_existing_object(#state{vnodeid=VId, idx =Idx} = State,
+                    #putargs{coord=Coord,
+                             robj = RObj,
+                             lww=LWW,
+                             starttime = StartTime,
+                             bprops = BProps,
+                             prunetime=PruneTime,
+                             crdt_op = CRDTOp}=PutArgs,
+                            OldObj, IndexBackend, CacheData, RequiresGet) ->
+    case put_merge(Coord, LWW, OldObj, RObj, VId, StartTime) of
+        {oldobj, OldObj} ->
+            {{false, {OldObj, no_old_object}}, PutArgs, State};
+        {newobj, NewObj} ->
+            AMObj = enforce_allow_mult(NewObj, BProps),
+            IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
+            ObjToStore0 = maybe_prune_vclock(PruneTime, AMObj, BProps),
+            ObjectToStore = maybe_do_crdt_update(Coord, CRDTOp, VId, ObjToStore0),
+            determine_put_result(ObjectToStore, OldObj, Idx, PutArgs, State, IndexSpecs, IndexBackend)
+    end.
+
+determine_put_result({error, E}, _, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
+    {{fail, Idx, E}, PutArgs, State};
+determine_put_result(ObjToStore, OldObj, _Idx, PutArgs, State, IndexSpecs, IndexBackend) ->
+    {{true, {ObjToStore, OldObj}},
+     PutArgs#putargs{index_specs = IndexSpecs,
+                     is_index    = IndexBackend}, State}.
+
+maybe_prune_vclock(_PruneTime=undefined, RObj, _BProps) ->
+    RObj;
+maybe_prune_vclock(PruneTime, RObj, BProps) ->
+    riak_object:prune_vclock(RObj, PruneTime, BProps).
+
+get_index_specs(_IndexedBackend=true, CacheData, RequiresGet, NewObj, OldObj) ->
+    case CacheData /= undefined andalso
+         RequiresGet == false of
+        true ->
+            NewData = riak_object:index_data(NewObj),
+            riak_object:diff_index_data(NewData,
+                                        CacheData);
+        false ->
+            riak_object:diff_index_specs(NewObj,
+                                         OldObj)
+    end;
+
+get_index_specs(_IndexedBackend=false, _CacheData, _RequiresGet, _NewObj, _OldObj) ->
+    [].
+
+prepare_put_new_object(#state{vnodeid=VId, idx =Idx} = State,
+               #putargs{robj = RObj,
+                        coord=Coord,
+                        starttime=StartTime,
+                        crdt_op=CRDTOp} = PutArgs,
+                       IndexBackend) ->
+    IndexSpecs = case IndexBackend of
+                     true ->
+                         riak_object:index_specs(RObj);
+                     false ->
+                         []
+                 end,
+    RObj2 = maybe_update_vclock(Coord, RObj, VId, StartTime),
+    RObj3 = maybe_do_crdt_update(Coord, CRDTOp, VId, RObj2),
+    determine_put_result(RObj3, no_old_object, Idx, PutArgs, State, IndexSpecs, IndexBackend).
+
+get_old_object_or_fake(true, Bucket, Key, Mod, ModState, _CacheClock) ->
+    case do_get_object(Bucket, Key, Mod, ModState) of
+        {error, not_found, _UpdModState} ->
+            not_found;
+        {ok, TheOldObj, _UpdModState} ->
+            {ok, TheOldObj}
+    end;
+get_old_object_or_fake(false, Bucket, Key, _Mod, _ModState, CacheClock) ->
+    FakeObj0 = riak_object:new(Bucket, Key, <<>>),
+    FakeObj = riak_object:set_vclock(FakeObj0, CacheClock),
+    {ok, FakeObj}.
+
+determine_requires_get(CacheClock, RObj, IsSearchable) ->
+    RequiresGet =
+    case CacheClock of
+        undefined ->
+            true;
+        Clock ->
+            %% We need to perform a local get, to merge contents,
+            %% if the local object has events unseen by the
+            %% incoming object. If the incoming object descends
+            %% the cache (i.e. has seen all its events) no need to
+            %% do a local get and merge, just overwrite.
+            not riak_object:vclock_descends(RObj, Clock) orelse IsSearchable
+    end,
+    RequiresGet.
+
 %% @Doc in the case that this a co-ordinating put, prepare the object.
-prepare_new_put(true, RObj, VId, StartTime, undefined) ->
+%% NOTE the `VId' is a new epoch actor for this object
+maybe_update_vclock(_Coord=true, RObj, VId, StartTime) ->
     riak_object:increment_vclock(RObj, VId, StartTime);
-prepare_new_put(true, RObj, VId, StartTime, CRDTOp) ->
-    VClockUp = riak_object:increment_vclock(RObj, VId, StartTime),
-    %% coordinating a _NEW_ crdt operation means
-    %% creating + updating the crdt.
-    %% Make a new crdt, stuff it in the riak_object
-    do_crdt_update(VClockUp, VId, CRDTOp);
-prepare_new_put(false, RObj, _VId, _StartTime, _CounterOp) ->
+maybe_update_vclock(_Coord=false, RObj, _VId, _StartTime) ->
+    %% @TODO Not coordindating, not found local, is there an entry for
+    %% us in the clock? If so, mark as dirty
     RObj.
 
-handle_crdt(_, undefined, _VId, RObj) ->
+maybe_do_crdt_update(_, undefined, _VId, RObj) ->
     RObj;
-handle_crdt(true, CRDTOp, VId, RObj) ->
+maybe_do_crdt_update(_Coord = true, CRDTOp, VId, RObj) ->
     do_crdt_update(RObj, VId, CRDTOp);
-handle_crdt(false, _CRDTOp, _Vid, RObj) ->
+maybe_do_crdt_update(_Coord = false, _CRDTOp, _Vid, RObj) ->
     RObj.
 
 do_crdt_update(RObj, VId, CRDTOp) ->
@@ -1448,17 +1467,17 @@ get_crdt_mod(Atom) when is_atom(Atom) -> Atom.
 
 perform_put({fail, _, _}=Reply, State, _PutArgs) ->
     {Reply, State};
-perform_put({false, Obj},
+perform_put({false, {Obj, _OldObj}},
             #state{idx=Idx}=State,
             #putargs{returnbody=true,
                      reqid=ReqID}) ->
     {{dw, Idx, Obj, ReqID}, State};
-perform_put({false, _Obj},
+perform_put({false, {_Obj, _OldObj}},
             #state{idx=Idx}=State,
             #putargs{returnbody=false,
                      reqid=ReqId}) ->
     {{dw, Idx, ReqId}, State};
-perform_put({true, Obj},
+perform_put({true, {_Obj, _OldObj}=Objects},
             State,
             #putargs{returnbody=RB,
                      bkey=BKey,
@@ -1471,13 +1490,13 @@ perform_put({true, Obj},
       false ->
         MaxCheckFlag = do_max_check
     end,
-    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
+    {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
     {Reply, State2}.
 
-actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, Obj, IndexSpecs, RB, ReqID, do_max_check, State).
+actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
+    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, State).
 
-actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag,
+actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFlag,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
@@ -1486,23 +1505,25 @@ actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag,
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
-            ?INDEX(Obj, put, Idx),
-            case RB of
+            ?INDEX({Obj, OldObj}, put, Idx),
+            Reply = case RB of
                 true ->
-                    Reply = {dw, Idx, Obj, ReqID};
+                    {dw, Idx, Obj, ReqID};
                 false ->
-                    Reply = {dw, Idx, ReqID}
+                    {dw, Idx, ReqID}
             end;
         {{error, Reason, UpdModState}, _EncodedVal} ->
             Reply = {fail, Idx, Reason}
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
-actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
+actual_put_tracked(BKey, {_NewObj, _OldObj} = Objs, IndexSpecs, RB, ReqId, State) ->
     StartTS = os:timestamp(),
-    Result = actual_put(BKey, Obj, IndexSpecs, RB, ReqId, State),
+    Result = actual_put(BKey, Objs, IndexSpecs, RB, ReqId, State),
     update_vnode_stats(vnode_put, State#state.idx, StartTS),
-    Result.
+    Result;
+actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
+    actual_put_tracked(BKey, {Obj, no_old_object}, IndexSpecs, RB, ReqId, State).
 
 do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
@@ -1517,7 +1538,7 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
                                bkey=BKey,
                                reqid=undefined,
                                index_specs=[]},
-            case perform_put({true, RObj}, State, PutArgs) of
+            case perform_put({true, {RObj, no_old_object}}, State, PutArgs) of
                 {{fail, _, Reason}, UpdState}  ->
                     Reply = {error, Reason};
                 {_, UpdState} ->
@@ -1554,11 +1575,19 @@ select_newest_content(Mult) ->
 
 %% @private
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
+    %% @TODO Do we need to mark the clock dirty here? I think so
+    %% @TODO Check the clock of the incoming object, if it is more advanced
+    %% for our actor than we are then something is amiss, and we need
+    %% to mark the actor as dirty for this key
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
+    %%
+    %% @TODO Check the clock of the incoming object, if it is more advanced
+    %% for our actor than we are then something is amiss, and we need
+    %% to mark the actor as dirty for this key
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
     case riak_object:equal(ResObj, CurObj) of
         true ->
@@ -1567,6 +1596,8 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
             {newobj, ResObj}
     end;
 put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
+    %% @TODO If the current object has a dirty clock, we need to start
+    %% a new per key epoch and mark clock as clean.
     {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
 
 %% @private
@@ -1891,7 +1922,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     update_hashtree(Bucket, Key, DiffObj, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
-                    ?INDEX(DiffObj, handoff, Idx),
+                    ?INDEX({DiffObj, no_old_object}, handoff, Idx),
                     InnerRes;
                 {InnerRes, _Val} ->
                     InnerRes
@@ -1917,7 +1948,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                             update_hashtree(Bucket, Key, AMObj, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
-                            ?INDEX(AMObj, handoff, Idx),
+                            ?INDEX({AMObj, OldObj}, handoff, Idx),
                             InnerRes;
                         {InnerRes, _EncodedVal} ->
                             InnerRes
@@ -2503,7 +2534,7 @@ list_buckets_test_() ->
              clean_test_dirs(),
              application:start(sasl),
              Env = application:get_all_env(riak_kv),
-	     exometer:start(),
+             exometer:start(),
              riak_kv_stat:register_stats(),
              {ok, _} = riak_core_bg_manager:start(),
              riak_core_metadata_manager:start_link([{data_dir, "kv_vnode_test_meta"}]),
@@ -2513,7 +2544,7 @@ list_buckets_test_() ->
              riak_core_ring_manager:cleanup_ets(test),
              riak_kv_test_util:stop_process(riak_core_metadata_manager),
              riak_kv_test_util:stop_process(riak_core_bg_manager),
-	     exometer:stop(),
+             exometer:stop(),
              application:stop(sasl),
              [application:unset_env(riak_kv, K) ||
                  {K, _V} <- application:get_all_env(riak_kv)],

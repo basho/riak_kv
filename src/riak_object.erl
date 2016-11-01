@@ -75,7 +75,7 @@
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
 -export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
--export([increment_vclock/2, increment_vclock/3]).
+-export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
@@ -623,6 +623,18 @@ get_update_value(#r_object{updatevalue=UV}) -> UV.
 %% @doc  INTERNAL USE ONLY.  Set the vclock of riak_object O to V.
 -spec set_vclock(riak_object(), vclock:vclock()) -> riak_object().
 set_vclock(Object=#r_object{}, VClock) -> Object#r_object{vclock=VClock}.
+
+%% @doc Prune vclock
+-spec prune_vclock(riak_object(), vclock:timestamp(), [proplists:property()]) ->
+    riak_object().
+prune_vclock(Obj=#r_object{vclock=VC}, PruneTime, BucketProps) ->
+    VC2 = vclock:prune(VC, PruneTime, BucketProps),
+    Obj#r_object{vclock=VC2}.
+
+%% @doc Does the `riak_object' descend the provided `vclock'?
+-spec vclock_descends(riak_object(), vclock:vclock()) -> boolean().
+vclock_descends(#r_object{vclock=ObjVC}, VC) ->
+    vclock:descends(ObjVC, VC).
 
 %% @doc  Increment the entry for ClientId in O's vclock.
 -spec increment_vclock(riak_object(), vclock:vclock_node()) -> riak_object().
