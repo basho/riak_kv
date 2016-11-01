@@ -208,8 +208,8 @@ gset_op_from_json({struct, Ops}) when is_list(Ops) ->
     try
         {update, [ gset_op_from_json(Op) || Op <- Ops]}
     catch
-        throw:{invalid_operation, {set, _}} ->
-            bad_op(set, {struct, Ops})
+        throw:{invalid_operation, {gset, _}} ->
+            bad_op(gset, {struct, Ops})
     end;
 gset_op_from_json({<<"add">>, Bin}) when is_binary(Bin) -> {add, Bin};
 gset_op_from_json({Verb, BinList}=Op) when is_list(BinList), (Verb == <<"add_all">>)->
@@ -217,13 +217,13 @@ gset_op_from_json({Verb, BinList}=Op) when is_list(BinList), (Verb == <<"add_all
         true ->
             {binary_to_atom(Verb, utf8), BinList};
         false ->
-            bad_op(set, Op)
+            bad_op(gset, Op)
     end;
 gset_op_from_json({<<"update">>, {struct, Ops}}) when is_list(Ops) ->
     {update, [ gset_op_from_json(Op) || Op <- Ops]};
 gset_op_from_json({<<"update">>, Ops}) when is_list(Ops) ->
     {update, [ gset_op_from_json(Op) || Op <- Ops]};
-gset_op_from_json(Op) -> bad_op(set, Op).
+gset_op_from_json(Op) -> bad_op(gset, Op).
 
 -spec set_op_from_json(mochijson2:json_term() |
                        {mochijson2:json_string(), mochijson2:json_term()}) ->
