@@ -90,7 +90,7 @@ meck_new_successfull_sweep_function(Name, TestCasePid) ->
     meck:expect(Name, successfull_sweep, successfull_sweep_function(Name, TestCasePid)).
 
 meck_new_failed_sweep_function(Name, TestCasePid) ->
-    meck:expect(Name, failed_sweep_function, failed_sweep_function(Name, TestCasePid)).
+    meck:expect(Name, failed_sweep, failed_sweep_function(Name, TestCasePid)).
 
 visit_function({throw, Error}) ->
     fun(_Index) ->
