@@ -193,7 +193,7 @@ add_participant_persistent_test(_Config) ->
     ok.
 
 
-remove_participant_test() ->
+remove_participant_test(_Config) ->
     SP = new_meck_sweep_particpant(sweep_observer_1, self()),
     riak_kv_sweeper:add_sweep_participant(SP),
     {[#sweep_participant{module = sweep_observer_1}], _} = riak_kv_sweeper:status(),
@@ -202,7 +202,7 @@ remove_participant_test() ->
     ok.
 
 
-remove_participant_persistent_test() ->
+remove_participant_persistent_test(_Config) ->
     SP = new_meck_sweep_particpant(sweep_observer_1, self()),
     riak_kv_sweeper:add_sweep_participant(SP),
     {[#sweep_participant{module = sweep_observer_1}], _} = riak_kv_sweeper:status(),
