@@ -31,22 +31,13 @@ end_per_group(_GroupName, _Config) ->
 
 
 init_per_testcase(_TestCase, Config) ->
-    Ring = ring,
-    VNodeIndices = lists:sort([0, 2, 4, 8, 16, 32]),
-
     file:delete(riak_kv_sweeper:sweep_file()),
     application:set_env(riak_kv, sweep_participants, undefined),
     application:set_env(riak_kv, sweep_window, always),
     application:set_env(riak_kv, sweeper_scheduler, false),
-
-    meck:new(riak_core_ring_manager),
-    meck:new(riak_core_ring),
-    meck:new(riak_core_node_watcher),
-    meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, Ring} end),
-    meck:expect(riak_core_ring, my_indices, fun(ring) -> VNodeIndices end),
-    meck:expect(riak_core_node_watcher, services, fun(_Node) -> [riak_kv] end),
-
     application:set_env(riak_kv, sweep_tick, 100),
+
+    VNodeIndices = new_meck_riak_core_modules(2),
     riak_kv_sweeper:start_link(),
 
     [{vnode_indices, VNodeIndices}|Config].
@@ -75,6 +66,16 @@ all() ->
 %%--------------------------------------------------------------------
 %% Factory functions
 %%--------------------------------------------------------------------
+new_meck_riak_core_modules(Partitions) ->
+    Ring = ring,
+    VNodeIndices = [N || N <- lists:seq(0, Partitions)],
+    meck:new(riak_core_node_watcher),
+    meck:new(riak_core_ring_manager),
+    meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, Ring} end),
+    meck:new(riak_core_ring),
+    meck:expect(riak_core_ring, my_indices, fun(ring) -> VNodeIndices end),
+    meck:expect(riak_core_node_watcher, services, fun(_Node) -> [riak_kv] end),
+    VNodeIndices.
 
 new_meck_sweep_particpant(Name, TestCasePid) ->
     meck:new(Name, [non_strict, no_link]),
