@@ -1697,11 +1697,13 @@ actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFla
     end,
     {Reply, State#state{modstate=UpdModState}}.
 
-actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
+actual_put_tracked(BKey, {_NewObj, _OldObj} = Objs, IndexSpecs, RB, ReqId, State) ->
     StartTS = os:timestamp(),
-    Result = actual_put(BKey, Obj, IndexSpecs, RB, ReqId, State),
+    Result = actual_put(BKey, Objs, IndexSpecs, RB, ReqId, State),
     update_vnode_stats(vnode_put, State#state.idx, StartTS),
-    Result.
+    Result;
+actual_put_tracked(BKey, Obj, IndexSpecs, RB, ReqId, State) ->
+    actual_put_tracked(BKey, {Obj, no_old_object}, IndexSpecs, RB, ReqId, State).
 
 do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
