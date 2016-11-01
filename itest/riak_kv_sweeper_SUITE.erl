@@ -288,10 +288,7 @@ scheduler_run_interval_test(Config) ->
     riak_kv_sweeper:enable_sweep_scheduling(),
 
     [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}) || I <- Indices],
-    %% Waiting for 2500 msecs because at least 1 second must elapse
-    %% before a sweep is re-run using the run_interval (now - ts) > 1,
-    %% see kv_sweeper:expired
-    [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, 2500) || I <- Indices],
+    [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
 
     ok.
 
