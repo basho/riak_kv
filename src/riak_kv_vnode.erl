@@ -1486,8 +1486,8 @@ prepare_put(State=#state{vnodeid=VId,
     %% old object to know how the indexes have changed.
     IndexBackend = is_indexed_backend(Mod, Bucket, ModState),
     IsSearchable = ?IS_SEARCH_ENABLED_FOR_BUCKET(BProps),
-    SkipReqdBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
-    case SkipReqdBeforeWrite of
+    SkipReadBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
+    case SkipReadBeforeWrite of
         true ->
             prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State);
         false ->
