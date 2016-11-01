@@ -119,9 +119,15 @@ test_file_limit(FileLimit0) ->
             case FileLimit < 4096 of
                 true ->
                     {warn, "Open file limit of ~p is low, at least "
-                     ++ "4096 is recommended", [FileLimit]};
+                        ++ "4096 is recommended", [FileLimit]};
                 false ->
-                    {info, "Open file limit: ~p", [FileLimit]}
+                    case FileLimit >= erlang:system_info(port_limit) of
+                        true ->
+                            {warn, "Erlang ports limit should be greater than open "
+                                ++ "file limit ~p",[FileLimit]};
+                        false -> 
+                            {info, "Open file limit: ~p", [FileLimit]}
+                    end
             end
     end.
 
@@ -185,29 +191,50 @@ check_erlang_limits() ->
 
 %% @private
 check_sysctls(Checklist) ->
-    Fn = fun({Param, Val, Direction}) ->
-                 Output = string:strip(os:cmd("sysctl -n "++Param), right, $\n),
-                 Actual = list_to_integer(Output -- "\n"),
-                 Good = case Direction of
-                            gte -> Actual =< Val;
-                            lte -> Actual >= Val;
-                            eq -> Actual == Val
-                        end,
-                 case Good of
-                     true ->
-                         {info , "sysctl ~s is ~p ~s ~p)",
-                          [Param, Actual,
-                           direction_to_word(Direction),
-                           Val]};
-                     false ->
-                         {warn, "sysctl ~s is ~p, should be ~s~p)",
-                          [Param, Actual,
-                           direction_to_word2(Direction),
-                           Val]}
-                 end
-         end,
-    lists:map(Fn, Checklist).
-
+    Sysctl = case os:cmd("which sysctl") of
+      [] ->
+          case os:cmd("PATH=/sbin:/bin:/usr/bin:/usr/local/bin:/usr/local/sbin " 
+                      ++ "which sysctl") of
+              [] -> 
+                    lager:info("sysctl not found, skipping"),
+                    notfound;
+              P -> string:strip(P,right,$\n)
+          end;
+      Path -> string:strip(Path,right,$\n)
+    end,
+    case Sysctl of
+        notfound ->
+           [];
+        _ -> 
+            Fn = fun({Param, Val, Direction}) ->
+               Output = string:strip(os:cmd(Sysctl ++" -n "++Param), right,
+$\n),
+               case catch list_to_integer(Output -- "\n") of
+                   Actual when is_integer(Actual) ->
+                       Good = case Direction of
+                                  gte -> Actual =< Val;
+                                  lte -> Actual >= Val;
+                                  eq -> Actual == Val
+                              end,
+                       case Good of
+                           true ->
+                               {info , "sysctl ~s is ~p ~s ~p)",
+                                [Param, Actual,
+                                 direction_to_word(Direction),
+                                 Val]};
+                           false ->
+                               {warn, "sysctl ~s is ~p, should be ~s~p)",
+                                [Param, Actual,
+                                 direction_to_word2(Direction),
+                                 Val]}
+                       end;
+                   Other ->
+                             {warn, "error retrieving ~s from sysctl:
+~p",[Param,Other]}
+               end
+           end,
+           lists:map(Fn, Checklist)
+    end.
 %% @private
 direction_to_word(Direction) ->
     case Direction of
