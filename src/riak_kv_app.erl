@@ -186,13 +186,17 @@ start(_Type, _StartArgs) ->
             riak_core_capability:register({riak_kv, crdt},
                                           [?TOP_LEVEL_TYPES,
                                            ?V1_TOP_LEVEL_TYPES ++
+                                               ?V2_TOP_LEVEL_TYPES ++
+                                               ?V3_TOP_LEVEL_TYPES,
+                                           ?V1_TOP_LEVEL_TYPES ++
                                            ?V2_TOP_LEVEL_TYPES,
                                            ?V1_TOP_LEVEL_TYPES,
                                            []],
                                           []),
 
             riak_core_capability:register({riak_kv, crdt_epoch_versions},
-                                          [?E3_DATATYPE_VERSIONS,
+                                          [?E4_DATATYPE_VERSIONS,
+                                           ?E3_DATATYPE_VERSIONS,
                                            ?E2_DATATYPE_VERSIONS,
                                            ?E1_DATATYPE_VERSIONS],
                                           ?E1_DATATYPE_VERSIONS),
