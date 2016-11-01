@@ -65,11 +65,25 @@ increment(Actor, Count, Vclock) ->
       lists:duplicate(Count, Actor)).
 
 riak_object() ->
-    ?LET({{Bucket, Key}, Vclock, Value},
-         {bkey(), vclock(), binary()},
+    ?LET({{Bucket, Key}, Vclock, Value, Meta},
+        {bkey(), vclock(), object_value(), oneof([[], [{binary(), object_value()}]])},
+        %% TODO: The above oneof() should really be the below list(), but
+        %% because dicts don't serialize/deserialize deterministically,
+        %% riak_object_eqc:prop_roundtrip will fail if we put the list in now.
+        %% related to riak_object
+        %%{bkey(), vclock(), binary(), list({binary(), binary()})},
          riak_object:set_vclock(
-           riak_object:new(Bucket, Key, Value),
+           riak_object:new(Bucket, Key, Value, dict:from_list(Meta)),
            Vclock)).
+
+object_value() ->
+    oneof([binary(), erlang_term()]).
+
+erlang_term() ->
+    oneof([gen_atom(), nat(), binary(), {?LAZY(erlang_term()), ?LAZY(erlang_term())}]).
+
+gen_atom() -> % a,q seems to be the minimum provoking example for atoms
+    elements([a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z]).
 
 maybe_tombstone() ->
     weighted_default({2, notombstone}, {1, tombstone}).
@@ -184,7 +198,6 @@ start_mock_servers() ->
     application:load(riak_core),
     application:start(crypto),
     exometer:start(),
-    start_fake_get_put_monitor(),
     riak_kv_stat:register_stats(),
     riak_core_metadata_manager:start_link([{data_dir, "fsm_eqc_test_data"}]),
     riak_core_ring_events:start_link(),
@@ -195,7 +208,6 @@ start_mock_servers() ->
     ok.
 
 cleanup_mock_servers() ->
-    stop_fake_get_put_monitor(),
     riak_kv_test_util:stop_process(riak_core_metadata_manager),
     riak_kv_test_util:stop_process(riak_core_ring_manager),
     application:stop(folsom),
@@ -248,29 +260,6 @@ wait_for_req_id(ReqId, Pid) ->
             {anything, Anything1}
     after 400 ->
             timeout
-    end.
-
-start_fake_get_put_monitor() ->
-    meck:new(riak_kv_get_put_monitor),
-    meck:expect(riak_kv_get_put_monitor, get_fsm_spawned,
-                fun(_Pid) ->  ok  end),
-    meck:expect(riak_kv_get_put_monitor, put_fsm_spawned,
-                fun(_Pid) ->  ok  end),
-    meck:expect(riak_kv_get_put_monitor, gets_active,
-                fun() -> meck:passthrough([])
-                end).
-
-stop_fake_get_put_monitor() ->
-    meck:unload(riak_kv_get_put_monitor).
-
-is_get_put_last_cast(Type, Pid) ->
-    case last_spawn(lists:reverse(meck:history(riak_kv_get_put_monitor))) of
-        {get_fsm_spawned, Pid} when Type == get ->
-            true;
-        {put_fsm_spawned, Pid} when Type == put ->
-            true;
-        _ ->
-            false
     end.
 
 %% Just get the last `XXX_fsm_spawned/1' from the list

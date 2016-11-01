@@ -833,7 +833,26 @@ break_out_timeseries(Filters1, PartitionFields1, no_quanta) ->
 break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(QuantumField) ->
     case find_timestamp_bounds(QuantumField, Filters1) of
         {_, {undefined, undefined}} ->
-            error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
+            %% if we don't have a time range then check for a time equality
+            %% filter e.g. mytime = 12345, which is rewritten as
+            %% mytime >= 12345 AND mytime <= 12345
+            {QEqFilters, OtherFilters} =
+                lists:splitwith(fun({Op, F, _}) ->
+                                    Op == '=' andalso F == QuantumField
+                                end, Filters1),
+            case QEqFilters of
+                [QEqFilter] ->
+                    {Body, Filters2} = split_key_from_filters(PartitionFields1, OtherFilters),
+                    Starts = setelement(1, QEqFilter, '>='),
+                    Ends = setelement(1, QEqFilter, '<='),
+                    {[Starts | Body], [Ends | Body], Filters2};
+                [] ->
+                    error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
+                [_|_] ->
+                    error(
+                        {cannot_have_two_equality_filters_on_quantum_without_range,
+                         ?E_CANNOT_HAVE_TWO_EQUALITY_FILTERS_ON_QUANTUM_WITHOUT_RANGE})
+            end;
         {_, {_, undefined}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND});
         {_, {undefined, _}} ->
@@ -907,6 +926,17 @@ add_types2([], _Mod, Acc) ->
 add_types2([{Op, LHS, RHS} | T], Mod, Acc) when Op =:= and_ orelse
                                                 Op =:= or_  ->
     NewAcc = {Op, add_types2([LHS], Mod, []), add_types2([RHS], Mod, [])},
+    add_types2(T, Mod, [NewAcc | Acc]);
+add_types2([{NullOp, {identifier, Field}} | T], Mod, Acc) when NullOp =:= is_null orelse
+                                                                 NullOp =:= is_not_null ->
+    EqOp = case NullOp of
+        is_null -> '=';
+        is_not_null -> '!='
+    end,
+    %% cast to varchar since nullable types do not exist w/i the leveldb backend,
+    %% otherwise said NULL as [] bleeds due to basic datatype selection.
+    NewType = 'varchar',
+    NewAcc = {EqOp, {field, Field, NewType}, {const, ?SQL_NULL}},
     add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
     NewType = Mod:get_field_type([Field]),
@@ -1132,6 +1162,25 @@ simple_filter_typing_test() ->
                  }
                 },
                 {'=', {field, <<"extra">>, sint64}, {const, 1}}
+               },
+    ?assertEqual(Expected, Got).
+
+%%
+%% test for IS [NOT] NULL filters
+%%
+is_null_filter_typing_test() ->
+    ?DDL{table = T} = get_long_ddl(),
+    Mod = riak_ql_ddl:make_module_name(T),
+    Filter = [
+               {and_,
+                   {is_null, {identifier, <<"weather">>}},
+                   {is_not_null, {identifier, <<"temperature">>}}
+               }
+             ],
+    Got = add_types_to_filter(Filter, Mod),
+    Expected = {and_,
+                {'=', {field, <<"weather">>, varchar}, {const, ?SQL_NULL}},
+                {'!=', {field, <<"temperature">>, varchar}, {const, ?SQL_NULL}}
                },
     ?assertEqual(Expected, Got).
 
@@ -2345,6 +2394,35 @@ no_quantum_in_query_4_test() ->
           {filter,[]},
           {end_inclusive,true}],
         Select?SQL_SELECT.'WHERE'
+    ).
+
+eqality_filter_on_quantum_specifies_start_and_end_range_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((quantum(a, 15, 's')), a))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1000"),
+    {ok, [Select]} = compile(DDL, Q, 100),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,timestamp,1000}]},
+         {endkey,[{<<"a">>,timestamp,1000}]},
+         {filter,[]},
+         {end_inclusive,true}],
+        Select?SQL_SELECT.'WHERE'
+    ).
+
+cannot_have_two_equality_filters_on_quantum_without_range_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((quantum(a, 15, 's')), a))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1000 AND a = 1"),
+    ?assertEqual(
+        {error, {cannot_have_two_equality_filters_on_quantum_without_range,
+                 ?E_CANNOT_HAVE_TWO_EQUALITY_FILTERS_ON_QUANTUM_WITHOUT_RANGE}},
+        compile(DDL, Q, 100)
     ).
 
 two_element_key_range_cannot_match_test() ->

@@ -229,7 +229,7 @@ responsible_preflists(Index) when is_integer(Index) ->
 
 -spec responsible_preflists(index(), riak_core_ring()) -> [index_n()].
 responsible_preflists(Index, Ring) ->
-    AllN = determine_all_n(Ring),
+    AllN = riak_core_bucket:all_n(Ring),
     responsible_preflists(Index, AllN, Ring).
 
 -spec responsible_preflists(index(), [pos_integer(),...], riak_core_ring())
@@ -250,19 +250,8 @@ responsible_preflists_n(RevIndices, N) ->
 
 -spec determine_max_n(riak_core_ring()) -> pos_integer().
 determine_max_n(Ring) ->
-    lists:max(determine_all_n(Ring)).
+    lists:max(riak_core_bucket:all_n(Ring)).
 
--spec determine_all_n(riak_core_ring()) -> [pos_integer(),...].
-determine_all_n(Ring) ->
-    Buckets = riak_core_ring:get_buckets(Ring),
-    BucketProps = [riak_core_bucket:get_bucket(Bucket, Ring) || Bucket <- Buckets],
-    Default = app_helper:get_env(riak_core, default_bucket_props),
-    DefaultN = proplists:get_value(n_val, Default),
-    AllN = lists:foldl(fun(Props, AllN) ->
-                               N = proplists:get_value(n_val, Props),
-                               ordsets:add_element(N, AllN)
-                       end, [DefaultN], BucketProps),
-    AllN.
 
 fix_incorrect_index_entries() ->
     fix_incorrect_index_entries([]).
@@ -392,28 +381,13 @@ overload_reply(_) ->
     ok.
 
 puts_active() ->
-    case whereis(riak_kv_put_fsm_sj) of
-        undefined ->
-            riak_kv_get_put_monitor:puts_active();
-        _ ->
-            sidejob_resource_stats:usage(riak_kv_put_fsm_sj)
-    end.
+    sidejob_resource_stats:usage(riak_kv_put_fsm_sj).
 
 exact_puts_active() ->
-    case whereis(riak_kv_put_fsm_sj) of
-        undefined ->
-            riak_kv_get_put_monitor:puts_active();
-        _ ->
-            length(sidejob_supervisor:which_children(riak_kv_put_fsm_sj))
-    end.
+    length(sidejob_supervisor:which_children(riak_kv_put_fsm_sj)).
 
 gets_active() ->
-    case whereis(riak_kv_get_fsm_sj) of
-        undefined ->
-            riak_kv_get_put_monitor:gets_active();
-        _ ->
-            sidejob_resource_stats:usage(riak_kv_get_fsm_sj)
-    end.
+    sidejob_resource_stats:usage(riak_kv_get_fsm_sj).
 
 %% @doc Get backend config for backends without an associated application
 %% eg, yessir, memory

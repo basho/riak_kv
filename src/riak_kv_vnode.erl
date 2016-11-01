@@ -2,7 +2,7 @@
 %%
 %% riak_kv_vnode: VNode Implementation
 %%
-%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -49,6 +49,7 @@
          refresh_index_data/4,
          request_hashtree_pid/1,
          request_hashtree_pid/2,
+         upgrade_hashtree/1,
          reformat_object/2,
          stop_fold/1,
          get_modstate/1]).
@@ -148,6 +149,7 @@
                 handoffs_rejected = 0 :: integer(),
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid(),
+                upgrade_hashtree = false :: boolean(),
                 md_cache :: ets:tab(),
                 md_cache_size :: pos_integer(),
                 counter :: #counter_state{},
@@ -160,6 +162,7 @@
 -type state() :: #state{}.
 -type vnodeid() :: binary().
 -type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
+
 
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
@@ -193,9 +196,10 @@
                   robj :: term(),
                   index_specs=[] :: [{index_op(), binary(), index_value()}],
                   reqid :: non_neg_integer(),
-                  bprops :: maybe_improper_list(),
+                  bprops :: riak_kv_bucket:props(),
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
+                  readrepair=false :: boolean(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
                  }).
@@ -206,8 +210,8 @@ maybe_create_hashtrees(State) ->
 
 -spec maybe_create_hashtrees(boolean(), state()) -> state().
 maybe_create_hashtrees(false, State) ->
-    State;
-maybe_create_hashtrees(true, State=#state{idx=Index,
+    State#state{upgrade_hashtree=false};
+maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
                                           mod=Mod, modstate=ModState}) ->
     %% Only maintain a hashtree if a primary vnode
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
@@ -219,11 +223,12 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
                         {false, _, _} -> false
                     end,
             Opts = [use_2i || lists:member(indexes, ModCaps)]
-                   ++ [vnode_empty || Empty],
+                   ++ [vnode_empty || Empty]
+                   ++ [upgrade || Upgrade],
             case riak_kv_index_hashtree:start(Index, self(), Opts) of
                 {ok, Trees} ->
                     monitor(process, Trees),
-                    State#state{hashtrees=Trees};
+                    State#state{hashtrees=Trees, upgrade_hashtree=false};
                 Error ->
                     lager:info("riak_kv/~p: unable to start index_hashtree: ~p",
                                [Index, Error]),
@@ -231,7 +236,7 @@ maybe_create_hashtrees(true, State=#state{idx=Index,
                     State#state{hashtrees=undefined}
             end;
         _ ->
-            State
+            State#state{upgrade_hashtree=false}
     end.
 
 %% @doc Reveal the underlying module state for testing
@@ -422,6 +427,14 @@ request_hashtree_pid(Partition, Sender) ->
     riak_core_vnode_master:command({Partition, node()},
                                    {hashtree_pid, node()},
                                    Sender,
+                                   riak_kv_vnode_master).
+
+%% @doc Destroy and restart the hashtrees associated with Partitions vnode.
+-spec upgrade_hashtree(index()) -> ok | {error, wrong_node}.
+upgrade_hashtree(Partition) ->
+    riak_core_vnode_master:command({Partition, node()},
+                                   {upgrade_hashtree, node()},
+                                   ignore,
                                    riak_kv_vnode_master).
 
 %% Used by {@link riak_kv_exchange_fsm} to force a vnode to update the hashtree
@@ -724,6 +737,32 @@ handle_command({fold_indexes, FoldIndexFun, Acc}, Sender, State=#state{mod=Mod, 
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
+    end;
+
+handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
+    %% Make sure we dont kick off an upgrade during a possible handoff
+    case node() of
+        Node ->
+            case HT of
+                undefined ->
+                    {reply, {error, wrong_node}, State};
+                _  ->
+                    case {riak_kv_index_hashtree:get_version(HT),
+                        riak_kv_entropy_manager:get_pending_version()} of
+                        {legacy, legacy} ->
+                            {reply, ok, State};
+                        {legacy, _} ->
+                            lager:notice("Destroying and upgrading index_hashtree for Index: ~p", [State#state.idx]),
+                            _ = riak_kv_index_hashtree:destroy(HT),
+                            riak_kv_entropy_info:clear_tree_build(State#state.idx),
+                            State1 = State#state{upgrade_hashtree=true,hashtrees=undefined},
+                            {reply, ok, State1};
+                        _ ->
+                            {reply, ok, State}
+                    end
+            end;
+        _ ->
+            {reply, {error, wrong_node}, State}
     end;
 
 %% Commands originating from inside this vnode
@@ -1270,8 +1309,16 @@ delete(State=#state{status_mgr_pid=StatusMgr, mod=Mod, modstate=ModState}) ->
     end,
     {ok, State#state{modstate=UpdModState,vnodeid=undefined,hashtrees=undefined}}.
 
-terminate(_Reason, #state{mod=Mod, modstate=ModState}) ->
+terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) ->
     Mod:stop(ModState),
+
+    %% Explicitly stop the hashtree rather than relying on the process monitor
+    %% to detect the vnode exit.  As riak_kv_index_hashtree is not a supervised
+    %% process in the riak_kv application, on graceful shutdown riak_kv and
+    %% riak_core can complete their shutdown before the hashtree is written
+    %% to disk causing the hashtree to be closed dirty.
+    riak_kv_index_hashtree:sync_stop(Trees),
+    riak_kv_stat:unregister_vnode_stats(Idx),
     ok.
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
@@ -1458,7 +1505,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                   Props ->
                       Props
               end,
-    PruneTime = case proplists:get_value(rr, Options, false) of
+    ReadRepair = proplists:get_value(rr, Options, false),
+    PruneTime = case ReadRepair of
                     true ->
                         undefined;
                     false ->
@@ -1474,6 +1522,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        reqid=ReqID,
                        bprops=BProps,
                        starttime=StartTime,
+                       readrepair = ReadRepair,
                        prunetime=PruneTime,
                        crdt_op = CRDTOp},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
@@ -1685,16 +1734,26 @@ perform_put({true, Obj},
             #putargs{returnbody=RB,
                      bkey=BKey,
                      reqid=ReqID,
-                     index_specs=IndexSpecs}) ->
-    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State),
+                     index_specs=IndexSpecs,
+                     readrepair=ReadRepair}) ->
+    case ReadRepair of
+      true ->
+        MaxCheckFlag = no_max_check;
+      false ->
+        MaxCheckFlag = do_max_check
+    end,
+    {Reply, State2} = actual_put(BKey, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
     {Reply, State2}.
 
-actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID,
+actual_put(BKey, Obj, IndexSpecs, RB, ReqID, State) ->
+    actual_put(BKey, Obj, IndexSpecs, RB, ReqID, do_max_check, State).
+
+actual_put(BKey={Bucket, Key}, Obj, IndexSpecs, RB, ReqID, MaxCheckFlag,
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
-                       do_max_check) of
+                       MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
@@ -2696,8 +2755,9 @@ maybe_new_key_epoch(true, State, LocalObj, IncomingObj) ->
                     B = riak_object:bucket(LocalObj),
                     K = riak_object:key(LocalObj),
 
-                    lager:error("Inbound clock entry for ~p in ~p/~p greater than local",
-                               [VId, B, K]),
+                    lager:warning("Inbound clock entry for ~p in ~p/~p greater than local." ++
+                                      "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
+                                  [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]),
                     new_key_epoch(State);
                 _ ->
                     %% just use local id

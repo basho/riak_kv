@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_wm_mapred: webmachine resource for mapreduce requests
-%%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -57,39 +55,56 @@ is_authorized(ReqData, State) ->
                     "instead.">>, ReqData), State}
     end.
 
-forbidden(RD, State = #state{security=undefined}) ->
-    {riak_kv_wm_utils:is_forbidden(RD), RD, State};
-forbidden(RD, State) ->
-    case riak_kv_wm_utils:is_forbidden(RD) of
-        true ->
-            {true, RD, State};
+-spec forbidden(#wm_reqdata{}, #state{})
+        -> {boolean(), #wm_reqdata{}, #state{}}.
+forbidden(ReqDataIn, #state{security = undefined} = Context) ->
+    Class = request_class(ReqDataIn),
+    riak_kv_wm_utils:is_forbidden(ReqDataIn, Class, Context);
+forbidden(ReqDataIn, Context) ->
+    Class = request_class(ReqDataIn),
+    {Answer, ReqData, _} = Result =
+        riak_kv_wm_utils:is_forbidden(ReqDataIn, Class, Context),
+    case Answer of
         false ->
-            case {wrq:method(RD), wrq:req_body(RD)} of
-                {'POST', Body} when Body /= undefined ->
-                    case riak_kv_mapred_json:parse_request(Body) of
-                        {ok, ParsedInputs, _ParsedQuery, _Timeout} ->
-                            Permissions = riak_kv_mapred_term:get_required_permissions(ParsedInputs,
-                                                                                       _ParsedQuery),
-                            Res = riak_core_security:check_permissions(
-                                    Permissions,
-                                    State#state.security),
-                            case Res of
-                                {false, Error, _} ->
-                                    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
-                                    {true, wrq:append_to_resp_body(
-                                             unicode:characters_to_binary(Error, utf8, utf8), RD1), State};
-                                {true, _} ->
-                                    {false, RD, State}
-                            end;
-                        _ ->
-                            %% bad input, will be caught in verify_body
-                            {false, RD, State}
-                    end;
-                _ ->
-                    %% bad input, will be caught in verify_body
-                    {false, RD, State}
-            end
+            security_forbidden(
+                wrq:method(ReqData), wrq:req_body(ReqData), Result);
+        _ ->
+            Result
     end.
+
+% Called from forbidden/2 when security is enabled. Moved to a function to
+% make pattern matching simpler and get away from obscenely deep nesting.
+% Anything that doesn't get to a properly parsed Body will be rejected later
+% as some manner of bad request, but not forbidden here.
+security_forbidden('POST', undefined, Result) ->
+    Result;
+security_forbidden('POST', Body,
+        {_, ReqData, #state{security = Sec} = Context} = Result) ->
+    case riak_kv_mapred_json:parse_request(Body) of
+        {ok, ParsedInputs, ParsedQuery, _Timeout} ->
+            Perms = riak_kv_mapred_term:get_required_permissions(
+                ParsedInputs, ParsedQuery),
+            case riak_core_security:check_permissions(Perms, Sec) of
+                {false, Error, _} ->
+                    {true,
+                        wrq:append_to_resp_body(
+                            unicode:characters_to_binary(Error, utf8, utf8),
+                            wrq:set_resp_header(
+                                "Content-Type", "text/plain", ReqData)),
+                        Context};
+                {true, _} ->
+                    Result
+            end;
+        _ ->
+            Result
+    end;
+security_forbidden(_, _, Result) ->
+    Result.
+
+-spec request_class(#wm_reqdata{}) -> term().
+request_class(_ReqData) ->
+    % for now I don't know how to tell them apart
+    {riak_kv, map_reduce}.
 
 allowed_methods(RD, State) ->
     {['GET','HEAD','POST'], RD, State}.

@@ -92,3 +92,10 @@
    iolist_to_binary(
      ["Too many subqueries (",integer_to_list(N),")"])
 ).
+
+-define(
+    E_CANNOT_HAVE_TWO_EQUALITY_FILTERS_ON_QUANTUM_WITHOUT_RANGE,
+    <<"There must only be one equality filter on the quantum field in the ",
+      "Where clause when a range is not specified, but more than one was ",
+      "specified.">>
+).

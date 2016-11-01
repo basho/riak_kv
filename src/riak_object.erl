@@ -86,7 +86,7 @@
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
--export([hash/1, approximate_size/2]).
+-export([hash/1, hash/2, approximate_size/2]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
@@ -95,7 +95,7 @@
 -export([to_json/1, from_json/1]).
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
--export([to_binary/2, to_binary/3, from_binary/3, from_binary/4, to_binary_version/4, binary_version/1]).
+-export([to_binary/2, to_binary/3, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1]).
 -export([update_last_modified/1, update_last_modified/2]).
@@ -292,7 +292,7 @@ compare_content_dates(C1,C2) ->
             C1 < C2
     end.
 
-%% @doc Merge the contents and vclocks of OldObject and NewObject.
+%% @doc  Merge the contents and vclocks of OldObject and NewObject.
 %%       Note: This function calls apply_updates on NewObject.
 %%       Depending on whether DVV is enabled or not, then may merge
 %%       dropping dotted and dominated siblings, otherwise keeps all
@@ -309,7 +309,8 @@ merge(OldObject, NewObject) ->
             merge_write_once(OldObject, NewObj1);
         _ ->
             DVV = dvv_enabled(Bucket),
-            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
+            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3,
+                                                 [NewObject, OldObject, DVV]),
             ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
             OldObject#r_object{contents=Contents,
                 vclock=vclock:merge([OldObject#r_object.vclock,
@@ -352,7 +353,7 @@ merge_contents(NewObject, OldObject, true) ->
     MergeAcc = prune_object_siblings(NewObject, vclock(OldObject), MergeAcc0),
     #merge_acc{crdt=CRDT, error=Error} = MergeAcc,
     riak_kv_crdt:log_merge_errors(Bucket, Key, CRDT, Error),
-    merge_acc_to_contents(MergeAcc).
+    merge_acc_to_contents(Bucket, MergeAcc).
 
 %% Optimisation. To save converting every meta dict to a list sorting,
 %% comparing, and coverting back again, we use this optimisation, that
@@ -395,10 +396,11 @@ compare_metadata(#r_content{metadata=MA}, #r_content{metadata=MB}) ->
 prune_object_siblings(Object, Clock) ->
     prune_object_siblings(Object, Clock, #merge_acc{}).
 
--spec prune_object_siblings(riak_object(), vclock:vclock(), merge_acc()) -> merge_acc().
+-spec prune_object_siblings(riak_object(), vclock:vclock(), merge_acc())
+                           -> merge_acc().
 prune_object_siblings(Object, Clock, MergeAcc) ->
-    lists:foldl(fun(Content, Acc) ->
-                        fold_contents(Content, Acc, Clock)
+    lists:foldl(fun(Contents, Acc) ->
+                        fold_contents(Contents, Acc, Clock)
                 end,
                 MergeAcc,
                 Object#r_object.contents).
@@ -425,7 +427,8 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
     #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
     case get_dot(Dict) of
         {ok, {Dot, PureDot}} ->
-            case {vclock:descends_dot(Clock, Dot), is_drop_candidate(PureDot, Drop)} of
+            case {vclock:descends_dot(Clock, Dot),
+                  is_drop_candidate(PureDot, Drop)} of
                 {true, true} ->
                     %% When the exact same dot is present in both
                     %% objects siblings, we keep that value. Without
@@ -452,7 +455,8 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% value that is the result of a PUT that
                     %% reconciled this sibling value, we can therefore
                     %% (potentialy, see above) drop this value.
-                    MergeAcc#merge_acc{drop=add_drop_candidate(PureDot, C0, Drop)};
+                    MergeAcc#merge_acc{drop=add_drop_candidate(PureDot, C0,
+                                                               Drop)};
                 {false, _} ->
                     %% The other object's vclock does not contain (or
                     %% dominate) this sibling's `dot'. That means this
@@ -524,8 +528,9 @@ get_drop_candidate(Dot, Dict) ->
 %% types it should really only ever contain one or the other (and the
 %% accumulated CRDTs should have a single value), but it is better to
 %% be safe.
--spec merge_acc_to_contents(merge_acc()) -> list(r_content()).
-merge_acc_to_contents(MergeAcc) ->
+-spec merge_acc_to_contents(riak_object:bucket(), merge_acc())
+                           -> list(r_content()).
+merge_acc_to_contents(Bucket, MergeAcc) ->
     #merge_acc{keep=Keep, crdt=CRDTs} = MergeAcc,
     %% Convert the non-CRDT sibling values back to dict metadata values.
     %%
@@ -538,13 +543,22 @@ merge_acc_to_contents(MergeAcc) ->
     %% `r_content' entries.  by generating their metadata entry and
     %% binary encoding their contents. Bucket Types should ensure this
     %% accumulator only has one entry ever.
-    orddict:fold(fun(_Type, {Meta, CRDT}, {_, Contents}) ->
-                         {riak_kv_crdt:to_mod(CRDT),
-                          [{r_content, riak_kv_crdt:meta(Meta, CRDT),
-                           riak_kv_crdt:to_binary(CRDT)} | Contents]}
-                 end,
-                 {undefined, Keep2},
-                 CRDTs).
+
+    case orddict:size(CRDTs) > 0 of
+        true ->
+            BProps = riak_core_bucket:get_bucket(Bucket),
+            orddict:fold(
+              fun(_Type, {Meta, CRDT0}, {_, Contents}) ->
+                      CRDT = riak_kv_crdt:maybe_apply_props(BProps, CRDT0),
+                      {riak_kv_crdt:to_mod(CRDT),
+                       [{r_content, riak_kv_crdt:meta(Meta, CRDT),
+                         riak_kv_crdt:to_binary(CRDT)} | Contents]}
+              end,
+              {undefined, Keep2},
+              CRDTs);
+        false ->
+            {undefined, Keep2}
+    end.
 
 %% @private Get the dot from the passed metadata dict (if present and
 %% valid). It turns out, due to weirdness, it is possible to have two
@@ -656,12 +670,37 @@ get_value(Object=#r_object{}) ->
     [{_M,Value}] = get_contents(Object),
     Value.
 
-%% @doc calculates the hash of a riak object
--spec hash(riak_object()) -> integer().
+%% @doc calculates the canonical hash of a riak object
+%%      Old API which uses the version .
+%% DEPRECATED
+-spec hash(riak_object()) -> binary().
 hash(Obj=#r_object{}) ->
-    Vclock = vclock(Obj),
-    UpdObj = riak_object:set_vclock(Obj, lists:sort(Vclock)),
-    erlang:phash2(to_binary(v0, UpdObj)).
+    case riak_kv_entropy_manager:get_version() of
+        0 ->
+            vclock_hash(Obj);
+        legacy ->
+            legacy_hash(Obj)
+    end.
+
+%% @doc calculates the canonical hash of a riak object depending on version
+-spec hash(riak_object(), non_neg_integer() | legacy) -> binary().
+hash(Obj=#r_object{}, _Version=0) ->
+    vclock_hash(Obj);
+hash(Obj=#r_object{}, _Version) ->
+    legacy_hash(Obj).
+
+%% @private return the legacy full object hash of the riak_object
+-spec legacy_hash(riak_object()) -> binary().
+legacy_hash(Obj=#r_object{}) ->
+    UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
+    Hash = erlang:phash2(to_binary(v0, UpdObj)),
+    term_to_binary(Hash).
+
+%% @private return the hash of the vclock
+-spec vclock_hash(riak_object()) -> binary().
+vclock_hash(Obj=#r_object{}) ->
+    Hash = erlang:phash2(lists:sort(vclock(Obj))),
+    term_to_binary(Hash).
 
 %% @doc  Set the updated metadata of an object to M.
 -spec update_metadata(riak_object(), riak_object_dict()) -> riak_object().
@@ -955,17 +994,10 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
     riak_object() | {error, 'bad_object_format'}.
--spec from_binary(bucket(),key(),binary(),encoding()) ->
-    riak_object() | {error, 'bad_object_format'}.
-
-%% Keep deprecated interface around, because I have a feeling someone
-%% will still try to use it
-
-from_binary(B,K,ObjTerm, _Enc) ->
-    from_binary(B, K, ObjTerm).
 
 from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
     binary_to_term(ObjTerm);
+
 from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
     %% Version 1 of binary riak object
     case Rest of
@@ -995,9 +1027,19 @@ sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, Met
     MDList0 = deleted_meta(Deleted, []),
     MDList1 = last_mod_meta({LMMega, LMSecs, LMMicro}, MDList0),
     MDList2 = vtag_meta(VTag, MDList1),
-    MDList = meta_of_binary(MetaRestBin, MDList2),
+    MDList3 = val_encoding_meta(ValBin, MDList2),
+    MDList = meta_of_binary(MetaRestBin, MDList3),
     MD = dict:from_list(MDList),
     {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
+
+val_encoding_meta(<<0, _Rest/binary>>, MDList) ->
+    MDList;
+val_encoding_meta(<<1, _Rest/binary>>, MDList) ->
+    MDList;
+val_encoding_meta(<<?MSGPACK_ENCODING_FLAG:8, _Rest/binary>>, MDList) ->
+    MDList;
+val_encoding_meta(<<Other:8, _Rest/binary>>, MDList) ->
+    [{?MD_VAL_ENCODING, Other} | MDList].
 
 deleted_meta(<<1>>, MDList) ->
     [{?MD_DELETED, "true"} | MDList];
@@ -1038,8 +1080,9 @@ new_v1(Vclock, Siblings, Enc) ->
     SibsBin = bin_contents(Siblings, Enc),
     <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
 
-bin_content(#r_content{metadata=Meta, value=Val}, Enc) ->
-    ValBin = encode(Val, Enc),
+bin_content(#r_content{metadata=Meta0, value=Val}, Enc) ->
+    {TypeTag, Meta} = determine_binary_type(Val, Meta0),
+    ValBin = encode(Val, TypeTag, Enc),
     ValLen = byte_size(ValBin),
     MetaBin = meta_bin(Meta),
     MetaLen = byte_size(MetaBin),
@@ -1088,20 +1131,32 @@ fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
 %% @doc Encode the contents of a riak object, either using
 %% term_to_binary   (if Enc == erlang), or
 %% msgpack encoding (if Enc == msgpack)
-encode(Bin, erlang) ->
-    encode_maybe_binary(Bin);
-encode(Bin, msgpack) ->
+encode(Bin, TypeTag, erlang) ->
+    encode_maybe_binary(Bin, TypeTag);
+encode(Bin, _, msgpack) ->
     encode_msgpack(Bin).
 
 encode_msgpack(Bin) ->
     <<?MSGPACK_ENCODING_FLAG:8/integer, (msgpack:pack(Bin, [{format, jsx}]))/binary>>.
 
-encode_maybe_binary(Bin) when is_binary(Bin) ->
-    <<1, Bin/binary>>;
-encode_maybe_binary(Bin) ->
-    <<0, (term_to_binary(Bin))/binary>>.
+encode_maybe_binary(Value) when is_binary(Value) ->
+    encode_maybe_binary(Value, 1);
+encode_maybe_binary(Value) when not is_binary(Value) ->
+    encode_maybe_binary(Value, 0).
+encode_maybe_binary(Value, TypeTag) when is_binary(Value) ->
+    <<TypeTag, Value/binary>>;
+encode_maybe_binary(Value, 0) when not is_binary(Value) ->
+    <<0, (term_to_binary(Value))/binary>>.
 
 %% @doc Decode the contents of a riak object
+
+determine_binary_type(Val, Meta) when is_binary(Val) ->
+    case dict:find(?MD_VAL_ENCODING, Meta) of
+        error -> {1, Meta};
+        {ok, TypeTag} -> {TypeTag, dict:erase(?MD_VAL_ENCODING, Meta)}
+    end;
+determine_binary_type(_Val, Meta) ->
+    {0, Meta}.
 
 decode_msgpack(ValBin) ->
     {ok, Unpacked} = msgpack:unpack(ValBin, [{format, jsx}]),
@@ -1206,7 +1261,7 @@ object_test() ->
     B = <<"buckets_are_binaries">>,
     K = <<"keys are binaries">>,
     V = <<"values are anything">>,
-    O = riak_object:new(B,K,V),
+    O = riak_object:new(B, K, V),
     B = riak_object:bucket(O),
     K = riak_object:key(O),
     V = riak_object:get_value(O),
@@ -1214,6 +1269,46 @@ object_test() ->
     1 = length(riak_object:get_values(O)),
     1 = length(riak_object:get_metadatas(O)),
     O.
+
+val_encoding_term_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = {a, tuple, is, a, valid, value},
+    Object = riak_object:new(B, K, V),
+    Binary = to_binary(v1, Object),
+    {FirstBinaryByte, _Meta} = get_binary_type_tag_and_metadata_from_full_binary(Binary),
+    %% term_to_binary format is 0
+    ?assertEqual(0, FirstBinaryByte).
+
+val_encoding_bin_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some Binary Data">>,
+    Object = riak_object:new(B, K, V),
+    Binary = to_binary(v1, Object),
+    {FirstBinaryByte, _Meta} = get_binary_type_tag_and_metadata_from_full_binary(Binary),
+    %% arbitrary binary format is 1
+    ?assertEqual(1, FirstBinaryByte).
+
+val_encoding_with_metadata_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some Binary Data">>,
+    Object = riak_object:new(B, K, V, dict:from_list([{?MD_VAL_ENCODING, 2}, {<<"X-Foo_MetaData">>, "Foo"}])),
+    Binary = to_binary(v1, Object),
+    {FirstBinaryByte, Meta} = get_binary_type_tag_and_metadata_from_full_binary(Binary),
+    %% When specified in metadata, use the val_encoding version
+    ?assertEqual(2, FirstBinaryByte),
+    %% Make sure <<"X-Riak-Val-Encoding">> metadata was removed, as it's encoded in the binary itself
+    %% and would be superfluous
+    ?assertNot(dict:is_key(?MD_VAL_ENCODING, Meta)).
+
+get_binary_type_tag_and_metadata_from_full_binary(Binary) ->
+    <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, _VclockBin:VclockLen/binary, _SibCount:32/integer, SibsBin/binary>> = Binary,
+    <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBinRest:MetaLen/binary>> = SibsBin,
+    <<_LMMega:32/integer, _LMSecs:32/integer, _LMMicro:32/integer, VTagLen:8/integer, _VTag:VTagLen/binary, _Deleted:1/binary-unit:8, MetaBin/binary>> = MetaBinRest,
+    <<FirstBinaryByte:8, _Rest/binary>> = ValBin,
+    {FirstBinaryByte, dict:from_list(meta_of_binary(MetaBin, []))}.
 
 update_test() ->
     O = object_test(),
@@ -1509,14 +1604,10 @@ packObj_test() ->
     Obj = riak_object:new(<<"bucket">>, <<"key">>, [{<<"field1">>, 1}, {<<"field2">>, 2.123}]),
     PackedErl = riak_object:to_binary(v1, Obj, erlang),
     PackedMsg = riak_object:to_binary(v1, Obj, msgpack),
-    ObjErl = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl, erlang),
-    ObjMsg = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg, msgpack),
-    ObjErl2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl),
-    ObjMsg2 = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg),
+    ObjErl = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl),
+    ObjMsg = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg),
     ?assertEqual(Obj, ObjErl),
-    ?assertEqual(Obj, ObjMsg),
-    ?assertEqual(Obj, ObjErl2),
-    ?assertEqual(Obj, ObjMsg2).
+    ?assertEqual(Obj, ObjMsg).
 
 dotted_values_reconcile() ->
     {B, K} = {<<"b">>, <<"k">>},

@@ -519,8 +519,7 @@ range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
     Options = [
                {start_key,   StartKey2},
                {end_key,     EndKey2},
-               {fold_method, streaming},
-               {encoding,    msgpack} | range_scan_additional_options(W)
+               {fold_method, streaming} | range_scan_additional_options(W)
               ],
     KeyFolder = fun() ->
                         Vals = eleveldb:fold(Ref, FoldFun, [], Options),
@@ -1126,12 +1125,12 @@ to_md_key(Key) ->
 simple_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
-    backend_test_util:standard_test(?MODULE, []).
+    backend_test_util:standard_test_gen(?MODULE, []).
 
 custom_config_test_() ->
     ?assertCmd("rm -rf test/eleveldb-backend"),
     application:set_env(eleveldb, data_root, ""),
-    backend_test_util:standard_test(?MODULE, [{data_root, "test/eleveldb-backend"}]).
+    backend_test_util:standard_test_gen(?MODULE, [{data_root, "test/eleveldb-backend"}]).
 
 retry_test_() ->
     {spawn, [fun retry/0, fun retry_fail/0]}.
