@@ -175,9 +175,11 @@ get_sweep_throttle() ->
             {Type, Limit, Sleep}
     end.
 
-send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid)->
+
+send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid) ->
     lager:debug("Send to sweep worker ~p: ~p", [Pid, Msg]),
     Pid ! Msg;
+
 send_to_sweep_worker(Msg, #sweep{index = Index}) ->
     lager:info("no pid ~p to ~p " , [Msg, Index]),
     no_pid.
