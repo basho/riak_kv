@@ -63,17 +63,23 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, 
 
 make_complete_fold_req() ->
     fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
-            Acc1 = maybe_throttle_sweep(RObjBin, Acc),
-            Acc2 =
-                case SweptKeys rem 1000 of
-                    0 ->
-                        riak_kv_sweeper:update_progress(Index, SweptKeys),
-                        maybe_receive_request(Acc1);
-                    _ ->
-                        Acc1
-                end,
-            RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-            fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1})
+            try
+                Acc1 = maybe_throttle_sweep(RObjBin, Acc),
+                Acc2 =
+                    case SweptKeys rem 1000 of
+                        0 ->
+                            riak_kv_sweeper:update_progress(Index, SweptKeys),
+                            maybe_receive_request(Acc1);
+                        _ ->
+                            Acc1
+                    end,
+                RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+                fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1})
+            catch throw:{stop_sweep, SA} ->
+                    SA;
+                  throw:{failed, SA} ->
+                    SA
+            end
     end.
 
 
@@ -213,7 +219,7 @@ fold_funs(_, #sa{index = Index,
                  active_p = [],
                  succ_p = []} = SweepAcc) ->
     lager:info("No more participants in sweep of Index ~p Failed: ~p", [Index, FailedParticipants]),
-    throw(SweepAcc);
+    throw({failed, SweepAcc});
 
 %%% No active participants return all succ for next key to run
 fold_funs(_, #sa{active_p = [],
