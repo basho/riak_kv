@@ -15,7 +15,7 @@
 %% under the License.
 
 %% Used as configuration for sweep participants.
--record(sweep_participant, 
+-record(sweep_participant,
         {
          description :: string(),   %% Human readeble description of the user.
          module :: atom(),          %% module where the sweep call back lives.
@@ -58,7 +58,6 @@
          estimated_keys = 0  :: non_neg_integer(),
          swept_keys = 0  :: non_neg_integer(),
          modified_objects = 0 ::non_neg_integer(),
-         throttle = riak_kv_sweeper:get_sweep_throttle(),
+         throttle = riak_kv_sweeper_fold:get_sweep_throttle(),
          total_obj_size = 0
          }).
-

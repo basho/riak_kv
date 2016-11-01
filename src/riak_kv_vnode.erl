@@ -2086,7 +2086,7 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, State) ->
     do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, State).
 
 do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, State=#state{idx=Index, mod=Mod, modstate=ModState}) ->
-    riak_kv_sweeper:do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, State).
+    riak_kv_sweeper_fold:do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, State).
 
 %% @private
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->

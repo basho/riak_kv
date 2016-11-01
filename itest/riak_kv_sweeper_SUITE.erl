@@ -135,14 +135,14 @@ meck_new_backend(TestCasePid) ->
                 fun({Index, _Node}, ActiveParticipants, EstimatedKeys) ->
                         spawn_link(
                           fun() ->
-                                  riak_kv_sweeper:do_sweep(ActiveParticipants,
-                                                           EstimatedKeys,
-                                                           _Sender = '?',
-                                                           _Opts = [],
-                                                           Index,
-                                                           meck_new_backend,
-                                                           _ModState = '?',
-                                                           _VnodeState = '?')
+                                  riak_kv_sweeper_fold:do_sweep(ActiveParticipants,
+                                                                EstimatedKeys,
+                                                                _Sender = '?',
+                                                                _Opts = [],
+                                                                Index,
+                                                                meck_new_backend,
+                                                                _ModState = '?',
+                                                                _VnodeState = '?')
                           end)
                 end).
 
