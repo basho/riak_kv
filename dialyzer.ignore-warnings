@@ -8,9 +8,9 @@ riak_kv_vnode.erl:908: Invalid type specification for function riak_kv_vnode:pre
 riak_kv_vnode.erl:909: The pattern Q = {'riak_kv_index_v3', _, _, _, _, _, _, _, _, RE, _} can never match the type 'undefined' | {_,_}
 riak_kv_vnode.erl:919: The pattern <{'riak_kv_index_v3', _, _, _, _, _, _, _, _, _, N}, DefaultSize> can never match the type <'undefined' | {_,_},'undefined' | pos_integer()>
 riak_kv_vnode.erl:940: The call riak_kv_vnode:prepare_index_query(Query::'undefined' | {_,_}) breaks the contract (#riak_kv_index_v3{}) -> #riak_kv_index_v3{}
-riak_kv_vnode.erl:1205: The call riak_kv_vnode:raw_put(HOTarget::atom(),Key::{binary() | {binary(),binary()},binary()},Obj::riak_object:riak_object()) will never return since it differs in the 1st argument from the success typing arguments: ({_,_},any(),any())
+riak_kv_vnode.erl:1284: The call riak_kv_vnode:raw_put(HOTarget::atom(),Key::{binary() | {binary(),binary()},binary()},Obj::{riak_object:riak_object(),_} | riak_object:riak_object()) will never return since it differs in the 1st argument from the success typing arguments: ({_,_},any(),any())
 riak_kv_vnode.erl:1327: Function raw_put/3 has no local return
-riak_kv_vnode.erl:1327: The pattern <{Idx, Node}, Key, Obj> can never match the type <atom(),{binary() | {binary(),binary()},binary()},riak_object:riak_object()>
+riak_kv_vnode.erl:1406: The pattern <{Idx, Node}, Key, Obj> can never match the type <atom(),{binary() | {binary(),binary()},binary()},{riak_object:riak_object(),_} | riak_object:riak_object()>
 riak_kv_vnode.erl:1367: Function do_backend_delete/3 has no local return
 riak_kv_vnode.erl:2051: Function delete_from_hashtree/3 has no local return
 riak_kv_vnode.erl:2055: The call riak_kv_index_hashtree:async_delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ({binary(),binary()} | [{binary(),binary()}],pid()) -> 'ok'
@@ -29,6 +29,7 @@ Unknown functions:
   yz_kv:index/3
   yz_kv:index_binary/5
   yz_kv:should_handoff/1
+  yz_kv:is_search_enabled_for_bucket/1
   object:warning/2
 Unknown types:
   base64:ascii_binary/0
