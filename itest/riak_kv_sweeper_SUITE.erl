@@ -313,6 +313,24 @@ stop_all_scheduled_sweeps_test(Config) ->
     [ timeout = receive_msg({ok, successfull_sweep, I}, SweepRunTimeMsecs) || I <- Indices],
     ok.
 
+
+stop_all_scheduled_sweeps_race_condition_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    SweepRunTimeMsecs = 1000,
+    NumKeys = 10000, % sweeper worker receives messages every 1000 keys
+    WaitAfterKeys = 1000,
+    WaitMSecs = SweepRunTimeMsecs div  (NumKeys div WaitAfterKeys),
+
+    meck_new_backend(self(), NumKeys),
+    SP = new_meck_sweep_particpant(sweep_observer_1, self()),
+    new_meck_visit_function(sweep_observer_1, {wait_after_keys, WaitAfterKeys, WaitMSecs}),
+    riak_kv_sweeper:add_sweep_participant(SP),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    Running = riak_kv_sweeper:stop_all_sweeps(),
+    Running = 0,
+    [timeout = receive_msg({ok, successfull_sweep, I}, SweepRunTimeMsecs) || I <- Indices],
+    ok.
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------

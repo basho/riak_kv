@@ -118,7 +118,6 @@ stop_all_sweeps() ->
 -spec disable_sweep_scheduling() -> ok.
 disable_sweep_scheduling() ->
     lager:info("Disable sweep scheduling"),
-    application:set_env(riak_kv, sweeper_scheduler, false),
     stop_all_sweeps().
 -spec enable_sweep_scheduling() ->  ok.
 enable_sweep_scheduling() ->
@@ -140,13 +139,14 @@ update_progress(Index, SweptKeys) ->
 %% Behavioural functions
 %% ====================================================================
 -record(state, {sweep_participants = dict:new() :: dict(),
-                sweeps             = dict:new() :: dict()
+                sweeps             = dict:new() :: dict(),
+                timer_ref                       :: reference()
                }).
 
 init([]) ->
     process_flag(trap_exit, true),
     random:seed(erlang:now()),
-    schedule_initial_sweep_tick(),
+    Ref = schedule_initial_sweep_tick(),
     State =
         case get_persistent_participants() of
             undefined ->
@@ -154,7 +154,7 @@ init([]) ->
             SP ->
                 #state{sweep_participants = SP}
         end,
-    {ok, State#state{sweeps = get_persistent_sweeps()}}.
+    {ok, State#state{timer_ref = Ref, sweeps = get_persistent_sweeps()}}.
 
 handle_call({add_sweep_participant, Participant}, _From, #state{sweep_participants = SP} = State) ->
     SP1 = dict:store(Participant#sweep_participant.module, Participant, SP),
@@ -187,7 +187,9 @@ handle_call(status, _From, State) ->
     Sweeps = [Sweep || {_Index, Sweep} <- dict:to_list(State1#state.sweeps)],
     {reply, {Participants , Sweeps}, State1};
 
-handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
+handle_call(stop_all_sweeps, _From, #state{timer_ref = Ref, sweeps = Sweeps} = State) ->
+    erlang:cancel_timer(Ref),
+    application:set_env(riak_kv, sweeper_scheduler, false),
     Running = [Sweep || Sweep <- get_running_sweeps(Sweeps)],
     [stop_sweep(Sweep) || Sweep <- Running],
     {reply, length(Running), State};
@@ -210,15 +212,17 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(sweep_tick, State) ->
-    schedule_sweep_tick(),
-    case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
-        true ->
-            State1 = maybe_initiate_sweeps(State),
-            State2 = maybe_schedule_sweep(State1),
-            {noreply, State2};
-        false ->
-            {noreply, State}
-    end;
+    Ref = schedule_sweep_tick(),
+    State3 =
+        case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
+            true ->
+                State1 = maybe_initiate_sweeps(State),
+                State2 = maybe_schedule_sweep(State1),
+                State2;
+            false ->
+                State
+        end,
+    {noreply, State3#state{timer_ref = Ref}};
 handle_info(Msg, State) ->
     lager:error("riak_kv_sweeper received unexpected message ~p", [Msg]),
     {noreply, State}.
