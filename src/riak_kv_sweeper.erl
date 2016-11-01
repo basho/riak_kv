@@ -188,8 +188,9 @@ handle_call(status, _From, State) ->
     {reply, {Participants , Sweeps}, State1};
 
 handle_call(stop_all_sweeps, _From, #state{sweeps = Sweeps} = State) ->
-    [stop_sweep(Sweep) || Sweep <- get_running_sweeps(Sweeps)],
-    {reply, ok, State};
+    Running = [Sweep || Sweep <- get_running_sweeps(Sweeps)],
+    [stop_sweep(Sweep) || Sweep <- Running],
+    {reply, length(Running), State};
 
 handle_call(stop, _From, #state{sweeps = Sweeps} = State) ->
     [stop_sweep(Sweep) || Sweep <- get_running_sweeps(Sweeps)],

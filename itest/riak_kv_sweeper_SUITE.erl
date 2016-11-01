@@ -98,10 +98,25 @@ visit_function({throw, Error}) ->
                 throw(Error)
         end
     end;
+visit_function({wait_after_keys, KeyCount, WaitMSecs}) ->
+    fun(_Index) ->
+        fun({{_Bucket, _Key}, _RObj}, Acc, _Opts = []) ->
+                VisitedKeys = Acc,
+                case (VisitedKeys rem KeyCount) == 0 of
+                    true ->
+                        timer:sleep(WaitMSecs),
+                        ok;
+                    false ->
+                        ok
+                end,
+                {ok, VisitedKeys + 1}
+        end
+    end;
 visit_function(_) ->
     fun(_Index) ->
         fun({{_Bucket, _Key}, _RObj}, Acc, _Opts = []) ->
-                {ok, Acc}
+                VisitedKeys = Acc,
+                {ok, VisitedKeys + 1}
         end
     end.
 
@@ -118,7 +133,10 @@ failed_sweep_function(TestCasePid) ->
     end.
 
 meck_new_backend(TestCasePid) ->
-    Keys = [integer_to_binary(N) || N <- lists:seq(1, 100)],
+    meck_new_backend(TestCasePid, 1000).
+
+meck_new_backend(TestCasePid, NumKeys) ->
+    Keys = [integer_to_binary(N) || N <- lists:seq(1, NumKeys)],
     meck:new(meck_new_backend, [non_strict]),
     meck:expect(meck_new_backend, fold_objects,
                 fun(CompleteFoldReq, InitialAcc, _, _) ->
@@ -275,6 +293,25 @@ scheduler_run_interval_test(Config) ->
     [ok = receive_msg({ok, successfull_sweep, I}, 2500) || I <- Indices],
     ok.
 
+
+stop_all_scheduled_sweeps_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    SweepRunTimeMsecs = 1000,
+    NumKeys = 10000, % sweeper worker receives messages every 1000 keys
+    WaitAfterKeys = 1000,
+    WaitMSecs = SweepRunTimeMsecs div  (NumKeys div WaitAfterKeys),
+    {ok, SweepTick} = application:get_env(riak_kv, sweep_tick),
+
+    meck_new_backend(self(), NumKeys),
+    SP = new_meck_sweep_particpant(sweep_observer_1, self()),
+    new_meck_visit_function(sweep_observer_1, {wait_after_keys, WaitAfterKeys, WaitMSecs}),
+    riak_kv_sweeper:add_sweep_participant(SP),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    timer:sleep(2*SweepTick),
+    Running = riak_kv_sweeper:stop_all_sweeps(),
+    true = Running >= 1,
+    [ timeout = receive_msg({ok, successfull_sweep, I}, SweepRunTimeMsecs) || I <- Indices],
+    ok.
 
 %% ------------------------------------------------------------------------------
 %% Internal Functions
