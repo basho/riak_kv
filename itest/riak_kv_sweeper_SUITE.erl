@@ -321,7 +321,7 @@ scheduler_remove_participant_test(Config) ->
     VisitControllerPid = spawn_link(
                            ?MODULE,
                            visit_function_controller,
-                           [TestCasePid, WaitIndex, Indices]),
+                           [TestCasePid, WaitIndex]),
     meck_new_visit_function(
       sweep_observer_1,
       {wait, VisitControllerPid, visit_function_continue}),
@@ -392,13 +392,52 @@ scheduler_add_participant_test(Config) ->
     ok.
 
 
+scheduler_restart_sweep_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    TestCasePid = self(),
+    meck_new_backend(TestCasePid, _NumKeys = 5000),
+    SP = new_meck_sweep_particpant(sweep_observer_1, TestCasePid),
+    SP1 = SP#sweep_participant{run_interval = 1},
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    WaitIndex = pick(Indices),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    VisitControllerPid0 = spawn_link(
+                           ?MODULE,
+                           visit_function_controller,
+                           [TestCasePid, WaitIndex]),
+
+    meck_new_visit_function(
+      sweep_observer_1,
+      {wait, VisitControllerPid0, visit_function_continue}),
+    receive {VisitControllerPid0, {visit_controller_waiting, WaitIndex}} ->
+            RunningSweep = get_sweep_on_index(WaitIndex),
+            running = RunningSweep#sweep.state,
+
+            riak_kv_sweeper:sweep(WaitIndex),
+            RestartingSweep = get_sweep_on_index(WaitIndex),
+            restart = RestartingSweep#sweep.state,
+            undefined = RestartingSweep#sweep.queue_time,
+
+            riak_kv_sweeper:sweep(WaitIndex),
+            RestartingSweep = get_sweep_on_index(WaitIndex),
+            undefined = RestartingSweep#sweep.queue_time,
+            restart = RestartingSweep#sweep.state,
+
+            RestartingSweep = RunningSweep#sweep{state=restart},
+            VisitControllerPid0 ! {TestCasePid, visit_controller_continue}
+    end,
+    ok = receive_msg({ok, failed_sweep, sweep_observer_1, WaitIndex}),
+    receive {VisitControllerPid0, {visit_controller_waiting, WaitIndex}} ->
+            VisitControllerPid0 ! {TestCasePid, visit_controller_continue}
+    end,
+    ok = receive_msg({ok, successfull_sweep, sweep_observer_1, WaitIndex}, min_scheduler_response_time_msecs()),
+    ok.
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
-visit_function_controller(_, _, []) ->
-    ok;
-visit_function_controller(TestCasePid, WaitIndex, Indices) ->
-    {Pid, Index} =
+visit_function_controller(TestCasePid, WaitIndex) ->
+    {Pid, _Index} =
         receive
             {Pid0, {visit_function_waiting, WaitIndex}}  ->
                 TestCasePid ! {self(), {visit_controller_waiting, WaitIndex}},
@@ -408,8 +447,7 @@ visit_function_controller(TestCasePid, WaitIndex, Indices) ->
                 {Pid0, Index0}
         end,
     Pid ! visit_function_continue,
-    NewIndices = lists:delete(Index, Indices),
-    visit_function_controller(TestCasePid, WaitIndex, NewIndices).
+    visit_function_controller(TestCasePid, WaitIndex).
 
 
 %% Waiting for 2500 msecs because at least 1 second must elapse
@@ -433,6 +471,11 @@ receive_msg(Msg, TimeoutMsecs) ->
     after TimeoutMsecs ->
             timeout
     end.
+
+
+get_sweep_on_index(Index) ->
+    {_, Sweeps} = riak_kv_sweeper:status(),
+    lists:keyfind(Index, #sweep.index, Sweeps).
 
 
 all_tests() ->
