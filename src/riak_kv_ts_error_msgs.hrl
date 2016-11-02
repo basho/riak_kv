@@ -102,3 +102,9 @@
 -define(
    E_ORDER_BY_WITH_AGGREGATE_CALC_TYPE,
    <<"ORDER BY/LIMIT/OFFSET clauses not supported for queries containing an aggregate function.">>).
+-define(
+   E_CANNOT_HAVE_TWO_EQUALITY_FILTERS_ON_QUANTUM_WITHOUT_RANGE,
+   <<"There must only be one equality filter on the quantum field in the ",
+     "Where clause when a range is not specified, but more than one was ",
+     "specified.">>
+).

@@ -434,8 +434,7 @@ describe_table_columns_test() ->
             " t timestamp not null,"
             " w sint64    not null,"
             " p double,"
-            " PRIMARY KEY ((f, s, quantum(t, 15, m)), "
-            " f, s, t))")),
+            " PRIMARY KEY ((f, s, quantum(t, 15, m)), f, s, t))")),
     Res = do_describe(DDL),
     ?assertMatch(
        {ok, {_, _,
@@ -456,7 +455,7 @@ describe_table_columns_no_quantum_test() ->
                 " t timestamp not null,"
                 " w sint64    not null,"
                 " p double,"
-                " PRIMARY KEY (f, s, t))")),
+                " PRIMARY KEY ((f, s, t), f, s, t))")),
     Res = do_describe(DDL),
     ?assertMatch(
         {ok, {_, _,

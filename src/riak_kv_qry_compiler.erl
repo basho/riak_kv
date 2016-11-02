@@ -781,7 +781,26 @@ break_out_timeseries(Filters1, PartitionFields1, no_quanta) ->
 break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(QuantumField) ->
     case find_timestamp_bounds(QuantumField, Filters1) of
         {_, {undefined, undefined}} ->
-            error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
+            %% if we don't have a time range then check for a time equality
+            %% filter e.g. mytime = 12345, which is rewritten as
+            %% mytime >= 12345 AND mytime <= 12345
+            {QEqFilters, OtherFilters} =
+                lists:splitwith(fun({Op, F, _}) ->
+                                    Op == '=' andalso F == QuantumField
+                                end, Filters1),
+            case QEqFilters of
+                [QEqFilter] ->
+                    {Body, Filters2} = split_key_from_filters(PartitionFields1, OtherFilters),
+                    Starts = setelement(1, QEqFilter, '>='),
+                    Ends = setelement(1, QEqFilter, '<='),
+                    {[Starts | Body], [Ends | Body], Filters2};
+                [] ->
+                    error({incomplete_where_clause, ?E_TSMSG_NO_BOUNDS_SPECIFIED});
+                [_|_] ->
+                    error(
+                        {cannot_have_two_equality_filters_on_quantum_without_range,
+                         ?E_CANNOT_HAVE_TWO_EQUALITY_FILTERS_ON_QUANTUM_WITHOUT_RANGE})
+            end;
         {_, {_, undefined}} ->
             error({incomplete_where_clause, ?E_TSMSG_NO_UPPER_BOUND});
         {_, {undefined, _}} ->
@@ -2321,6 +2340,35 @@ no_quantum_in_query_4_test() ->
           {filter,[]},
           {end_inclusive,true}],
         Select?SQL_SELECT.'WHERE'
+    ).
+
+eqality_filter_on_quantum_specifies_start_and_end_range_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((quantum(a, 15, 's')), a))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1000"),
+    {ok, [Select]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,timestamp,1000}]},
+         {endkey,[{<<"a">>,timestamp,1000}]},
+         {filter,[]},
+         {end_inclusive,true}],
+        Select?SQL_SELECT.'WHERE'
+    ).
+
+cannot_have_two_equality_filters_on_quantum_without_range_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab1("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY  ((quantum(a, 15, 's')), a))"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab1 WHERE a = 1000 AND a = 1"),
+    ?assertEqual(
+        {error, {cannot_have_two_equality_filters_on_quantum_without_range,
+                 ?E_CANNOT_HAVE_TWO_EQUALITY_FILTERS_ON_QUANTUM_WITHOUT_RANGE}},
+        compile(DDL, Q)
     ).
 
 two_element_key_range_cannot_match_test() ->
