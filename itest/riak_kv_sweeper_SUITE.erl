@@ -371,6 +371,55 @@ scheduler_queue_test(Config) ->
     ok.
 
 
+scheduler_sweep_window_never_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    {ok, SweepTick} = application:get_env(riak_kv, sweep_tick),
+    TestCasePid = self(),
+
+    application:set_env(riak_kv, sweep_window, never),
+    meck_new_backend(TestCasePid, _NumKeys = 5000),
+    SP = new_meck_sweep_particpant(sweep_observer_1, TestCasePid),
+    SP1 = SP#sweep_participant{run_interval = 1},
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+
+    StatusBefore = riak_kv_sweeper:status(),
+    timer:sleep(2*SweepTick),
+    StatusAfter = riak_kv_sweeper:status(),
+    StatusAfter = StatusBefore,
+
+    application:set_env(riak_kv, sweep_window, always),
+    timer:sleep(2*SweepTick),
+    [ ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices].
+
+
+scheduler_now_outside_sleep_window_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    {ok, SweepTick} = application:get_env(riak_kv, sweep_tick),
+    TestCasePid = self(),
+
+    {_, {Hour, _, _}} = calendar:local_time(),
+    Start = add_hours(Hour, 2),
+    End = add_hours(Start, 1),
+
+    application:set_env(riak_kv, sweep_window, {Start, End}),
+    meck_new_backend(TestCasePid, _NumKeys = 5000),
+    SP = new_meck_sweep_particpant(sweep_observer_1, TestCasePid),
+    SP1 = SP#sweep_participant{run_interval = 1},
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+
+    StatusBefore = riak_kv_sweeper:status(),
+    timer:sleep(2*SweepTick),
+    StatusAfter = riak_kv_sweeper:status(),
+    StatusAfter = StatusBefore,
+
+    application:set_env(riak_kv, sweep_window, {Hour, Hour+1}),
+    timer:sleep(2*SweepTick),
+    [ ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+    ok.
+
+
 stop_all_scheduled_sweeps_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     SweepRunTimeMsecs = 1000,
@@ -469,6 +518,9 @@ scheduler_restart_sweep_test(Config) ->
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
+add_hours(Hour, Inc)  ->
+    (Hour + Inc) rem 24.
+
 visit_function_controller(TestCasePid, WaitIndex) ->
     {Pid, _Index} =
         receive
