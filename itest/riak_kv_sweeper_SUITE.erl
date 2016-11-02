@@ -339,6 +339,39 @@ scheduler_remove_participant_test(Config) ->
     ok.
 
 
+scheduler_queue_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    WaitIndex = pick(Indices),
+    WaitIndex1 = pick(Indices -- [WaitIndex]),
+
+    TestCasePid = self(),
+    meck_new_backend(TestCasePid, _NumKeys = 5000),
+    SP = new_meck_sweep_particpant(sweep_observer_1, TestCasePid),
+    SP1 = SP#sweep_participant{run_interval = 1},
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    VisitControllerPid = spawn_link(
+                           ?MODULE,
+                           visit_function_controller,
+                           [TestCasePid, WaitIndex]),
+    meck_new_visit_function(
+      sweep_observer_1,
+      {wait, VisitControllerPid, visit_function_continue}),
+
+    %% Lets sweeps run once so they are not in never run state
+    receive {VisitControllerPid, {visit_controller_waiting, WaitIndex}} ->
+            VisitControllerPid ! {TestCasePid, visit_controller_continue}
+    end,
+    receive {VisitControllerPid, {visit_controller_waiting, WaitIndex}} ->
+            riak_kv_sweeper:sweep(WaitIndex1),
+            Sweep = get_sweep_on_index(WaitIndex1),
+            {_, _, _} = Sweep#sweep.queue_time,
+            VisitControllerPid ! {TestCasePid, visit_controller_continue}
+    end,
+    [ ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+    ok.
+
+
 stop_all_scheduled_sweeps_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     SweepRunTimeMsecs = 1000,
