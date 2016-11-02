@@ -256,7 +256,6 @@ remove_participant_persistent_test(_Config) ->
 
 sweep_request_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    application:set_env(riak_kv, sweeper_window, always),
     SP = new_meck_sweep_particpant(sweep_observer_1, self()),
     meck_new_backend(self()),
     riak_kv_sweeper:add_sweep_participant(SP),
