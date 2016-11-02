@@ -15,6 +15,7 @@ suite() ->
 
 
 init_per_testcase(_TestCase, Config) ->
+    meck:unload(),
     file:delete(riak_kv_sweeper:sweep_file()),
     application:set_env(riak_kv, sweep_participants, undefined),
     application:set_env(riak_kv, sweep_window, always),
