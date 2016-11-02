@@ -414,7 +414,7 @@ scheduler_now_outside_sleep_window_test(Config) ->
     StatusAfter = riak_kv_sweeper:status(),
     StatusAfter = StatusBefore,
 
-    application:set_env(riak_kv, sweep_window, {Hour, Hour+1}),
+    application:set_env(riak_kv, sweep_window, {Hour, add_hours(Hour, 1)}),
     timer:sleep(2*SweepTick),
     [ ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
     ok.
