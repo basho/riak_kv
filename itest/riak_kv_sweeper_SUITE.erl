@@ -332,6 +332,7 @@ scheduler_remove_participant_test(Config) ->
 
     timer:sleep(2*SweepTick),
     ok = receive_msg({ok, failed_sweep, sweep_observer_1, WaitIndex}, min_scheduler_response_time_msecs()),
+    timer:sleep(2*SweepTick), % Wait for result message to be received by the sweeper
     {_SPs, Sweeps} = riak_kv_sweeper:status(),
     #sweep{results = Result} = lists:keyfind(WaitIndex, #sweep.index, Sweeps),
     {ok,{_, fail}} = dict:find(sweep_observer_1, Result),
