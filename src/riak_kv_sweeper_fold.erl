@@ -44,7 +44,7 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, 
     CompleteFoldReq = make_complete_fold_req(),
     InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
     case Mod:fold_objects(CompleteFoldReq, InitialAcc, Opts, ModState) of
-        {ok, #sa{} = Acc} ->
+        #sa{} = Acc ->
             inform_participants(Acc, Index),
             riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
             {reply, Acc, VnodeState};
