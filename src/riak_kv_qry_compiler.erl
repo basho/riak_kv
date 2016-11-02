@@ -2447,7 +2447,7 @@ order_by_with_pass_1_test() ->
         Q2?SQL_SELECT.'LIMIT'
     ),
     ?assertEqual(
-        0,
+        undefined,
         Q2?SQL_SELECT.'OFFSET'
     ).
 
