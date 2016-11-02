@@ -59,6 +59,7 @@
               delete_request/0,
               map_request/0,
               vclock_request/0,
+              replica_type/0,
               request/0,
               request_type/0]).
 
