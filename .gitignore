@@ -17,3 +17,4 @@ tags
 erln8.config
 .idea
 riak_kv.iml
+logs
