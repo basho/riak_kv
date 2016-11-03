@@ -667,7 +667,7 @@ sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAf
     meck_new_backend(self(), NumKeys, RiakObjSizeBytes),
     riak_kv_sweeper:add_sweep_participant(SP),
     meck_new_visit_function(sweep_observer_1, {mutate, NumMutatedKeys}),
-    ExpectedThrottleMsecs = expected_throttle_total_msecs(
+    ExpectedThrottleMsecs = expected_obj_size_throttle_total_msecs(
                               NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs),
     SweepTime = (min_scheduler_response_time_msecs() + ExpectedThrottleMsecs),
 
@@ -677,10 +677,90 @@ sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAf
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
 
 
+%% throttling on pace every 100 keys
+sweep_throttle_pace1_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    sweep_throttle_pace(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 0,
+      _NumKeysPace        = 100,
+      _ThrottleWaitMsecs  = 1).
+
+
+%% throttling on pace every 100 keys with one extra throttle because
+%% of mutated objects
+sweep_throttle_pace2_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    sweep_throttle_pace(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 100,
+      _NumKeysPace        = 100,
+      _ThrottleWaitMsecs  = 1).
+
+%% throttling on pace with several extra throttles because of
+%% mutations
+sweep_throttle_pace3_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    sweep_throttle_pace(
+      _Index              = pick(Indices),
+      _NumKeys            = 5000,
+      _NumMutatedKeys     = 2000,
+      _NumKeysPace        = 100,
+      _ThrottleWaitMsecs  = 1).
+
+
+%% throttling on pace using sweep_window_throttle_div
+sweep_throttle_pace4_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    application:set_env(riak_kv, sweep_window_throttle_div, 2),
+    sweep_throttle_pace(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 1000,
+      _NumKeysPace        = 100,
+      _ThrottleWaitMsecs  = 2).
+
+
+%% throttling on pace using sweep_window_throttle_div where
+%% sweep_window_throttle_div > throttle wait time
+sweep_throttle_pace5_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    application:set_env(riak_kv, sweep_window_throttle_div, 2),
+    sweep_throttle_pace(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 1000,
+      _NumKeysPace        = 100,
+      _ThrottleWaitMsecs  = 1).
+
+
+sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMsecs) ->
+    application:set_env(riak_kv, sweep_throttle, {pace, NumKeysPace, ThrottleWaitMsecs}),
+
+    SP = new_meck_sweep_particpant(sweep_observer_1, self()),
+    meck_new_backend(self(), NumKeys),
+    riak_kv_sweeper:add_sweep_participant(SP),
+    meck_new_visit_function(sweep_observer_1, {mutate, NumMutatedKeys}),
+    ExpectedThrottleMsecs = expected_pace_throttle_total_msecs(
+                              NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMsecs),
+
+    SweepTime = (min_scheduler_response_time_msecs() + ExpectedThrottleMsecs),
+
+    riak_kv_sweeper:sweep(Index),
+    ok = receive_msg({ok, successfull_sweep, sweep_observer_1, Index}, SweepTime),
+    #sa{throttle_total_wait_msecs = ActualThrottleTotalWait} = receive_sweep_result(),
+
+    ct:pal("ActualThrottleTotalWait: ~p", [ActualThrottleTotalWait]),
+    ct:pal("ExpectedThrottleMsecs: ~p", [ExpectedThrottleMsecs]),
+    ActualThrottleTotalWait = ExpectedThrottleMsecs.
+
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
-expected_throttle_total_msecs(NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
+expected_obj_size_throttle_total_msecs(NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
     ThrottleMsecs = expected_throttle_msecs(
                       NumKeys, ThrottleAfterBytes, ThrottleWaitMsecs, RiakObjSizeBytes),
     ThrottleExtraMsecs = expected_throttle_extra_msecs(
@@ -692,6 +772,19 @@ expected_throttle_total_msecs(NumKeys, NumMutatedKeys, RiakObjSizeBytes, Throttl
             0;
         false ->
             (ThrottleMsecs + ThrottleExtraMsecs) div ThrottleDiv
+    end.
+
+
+expected_pace_throttle_total_msecs(NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMsecs) ->
+    ThrottleMsecs =
+        (NumKeys div NumKeysPace) * ThrottleWaitMsecs +
+        (NumMutatedKeys div NumKeysPace) * ThrottleWaitMsecs,
+    {ok, ThrottleDiv} = application:get_env(riak_kv, sweep_window_throttle_div),
+    case ThrottleDiv > ThrottleWaitMsecs of
+        true ->
+            0;
+        false ->
+            ThrottleMsecs div ThrottleDiv
     end.
 
 
