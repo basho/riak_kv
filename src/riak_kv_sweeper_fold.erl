@@ -120,14 +120,17 @@ format_result(SuccFail, Results) ->
 
 %% Throttle depending on swept keys.
 maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, Limit, Wait},
-                         swept_keys = SweepKeys} = SweepAcc) ->
+                         swept_keys = SweepKeys,
+                         throttle_total_wait_msecs = ThrottleTotalWait} = SweepAcc) ->
     case SweepKeys rem Limit of
         0 ->
             NewThrottle = get_sweep_throttle(),
             %% We use receive after to throttle instead of sleep.
             %% This way we can respond on requests while throttling
+            SweepAcc0 = SweepAcc#sa{throttle = NewThrottle,
+                                    throttle_total_wait_msecs = ThrottleTotalWait + Wait},
             SweepAcc1 =
-                maybe_receive_request(SweepAcc#sa{throttle = NewThrottle}, Wait),
+                maybe_receive_request(SweepAcc0, Wait),
             maybe_extra_throttle(SweepAcc1);
         _ ->
             maybe_extra_throttle(SweepAcc)
@@ -135,7 +138,8 @@ maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, Limit, Wait},
 
 %% Throttle depending on total obj_size.
 maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, Limit, Wait},
-                         total_obj_size = TotalObjSize} = SweepAcc) ->
+                         total_obj_size = TotalObjSize,
+                         throttle_total_wait_msecs = ThrottleTotalWait} = SweepAcc) ->
     ObjSize = byte_size(RObjBin),
     TotalObjSize1 = ObjSize + TotalObjSize,
     case (Limit =/= 0) andalso (TotalObjSize1 > Limit) of
@@ -143,8 +147,10 @@ maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, Limit, Wait},
             NewThrottle = get_sweep_throttle(),
             %% We use receive after to throttle instead of sleep.
             %% This way we can respond on requests while throttling
+            SweepAcc0 = SweepAcc#sa{throttle = NewThrottle,
+                                    throttle_total_wait_msecs = ThrottleTotalWait + Wait},
             SweepAcc1 =
-                maybe_receive_request(SweepAcc#sa{throttle = NewThrottle}, Wait),
+                maybe_receive_request(SweepAcc0, Wait),
             maybe_extra_throttle(SweepAcc1#sa{total_obj_size = 0});
         _ ->
             maybe_extra_throttle(SweepAcc#sa{total_obj_size = TotalObjSize1})
@@ -152,6 +158,7 @@ maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, Limit, Wait},
 
 %% Throttle depending on how many objects the sweep modify.
 maybe_extra_throttle(#sa{throttle = Throttle,
+                         throttle_total_wait_msecs = ThrottleTotalWait,
                          modified_objects = ModObj} = SweepAcc) ->
     {Limit, Wait} =
         case Throttle of
@@ -161,9 +168,10 @@ maybe_extra_throttle(#sa{throttle = Throttle,
                 {100, Wait0}
         end,
     %% +1 since some sweeps doesn't modify any objects
-    case ModObj + 1 rem Limit of
+    case (ModObj + 1) rem Limit of
         0 ->
-            maybe_receive_request(SweepAcc, Wait);
+            SweepAcc1 = SweepAcc#sa{throttle_total_wait_msecs = ThrottleTotalWait + Wait},
+            maybe_receive_request(SweepAcc1, Wait);
         _ ->
             SweepAcc
     end.

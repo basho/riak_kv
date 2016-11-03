@@ -21,6 +21,8 @@ init_per_testcase(_TestCase, Config) ->
     application:set_env(riak_kv, sweep_window, always),
     application:set_env(riak_kv, sweeper_scheduler, false),
     application:set_env(riak_kv, sweep_tick, 10), % MSecs
+    application:set_env(riak_kv, sweep_throttle, {obj_size, 0, 0}), %Disable throttling
+    application:set_env(riak_kv, sweep_window_throttle_div, 1),
 
     VNodeIndices = new_meck_riak_core_modules(2),
     riak_kv_sweeper:start_link(),
@@ -137,6 +139,18 @@ visit_function({wait, From, Msg}) ->
                 end
         end
     end;
+visit_function({mutate, Count}) ->
+    fun(_Index) ->
+        fun({{_Bucket, _Key}, RObj}, Acc, _Opts = []) ->
+                NewAcc = Acc + 1,
+                case NewAcc =< Count of
+                    true ->
+                        {mutated, RObj, NewAcc};
+                    false ->
+                        {ok, NewAcc}
+                end
+        end
+    end;
 visit_function(_) ->
     fun(_Index) ->
         fun({{_Bucket, _Key}, _RObj}, Acc, _Opts = []) ->
@@ -161,12 +175,15 @@ meck_new_backend(TestCasePid) ->
     meck_new_backend(TestCasePid, 1000).
 
 meck_new_backend(TestCasePid, NumKeys) ->
+    meck_new_backend(TestCasePid, NumKeys, 0).
+
+meck_new_backend(TestCasePid, NumKeys, ObjSizeBytes) ->
     Keys = [integer_to_binary(N) || N <- lists:seq(1, NumKeys)],
     meck:new(meck_new_backend, [non_strict]),
     meck:expect(meck_new_backend, fold_objects,
                 fun(CompleteFoldReq, InitialAcc, _, _) ->
                         Result = lists:foldl(fun(NBin, Acc) ->
-                                                     InitialObj = riak_object:to_binary(v1, riak_object:new(NBin, NBin, <<>>)),
+                                                     InitialObj = riak_object_bin(NBin, NBin, ObjSizeBytes),
                                                      CompleteFoldReq(NBin, NBin, InitialObj, Acc)
                                              end, InitialAcc, Keys),
                         TestCasePid ! {ok, fold_complete},
@@ -178,16 +195,21 @@ meck_new_backend(TestCasePid, NumKeys) ->
                 fun({Index, _Node}, ActiveParticipants, EstimatedKeys) ->
                         spawn_link(
                           fun() ->
-                                  riak_kv_sweeper_fold:do_sweep(ActiveParticipants,
-                                                                EstimatedKeys,
-                                                                _Sender = '?',
-                                                                _Opts = [],
-                                                                Index,
-                                                                meck_new_backend,
-                                                                _ModState = '?',
-                                                                _VnodeState = '?')
+                                  Result = riak_kv_sweeper_fold:do_sweep(ActiveParticipants,
+                                                                         EstimatedKeys,
+                                                                         _Sender = '?',
+                                                                         _Opts = [],
+                                                                         Index,
+                                                                         meck_new_backend,
+                                                                         _ModState = '?',
+                                                                         _VnodeState = '?'),
+                                  {reply, SA, _} = Result,
+                                  TestCasePid ! {ok, SA}
+
                           end)
-                end).
+                end),
+    meck:expect(riak_kv_vnode, local_put, fun(_, _, _) -> ok end),
+    meck:expect(riak_kv_vnode, local_reap, fun(_, _, _) -> ok end).
 
 
 %%--------------------------------------------------------------------
@@ -561,9 +583,136 @@ scheduler_estimated_keys_lock_fail_test(Config) ->
     [false = meck:called(riak_kv_index_hashtree, estimate_keys, [I]) || I <- Indices],
     ok.
 
+
+sweep_throttle_obj_size_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    sweep_throttle_obj_size(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 0,
+      _ObjSizeBytes       = 100,
+      _ThrottleAfterBytes = 100,
+      _ThrottleWaitMsecs  = 1).
+
+
+%% throttling on object size with no mutated keys
+sweep_throttle_obj_size1_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    sweep_throttle_obj_size(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 0,
+      _ObjSizeBytes       = 100,
+      _ThrottleAfterBytes = 100,
+      _ThrottleWaitMsecs  = 1).
+
+
+%% throttling on object size with 100 mutated keys - no extra
+%% throttles because of mutated keys should be done
+sweep_throttle_obj_size2_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    sweep_throttle_obj_size(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 100,
+      _ObjSizeBytes       = 100,
+      _ThrottleAfterBytes = 200,
+      _ThrottleWaitMsecs  = 1).
+
+
+%% throttling on obj_size where number of bytes to throttle after if
+%% bigger than object size
+sweep_throttle_obj_size3_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    sweep_throttle_obj_size(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 100,
+      _ObjSizeBytes       = 100,
+      _ThrottleAfterBytes = 500,
+      _ThrottleWaitMsecs  = 1).
+
+
+%% throttling on obj_size using a sweep_window_throttle_div
+sweep_throttle_obj_size4_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    application:set_env(riak_kv, sweep_window_throttle_div, 2),
+    sweep_throttle_obj_size(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 100,
+      _ObjSizeBytes       = 100,
+      _ThrottleAfterBytes = 500,
+      _ThrottleWaitMsecs  = 2).
+
+
+%% throttling on obj_size sweep_window > throttle wait time.
+sweep_throttle_obj_size5_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    application:set_env(riak_kv, sweep_window_throttle_div, 2),
+    sweep_throttle_obj_size(
+      _Index              = pick(Indices),
+      _NumKeys            = 1000,
+      _NumMutatedKeys     = 100,
+      _ObjSizeBytes       = 100,
+      _ThrottleAfterBytes = 500,
+      _ThrottleWaitMsecs  = 1).
+
+
+sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
+    application:set_env(riak_kv, sweep_throttle, {obj_size, ThrottleAfterBytes, ThrottleWaitMsecs}),
+
+    SP = new_meck_sweep_particpant(sweep_observer_1, self()),
+    RiakObjSizeBytes = byte_size(riak_object_bin(<<>>, <<>>, ObjSizeBytes)),
+    meck_new_backend(self(), NumKeys, RiakObjSizeBytes),
+    riak_kv_sweeper:add_sweep_participant(SP),
+    meck_new_visit_function(sweep_observer_1, {mutate, NumMutatedKeys}),
+    ExpectedThrottleMsecs = expected_throttle_total_msecs(
+                              NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs),
+    SweepTime = (min_scheduler_response_time_msecs() + ExpectedThrottleMsecs),
+
+    riak_kv_sweeper:sweep(Index),
+    ok = receive_msg({ok, successfull_sweep, sweep_observer_1, Index}, SweepTime),
+    #sa{throttle_total_wait_msecs = ActualThrottleTotalWait} = receive_sweep_result(),
+    ActualThrottleTotalWait = ExpectedThrottleMsecs.
+
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
+expected_throttle_total_msecs(NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
+    ThrottleMsecs = expected_throttle_msecs(
+                      NumKeys, ThrottleAfterBytes, ThrottleWaitMsecs, RiakObjSizeBytes),
+    ThrottleExtraMsecs = expected_throttle_extra_msecs(
+                           NumMutatedKeys, ThrottleWaitMsecs),
+
+    {ok, ThrottleDiv} = application:get_env(riak_kv, sweep_window_throttle_div),
+    case ThrottleDiv > ThrottleWaitMsecs of
+        true ->
+            0;
+        false ->
+            (ThrottleMsecs + ThrottleExtraMsecs) div ThrottleDiv
+    end.
+
+
+expected_throttle_extra_msecs(NumMutatedKeys, WaitTimeMsecs) ->
+    (NumMutatedKeys div 100) * WaitTimeMsecs.
+
+
+expected_throttle_msecs(NumKeys, ThrottleAfterBytes, WaitTimeMsecs, ObjSizeBytes) ->
+    case ThrottleAfterBytes div ObjSizeBytes of
+        0 ->
+            NumKeys * WaitTimeMsecs;
+        1 ->
+            (NumKeys div 2)  * WaitTimeMsecs;
+        _ ->
+            (NumKeys div (ThrottleAfterBytes div ObjSizeBytes))  * WaitTimeMsecs
+    end.
+
+
+riak_object_bin(B, K, ObjSizeBytes) ->
+    riak_object:to_binary(v1, riak_object:new(B, K, <<0:ObjSizeBytes/unit:8>>)).
+
 add_hours(Hour, Inc)  ->
     (Hour + Inc) rem 24.
 
@@ -600,6 +749,15 @@ receive_msg(Msg, TimeoutMsecs) ->
         RcvMsg when RcvMsg == Msg ->
             ok
     after TimeoutMsecs ->
+            timeout
+    end.
+
+
+receive_sweep_result() ->
+    receive
+        {ok, #sa{} = SA} ->
+            SA
+    after 5000 ->
             timeout
     end.
 
