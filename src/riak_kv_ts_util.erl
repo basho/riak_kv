@@ -116,15 +116,20 @@ build_sql_record_int(describe, SQL, _Cover) ->
     {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
 
 build_sql_record_int(insert, SQL, _Cover) ->
-    T = proplists:get_value(table, SQL),
-    case is_binary(T) of
+    Table = proplists:get_value(table, SQL),
+    case is_binary(Table) of
         true ->
-            Mod = riak_ql_ddl:make_module_name(T),
-            %% If columns are not specified, all columns are implied
-            F = riak_ql_ddl:insert_sql_columns(Mod, proplists:get_value(fields, SQL, [])),
-            V = proplists:get_value(values, SQL),
+            %% To support non- and partial specification of columns, the DDL
+            %% Module, Fields specified in the query, and Values specified in
+            %% the query are sent to the riak_ql_ddl module to flesh out the
+            %% missing or partially specified column to value mappings.
+            Mod = riak_ql_ddl:make_module_name(Table),
+            FieldsInQuery = proplists:get_value(fields, SQL, []),
+            ValuesInQuery = proplists:get_value(values, SQL),
+            {Fields, Values} = riak_ql_ddl:insert_sql_columns(Mod, FieldsInQuery, ValuesInQuery),
+
             %% In order to convert timestamps given as strings, rather
-            %% than doing this here, we pass V (Values) as is and
+            %% than doing this here, we pass Values as is and
             %% relegate the timestamp conversion to
             %% riak_kv_qry:do_insert. The conversion will take place
             %% after checking for too many values wrt the number of
@@ -132,9 +137,9 @@ build_sql_record_int(insert, SQL, _Cover) ->
             %% twice as the timestamp conversion code needs to have
             %% the Types available (and check that length(Types) ==
             %% length(Values)).
-            {ok, #riak_sql_insert_v1{'INSERT'   = T,
-                                     fields     = F,
-                                     values     = V,
+            {ok, #riak_sql_insert_v1{'INSERT'   = Table,
+                                     fields     = Fields,
+                                     values     = Values,
                                      helper_mod = Mod
                                     }};
         false ->

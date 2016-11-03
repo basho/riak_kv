@@ -491,6 +491,8 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             {reply, make_too_many_insert_values_resp(BadRowIdxs), State};
         {error, {undefined_fields, BadFields}} ->
             {reply, make_undefined_field_in_insert_resp(BadFields), State};
+        {error, {identifier_unexpected, Identifier}} ->
+            {reply, make_identifier_unexpected_resp(Identifier), State};
 
         %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
@@ -595,6 +597,11 @@ make_undefined_field_in_insert_resp(BadFields) ->
     make_rpberrresp(
       ?E_BAD_QUERY,
       flat_format("undefined fields: ~s", [string:join(BadFields, ", ")])).
+
+make_identifier_unexpected_resp(Identifier) ->
+    make_rpberrresp(
+        ?E_BAD_QUERY,
+        flat_format("unexpected identifer: ~s", [Identifier])).
 
 make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(
