@@ -176,13 +176,11 @@ process_stream({ReqId, From, {keys, []}}, ReqId,
     {ignore, State};
 
 process_stream({ReqId, From, {keys, CompoundKeys}}, ReqId,
-               State = #state{req = #tslistkeysreq{},
-                              req_ctx = ReqId,
-                              column_info = ColumnInfo}) ->
+               #state{req = #tslistkeysreq{},
+                      req_ctx = ReqId,
+                      key_transform_fn = EncodeStreamKeysFn} = State) ->
     riak_kv_keys_fsm:ack_keys(From),
-    Keys = riak_pb_ts_codec:encode_rows(
-             ColumnInfo, [tuple_to_list(sext:decode(A))
-                          || A <- CompoundKeys, A /= []]),
+    Keys = EncodeStreamKeysFn(CompoundKeys),
     {reply, #tslistkeysresp{keys = Keys, done = false}, State};
 
 process_stream({ReqId, {error, Error}}, ReqId,
@@ -192,6 +190,19 @@ process_stream({ReqId, Error}, ReqId,
                #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
     {error, {format, Error}, #state{}}.
 
+%%
+encode_rows_for_streaming(Mod, ColumnInfo, CompoundKeys1) ->
+    CompoundKeys2 = decode_keys_for_streaming(Mod, CompoundKeys1),
+    riak_pb_ts_codec:encode_rows(ColumnInfo, CompoundKeys2).
+
+%%
+decode_keys_for_streaming(_, []) ->
+    [];
+decode_keys_for_streaming(Mod, [[]|Tail]) ->
+    decode_keys_for_streaming(Mod, Tail);
+decode_keys_for_streaming(Mod, [K1|Tail]) ->
+    K2 = Mod:revert_ordering_on_local_key(sext:decode(K1)),
+    [K2|decode_keys_for_streaming(Mod, Tail)].
 
 %% ---------------------------------
 %% create_table, the only function for which we don't do
@@ -199,9 +210,11 @@ process_stream({ReqId, Error}, ReqId,
 
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
                           {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
-create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
+create_table({?DDL{table = Table} = DDL1, WithProps}, State) ->
+    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
+    DDL2 = convert_ddl_to_cluster_supported_version(DDLRecCap, DDL1),
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(
-                     DDL, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
+                     DDL2, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
     case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
         {bad_linkfun_modfun, {M, F}} ->
             {reply, make_table_create_fail_resp(
@@ -227,14 +240,25 @@ create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
             end
     end.
 
+%%
+convert_ddl_to_cluster_supported_version(DDLRecCap, DDL) when is_atom(DDLRecCap) ->
+    DDLConversions = riak_ql_ddl:convert(DDLRecCap, DDL),
+    [LowestDDL|_] = lists:sort(fun ddl_comparator/2, DDLConversions),
+    LowestDDL.
+
+%%
+ddl_comparator(A, B) ->
+    riak_ql_ddl:is_version_greater(element(1,A), element(1,B)) == true.
+
 wait_until_active(Table, State, 0) ->
-    {reply, make_table_activate_fail_resp(Table), State};
+    {reply, make_table_activate_error_timeout_resp(Table), State};
 wait_until_active(Table, State, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
             {reply, tsqueryresp, State};
         {error, not_ready} ->
             timer:sleep(1000),
+            lager:info("Waiting for table ~ts to be ready for activation", [Table]),
             wait_until_active(Table, State, Seconds - 1);
         {error, undefined} ->
             %% this is inconceivable because create(Table) has
@@ -358,7 +382,10 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 
     KeyConvFn =
         fun(Key) when is_binary(Key) ->
-                riak_kv_ts_util:lk_to_pk(sext:decode(Key), DDL, Mod);
+                PossiblyNegatedRow = sext:decode(Key),
+                LocalKey = riak_ql_ddl:get_local_key(DDL, PossiblyNegatedRow, Mod),
+                UnnegatedRow = riak_kv_ts_util:encode_typeval_key(LocalKey),
+                riak_kv_ts_util:row_to_key(UnnegatedRow, DDL, Mod);
            (Key) ->
                 %% Key read from leveldb should always be binary.
                 %% This clause is just to keep dialyzer quiet
@@ -383,8 +410,13 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
             ColumnInfo =
                 [Mod:get_field_type(N)
                  || ?SQL_PARAM{name = N} <- DDL?DDL.local_key#key_v1.ast],
+            EncodeStreamKeysFn =
+                fun(CompoundKeys) ->
+                    encode_rows_for_streaming(Mod, ColumnInfo, CompoundKeys)
+                end,
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
-                                                 column_info = ColumnInfo}};
+                                                 column_info = ColumnInfo,
+                                                 key_transform_fn = EncodeStreamKeysFn}};
         {error, Reason} ->
             {reply, make_failed_listkeys_resp(Reason), State}
     end.
@@ -590,10 +622,10 @@ make_table_create_fail_resp(Table, Reason) ->
     make_rpberrresp(
       ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])).
 
-make_table_activate_fail_resp(Table) ->
+make_table_activate_error_timeout_resp(Table) ->
     make_rpberrresp(
       ?E_ACTIVATE,
-      flat_format("Failed to activate table ~s", [Table])).
+      flat_format("Timed out while attempting to activate table ~ts", [Table])).
 
 make_table_not_activated_resp(Table) ->
     make_rpberrresp(
@@ -667,6 +699,22 @@ missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
         make_missing_helper_module_resp(<<"mytype">>, [{ddl, ?DDL{}}])
+    ).
+
+convert_ddl_to_cluster_supported_version_v1_test() ->
+    ?assertMatch(
+        #ddl_v1{},
+        convert_ddl_to_cluster_supported_version(
+          v1, #ddl_v2{local_key = ?DDL_KEY{ast = []}, partition_key = ?DDL_KEY{ast = []}})
+    ).
+
+convert_ddl_to_cluster_supported_version_v2_test() ->
+    DDLV2 = #ddl_v2{
+        local_key = ?DDL_KEY{ast = []},
+        partition_key = ?DDL_KEY{ast = []}},
+    ?assertMatch(
+        DDLV2,
+        convert_ddl_to_cluster_supported_version(v2, DDLV2)
     ).
 
 -endif.

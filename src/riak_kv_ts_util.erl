@@ -27,6 +27,7 @@
 -export([
          apply_timeseries_bucket_props/3,
          build_sql_record/3,
+         check_table_feature_supported/2,
          encode_typeval_key/1,
          explain_query/1, explain_query/2,
          get_column_types/2,
@@ -44,6 +45,9 @@
          validate_rows/2,
          varchar_to_timestamp/1
         ]).
+
+-type ts_service_req() ::
+    {ok, riak_kv_ts_svc:ts_requests(), {PermSpec::string(), Table::binary()}}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -418,7 +422,6 @@ build_dummy_object_from_keyed_values(LK, AllFields) ->
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
 
-
 -spec lk_to_pk(tuple(), ?DDL{}, module()) -> tuple().
 %% A simplified version of make_key/3 which only returns the PK.
 lk_to_pk(LKVals, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
@@ -562,7 +565,7 @@ validate_rows(Mod, Rows) ->
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
 
-row_to_key(Row, DDL, Mod) ->
+row_to_key(Row, DDL, Mod) when is_tuple(Row) ->
     encode_typeval_key(
       riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
@@ -674,6 +677,61 @@ extract_time_boundaries(FieldName, WhereList) ->
     EndInclusive = proplists:get_value(end_inclusive, WhereList, false),
     {{Start, StartInclusive}, {End, EndInclusive}}.
 
+
+%% Given the current capability value of the ddl records supported in the
+%% cluster and the decoded request, check if the table features are supported
+%% in the cluster.
+-spec check_table_feature_supported(DDLRecCap::atom(),
+                                    DecodedReq::ts_service_req()) -> ts_service_req() | {error, string()}.
+check_table_feature_supported(DDLRecCap, DecodedReq) ->
+    case DecodedReq of
+        {ok, {?DDL{} = DDL, _}, {_, Table}} ->
+            %% CREATE TABLE requires a separate path because there is no helper
+            %% module yet to check the min required ddl capability, so just
+            %% work it out from the DDL itself.
+            MinCap = riak_ql_ddl:get_minimum_capability(DDL),
+            case is_ddl_version_supported(MinCap, DDLRecCap) of
+                true ->
+                    DecodedReq;
+                false ->
+                    {error, create_table_not_supported_message(Table)}
+            end;
+        {ok, _, {_, Table}} ->
+            case is_table_supported(DDLRecCap, Table) of
+                true ->
+                    DecodedReq;
+                false ->
+                    {error, table_not_supported_message(Table)}
+            end;
+        _ ->
+            DecodedReq
+    end.
+
+%%
+is_table_supported(_, << >>) ->
+    %% an empty binary for the table name means that the request is not for a
+    %% specific table e.g. SHOW TABLES
+    true;
+is_table_supported(DDLRecCap, Table) when is_binary(Table) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    MinCap = Mod:get_min_required_ddl_cap(),
+    MinCap /= disabled andalso is_ddl_version_supported(MinCap, DDLRecCap).
+
+%%
+is_ddl_version_supported(MinCap, DDLRecCap) ->
+    riak_ql_ddl:is_version_greater(DDLRecCap, MinCap) /= false.
+
+%%
+table_not_supported_message(Table) ->
+    Reason = "Request was not executed. Table ~ts has features not supported "
+             "by all nodes in the cluster.",
+    lists:flatten(io_lib:format(Reason, [Table])).
+
+%%
+create_table_not_supported_message(Table) ->
+    Reason = "Table was not ~ts was not created. It contains features which "
+             "are not supported by all nodes in the cluster.",
+    lists:flatten(io_lib:format(Reason, [Table])).
 
 %%%%%%%%%%%%
 %% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
@@ -876,5 +934,70 @@ timestamp_parsing_test() ->
     {ok, Q} = riak_ql_parser:parse(Lexed),
     ?assertMatch({error, <<"Invalid date/time string">>},
                  build_sql_record(select, Q, undefined)).
+
+
+
+%%
+helper_sql_to_module(SQL) ->
+    Lexed = riak_ql_lexer:get_tokens(SQL),
+    {ddl, DDL, _Props} = riak_ql_parser:ql_parse(Lexed),
+    {module, _Module} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
+
+check_table_feature_supported_error_test() ->
+    ?assertEqual(
+        {error, myerror},
+        check_table_feature_supported(v2, {error, myerror})
+    ).
+
+check_table_feature_supported_is_supported_v1_test() ->
+    Table =
+        "CREATE TABLE check_table_feature_supported_is_supported_v1_test ("
+        " a varchar not null,"
+        " b varchar not null,"
+        " c timestamp not null,"
+        " primary key ((a, b, quantum(c, 1, 'm')), a, b, c))",
+    {module, _Mod} = helper_sql_to_module(Table),
+    DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_is_supported_v1_test">>}},
+    ?assertEqual(
+        DecodedReq,
+        check_table_feature_supported(v1, DecodedReq)
+    ).
+
+check_table_feature_supported_is_supported_v2_test() ->
+    Table =
+        "CREATE TABLE check_table_feature_supported_is_supported_v2_test ("
+        " a varchar not null,"
+        " b varchar not null,"
+        " c timestamp not null,"
+        " primary key ((a, b, quantum(c, 1, 'm')), a, b, c))",
+    {module, _Mod} = helper_sql_to_module(Table),
+    DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_is_supported_v2_test">>}},
+    ?assertEqual(
+        DecodedReq,
+        check_table_feature_supported(v2, DecodedReq)
+    ).
+
+check_table_feature_supported_not_supported_test() ->
+    Table =
+        "CREATE TABLE check_table_feature_supported_not_supported_test ("
+        " a varchar not null,"
+        " b varchar not null,"
+        " c timestamp not null,"
+        " primary key ((a, b, quantum(c, 1, 'm')), a, b, c DESC))",
+    {module, _Mod} = helper_sql_to_module(Table),
+    DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_not_supported_test">>}},
+    ?assertMatch(
+        {error, _},
+        check_table_feature_supported(v1, DecodedReq)
+    ).
+
+check_table_feature_supported_when_table_is_disabled_test() ->
+    Table = <<"check_table_feature_supported_when_table_is_disabled_test">>,
+    {module, _Mod} = riak_ql_ddl_compiler:compile_and_load_disabled_module_from_tmp(Table),
+    DecodedReq = {ok, req, {"perm", Table}},
+    ?assertMatch(
+        {error, _},
+        check_table_feature_supported(v2, DecodedReq)
+    ).
 
 -endif.

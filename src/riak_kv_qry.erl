@@ -76,7 +76,7 @@ submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
     do_insert(SQL);
 submit(SQL = ?SQL_SELECT{}, DDL) ->
     do_select(SQL, DDL);
-submit(#riak_sql_show_tables_v1{} = _SQL, _DDL) ->
+submit(#riak_sql_show_tables_v1{}, _DDL) ->
     do_show_tables();
 submit(#riak_sql_explain_query_v1{'EXPLAIN' = Select}, DDL) ->
     do_explain(DDL, Select).
@@ -225,19 +225,31 @@ maybe_convert_timestamp({_NonTSType, Val}, _OtherType) ->
 do_describe(?DDL{fields = FieldSpecs,
                  partition_key = #key_v1{ast = PKSpec},
                  local_key     = #key_v1{ast = LKSpec}}) ->
-    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>, <<"Interval">>, <<"Unit">>],
-    ColumnTypes = [   varchar,      varchar,    boolean,       sint64,            sint64,         sint64,         varchar],
+    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Partition Key">>, <<"Local Key">>, <<"Interval">>, <<"Unit">>, <<"Sort Order">>],
+    ColumnTypes = [   varchar,      varchar,    boolean,       sint64,            sint64,         sint64,         varchar,      varchar],
     Quantum = find_quantum_field(PKSpec),
     Rows =
         [[Name, list_to_binary(atom_to_list(Type)), Nullable,
           column_pk_position_or_blank(Name, PKSpec),
           column_lk_position_or_blank(Name, LKSpec)] ++
-          columns_quantum_or_blank(Name, Quantum)
+          columns_quantum_or_blank(Name, Quantum) ++
+          column_lk_order(Name, LKSpec)
          || #riak_field_v1{name = Name,
                            type = Type,
                            optional = Nullable} <- FieldSpecs],
     {ok, {ColumnNames, ColumnTypes, Rows}}.
 
+%% Return the sort order of the local key for this column, or null if it is not
+%% a local key or has an undefined sort order.
+column_lk_order(Name, LK) when is_binary(Name) ->
+    case lists:keyfind([Name], #riak_field_v1.name, LK) of
+        ?SQL_PARAM{ordering = descending} ->
+            [<<"DESC">>];
+        ?SQL_PARAM{ordering = ascending} ->
+            [<<"ASC">>];
+        _ ->
+            [[]]
+    end.
 
 %% the following two functions are identical, for the way fields and
 %% keys are represented as of 2015-12-18; duplication here is a hint
@@ -394,11 +406,11 @@ describe_table_columns_test() ->
     Res = do_describe(DDL),
     ?assertMatch(
        {ok, {_, _,
-             [[<<"f">>, <<"varchar">>,   false, 1,  1, [], []],
-              [<<"s">>, <<"varchar">>,   false, 2,  2, [], []],
-              [<<"t">>, <<"timestamp">>, false, 3,  3, 15, <<"m">>],
-              [<<"w">>, <<"sint64">>, false, [], [], [], []],
-              [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
+             [[<<"f">>, <<"varchar">>,   false, 1,  1, [], [], []],
+              [<<"s">>, <<"varchar">>,   false, 2,  2, [], [], []],
+              [<<"t">>, <<"timestamp">>, false, 3,  3, 15, <<"m">>, []],
+              [<<"w">>, <<"sint64">>, false, [], [], [], [], []],
+              [<<"p">>, <<"double">>, true,  [], [], [], [], []]]}},
        Res).
 
 describe_table_columns_no_quantum_test() ->
@@ -415,11 +427,11 @@ describe_table_columns_no_quantum_test() ->
     Res = do_describe(DDL),
     ?assertMatch(
         {ok, {_, _,
-            [[<<"f">>, <<"varchar">>,   false, 1,  1, [], []],
-             [<<"s">>, <<"varchar">>,   false, 2,  2, [], []],
-             [<<"t">>, <<"timestamp">>, false, 3,  3, [], []],
-             [<<"w">>, <<"sint64">>, false, [], [], [], []],
-             [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
+            [[<<"f">>, <<"varchar">>,   false, 1,  1, [],  [], []],
+             [<<"s">>, <<"varchar">>,   false, 2,  2, [],  [], []],
+             [<<"t">>, <<"timestamp">>, false, 3,  3, [],  [], []],
+             [<<"w">>, <<"sint64">>,    false, [], [], [], [], []],
+             [<<"p">>, <<"double">>,    true,  [], [], [], [], []]]}},
         Res).
 
 show_tables_test() ->
