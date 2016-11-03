@@ -470,6 +470,8 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             {reply, make_qbuf_create_error(Reason), State};
         {error, {qbuf_ldb_error, Reason}} ->
             {reply, make_qbuf_ldb_error(Reason), State};
+        {error, {identifier_unexpected, Identifier}} ->
+            {reply, make_identifier_unexpected_resp(Identifier), State};
 
         %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
@@ -596,6 +598,11 @@ make_max_query_quanta_resp(NQuanta, MaxQueryQuanta) ->
     make_rpberrresp(
       ?E_QUANTA_LIMIT,
       flat_format("Query spans too many quanta (~b, max ~b)", [NQuanta, MaxQueryQuanta])).
+
+make_identifier_unexpected_resp(Identifier) ->
+    make_rpberrresp(
+        ?E_BAD_QUERY,
+        flat_format("unexpected identifer: ~s", [Identifier])).
 
 make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(

@@ -32,8 +32,6 @@
 -define(SQL_SELECT, #riak_select_v3).
 -define(SQL_SELECT_RECORD_NAME, riak_select_v3).
 
--define(SQL_NULL, []).
-
 %% the result type of a query, rows means to return all matching rows, aggregate
 %% returns one row calculated from the result set for the query.
 -type select_result_type() :: rows | aggregate | group_by.
