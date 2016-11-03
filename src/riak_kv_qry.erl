@@ -406,11 +406,11 @@ describe_table_columns_test() ->
     Res = do_describe(DDL),
     ?assertMatch(
        {ok, {_, _,
-             [[<<"f">>, <<"varchar">>,   false, 1,  1, [], []],
-              [<<"s">>, <<"varchar">>,   false, 2,  2, [], []],
-              [<<"t">>, <<"timestamp">>, false, 3,  3, 15, <<"m">>],
-              [<<"w">>, <<"sint64">>, false, [], [], [], []],
-              [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
+             [[<<"f">>, <<"varchar">>,   false, 1,  1, [], [], []],
+              [<<"s">>, <<"varchar">>,   false, 2,  2, [], [], []],
+              [<<"t">>, <<"timestamp">>, false, 3,  3, 15, <<"m">>, []],
+              [<<"w">>, <<"sint64">>, false, [], [], [], [], []],
+              [<<"p">>, <<"double">>, true,  [], [], [], [], []]]}},
        Res).
 
 describe_table_columns_no_quantum_test() ->
@@ -427,11 +427,11 @@ describe_table_columns_no_quantum_test() ->
     Res = do_describe(DDL),
     ?assertMatch(
         {ok, {_, _,
-            [[<<"f">>, <<"varchar">>,   false, 1,  1, [], []],
-             [<<"s">>, <<"varchar">>,   false, 2,  2, [], []],
-             [<<"t">>, <<"timestamp">>, false, 3,  3, [], []],
-             [<<"w">>, <<"sint64">>, false, [], [], [], []],
-             [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
+            [[<<"f">>, <<"varchar">>,   false, 1,  1, [],  [], []],
+             [<<"s">>, <<"varchar">>,   false, 2,  2, [],  [], []],
+             [<<"t">>, <<"timestamp">>, false, 3,  3, [],  [], []],
+             [<<"w">>, <<"sint64">>,    false, [], [], [], [], []],
+             [<<"p">>, <<"double">>,    true,  [], [], [], [], []]]}},
         Res).
 
 show_tables_test() ->
