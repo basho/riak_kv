@@ -63,7 +63,7 @@ new_meck_riak_core_modules(Partitions) ->
     VNodeIndices.
 
 
-meck_new_aae_modules(AAEnabled, EstimatedKeys, LockResult) ->
+new_meck_aae_modules(AAEnabled, EstimatedKeys, LockResult) ->
     meck:new(riak_kv_entropy_manager),
     meck:expect(riak_kv_entropy_manager, enabled, fun() -> AAEnabled end),
     meck:new(riak_kv_index_hashtree),
@@ -529,7 +529,7 @@ scheduler_restart_sweep_test(Config) ->
 scheduler_estimated_keys_lock_ok_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     TestCasePid = self(),
-    meck_new_aae_modules(_AAEnabled = true,
+    new_meck_aae_modules(_AAEnabled = true,
                          _EstimatedKeys = 4200,
                          _LockResult = ok),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
@@ -547,7 +547,7 @@ scheduler_estimated_keys_lock_ok_test(Config) ->
 scheduler_estimated_keys_lock_fail_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     TestCasePid = self(),
-    meck_new_aae_modules(_AAEnabled = true,
+    new_meck_aae_modules(_AAEnabled = true,
                          _EstimatedKeys = 4200,
                          _LockResult = fail),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
