@@ -752,8 +752,6 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
     ok = receive_msg({ok, successfull_sweep, sweep_observer_1, Index}, SweepTime),
     #sa{throttle_total_wait_msecs = ActualThrottleTotalWait} = receive_sweep_result(),
 
-    ct:pal("ActualThrottleTotalWait: ~p", [ActualThrottleTotalWait]),
-    ct:pal("ExpectedThrottleMsecs: ~p", [ExpectedThrottleMsecs]),
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
 
 
