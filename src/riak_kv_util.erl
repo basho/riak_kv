@@ -47,7 +47,8 @@
          get_write_once/1,
          overload_reply/1,
          get_backend_config/3,
-         is_modfun_allowed/2]).
+         is_modfun_allowed/2,
+         get_bucket_from_req/1]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -131,6 +132,11 @@ make_request(Request, Index) ->
     riak_core_vnode_master:make_request(Request,
                                         {fsm, undefined, self()},
                                         Index).
+
+get_bucket_from_req(#riak_kv_sql_select_req_v1{bucket = B}) ->
+    B;
+get_bucket_from_req(?KV_INDEX_REQ{bucket = B}) ->
+    B.
 
 get_bucket_option(Type, BucketProps) ->
     case lists:keyfind(Type, 1, BucketProps) of
@@ -217,7 +223,7 @@ preflist_siblings(Index, N, Ring) ->
     lists:reverse(Pred) ++ Succ.
 
 -spec responsible_preflists(index()) -> [index_n()].
-responsible_preflists(Index) ->
+responsible_preflists(Index) when is_integer(Index) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     responsible_preflists(Index, Ring).
 
@@ -353,7 +359,7 @@ mark_indexes_reformatted(Idx, 0, ForUpgrade) ->
     lager:info("index reformat: marked partition ~p as fixed", [Idx]),
     ok;
 mark_indexes_reformatted(_Idx, _ErrorCount, _ForUpgrade) ->
-    undefined.
+    error.
 
 -ifndef(old_hash).
 md5(Bin) ->

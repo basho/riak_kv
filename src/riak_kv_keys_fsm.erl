@@ -73,11 +73,12 @@ req(Bucket, ItemFilter) ->
                                      item_filter=ItemFilter}
     end.
 
+
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
 %% should cover, the service to use to check for available nodes,
 %% and the registered name to use to access the vnode master process.
-init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
+init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout, KeyConvFn]) ->
     riak_core_dtrace:put_tag(io_lib:format("~p", [Bucket])),
     ClientNode = atom_to_list(node(ClientPid)),
     PidStr = pid_to_list(ClientPid),
@@ -93,8 +94,35 @@ init(From={_, _, ClientPid}, [Bucket, ItemFilter, Timeout]) ->
     NVal = proplists:get_value(n_val, BucketProps),
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter),
+
+    %% CreatePlanFn for this module invokes
+    %% riak_kv_keys_fsm:create_plan with the passed KeyConvFn
+
+    CreatePlanFn =
+        fun(Target, NValArg, PVC, ReqId, Service, Request) ->
+                create_plan(Target, NValArg, PVC, ReqId, Service, Request, KeyConvFn)
+        end,
+
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From}}.
+     CreatePlanFn, #state{from=From}}.
+
+%% ------------------------------------------------------------ 
+%% Create coverage plan for this module.
+%%
+%% Calls riak_core_coverage_plan:create_plan, but adds a key
+%% conversion function to the returned vnode filter prop list
+%%
+%% This is required to build the key filter used in listkeys
+%% ------------------------------------------------------------
+
+create_plan(Target, NVal, PVC, ReqId, Service, Request, KeyConvFn) ->
+    CoveragePlan = riak_core_coverage_plan:create_plan(Target, NVal, PVC, ReqId, Service, Request),
+    case CoveragePlan of
+        {error, Reason} ->
+            {error, Reason};
+        {CoverageVNodes, FilterVNodes} ->
+            {CoverageVNodes, [{key_conv_fn, KeyConvFn} | FilterVNodes]}
+    end.
 
 process_results({From, Bucket, Keys},
                 StateData=#state{from={raw, ReqId, ClientPid}}) ->

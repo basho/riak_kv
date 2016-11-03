@@ -1,8 +1,8 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_index: central module for indexing.
+%% riak_kv_index: central module for indexing.
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -19,6 +19,9 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
+
+-ifndef(RIAK_KV_INDEX_HRL).
+-define(RIAK_KV_INDEX_HRL, included).
 
 %% Index query records
 -record(riak_kv_index_v2, {
@@ -41,8 +44,10 @@
           start_inclusive=true :: boolean(),
           end_inclusive=true :: boolean(),
           return_body=false ::boolean(), %% Note, only for riak cs bucket folds
-          term_regex :: binary() | undefined,
+          term_regex :: {'re_pattern', any(), any(), any()} | binary() | undefined,
           max_results :: integer() | undefined
          }).
 
 -define(KV_INDEX_Q, #riak_kv_index_v3).
+
+-endif.

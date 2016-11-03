@@ -19,6 +19,17 @@
     type :: primary | fallback
 }).
 
+%% Currently only for timeseries batches
+-record(riak_kv_w1c_batch_put_req_v1, {
+    objs :: list({{binary(), binary()}, binary()}),
+    type :: primary | fallback
+}).
+
+-record(riak_kv_w1c_batch_put_reply_v1, {
+    reply :: ok | {error, term()},
+    type :: primary | fallback
+}).
+
 -record(riak_kv_get_req_v1, {
           bkey :: {binary(), binary()},
           req_id :: non_neg_integer()}).
@@ -51,6 +62,11 @@
           item_filter :: riak_kv_coverage_filter:filter(),
           qry :: riak_index:query_def()}).
 
+%% TODO get riak_ql types included properly somehow
+-record(riak_kv_sql_select_req_v1, {
+          bucket :: {binary(), binary()},
+          qry}).
+
 -record(riak_kv_vnode_status_req_v1, {}).
 
 -record(riak_kv_delete_req_v1, {
@@ -70,6 +86,8 @@
 -define(KV_PUT_REQ, #riak_kv_put_req_v1).
 -define(KV_W1C_PUT_REQ, #riak_kv_w1c_put_req_v1).
 -define(KV_W1C_PUT_REPLY, #riak_kv_w1c_put_reply_v1).
+-define(KV_W1C_BATCH_PUT_REQ, #riak_kv_w1c_batch_put_req_v1).
+-define(KV_W1C_BATCH_PUT_REPLY, #riak_kv_w1c_batch_put_reply_v1).
 -define(KV_GET_REQ, #riak_kv_get_req_v1).
 -define(KV_LISTBUCKETS_REQ, #riak_kv_listbuckets_req_v1).
 -define(KV_LISTKEYS_REQ, #riak_kv_listkeys_req_v4).

@@ -84,6 +84,7 @@
 -include_lib("riak_kv_index.hrl").
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
+-include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_types.hrl").
 
 -ifdef(TEST).
@@ -144,7 +145,7 @@
                 key_buf_size :: pos_integer(),
                 async_folding :: boolean(),
                 in_handoff = false :: boolean(),
-                handoff_target :: node(),
+                handoff_target :: {integer(), node()},
                 handoffs_rejected = 0 :: integer(),
                 forward :: node() | [{integer(), node()}],
                 hashtrees :: pid(),
@@ -542,6 +543,8 @@ handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
 handle_overload_command(?KV_W1C_PUT_REQ{type=Type}, Sender, _Idx) ->
     riak_core_vnode:reply(Sender, ?KV_W1C_PUT_REPLY{reply={error, overload}, type=Type});
+handle_overload_command(?KV_W1C_BATCH_PUT_REQ{type=Type}, Sender, _Idx) ->
+    riak_core_vnode:reply(Sender, ?KV_W1C_BATCH_PUT_REPLY{reply={error, overload}, type=Type});
 handle_overload_command(_, Sender, _) ->
     riak_core_vnode:reply(Sender, {error, mailbox_overload}).
 
@@ -878,14 +881,37 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
+%% For now, ignore async_put. This is currently TS-only, and TS
+%% supports neither AAE nor YZ.
+handle_command(?KV_W1C_BATCH_PUT_REQ{objs=Objs, type=Type},
+                From, State=#state{mod=Mod, modstate=ModState}) ->
+    StartTS = os:timestamp(),
+    Context = {w1c_batch_put, From, Type, Objs, StartTS},
+    case Mod:batch_put(Context, Objs, [], ModState) of
+        {ok, UpModState} ->
+            %% When we support AAE, be sure to call a batch version of
+            %% `update_hashtree' instead of iterating over each
+            %% element of Objs.
+            %%
+            %% riak_kv_index_hashtree:insert/async_insert can
+            %% take a list
+            {reply, ?KV_W1C_BATCH_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
+        {error, Reason, UpModState} ->
+            {reply, ?KV_W1C_BATCH_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
+    end;
+
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
-                From, State=#state{mod=Mod, async_put=true, modstate=ModState}) ->
+                From, State=#state{mod=Mod, idx=Idx, async_put=true, modstate=ModState}) ->
     StartTS = os:timestamp(),
     Context = {w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS},
-    case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
+    case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
-            {noreply, State#state{modstate=UpModState}};
+
+            update_hashtree(Bucket, Key, EncodedVal, State),
+            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+
+            {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=Type}, State#state{modstate=UpModState}}
     end;
@@ -951,8 +977,8 @@ handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
-                              item_filter=ItemFilter,
-                              qry=Query},
+                                      item_filter=ItemFilter,
+                                      qry=Query},
                 FilterVNodes, Sender, State) ->
     %% v1 == no backpressure
     handle_coverage_index(Bucket, ItemFilter, Query,
@@ -963,7 +989,14 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                 FilterVNodes, Sender, State) ->
     %% v2 = ack-based backpressure
     handle_coverage_index(Bucket, ItemFilter, Query,
-                          FilterVNodes, Sender, State, fun result_fun_ack/2).
+                          FilterVNodes, Sender, State, fun result_fun_ack/2);
+handle_coverage(#riak_kv_sql_select_req_v1{bucket=Bucket,
+                                           qry=Query},
+                FilterVNodes, Sender, State) ->
+    ItemFilter = none,
+    handle_range_scan(Bucket, ItemFilter, Query,
+                      FilterVNodes, Sender, State, fun result_fun_ack/2).
+
 
 -spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
 prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
@@ -1002,11 +1035,34 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             %% @HACK
             %% Really this should be decided in the backend
             %% if there was a index_query fun.
-            FoldType = case riak_index:return_body(Query) of
-                           true -> fold_objects;
-                           false -> fold_keys
-                       end,
+            FoldType = riak_index:return_foldtype(Query),
             handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
+                                 FilterVNodes, Sender, Opts, State);
+        false ->
+            {reply, {error, {indexes_not_supported, Mod}}, State}
+    end.
+
+handle_range_scan(Bucket, ItemFilter, Query,
+                  FilterVNodes, Sender,
+                  State=#state{mod=Mod,
+                               key_buf_size=DefaultBufSz,
+                               modstate=ModState},
+                  ResultFunFun) ->
+    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    IndexBackend = lists:member(indexes, Capabilities),
+    case IndexBackend of
+        true ->
+            %% Update stats...
+            ok = riak_kv_stat:update(vnode_index_read),
+
+            ResultFun = ResultFunFun(Bucket, Sender),
+            BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
+            Opts = [{index, Bucket, prepare_index_query(Query)},
+                    {bucket, Bucket}, {buffer_size, BufSize}],
+            %% @HACK
+            %% Really this should be decided in the backend
+            %% if there was a index_query fun.
+            handle_coverage_range_scan(range_scan, Bucket, ItemFilter, ResultFun,
                                     FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
@@ -1014,8 +1070,8 @@ handle_coverage_index(Bucket, ItemFilter, Query,
 
 %% Convenience for handling both v3 and v4 coverage-based key fold operations
 handle_coverage_keyfold(Bucket, ItemFilter, Query,
-                      FilterVNodes, Sender, State,
-                      ResultFunFun) ->
+                        FilterVNodes, Sender, State,
+                        ResultFunFun) ->
     handle_coverage_fold(fold_keys, Bucket, ItemFilter, Query,
                             FilterVNodes, Sender, State, ResultFunFun).
 
@@ -1023,12 +1079,45 @@ handle_coverage_keyfold(Bucket, ItemFilter, Query,
 %% index operations, allow the ModFun for folding to be declared
 %% to support index operations that can return objects
 handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
-                        FilterVNodes, Sender, Opts0,
-                        State=#state{async_folding=AsyncFolding,
-                                     idx=Index,
-                                     key_buf_size=DefaultBufSz,
-                                     mod=Mod,
-                                     modstate=ModState}) ->
+                     FilterVNodes, Sender, Opts0,
+                     State=#state{async_folding = AsyncFolding,
+                                  idx           = Index,
+                                  key_buf_size  = DefaultBufSz,
+                                  mod           = Mod,
+                                  modstate      = ModState}) ->
+    %% Construct the filter function
+    FilterVNode = proplists:get_value(Index, FilterVNodes),
+    KeyConvFn   = proplists:get_value(key_conv_fn, FilterVNodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode, KeyConvFn),
+    BufferMod = riak_kv_fold_buffer,
+    BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
+    Buffer = BufferMod:new(BufferSize, ResultFun),
+    Extras = fold_extras_keys(Index, Bucket),
+    FoldFunSelector = keys,
+    FoldFun = fold_fun(FoldFunSelector, BufferMod, Filter, Extras),
+    FinishFun = finish_fun(BufferMod, Sender),
+    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    AsyncBackend = lists:member(async_fold, Capabilities),
+    Opts = case AsyncFolding andalso AsyncBackend of
+               true ->
+                   [async_fold | Opts0];
+               false ->
+                   Opts0
+           end,
+    case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
+        {async, AsyncWork} ->
+            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+        _ ->
+            {noreply, State}
+    end.
+
+handle_coverage_range_scan(FoldType, Bucket, ItemFilter, ResultFun,
+                           FilterVNodes, Sender, Opts0,
+                           State=#state{async_folding=AsyncFolding,
+                                        idx=Index,
+                                        key_buf_size=DefaultBufSz,
+                                        mod=Mod,
+                                        modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
@@ -1036,7 +1125,7 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
     Extras = fold_extras_keys(Index, Bucket),
-    FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
+    FoldFun = fold_fun(range_scan, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     AsyncBackend = lists:member(async_fold, Capabilities),
@@ -1472,7 +1561,7 @@ delete_hash(RObj) ->
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState},
-            PutArgs=#putargs{bkey={Bucket, _Key},
+            PutArgs=#putargs{bkey={Bucket, _},
                              lww=LWW,
                              coord=Coord,
                              robj=RObj,
@@ -1863,6 +1952,11 @@ fold_fun(buckets, BufferMod, Filter, _Extra) ->
                     Buffer
             end
     end;
+fold_fun(range_scan, BufferMod, none, _Extra) ->
+    fun(Range, Buffer) ->
+            BufferMod:add(Range, Buffer)
+    end;
+
 fold_fun(keys, BufferMod, none, undefined) ->
     fun(_, Key, Buffer) ->
             BufferMod:add(Key, Buffer)
@@ -2348,11 +2442,37 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                         false ->
                             ok
                     end,
-                    PutRet = Mod:put(Bucket, Key, IndexSpecs, EncodedVal,
+
+                    %% Timeseries data arrives during handoff with
+                    %% sext-encoded local keys. Unless care is taken,
+                    %% those keys are doubly-encoded, so here we will
+                    %% identify them and unencode the key.
+                    %%
+                    %% Not the ideal solution but sufficient.
+                    PutKey = maybe_timeseries_key(Key, Obj),
+                    PutRet = Mod:put(Bucket, PutKey, IndexSpecs, EncodedVal,
                                      ModState),
                     {PutRet, EncodedVal}
             end
     end.
+
+%% This function takes a key and the riak object from the handoff call
+%% chain and verifies whether or not the object is from timeseries.
+%%
+%% The binary pattern match is quick and easy: does this look like a
+%% sext-encoded tuple?
+%%
+%% Only if that is true do we examine the object for DDL metadata and
+%% decode the key if this is TS.
+maybe_timeseries_key(<<16,0,0,0, _Rest/binary>>=Key, Object) ->
+    case riak_object:is_ts(Object) of
+        {true, _Version} ->
+            sext:decode(Key);
+        false ->
+            Key
+    end;
+maybe_timeseries_key(Key, _Object) ->
+    Key.
 
 uses_r_object(Mod, ModState, Bucket) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),

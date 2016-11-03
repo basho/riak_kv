@@ -574,6 +574,7 @@ gen_status_file(valid) ->
              ok = write_vnode_status([{vnodeid, VnodeId}], ?TEST_FILE, 1),
              ?TEST_FILE
          end).
+
 -endif.
 
 -endif.

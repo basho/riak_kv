@@ -1,3 +1,5 @@
+*~
+*.gg
 .rebar/*
 .eunit/*
 deps/*
@@ -17,3 +19,4 @@ tags
 erln8.config
 .idea
 riak_kv.iml
+deps

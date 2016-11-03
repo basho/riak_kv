@@ -28,22 +28,28 @@
 %%      commands to each of those VNodes, and compiles the
 %%      responses.
 %%
-%%      The number of VNodes required for full
+%%      For secondary indexes the number of VNodes required for full
 %%      coverage is based on the number
 %%      of partitions, the number of available physical
 %%      nodes, and the bucket n_val.
+%%
+%%      For composite keys the number of VNodes required
+%%      is based on the preflist for writing the collocated
+%%      data
 
 -module(riak_kv_index_fsm).
 
 -behaviour(riak_core_coverage_fsm).
 
 -include_lib("riak_kv_vnode.hrl").
+-include("riak_kv_ts.hrl").
 
 -export([init/2,
          plan/2,
          process_results/3,
          process_results/2,
-         finish/2]).
+         finish/2,
+         identity/1]).
 -export([use_ack_backpressure/0,
          req/3]).
 
@@ -72,8 +78,16 @@ use_ack_backpressure() ->
     riak_core_capability:get({riak_kv, index_backpressure}, false) == true.
 
 %% @doc Construct the correct index command record.
--spec req(binary(), term(), term()) -> term().
+-spec req(binary()|tuple(binary()), term(), term()) -> term().
 req(Bucket, ItemFilter, Query) ->
+    case riak_kv_select:is_sql_select_record(Query) of
+        true ->
+            #riak_kv_sql_select_req_v1{bucket = Bucket, qry = Query};
+        false ->
+            index_req(Bucket, ItemFilter, Query)
+    end.
+
+index_req(Bucket, ItemFilter, Query) ->
     case use_ack_backpressure() of
         true ->
             ?KV_INDEX_REQ{bucket=Bucket,
@@ -84,6 +98,19 @@ req(Bucket, ItemFilter, Query) ->
                                   item_filter=ItemFilter,
                                   qry=Query}
     end.
+
+%% Because instances of index fsm may be started on different nodes
+%% (particularly, on different nodes with differing versions of the
+%% beams), passing a fun object to where the call is made is likely to
+%% cause a badfun error the moment the function object is called.
+%% This happens to work when the module beam on the remote node
+%% contains the compiled code the received function object refers to;
+%% but all chances are off when 'index' and/or 'uniq' properties are
+%% different between the caller and target beams.
+%%
+%% To avoid badfuns, we export the function we are passing as an
+%% argument, for the caller to refer to it safely.
+identity(X) -> X.
 
 %% @doc Return a tuple containing the ModFun to call per vnode,
 %% the number of primary preflist vnodes the operation
@@ -96,10 +123,19 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
+    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, all]);
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget]) ->
+    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, riak_core_coverage_plan]);
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod]) ->
+    init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod, fun ?MODULE:identity/1]);
+%% The KeyConvFn is needed to infer the PK from LK in TS keys, and use
+%% that to correctly create the coverage plan.  For details, see
+%% github/riak_kv/pulls/1404
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0, VNodeTarget, PlannerMod, KeyConvFn]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
-    Paginating = is_integer(MaxResults) andalso MaxResults > 0, 
+    Paginating = is_integer(MaxResults) andalso MaxResults > 0,
     PgSort = case {Paginating, PgSort0} of
         {true, _} ->
             true;
@@ -110,8 +146,25 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) 
     end,
     %% Construct the key listing request
     Req = req(Bucket, ItemFilter, Query),
-    {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
+
+    %% Note riak_core_coverage_fsm now expects a plan function, not a mod, to be returned
+
+    CreatePlanFn =
+        fun(Target, NValArg, PVC, ReqId, Service, Request) ->
+                create_plan(PlannerMod, Target, NValArg, PVC, ReqId, Service, Request, KeyConvFn)
+        end,
+
+    {Req, VNodeTarget, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout, CreatePlanFn,
      #state{from=From, max_results=MaxResults, pagination_sort=PgSort}}.
+
+create_plan(PlannerMod, Target, NVal, PVC, ReqId, Service, Request, KeyConvFn) ->
+    CoveragePlan = PlannerMod:create_plan(Target, NVal, PVC, ReqId, Service, Request),
+    case CoveragePlan of
+        {error, Reason} ->
+            {error, Reason};
+        {CoverageVNodes, FilterVNodes} ->
+            {CoverageVNodes, [{key_conv_fn, KeyConvFn} | FilterVNodes]}
+    end.
 
 plan(CoverageVNodes, State = #state{pagination_sort=true}) ->
     {ok, State#state{merge_sort_buffer=sms:new(CoverageVNodes)}};

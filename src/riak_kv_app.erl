@@ -2,7 +2,7 @@
 %%
 %% riak_app: application startup for Riak
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -36,7 +36,10 @@
                    {riak_kv_pb_bucket_key_apl, 33, 34}, %% (Active) Preflist requests
                    {riak_kv_pb_csbucket, 40, 41}, %%  CS bucket folding support
                    {riak_kv_pb_counter, 50, 53}, %% counter requests
-                   {riak_kv_pb_crdt, 80, 83} %% CRDT requests
+                   {riak_kv_pb_coverage, 70, 71}, %% coverage requests
+                   {riak_kv_pb_crdt, 80, 83}, %% CRDT requests
+                   {riak_kv_pb_ts, 90, 103}, %% time series PB requests
+                   {riak_kv_ttb_ts, 104, 104} %% time series TTB requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
@@ -147,6 +150,10 @@ start(_Type, _StartArgs) ->
                                           [true, false],
                                           false),
 
+            riak_core_capability:register({riak_kv, w1c_batch_vnode},
+                                          [true, false],
+                                          false),
+
             %% mapred_system should remain until no nodes still exist
             %% that would propose 'legacy' as the default choice
             riak_core_capability:register({riak_kv, mapred_system},
@@ -181,7 +188,7 @@ start(_Type, _StartArgs) ->
 
             riak_core_capability:register({riak_kv, vclock_data_encoding},
                                           [encode_zlib, encode_raw],
-                                          encode_zlib),
+                                          encode_raw),
 
             riak_core_capability:register({riak_kv, crdt},
                                           [?TOP_LEVEL_TYPES,
@@ -205,6 +212,18 @@ start(_Type, _StartArgs) ->
                                           [0, legacy],
                                           legacy),
 
+            riak_core_capability:register({riak_kv, riak_ql_ddl_rec_version},
+                                           [v2,v1],
+                                           riak_ql_ddl:first_version()),
+
+            riak_core_capability:register({riak_kv, sql_select_version},
+                                          [v2,v1],
+                                          riak_kv_select:first_version()),
+
+            riak_kv_compile_tab:populate_v3_table(),
+            riak_kv_ts_newtype:recompile_ddl(),
+            riak_kv_ts_newtype:verify_helper_modules(),
+
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
@@ -217,6 +236,10 @@ start(_Type, _StartArgs) ->
                                mapreduce, index, get_preflist]}
             ]
             ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
+
+            riak_core:register(riak_ts, [
+                {permissions, riak_kv_ts_api:api_calls()}
+            ]),
 
             ok = riak_api_pb_service:register(?SERVICES),
 

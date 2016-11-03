@@ -69,8 +69,11 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
             [<<"other">>, ClientNode, PidStr]),
     %% Construct the bucket listing request
     Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+
+    %% Note riak_core_coverage_fsm now expects a plan function, not a mod, to be returned
+
     {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From, stream=Stream, type=BucketType}}.
+     fun riak_core_coverage_plan:create_plan/6, #state{from=From, stream=Stream, type=BucketType}}.
 
 process_results(done, StateData) ->
     {done, StateData};

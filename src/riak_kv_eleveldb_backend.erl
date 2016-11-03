@@ -2,7 +2,7 @@
 %%
 %% riak_kv_eleveldb_backend: Backend Driver for LevelDB
 %%
-%% Copyright (c) 2007-2014 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -30,8 +30,10 @@
          start/2,
          stop/1,
          get/3,
+         batch_put/4,
          put/5,
          async_put/5,
+         sync_put/5,
          delete/4,
          drop/1,
          fix_index/3,
@@ -42,26 +44,33 @@
          fold_keys/4,
          fold_objects/4,
          fold_indexes/4,
+         range_scan/4,
          is_empty/1,
          status/1,
          callback/3]).
-
 -export([data_size/1]).
 
 -compile({inline, [
                    to_object_key/2, from_object_key/1,
                    to_index_key/4, from_index_key/1
                   ]}).
+%% Remove a few releases after 2.1 series, keeping
+%% around for debugging/comparison.
+-export([orig_to_object_key/2, orig_from_object_key/1]).
 
 -include("riak_kv_index.hrl").
+-include("riak_kv_ts.hrl").
 
 -ifdef(TEST).
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold, indexes, index_reformat, size,
-        iterator_refresh]).
+                       iterator_refresh]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: eleveldb:db_ref(),
@@ -170,15 +179,10 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
             {error, Reason, State}
     end.
 
-%% @doc Insert an object into the eleveldb backend.
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
--spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
-put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
-                                                write_opts=WriteOpts,
-                                                legacy_indexes=WriteLegacy,
-                                                fixed_indexes=FixedIndexes}=State) ->
+
+%% Create a list of backend put-related updates for this object
+put_operations(Bucket, PrimaryKey, IndexSpecs, Val, #state{legacy_indexes=WriteLegacy,
+                                                           fixed_indexes=FixedIndexes}) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
     Updates1 = [{put, StorageKey, Val} || Val /= undefined],
@@ -195,9 +199,38 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
                 index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value)
         end,
     Updates2 = lists:flatmap(F, IndexSpecs),
+    Updates1 ++ Updates2.
+
+%% @doc Insert an object into the eleveldb backend.
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+-spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
+                                                write_opts=WriteOpts}=State) ->
+    Operations = put_operations(Bucket, PrimaryKey, IndexSpecs, Val, State),
 
     %% Perform the write...
-    case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
+    case eleveldb:write(Ref, Operations, WriteOpts) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
+
+%% @doc Insert a batch of objects (must contain the same index values) into the eleveldb backend.
+-spec batch_put(term(), [{{riak_object:bucket(), riak_object:key()}, binary()}], [index_spec()], state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+batch_put(Context, Values, IndexSpecs, #state{ref=Ref,
+                                              write_opts=WriteOpts}=State) ->
+    Operations = lists:flatmap(fun({{Bucket, Key}, Val}) ->
+                                       put_operations(Bucket, Key, IndexSpecs, Val, State)
+                               end,
+                               Values),
+
+    %% Perform the write...
+    case eleveldb:sync_write(Context, Ref, Operations, WriteOpts) of
         ok ->
             {ok, State};
         {error, Reason} ->
@@ -208,6 +241,15 @@ async_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts
     StorageKey = to_object_key(Bucket, PrimaryKey),
     eleveldb:async_put(Ref, Context, StorageKey, Val, WriteOpts),
     {ok, State}.
+
+sync_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts}=State) ->
+    StorageKey = to_object_key(Bucket, PrimaryKey),
+    case eleveldb:sync_put(Ref, Context, StorageKey, Val, WriteOpts) of
+        ok ->
+            {ok, State};
+        {error, Reason}  ->
+            {error, Reason, State}
+    end.
 
 indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
@@ -230,25 +272,25 @@ index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
     KeyDelete ++ LegacyDelete.
 
 fix_index(IndexKeys, ForUpgrade, #state{ref=Ref,
-                                                read_opts=ReadOpts,
-                                                write_opts=WriteOpts} = State)
-                                        when is_list(IndexKeys) ->
+                                        read_opts=ReadOpts,
+                                        write_opts=WriteOpts} = State)
+  when is_list(IndexKeys) ->
     FoldFun =
         fun(ok, {Success, Ignore, Error}) ->
-               {Success+1, Ignore, Error};
+                {Success+1, Ignore, Error};
            (ignore, {Success, Ignore, Error}) ->
-               {Success, Ignore+1, Error};
+                {Success, Ignore+1, Error};
            ({error, _}, {Success, Ignore, Error}) ->
-               {Success, Ignore, Error+1}
+                {Success, Ignore, Error+1}
         end,
     Totals =
         lists:foldl(FoldFun, {0,0,0},
                     [fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts)
-                        || {_Bucket, IndexKey} <- IndexKeys]),
+                     || {_Bucket, IndexKey} <- IndexKeys]),
     {reply, Totals, State};
 fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
-                                                read_opts=ReadOpts,
-                                                write_opts=WriteOpts} = State) ->
+                                       read_opts=ReadOpts,
+                                       write_opts=WriteOpts} = State) ->
     case fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) of
         Atom when is_atom(Atom) ->
             {Atom, State};
@@ -340,7 +382,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                                ref=Ref}) ->
     FoldFun = fold_buckets_fun(FoldBucketsFun),
     FirstKey = to_first_key(undefined),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = [{start_key, FirstKey} | FoldOpts],
     BucketFolder =
         fun() ->
                 try
@@ -383,24 +425,24 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = [{start_key, FirstKey} | FoldOpts],
     ExtraFold = not FixedIdx orelse WriteLegacyIdx,
     KeyFolder =
         fun() ->
-            %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
-            AccFinal =
-                       try
-                           eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
-                       catch
-                           {break, BrkResult} ->
-                               BrkResult
-                       end,
-            case ExtraFold of
-                true ->
-                    legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
-                false ->
-                    AccFinal
-            end
+                %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
+                AccFinal =
+                    try
+                        eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
+                    catch
+                        {break, BrkResult} ->
+                            BrkResult
+                    end,
+                case ExtraFold of
+                    true ->
+                        legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
+                    false ->
+                        AccFinal
+                end
         end,
     case lists:member(async_fold, Opts) of
         true ->
@@ -435,6 +477,90 @@ fold_indexes_fun(FoldIndexFun) ->
                     throw({break, Acc})
             end
     end.
+
+build_list({_K, _V}=KV, Acc) ->
+    [KV | Acc].
+
+range_scan(FoldIndexFun, Buffer, Opts, #state{fold_opts=_FoldOpts,
+                                              ref=Ref}) ->
+    {_, {BucketType,_} = Bucket, Qry1} = proplists:lookup(index, Opts),
+    Qry2 = riak_kv_select:convert(riak_kv_select:current_version(), Qry1),
+    ?SQL_SELECT{'WHERE'    = W,
+                local_key  = #key_v1{ast = LKAST}} = Qry2,
+    %% always rebuild the module name, do not use the name from the select
+    %% record because it was built in a different node which may have a
+    %% different module name because of compile versions in mixed version
+    %% clusters
+    Mod = riak_ql_ddl:make_module_name(BucketType),
+    {startkey, StartK} = proplists:lookup(startkey, W),
+    {endkey,   EndK}   = proplists:lookup(endkey, W),
+    FieldOrders = Mod:field_orders(),
+    LocalKeyLen = length(LKAST),
+    %% in the case where a local key is descending (it has the DESC keyword)
+    %% then the start and end keys will have been swapped, the start key will
+    %% be "greater" than the end key until ordering is applied.
+    StartKey1 = key_prefix(Bucket,  key_to_storage_format_key(FieldOrders, StartK), LocalKeyLen),
+    EndKey1 = key_prefix(Bucket, key_to_storage_format_key(FieldOrders, EndK), LocalKeyLen),
+    %% append extra byte to the key when it is not inclusive so that it compares
+    %% as greater
+    StartKey2 =
+        case lists:keyfind(start_inclusive, 1, W) of
+            {start_inclusive, false}  -> <<StartKey1/binary, 16#ff:8>>;
+            _                         -> StartKey1
+        end,
+    %% append extra byte to the key when it is inclusive so that it compares
+    %% as greater
+    EndKey2 =
+        case lists:keyfind(end_inclusive, 1, W) of
+            {end_inclusive, true}  -> <<EndKey1/binary, 16#ff:8>>;
+            _                      -> EndKey1
+        end,
+    FoldFun = fun build_list/2,
+    Options = [
+               {start_key,   StartKey2},
+               {end_key,     EndKey2},
+               {fold_method, streaming} | range_scan_additional_options(W)
+              ],
+    KeyFolder = fun() ->
+                        Vals = eleveldb:fold(Ref, FoldFun, [], Options),
+                        FoldIndexFun(lists:reverse(Vals), Buffer)
+                end,
+    {async, KeyFolder}.
+
+%% Apply ordering to the key values.
+key_to_storage_format_key(_,[]) ->
+    [];
+key_to_storage_format_key([Order|OrderTail], [{_Name,_Type,Value}|KeyTail]) ->
+    [riak_ql_ddl:apply_ordering(Value, Order) | key_to_storage_format_key(OrderTail, KeyTail)].
+
+%%
+range_scan_additional_options(Where) ->
+    Options1 =
+        case proplists:lookup(start_inclusive, Where) of
+             none   -> [];
+             STuple -> [STuple]
+         end,
+    Options2 =
+        case proplists:lookup(end_inclusive, Where) of
+            none   -> Options1;
+            ETuple -> [ETuple | Options1]
+        end,
+    case proplists:lookup(filter, Where) of
+        {filter, []} -> Options2;
+        {filter, Filter} -> [{range_filter, Filter} | Options2]
+    end.
+
+%%
+key_prefix({TableName,_}, PK2, LocalKeyLen) ->
+    PK3 = PK2 ++ lists:duplicate(LocalKeyLen - length(PK2), '_'),
+    PKPrefix = sext:prefix(list_to_tuple(PK3)),
+    EncodedBucketType = EncodedBucketName = sext:encode(TableName),
+    <<16,0,0,0,3, %% 3-tuple - outer
+      12,183,128,8, %% o-atom
+      16,0,0,0,2, %% 2-tuple for bucket type/name
+      EncodedBucketType/binary,
+      EncodedBucketName/binary,
+      PKPrefix/binary>>.
 
 legacy_key_fold(Ref, FoldFun, Acc, FoldOpts0, Query={index, _, _}) ->
     {_, FirstKey} = lists:keyfind(first_key, 1, FoldOpts0),
@@ -481,7 +607,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
 
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
-    FoldOpts1 = IteratorRefresh ++ [{first_key, FirstKey} | FoldOpts],
+    FoldOpts1 = IteratorRefresh ++ [{start_key, FirstKey} | FoldOpts],
     FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
 
     ObjectFolder =
@@ -702,22 +828,22 @@ fold_keys_fun(FoldKeysFun, {bucket, FilterBucket}) ->
 %% 2i queries
 fold_keys_fun(FoldKeysFun, {index, FilterBucket,
                             Q=?KV_INDEX_Q{filter_field=FilterField,
-                                         term_regex=TermRe}})
+                                          term_regex=TermRe}})
   when FilterField =:= <<"$bucket">>;
        FilterField =:= <<"$key">> ->
     AccFun = case FilterField =:= <<"$key">> andalso TermRe =/= undefined of
-        true ->
-            fun(Bucket, Key, Acc) ->
-                    case re:run(Key, TermRe) of
-                        nomatch -> Acc;
-                        _ -> FoldKeysFun(Bucket, Key, Acc)
-                    end
-            end;
-        false ->
-            fun(Bucket, Key, Acc) ->
-                    FoldKeysFun(Bucket, Key, Acc)
-            end
-    end,
+                 true ->
+                     fun(Bucket, Key, Acc) ->
+                             case re:run(Key, TermRe) of
+                                 nomatch -> Acc;
+                                 _ -> FoldKeysFun(Bucket, Key, Acc)
+                             end
+                     end;
+                 false ->
+                     fun(Bucket, Key, Acc) ->
+                             FoldKeysFun(Bucket, Key, Acc)
+                     end
+             end,
 
     %% Inbuilt indexes
     fun(StorageKey, Acc) ->
@@ -732,22 +858,22 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket,
             end
     end;
 fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Terms,
-                                                              term_regex=TermRe}}) ->
+                                                               term_regex=TermRe}}) ->
     AccFun = case TermRe =:= undefined of
-        true ->
-            fun(Bucket, _Term, Val, Acc) ->
-                    FoldKeysFun(Bucket, Val, Acc)
-            end;
-        false ->
-            fun(Bucket, Term, Val, Acc) ->
-                    case re:run(Term, TermRe) of
-                        nomatch ->
-                            Acc;
-                        _ ->
-                            FoldKeysFun(Bucket, Val, Acc)
-                    end
-            end
-    end,
+                 true ->
+                     fun(Bucket, _Term, Val, Acc) ->
+                             FoldKeysFun(Bucket, Val, Acc)
+                     end;
+                 false ->
+                     fun(Bucket, Term, Val, Acc) ->
+                             case re:run(Term, TermRe) of
+                                 nomatch ->
+                                     Acc;
+                                 _ ->
+                                     FoldKeysFun(Bucket, Val, Acc)
+                             end
+                     end
+             end,
 
     %% User indexes
     fun(StorageKey, Acc) ->
@@ -755,9 +881,9 @@ fold_keys_fun(FoldKeysFun, {index, FilterBucket, Q=?KV_INDEX_Q{return_terms=Term
             case riak_index:index_key_in_range(IndexKey, FilterBucket, Q) of
                 {true, {Bucket, Key, _Field, Term}} ->
                     Val = if
-                        Terms -> {Term, Key};
-                        true -> Key
-                    end,
+                              Terms -> {Term, Key};
+                              true -> Key
+                          end,
                     AccFun(Bucket, Term, Val, Acc);
                 {skip, _IK} ->
                     Acc;
@@ -844,12 +970,15 @@ fold_objects_fun(FoldObjectsFun, undefined) ->
 %% that represents the starting key for the scope. For example, since
 %% we store objects under {o, Bucket, Key}, the first key for the
 %% bucket "foo" would be `sext:encode({o, <<"foo">>, <<>>}).`
+%%
+%% For starting ranges, use key undefined.  Keys are either binaries
+%% for tuples for time series.  Either of sort *after* a bare atom.
 to_first_key(undefined) ->
     %% Start at the first object in LevelDB...
-    to_object_key({<<>>, <<>>}, <<>>);
+    to_object_key({<<>>, <<>>}, undefined);
 to_first_key({bucket, Bucket}) ->
     %% Start at the first object for a given bucket...
-    to_object_key(Bucket, <<>>);
+    to_object_key(Bucket, undefined);
 to_first_key({index, incorrect_format, ForUpgrade}) when is_boolean(ForUpgrade) ->
     %% Start at first index entry
     to_index_key(<<>>, <<>>, <<>>, <<>>);
@@ -870,7 +999,7 @@ to_first_key({index, Bucket, Q}) ->
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
 
-% @doc If index query, encode key using legacy sext format.
+%% @doc If index query, encode key using legacy sext format.
 to_legacy_first_key({index, Bucket, {eq, Field, Term}}) ->
     to_legacy_first_key({index, Bucket, {range, Field, Term, Term}});
 to_legacy_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
@@ -878,10 +1007,54 @@ to_legacy_first_key({index, Bucket, {range, Field, StartTerm, _EndTerm}}) ->
 to_legacy_first_key(Other) ->
     to_first_key(Other).
 
-to_object_key(Bucket, Key) ->
+orig_to_object_key(Bucket, Key) ->
     sext:encode({o, Bucket, Key}).
 
-from_object_key(LKey) ->
+%%
+%% Encode the Riak Object key for storing into leveldb.
+%% Originally this was just sext:encode({o, Bucket, Key}) but has been
+%% unrolled to save re-encoding things that don't change - like the tuple
+%% sizes and atoms. The binaries are still encoded with the sext library,
+%% for an extra boost, could copy sext:encode_bin_elems to this module
+%% and use.
+%%
+%% Timeseries objects provide their keys as tuples which are sext-encoded,
+%% however, on decode they are left as sext-encoded binaries so that the
+%% rest of Riak is not affected. They can be sext-decoded, but *cannot* just
+%% be round-tripped (as that would then be a binary-wrapping a sext-encoded
+%% TS key - for an extra 9 bytes used).
+%%
+to_object_key({TableName, TableName}, LocalKey) when is_tuple(LocalKey) ->
+    EncodedBucketType = EncodedBucketName = sext:encode(TableName),
+    EncodedLocalKey = sext:encode(LocalKey),
+    % format like {'o', {TableName,TableName}, LocalKeyTuple}
+    <<16,0,0,0,3, %% 3-tuple - outer
+      12,183,128,8, %% o-atom
+      16,0,0,0,2, %% 2-tuple for bucket type/name
+      EncodedBucketType/binary,
+      EncodedBucketName/binary,
+      EncodedLocalKey/binary>>;
+to_object_key({BucketType, BucketName}, Key) -> %% Riak 2.0 keys
+    %% sext:encode({o, Bucket, Key}).
+    EncodedBucketType = sext:encode(BucketType),
+    EncodedBucketName = sext:encode(BucketName),
+    EncodedKey = sext:encode(Key),
+    <<16,0,0,0,3, %% 3-tuple - outer
+      12,183,128,8, %% o-atom
+      16,0,0,0,2, %% 2-tuple for bucket type/name
+      EncodedBucketType/binary,
+      EncodedBucketName/binary,
+      EncodedKey/binary>>;
+to_object_key(Bucket, Key) -> %% Riak 1.0 keys
+    %% sext:encode({o, Bucket, Key}).
+    EncodedBucket = sext:encode(Bucket),
+    EncodedKey = sext:encode(Key),
+    <<16,0,0,0,3, %% 3-tuple
+      12,183,128,8, %% o-atom
+      EncodedBucket/binary,
+      EncodedKey/binary>>.
+
+orig_from_object_key(LKey) ->
     case (catch sext:decode(LKey)) of
         {'EXIT', _} ->
             lager:warning("Corrupted object key, discarding"),
@@ -891,6 +1064,36 @@ from_object_key(LKey) ->
         _ ->
             undefined
     end.
+
+%%
+%% Custom sext-decoder making use of the knowledge that all of our object
+%% keys are encoded as 3-tuples with the first element an 'o' atom.
+%% Deliberately returning the un-decoded key part if a time series key
+%% so that the key in the riak object structure will be a binary on decode.
+%% All support tooling/usual methods for visiting objects should still work.
+%%
+%% Because flexible keys work by @andytill has lifted the 3-field
+%% restriction on TS keys, we should, correspondingly, allow the 5th
+%% byte of the binary (which is the number of elements in the encoded
+%% tuple) to be any number.
+from_object_key(<<16,0,0,0,3, %% 3-tuple - outer
+                  12,183,128,8, %% o-atom
+                  Rest/binary>> = Bin) ->
+    {Bucket, Rest1} = sext:decode_next(Rest), % grabs the two-tuple of bucket type/name
+    case Rest1 of
+        <<16,0,0,0,_NTupleElements,_TSKeyElements/binary>> = TSKey ->
+            {Bucket, TSKey}; % small risk not checking for junk at the end of the TSKeyElements
+        _ ->
+            case catch sext:decode_next(Rest1) of
+                {Key, <<>>} ->
+                    {Bucket, Key};
+                _ ->
+                    lager:warning("Corrupted object key ~p, discarding", [Bin]),
+                    ignore
+            end
+    end;
+from_object_key(_) -> %% If it did not start with the magic {o, ...} ignore
+    undefined.
 
 to_index_key(Bucket, Key, Field, Term) ->
     sext:encode({i, Bucket, Field, Term, Key}).
@@ -944,10 +1147,10 @@ retry() ->
                                   end
                           end),
         _Pid2 = spawn_link(
-                 fun() ->
-                         Me ! {2, running},
-                         Me ! {2, start(42, [{data_root, Root}])}
-                 end),
+                  fun() ->
+                          Me ! {2, running},
+                          Me ! {2, start(42, [{data_root, Root}])}
+                  end),
         %% Ensure Pid2 is runnng and  give it 10ms to get into the open
         %% so we know it has a lock clash
         receive
@@ -1025,6 +1228,41 @@ retry_fail() ->
         application:unset_env(riak_kv, eleveldb_open_retry_delay)
     end.
 
+to_from_object_1elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_3elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1, 2, <<"three">>}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_4elem_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, {1, <<"two">>, <<"III">>, 3+1}},
+    {Bucket2, Key2Encoded} = from_object_key(to_object_key(Bucket, Key)),
+    Key2 = sext:decode(Key2Encoded),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+
+to_from_object_nonts1_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, <<"two">>},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+%% the rest nonts keys are impossible (KV uses only binaries); they
+%% are here purely to check they are not mistaken for TS keys:
+to_from_object_nonts2_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, "two"},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_nonts3_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, 2},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+to_from_object_nonts4_key_test() ->
+    {Bucket, Key} = {{<<"fa">>, <<"fa">>}, [2]},
+    {Bucket2, Key2} = from_object_key(to_object_key(Bucket, Key)),
+    ?assertEqual({Bucket, Key}, {Bucket2, Key2}).
+
 
 -ifdef(EQC).
 
@@ -1036,7 +1274,7 @@ eqc_test_() ->
          fun cleanup/1,
          [
           {timeout, 180,
-            [?_assertEqual(true,
+           [?_assertEqual(true,
                           backend_eqc:test(?MODULE, false,
                                            [{data_root,
                                              "test/eleveldb-backend"}]))]}
@@ -1053,6 +1291,43 @@ setup() ->
 cleanup(_) ->
     ?_assertCmd("rm -rf test/eleveldb-backend").
 
--endif. % EQC
 
+%%
+%% Test unrolling of sext decoder against bucket/keys from various versions of Riak.
+%%
+eqc_encoder_test() ->
+    ?assertEqual(true, eqc:quickcheck(eqc:testing_time(2, prop_object_encoder_roundtrips()))).
+
+bucket_name() -> non_empty(binary()).
+bucket_type() -> non_empty(binary()).
+binkey() -> non_empty(binary()).
+binfamily() -> non_empty(binary()).
+binseries() -> non_empty(binary()).
+timestamp() -> ?LET(X, nat(), 1449531227 + X).
+
+gen_bkey() ->
+    oneof([{riak1, {bucket_name(), binkey()}},
+           {riak2, {{bucket_name(), bucket_type()}, binkey()}},
+           {riakts, {{bucket_name(), bucket_type()},
+                     {binfamily(), binseries(), timestamp()}}}]).
+
+prop_object_encoder_roundtrips() ->
+    ?FORALL({Type, {Bucket, Key} = BKey},
+            gen_bkey(),
+            begin
+                Bin = to_object_key(Bucket, Key),
+                OrigBin = orig_to_object_key(Bucket, Key),
+                BKey2 = {Bucket2, Key2} = from_object_key(Bin),
+                ?assertEqual(Bin, OrigBin),
+                case Type of
+                    riakts ->
+                        ?assertEqual({Bucket2, sext:decode(Key2)}, BKey);
+                    _  ->
+                        ?assertEqual(BKey2, orig_from_object_key(Bin)),
+                        ?assertEqual(BKey2, BKey)
+                end,
+                true
+            end).
+
+-endif. % EQC
 -endif.

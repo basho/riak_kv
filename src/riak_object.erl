@@ -61,7 +61,7 @@
           key :: key(),
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
-          updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
+          updatemetadata=dict:from_list([{clean, true}]) :: riak_object_dict(),
           updatevalue :: term()
          }).
 -opaque riak_object() :: #r_object{}.
@@ -71,6 +71,7 @@
 -type index_op() :: add | remove.
 -type index_value() :: integer() | binary().
 -type binary_version() :: v0 | v1.
+-type encoding() :: erlang | msgpack.
 
 -define(MAX_KEY_SIZE, 65536).
 
@@ -79,8 +80,9 @@
 -define(MAGIC, 53).      %% Magic number, as opposed to 131 for Erlang term-to-binary magic
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
+-define(MSGPACK_ENCODING_FLAG, 2). %% Flag to indicate msgpack encoding
 
--export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
+-export([new/3, new/4, newts/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
@@ -93,11 +95,13 @@
 -export([to_json/1, from_json/1]).
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
--export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
+-export([to_binary/2, to_binary/3, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1]).
 -export([update_last_modified/1, update_last_modified/2]).
 -export([strict_descendant/2]).
+-export([get_ts_local_key/1]).
+-export([is_ts/1]).
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -123,6 +127,23 @@ new({T, B}, K, V, MD) when is_binary(T), is_binary(B), is_binary(K) ->
 new(B, K, V, MD) when is_binary(B), is_binary(K) ->
     new_int(B, K, V, MD).
 
+newts(B, K, V, MD) ->
+    new_int2(B, K, V, MD).
+
+-spec is_ts(riak_object()) -> {'true', pos_integer()} | 'false'.
+is_ts(RObj) ->
+    check_for_ddl(get_contents(RObj)).
+
+check_for_ddl([{Metadata, _V}]) ->
+    case dict:find(<<"ddl">>, Metadata) of
+        {ok, Version} ->
+            {true, Version};
+        _ ->
+            false
+    end;
+check_for_ddl(_) ->
+    false.
+
 %% internal version after all validation has been done
 new_int(B, K, V, MD) ->
     case size(K) > ?MAX_KEY_SIZE of
@@ -135,11 +156,14 @@ new_int(B, K, V, MD) ->
                     #r_object{bucket=B,key=K,
                               contents=Contents,vclock=vclock:fresh()};
                 _ ->
-                    Contents = [#r_content{metadata=MD, value=V}],
-                    #r_object{bucket=B,key=K,updatemetadata=MD,
-                              contents=Contents,vclock=vclock:fresh()}
+                    new_int2(B, K, V, MD)
             end
     end.
+
+new_int2(B, K, V, MD) ->
+    Contents = [#r_content{metadata=MD, value=V}],
+    #r_object{bucket=B,key=K,updatemetadata=MD,
+              contents=Contents,vclock=vclock:fresh()}.
 
 is_robject(#r_object{}) ->
     true;
@@ -213,6 +237,15 @@ reconcile(Objects, AllowMultiple) ->
         true ->
             RObj
     end.
+
+%% @doc gets the Local Index key
+-spec get_ts_local_key(riak_object()) ->
+        {ok, key()} | error.
+get_ts_local_key(RObj) when is_record(RObj, r_object) ->
+    % TODO
+    % using update metadata while testing with ts_run2, updates should
+    % be applied by this point!
+    dict:find(?MD_TS_LOCAL_KEY, get_update_metadata(RObj)).
 
 %% @private remove all Objects from the list that are causally
 %% dominated by any other object in the list. Only concurrent /
@@ -797,7 +830,7 @@ diff_specs_core(AllIndexSet, OldIndexSet) ->
 
 %% @doc Get a list of {Index, Value} tuples from the
 %% metadata of an object.
--spec index_data(riak_object()) -> [{binary(), index_value()}].
+-spec index_data(undefined | riak_object()) -> [{binary(), index_value()}].
 index_data(undefined) ->
     [];
 index_data(Obj) ->
@@ -932,10 +965,13 @@ value_size(Value) -> size(term_to_binary(Value)).
 
 %% @doc Convert riak object to binary form
 -spec to_binary(binary_version(), riak_object()) -> binary().
-to_binary(v0, RObj) ->
+-spec to_binary(binary_version(), riak_object(), encoding()) -> binary().
+to_binary(Vers, RObj) ->
+    to_binary(Vers, RObj, erlang).
+to_binary(v0, RObj, _) ->
     term_to_binary(RObj);
-to_binary(v1, #r_object{contents=Contents, vclock=VClock}) ->
-    new_v1(VClock, Contents).
+to_binary(v1, #r_object{contents=Contents, vclock=VClock}, Enc) ->
+    new_v1(VClock, Contents, Enc).
 
 %% @doc convert a binary encoded riak object to a different
 %% encoding version. If the binary is already in the desired
@@ -958,6 +994,7 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
     riak_object() | {error, 'bad_object_format'}.
+
 from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
     binary_to_term(ObjTerm);
 
@@ -999,6 +1036,8 @@ val_encoding_meta(<<0, _Rest/binary>>, MDList) ->
     MDList;
 val_encoding_meta(<<1, _Rest/binary>>, MDList) ->
     MDList;
+val_encoding_meta(<<?MSGPACK_ENCODING_FLAG:8, _Rest/binary>>, MDList) ->
+    MDList;
 val_encoding_meta(<<Other:8, _Rest/binary>>, MDList) ->
     [{?MD_VAL_ENCODING, Other} | MDList].
 
@@ -1034,24 +1073,24 @@ meta_of_binary(<<KeyLen:32/integer, KeyBin:KeyLen/binary, ValueLen:32/integer, V
 %% -type binobj_value()      :: <<ValueLen:32, ValueBin/binary, MetaLen:32,
 %%                                [binobj_meta()]>>.
 %% -type binobj()            :: <<binobj_header(), [binobj_value()]>>.
-new_v1(Vclock, Siblings) ->
+new_v1(Vclock, Siblings, Enc) ->
     VclockBin = term_to_binary(Vclock),
     VclockLen = byte_size(VclockBin),
     SibCount = length(Siblings),
-    SibsBin = bin_contents(Siblings),
+    SibsBin = bin_contents(Siblings, Enc),
     <<?MAGIC:8/integer, ?V1_VERS:8/integer, VclockLen:32/integer, VclockBin/binary, SibCount:32/integer, SibsBin/binary>>.
 
-bin_content(#r_content{metadata=Meta0, value=Val}) ->
+bin_content(#r_content{metadata=Meta0, value=Val}, Enc) ->
     {TypeTag, Meta} = determine_binary_type(Val, Meta0),
-    ValBin = encode_maybe_binary(Val, TypeTag),
+    ValBin = encode(Val, TypeTag, Enc),
     ValLen = byte_size(ValBin),
     MetaBin = meta_bin(Meta),
     MetaLen = byte_size(MetaBin),
     <<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary>>.
 
-bin_contents(Contents) ->
+bin_contents(Contents, Enc) ->
     F = fun(Content, Acc) ->
-                <<Acc/binary, (bin_content(Content))/binary>>
+                <<Acc/binary, (bin_content(Content, Enc))/binary>>
         end,
     lists:foldl(F, <<>>, Contents).
 
@@ -1089,6 +1128,17 @@ fold_meta_to_bin(Key, Value, {{_Vt,_Del,_Lm}=Elems,RestBin}) ->
     MetaBin = <<KeyLen:32/integer, KeyBin/binary, ValueLen:32/integer, ValueBin/binary>>,
     {Elems, <<RestBin/binary, MetaBin/binary>>}.
 
+%% @doc Encode the contents of a riak object, either using
+%% term_to_binary   (if Enc == erlang), or
+%% msgpack encoding (if Enc == msgpack)
+encode(Bin, TypeTag, erlang) ->
+    encode_maybe_binary(Bin, TypeTag);
+encode(Bin, _, msgpack) ->
+    encode_msgpack(Bin).
+
+encode_msgpack(Bin) ->
+    <<?MSGPACK_ENCODING_FLAG:8/integer, (msgpack:pack(Bin, [{format, jsx}]))/binary>>.
+
 encode_maybe_binary(Value) when is_binary(Value) ->
     encode_maybe_binary(Value, 1);
 encode_maybe_binary(Value) when not is_binary(Value) ->
@@ -1098,6 +1148,8 @@ encode_maybe_binary(Value, TypeTag) when is_binary(Value) ->
 encode_maybe_binary(Value, 0) when not is_binary(Value) ->
     <<0, (term_to_binary(Value))/binary>>.
 
+%% @doc Decode the contents of a riak object
+
 determine_binary_type(Val, Meta) when is_binary(Val) ->
     case dict:find(?MD_VAL_ENCODING, Meta) of
         error -> {1, Meta};
@@ -1106,11 +1158,19 @@ determine_binary_type(Val, Meta) when is_binary(Val) ->
 determine_binary_type(_Val, Meta) ->
     {0, Meta}.
 
+decode_msgpack(ValBin) ->
+    {ok, Unpacked} = msgpack:unpack(ValBin, [{format, jsx}]),
+    Unpacked.
+
 decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
     binary_to_term(Bin);
-decode_maybe_binary(<<_Other:8, Bin/binary>>) ->
+decode_maybe_binary(<<?MSGPACK_ENCODING_FLAG:8/integer, Bin/binary>>) ->
+    decode_msgpack(Bin);
+%% Add a catch-all for data that isn't formatted as we expect -- treat
+%% it like an external binary that we don't try to decode.
+decode_maybe_binary(<<Bin/binary>>) ->
     Bin.
 
 %% Update X-Riak-VTag and X-Riak-Last-Modified in the object's metadata, if
@@ -1157,7 +1217,7 @@ update_last_modified(RObj, TS) ->
 %% Fetch the preferred vclock encoding method:
 -spec vclock_encoding_method() -> atom().
 vclock_encoding_method() ->
-    riak_core_capability:get({riak_kv, vclock_data_encoding}, encode_zlib).
+    riak_core_capability:get({riak_kv, vclock_data_encoding}, encode_raw).
 
 %% Encode a vclock in accordance with our capability setting:
 encode_vclock(VClock) ->
@@ -1538,6 +1598,16 @@ vclock_codec_test() ->
     VCs = [<<"BinVclock">>, {vclock, something, [], <<"blah">>}, vclock:fresh()],
     [ ?assertEqual({Method, VC}, {Method, decode_vclock(encode_vclock(Method, VC))})
      || VC <- VCs, Method <- [encode_raw, encode_zlib]].
+
+packObj_test() ->
+    io:format("packObj_test~n"),
+    Obj = riak_object:new(<<"bucket">>, <<"key">>, [{<<"field1">>, 1}, {<<"field2">>, 2.123}]),
+    PackedErl = riak_object:to_binary(v1, Obj, erlang),
+    PackedMsg = riak_object:to_binary(v1, Obj, msgpack),
+    ObjErl = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedErl),
+    ObjMsg = riak_object:from_binary(<<"bucket">>, <<"key">>, PackedMsg),
+    ?assertEqual(Obj, ObjErl),
+    ?assertEqual(Obj, ObjMsg).
 
 dotted_values_reconcile() ->
     {B, K} = {<<"b">>, <<"k">>},

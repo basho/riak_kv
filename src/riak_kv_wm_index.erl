@@ -75,6 +75,9 @@
           index_query,   %% The query..
           max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
           return_terms = false :: boolean(), %% should the index values be returned
+          return_body = false :: boolean(), %% should the value be returned with the key. Only works with
+                                            %% $bucket and $key index queries, forces return_terms to be
+                                            %% false when true
           timeout :: non_neg_integer() | undefined | infinity,
           pagination_sort :: boolean() | undefined,
           security        %% security context
@@ -180,6 +183,8 @@ malformed_request(RD, Ctx) ->
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
     ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
     ReturnTerms1 = normalize_boolean(string:to_lower(ReturnTerms0)),
+    ReturnBody0 = wrq:get_qs_value(?Q_2I_RETURNBODY, "false", RD),
+    ReturnBody = normalize_boolean(string:to_lower(ReturnBody0)),
     Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
     PgSort0 = wrq:get_qs_value(?Q_2I_PAGINATION_SORT, RD),
     PgSort = case PgSort0 of
@@ -196,12 +201,12 @@ malformed_request(RD, Ctx) ->
                        {_, [S, E]} -> {S, E}
                    end,
     IsEqualOp = length(Args1) == 1,
-    InternalReturnTerms = not( IsEqualOp orelse IndexField == <<"$field">> ),
-    MaxVal = validate_max(MaxResults0),
+    InternalReturnTerms = not( IsEqualOp orelse IndexField == <<"$field">> ),    MaxVal = validate_max(MaxResults0),
     QRes = riak_index:to_index_query(
              [
                 {field, IndexField}, {start_term, Start}, {end_term, End},
                 {return_terms, InternalReturnTerms},
+                {return_body, ReturnBody},
                 {continuation, Continuation},
                 {term_regex, TermRegex}
              ]
@@ -216,37 +221,50 @@ malformed_request(RD, Ctx) ->
 
     case {PgSort,
           ReturnTerms1,
+          ReturnBody,
+          ReturnBody =:= true andalso not riak_index:is_system_index(IndexField),
           validate_timeout(Timeout0),
           MaxVal,
           QRes,
           ValRe} of
-        {malformed, _, _, _, _, _} ->
+        {malformed, _, _, _, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_PAGINATION_SORT, PgSort0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, malformed, _, _, _, _} ->
+        {_, malformed, _, _, _, _, _, _} ->
              {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_RETURNTERMS, ReturnTerms0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, _, _, {ok, ?KV_INDEX_Q{start_term=NormStart}}, {ok, _CompiledRe}}
+        {_, _, malformed, _, _, _, _, _} ->
+             {true,
+             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
+                                             [?Q_2I_RETURNBODY, ReturnBody0]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, _, _, true, _, _, _, _} ->
+             {true,
+             wrq:set_resp_body(io_lib:format("For return_body=true index must be one of ~p", [riak_index:system_index_list()]),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        {_, _, _, _, _, _, {ok, ?KV_INDEX_Q{start_term=NormStart}}, {ok, _CompiledRe}}
          when is_integer(NormStart) ->
             {true,
              wrq:set_resp_body("Can not use term regular expressions"
                                " on integer queries",
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, _, _, _, {error, ReError}} ->
+        {_, _, _, _, _, _, _, {error, ReError}} ->
             {true,
              wrq:set_resp_body(
                     io_lib:format("Invalid term regular expression ~p : ~p",
                                   [TermRegex, ReError]),
                     wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
+        {_, _, _, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
             %% Request is valid.
             ReturnTerms2 = riak_index:return_terms(ReturnTerms1, Query),
             %% Special case: a continuation implies pagination sort
@@ -260,23 +278,24 @@ malformed_request(RD, Ctx) ->
                        index_query = Query,
                        max_results = MaxResults,
                        return_terms = ReturnTerms2,
+                       return_body = ReturnBody,
                        timeout=Timeout,
                        pagination_sort = PgSortFinal
                       },
             {false, RD, NewCtx};
-        {_, _, _, _, {error, Reason}, _} ->
+        {_, _, _, _, _, _, {error, Reason}, _} ->
             {true,
              wrq:set_resp_body(
                io_lib:format("Invalid query: ~p~n", [Reason]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, _, {false, BadVal}, _, _} ->
+        {_, _, _, _, _, {false, BadVal}, _, _} ->
             {true,
              wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
                                              [?Q_2I_MAX_RESULTS, BadVal]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
-        {_, _, {error, Input}, _, _, _} ->
+        {_, _, _, _, {error, Input}, _, _, _} ->
             {true, wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p. Must be a non-negative integer~n",
                                                            [Input]),
@@ -354,6 +373,7 @@ handle_streaming_index_query(RD, Ctx) ->
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
+    ReturnBody = Ctx#ctx.return_body,
     Timeout = Ctx#ctx.timeout,
     PgSort = Ctx#ctx.pagination_sort,
 
@@ -368,10 +388,10 @@ handle_streaming_index_query(RD, Ctx) ->
     Opts = riak_index:add_timeout_opt(Timeout, Opts0),
 
     {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
-    StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
+    StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, ReturnBody, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
     {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
 
-index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count) ->
+index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, ReturnBody, MaxResults, Timeout, LastResult, Count) ->
     fun() ->
             receive
                 {ReqID, done} ->
@@ -386,17 +406,17 @@ index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, L
                             end,
                     {iolist_to_binary(Final), done};
                 {ReqID, {results, []}} ->
-                    {<<>>, index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult, Count)};
+                    {<<>>, index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, ReturnBody, MaxResults, Timeout, LastResult, Count)};
                 {ReqID, {results, Results}} ->
                     %% JSONify the results
-                    JsonResults = encode_results(ReturnTerms, Results),
+                    JsonResults = encode_results(response_type(ReturnTerms, ReturnBody), Results),
                     Body = ["\r\n--", Boundary, "\r\n",
                             "Content-Type: application/json\r\n\r\n",
                             JsonResults],
                     LastResult1 = last_result(Results),
                     Count1 = Count + length(Results),
                     {iolist_to_binary(Body),
-                     index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, Timeout, LastResult1, Count1)};
+                     index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, ReturnBody, MaxResults, Timeout, LastResult1, Count1)};
                 {ReqID, Error} ->
                     stream_error(Error, Boundary)
             after Timeout ->
@@ -449,6 +469,7 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     Query = Ctx#ctx.index_query,
     MaxResults = Ctx#ctx.max_results,
     ReturnTerms = Ctx#ctx.return_terms,
+    ReturnBody = Ctx#ctx.return_body,
     PgSort = Ctx#ctx.pagination_sort,
     Timeout = Ctx#ctx.timeout,
 
@@ -459,7 +480,7 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     case Client:get_index(Bucket, Query, Opts) of
         {ok, Results} ->
             Continuation = make_continuation(MaxResults, Results, length(Results)),
-            JsonResults = encode_results(ReturnTerms, Results, Continuation),
+            JsonResults = encode_results(response_type(ReturnTerms, ReturnBody), Results, Continuation),
             {JsonResults, RD, Ctx};
         {error, timeout} ->
             {{halt, 503},
@@ -472,14 +493,30 @@ handle_all_in_memory_index_query(RD, Ctx) ->
             {{error, Reason}, RD, Ctx}
     end.
 
+
+%% Return `keys', `terms', or `objects' depending on the value of
+%% `return_terms' and `return_body'
+response_type(_, true) ->
+    objects;
+response_type(true, _) ->
+    terms;
+response_type(_, _) ->
+    keys.
+
 encode_results(ReturnTerms, Results) ->
     encode_results(ReturnTerms, Results, undefined).
 
-encode_results(true, Results, Continuation) ->
+encode_results(objects, Results, Continuation) ->
+    ValueFun = fun(Bin) -> base64:encode(riak_object:get_value(
+                             riak_object:from_binary(<<"bucket">>, <<"key">>, Bin))) end,
+    JsonKeys = {struct, [{?Q_RESULTS, [{struct, [{Key, ValueFun(Val)}]} || {o, Key, Val} <- Results]}] ++
+                     mochify_continuation(Continuation)},
+    mochijson2:encode(JsonKeys);
+encode_results(terms, Results, Continuation) ->
     JsonKeys2 = {struct, [{?Q_RESULTS, [{struct, [{Val, Key}]} || {Val, Key} <- Results]}] ++
                      mochify_continuation(Continuation)},
     mochijson2:encode(JsonKeys2);
-encode_results(false, Results, Continuation) ->
+encode_results(keys, Results, Continuation) ->
     JustTheKeys = filter_values(Results),
     JsonKeys1 = {struct, [{?Q_KEYS, JustTheKeys}] ++ mochify_continuation(Continuation)},
     mochijson2:encode(JsonKeys1).

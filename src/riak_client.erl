@@ -2,7 +2,7 @@
 %%
 %% riak_client: object used for access into the riak system
 %%
-%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2015 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -30,7 +30,7 @@
 -export([delete/3,delete/4,delete/5]).
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
--export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
+-export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4,stream_list_keys/5]).
 -export([filter_buckets/2]).
 -export([filter_keys/3,filter_keys/4]).
 -export([list_buckets/1,list_buckets/2,list_buckets/3, list_buckets/4]).
@@ -45,11 +45,21 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
+-export([get_cover/3, get_cover/4, get_cover/5, replace_cover/6, replace_cover/7]).
+-export([vnode_target/1]).
+-export([ring_size/0]).
+
+-include_lib("riak_core/include/riak_core_vnode.hrl").
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
 -define(DEFAULT_TIMEOUT, 60000).
 -define(DEFAULT_ERRTOL, 0.00003).
+
+%% keys going via get path can eventually also be of TS kind (i.e., {PK, LK})
+-define(IS_KEY(K),
+        (is_binary(K)
+         orelse (is_tuple(K) andalso size(K) == 2))).
 
 %% TODO: This type needs to be better specified and validated against
 %%       any dependents on riak_kv.
@@ -176,7 +186,7 @@ get(Bucket, Key, R, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      nodes have responded with a value or error, or TimeoutMillisecs passes.
 get(Bucket, Key, R, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) when
                                   (is_binary(Bucket) orelse is_tuple(Bucket)),
-                                  is_binary(Key),
+                                  ?IS_KEY(Key),
                                   (is_atom(R) or is_integer(R)),
                                   is_integer(Timeout) ->
     get(Bucket, Key, [{r, R}, {timeout, Timeout}], THIS).
@@ -414,6 +424,7 @@ consistent_delete(Bucket, Key, Options, _Timeout, {?MODULE, [Node, _ClientId]}) 
             ok
     end.
 
+
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock(), riak_client()) ->
 %%        ok |
 %%       {error, too_many_fails} |
@@ -484,32 +495,205 @@ consistent_delete_vclock(Bucket, Key, VClock, Options, _Timeout, {?MODULE, [Node
             ok
     end.
 
-%% @spec list_keys(riak_object:bucket(), riak_client()) ->
-%%       {ok, [Key :: riak_object:key()]} |
-%%       {error, timeout} |
-%%       {error, Err :: term()}
+%% @doc Retrieve a coverage plan
+%% -spec get_cover(Module :: module(),
+%%                 Bucket :: binary() | {binary(), binary()},
+%%                 riak_client()) ->
+%%                        Plan :: list({atom(), term()}) |
+%%                                {error, Err :: term()}.
+get_cover(Module, Bucket, Client) ->
+    get_cover(Module, Bucket, undefined, Client).
+
+%% The 3rd argument (minimum parallelization) values mean:
+%%     undefined -> standard coverage plan
+%%     0         -> One coverage plan element per partition
+%%     Y>0       -> At least Y elements (will be no fewer than ring size)
+%% -spec get_cover(Module :: module(),
+%%                 Bucket :: binary() | {binary(), binary()},
+%%                 Parallelization :: 'undefined'|non_neg_integer(),
+%%                 riak_client()) ->
+%%                        Plan :: list({atom(), term()}) |
+%%                                {error, Err :: term()}.
+get_cover(Module, Bucket, Parallelization, Client) ->
+    get_cover(Module, Bucket, Parallelization, all, Client).
+
+get_cover(Module, Bucket, Parallelization, Target, _Client) ->
+    ReqId = mk_reqid(),
+    N = n_val(Bucket),
+    RingSize = ring_size(),
+    get_cover_aux(Module, Parallelization, ReqId, N, RingSize, Target).
+
+get_cover_aux(Module, undefined, ReqId, N, _RingSize, Target) ->
+    split_cover(Module:create_plan(Target, N, 1, ReqId, riak_kv, undefined));
+get_cover_aux(Module, 0, ReqId, N, RingSize, Target) ->
+    split_cover(
+      Module:create_subpartition_plan(Target, N,
+                                      RingSize, 1,
+                                      ReqId, riak_kv));
+get_cover_aux(Module, MinPar, ReqId, N, RingSize, Target) ->
+    split_cover(
+      Module:create_subpartition_plan(Target, N,
+                                      {MinPar, RingSize}, 1,
+                                      ReqId, riak_kv)).
+
+%% Will ignore the number of partitions, reconstruct from the coverage
+%% plan chunk we're replacing. The `Replace' argument is an ok/error
+%% tuple because it is intended to be the result of
+%% `riak_kv_pb_coverage:checksum_binary_to_term'. For the same reason
+%% `OtherBroken' will be a list of such ok/error tuples.
+-spec replace_cover(Mod :: module(), Bucket :: binary() | {binary(), binary()},
+                    Parallelization :: undefined | non_neg_integer(),
+                    Replace :: {ok, list({atom(), term()})} |
+                               {error, Reason},
+                    OtherBroken :: list(
+                      {ok, list({atom(), term()})} |
+                      {error, Reason}),
+                    Metadata :: list(),
+                    riak_client()) ->
+                           list(list({atom(), term()})) | {error, term()}.
+-spec replace_cover(Mod :: module(), Bucket :: binary() | {binary(), binary()},
+                    Parallelization :: undefined | non_neg_integer(),
+                    Replace :: {ok, list({atom(), term()})} |
+                               {error, Reason},
+                    OtherBroken :: list(
+                      {ok, list({atom(), term()})} |
+                      {error, Reason}),
+                    riak_client()) ->
+                           list(list({atom(), term()})) | {error, term()}.
+replace_cover(Mod, Bucket, P, Replace, OtherBroken, Client) ->
+    replace_cover(Mod, Bucket, P, Replace, OtherBroken, [], Client).
+
+replace_cover(_Mod, _Bucket, _P, {error, Reason}, _OtherBroken, _Meta, _Client) ->
+    {error, Reason};
+replace_cover(riak_core_coverage_plan, Bucket, _P, {ok, Replace},
+              OtherBroken, _Meta, _Client) ->
+    Mod = riak_core_coverage_plan,
+    %% Core coverage plan requests can be "traditional" or
+    %% parallel. See comments in `riak_core_coverage_plan.erl' for
+    %% more details
+    NVal = n_val(Bucket),
+    DownNodes = extract_proplist_nodes(OtherBroken),
+    case proplists:get_value(subpartition, Replace) of
+        undefined ->
+            %% we didn't find a subpartition filter, so this
+            %% is a traditional coverage plan chunk
+            replace_traditional_cover(Mod, NVal, Replace, DownNodes);
+        _Defined ->
+            replace_subpartition_cover(Mod, NVal, Replace, DownNodes)
+    end;
+replace_cover(Mod, Bucket, _P, {ok, Replace}, OtherBroken, Meta, _Client) ->
+    %% As of 1.6 or merged KV equivalent, we should be able to
+    %% directly read these properties. The cover plan should be a
+    %% proplist natively, but John Daily messed up with 1.3.
+    %%
+    %% Other coverage module writers: make certain your coverage
+    %% chunks are simple proplists with `vnode_hash' and `node' keys,
+    %% but add `cover_to_proplist' to your coverage module as an
+    %% identity function.
+    %%
+    %% In 1.6, drop the invocation of `cover_to_proplist' because it
+    %% should simply be a proplist. See `riak_kv_ts_util' for the
+    %% place to make that change.
+    BrokenCoverProps = Mod:cover_to_proplist(Replace),
+
+    %% We maintain the `ok' tuples for `extract_proplist_nodes'.
+    DownNodeProps = lists:map(fun({ok, B}) -> {ok, Mod:cover_to_proplist(B)} end, OtherBroken),
+    DownNodes = extract_proplist_nodes(DownNodeProps),
+    NVal = n_val(Bucket),
+    replace_cover(Mod, NVal, BrokenCoverProps, DownNodes, Meta).
+
+%% For coverage plans from `riak_core', we know what kind of metadata
+%% to expect (filters for traditional plans, subpartition identifiers
+%% for parallel plans). For plans from elsewhere, we expect plans to
+%% look like traditional plans.
+replace_cover(Mod, NVal, Replace, DownNodes, Meta) ->
+    split_cover(
+      Mod:replace_chunk(
+        proplists:get_value(vnode_hash, Replace),
+        proplists:get_value(node, Replace),
+        proplists:get_value(filters, Replace, []),
+        Meta,
+        NVal,
+        mk_reqid(),
+        DownNodes)).
+
+replace_traditional_cover(Mod, NVal, Replace, DownNodes) ->
+    split_cover(
+      Mod:replace_traditional_chunk(
+        proplists:get_value(vnode_hash, Replace),
+        proplists:get_value(node, Replace),
+        proplists:get_value(filters, Replace, []),
+        NVal,
+        mk_reqid(),
+        DownNodes,
+        riak_kv)).
+
+replace_subpartition_cover(Mod, NVal, Replace, DownNodes) ->
+    split_cover(
+      Mod:replace_subpartition_chunk(
+        proplists:get_value(vnode_hash, Replace),
+        proplists:get_value(node, Replace),
+        proplists:get_value(subpartition, Replace),
+        NVal,
+        mk_reqid(),
+        DownNodes,
+        riak_kv)).
+
+extract_proplist_nodes(L) ->
+    lists:filtermap(fun({ok, Proplist}) ->
+                            {true, proplists:get_value(node, Proplist)};
+                       ({error, _}) -> false
+                    end, L).
+
+
+n_val(Bucket) ->
+    riak_core_bucket:n_val(riak_core_bucket:get_bucket(Bucket)).
+
+ring_size() ->
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    chashbin:num_partitions(CHBin).
+
+
+split_cover({error, Term}) when is_atom(Term) ->
+    {error, atom_to_list(Term)};
+split_cover({VnodeList, FilterList}) ->
+    lists:map(fun({Hash, Node}) ->
+                      [{vnode_hash, Hash}, {node, Node}] ++
+                      case lists:keyfind(Hash, 1, FilterList) of
+                          false ->
+                              [];
+                          {Hash, Partitions} ->
+                              [{filters, Partitions}]
+                      end
+              end, VnodeList);
+split_cover(SubpartitionPlan) when is_list(SubpartitionPlan) ->
+    lists:map(fun({Hash, Node, { _Mask, _BSL }=Subp}) ->
+                      [{vnode_hash, Hash},
+                       {node, Node},
+                       {subpartition, Subp}]
+              end,
+              SubpartitionPlan).
+
+
+-spec list_keys(riak_object:bucket(), riak_client()) ->
+                       {ok, [tuple()]} | {error, term()}.
 %% @doc List the keys known to be present in Bucket.
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 %% @equiv list_keys(Bucket, default_timeout()*8)
 list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
-    list_keys(Bucket, ?DEFAULT_TIMEOUT*8, THIS).
+    list_keys(Bucket, none, ?DEFAULT_TIMEOUT*8, THIS).
 
-%% @spec list_keys(riak_object:bucket(), TimeoutMillisecs :: integer(), riak_client()) ->
-%%       {ok, [Key :: riak_object:key()]} |
-%%       {error, timeout} |
-%%       {error, Err :: term()}
+-spec list_keys(riak_object:bucket(), pos_integer() | none, riak_client()) ->
+                       {ok, [tuple()]} | {error, term()}.
 %% @doc List the keys known to be present in Bucket.
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
 list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
     list_keys(Bucket, none, Timeout, THIS).
 
-%% @spec list_keys(riak_object:bucket(), Filter :: term(),
-%% TimeoutMillisecs :: integer(), riak_client()) ->
-%%       {ok, [Key :: riak_object:key()]} |
-%%       {error, timeout} |
-%%       {error, Err :: term()}
+-spec list_keys(riak_object:bucket(), function() | none, pos_integer() | none, riak_client()) ->
+                       {ok, [tuple()]} | {error, term()}.
 %% @doc List the keys known to be present in Bucket.
 %%      Key lists are updated asynchronously, so this may be slightly
 %%      out of date if called immediately after a put or delete.
@@ -521,7 +705,12 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
         end,
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout]]),
+
+    %% Add no-op conversion function here so that riak_kv_keys_fsm has
+    %% a valid argument list for all invocations, including non-TS calls
+
+    KeyConvFn = fun(Key) -> Key end,
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout, KeyConvFn]]),
     wait_for_listkeys(ReqId).
 
 stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
@@ -529,12 +718,21 @@ stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
 
 stream_list_keys(Bucket, undefined, {?MODULE, [_Node, _ClientId]}=THIS) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT, THIS);
+
+%% Stream_list_keys with no key conversion function uses a no-op
+%% conversion
+
 stream_list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
+    KeyConvFn = fun(Key) -> Key end,
+    stream_list_keys(Bucket, Timeout, KeyConvFn, THIS).
+
+stream_list_keys(Bucket, Timeout, KeyConvFn, {?MODULE, [_Node, _ClientId]}=THIS) ->
     Me = self(),
-    stream_list_keys(Bucket, Timeout, Me, THIS).
+    stream_list_keys(Bucket, Timeout, KeyConvFn, Me, THIS).
 
 %% @spec stream_list_keys(riak_object:bucket(),
 %%                        TimeoutMillisecs :: integer(),
+%%                        KeyConvFn :: function(),
 %%                        Client :: pid(),
 %%                        riak_client()) ->
 %%       {ok, ReqId :: term()}
@@ -546,7 +744,7 @@ stream_list_keys(Bucket, Timeout, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      and a final {ReqId, done} message.
 %%      None of the Keys lists will be larger than the number of
 %%      keys in Bucket on any single vnode.
-stream_list_keys(Input, Timeout, Client, {?MODULE, [Node, _ClientId]}) when is_pid(Client) ->
+stream_list_keys(Input, Timeout, KeyConvFn, Client, {?MODULE, [Node, _ClientId]}) when is_pid(Client) ->
     ReqId = mk_reqid(),
     case Input of
         %% buckets with bucket types are also a 2-tuple, so be careful not to
@@ -562,7 +760,8 @@ stream_list_keys(Input, Timeout, Client, {?MODULE, [Node, _ClientId]}) when is_p
                                                           Client},
                                                          [Bucket,
                                                           FilterExprs,
-                                                          Timeout]]),
+                                                          Timeout,
+                                                          KeyConvFn]]),
                     {ok, ReqId}
             end;
         Bucket ->
@@ -570,7 +769,8 @@ stream_list_keys(Input, Timeout, Client, {?MODULE, [Node, _ClientId]}) when is_p
                                                 [{raw, ReqId, Client},
                                                  [Bucket,
                                                   none,
-                                                  Timeout]]),
+                                                  Timeout,
+                                                  KeyConvFn]]),
             {ok, ReqId}
     end.
 
@@ -720,14 +920,29 @@ get_index(Bucket, Query, {?MODULE, [_Node, _ClientId]}=THIS) ->
 %%       {error, timeout} |
 %%       {error, Err :: term()}
 %% @doc Run the provided index query.
+%%
+%% If defined in `Opts', `vnode_target' should be a proplist with
+%% `vnode_hash' as the hash that uniquely (barring failover)
+%% identifies a vnode, and optionally `filters' as coverage
+%% plan filters identifying individual partitions within that vnode.
 get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
+    VNodeCoverage = vnode_target(proplists:get_value(vnode_target, Opts)),
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort]]),
+    riak_kv_index_fsm_sup:start_index_fsm(Node, [{raw, ReqId, Me}, [Bucket, none, Query, Timeout, MaxResults, PgSort, VNodeCoverage]]),
     wait_for_query_results(ReqId, Timeout).
+
+vnode_target(undefined) ->
+    all;
+vnode_target(Proplist) ->
+    #vnode_coverage{
+       vnode_identifier=proplists:get_value(vnode_hash, Proplist),
+       partition_filters=proplists:get_value(filters, Proplist, []),
+       subpartition=proplists:get_value(subpartition, Proplist)
+      }.
 
 %% @doc Run the provided index query, return a stream handle.
 -spec stream_get_index(Bucket :: binary(), Query :: riak_index:query_def(),
@@ -744,13 +959,14 @@ stream_get_index(Bucket, Query, Opts, {?MODULE, [Node, _ClientId]}) ->
     Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
     MaxResults = proplists:get_value(max_results, Opts, all),
     PgSort = proplists:get_value(pagination_sort, Opts),
+    VNodeCoverage = vnode_target(proplists:get_value(vnode_target, Opts)),
     Me = self(),
     ReqId = mk_reqid(),
     case riak_kv_index_fsm_sup:start_index_fsm(Node,
                                                [{raw, ReqId, Me},
                                                 [Bucket, none,
                                                  Query, Timeout,
-                                                 MaxResults, PgSort]]) of
+                                                 MaxResults, PgSort, VNodeCoverage]]) of
         {ok, Pid} ->
             {ok, ReqId, Pid};
         {error, Reason} ->
