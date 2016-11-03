@@ -225,7 +225,7 @@ maybe_convert_timestamp({_NonTSType, Val}, _OtherType) ->
 do_describe(?DDL{fields = FieldSpecs,
                  partition_key = #key_v1{ast = PKSpec},
                  local_key     = #key_v1{ast = LKSpec}}) ->
-    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>, <<"Interval">>, <<"Unit">>, <<"Sort Order">>],
+    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Partition Key">>, <<"Local Key">>, <<"Interval">>, <<"Unit">>, <<"Sort Order">>],
     ColumnTypes = [   varchar,      varchar,    boolean,       sint64,            sint64,         sint64,         varchar,      varchar],
     Quantum = find_quantum_field(PKSpec),
     Rows =
@@ -243,12 +243,12 @@ do_describe(?DDL{fields = FieldSpecs,
 %% a local key or has an undefined sort order.
 column_lk_order(Name, LK) when is_binary(Name) ->
     case lists:keyfind([Name], #riak_field_v1.name, LK) of
-        ?SQL_PARAM{ ordering = descending } ->
-            <<"DESC">>;
-        ?SQL_PARAM{ ordering = ascending } ->
-            <<"ASC">>;
+        ?SQL_PARAM{ordering = descending} ->
+            [<<"DESC">>];
+        ?SQL_PARAM{ordering = ascending} ->
+            [<<"ASC">>];
         _ ->
-            []
+            [[]]
     end.
 
 %% the following two functions are identical, for the way fields and
