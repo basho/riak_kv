@@ -257,11 +257,12 @@ init([From, RObj, Options0, Monitor]) ->
             ?DTRACE(?C_PUT_FSM_INIT, [TombNum], ["init", TombStr]);
         _ ->
             ok
-    end,        
-    {ok, prepare, StateData, 0};
+    end,
+    gen_fsm:send_event(self(), timeout),
+    {ok, prepare, StateData};
 init({test, Args, StateProps}) ->
     %% Call normal init
-    {ok, prepare, StateData, 0} = init(Args),
+    {ok, prepare, StateData} = init(Args),
 
     %% Then tweak the state record with entries provided by StateProps
     Fields = record_info(fields, state),
@@ -274,7 +275,7 @@ init({test, Args, StateProps}) ->
 
     %% Enter into the validate state, skipping any code that relies on the
     %% state of the rest of the system
-    {ok, validate, TestStateData, 0}.
+    {ok, validate, TestStateData}.
 
 %% @private
 prepare(timeout, StateData0 = #state{from = From, robj = RObj,
@@ -753,9 +754,11 @@ new_state(StateName, StateData) ->
 %% Move to the new state, marking the time it started and trigger an immediate
 %% timeout.
 new_state_timeout(StateName, StateData=#state{trace = true}) ->
-    {next_state, StateName, add_timing(StateName, StateData), 0};
+    gen_fsm:send_event(self(), timeout),
+    {next_state, StateName, add_timing(StateName, StateData)};
 new_state_timeout(StateName, StateData) ->
-    {next_state, StateName, StateData, 0}.
+    gen_fsm:send_event(self(), timeout),
+    {next_state, StateName, StateData}.
 
 %% What to do once enough responses from vnodes have been received to reply
 process_reply(Reply, StateData = #state{postcommit = PostCommit,
