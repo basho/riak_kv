@@ -393,10 +393,14 @@ json_struct_to_obj(FieldValueList, Fields) ->
             || Field <- Fields],
     list_to_tuple(List).
 
-extract_field_value({Name, Type}, FVList) ->
+extract_field_value({Name, Type, Optional}, FVList) ->
     case proplists:get_value(Name, FVList) of
-        undefined ->
+        undefined when Optional == false ->
             throw({missing_field, Name});
+        undefined when Optional == true ->
+            [];
+        [] when Optional == true ->
+            [];
         Value ->
             check_field_value(Name, Type, Value)
     end.
@@ -417,7 +421,9 @@ check_field_value(Name, Type, _V) ->
 %% leak out of riak_ql.
 ddl_fields_and_types(Mod) ->
     ?DDL{fields = Fields} = Mod:get_ddl(),
-    [ {Name, Type} || #riak_field_v1{name=Name, type=Type} <- Fields ].
+    [{Name, Type, Optional} || #riak_field_v1{name = Name,
+                                              type = Type,
+                                              optional = Optional} <- Fields].
 
 %% @private
 api_call([]       , 'POST')   -> put;
