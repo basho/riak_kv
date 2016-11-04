@@ -269,24 +269,12 @@ queried_table(
     #riak_sql_explain_query_v1{'EXPLAIN'=?SQL_SELECT{'FROM' = Table}}) ->
         Table.
 
--spec get_table_ddl(binary()) ->
-                           {ok, module(), ?DDL{}} |
-                           {error, term()}.
+-spec get_table_ddl(binary()) -> {ok, module(), ?DDL{}}.
 %% Check that Table is in good standing and ready for TS operations
 %% (its bucket type has been activated and it has a DDL in its props)
 get_table_ddl(Table) when is_binary(Table) ->
-    case riak_core_bucket:get_bucket(table_to_bucket(Table)) of
-        {error, _} = Error ->
-            Error;
-        [_|_] ->
-            Mod = riak_ql_ddl:make_module_name(Table),
-            case catch Mod:get_ddl() of
-                {_, {undef, _}} ->
-                    {error, missing_helper_module};
-                DDL ->
-                    {ok, Mod, DDL}
-            end
-    end.
+    Mod = riak_ql_ddl:make_module_name(Table),
+    {ok, Mod, Mod:get_ddl()}.
 
 
 %%

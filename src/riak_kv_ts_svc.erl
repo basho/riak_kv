@@ -74,46 +74,95 @@
               ts_query_types/0]).
 
 decode_query_common(Q, Cover) ->
+    decode_query_common2(Q, Cover, fun riak_core_bucket:get_bucket/1).
+
+%% Note on returning errors, convert error returns to ok's, this means it will
+%% be passed into process which will not process it and return the error.
+decode_query_common2(Q, Cover, BucketPropsFn) ->
     case decode_query(Q, Cover) of
-        {QueryType, {ok, Query}} ->
-            {ok, Query, decode_query_permissions(QueryType, Query)};
-        {_QueryType, {error, Error}} ->
+        {_, {error, Error}} ->
             {ok, make_decoder_error_response(Error)};
         {error, Error} ->
-            %% convert error returns to ok's, this means it will be passed into
-            %% process which will not process it and return the error.
-            {ok, make_decoder_error_response(Error)}
+            {ok, make_decoder_error_response(Error)};
+        {ddl, DDL} ->
+            %% don't check bucket types for create tables, they don't exist yet!
+            {ok, DDL, decode_query_permissions(ddl, DDL)};
+        {QueryType, QueryProps} ->
+            %% check the table exists before creating a record for it because
+            %% some of the records (insert) requires the helper module to exist
+            Table = find_table_name_prop(QueryProps),
+            case is_existing_table(Table, BucketPropsFn) of
+                ok ->
+                    {ok, Query} = riak_kv_ts_util:build_sql_record(QueryType, QueryProps, Cover),
+                    {ok, Query, decode_query_permissions(QueryType, Query)};
+                {error, Error} ->
+                    {ok, Error}
+            end
+    end.
+
+find_table_name_prop(QueryProps) ->
+    case lists:keyfind(table, 1, QueryProps) of
+        false ->
+            case lists:keyfind(tables, 1, QueryProps) of
+                false -> << >>;
+                {_, Name} -> Name
+            end;
+        {_, Name} ->
+            Name
     end.
 
 -spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
     {error, _} | {ddl, {ok, {?DDL{}, proplists:proplist()}}}
-               | {ts_query_types(), riak_kv_qry:sql_query_type_record()}.
+               | {riak_kv_qry:query_type(), {ok, riak_kv_qry:sql_query_type_record()}}.
 decode_query(#tsinterpolation{}, Cover)
   when not (Cover == undefined orelse is_binary(Cover)) ->
     {error, bad_coverage_context};
-decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
+decode_query(#tsinterpolation{base = BaseQuery}, _) ->
     case catch riak_ql_parser:ql_parse(
                  riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
-                   binary_to_list(BaseQuery))) of
-        {ddl, DDL, WithProperties} ->
-            {ddl, {ok, {DDL, WithProperties}}};
-        {QryType, SQL} when QryType /= error,
-                            QryType /= 'EXIT' ->
-            {QryType, riak_kv_ts_util:build_sql_record(QryType, SQL, Cover)};
+                     binary_to_list(BaseQuery))) of
         {'EXIT', {Reason, _StackTrace}} ->
             {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
-            {error, Other}
+            {error, Other};
+        {ddl, DDL, WithProperties} ->
+            {ddl, {DDL, WithProperties}};
+        {QryType, SQL} ->
+            {QryType, SQL}
     end.
 
+is_existing_table(Table, BucketPropsFn) when is_binary(Table) ->
+    case BucketPropsFn(riak_kv_ts_util:table_to_bucket(Table)) of
+        {error, no_type} ->
+            {error, make_table_not_activated_resp(Table)};
+        [_|_] = BucketProps ->
+            case lists:keyfind(ddl, 1, BucketProps) of
+                false ->
+                    {error, make_non_ts_type_resp(Table)};
+                {ddl, _} ->
+                    is_table_module_loaded(Table)
+            end
+    end.
 
-decode_query_permissions(QryType, {DDL = ?DDL{}, _WithProps}) ->
-    decode_query_permissions(QryType, DDL);
+is_table_module_loaded(Table) ->
+    try
+        Mod = riak_ql_ddl:make_module_name(Table),
+        _ = Mod:get_ddl(),
+        ok
+    catch
+        error:undef ->
+            {error, make_missing_table_module_resp(Table)}
+    end.
+
+decode_query_permissions(ddl, {?DDL{} = DDL, _WithProps}) ->
+    decode_query_permissions2(ddl, DDL);
 decode_query_permissions(QryType, Qry) ->
+    decode_query_permissions2(QryType, Qry).
+
+decode_query_permissions2(QryType, Qry) ->
     SqlType = riak_kv_ts_api:api_call_from_sql_type(QryType),
     Perm = riak_kv_ts_api:api_call_to_perm(SqlType),
     {Perm, riak_kv_ts_util:queried_table(Qry)}.
-
 
 -spec process(atom() | ts_requests() | ts_query_types(), #state{}) ->
                      {reply, ts_query_responses(), #state{}} |
@@ -522,16 +571,8 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
 %% activated or Table has no DDL (not a TS bucket). Otherwise,
 %% transparently call the WorkItem function.
 check_table_and_call(Table, Fun, TsMessage, State) ->
-    case riak_kv_ts_util:get_table_ddl(Table) of
-        {ok, Mod, DDL} ->
-            Fun(Mod, DDL, TsMessage, State);
-        {error, no_type} ->
-            {reply, make_table_not_activated_resp(Table), State};
-        {error, missing_helper_module} ->
-            BucketProps = riak_core_bucket:get_bucket(
-                            riak_kv_ts_util:table_to_bucket(Table)),
-            {reply, make_missing_helper_module_resp(Table, BucketProps), State}
-    end.
+    {ok, Mod, DDL} = riak_kv_ts_util:get_table_ddl(Table),
+    Fun(Mod, DDL, TsMessage, State).
 
 
 
@@ -542,28 +583,8 @@ make_rpberrresp(Code, Message) ->
                   errmsg = iolist_to_binary(Message)}.
 
 %%
--spec make_missing_helper_module_resp(Table::binary(),
-                            BucketProps::{error, any()} | [proplists:property()])
-                           -> #rpberrorresp{}.
-make_missing_helper_module_resp(Table, {error, _}) ->
-    make_missing_type_resp(Table);
-make_missing_helper_module_resp(Table, BucketProps)
-  when is_binary(Table), is_list(BucketProps) ->
-    case lists:keymember(ddl, 1, BucketProps) of
-        true  -> make_missing_table_module_resp(Table);
-        false -> make_nonts_type_resp(Table)
-    end.
-
-%%
--spec make_missing_type_resp(Table::binary()) -> #rpberrorresp{}.
-make_missing_type_resp(Table) ->
-    make_rpberrresp(
-      ?E_MISSING_TYPE,
-      flat_format("Time Series table ~s does not exist", [Table])).
-
-%%
--spec make_nonts_type_resp(Table::binary()) -> #rpberrorresp{}.
-make_nonts_type_resp(Table) ->
+-spec make_non_ts_type_resp(Table::binary()) -> #rpberrorresp{}.
+make_non_ts_type_resp(Table) ->
     make_rpberrresp(
       ?E_NOT_TS_TYPE,
       flat_format("Attempt Time Series operation on non Time Series table ~s", [Table])).
@@ -680,27 +701,6 @@ flat_format(Format, Args) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-missing_helper_module_missing_type_test() ->
-    ?assertMatch(
-        #rpberrorresp{errcode = ?E_MISSING_TYPE },
-        make_missing_helper_module_resp(<<"mytype">>, {error, any})
-    ).
-
-missing_helper_module_not_ts_type_test() ->
-    ?assertMatch(
-        #rpberrorresp{errcode = ?E_NOT_TS_TYPE },
-        make_missing_helper_module_resp(<<"mytype">>, []) % no ddl property
-    ).
-
-%% if the bucket properties exist and they contain a ddl property then
-%% the bucket properties are in the correct state but the module is still
-%% missing.
-missing_helper_module_test() ->
-    ?assertMatch(
-        #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
-        make_missing_helper_module_resp(<<"mytype">>, [{ddl, ?DDL{}}])
-    ).
-
 convert_ddl_to_cluster_supported_version_v1_test() ->
     ?assertMatch(
         #ddl_v1{},
@@ -715,6 +715,87 @@ convert_ddl_to_cluster_supported_version_v2_test() ->
     ?assertMatch(
         DDLV2,
         convert_ddl_to_cluster_supported_version(v2, DDLV2)
+    ).
+
+decode_query_common_test() ->
+    TableDef =
+        "CREATE TABLE mytab("
+        "a VARCHAR NOT NULL,"
+        "PRIMARY KEY ((a),a))",
+    Lexed = riak_ql_lexer:get_tokens(TableDef),
+    {ok, {DDL, _}} = riak_ql_parser:parse(Lexed),
+    {module, _} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
+    SQL = <<"SELECT * FROM mytab">>,
+    BucketPropsFn = fun({<<"mytab">>, <<"mytab">>}) -> [{ddl, ?DDL{}}] end,
+    ?assertMatch(
+        {ok, ?SQL_SELECT{}, _},
+        decode_query_common2(#tsinterpolation{base = SQL}, undefined, BucketPropsFn)
+    ).
+
+decode_query_common_explain_test() ->
+    TableDef =
+        "CREATE TABLE decode_query_common_explain_test("
+        "a VARCHAR NOT NULL,"
+        "PRIMARY KEY ((a),a))",
+    Lexed = riak_ql_lexer:get_tokens(TableDef),
+    {ok, {DDL, _}} = riak_ql_parser:parse(Lexed),
+    {module, _} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
+    SQL = <<"EXPLAIN SELECT * FROM decode_query_common_explain_test">>,
+    BucketPropsFn = fun({_, _}) -> [{ddl, ?DDL{}}] end,
+    ?assertMatch(
+        {ok, #riak_sql_explain_query_v1{}, _},
+        decode_query_common2(#tsinterpolation{base = SQL}, undefined, BucketPropsFn)
+    ).
+
+decode_query_common_insert_test() ->
+    TableDef =
+        "CREATE TABLE decode_query_common_insert_test("
+        "a VARCHAR NOT NULL,"
+        "PRIMARY KEY ((a),a))",
+    Lexed = riak_ql_lexer:get_tokens(TableDef),
+    {ok, {DDL, _}} = riak_ql_parser:parse(Lexed),
+    {module, _} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
+    SQL = <<"INSERT INTO decode_query_common_insert_test VALUES ('hi');">>,
+    BucketPropsFn = fun({_, _}) -> [{ddl, ?DDL{}}] end,
+    ?assertMatch(
+        {ok, #riak_sql_insert_v1{}, _},
+        decode_query_common2(#tsinterpolation{base = SQL}, undefined, BucketPropsFn)
+    ).
+
+decode_query_common_create_table_test() ->
+    TableDef =
+        <<"CREATE TABLE mytab(",
+          "a VARCHAR NOT NULL,",
+          "PRIMARY KEY ((a),a))">>,
+    BucketPropsFn = fun({_,_}) -> [] end,
+    ?assertMatch(
+        {ok, {?DDL{}, []}, _},
+        decode_query_common2(#tsinterpolation{base = TableDef}, undefined, BucketPropsFn)
+    ).
+
+decode_query_common_no_helper_module_test() ->
+    Table = <<"decode_query_common_no_helper_module_test">>,
+    SQL = <<"SELECT * FROM ", Table/binary>>,
+    BucketPropsFn = fun({_, _}) -> [{ddl, ?DDL{}}] end,
+    ?assertMatch(
+        {ok, #rpberrorresp{errcode = ?E_MISSING_TS_MODULE}},
+        decode_query_common2(#tsinterpolation{base = SQL}, undefined, BucketPropsFn)
+    ).
+
+decode_query_common_not_timeseries_bucket_type_test() ->
+    SQL = <<"SELECT * FROM mytab">>,
+    BucketPropsFn = fun({<<"mytab">>, <<"mytab">>}) -> [a,b,c] end,
+    ?assertMatch(
+        {ok, #rpberrorresp{errcode = ?E_NOT_TS_TYPE}},
+        decode_query_common2(#tsinterpolation{base = SQL}, undefined, BucketPropsFn)
+    ).
+
+decode_query_common_no_type_test() ->
+    SQL = <<"SELECT * FROM mytab">>,
+    BucketPropsFn = fun({<<"mytab">>, <<"mytab">>}) -> {error,no_type} end,
+    ?assertMatch(
+        {ok, #rpberrorresp{errcode = ?E_TABLE_INACTIVE}},
+        decode_query_common2(#tsinterpolation{base = SQL}, undefined, BucketPropsFn)
     ).
 
 -endif.
