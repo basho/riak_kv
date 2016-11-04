@@ -23,6 +23,7 @@ init_per_testcase(_TestCase, Config) ->
     application:set_env(riak_kv, sweep_tick, 10), % MSecs
     application:set_env(riak_kv, sweep_throttle, {obj_size, 0, 0}), %Disable throttling
     application:set_env(riak_kv, sweep_window_throttle_div, 1),
+    application:set_env(riak_kv, sweep_concurrency, 1),
 
     VNodeIndices = meck_new_riak_core_modules(2),
     riak_kv_sweeper:start_link(),
@@ -55,15 +56,19 @@ all() ->
 %%--------------------------------------------------------------------
 meck_new_riak_core_modules(Partitions) ->
     Ring = ring,
-    VNodeIndices = [N || N <- lists:seq(0, Partitions)],
     meck:new(riak_core_node_watcher),
     meck:new(riak_core_ring_manager),
     meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, Ring} end),
     meck:new(riak_core_ring),
-    meck:expect(riak_core_ring, my_indices, fun(ring) -> VNodeIndices end),
+    VNodeIndices = meck_new_riak_core_ring(Partitions),
     meck:expect(riak_core_node_watcher, services, fun(_Node) -> [riak_kv] end),
     VNodeIndices.
 
+
+meck_new_riak_core_ring(Partitions) ->
+    VNodeIndices = [N || N <- lists:seq(0, Partitions)],
+    meck:expect(riak_core_ring, my_indices, fun(ring) -> VNodeIndices end),
+    VNodeIndices.
 
 meck_new_aae_modules(AAEnabled, EstimatedKeys, LockResult) ->
     meck:new(riak_kv_entropy_manager),
@@ -584,6 +589,29 @@ scheduler_estimated_keys_lock_fail_test(Config) ->
     ok.
 
 
+scheduler_sweep_concurrency_test(_Config) ->
+    ConcurrentSweeps = 8,
+    application:set_env(riak_kv, sweep_concurrency, ConcurrentSweeps),
+    meck_new_riak_core_ring(8),
+    TestCasePid = self(),
+    meck_new_backend(TestCasePid),
+    SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
+    SP1 = SP#sweep_participant{run_interval = 1},
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    meck_new_visit_function(
+      sweep_observer_1,
+      {wait, TestCasePid, visit_function_continue}),
+
+    wait_for_concurrent_sweeps(ConcurrentSweeps),
+    {_SPs, Sweeps} = riak_kv_sweeper:status(),
+    ConcurrentSweeps = length([1 || #sweep{pid = Pid, state = running} <- Sweeps,
+                                    process_info(Pid) =/= undefined]),
+    [Pid || #sweep{pid = Pid} <- Sweeps],
+    %% [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+    ok.
+
+
 sweep_throttle_obj_size_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_obj_size(
@@ -758,6 +786,19 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
+wait_for_concurrent_sweeps(ConcurrentSweeps) ->
+    wait_for_concurrent_sweeps(ConcurrentSweeps, []).
+
+wait_for_concurrent_sweeps(0, Result) ->
+    Result;
+wait_for_concurrent_sweeps(ConcurrentSweeps, Result) ->
+    NewResult =
+        receive {_Pid, {visit_function_waiting, Index}} ->
+                [Result|Index]
+        end,
+    wait_for_concurrent_sweeps(ConcurrentSweeps - 1, NewResult).
+
+
 expected_obj_size_throttle_total_msecs(NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
     ThrottleMsecs = expected_throttle_msecs(
                       NumKeys, ThrottleAfterBytes, ThrottleWaitMsecs, RiakObjSizeBytes),
