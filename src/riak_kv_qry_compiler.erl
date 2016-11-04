@@ -2616,7 +2616,7 @@ query_desc_order_on_quantum_at_quanta_boundaries_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM table1 "
           "WHERE a = 1 AND b = 1 AND c >= 4000 AND c <= 5000"),
-    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q, 100),
+    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q),
     SubQueryWheres = [S?SQL_SELECT.'WHERE' || S <- SubQueries],
     ?assertEqual(
         [
@@ -2639,7 +2639,7 @@ fix_subquery_order_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM table1 "
           "WHERE a = 1 AND b = 1 AND c >= 4000 AND c <= 5000"),
-    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q, 100),
+    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q),
     ?assertEqual(
         [
             [{startkey,[{<<"a">>,sint64,1},{<<"b">>,sint64,1},{<<"c">>,timestamp,5000}]},
@@ -2661,7 +2661,7 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM table1 "
           "WHERE a = 1 AND b = 1 AND c >= 3500 AND c <= 5500"),
-    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q, 100),
+    {ok, SubQueries} = compile(helper_desc_order_on_quantum_ddl(), Q),
     SubQueryWheres = [S?SQL_SELECT.'WHERE' || S <- SubQueries],
     ?assertEqual(
         [
