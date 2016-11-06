@@ -47,14 +47,17 @@ init() ->
                     {error, _}.
 decode(?TTB_MSG_CODE, Bin) ->
     Msg = riak_ttb_codec:decode(Bin),
-    case Msg of
-        #tsqueryreq{query = Q, cover_context = Cover} ->
-            riak_kv_ts_svc:decode_query_common(Q, Cover);
-        #tsgetreq{table = Table}->
-            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
-        #tsputreq{table = Table} ->
-            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(put), Table}}
-    end.
+    DecodedReq =
+        case Msg of
+            #tsqueryreq{query = Q, cover_context = Cover} ->
+                riak_kv_ts_svc:decode_query_common(Q, Cover);
+            #tsgetreq{table = Table}->
+                {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
+            #tsputreq{table = Table} ->
+                {ok, Msg, {riak_kv_ts_api:api_call_to_perm(put), Table}}
+        end,
+    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
+    riak_kv_ts_util:check_table_feature_supported(DDLRecCap, DecodedReq).
 
 -spec encode(tuple()) -> {ok, iolist()}.
 encode(Message) ->

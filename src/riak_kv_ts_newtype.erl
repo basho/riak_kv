@@ -25,10 +25,12 @@
 
 %% API.
 -export([
+         is_compiled/2,
          new_type/1,
          start_link/0,
-         recompile_ddl/1,
-         retrieve_ddl_from_metadata/1]).
+         recompile_ddl/0,
+         retrieve_ddl_from_metadata/1,
+         verify_helper_modules/0]).
 
 %% gen_server.
 -export([init/1]).
@@ -58,6 +60,20 @@ new_type(BucketType) ->
     lager:info("Add new Time Series bucket type ~s", [BucketType]),
     gen_server:cast(?MODULE, {new_type, BucketType}).
 
+%%
+-spec is_compiled(binary(), riak_ql_ddl:any_ddl()) -> boolean().
+is_compiled(BucketType, DDL) when is_binary(BucketType) ->
+    DDLVersion = riak_ql_ddl:ddl_record_version(element(1,DDL)),
+    %% if an operator changed his/her mind and submitted another definition for
+    %% the DDL shortly after the first, it’s theoretically possible the first
+    %% would be compiled on some and the second on others
+    %%
+    %% even if we're running an upgraded version of the DDL, the DDL argument
+    %% is from the metadata and will still be the old version so find the
+    %% original that was stored and compare that
+    (beam_exists(BucketType) andalso
+        riak_kv_compile_tab:get_ddl(BucketType, DDLVersion) == {ok, DDL}).
+
 %%%
 %%% gen_server.
 %%%
@@ -74,25 +90,11 @@ handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
 handle_cast({new_type, BucketType}, State) ->
-    ok = do_new_type(BucketType),
+    ok = do_maybe_new_type(BucketType),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({'EXIT', Pid, normal}, State) ->
-    % success
-    lager:info("DDL Compilation Pid ~p successfully compiled", [Pid]),
-    _ = riak_kv_compile_tab:update_state(Pid, compiled),
-    {noreply, State};
-handle_info({'EXIT', _, bucket_type_changed_mid_compile}, State) ->
-    % this means that the process was interrupted while compiling by an update
-    % to the metadata
-    {noreply, State};
-handle_info({'EXIT', Pid, _Error}, State) ->
-    % compilation error, check
-    lager:info("DDL Compilation Pid ~p failed", [Pid]),
-    _ = riak_kv_compile_tab:update_state(Pid, failed),
-    {noreply, State};
 handle_info(add_ddl_ebin_to_path, State) ->
     ok = riak_core_metadata_manager:swap_notification_handler(
         ?BUCKET_TYPE_PREFIX, riak_kv_metadata_store_listener, []),
@@ -111,101 +113,151 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal.
 %%%
 
-%%
 %% We rely on the claimant to not give us new DDLs after the bucket
-%% type is activated, at least until we have a system in place for
-%% managing DDL versioning
-do_new_type(BucketType) ->
-    maybe_compile_ddl(BucketType,
-                      retrieve_ddl_from_metadata(BucketType),
-                      riak_kv_compile_tab:get_ddl(BucketType),
-                      riak_ql_ddl_compiler:get_compiler_version(),
-                      riak_kv_compile_tab:get_compiled_ddl_version(BucketType)).
-
-maybe_compile_ddl(BucketType, NewDDL, NewDDL, NewVsn, NewVsn) ->
-    lager:info("Not compiling DDL for bucket type ~s because it is unchanged", [BucketType]),
-    %% Do nothing; we're seeing a CMD update but the DDL hasn't changed
-    ok;
-maybe_compile_ddl(BucketType, NewDDL, NewDDL, NewVsn, OldVsn) when is_record(NewDDL, ?DDL_RECORD_NAME),
-                                                                   is_integer(NewVsn), is_integer(OldVsn) ->
-    lager:info("Recompiling same DDL for bucket type ~s from version ~b to ~b",
-               [BucketType, OldVsn, NewVsn]),
-    actually_compile_ddl(BucketType, NewDDL);
-maybe_compile_ddl(BucketType, NewDDL, _OldDDL, NewVsn, OldVsn) when is_record(NewDDL, ?DDL_RECORD_NAME),
-                                                                    is_integer(OldVsn), is_integer(NewVsn) ->
-    lager:info("Compiling new DDL for bucket type ~s from version ~b to ~b",
-               [BucketType, OldVsn, NewVsn]),
-    actually_compile_ddl(BucketType, NewDDL);
-maybe_compile_ddl(BucketType, NewDDL, _OldDDL, NewVsn, notfound) when is_record(NewDDL, ?DDL_RECORD_NAME),
-                                                                      is_integer(NewVsn) ->
-    lager:info("Compiling new DDL for bucket type ~s with version ~b",
-               [BucketType, NewVsn]),
-    actually_compile_ddl(BucketType, NewDDL);
-maybe_compile_ddl(BucketType, NewDDL, _OldDDL, NewVsn, OldVsn) ->
-    lager:error("Unknown DDL version type ~p for bucket type ~s "
-                "(expecting ~p with old version ~p, new version ~p)",
-                [NewDDL, BucketType, ?DDL_RECORD_NAME, OldVsn, NewVsn]),
-    %% We don't know what to do with this new DDL, so stop
-    ok.
-
-%%
-actually_compile_ddl(BucketType, NewDDL) ->
-    ok = maybe_stop_current_compilation(BucketType),
-    _Pid = start_compilation(BucketType, NewDDL),
-    ok.
-
-%%
-maybe_stop_current_compilation(BucketType) ->
-    case riak_kv_compile_tab:is_compiling(BucketType) of
-        {true, CompilerPid} ->
-            ok = stop_current_compilation(CompilerPid);
-        false ->
-            ok
+%% type is activated but changes to a bucket type can still be made
+%% before activation
+do_maybe_new_type(Table) ->
+    case retrieve_ddl_from_metadata(Table) of
+        undefined ->
+            %% this bucket type name does not exist in the metadata!
+            log_missing_ddl_metadata(Table);
+        DDL ->
+            CurrentVersion = riak_ql_ddl:current_version(),
+            case riak_kv_compile_tab:get_ddl(Table, CurrentVersion) of
+                notfound ->
+                    do_new_type(Table, DDL);
+                {ok, DDL} ->
+                    ok = log_new_type_is_duplicate(Table);
+                {ok, StoredDDL} ->
+                    %% a DDL with the same name already exists in the dets table
+                    %% that does not match the one we have received from the
+                    %% ring.
+                    %%
+                    %% this can happen because the bucket type is allowed to be
+                    %% modified before activation, so clear the previous data
+                    %% and recompile the incoming DDL
+                    %%
+                    %% delete the old records because the new records may not
+                    %% overwrite all the downgraded versions we create
+                    ok = log_overwriting_ddl(DDL, StoredDDL),
+                    ok = riak_kv_compile_tab:delete_table_ddls(Table),
+                    ok = do_new_type(Table, DDL)
+            end
     end.
 
 %%
-stop_current_compilation(CompilerPid) ->
-    case is_process_alive(CompilerPid) of
+do_new_type(Table, DDL) when is_binary(Table) ->
+    CurrentVersion = riak_ql_ddl:current_version(),
+    try
+        ok = prepare_ddl_versions(Table, CurrentVersion, DDL),
+        actually_compile_ddl(Table)
+    catch
+        throw:unknown_ddl_version ->
+            log_unknown_ddl_version(Table, DDL),
+            ok
+    end.
+
+prepare_ddl_versions(Table, CurrentVersion, DDL) when is_binary(Table), is_atom(CurrentVersion) ->
+    %% this is a new DDL
+    case is_known_ddl_version(CurrentVersion, DDL) of
+        false ->
+            %% the version is unknown!  another node with a higher version has
+            %% somehow not respected the capability and sent a version we
+            %% cannot handle
+            throw(unknown_ddl_version);
         true ->
-            exit(CompilerPid, bucket_type_changed_mid_compile),
-            ok = flush_exit_message(CompilerPid);
-        false ->
             ok
-    end.
+    end,
+    log_compiling_new_type(Table),
+    %% conversions, if the DDL is greater, then we need to convert
+    UpgradedDDLs = riak_ql_ddl:convert(CurrentVersion, DDL),
+    % lager:info("DDLs ~p", [UpgradedDDLs]),
+    [ok = riak_kv_compile_tab:insert(Table, DDLx) || DDLx <- UpgradedDDLs],
+    ok.
 
 %%
-flush_exit_message(CompilerPid) ->
-    receive
-        {'EXIT', CompilerPid, _} -> ok
-    after
-        1000 -> ok
-    end.
+log_overwriting_ddl(DDL, StoredDDL) ->
+    lager:info("Overwriting DDL ~p with new DDL ~p", [StoredDDL, DDL]).
 
 %%
--spec start_compilation(BucketType::binary(), DDL::?DDL{}) -> pid().
-start_compilation(BucketType, DDL) ->
+is_known_ddl_version(CurrentVersion, DDL) ->
+    DDLVersion = riak_ql_ddl:ddl_record_version(element(1, DDL)),
+    riak_ql_ddl:is_version_greater(CurrentVersion, DDLVersion) /= false.
+
+%%
+log_missing_ddl_metadata(Table) ->
+    lager:info("No 'ddl' property in the metata for bucket type ~ts",
+        [Table]).
+
+%%
+log_compiling_new_type(Table) ->
+    lager:info("Compiling new DDL for bucket type ~ts with version ~p",
+               [Table, riak_ql_ddl:current_version()]).
+
+%%
+log_new_type_is_duplicate(Table) ->
+    lager:info("Not compiling DDL for table ~ts because it is unchanged",
+        [Table]).
+
+%%
+log_unknown_ddl_version(Table, DDL) ->
+    lager:error(
+        "Unknown DDL version ~p for bucket type ~ts (current version is ~p)",
+        [DDL, Table, riak_ql_ddl:current_version()]).
+
+%%
+-spec actually_compile_ddl(BucketType::binary()) -> ok | {error, term()}.
+actually_compile_ddl(BucketType) ->
+    lager:info("Starting DDL compilation of ~ts", [BucketType]),
+    Self = self(),
+    Ref = make_ref(),
     Pid = proc_lib:spawn_link(
         fun() ->
-            ok = compile_and_store(ddl_ebin_directory(), DDL)
+            try
+                TabResult = riak_kv_compile_tab:get_ddl(BucketType, riak_ql_ddl:current_version()),
+                {ModuleName, AST} = compile_to_ast(TabResult, BucketType),
+                {ok, ModuleName, Bin} = compile:forms(AST),
+                ok = store_module(ddl_ebin_directory(), ModuleName, Bin),
+                Self ! {compilation_complete, Ref}
+            after
+                %% this spawned process may crash before lager is properly
+                %% started and never write a crash report, so do a cheeky wee
+                %% sleep after a success has returned to the newtype gen_server
+                %% so only the error case is blocked
+                timer:sleep(100)
+            end
         end),
-    lager:info("Starting DDL compilation of ~s on Pid ~p", [BucketType, Pid]),
-    ok = riak_kv_compile_tab:insert(BucketType, riak_ql_ddl_compiler:get_compiler_version(), DDL, Pid, compiling),
-    Pid.
+    receive
+        {compilation_complete, Ref} ->
+            lager:info("Compilation of DDL ~ts complete and stored to disk", [BucketType]),
+            ok;
+        {'EXIT', Pid, normal} ->
+            ok;
+        {'EXIT', Pid, Error} ->
+            lager:error("Error compiling DDL ~ts with error ~p", [BucketType, Error]),
+            ok
+    after
+        30000 ->
+            %% really allow a lot of time to complete this, because there is
+            %% not much we can do if it fails
+            lager:error("timeout on compiling table ~ts", [BucketType]),
+            {error, timeout}
+    end.
 
-%%
-compile_and_store(BeamDir, DDL) ->
-    case riak_ql_ddl_compiler:compile(DDL) of
-        {error, _} = E ->
-            E;
-        {_, AST} ->
-            {ok, ModuleName, Bin} = compile:forms(AST),
-            ok = store_module(BeamDir, ModuleName, Bin)
+compile_to_ast(TabResult, BucketType) ->
+    case TabResult of
+        {ok, DDL} ->
+            riak_ql_ddl_compiler:compile(DDL);
+        _ ->
+            lager:info("No DDL for table ~ts, requests on it will not be supported.", [BucketType]),
+            riak_ql_ddl_compiler:compile_disabled_module(BucketType)
     end.
 
 %%
 store_module(Dir, Module, Bin) ->
     Filepath = beam_file_path(Dir, Module),
     ok = filelib:ensure_dir(Filepath),
+    lager:info("STORING BEAM ~p to ~p", [Module, Filepath]),
     ok = file:write_file(Filepath, Bin).
 
 %%
@@ -218,9 +270,8 @@ ddl_ebin_directory() ->
    DataDir = app_helper:get_env(riak_core, platform_data_dir),
    filename:join(DataDir, ddl_ebin).
 
-%% Would be nice to have a function in riak_core_bucket_type or
-%% similar to get either the prefix or the actual metadata instead
-%% of including a riak_core header file for this prefix
+%% The returned DDL may not be the current DDL record, it could be
+%% an old one.
 retrieve_ddl_from_metadata(BucketType) when is_binary(BucketType) ->
     retrieve_ddl_2(riak_core_metadata:get(?BUCKET_TYPE_PREFIX, BucketType,
                                           [{allow_put, false}])).
@@ -239,13 +290,111 @@ add_ddl_ebin_to_path() ->
     true = code:add_path(Ebin_Path),
     ok.
 
-%%
--spec recompile_ddl(DDLVersion :: riak_ql_component:component_version()) -> ok.
-recompile_ddl(DDLVersion) ->
-    %% Get list of tables to recompile
-    Tables = riak_kv_compile_tab:get_ddl_records_needing_recompiling(DDLVersion),
-    lists:foreach(fun(Table) ->
-                      new_type(Table)
-                  end,
-                  Tables),
+%% For each table
+%%     Find the most recent version
+%%     If the version is the most current one then continue
+%%     Else upgrade it to the current version
+%%     If the version is higher than the current version then continue (being downgraded, might not be able to check higher cos atoms)
+recompile_ddl() ->
+    Tables = riak_kv_compile_tab:get_all_table_names(),
+    CurrentVersion = riak_ql_ddl:current_version(),
+    [upgrade_ddl(T, CurrentVersion) || T <- Tables],
     ok.
+
+%%
+upgrade_ddl(Table, CurrentVersion) ->
+    [HighestVersion|_] = riak_kv_compile_tab:get_compiled_ddl_versions(Table),
+    case riak_ql_ddl:is_version_greater(CurrentVersion, HighestVersion) of
+        equal ->
+            %% the table is up to date, no need to upgrade
+            ok;
+        true ->
+            %% upgrade, current version is greater than our persisted
+            %% known versions
+            {ok, DDL} = riak_kv_compile_tab:get_ddl(Table, HighestVersion),
+            DDLs = riak_ql_ddl:convert(CurrentVersion, DDL),
+            log_ddl_upgrade(DDL, DDLs),
+            [ok = riak_kv_compile_tab:insert(Table, DDLx) || DDLx <- DDLs],
+            DowngradedDDLs = riak_ql_ddl:convert(riak_ql_ddl:first_version(), DDL),
+            [ok = insert_downgraded_ddl(Table, DDLx) || DDLx <- DowngradedDDLs],
+            ok;
+        false ->
+            %% downgrade, the current version is lower than the latest
+            %% persisted version, we have to hope there is a downgraded
+            %% ddl in the compile tab
+            ok
+    end.
+
+insert_downgraded_ddl(BucketType, {error, {cannot_downgrade, Version}}) ->
+    log_cannot_downgrade_to_version(BucketType, Version);
+insert_downgraded_ddl(BucketType, DDL) ->
+    DDLVersion = riak_ql_ddl:ddl_record_version(element(1, DDL)),
+    case riak_kv_compile_tab:get_ddl(BucketType, DDLVersion) of
+        {ok,_} ->
+            %% the DDL already exists, so don't overwrite it
+            ok;
+        notfound ->
+            log_storing_downgraded_ddl(BucketType, DDLVersion),
+            riak_kv_compile_tab:insert(BucketType, DDL)
+    end.
+
+%%
+log_storing_downgraded_ddl(BucketType, DDLVersion) when is_atom(DDLVersion) ->
+    lager:info("A DDL for table ~ts for DDL version ~p was stored, for use "
+               "in the event of a downgrade", [BucketType, DDLVersion]).
+
+%%
+log_cannot_downgrade_to_version(BucketType, Version) ->
+    lager:warning("Cannot downgrade table ~ts to version ~p, "
+                  "table will be disablded under this version",
+                  [BucketType, Version]).
+
+%%
+log_ddl_upgrade(DDL, DDLs) ->
+    lager:info("UPGRADING ~p WITH ~p", [DDL, DDLs]).
+
+%% For each table
+%%     build the table name
+%%     check if the beam is there for that module
+%%     if not then build it
+verify_helper_modules() ->
+    [verify_helper_module(T) || T <- riak_kv_compile_tab:get_all_table_names()],
+    ok.
+
+verify_helper_module(Table) when is_binary(Table) ->
+    case beam_exists(Table) of
+        true ->
+            lager:info("beam file for table ~ts exists", [Table]),
+            ok;
+        false ->
+            lager:info("beam file for table ~ts must be recompiled", [Table]),
+            actually_compile_ddl(Table)
+    end.
+
+%%
+beam_exists(Table) when is_binary(Table) ->
+    BeamDir = ddl_ebin_directory(),
+    ModuleName = riak_ql_ddl:make_module_name(Table),
+    filelib:is_file(beam_file_path(BeamDir, ModuleName)).
+
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+is_known_ddl_version_v2_test() ->
+    ?assertEqual(
+        true,
+        is_known_ddl_version(v2, #ddl_v2{})
+    ).
+
+is_known_ddl_version_v1_test() ->
+    ?assertEqual(
+        true,
+        is_known_ddl_version(v2, #ddl_v1{})
+    ).
+
+-endif.
