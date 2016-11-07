@@ -372,7 +372,7 @@ scheduler_test(Config) ->
     SP = meck_new_sweep_particpant(sweep_observer_1, self()),
     riak_kv_sweeper:add_sweep_participant(SP),
     riak_kv_sweeper:enable_sweep_scheduling(),
-    [receive_msg({ok, successfull_sweep, sweep_observer_1, I}) || I <- Indices],
+    [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}) || I <- Indices],
     ok.
 
 %% TODO - Why are we not monitoring the worker process doing the fold ?
