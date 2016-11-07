@@ -188,53 +188,82 @@ meck_new_backend(TestCasePid, NumKeys) ->
     meck_new_backend(TestCasePid, NumKeys, 0).
 
 meck_new_backend(TestCasePid, NumKeys, ObjSizeBytes) ->
-    Keys = [integer_to_binary(N) || N <- lists:seq(1, NumKeys)],
     meck:new(meck_new_backend, [non_strict]),
+    meck_new_fold_objects_function(TestCasePid, NumKeys, ObjSizeBytes),
+    meck_new_riak_kv_vnode(TestCasePid).
+
+
+meck_new_fold_objects_function(TestCasePid, NumKeys, ObjSizeBytes) ->
+    meck_new_fold_objects_function(async, TestCasePid, NumKeys, ObjSizeBytes).
+
+
+meck_new_fold_objects_function(async, TestCasePid, NumKeys, ObjSizeBytes) ->
+    Keys = [integer_to_binary(N) || N <- lists:seq(1, NumKeys)],
     meck:expect(meck_new_backend, fold_objects,
                 fun(CompleteFoldReq, InitialAcc, _, _) ->
                         Work = fun() ->
                                        Result =
-                                       lists:foldl(fun(NBin, Acc) ->
-                                                     InitialObj = riak_object_bin(NBin, NBin, ObjSizeBytes),
-                                                     CompleteFoldReq(NBin, NBin, InitialObj, Acc)
-                                                   end, InitialAcc, Keys),
+                                           lists:foldl(fun(NBin, Acc) ->
+                                                               InitialObj = riak_object_bin(NBin, NBin, ObjSizeBytes),
+                                                               CompleteFoldReq(NBin, NBin, InitialObj, Acc)
+                                                       end, InitialAcc, Keys),
                                        TestCasePid ! {ok, fold_complete},
                                        Result
                                end,
                         {async, Work}
-                end),
+                end);
+meck_new_fold_objects_function(sync, TestCasePid, NumKeys, ObjSizeBytes) ->
+    Keys = [integer_to_binary(N) || N <- lists:seq(1, NumKeys)],
+    meck:expect(meck_new_backend, fold_objects,
+                fun(CompleteFoldReq, InitialAcc, _, _) ->
+                        SA =
+                            lists:foldl(fun(NBin, Acc) ->
+                                                InitialObj = riak_object_bin(NBin, NBin, ObjSizeBytes),
+                                                CompleteFoldReq(NBin, NBin, InitialObj, Acc)
+                                        end, InitialAcc, Keys),
+                        TestCasePid ! {ok, fold_complete},
+                        {ok, SA}
+                end).
 
+
+meck_new_riak_kv_vnode(TestCasePid) ->
     meck:new(riak_kv_vnode),
     meck:expect(riak_kv_vnode, sweep,
                 fun({Index, _Node}, ActiveParticipants, EstimatedKeys) ->
-                        spawn_link(
-                          fun() ->
-                                  {async, {sweep, FoldFun, FinishFun}, _Sender, _VnodeState} =
-                                      riak_kv_sweeper_fold:do_sweep(ActiveParticipants,
-                                                                    EstimatedKeys,
-                                                                    _Sender = '?',
-                                                                    _Opts = [],
-                                                                    Index,
-                                                                    meck_new_backend,
-                                                                    _ModState = '?',
-                                                                    _VnodeState = '?'),
-                                  SA =
-                                      try
-                                          SA0 = FoldFun(),
-                                          FinishFun(SA0),
-                                          SA0
-                                      catch throw:{stop_sweep, PrematureAcc} ->
-                                              FinishFun(PrematureAcc),
-                                              PrematureAcc;
-                                            throw:PrematureAcc  ->
-                                              FinishFun(PrematureAcc),
-                                              PrematureAcc
-                                      end,
-                                  TestCasePid ! {ok, SA}
-                          end)
+                        meck_riak_kv_vnode_sweep_worker(
+                          TestCasePid, ActiveParticipants, EstimatedKeys, Index)
                 end),
     meck:expect(riak_kv_vnode, local_put, fun(_, _, _) -> ok end),
     meck:expect(riak_kv_vnode, local_reap, fun(_, _, _) -> ok end).
+
+
+meck_riak_kv_vnode_sweep_worker(TestCasePid, ActiveParticipants, EstimatedKeys, Index) ->
+    spawn_link(fun() ->
+                       SA = meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index),
+                       TestCasePid ! {ok, SA}
+               end).
+
+meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index) ->
+    case
+        riak_kv_sweeper_fold:do_sweep(
+          ActiveParticipants, EstimatedKeys, _Sender = '?',
+          _Opts = [], Index, meck_new_backend, _ModState = '?',
+          _VnodeState = '?') of
+        {async, {sweep, FoldFun, FinishFun}, _Sender, _VnodeState} ->
+            try
+                SA0 = FoldFun(),
+                FinishFun(SA0),
+                SA0
+            catch throw:{stop_sweep, PrematureAcc} ->
+                    FinishFun(PrematureAcc),
+                    PrematureAcc;
+                  throw:PrematureAcc  ->
+                    FinishFun(PrematureAcc),
+                    PrematureAcc
+            end;
+        {reply, Acc, _VnodeStat} ->
+            Acc
+    end.
 
 
 %%--------------------------------------------------------------------
@@ -324,6 +353,17 @@ sweep_request_test(Config) ->
     I1 = pick(Indices),
     riak_kv_sweeper:sweep(I1),
     ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I1}).
+
+
+scheduler_sync_backend_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    meck_new_backend(self()),
+    meck_new_fold_objects_function(sync, self(), 1000, 100),
+    SP = meck_new_sweep_particpant(sweep_observer_1, self()),
+    riak_kv_sweeper:add_sweep_participant(SP),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}) || I <- Indices],
+    ok.
 
 
 scheduler_test(Config) ->
