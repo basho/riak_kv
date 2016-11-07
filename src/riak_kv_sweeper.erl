@@ -258,7 +258,7 @@ schedule_sweep1(State) ->
     end.
 
 
--spec schedule_sweep2(Now::os:timestamp(), #state{}) -> {ok, #sweep{}} | {ok, none}.
+-spec schedule_sweep2(Now :: erlang:timestamp(), #state{}) -> {ok, #sweep{}} | {ok, none}.
 schedule_sweep2(Now, #state{sweep_participants = Participants,
                             sweeps = Sweeps}) ->
     case get_never_runned_sweeps(Sweeps) of
