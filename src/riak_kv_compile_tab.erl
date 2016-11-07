@@ -34,6 +34,7 @@
          populate_v3_table/0
         ]).
 
+-include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -type matchspec_value() :: '_' | '$1'.
@@ -171,7 +172,8 @@ get_table_status(Table) ->
     end.
 
 get_table_status_by_version(Table) ->
-    DecodedReq = {ok, req, {"perm", Table}},
+    Req = #tsqueryreq{},
+    DecodedReq = {ok, Req, {"perm", Table}},
     case check_table_feature_supported(v2, DecodedReq) of
         DecodedReq -> <<"Active">>;
         _ -> <<"Not Active">>
@@ -212,7 +214,7 @@ get_table_ddl(_Table) ->
     DDL = {}, %% not used by caller
     {ok, Module, DDL}.
 
-check_table_feature_supported(DDLRecCap, DecodedReq={ok, req, {"perm", Table}}) when
+check_table_feature_supported(DDLRecCap, DecodedReq={ok, _Req, {"perm", Table}}) when
       Table =:= <<"my_type1">> orelse
       Table =:= <<"my_type3">> orelse
       Table =:= <<"my_type4">> orelse
