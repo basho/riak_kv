@@ -192,12 +192,16 @@ meck_new_backend(TestCasePid, NumKeys, ObjSizeBytes) ->
     meck:new(meck_new_backend, [non_strict]),
     meck:expect(meck_new_backend, fold_objects,
                 fun(CompleteFoldReq, InitialAcc, _, _) ->
-                        Result = lists:foldl(fun(NBin, Acc) ->
+                        Work = fun() ->
+                                       Result =
+                                       lists:foldl(fun(NBin, Acc) ->
                                                      InitialObj = riak_object_bin(NBin, NBin, ObjSizeBytes),
                                                      CompleteFoldReq(NBin, NBin, InitialObj, Acc)
-                                             end, InitialAcc, Keys),
-                        TestCasePid ! {ok, fold_complete},
-                        Result
+                                                   end, InitialAcc, Keys),
+                                       TestCasePid ! {ok, fold_complete},
+                                       Result
+                               end,
+                        {async, Work}
                 end),
 
     meck:new(riak_kv_vnode),
@@ -205,17 +209,28 @@ meck_new_backend(TestCasePid, NumKeys, ObjSizeBytes) ->
                 fun({Index, _Node}, ActiveParticipants, EstimatedKeys) ->
                         spawn_link(
                           fun() ->
-                                  Result = riak_kv_sweeper_fold:do_sweep(ActiveParticipants,
-                                                                         EstimatedKeys,
-                                                                         _Sender = '?',
-                                                                         _Opts = [],
-                                                                         Index,
-                                                                         meck_new_backend,
-                                                                         _ModState = '?',
-                                                                         _VnodeState = '?'),
-                                  {reply, SA, _} = Result,
+                                  {async, {sweep, FoldFun, FinishFun}, _Sender, _VnodeState} =
+                                      riak_kv_sweeper_fold:do_sweep(ActiveParticipants,
+                                                                    EstimatedKeys,
+                                                                    _Sender = '?',
+                                                                    _Opts = [],
+                                                                    Index,
+                                                                    meck_new_backend,
+                                                                    _ModState = '?',
+                                                                    _VnodeState = '?'),
+                                  SA =
+                                      try
+                                          SA0 = FoldFun(),
+                                          FinishFun(SA0),
+                                          SA0
+                                      catch throw:{stop_sweep, PrematureAcc} ->
+                                              FinishFun(PrematureAcc),
+                                              PrematureAcc;
+                                            throw:PrematureAcc  ->
+                                              FinishFun(PrematureAcc),
+                                              PrematureAcc
+                                      end,
                                   TestCasePid ! {ok, SA}
-
                           end)
                 end),
     meck:expect(riak_kv_vnode, local_put, fun(_, _, _) -> ok end),
@@ -355,9 +370,10 @@ scheduler_remove_participant_test(Config) ->
     WaitIndex = pick(Indices),
     TestCasePid = self(),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
     SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
     SP1 = SP#sweep_participant{run_interval = 1},
+
+    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
 
@@ -367,6 +383,7 @@ scheduler_remove_participant_test(Config) ->
     end,
 
     timer:sleep(2*SweepTick),
+    {_SPs, Sweeps} = riak_kv_sweeper:status(),
     ok = receive_msg({ok, failed_sweep, sweep_observer_1, WaitIndex}, min_scheduler_response_time_msecs()),
     timer:sleep(2*SweepTick), % Wait for result message to be received by the sweeper
     {_SPs, Sweeps} = riak_kv_sweeper:status(),
