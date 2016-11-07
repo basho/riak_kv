@@ -521,20 +521,16 @@ scheduler_add_participant_test(Config) ->
     ok.
 
 
-scheduler_restart_sweep_test() ->
-    [{timetrap, {seconds, 10}}].
-
 scheduler_restart_sweep_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     TestCasePid = self(),
+    WaitIndex = pick(Indices),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
     SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
+    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
     SP1 = SP#sweep_participant{run_interval = 1},
     riak_kv_sweeper:add_sweep_participant(SP1),
-    WaitIndex = pick(Indices),
     riak_kv_sweeper:enable_sweep_scheduling(),
-
-    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
     receive {From0, WaitIndex} ->
             RunningSweep = get_sweep_on_index(WaitIndex),
             running = RunningSweep#sweep.state,
