@@ -355,12 +355,11 @@ scheduler_remove_participant_test(Config) ->
     WaitIndex = pick(Indices),
     TestCasePid = self(),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
+    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
     SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
     SP1 = SP#sweep_participant{run_interval = 1},
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
-
-    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
 
     receive {From, WaitIndex} ->
             riak_kv_sweeper:remove_sweep_participant(sweep_observer_1),

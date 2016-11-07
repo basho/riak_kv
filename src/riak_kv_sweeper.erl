@@ -37,9 +37,18 @@
 -compile({parse_transform, pulse_instrument}).
 -endif.
 
+-ifndef(TEST).
+-define(TEST, 1).
+-endif.
+
+-ifndef(EQC).
+-define(EQC, 1).
+-endif.
+
 -ifdef(TEST).
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
+-export([prop_schedule_sweep2/0]).
 -endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
