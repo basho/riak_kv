@@ -244,28 +244,38 @@ maybe_schedule_sweep(#state{sweeps = Sweeps} = State) ->
     SweepSchedulerEnabled = app_helper:get_env(riak_kv, sweeper_scheduler, true),
     case InSweepWindow and not CLR and SweepSchedulerEnabled of
         true ->
-            schedule_sweep(State);
+            schedule_sweep1(State);
         false ->
             State
     end.
 
-schedule_sweep(#state{sweeps = Sweeps,
-                      sweep_participants = Participants} = State) ->
+schedule_sweep1(State) ->
+    case schedule_sweep2(os:timestamp(), State) of
+        {ok, none} ->
+            State;
+        {ok, Sweep} ->
+            do_sweep(Sweep, State)
+    end.
+
+
+-spec schedule_sweep2(Now::os:timestamp(), #state{}) -> {ok, #sweep{}} | {ok, none}.
+schedule_sweep2(Now, #state{sweep_participants = Participants,
+                            sweeps = Sweeps}) ->
     case get_never_runned_sweeps(Sweeps) of
         [] ->
             case get_queued_sweeps(Sweeps) of
                 [] ->
-                    case find_expired_participant(Sweeps, Participants) of
+                    case find_expired_participant(Now, Sweeps, Participants) of
                         [] ->
-                            State;
+                            {ok, none};
                         Sweep ->
-                            do_sweep(Sweep, State)
+                            {ok, Sweep}
                     end;
                 QueuedSweeps ->
-                    do_sweep(hd(QueuedSweeps), State)
+                    {ok, hd(QueuedSweeps)}
             end;
         NeverRunnedSweeps ->
-            do_sweep(random_sweep(NeverRunnedSweeps), State)
+            {ok, random_sweep(NeverRunnedSweeps)}
     end.
 
 random_sweep(Sweeps) ->
@@ -480,9 +490,9 @@ update_progress(Index, SweptKeys, #state{sweeps = Sweeps} = State) ->
             State
     end.
 
-find_expired_participant(Sweeps, Participants) ->
+find_expired_participant(Now, Sweeps, Participants) ->
     ExpiredMissingSweeps =
-        [{expired_or_missing(Sweep, Participants), Sweep} ||
+        [{expired_or_missing(Now, Sweep, Participants), Sweep} ||
          Sweep <- get_idle_sweeps(Sweeps)],
     case ExpiredMissingSweeps of
         [] ->
@@ -497,8 +507,7 @@ find_expired_participant(Sweeps, Participants) ->
             end
     end.
 
-expired_or_missing(#sweep{results = Results}, Participants) ->
-    Now = os:timestamp(),
+expired_or_missing(Now, #sweep{results = Results}, Participants) ->
     ResultsList = dict:to_list(Results),
     Missing = missing(run_interval, Participants, ResultsList),
     Expired =
@@ -754,7 +763,7 @@ test_find_missing_part({MyRingPart, Participants, State}) ->
             State2 = update_finished_sweep(NotAllResult, {0, Result2}, State1),
             ?assertEqual([], get_never_runned_sweeps(State2#state.sweeps)),
             MissingPart =
-                find_expired_participant(State2#state.sweeps, State2#state.sweep_participants),
+                find_expired_participant(os:timestamp(), State2#state.sweeps, State2#state.sweep_participants),
             ?assertEqual(MissingPart#sweep.index, NotAllResult)
     end.
 
@@ -763,6 +772,170 @@ cleanup(_State) ->
 -endif.
 
 -ifdef(EQC).
+gen_now() ->
+    ?LET({IncMins, {Megas, Secs, Micros}}, {nat(), os:timestamp()},
+         {Megas, Secs + (60*IncMins), Micros}).
+
+
+gen_indices() ->
+    ?LET(Max, nat(),
+        lists:seq(0, Max)).
+
+
+gen_sweep_participant_modules() ->
+    Participants = [sp0, sp1, sp2, sp3, sp4, sp5, sp6, sp7, sp8, sp9],
+    ?LET(N, nat(), lists:sublist(Participants, N)).
+
+
+gen_sweep_participant(Module) ->
+    #sweep_participant{
+       description = 'EQC sweep participant',
+       module = Module,
+       fun_type = oneof([?DELETE_FUN, ?MODIFY_FUN, ?OBSERV_FUN]),
+       sweep_fun = eqc_sweep_function,
+       run_interval = oneof([60, 3600]),
+       acc = [],
+       options = [],
+       errors = 0,
+       fail_reason = undefined}.
+
+
+gen_empty_sweep_results() ->
+    dict:new().
+
+
+gen_nonempty_sweep_results({Mega, Secs, Micro}) ->
+    ?LET({N, Modules, SweepResult}, {nat(), gen_sweep_participant_modules(), oneof([succ, fail])},
+         lists:foldl(fun(Module, D) ->
+                             dict:store(Module, {{Mega, Secs - (N*60) , Micro}, SweepResult}, D)
+                     end,
+                     dict:new(), Modules)).
+
+
+gen_sweep_neverrun(Index) ->
+    ?LET(StartTime, os:timestamp(),
+         #sweep{index = Index,
+                state = idle,
+                results = gen_empty_sweep_results(),
+                active_participants = [],
+                start_time = StartTime,
+                end_time = undefined,
+                queue_time = undefined}).
+
+
+gen_sweep_running(Index) ->
+    ?LET(StartTime, os:timestamp(),
+         #sweep{index = Index,
+                state = running,
+                results = oneof([gen_empty_sweep_results(), gen_nonempty_sweep_results(StartTime)]),
+                start_time = StartTime,
+                end_time = undefined,
+                queue_time = undefined}).
+
+
+gen_sweep_restart(Index) ->
+    ?LET(StartTime, os:timestamp(),
+         #sweep{index = Index,
+                state = restart,
+                results = oneof([gen_empty_sweep_results(), gen_nonempty_sweep_results(StartTime)]),
+                start_time = StartTime,
+                end_time = undefined,
+                queue_time = undefined}).
+
+
+gen_sweep_queued(Index) ->
+    ?LET(StartTime, os:timestamp(),
+         #sweep{index = Index,
+                state = idle,
+                results = oneof([gen_empty_sweep_results(), gen_nonempty_sweep_results(StartTime)]),
+                start_time = StartTime,
+                end_time = undefined,
+                queue_time = StartTime}).
+
+
+gen_sweep_ended(Index) ->
+        ?LET(StartTime, os:timestamp(),
+         begin
+         {Mega, Secs, Micros} = StartTime,
+         #sweep{index = Index,
+                state = idle,
+                results = gen_nonempty_sweep_results(StartTime),
+                start_time = {Mega, Secs - 180, Micros},
+                end_time = StartTime,
+                queue_time = undefined}
+         end).
+
+
+gen_sweep(Index) ->
+    oneof([gen_sweep_neverrun(Index),
+           gen_sweep_running(Index),
+           gen_sweep_queued(Index),
+           gen_sweep_ended(Index),
+           gen_sweep_restart(Index)]).
+
+
+gen_sweep_participants() ->
+    ?LET(Modules, gen_sweep_participant_modules(),
+         ?LET(SPs, [gen_sweep_participant(M) || M <- Modules],
+              lists:foldl(
+                fun(SP, D) ->
+                        dict:store(SP#sweep_participant.module, SP, D)
+                end,
+                dict:new(), SPs))).
+
+
+gen_sweeps() ->
+    ?LET(Indices, gen_indices(),
+         ?LET(Sweeps, [gen_sweep(I) || I <- Indices],
+              lists:foldl(fun(Sweep, D) ->
+                                  dict:store(Sweep#sweep.index, Sweep, D)
+                          end,
+                          dict:new(), Sweeps))).
+
+
+is_sweep_index_in(Sweep, Sweeps) ->
+    lists:member(Sweep#sweep.index,
+                 [Index || #sweep{index = Index} <- Sweeps]).
+
+
+prop_schedule_sweep2() ->
+    ?FORALL({Now, State}, {gen_now(), #state{sweep_participants=gen_sweep_participants(),
+                                                          sweeps=gen_sweeps()}},
+            begin
+                SPs = State#state.sweep_participants,
+                Sweeps = State#state.sweeps,
+                NeverRunSweeps = get_never_runned_sweeps(Sweeps),
+                QueuedSweeps = get_queued_sweeps(Sweeps),
+                ExpiredSweep = find_expired_participant(Now, Sweeps, SPs),
+                SPs = State#state.sweep_participants,
+                case schedule_sweep2(Now, State) of
+                    {ok, none} ->
+                        length(NeverRunSweeps) == 0 andalso
+                            length (QueuedSweeps) == 0 andalso
+                            ExpiredSweep == [];
+                    {ok, Sweep} ->
+                        case {NeverRunSweeps, QueuedSweeps, ExpiredSweep} of
+                            {[], [], []} ->
+                                false ;
+                            {[], [], ExpiredSweep} ->
+                                is_sweep_index_in(Sweep, [ExpiredSweep]);
+                            {[], QueuedSweeps, _} ->
+                                is_sweep_index_in(Sweep, QueuedSweeps);
+                            {NeverRunSweeps, [], _} ->
+                                is_sweep_index_in(Sweep, NeverRunSweeps);
+                            {NeverRunSweeps, QueuedSweeps, []} ->
+                                is_sweep_index_in(Sweep, NeverRunSweeps);
+                            {NeverRunSweeps, QueuedSweeps, ExpiredSweep} ->
+                                is_sweep_index_in(Sweep, NeverRunSweeps)
+                        end
+                end
+            end).
+
+
+prop_schedule_sweep2_test_() ->
+    {timeout, 30,
+     [fun() -> ?assert(eqc:quickcheck(prop_schedule_sweep2())) end]}.
+
 
 prop_in_window() ->
     ?FORALL({NowHour, WindowLen, StartTime}, {choose(0, 23), choose(0, 23), choose(0, 23)},
