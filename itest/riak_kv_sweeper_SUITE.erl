@@ -651,17 +651,6 @@ scheduler_sweep_concurrency_test(_Config) ->
     ok.
 
 
-sweep_throttle_obj_size_test(Config) ->
-    Indices = ?config(vnode_indices, Config),
-    sweep_throttle_obj_size(
-      _Index              = pick(Indices),
-      _NumKeys            = 1000,
-      _NumMutatedKeys     = 0,
-      _ObjSizeBytes       = 100,
-      _ThrottleAfterBytes = 100,
-      _ThrottleWaitMsecs  = 1).
-
-
 %% throttling on object size with no mutated keys
 sweep_throttle_obj_size1_test(Config) ->
     Indices = ?config(vnode_indices, Config),
