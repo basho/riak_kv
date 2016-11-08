@@ -238,29 +238,56 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %% ====================================================================
 
-maybe_schedule_sweep(#state{sweeps = Sweeps} = State) ->
-    CLR = concurrency_limit_reached(Sweeps),
-    InSweepWindow = in_sweep_window(),
+maybe_schedule_sweep(State) ->
     SweepSchedulerEnabled = app_helper:get_env(riak_kv, sweeper_scheduler, true),
-    case InSweepWindow and not CLR and SweepSchedulerEnabled of
-        true ->
-            schedule_sweep1(State);
-        false ->
+    ConcurrenyLimit = get_concurrency_limit(),
+    SweepWindow = sweep_window(),
+    Now = os:timestamp(),
+
+    case schedule_sweep1(SweepSchedulerEnabled, SweepWindow, ConcurrenyLimit, Now, State) of
+        {ok, #sweep{} = Sweep} ->
+            do_sweep(Sweep, State);
+        {ok, _Other} ->
             State
     end.
 
-schedule_sweep1(State) ->
-    case schedule_sweep2(os:timestamp(), State) of
-        {ok, none} ->
-            State;
-        {ok, Sweep} ->
-            do_sweep(Sweep, State)
+
+-spec schedule_sweep1(Enabled :: boolean(), ConcurrencyLimit :: non_neg_integer(),
+                      SweepWindow :: never|always|{non_neg_integer(), non_neg_integer()},
+                      Now :: erlang:timestamp(), #state{}) ->
+                             {ok, #sweep{}} |
+                             {ok, none} |
+                             {ok, disabled} |
+                             {ok, sweep_window, never} |
+                             {ok, concurrency_limit_reached} |
+                             {ok, not_in_sweep_window}.
+schedule_sweep1(_Enabled = false, _SweepWindow, _ConcurrencyLimit, _Now, _State) ->
+    {ok, disabled};
+
+schedule_sweep1(_Enabled = true, _SweepWindow = never, _ConcurrencyLimit, _Now, _State) ->
+    {ok, sweep_window_never};
+
+schedule_sweep1(Enabled = true, _SweepWindow = always, ConcurrencyLimit, Now, State) ->
+    schedule_sweep1(Enabled, {0, 23}, ConcurrencyLimit, Now, State);
+
+schedule_sweep1(_Enabled = true, SweepWindow, ConcurrencyLimit, Now, State) ->
+    #state{sweep_participants = Participants,
+           sweeps = Sweeps} = State,
+    {_, {NowHour, _, _}} = calendar:now_to_local_time(Now),
+    InSweepWindow = in_sweep_window(NowHour, SweepWindow),
+    CLR = length(get_running_sweeps(Sweeps)) >= ConcurrencyLimit,
+
+    case {CLR, InSweepWindow} of
+        {true, _} ->
+            {ok, concurrency_limit_reached};
+        {false, false} ->
+            {ok, not_in_sweep_window};
+        {false, true} ->
+            schedule_sweep2(Now, Participants, Sweeps)
     end.
 
 
--spec schedule_sweep2(Now :: erlang:timestamp(), #state{}) -> {ok, #sweep{}} | {ok, none}.
-schedule_sweep2(Now, #state{sweep_participants = Participants,
-                            sweeps = Sweeps}) ->
+schedule_sweep2(Now, Participants, Sweeps) ->
     case get_never_runned_sweeps(Sweeps) of
         [] ->
             case get_queued_sweeps(Sweeps) of
@@ -893,14 +920,34 @@ gen_sweeps() ->
                           dict:new(), Sweeps))).
 
 
+gen_sweep_window() ->
+    oneof([always, never, {choose(0, 23),
+                           choose(0, 23)}]).
+
+gen_concurrency_limit() ->
+    oneof([0, 1, 4]).
+
+gen_state() ->
+    ?LET({SPs, Sweeps}, {gen_sweep_participants(), gen_sweeps()},
+         #state{sweep_participants=SPs,
+                sweeps=Sweeps}).
+
+gen_enabled() ->
+    frequency([{10, true}, {1, false}]).
+
+
 is_sweep_index_in(Sweep, Sweeps) ->
     lists:member(Sweep#sweep.index,
                  [Index || #sweep{index = Index} <- Sweeps]).
 
 
-prop_schedule_sweep2() ->
-    ?FORALL({Now, State}, {gen_now(), #state{sweep_participants=gen_sweep_participants(),
-                                                          sweeps=gen_sweeps()}},
+prop_schedule_sweep1() ->
+    ?FORALL({Enabled, SweepWindow, ConcurrencyLimit, Now, State},
+            {gen_enabled(),
+             gen_sweep_window(),
+             gen_concurrency_limit(),
+             gen_now(),
+             gen_state()},
             begin
                 SPs = State#state.sweep_participants,
                 Sweeps = State#state.sweeps,
@@ -908,12 +955,21 @@ prop_schedule_sweep2() ->
                 QueuedSweeps = get_queued_sweeps(Sweeps),
                 ExpiredSweep = find_expired_participant(Now, Sweeps, SPs),
                 SPs = State#state.sweep_participants,
-                case schedule_sweep2(Now, State) of
+                case schedule_sweep1(Enabled, SweepWindow, ConcurrencyLimit, Now, State) of
                     {ok, none} ->
                         length(NeverRunSweeps) == 0 andalso
                             length (QueuedSweeps) == 0 andalso
                             ExpiredSweep == [];
-                    {ok, Sweep} ->
+                    {ok, concurrency_limit_reached} ->
+                        get_running_sweeps(Sweeps) >= ConcurrencyLimit;
+                    {ok, disabled} ->
+                        Enabled == false;
+                    {ok, sweep_window_never} ->
+                        SweepWindow == never;
+                    {ok, not_in_sweep_window} ->
+                        {_, {NowHour, _, _}} = calendar:now_to_local_time(Now),
+                        not in_sweep_window(NowHour, SweepWindow);
+                    {ok, #sweep{} = Sweep} ->
                         case {NeverRunSweeps, QueuedSweeps, ExpiredSweep} of
                             {[], [], []} ->
                                 false ;
@@ -932,9 +988,9 @@ prop_schedule_sweep2() ->
             end).
 
 
-prop_schedule_sweep2_test_() ->
+prop_schedule_sweep1_test_() ->
     {timeout, 30,
-     [fun() -> ?assert(eqc:quickcheck(prop_schedule_sweep2())) end]}.
+     [fun() -> ?assert(eqc:quickcheck(prop_schedule_sweep1())) end]}.
 
 
 prop_in_window() ->
