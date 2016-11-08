@@ -186,22 +186,16 @@ handle_call({remove_sweep_participant, Module}, _From, #state{sweeps = Sweeps,
     {reply, Reply, State#state{sweep_participants = SP1}};
 
 handle_call({sweep_request, Index}, _From, State) ->
-    State1 = sweep_request(_RetryMax = 5, _RetryN = 0, Index, State),
-    {reply, ok, State1};
+    State1 = maybe_initiate_sweeps(State),
+    State2 = sweep_request(_RetryMax = 5, _RetryN = 0, Index, State1),
+    {reply, ok, State2};
 
 handle_call(status, _From, State) ->
-    State1 =
-        case dict:size(State#state.sweeps) of
-            0 ->
-                maybe_initiate_sweeps(State);
-            _ ->
-                State
-        end,
     Participants =
         [Participant ||
-         {_Mod, Participant} <- dict:to_list(State1#state.sweep_participants)],
-    Sweeps = [Sweep || {_Index, Sweep} <- dict:to_list(State1#state.sweeps)],
-    {reply, {Participants , Sweeps}, State1};
+         {_Mod, Participant} <- dict:to_list(State#state.sweep_participants)],
+    Sweeps = [Sweep || {_Index, Sweep} <- dict:to_list(State#state.sweeps)],
+    {reply, {Participants , Sweeps}, State};
 
 handle_call(stop_all_sweeps, _From, #state{timer_ref = Ref, sweeps = Sweeps} = State) ->
     erlang:cancel_timer(Ref),

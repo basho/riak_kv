@@ -271,20 +271,24 @@ meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index) ->
 %%--------------------------------------------------------------------
 
 
-status_test(Config) ->
+status_index_changed_sweep_request_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    {_SPs, Sweeps} = riak_kv_sweeper:status(),
+    {_, []} = riak_kv_sweeper:status(),
+    Index = pick(Indices),
+    riak_kv_sweeper:sweep(Index),
+    {_, Sweeps} = riak_kv_sweeper:status(),
     Indices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
     ok.
 
 
-status_index_changed_test(Config) ->
+status_index_changed_tick_test(Config) ->
+    {ok, SweepTick} = application:get_env(riak_kv, sweep_tick),
     Indices = ?config(vnode_indices, Config),
-    [_H|NewIndices0] = Indices,
-    NewIndices = [I0*1000 ||I0 <- NewIndices0],
-    meck:expect(riak_core_ring, my_indices, fun(ring) -> NewIndices end),
-    {_SPs, Sweeps} = riak_kv_sweeper:status(),
-    NewIndices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
+    {_, []} = riak_kv_sweeper:status(),
+    erlang:send_after(0, riak_kv_sweeper, tick),
+    timer:sleep(2 * SweepTick),
+    {_, Sweeps} = riak_kv_sweeper:status(),
+    Indices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
     ok.
 
 
