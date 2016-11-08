@@ -187,7 +187,7 @@ handle_call({remove_sweep_participant, Module}, _From, #state{sweeps = Sweeps,
 
 handle_call({sweep_request, Index}, _From, State) ->
     State1 = maybe_initiate_sweeps(State),
-    State2 = sweep_request(_RetryMax = 5, _RetryN = 0, Index, State1),
+    State2 = sweep_request(Index, State1),
     {reply, ok, State2};
 
 handle_call(status, _From, State) ->
@@ -338,10 +338,7 @@ random_sweep(Sweeps) ->
     lists:nth(Index, Sweeps).
 
 
-sweep_request(RetryMax, RetryN, _Index, State) when RetryN >= RetryMax ->
-    State;
-
-sweep_request(RetryMax, RetryN, Index, #state{sweeps = Sweeps} = State) ->
+sweep_request(Index, #state{sweeps = Sweeps} = State) ->
     Event = {request, Index},
     SweepSchedulerEnabled = app_helper:get_env(riak_kv, sweeper_scheduler, true),
     ConcurrenyLimit = get_concurrency_limit(),
@@ -361,7 +358,7 @@ sweep_request(RetryMax, RetryN, Index, #state{sweeps = Sweeps} = State) ->
         {ok, {request, #sweep{} = Sweep}} ->
             do_sweep(Sweep, State);
         {ok, {request, not_index}} ->
-            sweep_request(RetryMax, RetryN + 1, Index, State);
+            State;
         {ok, {request, _Other}} ->
             State
     end.
