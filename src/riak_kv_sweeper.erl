@@ -170,7 +170,7 @@ handle_call({remove_sweep_participant, Module}, _From, #state{sweeps = Sweeps,
     {reply, Reply, State#state{sweep_participants = SP1}};
 
 handle_call({sweep_request, Index}, _From, State) ->
-    State1 = sweep_request(Index, State),
+    State1 = sweep_request(_RetryMax = 5, _RetryN = 0, Index, State),
     {reply, ok, State1};
 
 handle_call(status, _From, State) ->
@@ -309,8 +309,8 @@ random_sweep(Sweeps) ->
     Index = random:uniform(length(Sweeps)),
     lists:nth(Index, Sweeps).
 
-sweep_request(Index, #state{sweeps = Sweeps} = State) ->
-    case maybe_restart(Index, State) of
+sweep_request(RetryMax, RetryN, Index, #state{sweeps = Sweeps} = State) ->
+    case maybe_restart(RetryMax, RetryN, Index, State) of
         false ->
             case concurrency_limit_reached(Sweeps) of
                 true ->
@@ -318,11 +318,16 @@ sweep_request(Index, #state{sweeps = Sweeps} = State) ->
                 false ->
                      do_sweep(Index, State)
             end;
+        {error, max_retry} ->
+            State;
         RestartState ->
             RestartState
     end.
 
-maybe_restart(Index, #state{sweeps = Sweeps} = State) ->
+maybe_restart(RetryMax, RetryN, _Index, _State) when RetryN >= RetryMax ->
+    {error, max_retry};
+
+maybe_restart(RetryMax, RetryN, Index, #state{sweeps = Sweeps} = State) ->
     case dict:find(Index, Sweeps) of
         {ok, #sweep{state = running} = Sweep} ->
             stop_sweep(Sweep),
@@ -338,7 +343,7 @@ maybe_restart(Index, #state{sweeps = Sweeps} = State) ->
             false;
         _ ->
             %% New index since last tick
-            sweep_request(Index, maybe_initiate_sweeps(State))
+            sweep_request(RetryMax, RetryN + 1, Index, maybe_initiate_sweeps(State))
     end.
 
 queue_sweep(Index, #state{sweeps = Sweeps} = State) ->

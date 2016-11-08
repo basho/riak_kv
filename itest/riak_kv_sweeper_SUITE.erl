@@ -355,6 +355,20 @@ sweep_request_test(Config) ->
     ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I1}).
 
 
+sweep_request_non_existing_index_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    SP = meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_backend(self()),
+    riak_kv_sweeper:add_sweep_participant(SP),
+
+    Max = lists:max(Indices),
+    NonExisting = Max * Max,
+
+    false = lists:member(NonExisting, Indices),
+    riak_kv_sweeper:sweep(NonExisting),
+    ok.
+
+
 scheduler_sync_backend_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     meck_new_backend(self()),
