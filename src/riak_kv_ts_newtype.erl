@@ -74,7 +74,7 @@ handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
 handle_cast({new_type, BucketType}, State) ->
-    ok = do_new_type(BucketType),
+    ok = do_new_type(BucketType, retrieve_ddl_from_metadata(BucketType)),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -115,9 +115,9 @@ code_change(_OldVsn, State, _Extra) ->
 %% We rely on the claimant to not give us new DDLs after the bucket
 %% type is activated, at least until we have a system in place for
 %% managing DDL versioning
-do_new_type(BucketType) ->
+do_new_type(BucketType, DDL) ->
     maybe_compile_ddl(BucketType,
-                      retrieve_ddl_from_metadata(BucketType),
+                      DDL,
                       riak_kv_compile_tab:get_ddl(BucketType),
                       riak_ql_ddl_compiler:get_compiler_version(),
                       riak_kv_compile_tab:get_compiled_ddl_version(BucketType)).
@@ -245,7 +245,7 @@ recompile_ddl(DDLVersion) ->
     %% Get list of tables to recompile
     Tables = riak_kv_compile_tab:get_ddl_records_needing_recompiling(DDLVersion),
     lists:foreach(fun(Table) ->
-                      new_type(Table)
+                      do_new_type(Table, riak_kv_compile_tab:get_ddl(Table))
                   end,
                   Tables),
     ok.
