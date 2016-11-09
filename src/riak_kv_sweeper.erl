@@ -256,7 +256,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% ====================================================================
 
 maybe_schedule_sweep(State) ->
-    Enabled = app_helper:get_env(riak_kv, sweeper_scheduler, true),
+    Enabled = scheduler_enabled(),
     ConcurrenyLimit = get_concurrency_limit(),
     SweepWindow = sweep_window(),
     Now = os:timestamp(),
@@ -273,8 +273,8 @@ maybe_schedule_sweep(State) ->
 
 -spec schedule_sweep1(Event            :: scheduler_event(),
                       Enabled          :: boolean(),
-                      ConcurrencyLimit :: non_neg_integer(),
                       SweepWindow      :: scheduler_sweep_window(),
+                      ConcurrencyLimit :: non_neg_integer(),
                       Now              :: erlang:timestamp(),
                       State            :: #state{}) -> shedulder_result().
 
@@ -322,6 +322,10 @@ schedule_sweep1({request, Index}, _Enabled, _SweepWindow, ConcurrencyLimit, _Now
     end.
 
 
+-spec schedule_sweep2(Now          :: erlang:timestamp(),
+                      Participants :: dict(),
+                      Sweeps       :: dict()) -> {ok, {tick, none}}|
+                                                 {ok, {tick, #sweep{}}}.
 schedule_sweep2(Now, Participants, Sweeps) ->
     case get_never_runned_sweeps(Sweeps) of
         [] ->
@@ -346,13 +350,12 @@ random_sweep(Sweeps) ->
 
 
 sweep_request(Index, #state{sweeps = Sweeps} = State) ->
-    Event = {request, Index},
-    SweepSchedulerEnabled = app_helper:get_env(riak_kv, sweeper_scheduler, true),
+    SweepSchedulerEnabled = scheduler_enabled(),
     ConcurrenyLimit = get_concurrency_limit(),
     SweepWindow = sweep_window(),
     Now = os:timestamp(),
 
-    case schedule_sweep1(Event, SweepSchedulerEnabled, SweepWindow, ConcurrenyLimit, Now, State) of
+    case schedule_sweep1({request, Index}, SweepSchedulerEnabled, SweepWindow, ConcurrenyLimit, Now, State) of
         {ok, {request, queue}} ->
             queue_sweep(Index, State);
         {ok, {request, {restart, Sweep}}} ->
@@ -365,8 +368,6 @@ sweep_request(Index, #state{sweeps = Sweeps} = State) ->
         {ok, {request, #sweep{} = Sweep}} ->
             do_sweep(Sweep, State);
         {ok, {request, not_index}} ->
-            State;
-        {ok, {request, _Other}} ->
             State
     end.
 
@@ -490,6 +491,16 @@ sweep_window() ->
                                    "Defaulting to 'always'.\n", [Other]),
             always
     end.
+
+-spec scheduler_enabled() -> boolean().
+scheduler_enabled() ->
+    case app_helper:get_env(riak_kv, sweeper_scheduler, true) of
+        E when E == true; E == false ->
+            E;
+        _ ->
+            false
+    end.
+
 
 get_concurrency_limit() ->
     app_helper:get_env(riak_kv, sweep_concurrency, ?DEFAULT_SWEEP_CONCURRENCY).
