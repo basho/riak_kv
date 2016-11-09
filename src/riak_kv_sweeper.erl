@@ -163,14 +163,16 @@ init([]) ->
     process_flag(trap_exit, true),
     random:seed(erlang:now()),
     Ref = schedule_initial_sweep_tick(),
-    State =
+    State0 =
         case get_persistent_participants() of
             undefined ->
                 #state{};
             SP ->
                 #state{sweep_participants = SP}
         end,
-    {ok, State#state{timer_ref = Ref, sweeps = get_persistent_sweeps()}}.
+    State1 = State0#state{timer_ref = Ref, sweeps = get_persistent_sweeps()},
+    State2 = maybe_initiate_sweeps(State1),
+    {ok, State2}.
 
 handle_call({add_sweep_participant, Participant}, _From, #state{sweep_participants = SP} = State) ->
     SP1 = dict:store(Participant#sweep_participant.module, Participant, SP),
@@ -220,6 +222,11 @@ handle_cast({update_progress, Index, SweptKeys}, State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
+
+handle_info({test_tick, Ref, From}, State) ->
+    {noreply, State1} = handle_info(sweep_tick, State),
+    From ! {ok, Ref},
+    {noreply, State1};
 
 handle_info(sweep_tick, State) ->
     Ref = schedule_sweep_tick(),

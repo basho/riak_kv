@@ -271,24 +271,37 @@ meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index) ->
 %%--------------------------------------------------------------------
 
 
-status_index_changed_sweep_request_test(Config) ->
+initiailize_sweep_request_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    {_, []} = riak_kv_sweeper:status(),
-    Index = pick(Indices),
-    riak_kv_sweeper:sweep(Index),
     {_, Sweeps} = riak_kv_sweeper:status(),
     Indices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
     ok.
 
 
-status_index_changed_tick_test(Config) ->
-    {ok, SweepTick} = application:get_env(riak_kv, sweep_tick),
+status_index_changed_sweep_request_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    {_, []} = riak_kv_sweeper:status(),
-    erlang:send_after(0, riak_kv_sweeper, tick),
-    timer:sleep(2 * SweepTick),
     {_, Sweeps} = riak_kv_sweeper:status(),
     Indices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
+
+    NewPartitions = 2 * length(Indices),
+    NewIndices = meck_new_riak_core_ring(NewPartitions),
+    Index = pick(NewIndices -- Indices),
+    riak_kv_sweeper:sweep(Index),
+    {_, Sweeps1} = riak_kv_sweeper:status(),
+    NewIndices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps1]),
+    ok.
+
+
+status_index_changed_tick_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    {_, Sweeps} = riak_kv_sweeper:status(),
+    Indices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
+
+    NewPartitions = 2 * length(Indices),
+    NewIndices = meck_new_riak_core_ring(NewPartitions),
+    sweeper_tick(self()),
+    {_, Sweeps1} = riak_kv_sweeper:status(),
+    NewIndices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps1]),
     ok.
 
 
@@ -832,6 +845,16 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
+sweeper_tick(TestCasePid) ->
+    Ref = make_ref(),
+    erlang:send_after(0, riak_kv_sweeper, {test_tick, Ref, TestCasePid}),
+    receive {ok, Ref} ->
+            ok
+    after 100 ->
+            throw(timeout)
+    end.
+
+
 wait_for_concurrent_sweeps(ConcurrentSweeps) ->
     wait_for_concurrent_sweeps(ConcurrentSweeps, []).
 
