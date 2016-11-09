@@ -939,7 +939,7 @@ add_types2([{NullOp, {identifier, Field}} | T], Mod, Acc) when NullOp =:= is_nul
     NewAcc = {EqOp, {field, Field, NewType}, {const, ?SQL_NULL}},
     add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
-    NewType = Mod:get_field_type([Field]),
+    NewType = riak_ql_ddl:get_storage_type(Mod:get_field_type([Field])),
     NewAcc = {Op, {field, Field, NewType}, {const, normalise(Val, NewType)}},
     add_types2(T, Mod, [NewAcc | Acc]).
 
