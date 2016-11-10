@@ -335,8 +335,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                     ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [1],
                             ["prepare", atom2list(CoordNode)]),
                     try
-                        {UseAckP, Options2} = make_ack_options(
-                                               [{ack_execute, self()}|Options]),
+                        {UseAckP, Options2} = make_ack_options(Options),
                         MiddleMan = spawn_coordinator_proc(
                                       CoordNode, riak_kv_put_fsm, start_link,
                                       [From,RObj,Options2]),
