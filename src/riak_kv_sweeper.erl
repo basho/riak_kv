@@ -958,9 +958,13 @@ gen_sweeps() ->
                           dict:new(), Sweeps))).
 
 
+gen_hour() ->
+    choose(0, 23).
+
+
 gen_sweep_window() ->
-    oneof([always, never, {choose(0, 23),
-                           choose(0, 23)}]).
+    oneof([always, never, {gen_hour(),
+                           gen_hour()}]).
 
 gen_concurrency_limit() ->
     oneof([0, 1, 4]).
