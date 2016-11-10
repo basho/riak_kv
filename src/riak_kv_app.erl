@@ -170,10 +170,6 @@ start(_Type, _StartArgs) ->
                                            mapred_2i_pipe,
                                            [{true, true}, {false, false}]}),
 
-            riak_core_capability:register({riak_kv, anti_entropy},
-                                          [enabled_v1, disabled],
-                                          disabled),
-
             riak_core_capability:register({riak_kv, handoff_data_encoding},
                                           [encode_raw, encode_zlib],
                                           encode_zlib),
