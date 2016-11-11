@@ -61,6 +61,8 @@
          set_ready_waiting_process/2,  %% notify a process when all chunks are here
 
          %% utility functions
+         limit_to_scalar/1,
+         offset_to_scalar/1,
          make_qref/1
         ]).
 
@@ -111,7 +113,7 @@ batch_put(QBufRef, Data) ->
 set_ready_waiting_process(QBufRef, SelfNotifierFun) ->
     gen_server:call(?SERVER, {set_ready_waiting_process, QBufRef, SelfNotifierFun}).
 
--spec fetch_limit(qbuf_ref(), undefined | pos_integer(), undefined | non_neg_integer()) ->
+-spec fetch_limit(qbuf_ref(), unlimited | pos_integer(), non_neg_integer()) ->
                     {ok, riak_kv_qry:query_tabular_result()} |
                     {error, bad_qbuf_ref|bad_sql|qbuf_not_ready}.
 %% @doc Emulate SELECT.
@@ -163,6 +165,13 @@ make_qref(?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{col_names = ColNames},
        Part3:32/integer>>};
 make_qref(_) ->
     {error, query_non_pageable}.
+
+
+limit_to_scalar([]) -> unlimited;
+limit_to_scalar([A]) when is_integer(A) -> A.
+
+offset_to_scalar([]) -> 0;
+offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
 
 
 -record(qbuf, {

@@ -85,11 +85,13 @@ compile(?DDL{table = T} = DDL,
                               {ok, ?SQL_SELECT{}} | {error, any()}.
 compile_order_by({error,_} = E) ->
     E;
-compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = undefined} = Q}) ->
-    {ok, Q};
 compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = OrderBy,
+                                  'OFFSET'   = Offset,
+                                  'LIMIT'    = Limit,
                                   'SELECT' = #riak_sel_clause_v1{calc_type = CalcType}}})
-  when OrderBy /= undefined andalso CalcType /= rows ->
+  when (length(OrderBy) > 0 orelse
+        length(Limit)   > 0 orelse
+        length(Offset)  > 0) andalso CalcType /= rows ->
     {error, {order_by_with_aggregate_calc_type, ?E_ORDER_BY_WITH_AGGREGATE_CALC_TYPE}};
 compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = OrderBy} = Q}) ->
     case non_unique_identifiers(OrderBy) of
@@ -100,8 +102,8 @@ compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = OrderBy} = Q}) ->
     end.
 
 non_unique_identifiers(FF) ->
-    Occurses = [{F, occurs(F, FF)} || {F, _, _} <- FF],
-    [F || {F, N} <- Occurses, N > 1].
+    Occurrences = [{F, occurs(F, FF)} || {F, _, _} <- FF],
+    [F || {F, N} <- Occurrences, N > 1].
 occurs(F, FF) ->
     lists:foldl(
       fun({A, _, _}, N) when A == F -> N + 1;
@@ -2540,11 +2542,11 @@ order_by_with_pass_1_test() ->
         Q2?SQL_SELECT.'ORDER BY'
     ),
     ?assertEqual(
-        6,
+        [6],
         Q2?SQL_SELECT.'LIMIT'
     ),
     ?assertEqual(
-        undefined,
+        [],
         Q2?SQL_SELECT.'OFFSET'
     ).
 
@@ -2564,11 +2566,11 @@ order_by_with_pass_2_test() ->
         Q2?SQL_SELECT.'ORDER BY'
     ),
     ?assertEqual(
-        11,
+        [11],
         Q2?SQL_SELECT.'LIMIT'
     ),
     ?assertEqual(
-        3,
+        [3],
         Q2?SQL_SELECT.'OFFSET'
     ).
 

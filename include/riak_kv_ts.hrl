@@ -52,8 +52,8 @@
           'SELECT'              :: #riak_sel_clause_v1{},
           'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
           'WHERE'       = []    :: [riak_ql_ddl:filter()],
-          'ORDER BY'            :: undefined | [riak_kv_qry_compiler:sorter()],
-          'LIMIT'               :: undefined | riak_kv_qry_compiler:limit(),
+          'ORDER BY'    = []    :: [riak_kv_qry_compiler:sorter()],
+          'LIMIT'       = []    :: [riak_kv_qry_compiler:limit()],
           helper_mod            :: atom(),
           %% will include groups when we get that far
           partition_key = none  :: none | #key_v1{},
@@ -69,8 +69,8 @@
           'SELECT'              :: #riak_sel_clause_v1{},
           'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
           'WHERE'       = []    :: [riak_ql_ddl:filter()],
-          'ORDER BY'            :: undefined | [riak_kv_qry_compiler:sorter()],
-          'LIMIT'               :: undefined | riak_kv_qry_compiler:limit(),
+          'ORDER BY'    = []    :: [riak_kv_qry_compiler:sorter()],
+          'LIMIT'       = []    :: [riak_kv_qry_compiler:limit()],
           helper_mod            :: atom(),
           %% will include groups when we get that far
           partition_key = none  :: none | #key_v1{},
@@ -88,8 +88,8 @@
           'SELECT'              :: #riak_sel_clause_v1{},
           'FROM'        = <<>>  :: binary() | {list, [binary()]} | {regex, list()},
           'WHERE'       = []    :: [riak_ql_ddl:filter()],
-          'ORDER BY'            :: undefined | [riak_kv_qry_compiler:sorter()],
-          'LIMIT'               :: undefined | riak_kv_qry_compiler:limit(),
+          'ORDER BY'    = []    :: [riak_kv_qry_compiler:sorter()],
+          'LIMIT'       = []    :: [riak_kv_qry_compiler:limit()],
           helper_mod            :: atom(),
           %% will include groups when we get that far
           partition_key = none  :: none | #key_v1{},
@@ -103,7 +103,7 @@
           %% since v2
           group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}],
           %% since v3
-          'OFFSET'              :: undefined | riak_kv_qry_compiler:offset()
+          'OFFSET'              :: [riak_kv_qry_compiler:offset()]
        }).
 
 -record(riak_sql_describe_v1,

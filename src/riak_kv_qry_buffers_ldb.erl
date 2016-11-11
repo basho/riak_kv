@@ -120,11 +120,9 @@ make_sorted_keys(F, desc, _) when is_boolean(F) ->
 
 
 
--spec fetch_rows(eleveldb:db_ref(), undefined|non_neg_integer(), undefined|pos_integer()) ->
+-spec fetch_rows(eleveldb:db_ref(), non_neg_integer(), unlimited|pos_integer()) ->
                         {ok, [riak_kv_qry_buffers:data_row()]} | {error, term()}.
-fetch_rows(LdbRef, undefined, Limit) ->
-    fetch_rows(LdbRef, 0, Limit);
-fetch_rows(LdbRef, Offset, LimitOrUndef) ->
+fetch_rows(LdbRef, Offset, LimitOrUnlim) ->
     %% Because the database is read-only, the plan is to keep a cache
     %% of iterators for faster seeking (to the nearest stored),
     %% ideally also enable eleveldb to do the folding from stored
@@ -139,7 +137,7 @@ fetch_rows(LdbRef, Offset, LimitOrUndef) ->
            %% iterator), before we can think up an iterator cache in
            %% qbuf state.  For now, we have to trundle to Position
            %% every time we serve a query.
-           ({_K, V}, {Off, Lim, Pos, Acc}) when Lim == undefined orelse
+           ({_K, V}, {Off, Lim, Pos, Acc}) when Lim == unlimited orelse
                                                 Pos < Off + Lim ->
                 {Off, Lim, Pos + 1, [V | Acc]};
            (_KV, {_, _, _, Acc}) ->
@@ -148,7 +146,7 @@ fetch_rows(LdbRef, Offset, LimitOrUndef) ->
     {ok, Fetched} =
         try eleveldb:fold(
               LdbRef, FetchLimitFn,
-              {Offset, LimitOrUndef, 0, []},
+              {Offset, LimitOrUnlim, 0, []},
               [{fold_method, streaming}]) of
             {_, _, _N, Acc} ->
                 {ok, Acc}

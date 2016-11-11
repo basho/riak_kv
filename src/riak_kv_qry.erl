@@ -262,7 +262,8 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                             %% query: yay results!
                             riak_kv_qry_buffers:fetch_limit(
                               QBufRef,
-                              SQL?SQL_SELECT.'LIMIT', SQL?SQL_SELECT.'OFFSET')
+                              riak_kv_qry_buffers:limit_to_scalar(SQL?SQL_SELECT.'LIMIT'),
+                              riak_kv_qry_buffers:offset_to_scalar(SQL?SQL_SELECT.'OFFSET'))
                     end
             end;
         {false, Errors} ->
@@ -276,7 +277,7 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                                        {ok, {new|existing, riak_kv_qry_buffers:qbuf_ref()} |
                                              undefined} |
                                        {error, any()}.
-maybe_create_query_buffer(?SQL_SELECT{'ORDER BY' = undefined},  %% LIMIT implies ORDER BY
+maybe_create_query_buffer(?SQL_SELECT{'ORDER BY' = []},  %% LIMIT implies ORDER BY
                           _NSubQueries, _CompiledSelect, _CompiledOrderBy, _Options) ->
     {ok, undefined};
 maybe_create_query_buffer(SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) ->

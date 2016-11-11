@@ -265,7 +265,7 @@ estimate_query_size(#state{total_query_data  = CurrentTotalSize,
                            max_query_data    = MaxQueryData,
                            qbuf_ref          = QBufRef,
                            sub_qrys          = SubQrys,
-                           qry = ?SQL_SELECT{'LIMIT' = Limit} = OrigQry} = State)
+                           qry = ?SQL_SELECT{'LIMIT' = [Limit]} = OrigQry} = State)
   when QBufRef /= undefined,
        is_integer(Limit) ->
     %% query buffer-backed, has a LIMIT: consider the latter
@@ -430,7 +430,9 @@ prepare_final_results(#state{qbuf_ref = QBufRef,
                              qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select,
                                                'LIMIT'  = Limit,
                                                'OFFSET' = Offset}} = State) ->
-    case riak_kv_qry_buffers:fetch_limit(QBufRef, Limit, Offset) of
+    case riak_kv_qry_buffers:fetch_limit(QBufRef,
+                                         riak_kv_qry_buffers:limit_to_scalar(Limit),
+                                         riak_kv_qry_buffers:offset_to_scalar(Offset)) of
         {ok, {_ColNames, _ColTypes, FetchedRows}} ->
             prepare_final_results2(Select, FetchedRows);
         {error, qbuf_not_ready} ->
