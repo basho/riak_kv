@@ -82,73 +82,122 @@ compare(_, _) -> less_than.
 %% Iterate over the versions and upgrade the record, from 1 to 2, 2 to 3 etc.
 upgrade_select([_], Select) ->
     Select;
-upgrade_select([v1,v2 = To|Tail], Select1) ->
+upgrade_select([v1,v2 = To|Tail],
+               #riak_select_v1{'SELECT'      = Select,
+                               'FROM'        = From,
+                               'WHERE'       = Where,
+                               'ORDER BY'    = OrderBy,
+                               'LIMIT'       = Limit,
+                               helper_mod    = HelperMod,
+                               is_executable = IsExecutable,
+                               type          = Type,
+                               cover_context = CoverContext,
+                               partition_key = PartitionKey,
+                               local_key     = LocalKey}) ->
     Select2 = #riak_select_v2{
-        'SELECT'      = Select1#riak_select_v1.'SELECT',
-        'FROM'        = Select1#riak_select_v1.'FROM',
-        'WHERE'       = Select1#riak_select_v1.'WHERE',
-        'ORDER BY'    = Select1#riak_select_v1.'ORDER BY',
-        'LIMIT'       = Select1#riak_select_v1.'LIMIT',
-        helper_mod    = Select1#riak_select_v1.helper_mod,
-        partition_key = Select1#riak_select_v1.partition_key,
-        is_executable = Select1#riak_select_v1.is_executable,
-        type          = Select1#riak_select_v1.type,
-        cover_context = Select1#riak_select_v1.cover_context,
-        local_key     = Select1#riak_select_v1.local_key,
-        group_by      = ?GROUP_BY_DEFAULT
-    },
+                 'SELECT'      = Select,
+                 'FROM'        = From,
+                 'WHERE'       = Where,
+                 'ORDER BY'    = OrderBy,
+                 'LIMIT'       = Limit,
+                 helper_mod    = HelperMod,
+                 is_executable = IsExecutable,
+                 type          = Type,
+                 cover_context = CoverContext,
+                 partition_key = PartitionKey,
+                 local_key     = LocalKey,
+                 group_by      = ?GROUP_BY_DEFAULT
+                },
     upgrade_select([To|Tail], Select2);
-upgrade_select([v2,v3 = To|Tail], Select1) ->
+upgrade_select([v2,v3 = To|Tail],
+               #riak_select_v2{'SELECT'      = Select,
+                               'FROM'        = From,
+                               'WHERE'       = Where,
+                               'ORDER BY'    = OrderBy,
+                               'LIMIT'       = Limit,
+                               helper_mod    = HelperMod,
+                               is_executable = IsExecutable,
+                               type          = Type,
+                               cover_context = CoverContext,
+                               partition_key = PartitionKey,
+                               local_key     = LocalKey,
+                               group_by      = GroupBy}) ->
     Select2 = #riak_select_v3{
-        'SELECT'      = Select1#riak_select_v2.'SELECT',
-        'FROM'        = Select1#riak_select_v2.'FROM',
-        'WHERE'       = Select1#riak_select_v2.'WHERE',
-        'ORDER BY'    = Select1#riak_select_v2.'ORDER BY',
-        'LIMIT'       = Select1#riak_select_v2.'LIMIT',
-        'OFFSET'      = [],
-        helper_mod    = Select1#riak_select_v2.helper_mod,
-        partition_key = Select1#riak_select_v2.partition_key,
-        is_executable = Select1#riak_select_v2.is_executable,
-        type          = Select1#riak_select_v2.type,
-        cover_context = Select1#riak_select_v2.cover_context,
-        local_key     = Select1#riak_select_v2.local_key,
-        group_by      = ?GROUP_BY_DEFAULT
-    },
+                 'SELECT'      = Select,
+                 'FROM'        = From,
+                 'WHERE'       = Where,
+                 'ORDER BY'    = OrderBy,
+                 'LIMIT'       = Limit,
+                 'OFFSET'      = [],
+                 helper_mod    = HelperMod,
+                 is_executable = IsExecutable,
+                 type          = Type,
+                 cover_context = CoverContext,
+                 partition_key = PartitionKey,
+                 local_key     = LocalKey,
+                 group_by      = GroupBy
+                },
     upgrade_select([To|Tail], Select2).
 
 
 %% Iterate over the versions backwards to downgrade, from 3 to 2 then 2 to 1 etc.
 downgrade_select([_], Select) ->
     Select;
-downgrade_select([v2,v1=To|Tail], Select1) ->
+downgrade_select([v2,v1=To|Tail],
+               #riak_select_v2{'SELECT'      = Select,
+                               'FROM'        = From,
+                               'WHERE'       = Where,
+                               'ORDER BY'    = OrderBy,
+                               'LIMIT'       = Limit,
+                               helper_mod    = HelperMod,
+                               is_executable = IsExecutable,
+                               type          = Type,
+                               cover_context = CoverContext,
+                               partition_key = PartitionKey,
+                               local_key     = LocalKey,
+                               group_by      = _GroupBy}) ->
     Select2 = #riak_select_v1{
-        'SELECT'      = Select1#riak_select_v2.'SELECT',
-        'FROM'        = Select1#riak_select_v2.'FROM',
-        'WHERE'       = Select1#riak_select_v2.'WHERE',
-        'ORDER BY'    = Select1#riak_select_v2.'ORDER BY',
-        'LIMIT'       = Select1#riak_select_v2.'LIMIT',
-        helper_mod    = Select1#riak_select_v2.helper_mod,
-        partition_key = Select1#riak_select_v2.partition_key,
-        is_executable = Select1#riak_select_v2.is_executable,
-        type          = Select1#riak_select_v2.type,
-        cover_context = Select1#riak_select_v2.cover_context,
-        local_key     = Select1#riak_select_v2.local_key
+                 'SELECT'      = Select,
+                 'FROM'        = From,
+                 'WHERE'       = Where,
+                 'ORDER BY'    = OrderBy,
+                 'LIMIT'       = Limit,
+                 helper_mod    = HelperMod,
+                 is_executable = IsExecutable,
+                 type          = Type,
+                 cover_context = CoverContext,
+                 partition_key = PartitionKey,
+                 local_key     = LocalKey
     },
     downgrade_select([To|Tail], Select2);
-downgrade_select([v3,v2=To|Tail], Select1) ->
+downgrade_select([v3,v2=To|Tail],
+               #riak_select_v3{'SELECT'      = Select,
+                               'FROM'        = From,
+                               'WHERE'       = Where,
+                               'ORDER BY'    = OrderBy,
+                               'LIMIT'       = Limit,
+                               'OFFSET'      = _Offset,
+                               helper_mod    = HelperMod,
+                               is_executable = IsExecutable,
+                               type          = Type,
+                               cover_context = CoverContext,
+                               partition_key = PartitionKey,
+                               local_key     = LocalKey,
+                               group_by      = GroupBy}) ->
     Select2 = #riak_select_v2{
-        'SELECT'      = Select1#riak_select_v3.'SELECT',
-        'FROM'        = Select1#riak_select_v3.'FROM',
-        'WHERE'       = Select1#riak_select_v3.'WHERE',
-        'ORDER BY'    = Select1#riak_select_v3.'ORDER BY',
-        'LIMIT'       = Select1#riak_select_v3.'LIMIT',
-        helper_mod    = Select1#riak_select_v3.helper_mod,
-        partition_key = Select1#riak_select_v3.partition_key,
-        is_executable = Select1#riak_select_v3.is_executable,
-        type          = Select1#riak_select_v3.type,
-        cover_context = Select1#riak_select_v3.cover_context,
-        local_key     = Select1#riak_select_v3.local_key
-    },
+                 'SELECT'      = Select,
+                 'FROM'        = From,
+                 'WHERE'       = Where,
+                 'ORDER BY'    = OrderBy,
+                 'LIMIT'       = Limit,
+                 helper_mod    = HelperMod,
+                 is_executable = IsExecutable,
+                 type          = Type,
+                 cover_context = CoverContext,
+                 partition_key = PartitionKey,
+                 local_key     = LocalKey,
+                 group_by      = GroupBy
+                },
     downgrade_select([To|Tail], Select2).
 
 %%
