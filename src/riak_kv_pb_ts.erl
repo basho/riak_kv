@@ -46,20 +46,23 @@ init() ->
                     {error, _}.
 decode(Code, Bin) when Code >= 90, Code =< 103 ->
     Msg = riak_pb_codec:decode(Code, Bin),
-    case Msg of
-        #tsqueryreq{query = Q, cover_context = Cover} ->
-            riak_kv_ts_svc:decode_query_common(Q, Cover);
-        #tsgetreq{table = Table}->
-            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
-        #tsputreq{table = Table} ->
-            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(put), Table}};
-        #tsdelreq{table = Table} ->
-            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(delete), Table}};
-        #tslistkeysreq{table = Table} ->
-            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(list_keys), Table}};
-        #tscoveragereq{table = Table} ->
-            {ok, Msg, {riak_kv_ts_api:api_call_to_perm(coverage), Table}}
-    end.
+    DecodedReq =
+        case Msg of
+            #tsqueryreq{query = Q, cover_context = Cover} ->
+                riak_kv_ts_svc:decode_query_common(Q, Cover);
+            #tsgetreq{table = Table}->
+                {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
+            #tsputreq{table = Table} ->
+                {ok, Msg, {riak_kv_ts_api:api_call_to_perm(put), Table}};
+            #tsdelreq{table = Table} ->
+                {ok, Msg, {riak_kv_ts_api:api_call_to_perm(delete), Table}};
+            #tslistkeysreq{table = Table} ->
+                {ok, Msg, {riak_kv_ts_api:api_call_to_perm(list_keys), Table}};
+            #tscoveragereq{table = Table} ->
+                {ok, Msg, {riak_kv_ts_api:api_call_to_perm(coverage), Table}}
+        end,
+    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
+    riak_kv_ts_util:check_table_feature_supported(DDLRecCap, DecodedReq).
 
 -spec encode(tuple()) -> {ok, iolist()}.
 encode(Message) ->

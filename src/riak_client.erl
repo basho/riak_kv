@@ -95,8 +95,10 @@ normal_get(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}) ->
     ReqId = mk_reqid(),
     case node() of
         Node ->
-            riak_kv_get_fsm:start_link({raw, ReqId, Me}, Bucket, Key, Options);
+            riak_kv_get_fsm:start({raw, ReqId, Me}, Bucket, Key, Options);
         _ ->
+            %% Still using the deprecated `start_link' alias for `start' here, in
+            %% case the remote node is pre-2.2:
             proc_lib:spawn_link(Node, riak_kv_get_fsm, start_link,
                                 [{raw, ReqId, Me}, Bucket, Key, Options])
     end,
@@ -209,8 +211,10 @@ normal_put(RObj, Options, {?MODULE, [Node, ClientId]}) ->
         undefined ->
             case node() of
                 Node ->
-                    riak_kv_put_fsm:start_link({raw, ReqId, Me}, RObj, Options);
+                    riak_kv_put_fsm:start({raw, ReqId, Me}, RObj, Options);
                 _ ->
+                    %% Still using the deprecated `start_link' alias for `start'
+                    %% here, in case the remote node is pre-2.2:
                     proc_lib:spawn_link(Node, riak_kv_put_fsm, start_link,
                                         [{raw, ReqId, Me}, RObj, Options])
             end;

@@ -42,7 +42,7 @@
 
 %% API
 -export([start_link/0, get_stats/0,
-         update/1, perform_update/1, register_stats/0, produce_stats/0,
+         update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1, produce_stats/0,
          leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
@@ -63,6 +63,10 @@ start_link() ->
 
 register_stats() ->
     riak_core_stat:register_stats(?APP, stats()).
+
+unregister_vnode_stats(Index) ->
+    unregister_per_index(gets, Index),
+    unregister_per_index(puts, Index).
 
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
@@ -296,6 +300,9 @@ do_update({fsm_destroy, Type}) ->
     exometer:update([?PFX, ?APP, Type, fsm, active], -1);
 do_update({Type, actor_count, Count}) ->
     exometer:update([?PFX, ?APP, Type, actor_count], Count);
+do_update({Type, bytes, Bytes}) ->
+    ok = exometer:update([?PFX, ?APP, Type, bytes], Bytes),
+    exometer:update([?PFX, ?APP, Type, bytes, total], Bytes);
 do_update(late_put_fsm_coordinator_ack) ->
     exometer:update([?PFX, ?APP, late_put_fsm_coordinator_ack], 1);
 do_update({consistent_get, _Bucket, Microsecs, undefined}) ->
@@ -343,6 +350,12 @@ do_per_index(Op, Idx, USecs) ->
     P = riak_core_stat:prefix(),
     create_or_update([P, ?APP, vnode, Op, IdxAtom], 1, spiral),
     create_or_update([P, ?APP, vnode, Op, time, IdxAtom], USecs, histogram).
+
+unregister_per_index(Op, Idx) ->
+    IdxAtom = list_to_atom(integer_to_list(Idx)),
+    P = riak_core_stat:prefix(),
+    exometer:delete([P, ?APP, vnode, Op, IdxAtom]),
+    exometer:delete([P, ?APP, vnode, Op, time, IdxAtom]).
 
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
@@ -443,7 +456,9 @@ create_or_update(Name, UpdateVal, Type) ->
 %% stats that we can register at start up
 stats() ->
     Pfx = riak_core_stat:prefix(),
-    [{[vnode, gets], spiral, [], [{one  , vnode_gets},
+
+    [%% vnode stats
+     {[vnode, gets], spiral, [], [{one  , vnode_gets},
                                   {count, vnode_gets_total}]},
      {[vnode, gets, time], histogram, [], [{mean  , vnode_get_fsm_time_mean},
                                            {median, vnode_get_fsm_time_median},
@@ -483,6 +498,13 @@ stats() ->
                                                   {95    , vnode_set_update_time_95},
                                                   {99    , vnode_set_update_time_99},
                                                   {max   , vnode_set_update_time_100}]},
+     {[vnode, hll, update], spiral, [], [{one  , vnode_hll_update},
+                                         {count, vnode_hll_update_total}]},
+     {[vnode, hll, update, time], histogram, [], [{mean  , vnode_hll_update_time_mean},
+                                                  {median, vnode_hll_update_time_median},
+                                                  {95    , vnode_hll_update_time_95},
+                                                  {99    , vnode_hll_update_time_99},
+                                                  {max   , vnode_hll_update_time_100}]},
      {[vnode, map, update], spiral, [], [{one  , vnode_map_update},
                                          {count, vnode_map_update_total}]},
      {[vnode, map, update, time], histogram, [], [{mean  , vnode_map_update_time_mean},
@@ -490,6 +512,8 @@ stats() ->
                                                   {95    , vnode_map_update_time_95},
                                                   {99    , vnode_map_update_time_99},
                                                   {max   , vnode_map_update_time_100}]},
+
+     %% node stats: gets
      {[node, gets], spiral, [], [{one  , node_gets},
                                  {count, node_gets_total}]},
      {[node, gets, fsm, active], counter, [], [{value, node_get_fsm_active}]},
@@ -552,6 +576,25 @@ stats() ->
                                                {95    , node_get_fsm_set_time_95},
                                                {99    , node_get_fsm_set_time_99},
                                                {max   , node_get_fsm_set_time_100}]},
+     {[node, gets, hll], spiral, [], [{one  , node_gets_hll},
+                                      {count, node_gets_hll_total}]},
+     {[node, gets, hll, objsize], histogram, [], [{mean  , node_get_fsm_hll_objsize_mean},
+                                                  {median, node_get_fsm_hll_objsize_median},
+                                                  {95    , node_get_fsm_hll_objsize_95},
+                                                  {99    , node_get_fsm_hll_objsize_99},
+                                                  {max   , node_get_fsm_hll_objsize_100}]},
+     {[node, gets, hll, read_repairs], spiral, [], [{one  , read_repairs_hll},
+                                                    {count, read_repairs_hll_total}]},
+     {[node, gets, hll, siblings], histogram, [], [{mean  , node_get_fsm_hll_siblings_mean},
+                                                   {median, node_get_fsm_hll_siblings_median},
+                                                   {95    , node_get_fsm_hll_siblings_95},
+                                                   {99    , node_get_fsm_hll_siblings_99},
+                                                   {max   , node_get_fsm_hll_siblings_100}]},
+     {[node, gets, hll, time], histogram, [], [{mean  , node_get_fsm_hll_time_mean},
+                                               {median, node_get_fsm_hll_time_median},
+                                               {95    , node_get_fsm_hll_time_95},
+                                               {99    , node_get_fsm_hll_time_99},
+                                               {max   , node_get_fsm_hll_time_100}]},
      {[node, gets, map], spiral, [], [{one  , node_gets_map},
                                       {count, node_gets_map_total}]},
      {[node, gets, map, objsize], histogram, [], [{mean  , node_get_fsm_map_objsize_mean},
@@ -571,6 +614,8 @@ stats() ->
                                                {95    , node_get_fsm_map_time_95},
                                                {99    , node_get_fsm_map_time_99},
                                                {max   , node_get_fsm_map_time_100}]},
+
+     %% node stats: puts
      {[node, puts], spiral, [], [{one, node_puts},
                                  {count, node_puts_total}]},
      {[node, puts, coord_redirs], counter, [], [{value,coord_redirs_total}]},
@@ -595,6 +640,13 @@ stats() ->
                                                {95    , node_put_fsm_set_time_95},
                                                {99    , node_put_fsm_set_time_99},
                                                {max   , node_put_fsm_set_time_100}]},
+     {[node, puts, hll], spiral, [], [{one  , node_puts_hll},
+                                      {count, node_puts_hll_total}]},
+     {[node, puts, hll, time], histogram, [], [{mean  , node_put_fsm_hll_time_mean},
+                                               {median, node_put_fsm_hll_time_median},
+                                               {95    , node_put_fsm_hll_time_95},
+                                               {99    , node_put_fsm_hll_time_99},
+                                               {max   , node_put_fsm_hll_time_100}]},
      {[node, puts, map], spiral, [], [{one  , node_puts_map},
                                       {count, node_puts_map_total}]},
      {[node, puts, map, time], histogram, [], [{mean  , node_put_fsm_map_time_mean},
@@ -602,6 +654,8 @@ stats() ->
                                                {95    , node_put_fsm_map_time_95},
                                                {99    , node_put_fsm_map_time_99},
                                                {max   , node_put_fsm_map_time_100}]},
+
+     %% index & list{keys,buckets} stats
      {[index, fsm, create], spiral, [], [{one, index_fsm_create}]},
      {[index, fsm, create, error], spiral, [], [{one, index_fsm_create_error}]},
      {[index, fsm, active], counter, [], [{value, index_fsm_active}]},
@@ -610,6 +664,8 @@ stats() ->
      {[list, fsm, create, error], spiral, [], [{one  , list_fsm_create_error},
                                                {count, list_fsm_create_error_total}]},
      {[list, fsm, active], counter, [], [{value, list_fsm_active}]},
+
+     %% misc stats
      {mapper_count, counter, [], [{value, executing_mappers}]},
      {precommit_fail, counter, [], [{value, precommit_fail}]},
      {postcommit_fail, counter, [], [{value, postcommit_fail}]},
@@ -617,6 +673,8 @@ stats() ->
      {[vnode, backend, leveldb, read_block_error],
       {function, ?MODULE, leveldb_read_block_errors, [], match, value}, [],
       [{value, leveldb_read_block_error}]},
+
+     %% datatype stats
      {[counter, actor_count], histogram, [], [{mean  , counter_actor_counts_mean},
                                               {median, counter_actor_counts_median},
                                               {95    , counter_actor_counts_95},
@@ -632,6 +690,13 @@ stats() ->
                                           {95    , map_actor_counts_95},
                                           {99    , map_actor_counts_99},
                                           {max   , map_actor_counts_100}]},
+     {[hll, bytes], spiral, [], [{one  , hll_bytes},
+                                 {count, hll_bytes_total}]},
+     {[hll, bytes, total], histogram, [], [{mean  , hll_bytes_mean},
+                                           {median, hll_bytes_median},
+                                           {95    , hll_bytes_95},
+                                           {99    , hll_bytes_99},
+                                           {max   , hll_bytes_100}]},
      {[object, merge], spiral, [], [{one  , object_merge},
                                     {count, object_merge_total}]},
      {[object, merge, time], histogram, [], [{mean  , object_merge_time_mean},
@@ -653,6 +718,13 @@ stats() ->
                                                   {95    , object_set_merge_time_95},
                                                   {99    , object_set_merge_time_99},
                                                   {max   , object_set_merge_time_100}]},
+     {[object, hll, merge], spiral, [], [{one  , object_hll_merge},
+                                         {count, object_hll_merge_total}]},
+     {[object, hll, merge, time], histogram, [], [{mean  , object_hll_merge_time_mean},
+                                                  {median, object_hll_merge_time_median},
+                                                  {95    , object_hll_merge_time_95},
+                                                  {99    , object_hll_merge_time_99},
+                                                  {max   , object_hll_merge_time_100}]},
      {[object, map, merge], spiral, [], [{one  , object_map_merge},
                                          {count, object_map_merge_total}]},
      {[object, map, merge, time], histogram, [], [{mean  , object_map_merge_time_mean},
@@ -661,6 +733,8 @@ stats() ->
 						  {99    , object_map_merge_time_99},
 						  {max   , object_map_merge_time_100}]},
      {late_put_fsm_coordinator_ack, counter, [], [{value, late_put_fsm_coordinator_ack}]},
+
+     %% strong-consistency stats
      {[consistent, gets], spiral, [], [{one, consistent_gets},
                                        {count, consistent_gets_total}]},
      {[consistent, gets, time], histogram, [], [{mean  , consistent_get_time_mean},
@@ -685,6 +759,8 @@ stats() ->
                                                    {95    , consistent_put_objsize_95},
                                                    {99    , consistent_put_objsize_99},
                                                    {max   , consistent_put_objsize_100}]},
+
+     %% write-once stats
      {[write_once, puts], spiral, [], [{one, write_once_puts},
                                        {count, write_once_puts_total}]},
      {[write_once, puts, time], histogram, [], [{mean  , write_once_put_time_mean},
@@ -697,6 +773,7 @@ stats() ->
                                                    {95    , write_once_put_objsize_95},
                                                    {99    , write_once_put_objsize_99},
                                                    {max   , write_once_put_objsize_100}]},
+
      {[storage_backend], {function, app_helper, get_env, [riak_kv, storage_backend], match, value},
       [], [{value, storage_backend}]},
      {[ring_stats], {function, riak_kv_stat_bc, ring_stats, [], proplist, [ring_members,

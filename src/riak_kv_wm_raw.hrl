@@ -26,6 +26,7 @@
 -define(MD_TS_LOCAL_KEY, <<"timeseries-local-key">>).
 -define(MD_DDL_VERSION,  <<"ddl">>).
 -define(MD_DELETED,  <<"X-Riak-Deleted">>).
+-define(MD_VAL_ENCODING, <<"X-Riak-Val-Encoding">>).
 
 %% for the first DDL version we just brute force it to 1
 -define(DDL_VERSION, 1).
@@ -60,6 +61,7 @@
 -define(JSON_EXTRACT, <<"search_extractor">>).
 -define(JSON_EXTRACT_LEGACY, <<"rs_extractfun">>).
 -define(JSON_DATATYPE, <<"datatype">>).
+-define(JSON_HLL_PRECISION, <<"hll_precision">>).
 
 %% Names of HTTP query parameters
 -define(Q_PROPS, "props").
