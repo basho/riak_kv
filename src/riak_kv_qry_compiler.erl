@@ -367,7 +367,7 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
 
 %%
 -spec infer_col_type(?DDL{}, riak_ql_ddl:selection(), Errors1::[any()]) ->
-        {Type::riak_ql_ddl:simple_field_type() | error, Errors2::[any()]}.
+        {Type::riak_ql_ddl:external_field_type() | error, Errors2::[any()]}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
     {Type, Errors};

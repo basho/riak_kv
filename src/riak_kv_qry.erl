@@ -95,7 +95,7 @@ do_insert(#riak_sql_insert_v1{'INSERT' = Table,
     case lookup_field_positions(Mod, Fields) of
         {ok, Positions} ->
             Empty = make_empty_row(Mod),
-            Types = [catch Mod:get_field_type([Column]) || {identifier, [Column]} <- Fields],
+            Types = [catch riak_qql_ddl:get_storage_type(Mod:get_field_type([Column])) || {identifier, [Column]} <- Fields],
             try xlate_insert_to_putdata(Values, Positions, Empty, Types) of
                 {ok, Data} ->
                     insert_putreqs(Mod, Table, Data);
@@ -171,7 +171,7 @@ lookup_field_positions(Mod, FieldIdentifiers) ->
 %% post-processing step on Data, to avoid another round of
 %% list_to_tuple(tuple_to_list())
 -spec xlate_insert_to_putdata([[riak_ql_ddl:data_value()]], [pos_integer()], tuple(undefined),
-                              [riak_ql_ddl:simple_field_type()]) ->
+                              [riak_ql_ddl:internal_field_type()]) ->
                               {ok, [tuple()]} | {error, string()}.
 xlate_insert_to_putdata(Values, Positions, Empty, FieldTypes) ->
     ConvFn = fun(RowVals, {Good, Bad, RowNum}) ->
@@ -191,7 +191,7 @@ xlate_insert_to_putdata(Values, Positions, Empty, FieldTypes) ->
     end.
 
 -spec make_insert_row([riak_ql_ddl:data_value()], [pos_integer()], tuple(),
-                      [riak_ql_ddl:simple_field_type()]) ->
+                      [riak_ql_ddl:internal_field_type()]) ->
                       {ok, tuple()} | {error, string()} |
                       {error, {atom(), string()}}.
 make_insert_row(Vals, _Positions, Row, _FieldTypes)
