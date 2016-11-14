@@ -163,10 +163,6 @@ start(_Type, _StartArgs) ->
                                            mapred_2i_pipe,
                                            [{true, true}, {false, false}]}),
 
-            riak_core_capability:register({riak_kv, anti_entropy},
-                                          [enabled_v1, disabled],
-                                          disabled),
-
             riak_core_capability:register({riak_kv, handoff_data_encoding},
                                           [encode_raw, encode_zlib],
                                           encode_zlib),
@@ -200,10 +196,6 @@ start(_Type, _StartArgs) ->
             riak_core_capability:register({riak_kv, put_fsm_ack_execute},
                                           [enabled, disabled],
                                           disabled),
-
-            riak_core_capability:register({riak_kv, object_hash_version},
-                                          [0, legacy],
-                                          legacy),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
