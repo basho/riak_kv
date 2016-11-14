@@ -111,6 +111,11 @@
           'DESCRIBE'    = <<>>  :: binary()
         }).
 
+-record(riak_sql_show_create_table_v1,
+        {
+            'SHOW_CREATE_TABLE' = <<>> :: binary()
+        }).
+
 -record(riak_sql_insert_v1,
         {
           'INSERT'      = <<>>  :: binary(),

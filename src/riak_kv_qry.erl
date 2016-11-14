@@ -35,13 +35,14 @@
 
 %% enumerate all current SQL query types
 -type query_type() ::
-        ddl | explain | describe | insert | select | show_tables.
+        ddl | explain | describe | insert | select | show_tables | show_create_table.
 %% and also their corresponding records (mainly for use in specs)
 -type sql_query_type_record() ::
         ?SQL_SELECT{} |
         #riak_sql_describe_v1{} |
         #riak_sql_insert_v1{} |
-        #riak_sql_show_tables_v1{}.
+        #riak_sql_show_tables_v1{} |
+        #riak_sql_show_create_table_v1{}.
 
 -type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
                                  [riak_pb_ts_codec:tscolumntype()],
@@ -72,6 +73,9 @@ submit(SQLString, DDL) when is_list(SQLString) ->
 
 submit(#riak_sql_describe_v1{}, DDL) ->
     riak_ql_describe:describe(DDL);
+submit(#riak_sql_show_create_table_v1{}, ?DDL{table = Table} = DDL) ->
+    Props = riak_core_bucket:get_bucket({Table, Table}),
+    riak_ql_show_create_table:show_create_table(DDL, Props);
 submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
     do_insert(SQL);
 submit(SQL = ?SQL_SELECT{}, DDL) ->
