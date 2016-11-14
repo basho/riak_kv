@@ -66,7 +66,7 @@ submit(SQLString, DDL) when is_list(SQLString) ->
         {ok, Compiled} ->
             Type = proplists:get_value(type, Compiled),
             {ok, SQL} = riak_kv_ts_util:build_sql_record(
-                Type, Compiled, undefined),
+                Type, Compiled, []),
             submit(SQL, DDL)
     end;
 
@@ -227,21 +227,69 @@ maybe_convert_timestamp({_NonTSType, Val}, _OtherType) ->
                        {ok, query_tabular_result()} | {error, term()}.
 do_select(SQL, ?DDL{table = BucketType} = DDL) ->
     Mod = riak_ql_ddl:make_module_name(BucketType),
-    MaxSubQueries =
-        app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
 
     case riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(SQL)) of
         true ->
-            case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
+            case riak_kv_qry_compiler:compile(DDL, SQL) of
                 {error,_} = Error ->
                     Error;
                 {ok, SubQueries} ->
-                    maybe_await_query_results(
-                      riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL))
+                    %% these fields are used to create a DDL for the query buffer table;
+                    %% we extract them here to avoid doing another compilation of OrigQry
+                    %% in riak_kv_qry_buffers:get_or_create_qbuf
+                    ?SQL_SELECT{'SELECT' = CompiledSelect,
+                                'ORDER BY' = CompiledOrderBy} = hd(SubQueries),
+                    FullCycle =
+                        fun(QBufRef) ->
+                            maybe_await_query_results(
+                              riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL, QBufRef))
+                        end,
+                    case maybe_create_query_buffer(
+                           SQL, length(SubQueries), CompiledSelect, CompiledOrderBy, []) of
+                        {error, Reason} ->
+                            %% query buffers are non-optional for
+                            %% ORDER BY queries
+                            {error, {qbuf_create_error, Reason}};
+                        {ok, undefined} ->
+                            %% query buffer path not advisable (query
+                            %% has no ORDER BY)
+                            FullCycle(undefined);
+                        {ok, {new, QBufRef}} ->
+                            %% query is eligible, and new buffer is ready
+                            FullCycle(QBufRef);
+                        {ok, {existing, QBufRef}} ->
+                            %% query is eligible AND it is a follow-up
+                            %% query: yay results!
+                            riak_kv_qry_buffers:fetch_limit(
+                              QBufRef,
+                              riak_kv_qry_buffers:limit_to_scalar(SQL?SQL_SELECT.'LIMIT'),
+                              riak_kv_qry_buffers:offset_to_scalar(SQL?SQL_SELECT.'OFFSET'))
+                    end
             end;
         {false, Errors} ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}
     end.
+
+
+-spec maybe_create_query_buffer(?SQL_SELECT{}, pos_integer(),
+                                #riak_sel_clause_v1{}, [riak_kv_qry_compiler:sorter()],
+                                proplists:proplist()) ->
+                                       {ok, {new|existing, riak_kv_qry_buffers:qbuf_ref()} |
+                                             undefined} |
+                                       {error, any()}.
+maybe_create_query_buffer(?SQL_SELECT{'ORDER BY' = []},  %% LIMIT implies ORDER BY
+                          _NSubQueries, _CompiledSelect, _CompiledOrderBy, _Options) ->
+    {ok, undefined};
+maybe_create_query_buffer(SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) ->
+    case riak_kv_qry_buffers:get_or_create_qbuf(
+           SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) of
+        {ok, QBufRefNewOrExisting} ->
+            {ok, QBufRefNewOrExisting};
+        {error, Reason} ->
+            lager:warning("Failed to set up query buffer for ~p: ~p", [SQL, Reason]),
+            {error, Reason}
+    end.
+
 
 maybe_await_query_results({error,_} = Error) ->
     Error;
@@ -344,7 +392,7 @@ explain_query_test() ->
     riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND f='adios'))",
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
-    {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, undefined),
+    {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, []),
     meck:new(riak_client),
     meck:new(riak_core_apl),
     meck:new(riak_core_bucket),
@@ -437,7 +485,7 @@ good_timestamp_insert_test() ->
         "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
     Lexed = riak_ql_lexer:get_tokens(GoodInsert),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    {ok, Insert} = riak_kv_ts_util:build_sql_record(insert, Q, undefined),
+    {ok, Insert} = riak_kv_ts_util:build_sql_record(insert, Q, []),
     Res = xlate_insert_to_putdata(
             Insert#riak_sql_insert_v1.values,
             [1,2,3], {undefined, undefined, undefined},
