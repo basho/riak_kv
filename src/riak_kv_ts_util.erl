@@ -702,9 +702,10 @@ extract_time_boundaries(FieldName, WhereList) ->
 %% cluster and the decoded request, check if the table features are supported
 %% in the cluster.
 -spec check_table_feature_supported(DDLRecCap::atom(),
-                                    DecodedReq::ts_service_req()) -> ts_service_req() | {error, string()}.
+                                    DecodedReq::ts_service_req()) -> boolean() | {error, string()}.
 check_table_feature_supported(DDLRecCap, DecodedReq) ->
     case DecodedReq of
+        Error = {error, _Reason} -> Error;
         {ok, {?DDL{} = DDL, _}, {_, Table}} ->
             %% CREATE TABLE requires a separate path because there is no helper
             %% module yet to check the min required ddl capability, so just
@@ -712,19 +713,19 @@ check_table_feature_supported(DDLRecCap, DecodedReq) ->
             MinCap = riak_ql_ddl:get_minimum_capability(DDL),
             case is_ddl_version_supported(MinCap, DDLRecCap) of
                 true ->
-                    DecodedReq;
+                    true;
                 false ->
                     {error, create_table_not_supported_message(Table)}
             end;
         {ok, _, {_, Table}} ->
             case is_table_supported(DDLRecCap, Table) of
                 true ->
-                    DecodedReq;
+                    true;
                 false ->
                     {error, table_not_supported_message(Table)}
             end;
         _ ->
-            DecodedReq
+            true
     end.
 
 %%
@@ -1022,8 +1023,8 @@ check_table_feature_supported_is_supported_v1_test() ->
     {module, _Mod} = helper_sql_to_module(Table),
     DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_is_supported_v1_test">>}},
     ?assertEqual(
-        DecodedReq,
-        check_table_feature_supported(v1, DecodedReq)
+       true,
+       check_table_feature_supported(v1, DecodedReq)
     ).
 
 check_table_feature_supported_is_supported_v2_test() ->
@@ -1036,8 +1037,8 @@ check_table_feature_supported_is_supported_v2_test() ->
     {module, _Mod} = helper_sql_to_module(Table),
     DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_is_supported_v2_test">>}},
     ?assertEqual(
-        DecodedReq,
-        check_table_feature_supported(v2, DecodedReq)
+       true,
+       check_table_feature_supported(v2, DecodedReq)
     ).
 
 check_table_feature_supported_not_supported_test() ->

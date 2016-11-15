@@ -178,7 +178,7 @@ get_table_status_by_version(Table) ->
     Req = #tsqueryreq{},
     DecodedReq = {ok, Req, {"perm", Table}},
     case check_table_feature_supported(v2, DecodedReq) of
-        DecodedReq -> <<"Active">>;
+        true -> <<"Active">>;
         _ -> <<"Not Active">>
     end.
 
@@ -193,44 +193,40 @@ get_table_ddl(Table) ->
     riak_kv_ts_util:get_table_ddl(Table).
 
 -spec check_table_feature_supported(DDLRecCap::atom(),
-                                    DecodedReq::ts_service_req()) -> ts_service_req() |
+                                    DecodedReq::ts_service_req()) -> boolean() |
                                                                      {error, string()}.
 check_table_feature_supported(DDLRecCap, DecodedReq) ->
     riak_kv_ts_util:check_table_feature_supported(DDLRecCap, DecodedReq).
 
 -else.
-expected_table_status(Table) when Table =:= <<"my_type2">> ->
+expected_table_status(<<"my_type2">>) ->
     <<"Not Active">>;
-expected_table_status(Table) when Table =:= <<"my_type4">> ->
+expected_table_status(<<"my_type4">>) ->
     <<"Not Active">>;
-expected_table_status(Table) when Table =:= <<"my_type5">> ->
+expected_table_status(<<"my_type5">>) ->
     <<"Not Active">>;
 expected_table_status(_Table) ->
     <<"Active">>.
 
-get_table_ddl(Table) when Table =:= <<"my_type4">> ->
+get_table_ddl(<<"my_type4">>) ->
     {error, no_type};
-get_table_ddl(Table) when Table =:= <<"my_type5">> ->
+get_table_ddl(<<"my_type5">>) ->
     {error, missing_helper_module};
 get_table_ddl(_Table) ->
     Module = {}, %% not used by caller
     DDL = {}, %% not used by caller
     {ok, Module, DDL}.
 
-check_table_feature_supported(DDLRecCap, DecodedReq={ok, _Req, {"perm", Table}}) when
-      Table =:= <<"my_type1">> orelse
-      Table =:= <<"my_type3">> orelse
-      Table =:= <<"my_type4">> orelse
-      Table =:= <<"my_type5">>
-      ->
-    check_table_feature_supported_active(DDLRecCap, DecodedReq);
+check_table_feature_supported(DDLRecCap, DecodedReq={ok, _Req, {_Perm, Table}})
+  when Table =:= <<"my_type2">> ->
+    check_table_feature_supported_not_active(DDLRecCap, DecodedReq);
 check_table_feature_supported(DDLRecCap, DecodedReq) ->
-    check_table_feature_supported_not_active(DDLRecCap, DecodedReq).
+    check_table_feature_supported_active(DDLRecCap, DecodedReq).
 
-check_table_feature_supported_active(_DDLRecCap, DecodedReq) ->
-    DecodedReq.
+check_table_feature_supported_active(_DDLRecCap, _DecodedReq) ->
+    true.
 check_table_feature_supported_not_active(_DDLRecCap, _DecodedReq) ->
-    {notok}.
+    {error, "The table is not active"}.
 -endif.
 %% / Forwards/Mocks for getting table status, isolating the interaction for testability
 
