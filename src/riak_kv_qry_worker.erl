@@ -40,7 +40,13 @@
          handle_cast/2,
          handle_info/2,
          terminate/2,
-         code_change/3
+         code_change/3,
+
+	 %% decode_results exported because it may be used in
+	 %% riak_kv_vnode to pre-decode query results at the vnode
+	 %% rather than here
+
+	 decode_results/1 
         ]).
 
 -include("riak_kv_ts.hrl").
@@ -325,7 +331,13 @@ add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
 run_select_on_chunk(SubQId, Chunk, #state{qry = Query,
                                           result = QueryResult1,
                                           qbuf_ref = QBufRef}) ->
-    DecodedChunk = decode_results(lists:flatten(Chunk)),
+
+    %% Return decoded_results for this chunk.  We delegate this to a
+    %% helper function that determines whether the results have
+    %% already been decoded by the sending vnode
+
+    DecodedChunk = get_decoded_results(Chunk),
+
     SelClause = sql_select_clause(Query),
     case sql_select_calc_type(Query) of
         rows ->
@@ -338,6 +350,19 @@ run_select_on_chunk(SubQId, Chunk, #state{qry = Query,
             %% ditto
             run_select_on_group(Query, SelClause, DecodedChunk, QueryResult1)
     end.
+
+%% ------------------------------------------------------------
+%% Helper function to return decoded query results for the current
+%% Chunk.  
+%%
+%% If already decoded, simply return the decoded data
+%% If not, decode and return
+%% ------------------------------------------------------------
+
+get_decoded_results({decoded, Chunk}) ->
+    Chunk;
+get_decoded_results(Chunk) ->
+    decode_results(lists:flatten(Chunk)).
 
 %%
 run_select_on_group(Query, SelClause, Chunk, QueryResult1) ->

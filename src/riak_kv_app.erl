@@ -220,6 +220,15 @@ start(_Type, _StartArgs) ->
                                           [v3,v2,v1],
                                           riak_kv_select:first_version()),
 
+	    %% Register capability to decode query results at the
+	    %% vnode.  Default will be false, causing all vnodes to
+	    %% send back encoded results, to be decoded by the
+	    %% coordinator (the behavior prior to this change)
+
+            riak_core_capability:register({riak_kv, decode_query_results_at_vnode},
+                                          [true, false],
+					  false),
+
             riak_kv_compile_tab:populate_v3_table(),
             riak_kv_ts_newtype:recompile_ddl(),
             riak_kv_ts_newtype:verify_helper_modules(),

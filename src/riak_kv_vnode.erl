@@ -995,7 +995,7 @@ handle_coverage(#riak_kv_sql_select_req_v1{bucket=Bucket,
                 FilterVNodes, Sender, State) ->
     ItemFilter = none,
     handle_range_scan(Bucket, ItemFilter, Query,
-                      FilterVNodes, Sender, State, fun result_fun_ack/2).
+                      FilterVNodes, Sender, State, fun range_scan_result_fun_ack/2).
 
 
 -spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
@@ -2034,6 +2034,58 @@ result_fun_ack(Bucket, Sender) ->
                 {Monitor, ok} ->
                     erlang:demonitor(Monitor, [flush]);
                 {Monitor, stop_fold} ->
+                    erlang:demonitor(Monitor, [flush]),
+                    throw(stop_fold);
+                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                    throw(receiver_down)
+            end
+    end.
+
+%% ------------------------------------------------------------
+%% Specialization of result_fun_ack for range scans.  
+%%
+%% This version checks the cluster capabilities for {riak_kv,
+%% decode_query_results_at_vnode}.
+%%
+%% If true (upgraded cluster where all nodes support parallel
+%% decoding), we reply with the query results already decoded, so that
+%% the work of decoding the results can be parallelized among the
+%% vnodes in the query coverage plan, instead of being serialized at
+%% the coordinating vnode.
+%%
+%% If false (mixed-mode cluster), we reply with the encoded results,
+%% as before.
+%% ------------------------------------------------------------
+
+range_scan_result_fun_ack(Bucket, Sender) ->
+    fun(Items) ->
+            Monitor = riak_core_vnode:monitor(Sender),
+
+	    %% Check capabilities.  If upgraded, decode the results
+	    %% here.  If mixed, delegate decoding to the coordinator,
+	    %% as before
+
+	    case riak_core_capability:get({riak_kv, sql_select_decode_results}) of
+		true ->
+		    DecodedItems = riak_kv_qry_worker:decode_results(lists:flatten(Items)),
+
+		    %% Instead of simply sending the DecodedItems as the
+		    %% payload, we send a tuple indicating that the items have
+		    %% already been decoded.  This allows the receiver to
+		    %% distinguish between results that have already been
+		    %% decoded by the vnode (new behavior indicated by
+		    %% {riak_kv, sql_select_decode_results} capability), and
+		    %% results that have not (TS behavior up to this change)
+
+		    riak_core_vnode:reply(Sender, {{self(), Monitor}, Bucket, {decoded, DecodedItems}});
+		_ ->
+		    riak_core_vnode:reply(Sender, {{self(), Monitor}, Bucket, Items})
+	    end,
+
+	    receive
+                {Monitor, ok} ->
+		    erlang:demonitor(Monitor, [flush]);
+		{Monitor, stop_fold} ->
                     erlang:demonitor(Monitor, [flush]),
                     throw(stop_fold);
                 {'DOWN', Monitor, process, _Pid, _Reason} ->
