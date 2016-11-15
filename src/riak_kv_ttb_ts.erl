@@ -59,10 +59,7 @@ decode(?TTB_MSG_CODE, Bin) ->
                 {ok, Msg, {riak_kv_ts_api:api_call_to_perm(put), Table}}
         end,
     DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
-    case riak_kv_ts_util:check_table_feature_supported(DDLRecCap, DecodedReq) of
-        true -> DecodedReq;
-        Error = {error, _Reason} -> Error
-    end.
+    riak_kv_ts_util:check_table_feature_supported(DDLRecCap, DecodedReq).
 
 -spec encode(tuple()) -> {ok, iolist()}.
 encode(Message) ->

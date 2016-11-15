@@ -175,28 +175,21 @@ get_table_status(Table) ->
     end.
 
 get_table_status_by_version(Table) ->
-    Req = #tsqueryreq{},
-    DecodedReq = {ok, Req, {"perm", Table}},
-    case check_table_feature_supported(v2, DecodedReq) of
+    case is_table_supported(v2, Table) of
         true -> <<"Active">>;
         _ -> <<"Not Active">>
     end.
 
 %% Forwards/Mocks for getting table status, isolating the interaction for testability
 -ifndef(TEST).
--type ts_service_req() ::
-    {ok, riak_kv_ts_svc:ts_requests(), {PermSpec::string(), Table::binary()}}.
-
--spec get_table_ddl(binary()) ->
-    {ok, module(), ?DDL{}} | {error, term()}.
 get_table_ddl(Table) ->
     riak_kv_ts_util:get_table_ddl(Table).
 
--spec check_table_feature_supported(DDLRecCap::atom(),
-                                    DecodedReq::ts_service_req()) -> boolean() |
-                                                                     {error, string()}.
-check_table_feature_supported(DDLRecCap, DecodedReq) ->
-    riak_kv_ts_util:check_table_feature_supported(DDLRecCap, DecodedReq).
+-spec is_table_supported(DDLRecCap::atom(),
+                         Table::binary()) -> boolean() |
+                                             {error, string()}.
+is_table_supported(DDLRecCap, Table) ->
+    riak_kv_ts_util:is_table_supported(DDLRecCap, Table).
 
 -else.
 expected_table_status(<<"my_type2">>) ->
@@ -217,15 +210,14 @@ get_table_ddl(_Table) ->
     DDL = {}, %% not used by caller
     {ok, Module, DDL}.
 
-check_table_feature_supported(DDLRecCap, DecodedReq={ok, _Req, {_Perm, Table}})
-  when Table =:= <<"my_type2">> ->
-    check_table_feature_supported_not_active(DDLRecCap, DecodedReq);
-check_table_feature_supported(DDLRecCap, DecodedReq) ->
-    check_table_feature_supported_active(DDLRecCap, DecodedReq).
+is_table_supported(DDLRecCap, Table = <<"my_type2">>) ->
+    is_table_supported_not_active(DDLRecCap, Table);
+is_table_supported(DDLRecCap, Table) ->
+    is_table_supported_active(DDLRecCap, Table).
 
-check_table_feature_supported_active(_DDLRecCap, _DecodedReq) ->
+is_table_supported_active(_DDLRecCap, _Table) ->
     true.
-check_table_feature_supported_not_active(_DDLRecCap, _DecodedReq) ->
+is_table_supported_not_active(_DDLRecCap, _Table) ->
     {error, "The table is not active"}.
 -endif.
 %% / Forwards/Mocks for getting table status, isolating the interaction for testability
