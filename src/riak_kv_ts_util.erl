@@ -495,7 +495,12 @@ explain_compile_query(QueryString) ->
 explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
                                            'WHERE' = SubQueryWhere,
                                            helper_mod = HelperMod,
-                                           partition_key = PartitionKey}) ->
+                                           partition_key = PartitionKey,
+                                           'SELECT' = #riak_sel_clause_v1{
+                                                         col_names=ColNames,
+                                                         col_return_types=ColTypes},
+
+}) ->
     CoverKey = riak_kv_qry_coverage_plan:make_key(HelperMod, PartitionKey, SubQueryWhere),
     Coverage = format_coverage(Table, CoverKey, NVal),
     {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
@@ -505,13 +510,14 @@ explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
     EndKey2 = string:join([key_to_string(Key) || Key <- EndKey1], ", "),
     StartInclusive = lists:keymember(start_inclusive, 1, StartKey1),
     EndInclusive = lists:keymember(end_inclusive, 1, EndKey1),
+    ColumnTypes = lists:zip(ColNames, ColTypes),
     [Index,
      list_to_binary(Coverage),
      list_to_binary(StartKey2),
      StartInclusive,
      list_to_binary(EndKey2),
      EndInclusive,
-     list_to_binary(filter_to_string(Filter))].
+     list_to_binary(filter_to_string(Filter, ColumnTypes))].
 
 %%
 format_coverage(Table, CoverKey, NVal) ->
@@ -534,28 +540,36 @@ key_element_to_string(V) -> lists:flatten(io_lib:format("~p", [V])).
 
 %%
 %% This one quotes values which should be quoted for assignment
-element_to_quoted_string(V) when is_binary(V) -> varchar_quotes(V);
-element_to_quoted_string(V) when is_float(V) -> mochinum:digits(V);
-element_to_quoted_string(V) -> lists:flatten(io_lib:format("~p", [V])).
+element_to_quoted_string(V, blob) -> hex_as_string(hexlify(V));
+element_to_quoted_string(V, varchar)  -> varchar_quotes(V);
+element_to_quoted_string(V, _Type) when is_float(V) -> mochinum:digits(V);
+element_to_quoted_string(V, _Type) -> lists:flatten(io_lib:format("~p", [V])).
+
+hex_as_string(Bin) ->
+    lists:flatten(io_lib:format("0x~s~n", [Bin])).
+
+hexlify(Bin) when is_binary(Bin) ->
+    << <<(hex(H)),(hex(L))>> || <<H:4,L:4>> <= Bin >>.
+
+hex(C) when C < 10 -> $0 + C;
+hex(C) -> $a + C - 10.
 
 %%
--spec key_to_string({binary(),any(),term()}) -> string().
-key_to_string({Field, _Op, Value}) ->
+-spec key_to_string({binary(),riak_ql_ddl:external_field_type(),term()}) -> string().
+key_to_string({Field, Type, Value}) ->
     lists:flatten(io_lib:format("~s = ~s",
-        [key_element_to_string(Field), element_to_quoted_string(Value)])).
+        [key_element_to_string(Field), element_to_quoted_string(Value, Type)])).
 
 %%
--spec filter_to_string([]| {const,any()} | {atom(),any(),any()}) ->
+-spec filter_to_string([]| {atom(),tuple(),tuple()},
+                       [{binary(), atom()}]) ->
     string().
-filter_to_string([]) ->
+filter_to_string([], _Types) ->
     [];
-filter_to_string({const,V}) ->
-    element_to_quoted_string(V);
-filter_to_string({field,V,_}) ->
-    key_element_to_string(V);
-filter_to_string({Op, A, B}) ->
+filter_to_string({Op, {field,F,_}, {const,V}}, Types) ->
+    Type = proplists:get_value(F, Types),
     lists:flatten(io_lib:format("(~s~s~s)",
-        [filter_to_string(A), op_to_string(Op), filter_to_string(B)])).
+        [key_element_to_string(F), op_to_string(Op), element_to_quoted_string(V, Type)])).
 
 %%
 op_to_string(and_) -> " AND ";
