@@ -498,7 +498,7 @@ explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
                                            partition_key = PartitionKey,
                                            'SELECT' = #riak_sel_clause_v1{
                                                          col_names=ColNames,
-                                                         col_return_types=ColTypes},
+                                                         col_return_types=ColTypes}
 
 }) ->
     CoverKey = riak_kv_qry_coverage_plan:make_key(HelperMod, PartitionKey, SubQueryWhere),
