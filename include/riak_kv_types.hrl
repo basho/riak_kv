@@ -17,6 +17,8 @@
 -define(HLL_TYPE(Val), #crdt{mod=?HLL_TYPE,
                              ctype="application/riak_hll",
                              value=Val}).
+-define(GSET_TYPE, riak_dt_gset).
+-define(GSET_TYPE(Val), #crdt{mod=?GSET_TYPE, ctype="application/riak_gset", value=Val}).
 
 -define(MAP_TYPE, riak_dt_map).
 -define(MAP_TYPE(Val), #crdt{mod=?MAP_TYPE, ctype="application/riak_map", value=Val}).
@@ -29,15 +31,17 @@
 -define(V1_TOP_LEVEL_TYPES, [pncounter]).
 -define(V2_TOP_LEVEL_TYPES, [?COUNTER_TYPE, ?SET_TYPE, ?MAP_TYPE]).
 -define(V3_TOP_LEVEL_TYPES, [?HLL_TYPE]).
+-define(V4_TOP_LEVEL_TYPES, [?GSET_TYPE]).
 -define(TOP_LEVEL_TYPES, ?V1_TOP_LEVEL_TYPES ++ ?V2_TOP_LEVEL_TYPES ++
-            ?V3_TOP_LEVEL_TYPES).
+            ?V3_TOP_LEVEL_TYPES ++ ?V4_TOP_LEVEL_TYPES).
 -define(ALL_TYPES, ?TOP_LEVEL_TYPES ++ [?FLAG_TYPE, ?REG_TYPE]).
 -define(EMBEDDED_TYPES, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
                          {counter, ?EMCNTR_TYPE}, {flag, ?FLAG_TYPE},
                          {register, ?REG_TYPE}]).
 
+
 -define(MOD_MAP, [{map, ?MAP_TYPE}, {set, ?SET_TYPE},
-                  {counter, ?COUNTER_TYPE}, {hll, ?HLL_TYPE}]).
+                  {counter, ?COUNTER_TYPE}, {hll, ?HLL_TYPE}, {gset, ?GSET_TYPE}]).
 
 -define(DATATYPE_STATS_DEFAULTS, [actor_count]).
 -define(HLL_STATS, [bytes]).
@@ -51,6 +55,7 @@
                                {?SET_TYPE, 2},
                                {?COUNTER_TYPE, 2}]).
 -define(E3_DATATYPE_VERSIONS, ?E2_DATATYPE_VERSIONS ++ [{?HLL_TYPE, 1}]).
+-define(E4_DATATYPE_VERSIONS, ?E2_DATATYPE_VERSIONS ++ [{?HLL_TYPE, 1}, {?GSET_TYPE, 2}]).
 
 -type crdt() :: ?CRDT{}.
 -type crdt_op() :: ?CRDT_OP{}.
