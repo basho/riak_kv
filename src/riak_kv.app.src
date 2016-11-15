@@ -64,7 +64,6 @@
          % generate a warning in the logs
          {max_siblings, 100},
 
-
          %% @doc http_url_encoding determines how Riak treats URL encoded
          %% buckets, keys, and links over the REST API. When set to 'on' Riak
          %% always decodes encoded values sent as URLs and Headers.  Otherwise,
@@ -84,9 +83,24 @@
          %% riak_kv.schema
          {timeseries_query_timeout_ms, 10000},
 
-         {timeseries_query_max_quanta_span, 5},
+         %% max number of quanta (= subqueries) a query can span
+         {timeseries_query_max_quanta_span, 5000},
+         %% max data size a query can return to the client
+         {timeseries_query_max_returned_data_size, 1000000},
 
+         %% query buffers configuration:
+         %% where query buffers will be created
+         {timeseries_query_buffers_root_path, ""},
+         %% query buffers soft and hard watermark
+         {timeseries_query_buffers_soft_watermark, 1073741824},  %% 1*1024*1024*1024
+         {timeseries_query_buffers_hard_watermark, 4294967296},  %% 4*1024*1024*1024
+         %% expiration times
+         {timeseries_query_buffers_expire_ms, 5000},
+         {timeseries_query_buffers_incomplete_release_ms, 9000},
+
+         %% query queue limits
          {timeseries_max_concurrent_queries, 3},
+         {timeseries_query_queue_length, 15},
 
          %% Max batch size (in bytes) of data distributed between
          %% nodes during a put operation. Highly recommended that you
