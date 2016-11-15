@@ -114,7 +114,10 @@ insert_v2(BucketType, #ddl_v1{} = DDL) ->
     %% put compiling as the compile state in the old table so that
     %% it will always recompile the modules on a downgrade
     CompileState = compiling,
-    V2Row = {BucketType, DDLVersion, DDL, self(), CompileState},
+    %% the compiler pid is no longer meaningful, but v2 expects it to be unique
+    %% so just create a new one
+    CompilerPid = spawn(fun() -> ok end),
+    V2Row = {BucketType, DDLVersion, DDL, CompilerPid, CompileState},
     dets:insert(?TABLE2, V2Row),
     log_compile_tab_v2_inserted(BucketType),
     ok = dets:sync(?TABLE2).

@@ -213,7 +213,7 @@ start(_Type, _StartArgs) ->
                                            riak_ql_ddl:first_version()),
 
             riak_core_capability:register({riak_kv, sql_select_version},
-                                          [v2,v1],
+                                          [v3,v2,v1],
                                           riak_kv_select:first_version()),
 
             riak_kv_compile_tab:populate_v3_table(),

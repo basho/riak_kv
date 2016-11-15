@@ -712,16 +712,16 @@
   end}.
 
 %% @doc maximum query queue length
-{mapping, "riak_kv.query.maximum_query_queue_length", "riak_kv.query_queue_length", [
+{mapping, "riak_kv.query.maximum_query_queue_length", "riak_kv.timeseries_query_queue_length", [
   {default, 15},
   {datatype, integer},
-  {validators, ["validate_concurrent_queries"]}
+  {validators, ["validate_timeseries_query_queue_length"]}
 ]}.
 
 {validator,
-  "validate_concurrent_queries",
-  "must be an integer 0 or greater",
-  fun(Value) when is_integer(Value) andalso Value >= 0 -> true;
+  "validate_timeseries_query_queue_length",
+  "must be an integer > 0",
+  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
      (_) -> false
   end}.
 
@@ -774,20 +774,19 @@
   {validators, ["validate_max_quanta_span"]}
 ]}.
 
-%% @doc Maximum number of quanta that a query can span. Larger quanta spans
-%% mean the time duration for a query can be bigger. This is constrained to
-%% prevent excessively long running queries that could affect the performance
-%% of the cluster.
+%% @doc Maximum number of quanta that a query can span. Note that even
+%% when the number of quanta is less than this value, the query may be
+%% cancelled if the projected size of the data exceeeds @see max_returned_data_size.
 {mapping, "riak_kv.query.timeseries.max_quanta_span", "riak_kv.timeseries_query_max_quanta_span", [
-  {default, 5},
+  {default, 5000},
   {datatype, integer},
-  {validators, ["validate_max_quanta_span"]}
+  {validators, ["validate_timeseries_query_max_quanta_span"]}
 ]}.
 
 {validator,
-  "validate_max_quanta_span",
-  "must be an integer > 0 and =< 256",
-  fun(Value) when is_integer(Value) andalso Value > 1 andalso Value =< 256 -> true;
+  "validate_timeseries_query_max_quanta_span",
+  "must be an integer > 0 and =< 10000",
+  fun(Value) when is_integer(Value) andalso Value > 0 andalso Value =< 10000 -> true;
      (_) -> false
   end}.
 
@@ -799,7 +798,7 @@
     case Old of
       undefined ->
         case New of
-          undefined -> 5;
+          undefined -> 5000;
           New -> New
         end;
       Old ->
@@ -811,6 +810,20 @@
     end
   end
 }.
+
+%% @doc Largest estimated size of the data a query can return to the client.
+{mapping, "riak_kv.query.timeseries.max_returned_data_size", "riak_kv.timeseries_query_max_returned_data_size", [
+  {default, 10*1000*1000},
+  {datatype, integer},
+  {validators, ["validate_timeseries_query_max_returned_data_size"]}
+]}.
+
+{validator,
+  "validate_timeseries_query_max_returned_data_size",
+  "must be an integer > 0",
+  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
+     (_) -> false
+  end}.
 
 %% @see riak_kv.query.timeseries.max_concurrent_queries
 %% @doc The number of individual queries that can run at any one time.
@@ -860,3 +873,75 @@
   end
 }.
 
+%% @doc Root path for leveldb instances backing node-local query buffers.
+{mapping, "riak_kv.query.timeseries.qbuf_root_path", "riak_kv.timeseries_query_buffers_root_path", [
+  {datatype, directory},
+  {default, "$(platform_data_dir)/query_buffers"},
+  {validators, ["validate_timeseries_query_buffers_root_path"]},
+  hidden
+]}.
+
+%% @doc Max size (in bytes) of all query buffers below which new
+%% queries can be accepted. Does not affect existing queries for which
+%% data collection is in progress.
+{mapping, "riak_kv.query.timeseries.qbuf_soft_watermark", "riak_kv.timeseries_query_buffers_soft_watermark", [
+  {default, 1*1024*1024*1024},
+  {datatype, integer},
+  {validators, ["validate_timeseries_query_buffers_soft_watermark"]}
+]}.
+
+{validator,
+  "validate_timeseries_query_buffers_soft_watermark",
+  "must be an integer > 0",
+  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
+     (_) -> false
+  end}.
+
+%% @doc Max size (in bytes) of all query buffers below which existing
+%% queries can continue to collect data into query buffers. Queries
+%% tripping this threshold will be cancelled.
+{mapping, "riak_kv.query.timeseries.qbuf_hard_watermark", "riak_kv.timeseries_query_buffers_hard_watermark", [
+  {default, 4*1024*1024*1024},
+  {datatype, integer},
+  {validators, ["validate_timeseries_query_buffers_hard_watermark"]}
+]}.
+
+{validator,
+  "validate_timeseries_query_hard_watermark",
+  "must be an integer > 0",
+  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
+     (_) -> false
+  end}.
+
+%% @doc Query buffer expiry time (in msec). Query buffers not accessed
+%% for longer than this value (rounded upward to the next whole
+%% second) will be deleted.
+{mapping, "riak_kv.query.timeseries.qbuf_expire_ms", "riak_kv.timeseries_query_buffers_expire_ms", [
+  {default, 5000},
+  {datatype, integer},
+  {validators, ["validate_timeseries_query_buffers_expire_ms"]}
+]}.
+
+{validator,
+  "validate_timeseries_query_buffers_expire_ms",
+  "must be an integer > 0",
+  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
+     (_) -> false
+  end}.
+
+%% @doc Query buffer collection time limit (in msec). Queries for
+%% which data collection takes longer than this value (rounded upward
+%% to the next whole second) will be cancelled. It should not be
+%% greater than @see riak_kv.query.timeseries.timeout.
+{mapping, "riak_kv.query.timeseries.qbuf_incomplete_release_ms", "riak_kv.timeseries_query_buffers_incomplete_release_ms", [
+  {default, 9000},
+  {datatype, integer},
+  {validators, ["validate_timeseries_query_buffers_incomplete_release_ms"]}
+]}.
+
+{validator,
+  "validate_timeseries_query_buffers_incomplete_release_ms",
+  "must be an integer > 0",
+  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
+     (_) -> false
+  end}.

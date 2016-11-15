@@ -84,17 +84,21 @@ This number should be some small multiple of `riak_kv.query.concurrent_queries` 
 
 ---
 
-## 3 Configurable Quanta A Query Can Span
+## 3 Query limits
 
-The third setting controls how many quanta a `SELECT` query can span.
+The third setting sets the cap on the amount of data a `SELECT` query
+can return to the client, and the number of quanta it can span.
 
-The value `riak_kv.query.timeseries.max_quanta_span` in `riak.config` controls how many quanta a single query can span.
+These values are, respectively,
+`riak_kv.query.timeseries.max_returned_data_size` (default is 1MB) and
+`riak_kv.query.timeseries.max_quanta_span` (default is 1000) in `riak.config`.
 
-The default it 5 (in practice this means 4, unless your written queries land exactly on quanta boundaries.)
+**Note**: The data size is estimated, on completion of each subquery
+  starting from the second, as average per-query data size (i.e., from
+  a single quantum) times the number of subqueries still queued.  This
+  assumes the data are homogenously stored/selected across quanta.
 
-**Note**: this value is again derived from a 'rule of thumb' - the TS team would love to hear the results of experiments under real workloads.
-
-**Note**: it is now possible to specify TS tables that don't use a quantum function, merely composite keys. In this world a partition key is set like `PRIMARY KEY((family, series), family, series, additionalkey1, additionalkey2)`. Queries against tables like this are like queries that span a single quantum in quantised data.
+**Note**: It is now possible to specify TS tables that don't use a quantum function, merely composite keys. In this world a partition key is set like `PRIMARY KEY((family, series), family, series, additionalkey1, additionalkey2)`. Queries against tables like this are like queries that span a single quantum in quantised data.
 
 ---
 

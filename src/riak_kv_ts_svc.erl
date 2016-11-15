@@ -51,6 +51,10 @@
 -define(E_TABLE_INACTIVE,    1019).
 -define(E_PARSE_ERROR,       1020).
 -define(E_NOTFOUND,          1021).
+-define(E_SELECT_RESULT_TOO_BIG, 1022).
+-define(E_QBUF_CREATE_ERROR,     1023).
+-define(E_QBUF_LDB_ERROR,        1024).
+-define(E_QUANTA_LIMIT,          1025).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -73,33 +77,33 @@
               ts_query_response/0, ts_query_responses/0,
               ts_query_types/0]).
 
-decode_query_common(Q, Cover) ->
-    case decode_query(Q, Cover) of
-        {QueryType, {ok, Query}} ->
+decode_query_common(Q, Options) ->
+    case decode_query(Q, Options) of
+        {ok, {QueryType, Query}} ->
             {ok, Query, decode_query_permissions(QueryType, Query)};
-        {_QueryType, {error, Error}} ->
-            {ok, make_decoder_error_response(Error)};
         {error, Error} ->
             %% convert error returns to ok's, this means it will be passed into
             %% process which will not process it and return the error.
             {ok, make_decoder_error_response(Error)}
     end.
 
--spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
-    {error, _} | {ddl, {ok, {?DDL{}, proplists:proplist()}}}
-               | {ts_query_types(), riak_kv_qry:sql_query_type_record()}.
-decode_query(#tsinterpolation{}, Cover)
-  when not (Cover == undefined orelse is_binary(Cover)) ->
-    {error, bad_coverage_context};
-decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
+-spec decode_query(Query::#tsinterpolation{}, proplists:proplist()) ->
+    {error, _} | {ok, {ddl, {?DDL{}, proplists:proplist()}}}
+               | {ok, {ts_query_types(), riak_kv_qry:sql_query_type_record()}}.
+decode_query(#tsinterpolation{base = BaseQuery}, Options) ->
     case catch riak_ql_parser:ql_parse(
                  riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
                    binary_to_list(BaseQuery))) of
         {ddl, DDL, WithProperties} ->
-            {ddl, {ok, {DDL, WithProperties}}};
+            {ok, {ddl, {DDL, WithProperties}}};
         {QryType, SQL} when QryType /= error,
                             QryType /= 'EXIT' ->
-            {QryType, riak_kv_ts_util:build_sql_record(QryType, SQL, Cover)};
+            case riak_kv_ts_util:build_sql_record(QryType, SQL, Options) of
+                {ok, SQLRec} ->
+                    {ok, {QryType, SQLRec}};
+                {error, Reason} ->
+                    {error, Reason}
+            end;
         {'EXIT', {Reason, _StackTrace}} ->
             {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
@@ -433,8 +437,8 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
     Client = {riak_client, [node(), undefined]},
     %% all we need from decode_query is to compile the query,
     %% but also to check permissions
-    case decode_query(Q, undefined) of
-        {_QryType, {ok, SQL}} ->
+    case decode_query(Q, []) of
+        {ok, {_QryType, SQL}} ->
             %% Make sure, if we pass a replacement cover, we use it to
             %% determine the proper where range
             case riak_kv_ts_api:compile_to_per_quantum_queries(Mod,
@@ -491,6 +495,13 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             {reply, make_too_many_insert_values_resp(BadRowIdxs), State};
         {error, {undefined_fields, BadFields}} ->
             {reply, make_undefined_field_in_insert_resp(BadFields), State};
+        %% from the qbuf subsystem
+        {error, select_result_too_big} ->
+            {reply, make_select_result_too_big_error(), State};
+        {error, {qbuf_create_error, Reason}} ->
+            {reply, make_qbuf_create_error(Reason), State};
+        {error, {qbuf_ldb_error, Reason}} ->
+            {reply, make_qbuf_ldb_error(Reason), State};
         {error, {identifier_unexpected, Identifier}} ->
             {reply, make_identifier_unexpected_resp(Identifier), State};
 
@@ -499,6 +510,8 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
         {error, invalid_coverage_context_checksum} ->
             {reply, make_rpberrresp(?E_SUBMIT, "Query coverage context fails checksum"), State};
+        {error, {too_many_subqueries, NQuanta, MaxQueryQuanta}} ->
+            {reply, make_max_query_quanta_resp(NQuanta, MaxQueryQuanta), State};
 
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
@@ -597,6 +610,26 @@ make_undefined_field_in_insert_resp(BadFields) ->
     make_rpberrresp(
       ?E_BAD_QUERY,
       flat_format("undefined fields: ~s", [string:join(BadFields, ", ")])).
+
+make_qbuf_create_error(Reason) ->
+    make_rpberrresp(
+      ?E_QBUF_CREATE_ERROR,
+      flat_format("Failed to set up query buffer for an ORDER BY query (~p)", [Reason])).
+
+make_select_result_too_big_error() ->
+    make_rpberrresp(
+      ?E_SELECT_RESULT_TOO_BIG,
+      flat_format("Projected result of a SELECT query is too big", [])).
+
+make_qbuf_ldb_error(Reason) ->
+    make_rpberrresp(
+      ?E_QBUF_LDB_ERROR,
+      flat_format("Query buffer I/O error: ~p", [Reason])).
+
+make_max_query_quanta_resp(NQuanta, MaxQueryQuanta) ->
+    make_rpberrresp(
+      ?E_QUANTA_LIMIT,
+      flat_format("Query spans too many quanta (~b, max ~b)", [NQuanta, MaxQueryQuanta])).
 
 make_identifier_unexpected_resp(Identifier) ->
     make_rpberrresp(
