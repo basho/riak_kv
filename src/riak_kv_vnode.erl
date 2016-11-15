@@ -2047,14 +2047,14 @@ result_fun_ack(Bucket, Sender) ->
 %% This version checks the cluster capabilities for {riak_kv,
 %% decode_query_results_at_vnode}.
 %%
-%% If true (upgraded cluster where all nodes support parallel
-%% decoding), we reply with the query results already decoded, so that
-%% the work of decoding the results can be parallelized among the
-%% vnodes in the query coverage plan, instead of being serialized at
-%% the coordinating vnode.
+%% If true (i.e., we have an upgraded cluster where all nodes support
+%% parallel decoding), we reply with the query results already
+%% decoded, so that the work of decoding the results can be
+%% parallelized among the vnodes in the query coverage plan, instead
+%% of being serialized at the coordinating vnode.
 %%
-%% If false (mixed-mode cluster), we reply with the encoded results,
-%% as before.
+%% If false (i.e., we have a mixed-mode cluster), we reply with the
+%% encoded results, as before.
 %% ------------------------------------------------------------
 
 range_scan_result_fun_ack(Bucket, Sender) ->
@@ -2069,13 +2069,15 @@ range_scan_result_fun_ack(Bucket, Sender) ->
 		true ->
 		    DecodedItems = riak_kv_qry_worker:decode_results(lists:flatten(Items)),
 
-		    %% Instead of simply sending the DecodedItems as the
-		    %% payload, we send a tuple indicating that the items have
-		    %% already been decoded.  This allows the receiver to
-		    %% distinguish between results that have already been
-		    %% decoded by the vnode (new behavior indicated by
-		    %% {riak_kv, sql_select_decode_results} capability), and
-		    %% results that have not (TS behavior up to this change)
+		    %% Instead of simply sending DecodedItems as the
+		    %% payload, we send a tuple indicating that the
+		    %% items have already been decoded.  This allows
+		    %% the receiver to distinguish between results
+		    %% that have already been decoded by the vnode
+		    %% (new behavior indicated by {riak_kv,
+		    %% sql_select_decode_results} capability), and
+		    %% results that have not (TS behavior prior to
+		    %% this change)
 
 		    riak_core_vnode:reply(Sender, {{self(), Monitor}, Bucket, {decoded, DecodedItems}});
 		_ ->

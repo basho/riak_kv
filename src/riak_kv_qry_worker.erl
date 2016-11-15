@@ -42,7 +42,7 @@
          terminate/2,
          code_change/3,
 
-	 %% decode_results exported because it may be used in
+	 %% decode_results/1 is now exported because it may be used in
 	 %% riak_kv_vnode to pre-decode query results at the vnode
 	 %% rather than here
 
@@ -353,10 +353,11 @@ run_select_on_chunk(SubQId, Chunk, #state{qry = Query,
 
 %% ------------------------------------------------------------
 %% Helper function to return decoded query results for the current
-%% Chunk.  
+%% Chunk:
 %%
-%% If already decoded, simply return the decoded data
-%% If not, decode and return
+%%   if already decoded, simply returns the decoded data
+%%
+%%   if not, decodes and returns
 %% ------------------------------------------------------------
 
 get_decoded_results({decoded, Chunk}) ->
