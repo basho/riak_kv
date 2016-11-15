@@ -324,14 +324,14 @@ empty_result() ->
 %%
 -spec do_show_tables() -> {ok, query_tabular_result()} | {error, term()}.
 do_show_tables() ->
-    Tables = riak_kv_compile_tab:get_all_table_names(),
+    Tables = riak_kv_compile_tab:get_table_status_pairs(),
     build_show_tables_result(Tables).
 
--spec build_show_tables_result([binary()]) -> tuple().
+-spec build_show_tables_result([{binary(),binary()}]) -> {ok, query_tabular_result()}.
 build_show_tables_result(Tables) ->
-    ColumnNames = [<<"Table">>],
-    ColumnTypes = [varchar],
-    Rows = [[T] || T <- Tables],
+    ColumnNames = [<<"Table">>, <<"Status">>],
+    ColumnTypes = [varchar,varchar],
+    Rows = [[TableName, Status] || {TableName, Status} <- Tables],
     {ok, {ColumnNames, ColumnTypes, Rows}}.
 
 %%
@@ -372,9 +372,14 @@ do_explain(DDL, Select) ->
 -include_lib("eunit/include/eunit.hrl").
 
 show_tables_test() ->
-    Res = build_show_tables_result([<<"fafa">>,<<"lala">>]),
+    Res = build_show_tables_result([
+            {<<"fafa">>, <<"Active">>},
+            {<<"lala">>, <<"Not Active">>}]),
     ?assertMatch(
-        {ok, {[<<"Table">>], [varchar], [[<<"fafa">>], [<<"lala">>]]}},
+        {ok, {[<<"Table">>,<<"Status">>],
+                [varchar,varchar],
+                [[<<"fafa">>, <<"Active">>],
+                 [<<"lala">>, <<"Not Active">>]]}},
         Res).
 
 explain_query_test() ->
