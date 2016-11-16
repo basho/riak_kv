@@ -2065,7 +2065,7 @@ range_scan_result_fun_ack(Bucket, Sender) ->
 	    %% here.  If mixed, delegate decoding to the coordinator,
 	    %% as before
 
-	    case riak_core_capability:get({riak_kv, sql_select_decode_results}) of
+	    case riak_core_capability:get({riak_kv, decode_query_results_at_vnode}) of
 		true ->
 		    DecodedItems = riak_kv_qry_worker:decode_results(lists:flatten(Items)),
 
