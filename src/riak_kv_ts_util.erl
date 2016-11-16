@@ -495,12 +495,7 @@ explain_compile_query(QueryString) ->
 explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
                                            'WHERE' = SubQueryWhere,
                                            helper_mod = HelperMod,
-                                           partition_key = PartitionKey,
-                                           'SELECT' = #riak_sel_clause_v1{
-                                                         col_names=ColNames,
-                                                         col_return_types=ColTypes}
-
-}) ->
+                                           partition_key = PartitionKey}) ->
     CoverKey = riak_kv_qry_coverage_plan:make_key(HelperMod, PartitionKey, SubQueryWhere),
     Coverage = format_coverage(Table, CoverKey, NVal),
     {_, StartKey1} = lists:keyfind(startkey, 1, SubQueryWhere),
@@ -510,14 +505,13 @@ explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
     EndKey2 = string:join([key_to_string(Key) || Key <- EndKey1], ", "),
     StartInclusive = lists:keymember(start_inclusive, 1, StartKey1),
     EndInclusive = lists:keymember(end_inclusive, 1, EndKey1),
-    ColumnTypes = lists:zip(ColNames, ColTypes),
     [Index,
      list_to_binary(Coverage),
      list_to_binary(StartKey2),
      StartInclusive,
      list_to_binary(EndKey2),
      EndInclusive,
-     list_to_binary(filter_to_string(Filter, ColumnTypes))].
+     list_to_binary(filter_to_string(Filter, HelperMod))].
 
 %%
 format_coverage(Table, CoverKey, NVal) ->
@@ -561,15 +555,17 @@ key_to_string({Field, Type, Value}) ->
         [key_element_to_string(Field), element_to_quoted_string(Value, Type)])).
 
 %%
--spec filter_to_string([]| {atom(),tuple(),tuple()},
-                       [{binary(), atom()}]) ->
+-spec filter_to_string([]| {atom(),tuple(),tuple()}, module()) ->
     string().
-filter_to_string([], _Types) ->
+filter_to_string([], _Mod) ->
     [];
-filter_to_string({Op, {field,F,_}, {const,V}}, Types) ->
-    Type = proplists:get_value(F, Types),
+filter_to_string({Op, {field,F,_}, {const,V}}, Mod) ->
+    Type = Mod:get_field_type([F]),
     lists:flatten(io_lib:format("(~s~s~s)",
-        [key_element_to_string(F), op_to_string(Op), element_to_quoted_string(V, Type)])).
+                                [key_element_to_string(F), op_to_string(Op), element_to_quoted_string(V, Type)]));
+filter_to_string({Op, A, B}, Mod) ->
+     lists:flatten(io_lib:format("(~s~s~s)",
+                                 [filter_to_string(A, Mod), op_to_string(Op), filter_to_string(B, Mod)])).
 
 %%
 op_to_string(and_) -> " AND ";
