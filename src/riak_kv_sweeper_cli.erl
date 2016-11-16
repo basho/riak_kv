@@ -52,7 +52,6 @@ status_register() ->
      [],                                  % FlagSpecs
      fun status/3].                       % Implementation callback.
 
-
 sweeper_usage() ->
     [
      "riak-admin sweeper <sub-command>\n\n",
@@ -95,6 +94,7 @@ format_sweeps(Sweeps, IndexedParticipants) ->
          || Sweep <- SortedSweeps],
     [clique_status:text(Header),
      clique_status:table(Rows)].
+
 format_active_sweeps(Sweeps, IndexedParticipants) ->
     Rows = [format_progress(Sweep, IndexedParticipants)
               || #sweep{state = State} = Sweep <- Sweeps, State == running],

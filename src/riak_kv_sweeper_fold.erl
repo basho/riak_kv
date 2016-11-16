@@ -60,7 +60,6 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, 
             {reply, Reason, VnodeState}
     end.
 
-
 make_complete_fold_req() ->
     fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
             Acc1 = maybe_throttle_sweep(RObjBin, Acc),
@@ -76,7 +75,6 @@ make_complete_fold_req() ->
             fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1})
     end.
 
-
 make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
     SweepsParticipants =
         [AP ||
@@ -84,16 +82,13 @@ make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
          AP <- lists:keysort(#sweep_participant.fun_type, ActiveParticipants)],
     #sa{index = Index, active_p = SweepsParticipants, estimated_keys = EstimatedNrKeys}.
 
-
 inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
     successfull_sweep(Succ, Index),
     failed_sweep(Failed, Index).
 
-
 successfull_sweep(Succ, Index) ->
     [Module:successfull_sweep(Index, FinalAcc) ||
        #sweep_participant{module = Module, acc = FinalAcc} <- Succ].
-
 
 failed_sweep(Failed, Index) ->
     [Module:failed_sweep(Index, Reason) ||
@@ -103,14 +98,12 @@ failed_sweep(Failed, Index, Reason) ->
     [Module:failed_sweep(Index, Reason) ||
        #sweep_participant{module = Module} <- Failed].
 
-
 format_result(#sa{swept_keys = SweptKeys, active_p = Succ, failed_p = Failed}) ->
     {SweptKeys,
      format_result(succ, Succ) ++ format_result(fail, Failed)}.
 
 format_result(SuccFail, Results) ->
     [{Module, SuccFail} || #sweep_participant{module = Module} <- Results].
-
 
 %% Throttle depending on swept keys.
 maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, Limit, Wait},
@@ -183,7 +176,6 @@ get_sweep_throttle() ->
             {Type, Limit, Sleep}
     end.
 
-
 send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid) ->
     lager:debug("Send to sweep worker ~p: ~p", [Pid, Msg]),
     Pid ! Msg;
@@ -214,7 +206,6 @@ maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc, Wait) ->
     after Wait ->
         Acc
     end.
-
 
 fold_funs(_, #sa{index = Index,
                  failed_p = FailedParticipants,
@@ -280,17 +271,14 @@ fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
                                      succ_p = [Sweep#sweep_participant{errors = Errors + 1} | Succ]})
     end.
 
-
 maybe_add_opt_info({BKey, RObj}, SweepAcc, Options) ->
     lists:foldl(fun(Option, InfoSweepAcc) ->
                         add_opt_info({BKey, RObj}, Option, InfoSweepAcc)
                 end, {[], SweepAcc}, Options).
 
-
 add_opt_info({{Bucket, _Key}, _RObj}, bucket_props, {OptInfo, #sa{bucket_props = BucketPropsDict} = SweepAcc}) ->
     {BucketProps, BucketPropsDict1} = get_bucket_props(Bucket, BucketPropsDict),
     {[{bucket_props, BucketProps} | OptInfo], SweepAcc#sa{bucket_props = BucketPropsDict1}}.
-
 
 get_bucket_props(Bucket, BucketPropsDict) ->
     case dict:find(Bucket, BucketPropsDict) of
@@ -317,8 +305,9 @@ setup_sweep(N) ->
     BackendFun =
         fun(CompleteFoldReq, InitialAcc, _, _) ->
                 SA = lists:foldl(fun(NBin, Acc) ->
-                                    InitialObj = riak_object:to_binary(v1, riak_object:new(NBin, NBin, <<>>)),
-                                    CompleteFoldReq(NBin, NBin, InitialObj, Acc)
+                                         InitialObj = riak_object:new(NBin, NBin, <<>>),
+                                         ObjBin = riak_object:to_binary(v1, InitialObj),
+                                         CompleteFoldReq(NBin, NBin, ObjBin, Acc)
                                  end, InitialAcc, Keys),
                 {ok, SA}
         end,
@@ -347,7 +336,6 @@ delete_sweep(N) ->
 
 make_keys(Nr) ->
     [integer_to_binary(N) || N <- lists:seq(1, Nr)].
-
 
 meck_callback_modules(Module) ->
     meck:new(Module, [non_strict]),

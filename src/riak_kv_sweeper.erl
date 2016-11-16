@@ -60,40 +60,33 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
-
 stop() ->
     gen_server:call(?MODULE, stop).
-
 
 %% @doc Add callback module that will be asked to participate in sweeps.
 -spec add_sweep_participant(#sweep_participant{}) -> ok.
 add_sweep_participant(Participant) ->
     gen_server:call(?MODULE, {add_sweep_participant, Participant}).
 
-
 %% @doc Remove participant callback module.
 -spec remove_sweep_participant(atom()) -> true | false.
 remove_sweep_participant(Module) ->
     gen_server:call(?MODULE, {remove_sweep_participant, Module}).
-
 
 %% @doc Initiat a sweep without using scheduling. Can be used as fold replacment.
 -spec sweep(non_neg_integer()) -> ok.
 sweep(Index) ->
     gen_server:call(?MODULE, {sweep_request, Index}, infinity).
 
-
 %% @doc Get information about participants and all sweeps.
 -spec status() -> {[#sweep_participant{}], [#sweep{}]}.
 status() ->
     gen_server:call(?MODULE, status).
 
-
 -spec enable_sweep_scheduling() ->  ok.
 enable_sweep_scheduling() ->
     lager:info("Enable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, true).
-
 
 %% @doc Stop all sweeps and disable the scheduler from starting new sweeps
 %% Only allow manual sweeps throu sweep/1.
@@ -101,24 +94,19 @@ enable_sweep_scheduling() ->
 stop_all_sweeps() ->
     gen_server:call(?MODULE, stop_all_sweeps).
 
-
 update_started_sweep(Index, ActiveParticipants, Estimate) ->
     gen_server:cast(?MODULE, {update_started_sweep, Index, ActiveParticipants, Estimate}).
-
 
 %% @private used by the sweeping process to report results when done.
 sweep_result(Index, Result) ->
     gen_server:cast(?MODULE, {sweep_result, Index, Result}).
 
-
 % @private used by the sweeping process to report progress.
 update_progress(Index, SweptKeys) ->
     gen_server:cast(?MODULE, {update_progress, Index, SweptKeys}).
 
-
 in_sweep_window() ->
     riak_kv_sweeper_state:in_sweep_window().
-
 
 get_run_interval(RunIntervalFun) when is_function(RunIntervalFun) ->
     riak_kv_sweeper_state:get_run_interval(RunIntervalFun).
@@ -133,7 +121,6 @@ init([]) ->
     State = riak_kv_sweeper_state:new(),
     State1 = State:update_timer_ref(Ref),
     {ok, State1}.
-
 
 handle_call({add_sweep_participant, Participant}, _From, State) ->
     State1 = riak_kv_sweeper_state:add_sweep_participant(Participant, State),
@@ -166,7 +153,6 @@ handle_call(stop, _From, State) ->
     {ok, _Running, State1} = riak_kv_sweeper_state:stop_all_sweeps(State),
     {stop, normal, ok, State1}.
 
-
 handle_cast({update_started_sweep, Index, ActiveParticipants, Estimate}, State) ->
     State1 = riak_kv_sweeper_state:update_started_sweep(Index, ActiveParticipants, Estimate, State),
     {noreply, State1};
@@ -181,7 +167,6 @@ handle_cast({update_progress, Index, SweptKeys}, State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
-
 
 handle_info({test_tick, Ref, From}, State) ->
     {noreply, State1} = handle_info(sweep_tick, State),
@@ -210,15 +195,12 @@ handle_info(Msg, State) ->
     lager:error("riak_kv_sweeper received unexpected message ~p", [Msg]),
     {noreply, State}.
 
-
 terminate(_, State) ->
     riak_kv_sweeper_state:persist_sweeps(State),
     ok.
 
-
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
 
 do_sweep(Index, State) ->
     %% Ask for estimate before we ask_participants since riak_kv_index_tree
@@ -239,11 +221,9 @@ do_sweep(Index, State) ->
         end,
     State2.
 
-
 get_estimate_keys(Index, AAEEnabled, State) ->
     {ok, OldEstimate, _NewState} = riak_kv_sweeper_state:get_estimate_keys(Index, State),
     maybe_estimate_keys(Index, AAEEnabled, OldEstimate).
-
 
 %% We keep the estimate from previus sweep unless it's older then ?ESTIMATE_EXPIRY.
 maybe_estimate_keys(Index, true, undefined) ->
@@ -260,7 +240,6 @@ maybe_estimate_keys(_Index, false, {EstimatedNrKeys, _TS}) ->
     EstimatedNrKeys;
 maybe_estimate_keys(_Index, false, _) ->
     false.
-
 
 get_estimtate(Index) ->
     Pid = self(),
@@ -286,7 +265,6 @@ get_estimtate(Index) ->
         end),
     wait_for_estimate().
 
-
 wait_for_estimate() ->
     receive
         {estimate, Estimate} ->
@@ -295,19 +273,15 @@ wait_for_estimate() ->
         0
     end.
 
-
 schedule_initial_sweep_tick() ->
     InitialTick = trunc(get_tick() * random:uniform()),
     erlang:send_after(InitialTick, ?MODULE, sweep_tick).
 
-
 schedule_sweep_tick() ->
     erlang:send_after(get_tick(), ?MODULE, sweep_tick).
 
-
 get_tick() ->
     app_helper:get_env(riak_kv, sweep_tick, ?DEFAULT_SWEEP_TICK).
-
 
 elapsed_secs(Now, Start) ->
     timer:now_diff(Now, Start) div 1000000.

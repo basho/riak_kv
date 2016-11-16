@@ -21,7 +21,6 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_sweeper_state).
 
-
 -include("riak_kv_sweeper.hrl").
 
 -export([add_sweep_participant/2,
@@ -102,11 +101,9 @@ new() ->
     State1 = State0#state{sweeps = get_persistent_sweeps()},
     maybe_initiate_sweeps({?MODULE, State1}).
 
-
 -spec update_timer_ref(TimerRef :: reference(), state()) -> state().
 update_timer_ref(Ref, {?MODULE, State}) ->
     new(State#state{timer_ref = Ref}).
-
 
 -spec add_sweep_participant(Participant:: #sweep_participant{}, state()) -> state().
 add_sweep_participant(Participant, {?MODULE, State}) ->
@@ -114,7 +111,6 @@ add_sweep_participant(Participant, {?MODULE, State}) ->
     SP1 = dict:store(Participant#sweep_participant.module, Participant, SP),
     persist_participants(SP1),
     new(State#state{sweep_participants = SP1}).
-
 
 -spec remove_sweep_participant(Module :: atom(), state()) -> {ok, boolean(), state()}.
 remove_sweep_participant(Module, {?MODULE, State}) ->
@@ -126,7 +122,6 @@ remove_sweep_participant(Module, {?MODULE, State}) ->
     disable_sweep_participant_in_running_sweep(Module, Sweeps),
     State1 = new(State#state{sweep_participants = SP1}),
     {ok, Removed, State1}.
-
 
 -spec maybe_initiate_sweeps(state()) -> state().
 maybe_initiate_sweeps({?MODULE, State}) ->
@@ -143,7 +138,6 @@ maybe_initiate_sweeps({?MODULE, State}) ->
 
     new(State#state{sweeps = Sweeps2}).
 
-
 -spec status(state()) -> {ok,
                           {Participant :: [#sweep_participant{}],
                            Sweeps :: [#sweep{}]},
@@ -155,7 +149,6 @@ status({?MODULE, State}) ->
     Sweeps = [Sweep || {_Index, Sweep} <- dict:to_list(State#state.sweeps)],
     {ok, {Participants, Sweeps}, new(State)}.
 
-
 -spec stop_all_sweeps(state()) -> {ok, Running :: non_neg_integer(), state()}.
 stop_all_sweeps({?MODULE, State}) ->
     #state{timer_ref = Ref, sweeps = Sweeps} = State,
@@ -164,7 +157,6 @@ stop_all_sweeps({?MODULE, State}) ->
     Running = [Sweep || Sweep <- get_running_sweeps(Sweeps)],
     [stop_sweep(Sweep) || Sweep <- Running],
     {ok, length(Running), new(State)}.
-
 
 -spec ask_participants(index(), state()) -> {ok, Participants :: [#sweep_participant{}], state()}.
 ask_participants(Index, {?MODULE, State}) ->
@@ -179,14 +171,13 @@ ask_participants(Index, {?MODULE, State}) ->
             {Participant, {ok, Fun, InitialAcc}} <- Funs],
     {ok, ActiveParticipants, new(State)}.
 
-
--spec get_estimate_keys(index(), state()) -> {ok, OldEstimate :: {EstimatedNrKeys :: non_neg_integer(), erlang:timestamp()}, state()}|
-                                             {ok, OldEstimate :: undefined, state()}.
+-spec get_estimate_keys(index(), state()) ->
+    {ok, OldEstimate :: {EstimatedNrKeys :: non_neg_integer(), erlang:timestamp()}, state()} |
+    {ok, OldEstimate :: undefined, state()}.
 get_estimate_keys(Index, {?MODULE, State}) ->
     #state{sweeps = Sweeps} = State,
     #sweep{estimated_keys = OldEstimate} = dict:fetch(Index, Sweeps),
     {ok, OldEstimate, new(State)}.
-
 
 -spec update_finished_sweep(index(), any(), state()) -> state().
 update_finished_sweep(Index, Result, {?MODULE, State}) ->
@@ -202,8 +193,8 @@ update_finished_sweep(Index, Result, {?MODULE, State}) ->
     end,
     new(State1).
 
-
--spec update_started_sweep(index(), ActiveParticipants :: [], Estimate :: non_neg_integer(), state()) -> state().
+-spec update_started_sweep(index(), ActiveParticipants :: [],
+                           Estimate :: non_neg_integer(), state()) -> state().
 update_started_sweep(Index, ActiveParticipants, Estimate, {?MODULE, State}) ->
     Sweeps = State#state.sweeps,
     SweepParticipants = State#state.sweep_participants,
@@ -223,7 +214,6 @@ update_started_sweep(Index, ActiveParticipants, Estimate, {?MODULE, State}) ->
     State1 = State#state{sweeps = Sweeps1},
     new(State1).
 
-
 -spec update_progress(index(), SweptKeys :: integer(), state()) -> state().
 update_progress(Index, SweptKeys, {?MODULE, State}) ->
     #state{sweeps = Sweeps} = State,
@@ -237,9 +227,7 @@ update_progress(Index, SweptKeys, {?MODULE, State}) ->
     end,
     new(State1).
 
-
--spec maybe_schedule_sweep(state()) -> {ok, index(), state()}|
-                                       state().
+-spec maybe_schedule_sweep(state()) -> {ok, index(), state()} | state().
 maybe_schedule_sweep({?MODULE, State}) ->
     Enabled = scheduler_enabled(),
     ConcurrenyLimit = get_concurrency_limit(),
@@ -261,10 +249,7 @@ maybe_schedule_sweep({?MODULE, State}) ->
             new(State1)
     end.
 
-
-
--spec sweep_request(index(), state()) -> {ok, index(), state()}|
-                                         state().
+-spec sweep_request(index(), state()) -> {ok, index(), state()} | state().
 sweep_request(Index, {?MODULE, State}) ->
     #state{sweeps = Sweeps} = State,
     SweepSchedulerEnabled = scheduler_enabled(),
@@ -273,7 +258,8 @@ sweep_request(Index, {?MODULE, State}) ->
     Now = os:timestamp(),
 
     Result =
-        case schedule_sweep1({request, Index}, SweepSchedulerEnabled, SweepWindow, ConcurrenyLimit, Now, State) of
+        case schedule_sweep1({request, Index}, SweepSchedulerEnabled,
+                             SweepWindow, ConcurrenyLimit, Now, State) of
             {ok, {request, queue}} ->
                 queue_sweep(Index, State);
             {ok, {request, {restart, Sweep}}} ->
@@ -306,13 +292,11 @@ start_sweep(Index, Pid, {?MODULE, State}) ->
                     end, Sweeps),
     new(State#state{sweeps = Sweeps1}).
 
-
 %% =============================================================================
 %% Internal Functions
 %% =============================================================================
 new(#state{} = State) ->
     {?MODULE, State}.
-
 
 finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
     Sweeps1 =
@@ -321,7 +305,6 @@ finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
                         Sweep#sweep{state = idle, pid = undefined}
                 end, Sweeps),
     State#state{sweeps = Sweeps1}.
-
 
 store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
     TimeStamp = os:timestamp(),
@@ -341,7 +324,6 @@ add_asked_to_results(Results, SweepParticipants) ->
     lists:foldl(fun(Mod, Dict) ->
                         dict:store(Mod, {TimeStamp, asked}, Dict)
                 end, Results, MissingResults).
-
 
 missing(Return, Participants, ResultList) ->
     [case Return of
@@ -371,7 +353,8 @@ schedule_sweep1(tick, _Enabled = false, _SweepWindow, _ConcurrencyLimit, _Now, _
 schedule_sweep1(tick, _Enabled = true, _SweepWindow = never, _ConcurrencyLimit, _Now, _State) ->
     {ok, {tick, sweep_window_never}};
 
-schedule_sweep1(Event = tick, Enabled = true, _SweepWindow = always, ConcurrencyLimit, Now, State) ->
+schedule_sweep1(Event = tick, Enabled = true, _SweepWindow = always,
+                ConcurrencyLimit, Now, State) ->
     schedule_sweep1(Event, Enabled, {0, 23}, ConcurrencyLimit, Now, State);
 
 schedule_sweep1(tick, _Enabled = true, SweepWindow, ConcurrencyLimit, Now, State) ->
@@ -408,7 +391,6 @@ schedule_sweep1({request, Index}, _Enabled, _SweepWindow, ConcurrencyLimit, _Now
             {ok, {request, not_index}}
     end.
 
-
 in_sweep_window() ->
     {_, {Hour, _, _}} = calendar:local_time(),
     in_sweep_window(Hour, sweep_window()).
@@ -421,7 +403,6 @@ in_sweep_window(NowHour, {Start, End}) when Start =< End ->
     (NowHour >= Start) and (NowHour =< End);
 in_sweep_window(NowHour, {Start, End}) when Start > End ->
     (NowHour >= Start) or (NowHour =< End).
-
 
 -spec schedule_sweep2(Now          :: erlang:timestamp(),
                       Participants :: dict(),
@@ -445,17 +426,12 @@ schedule_sweep2(Now, Participants, Sweeps) ->
             {ok, {tick, random_sweep(NeverRunnedSweeps)}}
     end.
 
-
-
-
 get_idle_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle} = Sweep} <- dict:to_list(Sweeps)].
-
 
 get_never_runned_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle, results = ResDict} = Sweep}
                   <- dict:to_list(Sweeps), dict:size(ResDict) == 0].
-
 
 get_queued_sweeps(Sweeps) ->
     QueuedSweeps =
@@ -463,7 +439,6 @@ get_queued_sweeps(Sweeps) ->
          {_Index, #sweep{queue_time = QueueTime} = Sweep} <- dict:to_list(Sweeps),
          not (QueueTime == undefined)],
     lists:keysort(#sweep.queue_time, QueuedSweeps).
-
 
 find_expired_participant(Now, Sweeps, Participants) ->
     ExpiredMissingSweeps =
@@ -534,7 +509,6 @@ scheduler_enabled() ->
             false
     end.
 
-
 sweep_window() ->
     case application:get_env(riak_kv, sweep_window) of
         {ok, always} ->
@@ -550,10 +524,8 @@ sweep_window() ->
             always
     end.
 
-
 get_concurrency_limit() ->
     app_helper:get_env(riak_kv, sweep_concurrency, ?DEFAULT_SWEEP_CONCURRENCY).
-
 
 queue_sweep(Index, #state{sweeps = Sweeps} = State) ->
     case dict:fetch(Index, Sweeps) of
@@ -592,7 +564,6 @@ get_running_sweeps(Sweeps) ->
       {_Index, #sweep{state = State} = Sweep} <- dict:to_list(Sweeps),
       State == running orelse State == restart].
 
-
 disable_sweep_participant_in_running_sweep(Module, Sweeps) ->
     [disable_participant(Sweep, Module) ||
        #sweep{active_participants = ActiveP} = Sweep <- get_running_sweeps(Sweeps),
@@ -604,23 +575,18 @@ disable_participant(Sweep, Module) ->
 persist_participants(Participants) ->
     application:set_env(riak_kv, sweep_participants, Participants).
 
-
-
 add_sweeps(MissingIdx, Sweeps) ->
     lists:foldl(fun(Idx, SweepsDict) ->
                         dict:store(Idx, #sweep{index = Idx}, SweepsDict)
                 end, Sweeps, MissingIdx).
-
 
 remove_sweeps(NotOwnerIdx, Sweeps) ->
     lists:foldl(fun(Idx, SweepsDict) ->
                         dict:erase(Idx, SweepsDict)
                 end, Sweeps, NotOwnerIdx).
 
-
 get_persistent_participants() ->
     app_helper:get_env(riak_kv, sweep_participants).
-
 
 get_persistent_sweeps() ->
     case file:consult(sweep_file(?SWEEPS_FILE)) of
@@ -630,14 +596,12 @@ get_persistent_sweeps() ->
             dict:new()
     end.
 
-
 sweep_file(File) ->
      PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
      SweepDir = filename:join(PDD, ?MODULE),
      SweepFile = filename:join(SweepDir, File),
      ok = filelib:ensure_dir(SweepFile),
      SweepFile.
-
 
 -ifdef(TEST).
 
@@ -678,6 +642,7 @@ test_sweep_participant(N) ->
     #sweep_participant{module = Module,
                        run_interval = N
                       }.
+
 get_module(N) ->
     list_to_atom(integer_to_list(N)).
 
@@ -715,8 +680,8 @@ test_find_missing_part({MyRingPart, Participants, State}) ->
             Result2 = [{get_module(Part), succ} || Part <- tl(Participants)],
             {?MODULE, State2} = update_finished_sweep(NotAllResult, {0, Result2}, State1),
             ?assertEqual([], get_never_runned_sweeps(State2#state.sweeps)),
-            MissingPart =
-                find_expired_participant(os:timestamp(), State2#state.sweeps, State2#state.sweep_participants),
+            MissingPart = find_expired_participant(os:timestamp(), State2#state.sweeps,
+                                                   State2#state.sweep_participants),
             ?assertEqual(MissingPart#sweep.index, NotAllResult)
     end.
 
@@ -726,10 +691,10 @@ cleanup(_State) ->
 -endif.
 
 -ifdef(EQC).
+
 gen_now() ->
     ?LET({IncMins, {Megas, Secs, Micros}}, {nat(), os:timestamp()},
          {Megas, Secs + (60*IncMins), Micros}).
-
 
 gen_indices() ->
     ?LET(Max, nat(),
@@ -753,10 +718,8 @@ gen_sweep_participant(Module) ->
        errors = 0,
        fail_reason = undefined}.
 
-
 gen_empty_sweep_results() ->
     dict:new().
-
 
 gen_nonempty_sweep_results({Mega, Secs, Micro}) ->
     ?LET({N, Modules, SweepResult}, {nat(), gen_sweep_participant_modules(), oneof([succ, fail])},
@@ -764,7 +727,6 @@ gen_nonempty_sweep_results({Mega, Secs, Micro}) ->
                              dict:store(Module, {{Mega, Secs - (N*60) , Micro}, SweepResult}, D)
                      end,
                      dict:new(), Modules)).
-
 
 gen_sweep_neverrun(Index) ->
     ?LET(StartTime, os:timestamp(),
@@ -776,7 +738,6 @@ gen_sweep_neverrun(Index) ->
                 end_time = undefined,
                 queue_time = undefined}).
 
-
 gen_sweep_running(Index) ->
     ?LET(StartTime, os:timestamp(),
          #sweep{index = Index,
@@ -785,7 +746,6 @@ gen_sweep_running(Index) ->
                 start_time = StartTime,
                 end_time = undefined,
                 queue_time = undefined}).
-
 
 gen_sweep_restart(Index) ->
     ?LET(StartTime, os:timestamp(),
@@ -796,7 +756,6 @@ gen_sweep_restart(Index) ->
                 end_time = undefined,
                 queue_time = undefined}).
 
-
 gen_sweep_queued(Index) ->
     ?LET(StartTime, os:timestamp(),
          #sweep{index = Index,
@@ -805,7 +764,6 @@ gen_sweep_queued(Index) ->
                 start_time = StartTime,
                 end_time = undefined,
                 queue_time = StartTime}).
-
 
 gen_sweep_ended(Index) ->
         ?LET(StartTime, os:timestamp(),
@@ -819,14 +777,12 @@ gen_sweep_ended(Index) ->
                 queue_time = undefined}
          end).
 
-
 gen_sweep(Index) ->
     oneof([gen_sweep_neverrun(Index),
            gen_sweep_running(Index),
            gen_sweep_queued(Index),
            gen_sweep_ended(Index),
            gen_sweep_restart(Index)]).
-
 
 gen_sweep_participants() ->
     ?LET(Modules, gen_sweep_participant_modules(),
@@ -837,7 +793,6 @@ gen_sweep_participants() ->
                 end,
                 dict:new(), SPs))).
 
-
 gen_sweeps() ->
     ?LET(Indices, gen_indices(),
          ?LET(Sweeps, [gen_sweep(I) || I <- Indices],
@@ -846,15 +801,12 @@ gen_sweeps() ->
                           end,
                           dict:new(), Sweeps))).
 
-
 gen_hour() ->
     choose(0, 23).
-
 
 gen_sweep_window() ->
     oneof([always, never, {gen_hour(),
                            gen_hour()}]).
-
 gen_concurrency_limit() ->
     oneof([0, 1, 4]).
 
@@ -866,11 +818,9 @@ gen_state() ->
 gen_enabled() ->
     frequency([{10, true}, {1, false}]).
 
-
 is_sweep_index_in(Sweep, Sweeps) ->
     lists:member(Sweep#sweep.index,
                  [Index || #sweep{index = Index} <- Sweeps]).
-
 
 prop_schedule_sweep_request() ->
     ?FORALL({Event, Enabled, SweepWindow, ConcurrencyLimit, Now, State},
@@ -950,12 +900,10 @@ prop_schedule_sweep_tick() ->
                 end
             end).
 
-
 prop_schedule_sweep1_test_() ->
     {timeout, 30,
      [fun() -> ?assert(eqc:quickcheck(prop_schedule_sweep_request())) end,
       fun() -> ?assert(eqc:quickcheck(prop_schedule_sweep_tick())) end]}.
-
 
 prop_in_window() ->
     ?FORALL({NowHour, WindowLen, StartTime}, {choose(0, 23), choose(0, 23), choose(0, 23)},
@@ -975,6 +923,5 @@ prop_in_window() ->
 prop_in_window_test_() ->
     {timeout, 30,
      [fun() -> ?assert(eqc:quickcheck(prop_in_window())) end]}.
-
 
 -endif.
