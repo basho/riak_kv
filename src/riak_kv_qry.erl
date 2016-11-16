@@ -424,13 +424,11 @@ explain_query_test() ->
         [2,<<"dev1@127.0.0.1/0, dev1@127.0.0.1/1, dev1@127.0.0.1/1">>,
             <<"c = 'hola', b = 1000">>,false,<<"c = 'hola', b = 2000">>,false,
             <<"(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))">>]],
-    ?assertMatch(
-        {ok, {_, _, ExpectedRows}},
-        Res),
+    {ok, {_, _, ActualRows}} = Res,
+    ?assertEqual(ExpectedRows, ActualRows),
     Res1 = submit("EXPLAIN " ++ SQL, DDL),
-    ?assertMatch(
-        {ok, {_, _, ExpectedRows}},
-        Res1),
+    {ok, {_, _, ActualRows1}} = Res1,
+    ?assertEqual(ExpectedRows, ActualRows1),
     meck:unload(riak_client),
     meck:unload(riak_core_apl),
     meck:unload(riak_core_bucket),
