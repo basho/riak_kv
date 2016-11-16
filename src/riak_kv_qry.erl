@@ -388,9 +388,10 @@ explain_query_test() ->
                 "d SINT64,"
                 "e BOOLEAN,"
                 "f VARCHAR,"
+                "g BLOB,"
                 "PRIMARY KEY  ((c, QUANTUM(b, 1, 's')), c,b,a))")),
     riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
-    SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND f='adios'))",
+    SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND (f='adios' OR g=0xefface)))",
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
     {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, []),
     meck:new(riak_client),
@@ -420,10 +421,10 @@ explain_query_test() ->
     ExpectedRows =
         [[1,<<"dev1@127.0.0.1/0, dev1@127.0.0.1/1, dev1@127.0.0.1/1">>,
             <<"c = 'hola', b = 1">>,false,<<"c = 'hola', b = 1000">>,false,
-            <<"(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))">>],
+            <<"(((d = 15) OR ((e = true) AND ((f = 'adios') OR (g = 0xefface)))) AND (a = 319))">>],
         [2,<<"dev1@127.0.0.1/0, dev1@127.0.0.1/1, dev1@127.0.0.1/1">>,
             <<"c = 'hola', b = 1000">>,false,<<"c = 'hola', b = 2000">>,false,
-            <<"(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))">>]],
+            <<"(((d = 15) OR ((e = true) AND ((f = 'adios') OR (g = 0xefface)))) AND (a = 319))">>]],
     {ok, {_, _, ActualRows}} = Res,
     ?assertEqual(ExpectedRows, ActualRows),
     Res1 = submit("EXPLAIN " ++ SQL, DDL),
