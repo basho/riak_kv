@@ -93,7 +93,7 @@ meck_new_sweep_particpant(Name, TestCasePid) ->
 
     #sweep_participant{description = atom_to_list(Name) ++ " sweep participant",
                        module = Name,
-                       fun_type = ?OBSERV_FUN,
+                       fun_type = observe_fun,
                        run_interval = 60,       % Secs
                        options = []}.
 

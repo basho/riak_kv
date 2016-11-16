@@ -76,11 +76,18 @@ make_complete_fold_req() ->
     end.
 
 make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
-    SweepsParticipants =
-        [AP ||
-         %% Sort list depening on fun typ.
-         AP <- lists:keysort(#sweep_participant.fun_type, ActiveParticipants)],
+    SweepsParticipants = sort_participants(ActiveParticipants),
     #sa{index = Index, active_p = SweepsParticipants, estimated_keys = EstimatedNrKeys}.
+
+sort_participants(Participants) ->
+    lists:sort(fun compare_participants/2, Participants).
+compare_participants(A, B) ->
+    TypeA = A#sweep_participant.fun_type,
+    TypeB = B#sweep_participant.fun_type,
+    fun_type_rank(TypeA) =< fun_type_rank(TypeB).
+fun_type_rank(delete_fun) -> 1;
+fun_type_rank(modify_fun) -> 2;
+fun_type_rank(observe_fun) -> 3.
 
 inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
     successfull_sweep(Succ, Index),
@@ -319,7 +326,7 @@ observ_sweep() ->
                    ({{_, _BKey}, _RObj}, {Mut, Org}, _Opt) -> {ok, {Mut, Org + 1}} end,
     [#sweep_participant{module = observ_callback_module,
                        sweep_fun = ObservFun,
-                       fun_type = ?OBSERV_FUN,
+                       fun_type = observe_fun,
                         acc = {0,0}
                        }].
 
@@ -330,7 +337,7 @@ delete_sweep(N) ->
         end,
     [#sweep_participant{module = delete_callback_module,
                        sweep_fun = DeleteFun,
-                       fun_type = ?DELETE_FUN,
+                       fun_type = delete_fun,
                         acc = 0
                        }].
 
@@ -357,7 +364,7 @@ modify_sweep(N) ->
         end,
     [#sweep_participant{module = modify_callback_module,
                         sweep_fun = ModifyFun,
-                        fun_type = ?MODIFY_FUN,
+                        fun_type = modify_fun,
                         acc = 0
                        }].
 
@@ -367,14 +374,14 @@ delete_sweep_bucket_props() ->
     DeleteFun = fun({_BKey, _RObj}, Acc, [{bucket_props, _}]) -> {deleted, Acc} end,
     [#sweep_participant{module = delete_callback_module,
                        sweep_fun = DeleteFun,
-                       fun_type = ?DELETE_FUN,
+                       fun_type = delete_fun,
                        options = [bucket_props]}].
 %% Crashing delete sweep participant
 delete_sweep_crash() ->
     DeleteFun = fun({_BKey, RObj}, _Acc, _Opt) -> RObj = crash end,
     [#sweep_participant{module = delete_callback_module,
                         sweep_fun = DeleteFun,
-                        fun_type = ?DELETE_FUN,
+                        fun_type = delete_fun,
                         options = [bucket_props]}].
 
 %% Basic sweep test. Check that callback get complete Acc when sweep finish

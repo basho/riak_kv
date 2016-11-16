@@ -24,7 +24,7 @@
 %% This module implements a gen_server process that manages and schedules sweeps.
 %% Anyone can register a #sweep_participant{} with information about how
 %% often it should run and what kind of fun it include
-%%  (?DELETE_FUN, ?MODIFY_FUN or ?OBSERV_FUN)
+%%  (delete_fun, modify_fun or observ_fun)
 %%
 %% riak_kv_sweeper keep one sweep per index.
 %% Once every tick  riak_kv_sweeper check if it's in the configured sweep_window
@@ -39,6 +39,10 @@
 %% Default number of concurrent sweeps that are allowed to run.
 -define(DEFAULT_SWEEP_TICK, timer:minutes(1)).
 -define(ESTIMATE_EXPIRY, 24 * 3600). %% 1 day in s
+
+-type fun_type() :: delete_fun | modify_fun | observe_fun.
+
+-export_type([fun_type/0]).
 
 %% ====================================================================
 %% API functions

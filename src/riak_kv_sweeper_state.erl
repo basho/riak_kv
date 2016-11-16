@@ -710,7 +710,7 @@ gen_sweep_participant(Module) ->
     #sweep_participant{
        description = 'EQC sweep participant',
        module = Module,
-       fun_type = oneof([?DELETE_FUN, ?MODIFY_FUN, ?OBSERV_FUN]),
+       fun_type = oneof([delete_fun, modify_fun, observe_fun]),
        sweep_fun = eqc_sweep_function,
        run_interval = oneof([60, 3600]),
        acc = [],

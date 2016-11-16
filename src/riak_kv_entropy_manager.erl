@@ -244,7 +244,7 @@ add_sweep_participant() ->
       #sweep_participant{
                          description = "AAE tree rebuild",
                          module = riak_kv_index_hashtree,
-                         fun_type = ?OBSERV_FUN,
+                         fun_type = observe_fun,
                          run_interval = RunInterval,
                          options = [bucket_props]
                         }).

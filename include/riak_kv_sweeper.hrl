@@ -19,7 +19,7 @@
         {
          description :: string(),   %% Human readeble description of the user.
          module :: atom(),          %% module where the sweep call back lives.
-         fun_type :: integer(),     %% ?DELETE_FUN, ?MODIFY_FUN or ?OBSERV_FUN
+         fun_type :: riak_kv_sweeper:fun_type(), %% delete_fun | modify_fun | observe_fun
          sweep_fun :: fun(),        %%
          run_interval :: integer() | fun(), %% Defines how often participant wants to run.
          acc :: any(),
@@ -27,12 +27,6 @@
          errors = 0 :: integer(),
          fail_reason
         }).
-
-%% fun_type used to be able to sort the
-%% participating funs.
--define(DELETE_FUN, 1).
--define(MODIFY_FUN, 3).
--define(OBSERV_FUN, 5).
 
 -record(sweep,
         {
