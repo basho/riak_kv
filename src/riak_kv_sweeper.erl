@@ -52,9 +52,8 @@
          sweep_result/2,
          update_progress/2,
          update_started_sweep/3,
-         stop_all_sweeps/0,
-         disable_sweep_scheduling/0,
          enable_sweep_scheduling/0,
+         stop_all_sweeps/0,
          get_run_interval/1,
          in_sweep_window/0]).
 
@@ -90,24 +89,17 @@ status() ->
     gen_server:call(?MODULE, status).
 
 
-%% @doc Stop all running sweeps
--spec stop_all_sweeps() ->  ok.
-stop_all_sweeps() ->
-    gen_server:call(?MODULE, stop_all_sweeps).
-
-
-%% Stop scheduled sweeps and disable the scheduler from starting new sweeps
-%% Only allow manual sweeps throu sweep/1.
--spec disable_sweep_scheduling() -> ok.
-disable_sweep_scheduling() ->
-    lager:info("Disable sweep scheduling"),
-    stop_all_sweeps().
-
-
 -spec enable_sweep_scheduling() ->  ok.
 enable_sweep_scheduling() ->
     lager:info("Enable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, true).
+
+
+%% @doc Stop all sweeps and disable the scheduler from starting new sweeps
+%% Only allow manual sweeps throu sweep/1.
+-spec stop_all_sweeps() ->  ok.
+stop_all_sweeps() ->
+    gen_server:call(?MODULE, stop_all_sweeps).
 
 
 update_started_sweep(Index, ActiveParticipants, Estimate) ->
