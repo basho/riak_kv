@@ -540,7 +540,7 @@ element_to_quoted_string(V, _Type) when is_float(V) -> mochinum:digits(V);
 element_to_quoted_string(V, _Type) -> lists:flatten(io_lib:format("~p", [V])).
 
 hex_as_string(Bin) ->
-    lists:flatten(io_lib:format("0x~s~n", [Bin])).
+    lists:flatten(io_lib:format("0x~s", [Bin])).
 
 hexlify(Bin) when is_binary(Bin) ->
     << <<(hex(H)),(hex(L))>> || <<H:4,L:4>> <= Bin >>.
