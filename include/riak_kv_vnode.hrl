@@ -3,12 +3,12 @@
 
 -record(riak_kv_w1c_put_reply_v1, {
     reply :: ok | {error, term()},
-    type :: primary | fallback
+    type :: riak_kv_requests:replica_type()
 }).
 
 -record(riak_kv_w1c_batch_put_reply_v1, {
     reply :: ok | {error, term()},
-    type :: primary | fallback
+    type :: riak_kv_requests:replica_type()
 }).
 
 %% this is a legacy request *potentially* handled via riak_core_vnode_master

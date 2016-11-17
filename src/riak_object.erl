@@ -83,7 +83,6 @@
 -define(MSGPACK_ENCODING_FLAG, 2). %% Flag to indicate msgpack encoding
 
 -export([new/3, new/4, newts/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
->>>>>>> Revert "WIP: Refactored get/put core/fsm and object to take DVV enabled"
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).

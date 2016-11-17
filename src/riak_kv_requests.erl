@@ -25,6 +25,7 @@
 -export([new_put_request/5,
          new_get_request/2,
          new_w1c_put_request/3,
+         new_w1c_batch_put_request/2,
          new_listkeys_request/3,
          new_listbuckets_request/1,
          new_index_request/4,
@@ -32,6 +33,7 @@
          new_delete_request/2,
          new_map_request/3,
          new_vclock_request/1,
+         new_sql_select_request/2,
          is_coordinated_put/1,
          get_bucket_key/1,
          get_bucket_keys/1,
@@ -46,18 +48,21 @@
          get_request_id/1,
          get_start_time/1,
          get_options/1,
+         get_w1c_objects/1,
          remove_option/2,
          request_type/1]).
 
 -export_type([put_request/0,
               get_request/0,
               w1c_put_request/0,
+              w1c_batch_put_request/0,
               listkeys_request/0,
               listbuckets_request/0,
               index_request/0,
               vnode_status_request/0,
               delete_request/0,
               map_request/0,
+              sql_select_request/0,
               vclock_request/0,
               replica_type/0,
               request/0,
@@ -65,6 +70,7 @@
 
 -type bucket_key() :: {binary(),binary()}.
 -type object() :: term().
+-type w1c_objects() :: list({{binary(), binary()}, binary()}).
 -type request_id() :: non_neg_integer().
 -type start_time() :: non_neg_integer().
 -type request_options() :: [any()].
@@ -74,6 +80,7 @@
 -type item_filter() :: function().
 -type coverage_filter() :: riak_kv_coverage_filter:filter().
 -type query() :: riak_index:query_def().
+-type sql_query() :: term().
 
 -record(riak_kv_put_req_v1,
         { bkey :: bucket_key(),
@@ -87,11 +94,16 @@
           req_id :: request_id()}).
 
 -record(riak_kv_w1c_put_req_v1, {
-    bkey :: bucket_key(),
-    encoded_obj :: encoded_obj(),
-    type :: replica_type()
-    % start_time :: non_neg_integer(), Jon to add?
-}).
+          bkey :: bucket_key(),
+          encoded_obj :: encoded_obj(),
+          type :: replica_type()
+          % start_time :: non_neg_integer(), Jon to add?
+       }).
+
+%% Currently only for timeseries batches
+-record(riak_kv_w1c_batch_put_req_v1, {
+          objs :: w1c_objects(),
+          type :: replica_type()}).
 
 -record(riak_kv_listkeys_req_v3, {
           bucket :: bucket(),
@@ -116,6 +128,11 @@
           item_filter :: coverage_filter(),
           qry :: riak_index:query_def()}).
 
+%% TODO get riak_ql types included properly somehow
+-record(riak_kv_sql_select_req_v1, {
+          bucket :: {binary(), binary()},
+          qry}).
+
 -record(riak_kv_vnode_status_req_v1, {}).
 
 -record(riak_kv_delete_req_v1, {
@@ -134,6 +151,7 @@
 -opaque put_request() :: #riak_kv_put_req_v1{}.
 -opaque get_request() :: #riak_kv_get_req_v1{}.
 -opaque w1c_put_request() :: #riak_kv_w1c_put_req_v1{}.
+-opaque w1c_batch_put_request() :: #riak_kv_w1c_batch_put_req_v1{}.
 -opaque listbuckets_request() :: #riak_kv_listbuckets_req_v1{}.
 -opaque listkeys_request() :: #riak_kv_listkeys_req_v3{} | #riak_kv_listkeys_req_v4{}.
 -opaque index_request() :: #riak_kv_index_req_v1{} | #riak_kv_index_req_v2{}.
@@ -141,22 +159,26 @@
 -opaque delete_request() :: #riak_kv_delete_req_v1{}.
 -opaque map_request() :: #riak_kv_map_req_v1{}.
 -opaque vclock_request() :: #riak_kv_vclock_req_v1{}.
+-opaque sql_select_request() :: #riak_kv_sql_select_req_v1{}.
 
 
 -type request() :: put_request()
                  | get_request()
                  | w1c_put_request()
+                 | w1c_batch_put_request()
                  | listkeys_request()
                  | listbuckets_request()
                  | index_request()
                  | vnode_status_request()
                  | delete_request()
                  | map_request()
-                 | vclock_request().
+                 | vclock_request()
+                 | sql_select_request().
 
 -type request_type() :: kv_put_request
                       | kv_get_request
                       | kv_w1c_put_request
+                      | kv_w1c_batch_put_request
                       | kv_listkeys_request
                       | kv_listbuckets_request
                       | kv_index_request
@@ -164,12 +186,14 @@
                       | kv_delete_request
                       | kv_map_request
                       | kv_vclock_request
+                      | kv_sql_select_request
                       | unknown.
 
 -spec request_type(request()) -> request_type().
 request_type(#riak_kv_put_req_v1{}) -> kv_put_request;
 request_type(#riak_kv_get_req_v1{}) -> kv_get_request;
 request_type(#riak_kv_w1c_put_req_v1{}) -> kv_w1c_put_request;
+request_type(#riak_kv_w1c_batch_put_req_v1{}) -> kv_w1c_batch_put_request;
 request_type(#riak_kv_listkeys_req_v3{})-> kv_listkeys_request;
 request_type(#riak_kv_listkeys_req_v4{})-> kv_listkeys_request;
 request_type(#riak_kv_listbuckets_req_v1{})-> kv_listbuckets_request;
@@ -179,6 +203,7 @@ request_type(#riak_kv_vnode_status_req_v1{})-> kv_vnode_status_request;
 request_type(#riak_kv_delete_req_v1{})-> kv_delete_request;
 request_type(#riak_kv_map_req_v1{})-> kv_map_request;
 request_type(#riak_kv_vclock_req_v1{})-> kv_vclock_request;
+request_type(#riak_kv_sql_select_req_v1{})-> kv_sql_select_request;
 request_type(_) -> unknown.
 
 -spec new_put_request(bucket_key(),
@@ -200,6 +225,10 @@ new_get_request(BKey, ReqId) ->
 -spec new_w1c_put_request(bucket_key(), encoded_obj(), replica_type()) -> w1c_put_request().
 new_w1c_put_request(BKey, EncodedObj, ReplicaType) ->
     #riak_kv_w1c_put_req_v1{bkey = BKey, encoded_obj = EncodedObj, type = ReplicaType}.
+
+-spec new_w1c_batch_put_request(w1c_objects(), replica_type()) -> w1c_batch_put_request().
+new_w1c_batch_put_request(Objects, ReplicaType) ->
+    #riak_kv_w1c_batch_put_req_v1{objs = Objects, type = ReplicaType}.
 
 -spec new_listkeys_request(bucket(), item_filter(), UseAckBackpressure::boolean()) -> listkeys_request().
 new_listkeys_request(Bucket, ItemFilter, true) ->
@@ -243,6 +272,11 @@ new_map_request(BKey, QTerm, KeyData) ->
 new_vclock_request(BKeys) ->
     #riak_kv_vclock_req_v1{bkeys=BKeys}.
 
+-spec new_sql_select_request(bucket(), sql_query()) -> sql_select_request().
+new_sql_select_request(Bucket, Query) ->
+    #riak_kv_sql_select_req_v1{bucket=Bucket,
+                               qry=Query}.
+
 -spec is_coordinated_put(put_request()) -> boolean().
 is_coordinated_put(#riak_kv_put_req_v1{options=Options}) ->
     proplists:get_value(coord, Options, false).
@@ -268,8 +302,9 @@ get_bucket(#riak_kv_listkeys_req_v4{bucket = Bucket}) ->
 get_bucket(#riak_kv_index_req_v1{bucket = Bucket}) ->
     Bucket;
 get_bucket(#riak_kv_index_req_v2{bucket = Bucket}) ->
+    Bucket;
+get_bucket(#riak_kv_sql_select_req_v1{bucket = Bucket}) ->
     Bucket.
-
 
 -spec get_item_filter(request()) -> item_filter() | coverage_filter().
 get_item_filter(#riak_kv_listkeys_req_v3{item_filter = ItemFilter}) ->
@@ -293,10 +328,12 @@ get_ack_backpressure(#riak_kv_index_req_v1{}) ->
 get_ack_backpressure(#riak_kv_index_req_v2{}) ->
     true.
 
--spec get_query(request()) -> query().
+-spec get_query(request()) -> query() | sql_query().
 get_query(#riak_kv_index_req_v1{qry = Query}) ->
     Query;
 get_query(#riak_kv_index_req_v2{qry = Query}) ->
+    Query;
+get_query(#riak_kv_sql_select_req_v1{qry = Query}) ->
     Query.
 
 -spec get_encoded_obj(request()) -> encoded_obj().
@@ -306,8 +343,14 @@ get_encoded_obj(#riak_kv_w1c_put_req_v1{encoded_obj = EncodedObj}) ->
 get_object(#riak_kv_put_req_v1{object = Object}) ->
     Object.
 
+-spec get_w1c_objects(request()) -> w1c_objects().
+get_w1c_objects(#riak_kv_w1c_batch_put_req_v1{objs = Objects}) ->
+    Objects.
+
 -spec get_replica_type(request()) -> replica_type().
 get_replica_type(#riak_kv_w1c_put_req_v1{type = Type}) ->
+    Type;
+get_replica_type(#riak_kv_w1c_batch_put_req_v1{type = Type}) ->
     Type.
 
 -spec get_request_id(request()) -> request_id().

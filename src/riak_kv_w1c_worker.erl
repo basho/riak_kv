@@ -20,10 +20,6 @@
 
 -behaviour(gen_server).
 
--ifdef(TEST).
--compile(export_all).
--endif.
-
 %% API
 -export([start_link/1, put/2, async_put/8, async_put_replies/2,
          ts_batch_put/8, ts_batch_put_encoded/2,
@@ -34,6 +30,10 @@
     handle_info/2,
     terminate/2,
     code_change/3]).
+
+-ifdef(TEST).
+-export([w1c_vclock/1]).
+-endif.
 
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -391,7 +391,7 @@ batch_send_vnodes([], Proxies, _EncodedVals, _ReqId) ->
     Proxies;
 batch_send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, EncodedVals, ReqId) ->
     {Proxy, NewProxies} = get_proxy(Idx, Proxies),
-    Message = ?KV_W1C_BATCH_PUT_REQ{objs=EncodedVals, type=Type},
+    Message = riak_kv_requests:new_w1c_batch_put_request(EncodedVals, Type),
     gen_fsm:send_event(
         {Proxy, Node},
         riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
