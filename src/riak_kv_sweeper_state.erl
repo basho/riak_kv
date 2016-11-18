@@ -515,8 +515,8 @@ sweep_window() ->
                                         EndHour >= 0, EndHour =< 23 ->
             {StartHour, EndHour};
         Other ->
-            error_logger:error_msg("Invalid riak_kv_sweep window specified: ~p. "
-                                   "Defaulting to 'always'.\n", [Other]),
+            lager:warning("Invalid riak_kv_sweep window specified: ~p. "
+                          "Defaulting to 'always'.\n", [Other]),
             always
     end.
 
