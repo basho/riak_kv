@@ -516,8 +516,8 @@ sweep_window() ->
             {StartHour, EndHour};
         Other ->
             lager:warning("Invalid riak_kv_sweep window specified: ~p. "
-                          "Defaulting to 'always'.\n", [Other]),
-            always
+                          "Defaulting to 'never'.", [Other]),
+            never
     end.
 
 get_concurrency_limit() ->
