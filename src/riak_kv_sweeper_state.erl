@@ -252,20 +252,16 @@ maybe_schedule_sweep({?MODULE, State}) ->
 -spec sweep_request(index(), state()) -> {ok, index(), state()} | state().
 sweep_request(Index, {?MODULE, State}) ->
     #state{sweeps = Sweeps} = State,
-    SweepSchedulerEnabled = scheduler_enabled(),
     ConcurrenyLimit = get_concurrency_limit(),
-    SweepWindow = sweep_window(),
-    Now = os:timestamp(),
 
     Result =
-        case schedule_sweep1({request, Index}, SweepSchedulerEnabled,
-                             SweepWindow, ConcurrenyLimit, Now, State) of
+        case schedule_sweep1({request, Index}, _Enabled = not_applicable,
+                             _SweepWindow = unused, ConcurrenyLimit, _Now = unused, State) of
             {ok, {request, queue}} ->
                 queue_sweep(Index, State);
             {ok, {request, {restart, Sweep}}} ->
                 stop_sweep(Sweep),
-                Sweeps1 =
-                    dict:store(Index, Sweep#sweep{state = restart}, Sweeps),
+                Sweeps1 = dict:store(Index, Sweep#sweep{state = restart}, Sweeps),
                 State#state{sweeps = Sweeps1};
             {ok, {request, restarting}} ->
                 State;
