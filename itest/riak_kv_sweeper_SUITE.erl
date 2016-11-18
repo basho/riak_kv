@@ -83,7 +83,8 @@ meck_new_aae_modules(AAEnabled, EstimatedKeys, LockResult) ->
     meck:expect(riak_kv_entropy_manager, enabled, fun() -> AAEnabled end),
     meck:new(riak_kv_index_hashtree),
     meck:expect(riak_kv_index_hashtree, get_lock, fun(_, _) -> LockResult end),
-    meck:expect(riak_kv_index_hashtree, estimate_keys, fun(_) -> {ok, EstimatedKeys} end).
+    meck:expect(riak_kv_index_hashtree, estimate_keys, fun(_) -> {ok, EstimatedKeys} end),
+    meck:expect(riak_kv_index_hashtree, release_lock, fun(_) -> ok end).
 
 
 meck_new_sweep_particpant(Name, TestCasePid) ->
@@ -630,18 +631,22 @@ scheduler_restart_sweep_test(Config) ->
 scheduler_estimated_keys_lock_ok_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     TestCasePid = self(),
+
     meck_new_aae_modules(_AAEnabled = true,
                          _EstimatedKeys = 4200,
                          _LockResult = ok),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
     SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
     SP1 = SP#sweep_participant{run_interval = 1},
+    meck_new_visit_function(sweep_observer_1),
+
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
-    meck_new_visit_function(sweep_observer_1),
+
     [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, get_lock, [I, estimate]) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, estimate_keys, [I]) || I <- Indices],
+    [true = meck:called(riak_kv_index_hashtree, release_lock, [I]) || I <- Indices],
     ok.
 
 
@@ -660,6 +665,7 @@ scheduler_estimated_keys_lock_fail_test(Config) ->
     [ok = receive_msg({ok, successfull_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, get_lock, [I, estimate]) || I <- Indices],
     [false = meck:called(riak_kv_index_hashtree, estimate_keys, [I]) || I <- Indices],
+    [false = meck:called(riak_kv_index_hashtree, release_lock, [I]) || I <- Indices],
     ok.
 
 
