@@ -220,7 +220,7 @@ fold_funs(_, #sa{index = Index,
                  succ_p = []} = SweepAcc) ->
     lager:info("No more participants in sweep of Index ~p Failed: ~p", [Index, FailedParticipants]),
 
-    throw(SweepAcc);
+    throw({stop_sweep, SweepAcc});
 
 %%% No active participants return all succ for next key to run
 fold_funs(_, #sa{active_p = [],

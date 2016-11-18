@@ -58,7 +58,6 @@ handle_work({sweep, FoldFun, FinishFun}, Sender, State) ->
         FinishFun(FoldFun())
     catch
         throw:receiver_down -> ok;
-        throw:{stop_sweep, PrematureAcc}  -> FinishFun(PrematureAcc);
-        throw:PrematureAcc  -> FinishFun(PrematureAcc)
+        throw:{stop_sweep, PrematureAcc} -> FinishFun(PrematureAcc)
     end,
     {noreply, State}.
