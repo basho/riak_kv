@@ -40,6 +40,7 @@
 -export([get_lock/2,
          get_lock/3,
          get_lock_and_version/2,
+         release_lock/1,
          get_expire_time/0,
          compare/3,
          compare/4,
@@ -234,6 +235,20 @@ get_version(Tree) ->
 get_lock_and_version(Tree, Type) ->
     {get_lock(Tree, Type) , get_version(Tree)}.
 
+%% @doc Release a previously acquired lock. Can only be called by the
+%%      same process that is currently holding the lock.
+%%      Note: if the calling process doesn't hold a lock for this tree,
+%%      this call will crash with a badmatch.
+-spec release_lock(index() | pid()) -> ok.
+release_lock(Index) when is_integer(Index) ->
+    ok = lookup_tree_and_call(Index, {release_lock, self()});
+release_lock(Tree) when is_pid(Tree)  ->
+    %% NB I *hate* infinity timeouts, but since everything else in this
+    %% module already does it, I'm going to stick with that so at least
+    %% we stay consistent until we can address the wider issue in a more
+    %% systematic way.
+    ok = gen_server:call(Tree, {release_lock, self()}, infinity).
+
 %% @doc Poke the specified index_hashtree to ensure the tree is
 %%      built/rebuilt as needed. This is periodically called by the
 %%      {@link riak_kv_entropy_manager}.
@@ -362,6 +377,15 @@ handle_call({new_tree, Id}, _From, State) ->
 handle_call({get_lock, Type, Version, Pid}, _From, State) ->
     {Reply, State2} = do_get_lock(Type, Version, Pid, State),
     {reply, Reply, State2};
+
+handle_call({release_lock, _RequesterPid}, _From, #state{lock = unlocked} = State) ->
+    {reply, not_locked, State};
+handle_call({release_lock, RequesterPid}, _From, #state{lock = {LockPid, LockRef}} = State) when
+      LockPid =:= RequesterPid ->
+    erlang:demonitor(LockRef, [flush]),
+    {reply, ok, State#state{lock = unlocked}};
+handle_call({release_lock, _RequesterPid}, _From, #state{lock = {OtherPid, _LockRef}} = State) ->
+    {reply, {locked_elsewhere, OtherPid}, State};
 
 handle_call(get_version, _From, State=#state{version=Version}) ->
     {reply, Version, State};
