@@ -86,7 +86,7 @@
                 vnode_pid,
                 built,
                 expired :: boolean(),
-                lock :: undefined | reference(),
+                lock = unlocked :: unlocked | reference(),
                 path,
                 build_time,
                 trees,
@@ -415,7 +415,7 @@ handle_call(clear, _From, State) ->
     State2 = clear_tree(State),
     {reply, ok, State2};
 
-handle_call({participate_in_sweep, Pid}, _From, #state{lock=undefined, built=true, expired=true} = State) ->
+handle_call({participate_in_sweep, Pid}, _From, #state{lock=unlocked, built=true, expired=true} = State) ->
     do_participate_in_sweep(Pid, State);
 handle_call({participate_in_sweep, Pid}, _From, #state{built=sweep} = State) ->
     do_participate_in_sweep(Pid, State);
@@ -742,7 +742,7 @@ do_new_tree(Id, State=#state{trees=Trees, path=Path}, MarkType) ->
 do_get_lock(_, _, _, State) when State#state.built /= true ->
     lager:debug("Not built: ~p :: ~p", [State#state.index, State#state.built]),
     {not_built, State};
-do_get_lock(_, _, _, State) when State#state.lock /= undefined ->
+do_get_lock(_, _, _, State) when State#state.lock /= unlocked ->
     lager:debug("Already locked: ~p", [State#state.index]),
     {already_locked, State};
 do_get_lock(_Type, Version, Pid, State=#state{version=Version}) ->
@@ -757,7 +757,7 @@ do_get_lock(_Type, ReqVer, _Pid, State=#state{version=Version, index=Index}) ->
 maybe_release_lock(Ref, State) ->
     case State#state.lock of
         Ref ->
-            State#state{lock=undefined};
+            State#state{lock=unlocked};
         _ ->
             State
     end.
@@ -999,7 +999,7 @@ do_poke(State) ->
     State3.
 
 -spec maybe_upgrade(state()) -> state().
-maybe_upgrade(State=#state{lock=undefined, built=true, version=legacy, index=Index}) ->
+maybe_upgrade(State=#state{lock=unlocked, built=true, version=legacy, index=Index}) ->
     case riak_kv_entropy_manager:get_pending_version() of
         legacy ->
             State;
@@ -1017,7 +1017,7 @@ maybe_upgrade(State) ->
     State.
 
 -spec maybe_expire(state()) -> state().
-maybe_expire(State=#state{lock=undefined, built=true, expired=false}) ->
+maybe_expire(State=#state{lock=unlocked, built=true, expired=false}) ->
     Diff = timer:now_diff(os:timestamp(), State#state.build_time),
     Expire = get_expire_time(),
 
