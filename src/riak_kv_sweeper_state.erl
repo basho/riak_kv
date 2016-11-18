@@ -337,11 +337,11 @@ get_run_interval(RunInterval) ->
     RunInterval.
 
 -spec schedule_sweep(Event            :: scheduler_event(),
-                      Enabled          :: boolean(),
-                      SweepWindow      :: scheduler_sweep_window(),
-                      ConcurrencyLimit :: non_neg_integer(),
-                      Now              :: erlang:timestamp(),
-                      State            :: #state{}) -> shedulder_result().
+                     Enabled          :: boolean(),
+                     SweepWindow      :: scheduler_sweep_window(),
+                     ConcurrencyLimit :: non_neg_integer(),
+                     Now              :: erlang:timestamp(),
+                     State            :: #state{}) -> shedulder_result().
 
 schedule_sweep(tick, _Enabled = false, _SweepWindow, _ConcurrencyLimit, _Now, _State) ->
     {ok, {tick, disabled}};
