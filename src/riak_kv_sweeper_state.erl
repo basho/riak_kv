@@ -27,7 +27,7 @@
          ask_participants/2,
          get_estimate_keys/2,
          get_run_interval/1,
-         maybe_initiate_sweeps/1,
+         update_sweep_specs/1,
          maybe_schedule_sweep/1,
          new/0,
          persist_sweeps/1,
@@ -99,7 +99,7 @@ new() ->
                 #state{sweep_participants = SP}
         end,
     State1 = State0#state{sweeps = get_persistent_sweeps()},
-    maybe_initiate_sweeps({?MODULE, State1}).
+    update_sweep_specs({?MODULE, State1}).
 
 -spec update_timer_ref(TimerRef :: reference(), state()) -> state().
 update_timer_ref(Ref, {?MODULE, State}) ->
@@ -123,8 +123,8 @@ remove_sweep_participant(Module, {?MODULE, State}) ->
     State1 = new(State#state{sweep_participants = SP1}),
     {ok, Removed, State1}.
 
--spec maybe_initiate_sweeps(state()) -> state().
-maybe_initiate_sweeps({?MODULE, State}) ->
+-spec update_sweep_specs(state()) -> state().
+update_sweep_specs({?MODULE, State}) ->
     #state{sweeps = Sweeps} = State,
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Indices = riak_core_ring:my_indices(Ring),
@@ -618,7 +618,7 @@ setup() ->
     meck:expect(riak_core_ring, my_indices,  fun(ring) -> MyRingPart  end),
     meck:new(riak_kv_vnode),
     meck:expect(riak_kv_vnode, sweep, fun(_, _, _) -> [] end),
-    State = maybe_initiate_sweeps({?MODULE, #state{}}),
+    State = update_sweep_specs({?MODULE, #state{}}),
     State1 = add_test_sweep_participant(State, Participants),
     {MyRingPart, Participants, State1}.
 

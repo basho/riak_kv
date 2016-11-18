@@ -135,7 +135,7 @@ handle_call({remove_sweep_participant, Module}, _From, State) ->
     {reply, Removed, State1};
 
 handle_call({sweep_request, Index}, _From, State) ->
-    State1 = riak_kv_sweeper_state:maybe_initiate_sweeps(State),
+    State1 = riak_kv_sweeper_state:update_sweep_specs(State),
     State3 =
         case riak_kv_sweeper_state:sweep_request(Index, State1) of
             {ok, Index, State2} ->
@@ -182,7 +182,7 @@ handle_info(sweep_tick, State) ->
     State3 =
         case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
             true ->
-                State1 = riak_kv_sweeper_state:maybe_initiate_sweeps(State),
+                State1 = riak_kv_sweeper_state:update_sweep_specs(State),
                 case riak_kv_sweeper_state:maybe_schedule_sweep(State1) of
                     {ok, Index, State2} ->
                         do_sweep(Index, State2);
