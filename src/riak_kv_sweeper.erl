@@ -246,35 +246,28 @@ maybe_estimate_keys(_Index, false, _) ->
     false.
 
 get_estimtate(Index) ->
-    Pid = self(),
-    %% riak_kv_index_hashtree release lock when the process die
-    proc_lib:spawn(fun() ->
-                Estimate =
-                    case riak_kv_index_hashtree:get_lock(Index, estimate) of
-                        ok ->
-                            case riak_kv_index_hashtree:estimate_keys(Index) of
-                                {ok, EstimatedNrKeys} ->
-                                    EstimatedNrKeys;
-                                Other ->
-                                    lager:info("Failed to get estimate for ~p, got result"
-                                               " ~p. Defaulting to 0...", [Index, Other]),
-                                    0
-                            end;
-                        _ ->
-                            lager:info("Failed to get lock for index ~p for estimate, "
-                                       "defaulting to 0...", [Index]),
-                            0
-                    end,
-                Pid ! {estimate, Estimate}
-        end),
-    wait_for_estimate().
-
-wait_for_estimate() ->
-    receive
-        {estimate, Estimate} ->
-            Estimate
-    after 5000 ->
-        0
+    case riak_kv_index_hashtree:get_lock(Index, estimate) of
+        ok ->
+            Result = case riak_kv_index_hashtree:estimate_keys(Index) of
+                         {ok, EstimatedNrKeys} ->
+                             EstimatedNrKeys;
+                         Other ->
+                             lager:info("Failed to get estimate for ~p, got result"
+                                        " ~p. Defaulting to 0...", [Index, Other]),
+                             0
+                     end,
+            %% If we wanted to be extra paranoid, we could wrap the above in a try
+            %% block and put release_lock in an after block, but then that can mask
+            %% exceptions in the try block if release_lock fails too...and this will
+            %% be safe right now anyway, since we don't catch exceptions anywhere;
+            %% the death of the process holding the lock triggers the lock's release,
+            %% so if we raise an exception the sweeper will die and the tree will unlock.
+            riak_kv_index_hashtree:release_lock(Index),
+            Result;
+        _ ->
+            lager:info("Failed to get lock for index ~p for estimate, "
+                       "defaulting to 0...", [Index]),
+            0
     end.
 
 schedule_initial_sweep_tick() ->
