@@ -28,6 +28,14 @@ init_per_testcase(_TestCase, Config) ->
     VNodeIndices = meck_new_riak_core_modules(2),
     riak_kv_sweeper:start_link(),
 
+    {messages, LeftoverMessages} = process_info(self(), messages),
+    case LeftoverMessages of
+        [] ->
+            ok;
+        _ ->
+            ct:pal("Got leftover messages: ~p", LeftoverMessages)
+    end,
+
     [{vnode_indices, VNodeIndices}|Config].
 
 
