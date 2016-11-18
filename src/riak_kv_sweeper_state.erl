@@ -255,8 +255,8 @@ sweep_request(Index, {?MODULE, State}) ->
     ConcurrenyLimit = get_concurrency_limit(),
 
     Result =
-        case schedule_sweep({request, Index}, _Enabled = not_applicable,
-                             _SweepWindow = unused, ConcurrenyLimit, _Now = unused, State) of
+        case schedule_sweep({request, Index}, _Enabled = true,
+                             _SweepWindow = always, ConcurrenyLimit, {0,0,0}, State) of
             {ok, {request, queue}} ->
                 queue_sweep(Index, State);
             {ok, {request, {restart, Sweep}}} ->
