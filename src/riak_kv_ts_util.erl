@@ -167,7 +167,10 @@ build_sql_record_int(insert, SQL, _Options) ->
             {error, <<"Must provide exactly one table name">>}
     end;
 build_sql_record_int(show_tables, _SQL, _Options) ->
-    {ok, #riak_sql_show_tables_v1{}}.
+    {ok, #riak_sql_show_tables_v1{}};
+build_sql_record_int(show_create_table, SQL, _Options) ->
+    Table = proplists:get_value(identifier, SQL),
+    {ok, #riak_sql_show_create_table_v1{'SHOW_CREATE_TABLE' = Table}}.
 
 convert_where_timestamps(_Mod, []) ->
     [];
@@ -288,7 +291,9 @@ queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table;
 queried_table(#riak_sql_show_tables_v1{})                -> <<>>;
 queried_table(
     #riak_sql_explain_query_v1{'EXPLAIN'=?SQL_SELECT{'FROM' = Table}}) ->
-        Table.
+        Table;
+queried_table(#riak_sql_show_create_table_v1{'SHOW_CREATE_TABLE' = Table}) ->
+    Table.
 
 -spec get_table_ddl(binary()) ->
                            {ok, module(), ?DDL{}} |

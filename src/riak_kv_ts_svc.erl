@@ -166,6 +166,9 @@ process(#riak_sql_show_tables_v1{}, State) ->
     {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State};
 
 process(M = #riak_sql_explain_query_v1{'EXPLAIN' = ?SQL_SELECT{'FROM' = Table}}, State) ->
+    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
+
+process(M = #riak_sql_show_create_table_v1{'SHOW_CREATE_TABLE' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State).
 
 %% There is no two-tuple variants of process_stream for tslistkeysresp

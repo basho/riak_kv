@@ -35,13 +35,14 @@
 
 %% enumerate all current SQL query types
 -type query_type() ::
-        ddl | explain | describe | insert | select | show_tables.
+        ddl | explain | describe | insert | select | show_tables | show_create_table.
 %% and also their corresponding records (mainly for use in specs)
 -type sql_query_type_record() ::
         ?SQL_SELECT{} |
         #riak_sql_describe_v1{} |
         #riak_sql_insert_v1{} |
-        #riak_sql_show_tables_v1{}.
+        #riak_sql_show_tables_v1{} |
+        #riak_sql_show_create_table_v1{}.
 
 -type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
                                  [riak_pb_ts_codec:tscolumntype()],
@@ -72,6 +73,9 @@ submit(SQLString, DDL) when is_list(SQLString) ->
 
 submit(#riak_sql_describe_v1{}, DDL) ->
     riak_ql_describe:describe(DDL);
+submit(#riak_sql_show_create_table_v1{}, ?DDL{table = Table} = DDL) ->
+    Props = riak_core_bucket:get_bucket({Table, Table}),
+    riak_ql_show_create_table:show_create_table(DDL, Props);
 submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
     do_insert(SQL);
 submit(SQL = ?SQL_SELECT{}, DDL) ->
@@ -442,6 +446,83 @@ explain_query_test() ->
     meck:unload(riak_core_apl),
     meck:unload(riak_core_bucket),
     meck:unload(riak_core_claimant).
+
+show_create_table_test() ->
+    CreateSQL = "CREATE TABLE creation ("
+        "a SINT64 NOT NULL,\n"
+        "b TIMESTAMP NOT NULL,\n"
+        "c VARCHAR NOT NULL,\n"
+        "d SINT64,\n"
+        "e BOOLEAN,\n"
+        "f VARCHAR,\n"
+        "PRIMARY KEY ((c, a, QUANTUM(b, 1, 's')),\nc, a, b))",
+    PropsSQL = "\nWITH (active = true,\n"
+        "allow_mult = true,\n"
+        "dvv_enabled = true,\n"
+        "dw = quorum,\n"
+        "last_write_wins = false,\n"
+        "n_val = 2,\n"
+        "notfound_ok = true,\n"
+        "postcommit = '',\n"
+        "pr = 0,\n"
+        "pw = 0,\n"
+        "r = quorum,\n"
+        "rw = quorum,\n"
+        "w = quorum)",
+    %NoNewLines = re:replace(CreateSQL, "\n", " ", [global,{return,list}]),
+    {ddl, DDL, _Props} =
+        riak_ql_parser:ql_parse(
+            riak_ql_lexer:get_tokens(
+                CreateSQL ++
+                "WITH (n_val=2)")),
+    Props = [
+        {young_vclock, 20},
+        {w, quorum},
+        {small_vclock, 50},
+        {rw, quorum},
+        {r, quorum},
+        {pw, 0},
+        {precommit, []},
+        {pr, 0},
+        {postcommit, []},
+        {old_vclock, 86400},
+        {notfound_ok, true},
+        {n_val, 2},
+        {linkfun, {modfun,riak_kv_wm_link_walker,mapreduce_linkfun}},
+        {last_write_wins, false},
+        {dw, quorum},
+        {dvv_enabled, true},
+        {ddl_compiler_version, 319058810386694792992737611904771446619},
+        {ddl, {ddl_v2,<<"creation">>,
+            [{riak_field_v1,<<"a">>,1,sint64,false},
+                {riak_field_v1,<<"b">>,2,timestamp,false},
+                {riak_field_v1,<<"c">>,3,varchar,false},
+                {riak_field_v1,<<"d">>,4,sint64,true},
+                {riak_field_v1,<<"e">>,5,boolean,true},
+                {riak_field_v1,<<"f">>,6,varchar,true}],
+            {key_v1,[{param_v2,[<<"c">>],undefined},
+                {param_v2,[<<"a">>],undefined},
+                {hash_fn_v1,riak_ql_quanta,quantum,
+                    [{param_v2,[<<"b">>],undefined},1,s],
+                    timestamp}]},
+            {key_v1,[{param_v2,[<<"c">>],undefined},
+                {param_v2,[<<"a">>],undefined},
+                {param_v2,[<<"b">>],undefined}]},
+            v1}},
+        {chash_keyfun, {riak_core_util,chash_std_keyfun}},
+        {big_vclock, 50},
+        {basic_quorum, false},
+        {allow_mult, true},
+        {write_once, true},
+        {active, true},
+        {claimant, 'dev1@127.0.0.1'}
+    ],
+    Res = riak_ql_show_create_table:show_create_table(DDL, Props),
+    ExpectedRows =
+        [[CreateSQL ++ PropsSQL]],
+    ?assertMatch(
+        {ok, {_, _, ExpectedRows}},
+        Res).
 
 validate_make_insert_row_basic_test() ->
     Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
