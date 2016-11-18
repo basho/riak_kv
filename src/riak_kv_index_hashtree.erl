@@ -86,7 +86,7 @@
                 vnode_pid,
                 built,
                 expired :: boolean(),
-                lock = unlocked :: unlocked | reference(),
+                lock = unlocked :: unlocked | {pid(), reference()},
                 path,
                 build_time,
                 trees,
@@ -747,7 +747,7 @@ do_get_lock(_, _, _, State) when State#state.lock /= unlocked ->
     {already_locked, State};
 do_get_lock(_Type, Version, Pid, State=#state{version=Version}) ->
     Ref = monitor(process, Pid),
-    State2 = State#state{lock=Ref},
+    State2 = State#state{lock={Pid, Ref}},
     {ok, State2};
 do_get_lock(_Type, ReqVer, _Pid, State=#state{version=Version, index=Index}) ->
     lager:debug("Hashtree ~p lock attempted for version: ~p while local tree has version: ~p", [Index, ReqVer, Version]),
@@ -756,7 +756,7 @@ do_get_lock(_Type, ReqVer, _Pid, State=#state{version=Version, index=Index}) ->
 -spec maybe_release_lock(reference(), state()) -> state().
 maybe_release_lock(Ref, State) ->
     case State#state.lock of
-        Ref ->
+        {_Pid, Ref} ->
             State#state{lock=unlocked};
         _ ->
             State
