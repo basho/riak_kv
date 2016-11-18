@@ -235,7 +235,7 @@ maybe_schedule_sweep({?MODULE, State}) ->
     Now = os:timestamp(),
 
     Result =
-        case schedule_sweep1(_Event = tick,
+        case schedule_sweep(_Event = tick,
                              Enabled, SweepWindow, ConcurrenyLimit, Now, State) of
             {ok, {tick, #sweep{} = Sweep}} ->
                 {Sweep, State};
@@ -255,7 +255,7 @@ sweep_request(Index, {?MODULE, State}) ->
     ConcurrenyLimit = get_concurrency_limit(),
 
     Result =
-        case schedule_sweep1({request, Index}, _Enabled = not_applicable,
+        case schedule_sweep({request, Index}, _Enabled = not_applicable,
                              _SweepWindow = unused, ConcurrenyLimit, _Now = unused, State) of
             {ok, {request, queue}} ->
                 queue_sweep(Index, State);
@@ -336,24 +336,24 @@ get_run_interval(RunIntervalFun) when is_function(RunIntervalFun) ->
 get_run_interval(RunInterval) ->
     RunInterval.
 
--spec schedule_sweep1(Event            :: scheduler_event(),
+-spec schedule_sweep(Event            :: scheduler_event(),
                       Enabled          :: boolean(),
                       SweepWindow      :: scheduler_sweep_window(),
                       ConcurrencyLimit :: non_neg_integer(),
                       Now              :: erlang:timestamp(),
                       State            :: #state{}) -> shedulder_result().
 
-schedule_sweep1(tick, _Enabled = false, _SweepWindow, _ConcurrencyLimit, _Now, _State) ->
+schedule_sweep(tick, _Enabled = false, _SweepWindow, _ConcurrencyLimit, _Now, _State) ->
     {ok, {tick, disabled}};
 
-schedule_sweep1(tick, _Enabled = true, _SweepWindow = never, _ConcurrencyLimit, _Now, _State) ->
+schedule_sweep(tick, _Enabled = true, _SweepWindow = never, _ConcurrencyLimit, _Now, _State) ->
     {ok, {tick, sweep_window_never}};
 
-schedule_sweep1(Event = tick, Enabled = true, _SweepWindow = always,
+schedule_sweep(Event = tick, Enabled = true, _SweepWindow = always,
                 ConcurrencyLimit, Now, State) ->
-    schedule_sweep1(Event, Enabled, {0, 23}, ConcurrencyLimit, Now, State);
+    schedule_sweep(Event, Enabled, {0, 23}, ConcurrencyLimit, Now, State);
 
-schedule_sweep1(tick, _Enabled = true, SweepWindow, ConcurrencyLimit, Now, State) ->
+schedule_sweep(tick, _Enabled = true, SweepWindow, ConcurrencyLimit, Now, State) ->
     #state{sweep_participants = Participants,
            sweeps = Sweeps} = State,
     {_, {NowHour, _, _}} = calendar:now_to_local_time(Now),
@@ -368,7 +368,7 @@ schedule_sweep1(tick, _Enabled = true, SweepWindow, ConcurrencyLimit, Now, State
         {false, true} ->
             schedule_sweep2(Now, Participants, Sweeps)
     end;
-schedule_sweep1({request, Index}, _Enabled, _SweepWindow, ConcurrencyLimit, _Now, State) ->
+schedule_sweep({request, Index}, _Enabled, _SweepWindow, ConcurrencyLimit, _Now, State) ->
     #state{sweeps = Sweeps} = State,
     CLR = length(get_running_sweeps(Sweeps)) >= ConcurrencyLimit,
     case dict:find(Index, Sweeps) of
@@ -830,7 +830,7 @@ prop_schedule_sweep_request() ->
                 SPs = State#state.sweep_participants,
                 Sweeps = State#state.sweeps,
                 SPs = State#state.sweep_participants,
-                case schedule_sweep1(Event, Enabled, SweepWindow, ConcurrencyLimit, Now, State) of
+                case schedule_sweep(Event, Enabled, SweepWindow, ConcurrencyLimit, Now, State) of
                     {ok, {request, not_index}} ->
                         {request, Index} = Event,
                         Indices = [I0 || {I0, _} <- dict:to_list(Sweeps)],
@@ -864,7 +864,7 @@ prop_schedule_sweep_tick() ->
                 QueuedSweeps = get_queued_sweeps(Sweeps),
                 ExpiredSweep = find_expired_participant(Now, Sweeps, SPs),
                 SPs = State#state.sweep_participants,
-                case schedule_sweep1(Event, Enabled, SweepWindow, ConcurrencyLimit, Now, State) of
+                case schedule_sweep(Event, Enabled, SweepWindow, ConcurrencyLimit, Now, State) of
                     {ok, {tick, none}} ->
                         length(NeverRunSweeps) == 0 andalso
                             length (QueuedSweeps) == 0 andalso
@@ -896,7 +896,7 @@ prop_schedule_sweep_tick() ->
                 end
             end).
 
-prop_schedule_sweep1_test_() ->
+prop_schedule_sweep_test_() ->
     {timeout, 30,
      [fun() -> ?assert(eqc:quickcheck(prop_schedule_sweep_request())) end,
       fun() -> ?assert(eqc:quickcheck(prop_schedule_sweep_tick())) end]}.
