@@ -64,14 +64,7 @@ use_ack_backpressure() ->
 %% @doc Construct the correct listkeys command record.
 -spec req(binary(), term()) -> term().
 req(Bucket, ItemFilter) ->
-    case use_ack_backpressure() of
-        true ->
-            ?KV_LISTKEYS_REQ{bucket=Bucket,
-                             item_filter=ItemFilter};
-        false ->
-            #riak_kv_listkeys_req_v3{bucket=Bucket,
-                                     item_filter=ItemFilter}
-    end.
+    riak_kv_requests:new_listkeys_request(Bucket, ItemFilter, use_ack_backpressure()).
 
 
 %% @doc Return a tuple containing the ModFun to call per vnode,

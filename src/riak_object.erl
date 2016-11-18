@@ -309,8 +309,7 @@ merge(OldObject, NewObject) ->
             merge_write_once(OldObject, NewObj1);
         _ ->
             DVV = dvv_enabled(Bucket),
-            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3,
-                                                 [NewObject, OldObject, DVV]),
+            {Time,  {CRDT, Contents}} = timer:tc(fun merge_contents/3, [NewObject, OldObject, DVV]),
             ok = riak_kv_stat:update({riak_object_merge, CRDT, Time}),
             OldObject#r_object{contents=Contents,
                 vclock=vclock:merge([OldObject#r_object.vclock,
@@ -320,19 +319,18 @@ merge(OldObject, NewObject) ->
     end.
 
 %% @doc Special case write_once merge, in the case where the write_once property is
-%%      set on the bucket (type).  In this case, take the lesser (in lexical order)
-%%      of the SHA1 hash of each object.
+%%      set on the bucket (type).  In this case, take the vclock timestamp.
 %%
 -spec merge_write_once(riak_object(), riak_object()) -> riak_object().
 merge_write_once(OldObject, NewObject) ->
     ok = riak_kv_stat:update(write_once_merge),
-    case crypto:hash(sha, term_to_binary(OldObject)) =< crypto:hash(sha, term_to_binary(NewObject)) of
-        true ->
-            OldObject;
-        _ ->
-            NewObject
-    end.
+    pick_last_w1c_timestamp({OldObject, vclock:get_timestamp(<<0:8>>, OldObject#r_object.vclock)},
+                            {NewObject, vclock:get_timestamp(<<0:8>>, NewObject#r_object.vclock)}).
 
+pick_last_w1c_timestamp({O1, T1}, {_O2, T2}) when T1 > T2 ->
+    O1;
+pick_last_w1c_timestamp({_O1, _T1}, {O2, _T2}) ->
+    O2.
 
 %% @doc Merge the r_objects contents by converting the inner dict to
 %%      a list, ensuring a sane order, and merging into a unique list.
@@ -495,11 +493,11 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% CRDT binary start tag. Either way, gather the
                     %% error for later logging.
                     MergeAcc#merge_acc{error=[E | Error]};
-                {CRDT, [{Dict, Value}], []} ->
+                {CRDT, [{Dict, Value}], E} when is_list(E)->
                     %% The sibling value was not a CRDT, but a
                     %% (legacy?) un-dotted user opaque value. Add it
                     %% to the list of values to keep.
-                    MergeAcc#merge_acc{keep=[C0|Keep]};
+                    MergeAcc#merge_acc{keep=[C0|Keep], error=E ++ Error};
                 {CRDT2, [], []} ->
                     %% The sibling was a CRDT and the CRDT accumulator
                     %% has been updated.
@@ -1256,6 +1254,23 @@ decode_vclock(Method, VClock) ->
     end.
 
 -ifdef(TEST).
+
+w1c_merge_test() ->
+    B = {<<"bogus_w1c">>, <<"a_bucket">>},
+    K1 = <<"w1c key 1">>,
+    K2 = <<"w1c key 2">>,
+    V = <<"value">>,
+    O1 = riak_kv_w1c_worker:w1c_vclock(riak_object:new(B,K1,V)),
+    timer:sleep(2000),
+    O2 = riak_kv_w1c_worker:w1c_vclock(riak_object:new(B,K2,V)),
+    ?assertEqual(O2, merge_write_once(O1, O2)),
+    ?assertEqual(O2, merge_write_once(O2, O1)),
+    NewO1 = riak_kv_w1c_worker:w1c_vclock(riak_object:new(B,K2,V)),
+    timer:sleep(2000),
+    NewO2 = riak_kv_w1c_worker:w1c_vclock(riak_object:new(B,K1,V)),
+    ?assertEqual(NewO2, merge_write_once(NewO1, NewO2)),
+    ?assertEqual(NewO2, merge_write_once(NewO2, NewO1)).
+
 
 object_test() ->
     B = <<"buckets_are_binaries">>,

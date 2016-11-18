@@ -28,6 +28,7 @@
          apply_timeseries_bucket_props/3,
          build_sql_record/3,
          check_table_feature_supported/2,
+         is_table_supported/2,
          encode_typeval_key/1,
          explain_query/1, explain_query/2,
          get_column_types/2,
@@ -1027,8 +1028,8 @@ check_table_feature_supported_is_supported_v1_test() ->
     {module, _Mod} = helper_sql_to_module(Table),
     DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_is_supported_v1_test">>}},
     ?assertEqual(
-        DecodedReq,
-        check_table_feature_supported(v1, DecodedReq)
+       DecodedReq,
+       check_table_feature_supported(v1, DecodedReq)
     ).
 
 check_table_feature_supported_is_supported_v2_test() ->
@@ -1041,8 +1042,8 @@ check_table_feature_supported_is_supported_v2_test() ->
     {module, _Mod} = helper_sql_to_module(Table),
     DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_is_supported_v2_test">>}},
     ?assertEqual(
-        DecodedReq,
-        check_table_feature_supported(v2, DecodedReq)
+       DecodedReq,
+       check_table_feature_supported(v2, DecodedReq)
     ).
 
 check_table_feature_supported_not_supported_test() ->

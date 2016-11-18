@@ -31,6 +31,10 @@
     terminate/2,
     code_change/3]).
 
+-ifdef(TEST).
+-export([w1c_vclock/1]).
+-endif.
+
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_wm_raw.hrl").
 
@@ -376,7 +380,7 @@ send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
 send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId) ->
     {Proxy, NewProxies} = get_proxy(Idx, Proxies),
-    Message = ?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
+    Message = riak_kv_requests:new_w1c_put_request({Bucket, Key}, EncodedVal, Type),
     gen_fsm:send_event(
         {Proxy, Node},
         riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
@@ -387,7 +391,7 @@ batch_send_vnodes([], Proxies, _EncodedVals, _ReqId) ->
     Proxies;
 batch_send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, EncodedVals, ReqId) ->
     {Proxy, NewProxies} = get_proxy(Idx, Proxies),
-    Message = ?KV_W1C_BATCH_PUT_REQ{objs=EncodedVals, type=Type},
+    Message = riak_kv_requests:new_w1c_batch_put_request(EncodedVals, Type),
     gen_fsm:send_event(
         {Proxy, Node},
         riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
