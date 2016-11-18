@@ -65,7 +65,7 @@
 %% ====================================================================
 %% Types
 %% ====================================================================
--type state() :: {Module :: atom(), #state{}}.
+-type state() :: {?MODULE, #state{}}.
 -type index() :: non_neg_integer().
 
 -type scheduler_event() :: {request, index()} | tick.
