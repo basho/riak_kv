@@ -34,13 +34,10 @@
          get_column_types/2,
          get_table_ddl/1,
          lk/1,
-         lk_to_pk/3,
-         make_ts_keys/3,
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
          rm_rf/1,
-         row_to_key/3,
          sql_record_to_tuple/1,
          sql_to_cover/6,
          table_to_bucket/1,
@@ -405,60 +402,11 @@ try_compile_ddl(DDL) ->
     {ok, _, _} = compile:forms(AST),
     ok.
 
-
--spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], ?DDL{}, module()) ->
-                          {ok, {tuple(), tuple()}} |
-                          {error, {bad_key_length, integer(), integer()}}.
-%% Given a list of values (of appropriate types) and a DDL, produce a
-%% partition and local key pair, which can be used in riak_client:get
-%% to fetch TS objects.
-make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
-                                     fields = Fields}, Mod) ->
-    %% 1. use elements in Key to form a complete data record:
-    KeyFields = [F || ?SQL_PARAM{name = [F]} <- LKAst],
-    AllFields = [F || #riak_field_v1{name = F} <- Fields],
-    Got = length(CompoundKey),
-    Need = length(KeyFields),
-    case {Got, Need} of
-        {_N, _N} ->
-            DummyObject = build_dummy_object_from_keyed_values(
-                            lists:zip(KeyFields, CompoundKey), AllFields),
-            %% 2. make the PK and LK
-            PK  = encode_typeval_key(
-                    riak_ql_ddl:get_partition_key(DDL, DummyObject, Mod)),
-            LK  = encode_typeval_key(
-                    riak_ql_ddl:get_local_key(DDL, DummyObject, Mod)),
-            {ok, {PK, LK}};
-       {G, N} ->
-            {error, {bad_key_length, G, N}}
-    end.
-
-build_dummy_object_from_keyed_values(LK, AllFields) ->
-    VoidRecord = [{F, void} || F <- AllFields],
-    %% (void values will not be looked at in riak_ql_ddl:make_key;
-    %% only LK-constituent fields matter)
-    list_to_tuple(
-      [proplists:get_value(K, LK)
-       || {K, _} <- VoidRecord]).
-
-
 -spec encode_typeval_key(list({term(), term()})) -> tuple().
 %% Encode a time series key returned by riak_ql_ddl:get_partition_key/3,
 %% riak_ql_ddl:get_local_key/3,
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
-
--spec lk_to_pk(tuple(), ?DDL{}, module()) -> tuple().
-%% A simplified version of make_key/3 which only returns the PK.
-lk_to_pk(LKVals, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
-                        fields = Fields}, Mod)
-  when is_tuple(LKVals) andalso size(LKVals) == length(LKAst) ->
-    KeyFields = [F || ?SQL_PARAM{name = [F]} <- LKAst],
-    AllFields = [F || #riak_field_v1{name = F} <- Fields],
-    DummyObject = build_dummy_object_from_keyed_values(
-                    lists:zip(KeyFields, tuple_to_list(LKVals)), AllFields),
-    encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, DummyObject, Mod)).
 
 %% Show some debug info about how a query is compiled into sub queries
 %% and what key ranges are created.
@@ -590,10 +538,6 @@ validate_rows(Mod, Rows) ->
 -spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
-
-row_to_key(Row, DDL, Mod) when is_tuple(Row) ->
-    encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
 %% Result from riak_client:get_cover is a nested list of coverage plan
 %% because KV coverage requests are designed that way, but in our case
@@ -817,59 +761,6 @@ helper_compile_def_to_module(SQL) ->
     {ok, {DDL, _Props}} = riak_ql_parser:parse(Lexed),
     {module, Mod} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     {DDL, Mod}.
-
-% basic family/series/timestamp
-make_ts_keys_1_test() ->
-    {DDL, Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table1 ("
-        "a SINT64 NOT NULL, "
-        "b SINT64 NOT NULL, "
-        "c TIMESTAMP NOT NULL, "
-        "PRIMARY KEY((a, b, quantum(c, 15, 's')), a, b, c))"),
-    ?assertEqual(
-        {ok, {{1,2,0}, {1,2,3}}},
-        make_ts_keys([1,2,3], DDL, Mod)
-    ).
-
-% a two element key, still using the table definition field order
-make_ts_keys_2_test() ->
-    {DDL, Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table1 ("
-        "a SINT64 NOT NULL, "
-        "b TIMESTAMP NOT NULL, "
-        "c SINT64 NOT NULL, "
-        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
-    ?assertEqual(
-        {ok, {{1,0}, {1,2}}},
-        make_ts_keys([1,2], DDL, Mod)
-    ).
-
-make_ts_keys_3_test() ->
-    {DDL, Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table2 ("
-        "a SINT64 NOT NULL, "
-        "b SINT64 NOT NULL, "
-        "c TIMESTAMP NOT NULL, "
-        "d SINT64 NOT NULL, "
-        "PRIMARY KEY  ((d,a,quantum(c, 1, 's')), d,a,c))"),
-    ?assertEqual(
-        {ok, {{10,20,0}, {10,20,1}}},
-        make_ts_keys([10,20,1], DDL, Mod)
-    ).
-
-make_ts_keys_4_test() ->
-    {DDL, Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table2 ("
-        "ax SINT64 NOT NULL, "
-        "a SINT64 NOT NULL, "
-        "b SINT64 NOT NULL, "
-        "c TIMESTAMP NOT NULL, "
-        "d SINT64 NOT NULL, "
-        "PRIMARY KEY  ((ax,a,quantum(c, 1, 's')), ax,a,c))"),
-    ?assertEqual(
-        {ok, {{10,20,0}, {10,20,1}}},
-        make_ts_keys([10,20,1], DDL, Mod)
-    ).
 
 
 test_helper_validate_rows_mod() ->
