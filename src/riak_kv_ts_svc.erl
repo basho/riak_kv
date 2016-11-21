@@ -516,6 +516,8 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
         {error, {too_many_subqueries, NQuanta, MaxQueryQuanta}} ->
             {reply, make_max_query_quanta_resp(NQuanta, MaxQueryQuanta), State};
 
+        {error, AReason} when is_atom(AReason) -> %%<< i.e. overload, primary_not_available
+            {reply, make_rpberrresp(?E_SUBMIT, atom_to_list(AReason)), State};
         {error, Reason} ->
             {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
     end.
