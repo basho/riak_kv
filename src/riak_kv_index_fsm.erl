@@ -80,7 +80,13 @@ use_ack_backpressure() ->
 %% @doc Construct the correct index command record.
 -spec req(binary()|tuple(binary()), term(), term()) -> term().
 req(Bucket, ItemFilter, Query) ->
-    riak_kv_requests:new_index_request(Bucket, ItemFilter, Query, use_ack_backpressure()).
+    case riak_kv_select:is_sql_select_record(Query) of
+        true ->
+            riak_kv_requests:new_sql_select_request(Bucket, Query);
+        false ->
+            riak_kv_requests:new_index_request(Bucket, ItemFilter, Query, use_ack_backpressure())
+    end.
+
 
 %% Because instances of index fsm may be started on different nodes
 %% (particularly, on different nodes with differing versions of the
