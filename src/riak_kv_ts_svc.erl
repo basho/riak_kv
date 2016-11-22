@@ -516,10 +516,10 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
         {error, {too_many_subqueries, NQuanta, MaxQueryQuanta}} ->
             {reply, make_max_query_quanta_resp(NQuanta, MaxQueryQuanta), State};
 
-        {error, AReason} when is_atom(AReason) -> %%<< i.e. overload, primary_not_available
-            {reply, make_rpberrresp(?E_SUBMIT, atom_to_list(AReason)), State};
-        {error, Reason} ->
-            {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
+        {error, Reason} when is_list(Reason) ->
+            {reply, make_rpberrresp(?E_SUBMIT, Reason), State};
+        {error, AReason} -> %%<< i.e. overload, primary_not_available
+            {reply, make_rpberrresp(?E_SUBMIT, to_string(AReason)), State}
     end.
 
 
@@ -555,7 +555,7 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
 
 %%
 -spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
-make_rpberrresp(Code, Message) ->
+make_rpberrresp(Code, Message) when is_list(Message) ->
     #rpberrorresp{errcode = Code,
                   errmsg = iolist_to_binary(Message)}.
 
@@ -675,6 +675,8 @@ make_table_created_missing_resp(Table) ->
       ?E_CREATED_GHOST,
       flat_format("Table ~s has been created but found missing", [Table])).
 
+to_string(X) when is_atom(X) ->
+    atom_to_list(X);
 to_string(X) ->
     flat_format("~p", [X]).
 
