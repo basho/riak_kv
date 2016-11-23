@@ -39,7 +39,6 @@
          update_finished_sweep/3,
          update_progress/3,
          update_started_sweep/4,
-         update_timer_ref/2,
          in_sweep_window/0]).
 
 %% Export for testing
@@ -59,8 +58,7 @@
 -define(DEFAULT_SWEEP_CONCURRENCY,1).
 
 -record(state, {sweep_participants = dict:new() :: dict(),
-                sweeps             = dict:new() :: dict(),
-                timer_ref                       :: reference()}).
+                sweeps             = dict:new() :: dict()}).
 
 %% ====================================================================
 %% Types
@@ -100,10 +98,6 @@ new() ->
         end,
     State1 = State0#state{sweeps = get_persistent_sweeps()},
     update_sweep_specs({?MODULE, State1}).
-
--spec update_timer_ref(TimerRef :: reference(), state()) -> state().
-update_timer_ref(Ref, {?MODULE, State}) ->
-    new(State#state{timer_ref = Ref}).
 
 -spec add_sweep_participant(Participant:: #sweep_participant{}, state()) -> state().
 add_sweep_participant(Participant, {?MODULE, State}) ->
@@ -151,9 +145,7 @@ status({?MODULE, State}) ->
 
 -spec stop_all_sweeps(state()) -> {ok, Running :: non_neg_integer(), state()}.
 stop_all_sweeps({?MODULE, State}) ->
-    #state{timer_ref = Ref, sweeps = Sweeps} = State,
-    erlang:cancel_timer(Ref),
-    application:set_env(riak_kv, sweeper_scheduler, false),
+    #state{sweeps = Sweeps} = State,
     Running = [Sweep || Sweep <- get_running_sweeps(Sweeps)],
     [stop_sweep(Sweep) || Sweep <- Running],
     {ok, length(Running), new(State)}.

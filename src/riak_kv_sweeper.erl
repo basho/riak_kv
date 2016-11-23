@@ -94,8 +94,10 @@ enable_sweep_scheduling() ->
 
 %% @doc Stop all sweeps and disable the scheduler from starting new sweeps
 %% Only allow manual sweeps throu sweep/1.
--spec stop_all_sweeps() ->  ok.
+%% Returns the number of running sweeps that were stopped.
+-spec stop_all_sweeps() -> non_neg_integer().
 stop_all_sweeps() ->
+    application:set_env(riak_kv, sweeper_scheduler, false),
     gen_server:call(?MODULE, stop_all_sweeps).
 
 update_started_sweep(Index, ActiveParticipants, Estimate) ->
@@ -121,10 +123,9 @@ get_run_interval(RunIntervalFun) when is_function(RunIntervalFun) ->
 init([]) ->
     process_flag(trap_exit, true),
     random:seed(erlang:now()),
-    Ref = schedule_initial_sweep_tick(),
+    schedule_initial_sweep_tick(),
     State = riak_kv_sweeper_state:new(),
-    State1 = State:update_timer_ref(Ref),
-    {ok, State1}.
+    {ok, State}.
 
 handle_call({add_sweep_participant, Participant}, _From, State) ->
     State1 = riak_kv_sweeper_state:add_sweep_participant(Participant, State),
@@ -178,7 +179,7 @@ handle_info({test_tick, Ref, From}, State) ->
     {noreply, State1};
 
 handle_info(sweep_tick, State) ->
-    Ref = schedule_sweep_tick(),
+    schedule_sweep_tick(),
     State3 =
         case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
             true ->
@@ -192,8 +193,7 @@ handle_info(sweep_tick, State) ->
             false ->
                 State
         end,
-    State4 = riak_kv_sweeper_state:update_timer_ref(Ref, State3),
-    {noreply, State4};
+    {noreply, State3};
 
 handle_info(Msg, State) ->
     lager:error("riak_kv_sweeper received unexpected message ~p", [Msg]),
