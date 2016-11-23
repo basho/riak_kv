@@ -30,6 +30,8 @@
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_sweeper.hrl").
 
+-behavior(riak_kv_sweeper).
+
 %% API
 -export([start/3, start_link/3]).
 

@@ -29,6 +29,8 @@
 -endif.
 -include("riak_kv_wm_raw.hrl").
 
+-behavior(riak_kv_sweeper).
+
 -export([start_link/6, start_link/7, start_link/8, delete/8, obj_outside_grace_period/1,
          create_tombstone/3]).
 -export([participate_in_sweep/2, successful_sweep/2, failed_sweep/2]).

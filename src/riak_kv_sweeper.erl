@@ -45,6 +45,28 @@
 -export_type([fun_type/0]).
 
 %% ====================================================================
+%% Sweep module callback types and specifications
+%% ====================================================================
+-type index() :: non_neg_integer().
+
+-type sweep_fun_acc() :: term().
+
+-type sweep_fun_return() :: {ok, sweep_fun_acc()} |
+                            {deleted, sweep_fun_acc()} |
+                            {mutated, riak_object:riak_object(), sweep_fun_acc()}.
+
+-type sweep_fun() :: fun(({{riak_object:bucket(), riak_object:key()}, riak_object:riak_object()},
+                         sweep_fun_acc(), Options :: [{atom(), term()}])
+                         -> sweep_fun_return()).
+
+-callback participate_in_sweep(Index :: index(), SweeperProc :: pid()) ->
+    false | {ok, sweep_fun(), sweep_fun_acc()}.
+
+-callback successful_sweep(Index :: index(), FinalAcc :: sweep_fun_acc()) -> _.
+
+-callback failed_sweep(Index :: index(), Reason :: term()) -> _.
+
+%% ====================================================================
 %% API functions
 %% ====================================================================
 -export([start_link/0,
