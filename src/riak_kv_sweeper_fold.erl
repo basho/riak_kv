@@ -90,11 +90,11 @@ fun_type_rank(modify_fun) -> 2;
 fun_type_rank(observe_fun) -> 3.
 
 inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
-    successfull_sweep(Succ, Index),
+    successful_sweep(Succ, Index),
     failed_sweep(Failed, Index).
 
-successfull_sweep(Succ, Index) ->
-    [Module:successfull_sweep(Index, FinalAcc) ||
+successful_sweep(Succ, Index) ->
+    [Module:successful_sweep(Index, FinalAcc) ||
        #sweep_participant{module = Module, acc = FinalAcc} <- Succ].
 
 failed_sweep(Failed, Index) ->
@@ -347,7 +347,7 @@ make_keys(Nr) ->
 meck_callback_modules(Module) ->
     meck:new(Module, [non_strict]),
     meck:expect(Module, failed_sweep, fun(_Index, _Reason) -> ok end),
-    meck:expect(Module, successfull_sweep, fun(_Index, _Reason) -> ok end).
+    meck:expect(Module, successful_sweep, fun(_Index, _Reason) -> ok end).
 
 rem_keys(BKey, N, MatchReturn, DefaultReturn) ->
     case binary_to_integer(BKey) rem N of

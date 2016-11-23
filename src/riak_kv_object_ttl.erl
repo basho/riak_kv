@@ -27,7 +27,7 @@
 %% API functions
 %% ====================================================================
 -export([participate_in_sweep/2,
-         successfull_sweep/2,
+         successful_sweep/2,
          failed_sweep/2]).
 
 %% riak_kv_sweeper callbacks
@@ -45,8 +45,8 @@ ttl_fun() ->
             end
     end.
 
-successfull_sweep(Index, _FinalAcc) ->
-    lager:info("successfull_sweep ~p", [Index]),
+successful_sweep(Index, _FinalAcc) ->
+    lager:info("successful_sweep ~p", [Index]),
     ok.
 
 failed_sweep(Index, Reason) ->

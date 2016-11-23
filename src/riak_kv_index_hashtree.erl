@@ -68,7 +68,7 @@
          get_version/1]).
 
 -export([participate_in_sweep/2,
-         successfull_sweep/2,
+         successful_sweep/2,
          failed_sweep/2]).
 
 -export([poke/1,
@@ -283,8 +283,8 @@ expire(Tree) ->
 participate_in_sweep(Index, Pid) ->
     lookup_tree_and_call(Index, {participate_in_sweep, Pid}).
 
-successfull_sweep(Index, _FinalAcc) ->
-    lager:info("successfull_sweep ~p", [Index]),
+successful_sweep(Index, _FinalAcc) ->
+    lager:info("successful_sweep ~p", [Index]),
     riak_kv_entropy_manager:release_lock(Index),
     lookup_tree_and_cast(Index, build_finished).
 
