@@ -229,13 +229,13 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 do_sweep(Index, State) ->
-    %% Ask for estimate before we ask_participants since riak_kv_index_tree
+    %% Ask for estimate before we call get_active_participants, since riak_kv_index_tree
     %% clears the trees if they are expired.
     AAEEnabled = riak_kv_entropy_manager:enabled(),
     Estimate = get_estimate_keys(Index, AAEEnabled, State),
 
     State2 =
-        case riak_kv_sweeper_state:ask_participants(Index, State) of
+        case riak_kv_sweeper_state:get_active_participants(Index, State) of
             {ok, [], State1} ->
                 State1;
             {ok, ActiveParticipants, State1} ->

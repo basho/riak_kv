@@ -24,7 +24,7 @@
 -include("riak_kv_sweeper.hrl").
 
 -export([add_sweep_participant/2,
-         ask_participants/2,
+         get_active_participants/2,
          get_estimate_keys/2,
          get_run_interval/1,
          update_sweep_specs/1,
@@ -150,8 +150,9 @@ stop_all_sweeps({?MODULE, State}) ->
     [stop_sweep(Sweep) || Sweep <- Running],
     {ok, length(Running), new(State)}.
 
--spec ask_participants(index(), state()) -> {ok, Participants :: [#sweep_participant{}], state()}.
-ask_participants(Index, {?MODULE, State}) ->
+-spec get_active_participants(index(), state()) ->
+    {ok, Participants :: [#sweep_participant{}], state()}.
+get_active_participants(Index, {?MODULE, State}) ->
     #state{sweep_participants = Participants} = State,
     Funs =
         [{Participant, Module:participate_in_sweep(Index, self())} ||
