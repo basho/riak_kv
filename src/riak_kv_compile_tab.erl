@@ -27,6 +27,7 @@
          delete_table_ddls/1,
          get_all_table_names/0,
          get_table_status_pairs/0,
+         get_table_status/1,
          get_compiled_ddl_versions/1,
          get_ddl/2,
          insert/2,

@@ -89,6 +89,8 @@ build_sql_record(Command, SQL, Options) ->
 
 
 %% Convert the proplist obtained from the QL parser
+build_sql_record_int(select, SQL, _Options = undefined) ->
+    build_sql_record_int(select, SQL, []);
 build_sql_record_int(select, SQL, Options) ->
     AllowQBufReuse = proplists:get_value(allow_qbuf_reuse, Options),
     Cover          = proplists:get_value(cover, Options),

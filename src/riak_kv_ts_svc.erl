@@ -91,25 +91,39 @@ decode_query_common(Q, Options) ->
     {error, _} | {ok, {ddl, {?DDL{}, proplists:proplist()}}}
                | {ok, {ts_query_types(), riak_kv_qry:sql_query_type_record()}}.
 decode_query(#tsinterpolation{base = BaseQuery}, Options) ->
-    case catch riak_ql_parser:ql_parse(
-                 riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
-                   binary_to_list(BaseQuery))) of
-        {ddl, DDL, WithProperties} ->
-            {ok, {ddl, {DDL, WithProperties}}};
-        {QryType, SQL} when QryType /= error,
-                            QryType /= 'EXIT' ->
-            case riak_kv_ts_util:build_sql_record(QryType, SQL, Options) of
-                {ok, SQLRec} ->
-                    {ok, {QryType, SQLRec}};
-                {error, Reason} ->
-                    {error, Reason}
-            end;
+    case catch sql_lex_parse(BaseQuery) of
         {'EXIT', {Reason, _StackTrace}} ->
             {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
-            {error, Other}
+            {error, Other};
+        {ok, {DDL = ?DDL{}, WithProperties}} ->
+            %% CREATE TABLE, so don't check if the table exists
+            {ok, {ddl, {DDL, WithProperties}}};
+        {ok, [{type, QryType}|SQL]} ->
+            Table = extract_table_name(SQL),
+            case is_table_query_ready(QryType, Table) of
+                true ->
+                    case riak_kv_ts_util:build_sql_record(QryType, SQL, Options) of
+                        {ok, SQLRec} ->
+                            {ok, {QryType, SQLRec}};
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                _ ->
+                    {error, make_table_not_activated_resp(Table)}
+            end
     end.
 
+%% for SHOW TABLES and other such queries which have no table(s), the "table" is
+%% effectively ready for the query
+is_table_query_ready(_QryType, _Table = << >>) -> true;
+is_table_query_ready(_QryType, Table) ->
+    riak_kv_compile_tab:get_table_status(Table) =:= <<"Active">>.
+
+extract_table_name(SQL) ->
+    proplists:get_value(table, SQL,
+                        proplists:get_value(tables, SQL,
+                                            << >>)).
 
 decode_query_permissions(QryType, {DDL = ?DDL{}, _WithProps}) ->
     decode_query_permissions(QryType, DDL);
@@ -553,10 +567,12 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
 
 
 %%
--spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
+-spec make_rpberrresp(integer(), string()|binary()) -> #rpberrorresp{}.
 make_rpberrresp(Code, Message) when is_list(Message) ->
+    make_rpberrresp(Code, list_to_binary(Message));
+make_rpberrresp(Code, Message) when is_binary(Message) ->
     #rpberrorresp{errcode = Code,
-                  errmsg = iolist_to_binary(Message)}.
+                  errmsg = Message}.
 
 %%
 -spec make_missing_helper_module_resp(Table::binary(),
@@ -699,7 +715,8 @@ make_tsqueryresp({_ColumnNames, _ColumnTypes, []}) ->
 make_tsqueryresp(Data = {_ColumnNames, _ColumnTypes, _Rows}) ->
     {tsqueryresp, Data}.
 
-
+make_decoder_error_response(Error = {rpberrorresp, _Msg, _Code}) ->
+    Error;
 make_decoder_error_response(bad_coverage_context) ->
     make_rpberrresp(?E_SUBMIT, "Bad coverage context");
 make_decoder_error_response({lexer_error, Msg}) ->
@@ -715,6 +732,11 @@ make_decoder_error_response(Error) ->
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
+
+sql_lex_parse(Sql) when is_binary(Sql) ->
+    sql_lex_parse(binary_to_list(Sql));
+sql_lex_parse(Sql) ->
+    riak_ql_parser:parse(riak_ql_lexer:get_tokens(Sql)).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -755,5 +777,88 @@ convert_ddl_to_cluster_supported_version_v2_test() ->
         DDLV2,
         convert_ddl_to_cluster_supported_version(v2, DDLV2)
     ).
+
+get_create_table_sql(TableName) when is_binary(TableName) ->
+    get_create_table_sql(binary_to_list(TableName));
+get_create_table_sql(TableName) ->
+    "CREATE TABLE " ++ TableName ++ "("
+    "a VARCHAR NOT NULL,"
+    "PRIMARY KEY((a), a))"
+    " WITH(dw=1)".
+
+create_test_tmp_table(TableName) ->
+    TableDef = get_create_table_sql(TableName),
+    {ok, {DDL, _}} = sql_lex_parse(TableDef),
+    {module, _} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
+
+decode_query_common_invalid_sql_errors_test() ->
+    Sql = <<"INVALID SQL">>,
+    ?assertMatch(
+       {ok, {rpberrorresp, _, 1020}},
+       decode_query_common(#tsinterpolation{base = Sql}, undefined)).
+
+assert_create_table_decoded(Decoded, TableExpected) when is_list(TableExpected) ->
+    assert_create_table_decoded(Decoded, list_to_binary(TableExpected));
+assert_create_table_decoded(Decoded, TableExpected) ->
+    Ddl = element(1, element(2, Decoded)),
+    WithProps = element(2, element(2, Decoded)),
+    ?assertMatch([{<<"dw">>, 1}], WithProps),
+    DdlV = element(1, Ddl),
+    ?assertMatch(ddl_v2, DdlV),
+    Table = element(2, Ddl),
+    ?assertMatch(TableExpected, Table).
+
+decode_query_common_create_table_dne_passes_test() ->
+    TableName = "dne",
+    Sql = get_create_table_sql(TableName),
+    Decoded = decode_query_common(#tsinterpolation{base = Sql}, undefined),
+    assert_create_table_decoded(Decoded, TableName).
+
+decode_query_common_create_table_existing_passes_test() ->
+    %% table existence is not checked for decoding of CREATE TABLE at this stage.
+    TableName = "my_type1",
+    create_test_tmp_table(TableName),
+    Sql = get_create_table_sql(TableName),
+    Decoded = decode_query_common(#tsinterpolation{base = Sql}, undefined),
+    assert_create_table_decoded(Decoded, TableName).
+
+%% whether a table is expected to be Active or not for testing purpose is
+%% borrowed from riak_kv_compile_tab where the feature of establishing whether
+%% a table is Active is implemented. my_type1 is Active, my_type2 is not.
+decode_query_common_select_notactive_table_errors_test() ->
+    TableName = "my_type2",
+    create_test_tmp_table(TableName),
+    Sql = list_to_binary("SELECT * FROM " ++ TableName),
+    ?assertMatch(
+       {ok, {rpberrorresp, _Msg, 1019}},
+       decode_query_common(#tsinterpolation{base = Sql}, undefined)).
+
+decode_query_common_select_active_table_passes_test() ->
+    TableName = "my_type1",
+    create_test_tmp_table(TableName),
+    Sql = list_to_binary("SELECT * FROM " ++ TableName),
+    Decoded = decode_query_common(#tsinterpolation{base = Sql}, undefined),
+    QryType = element(1, element(2, Decoded)),
+    ?assertMatch(riak_select_v3, QryType).
+
+decode_query_common_insert_notactive_table_errors_test() ->
+    TableName = "my_type2",
+    create_test_tmp_table(TableName),
+    Sql = list_to_binary("INSERT INTO " ++ TableName ++ " VALUES('a')"),
+    ?assertMatch(
+       {ok, {rpberrorresp, _Msg, 1019}},
+       decode_query_common(#tsinterpolation{base = Sql}, undefined)).
+
+decode_query_common_insert_active_table_passes_test() ->
+    TableName = "my_type1",
+    create_test_tmp_table(TableName),
+    Sql = list_to_binary("INSERT INTO " ++ TableName ++ " VALUES('a')"),
+    Decoded = decode_query_common(#tsinterpolation{base = Sql}, undefined),
+    QryType = element(1, element(2, Decoded)),
+    ?assertMatch(riak_sql_insert_v1, QryType).
+
+%% NOTE: unit tests for decode_query_common for all SQL types is not necessary
+%% since the patterns are restricted to EXIT, error, ddl (create table), and
+%% queries of all types.
 
 -endif.
