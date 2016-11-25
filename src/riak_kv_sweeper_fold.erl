@@ -123,9 +123,8 @@ maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, Limit, Wait},
             %% This way we can respond on requests while throttling
             SweepAcc0 = SweepAcc#sa{throttle = NewThrottle,
                                     throttle_total_wait_msecs = ThrottleTotalWait + Wait},
-            SweepAcc1 =
-                maybe_receive_request(SweepAcc0, Wait),
-            maybe_extra_throttle(SweepAcc1);
+            timer:sleep(Wait),
+            maybe_extra_throttle(SweepAcc0);
         _ ->
             maybe_extra_throttle(SweepAcc)
     end;
@@ -143,9 +142,8 @@ maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, Limit, Wait},
             %% This way we can respond on requests while throttling
             SweepAcc0 = SweepAcc#sa{throttle = NewThrottle,
                                     throttle_total_wait_msecs = ThrottleTotalWait + Wait},
-            SweepAcc1 =
-                maybe_receive_request(SweepAcc0, Wait),
-            maybe_extra_throttle(SweepAcc1#sa{total_obj_size = 0});
+            timer:sleep(Wait),
+            maybe_extra_throttle(SweepAcc0#sa{total_obj_size = 0});
         _ ->
             maybe_extra_throttle(SweepAcc#sa{total_obj_size = TotalObjSize1})
     end.
@@ -164,8 +162,8 @@ maybe_extra_throttle(#sa{throttle = Throttle,
     %% +1 since some sweeps doesn't modify any objects
     case (ModObj + 1) rem Limit of
         0 ->
-            SweepAcc1 = SweepAcc#sa{throttle_total_wait_msecs = ThrottleTotalWait + Wait},
-            maybe_receive_request(SweepAcc1, Wait);
+            timer:sleep(Wait),
+            SweepAcc#sa{throttle_total_wait_msecs = ThrottleTotalWait + Wait};
         _ ->
             SweepAcc
     end.
@@ -191,10 +189,7 @@ send_to_sweep_worker(Msg, #sweep{index = Index}) ->
     lager:info("no pid ~p to ~p " , [Msg, Index]),
     no_pid.
 
-maybe_receive_request(Acc) ->
-    maybe_receive_request(Acc, 0).
-
-maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc, Wait) ->
+maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
     receive
         stop ->
             Active1 =
@@ -210,7 +205,7 @@ maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc, Wait) ->
                 _ ->
                     Acc
             end
-    after Wait ->
+    after 0 ->
         Acc
     end.
 
