@@ -534,19 +534,13 @@ key_element_to_string(V) -> lists:flatten(io_lib:format("~p", [V])).
 
 %%
 %% This one quotes values which should be quoted for assignment
-element_to_quoted_string(V, blob) -> hex_as_string(hexlify(V));
+element_to_quoted_string(V, blob) -> hex_as_string(V);
 element_to_quoted_string(V, varchar)  -> varchar_quotes(V);
 element_to_quoted_string(V, _Type) when is_float(V) -> mochinum:digits(V);
 element_to_quoted_string(V, _Type) -> lists:flatten(io_lib:format("~p", [V])).
 
 hex_as_string(Bin) ->
-    lists:flatten(io_lib:format("0x~s", [Bin])).
-
-hexlify(Bin) when is_binary(Bin) ->
-    << <<(hex(H)),(hex(L))>> || <<H:4,L:4>> <= Bin >>.
-
-hex(C) when C < 10 -> $0 + C;
-hex(C) -> $a + C - 10.
+    lists:flatten(io_lib:format("0x~s", [mochihex:to_hex(Bin)])).
 
 %%
 -spec key_to_string({binary(),riak_ql_ddl:external_field_type(),term()}) -> string().
