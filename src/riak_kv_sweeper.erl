@@ -150,17 +150,17 @@ init([]) ->
     {ok, State}.
 
 handle_call({add_sweep_participant, Participant}, _From, State) ->
-    State1 = riak_kv_sweeper_state:add_sweep_participant(Participant, State),
+    State1 = riak_kv_sweeper_state:add_sweep_participant(State, Participant),
     {reply, ok, State1};
 
 handle_call({remove_sweep_participant, Module}, _From, State) ->
-    {ok, Removed, State1} = riak_kv_sweeper_state:remove_sweep_participant(Module, State),
+    {ok, Removed, State1} = riak_kv_sweeper_state:remove_sweep_participant(State, Module),
     {reply, Removed, State1};
 
 handle_call({sweep_request, Index}, _From, State) ->
     State1 = riak_kv_sweeper_state:update_sweep_specs(State),
     State3 =
-        case riak_kv_sweeper_state:sweep_request(Index, State1) of
+        case riak_kv_sweeper_state:sweep_request(State1, Index) of
             {ok, Index, State2} ->
                 do_sweep(Index, State2);
             State2 ->
@@ -181,15 +181,15 @@ handle_call(stop, _From, State) ->
     {stop, normal, ok, State1}.
 
 handle_cast({update_started_sweep, Index, ActiveParticipants, Estimate}, State) ->
-    State1 = riak_kv_sweeper_state:update_started_sweep(Index, ActiveParticipants, Estimate, State),
+    State1 = riak_kv_sweeper_state:update_started_sweep(State, Index, ActiveParticipants, Estimate),
     {noreply, State1};
 
 handle_cast({sweep_result, Index, Result}, State) ->
-    State1 = riak_kv_sweeper_state:update_finished_sweep(Index, Result, State),
+    State1 = riak_kv_sweeper_state:update_finished_sweep(State, Index, Result),
     {noreply, State1};
 
 handle_cast({update_progress, Index, SweptKeys}, State) ->
-    State1 = riak_kv_sweeper_state:update_progress(Index, SweptKeys, State),
+    State1 = riak_kv_sweeper_state:update_progress(State, Index, SweptKeys),
     {noreply, State1};
 
 handle_cast(_Msg, State) ->
@@ -235,7 +235,7 @@ do_sweep(Index, State) ->
     Estimate = get_estimate_keys(Index, AAEEnabled, State),
 
     State2 =
-        case riak_kv_sweeper_state:get_active_participants(Index, State) of
+        case riak_kv_sweeper_state:get_active_participants(State, Index) of
             {ok, [], State1} ->
                 State1;
             {ok, ActiveParticipants, State1} ->
@@ -243,12 +243,12 @@ do_sweep(Index, State) ->
                 Workerpid = riak_kv_vnode:sweep({Index, node()},
                                                 ActiveParticipants,
                                                 Estimate),
-                riak_kv_sweeper_state:start_sweep(Index, Workerpid, State1)
+                riak_kv_sweeper_state:start_sweep(State1, Index, Workerpid)
         end,
     State2.
 
 get_estimate_keys(Index, AAEEnabled, State) ->
-    {ok, OldEstimate, _NewState} = riak_kv_sweeper_state:get_estimate_keys(Index, State),
+    {ok, OldEstimate, _NewState} = riak_kv_sweeper_state:get_estimate_keys(State, Index),
     maybe_estimate_keys(Index, AAEEnabled, OldEstimate).
 
 %% We keep the estimate from previus sweep unless it's older then ?ESTIMATE_EXPIRY.

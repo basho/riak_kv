@@ -99,15 +99,15 @@ new() ->
     State1 = State0#state{sweeps = get_persistent_sweeps()},
     update_sweep_specs(State1).
 
--spec add_sweep_participant(Participant:: #sweep_participant{}, state()) -> state().
-add_sweep_participant(Participant, State) ->
+-spec add_sweep_participant(state(), Participant:: #sweep_participant{}) -> state().
+add_sweep_participant(State, Participant) ->
     #state{sweep_participants = SP} = State,
     SP1 = dict:store(Participant#sweep_participant.module, Participant, SP),
     persist_participants(SP1),
     State#state{sweep_participants = SP1}.
 
--spec remove_sweep_participant(Module :: atom(), state()) -> {ok, boolean(), state()}.
-remove_sweep_participant(Module, State) ->
+-spec remove_sweep_participant(state(), Module :: atom()) -> {ok, boolean(), state()}.
+remove_sweep_participant(State, Module) ->
     #state{sweeps = Sweeps,
            sweep_participants = SP} = State,
     Removed = dict:is_key(Module, SP),
@@ -150,9 +150,9 @@ stop_all_sweeps(State) ->
     [stop_sweep(Sweep) || Sweep <- Running],
     {ok, length(Running), State}.
 
--spec get_active_participants(index(), state()) ->
+-spec get_active_participants(state(), index()) ->
     {ok, Participants :: [#sweep_participant{}], state()}.
-get_active_participants(Index, State) ->
+get_active_participants(State, Index) ->
     #state{sweep_participants = Participants} = State,
     Funs =
         [{Participant, Module:participate_in_sweep(Index, self())} ||
@@ -164,16 +164,16 @@ get_active_participants(Index, State) ->
             {Participant, {ok, Fun, InitialAcc}} <- Funs],
     {ok, ActiveParticipants, State}.
 
--spec get_estimate_keys(index(), state()) ->
+-spec get_estimate_keys(state(), index()) ->
     {ok, OldEstimate :: {EstimatedNrKeys :: non_neg_integer(), erlang:timestamp()}, state()} |
     {ok, OldEstimate :: undefined, state()}.
-get_estimate_keys(Index, State) ->
+get_estimate_keys(State, Index) ->
     #state{sweeps = Sweeps} = State,
     #sweep{estimated_keys = OldEstimate} = dict:fetch(Index, Sweeps),
     {ok, OldEstimate, State}.
 
--spec update_finished_sweep(index(), any(), state()) -> state().
-update_finished_sweep(Index, Result, State) ->
+-spec update_finished_sweep(state(), index(), any()) -> state().
+update_finished_sweep(State, Index, Result) ->
     #state{sweeps = Sweeps} = State,
     case dict:find(Index, Sweeps) of
         {ok, Sweep} ->
@@ -183,9 +183,9 @@ update_finished_sweep(Index, Result, State) ->
             State
     end.
 
--spec update_started_sweep(index(), ActiveParticipants :: [],
-                           Estimate :: non_neg_integer(), state()) -> state().
-update_started_sweep(Index, ActiveParticipants, Estimate, State) ->
+-spec update_started_sweep(state(), index(), ActiveParticipants :: [],
+                           Estimate :: non_neg_integer()) -> state().
+update_started_sweep(State, Index, ActiveParticipants, Estimate) ->
     Sweeps = State#state.sweeps,
     SweepParticipants = State#state.sweep_participants,
     TS = os:timestamp(),
@@ -203,8 +203,8 @@ update_started_sweep(Index, ActiveParticipants, Estimate, State) ->
                 end, Sweeps),
     State#state{sweeps = Sweeps1}.
 
--spec update_progress(index(), SweptKeys :: integer(), state()) -> state().
-update_progress(Index, SweptKeys, State) ->
+-spec update_progress(state(), index(), SweptKeys :: integer()) -> state().
+update_progress(State, Index, SweptKeys) ->
     #state{sweeps = Sweeps} = State,
     case dict:find(Index, Sweeps) of
         {ok, Sweep} ->
@@ -236,8 +236,8 @@ maybe_schedule_sweep(State) ->
             State1
     end.
 
--spec sweep_request(index(), state()) -> {ok, index(), state()} | state().
-sweep_request(Index, State) ->
+-spec sweep_request(state(), index()) -> {ok, index(), state()} | state().
+sweep_request(State, Index) ->
     #state{sweeps = Sweeps} = State,
     ConcurrenyLimit = get_concurrency_limit(),
 
@@ -264,7 +264,8 @@ sweep_request(Index, State) ->
             State1
     end.
 
-start_sweep(Index, Pid, State) ->
+-spec start_sweep(state(), index(), pid()) -> state().
+start_sweep(State, Index, Pid) ->
     #state{ sweeps = Sweeps} = State,
     Sweeps1 =
         dict:update(Index,
