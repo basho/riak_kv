@@ -97,13 +97,13 @@
           is_executable = false :: boolean(),
           type          = sql   :: sql | timeseries,
           cover_context = undefined :: term(), %% for parallel queries
-          allow_qbuf_reuse = false  :: boolean(),  %% control reuse of query buffers
           %% prolly a mistake to put this here - should be in DDL
           local_key,
           %% since v2
           group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}],
           %% since v3
-          'OFFSET'              :: [riak_kv_qry_compiler:offset()]
+          'OFFSET'       = []   :: [riak_kv_qry_compiler:offset()],
+          allow_qbuf_reuse = false :: boolean()  %% control reuse of query buffers
        }).
 
 -record(riak_sql_describe_v1,
