@@ -92,3 +92,19 @@
    iolist_to_binary(
      ["Too many subqueries (",integer_to_list(N),")"])
 ).
+
+-define(
+   E_NON_UNIQUE_ORDERBY_FIELDS(N),
+   iolist_to_binary(
+     ["Column ",N," appears more than once in ORDER BY list"])
+).
+
+-define(
+   E_ORDER_BY_WITH_AGGREGATE_CALC_TYPE,
+   <<"ORDER BY/LIMIT/OFFSET clauses not supported for queries containing an aggregate function.">>).
+-define(
+   E_CANNOT_HAVE_TWO_EQUALITY_FILTERS_ON_QUANTUM_WITHOUT_RANGE,
+   <<"There must only be one equality filter on the quantum field in the ",
+     "Where clause when a range is not specified, but more than one was ",
+     "specified.">>
+).

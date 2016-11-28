@@ -69,10 +69,16 @@ setup() ->
                 fun(_Bucket) ->
                         [dvv_enabled]
                 end),
+    meck:new(sidejob_resource_stats),
+    meck:expect(sidejob_resource_stats, usage,
+                fun(riak_kv_get_fsm_sj) ->
+                        app_helper:get_env(riak_kv, fake_get_fsm_usage)
+                end),
     ok.
 
 cleanup(_) ->
     fsm_eqc_util:cleanup_mock_servers(),
+    meck:unload(sidejob_resource_stats),
     meck:unload(riak_core_bucket),
     ok.
 
@@ -219,11 +225,7 @@ prop_basic_get() ->
         {SoftCap, HardCap, Actual, Roll} = RRAbort,
         application:set_env(riak_kv, read_repair_soft, SoftCap),
         application:set_env(riak_kv, read_repair_max, HardCap),
-        StatKey = [riak, riak_kv, node, gets, fsm, active],
-        % don't really care if the key doesn't exist when we delete it.
-        _ = exometer:delete(StatKey),
-        exometer:new(StatKey, counter),
-        exometer:update(StatKey, Actual),
+        application:set_env(riak_kv, fake_get_fsm_usage, Actual),
         fsm_eqc_util:set_fake_rng(?MODULE, Roll),
 
         {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
@@ -321,8 +323,7 @@ prop_basic_get() ->
                  {n_value, equals(length(History), ExpectedN)},
                  {repair, check_repair(Objects, RepairHistory, History, RRAbort)},
                  {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
-                 {distinct, all_distinct(Partitions)},
-                 {told_monitor, fsm_eqc_util:is_get_put_last_cast(get, GetPid)}
+                 {distinct, all_distinct(Partitions)}
                 ]))
     end).
 
@@ -440,11 +441,15 @@ check_info([{vnode_errors, _Errors} | Rest], State) ->
 %% happen when all read repairs are complete.
 
 check_repair(Objects, RepairH, H, RRAbort) ->
-    Actual = [ Part || {Part, ?KV_PUT_REQ{}} <- RepairH ],
+    Actual = [ Part ||
+               {Part, Req} <- RepairH,
+                 riak_kv_requests:request_type(Req) == kv_put_request ],
     Heads  = merge_heads([ Lineage || {_, {ok, Lineage}} <- H ]),
     RepairObject  = (catch build_merged_object(Heads, Objects)),
     Expected =expected_repairs(H,RRAbort),
-    RepairObjects = [ Obj || {_Idx, ?KV_PUT_REQ{object=Obj}} <- RepairH ],
+    RepairObjects = [ riak_kv_requests:get_object(Req) ||
+                        {_Idx, Req} <- RepairH,
+                        riak_kv_requests:request_type(Req) == kv_put_request],
     conjunction(
         [{puts, equals(lists:sort(Expected), lists:sort(Actual))},
          {sanity, equals(length(RepairObjects), length(Actual))},
@@ -456,7 +461,8 @@ check_repair(Objects, RepairH, H, RRAbort) ->
 
 
 check_delete(Objects, RepairH, H, PerfectPreflist) ->
-    Deletes  = [ Part || {Part, ?KV_DELETE_REQ{}} <- RepairH ],
+    Deletes = [Part || {Part, Req} <- RepairH,
+                       riak_kv_requests:request_type(Req) == kv_delete_request],
 
     %% Should get deleted if all vnodes returned the same object
     %% and a perfect preflist and the object is deleted

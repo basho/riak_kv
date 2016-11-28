@@ -25,13 +25,14 @@
 -include_lib("eunit/include/eunit.hrl").
 -compile(export_all).
 
-standard_test(BackendMod, Config) ->
+standard_test_gen(BackendMod, Config) ->
     {"Basic Backend",
-     fun() ->
-             {Mod, State} = setup({BackendMod, Config}),
-             State2 = basic_store_and_fetch(Mod, State),
-             cleanup({Mod, State2})
-     end}.
+     fun() -> standard_test_fun(BackendMod, Config) end}.
+
+standard_test_fun(BackendMod, Config) ->
+    {Mod, State} = setup({BackendMod, Config}),
+    State2 = basic_store_and_fetch(Mod, State),
+    cleanup({Mod, State2}).
 
 make_test_bucket(Backend, Suffix) ->
     try

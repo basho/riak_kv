@@ -45,9 +45,8 @@
 
 -include("riak_kv_ts.hrl").
 
--define(NO_SIDEEFFECTS, []).
--define(NO_MAX_RESULTS, no_max_results).
--define(NO_PG_SORT, undefined).
+-define(MAX_RUNNING_FSMS, 5).
+-define(SUBQUERY_FSM_TIMEOUT, 10000).
 
 %% accumulators for different types of query results.
 -type rows_acc()      :: [{non_neg_integer(), list()}].
@@ -59,8 +58,21 @@
           qid           = undefined           :: undefined | {node(), non_neg_integer()},
           sub_qrys      = []                  :: [integer()],
           receiver_pid                        :: pid(),
-          result        = []                  :: rows_acc() | aggregate_acc() | group_by_acc(),
-          run_sub_qs_fn = fun run_sub_qs_fn/1 :: fun()
+          %% overload protection:
+          %% 1. Maintain a limited number of running fsms (i.e.,
+          %%    process at most that many subqueries at a time):
+          fsm_queue          = []                   :: [list()],
+          n_running_fsms     = 0                    :: non_neg_integer(),
+          max_running_fsms   = ?MAX_RUNNING_FSMS    :: pos_integer(),
+          %% 2. Estimate query size (wget-style):
+          n_subqueries_done  = 0                    :: non_neg_integer(),
+          total_query_data   = 0                    :: non_neg_integer(),
+          max_query_data                            :: non_neg_integer(),
+          %% For queries not backed by query buffers, results are
+          %% accumulated in memory:
+          result             = []                   :: rows_acc() | aggregate_acc() | group_by_acc(),
+          %% Query buffer support
+          qbuf_ref                 :: undefined | riak_kv_qry_buffers:qbuf_ref()
          }).
 
 %%%===================================================================
@@ -95,10 +107,15 @@ handle_info(pop_next_query, State1) ->
     QueryWork = riak_kv_qry_queue:blocking_pop(),
     {ok, State2} = execute_query(QueryWork, State1),
     {noreply, State2};
+
 handle_info({{_, QId}, done}, #state{ qid = QId } = State) ->
     {noreply, subqueries_done(QId, State)};
-handle_info({{SubQId, QId}, {results, Chunk}}, #state{ qid = QId } = State) ->
-    {noreply, add_subquery_result(SubQId, Chunk, State)};
+
+handle_info({{SubQId, QId}, {results, Chunk}}, #state{qid = QId} = State) ->
+    {noreply, throttling_spawn_index_fsms(
+                estimate_query_size(
+                  add_subquery_result(SubQId, Chunk, State)))};
+
 handle_info({{SubQId, QId}, {error, Reason} = Error},
             #state{receiver_pid = ReceiverPid,
                    qid    = QId,
@@ -134,41 +151,36 @@ code_change(_OldVsn, State, _Extra) ->
 new_state() ->
     #state{ }.
 
-run_sub_qs_fn([]) ->
-    ok;
-run_sub_qs_fn([{{qry, ?SQL_SELECT{cover_context = undefined} = Q1}, {qid, QId}} | T]) ->
+prepare_fsm_options([], Acc) ->
+    lists:reverse(Acc);
+prepare_fsm_options([{{qry, ?SQL_SELECT{cover_context = CoverContext} = Q1}, {qid, QId}} | T], Acc) ->
     Table = Q1?SQL_SELECT.'FROM',
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
-    %% fix these up too
-    Timeout = {timeout, 10000},
+    Timeout = {timeout, ?SUBQUERY_FSM_TIMEOUT},
     Me = self(),
     KeyConvFn = make_key_conversion_fun(Table),
     Q2 = convert_query_to_cluster_version(Q1),
-    Opts = [Bucket, none, Q2, Timeout, all, undefined, {Q2, Bucket}, riak_kv_qry_coverage_plan, KeyConvFn],
-    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
-    run_sub_qs_fn(T);
-%% if cover_context in the SQL record is *not* undefined, we've been
-%% given a mini coverage plan to map to a single vnode/quantum
-run_sub_qs_fn([{{qry, Q1}, {qid, QId}} | T]) ->
-    Table = Q1?SQL_SELECT.'FROM',
-    {ok, CoverProps} =
-        riak_kv_pb_coverage:checksum_binary_to_term(Q1?SQL_SELECT.cover_context),
-    CoverageFn = riak_client:vnode_target(CoverProps),
-    Bucket = riak_kv_ts_util:table_to_bucket(Table),
-    %% fix these up too
-    Timeout = {timeout, 10000},
-    Me = self(),
-    KeyConvFn = make_key_conversion_fun(Table),
-    Q2 = convert_query_to_cluster_version(Q1),
-    Opts = [Bucket, none, Q2, Timeout, all, undefined, CoverageFn, riak_kv_qry_coverage_plan, KeyConvFn],
-    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), [{raw, QId, Me}, Opts]),
-    run_sub_qs_fn(T).
+    CoverageParameter =
+        case CoverContext of
+            undefined ->
+                {Q2, Bucket};
+            _Defined ->
+                %% if cover_context in the SQL record is *not* undefined, we've been
+                %% given a mini coverage plan to map to a single vnode/quantum
+                {ok, CoverProps} =
+                    riak_kv_pb_coverage:checksum_binary_to_term(CoverContext),
+                riak_client:vnode_target(CoverProps)
+        end,
+    Opts = [Bucket, none, Q2, Timeout, all, undefined, CoverageParameter, riak_kv_qry_coverage_plan, KeyConvFn],
+    prepare_fsm_options(T, [[{raw, QId, Me}, Opts] | Acc]).
+
 
 make_key_conversion_fun(Table) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     DDL = Mod:get_ddl(),
     fun(Key) when is_binary(Key) ->
-            riak_kv_ts_util:lk_to_pk(sext:decode(Key), DDL, Mod);
+            {ok, PK} = riak_ql_ddl:lk_to_pk(sext:decode(Key), DDL, Mod),
+            PK;
        (Key) ->
             lager:error("Key conversion function "
                         "encountered a non-binary object key: ~p", [Key]),
@@ -200,8 +212,8 @@ pop_next_query() ->
     self() ! pop_next_query.
 
 %%
-execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
-              #state{ run_sub_qs_fn = RunSubQs } = State) ->
+execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
+              State0) ->
     Indices = lists:seq(1, length(SubQueries)),
     ZQueries = lists:zip(Indices, SubQueries),
     %% all subqueries have the same select clause
@@ -218,42 +230,113 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _},
                 InitialState
         end,
     SubQs = [{{qry, Q}, {qid, {I, QId}}} || {I, Q} <- ZQueries],
-    ok = RunSubQs(SubQs),
-    {ok, State#state{qid          = QId,
-                     receiver_pid = ReceiverPid,
-                     qry          = Qry1,
-                     sub_qrys     = Indices,
-                     result       = InitialResult }}.
+    FsmOptsList = prepare_fsm_options(SubQs, []),
+    State = State0#state{qid            = QId,
+                         receiver_pid   = ReceiverPid,
+                         qry            = Qry1,
+                         sub_qrys       = Indices,
+                         fsm_queue      = FsmOptsList,
+                         n_running_fsms = 0,
+                         result         = InitialResult,
+                         max_query_data = riak_kv_qry_buffers:get_max_query_data_size(),
+                         qbuf_ref       = QBufRef},
+    %% Start spawning index fsms, keeping at most
+    %% #state.max_n_running_fsms running simultaneously.
+    %% Notifications to proceed to the next fsm are sent to us, in the
+    %% form of 'chunk_done' atom,
+    {ok, throttling_spawn_index_fsms(State)}.
 
 %%
-add_subquery_result(SubQId, Chunk, #state{ sub_qrys = SubQs} = State) ->
+throttling_spawn_index_fsms(#state{fsm_queue = [Opts | Rest],
+                                   n_running_fsms = NRunning,
+                                   max_running_fsms = SubqFsmSpawnThrottle} = State)
+  when NRunning < SubqFsmSpawnThrottle ->
+    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), Opts),
+    throttling_spawn_index_fsms(State#state{fsm_queue = Rest,
+                                            n_running_fsms = NRunning + 1});
+throttling_spawn_index_fsms(State) ->
+    State.
+
+
+estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
+  when NSubqueriesDone < 2  ->
+    State;
+estimate_query_size(#state{total_query_data  = CurrentTotalSize,
+                           n_subqueries_done = NSubqueriesDone,
+                           max_query_data    = MaxQueryData,
+                           qbuf_ref          = QBufRef,
+                           sub_qrys          = SubQrys,
+                           qry = ?SQL_SELECT{'LIMIT' = [Limit]} = OrigQry} = State)
+  when QBufRef /= undefined,
+       is_integer(Limit) ->
+    %% query buffer-backed, has a LIMIT: consider the latter
+    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
+    ProjectedLimitData = round(Limit * BytesPerChunk),
+    if ProjectedLimitData > MaxQueryData ->
+            lager:info("Cancelling LIMIT ~b query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
+                       [Limit, ProjectedLimitData, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
+            cancel_error_query(select_result_too_big, State);
+       el/=se ->
+            State
+    end;
+estimate_query_size(#state{total_query_data  = CurrentTotalSize,
+                           n_subqueries_done = NSubqueriesDone,
+                           max_query_data    = MaxQueryData,
+                           sub_qrys          = SubQrys,
+                           qry               = OrigQry} = State) ->
+    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
+    ProjectedGrandTotal = round(CurrentTotalSize + BytesPerChunk * length(SubQrys)),
+    if ProjectedGrandTotal > MaxQueryData ->
+            lager:info("Cancelling regular query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
+                       [ProjectedGrandTotal, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
+            cancel_error_query(select_result_too_big, State);
+       el/=se ->
+            State
+    end.
+
+
+%%
+add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
+                                          total_query_data = TotalQueryData,
+                                          n_subqueries_done = NSubqueriesDone,
+                                          n_running_fsms = NRunning} = State) ->
     case lists:member(SubQId, SubQs) of
         true ->
             try
-                QueryResult2 = run_select_on_chunk(SubQId, Chunk, State),
+                QueryResult = run_select_on_chunk(SubQId, Chunk, State),
                 NSubQ = lists:delete(SubQId, SubQs),
-                State#state{result   = QueryResult2,
-                            sub_qrys = NSubQ}
+                ThisChunkData = erlang:external_size(Chunk),
+                State#state{result            = QueryResult,
+                            total_query_data  = TotalQueryData + ThisChunkData,
+                            n_subqueries_done = NSubqueriesDone + 1,
+                            n_running_fsms    = NRunning - 1,
+                            sub_qrys          = NSubQ}
             catch
-              error:divide_by_zero ->
-                  cancel_error_query(divide_by_zero, State)
+                error:divide_by_zero ->
+                    cancel_error_query(divide_by_zero, State);
+                throw:{qbuf_error, Reason} ->
+                    cancel_error_query(Reason, State)
             end;
         false ->
-            %% discard; Don't touch state as it may have already 'finished'.
+            lager:warning("unexpected chunk received for non-existing query ~p when state is ~p", [SubQId, State]),
             State
     end.
 
 %%
-run_select_on_chunk(SubQId, Chunk, #state{ qry = Query,
-                                           result = QueryResult1 }) ->
+run_select_on_chunk(SubQId, Chunk, #state{qry = Query,
+                                          result = QueryResult1,
+                                          qbuf_ref = QBufRef}) ->
     DecodedChunk = decode_results(lists:flatten(Chunk)),
     SelClause = sql_select_clause(Query),
     case sql_select_calc_type(Query) of
         rows ->
-            run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1);
+            run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, QBufRef);
         aggregate ->
+            %% query buffers don't enter at this stage: QueryResult is always a
+            %% single row for aggregate SELECTs
             run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1);
         group_by ->
+            %% ditto
             run_select_on_group(Query, SelClause, DecodedChunk, QueryResult1)
     end.
 
@@ -285,10 +368,19 @@ select_group(Query, Row) ->
     [lists:nth(N, Row) || {N,_} <- GroupByFields].
 
 %% Run the selection clause on results that accumulate rows
-run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1) ->
+run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, undefined) ->
     IndexedChunks =
         [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
-    [{SubQId, IndexedChunks} | QueryResult1].
+    [{SubQId, IndexedChunks} | QueryResult1];
+run_select_on_rows_chunk(_SubQId, SelClause, DecodedChunk, _QueryResult1, QBufRef) ->
+    IndexedChunks =
+        [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
+    case riak_kv_qry_buffers:batch_put(QBufRef, IndexedChunks) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            throw({qbuf_error, Reason})
+    end.
 
 %%
 run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
@@ -300,7 +392,9 @@ run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
 %%
 -spec cancel_error_query(Error::any(), State1::#state{}) ->
         State2::#state{}.
-cancel_error_query(Error, #state{ receiver_pid = ReceiverPid}) ->
+cancel_error_query(Error, #state{qbuf_ref = QBufRef,
+                                 receiver_pid = ReceiverPid}) ->
+    _ = riak_kv_qry_buffers:delete_qbuf(QBufRef),  %% is a noop on undefined
     ReceiverPid ! {error, Error},
     pop_next_query(),
     new_state().
@@ -326,12 +420,36 @@ subqueries_done(QId, #state{qid          = QId,
                                    {[riak_pb_ts_codec:tscolumnname()],
                                     [riak_pb_ts_codec:tscolumntype()],
                                     [[riak_pb_ts_codec:ldbvalue()]]}.
-prepare_final_results(#state{
-        result = IndexedChunks,
-        qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select }}) ->
+prepare_final_results(#state{qbuf_ref = undefined,
+                             result = IndexedChunks,
+                             qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select}}) ->
     %% sort by index, to reassemble according to coverage plan
     {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
     prepare_final_results2(Select, lists:append(R2));
+
+prepare_final_results(#state{qbuf_ref = QBufRef,
+                             qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select,
+                                               'LIMIT'  = Limit,
+                                               'OFFSET' = Offset}} = State) ->
+    case riak_kv_qry_buffers:fetch_limit(QBufRef,
+                                         riak_kv_qry_buffers:limit_to_scalar(Limit),
+                                         riak_kv_qry_buffers:offset_to_scalar(Offset)) of
+        {ok, {_ColNames, _ColTypes, FetchedRows}} ->
+            prepare_final_results2(Select, FetchedRows);
+        {error, qbuf_not_ready} ->
+            riak_kv_qry_buffers:set_ready_waiting_process(
+              QBufRef, fun(Msg) -> self() ! Msg end),
+            receive
+                {qbuf_ready, QBufRef} ->
+                    prepare_final_results(State)
+            after 60000 ->
+                    cancel_error_query(qbuf_timeout, State)
+            end;
+        {error, bad_qbuf_ref} ->
+            %% the query buffer is gone: we can still retry (should we, really?)
+            cancel_error_query(bad_qbuf_ref, State)
+    end;
+
 prepare_final_results(#state{
         result = Aggregate1,
         qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate} = Select }} = State) ->

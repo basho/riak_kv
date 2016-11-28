@@ -27,7 +27,10 @@
 -record(state, {
           req,
           req_ctx,
-          column_info
+          column_info,
+          %% Arity one fun for transforming keys from their leveldb encoding to
+          %% values as inserted by the user
+          key_transform_fn
          }).
 
 -type process_retval() :: {reply, RpbOrTsMessage::tuple(), #state{}}.

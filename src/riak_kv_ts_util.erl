@@ -27,23 +27,26 @@
 -export([
          apply_timeseries_bucket_props/3,
          build_sql_record/3,
+         check_table_feature_supported/2,
+         is_table_supported/2,
          encode_typeval_key/1,
          explain_query/1, explain_query/2,
          get_column_types/2,
          get_table_ddl/1,
          lk/1,
-         lk_to_pk/3,
-         make_ts_keys/3,
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
-         row_to_key/3,
+         rm_rf/1,
          sql_record_to_tuple/1,
          sql_to_cover/6,
          table_to_bucket/1,
          validate_rows/2,
          varchar_to_timestamp/1
         ]).
+
+-type ts_service_req() ::
+    {ok, riak_kv_ts_svc:ts_requests(), {PermSpec::string(), Table::binary()}}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -63,64 +66,90 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_ts.hrl").
 
+-spec sql_record_to_tuple(?SQL_SELECT{}) -> {binary(), [tuple(2) | tuple(3)], list(), [tuple(2)]}.
 %% riak_ql_ddl:is_query_valid expects a tuple, not a SQL record
 sql_record_to_tuple(?SQL_SELECT{'FROM'   = From,
                                 'SELECT' = #riak_sel_clause_v1{clause=Select},
-                                'WHERE'  = Where}) ->
-    {From, Select, Where}.
+                                'WHERE'  = Where,
+                                'ORDER BY' = OrderBy}) ->
+    {From, Select, Where, OrderBy}.
 
-build_sql_record(Command, SQL, Cover) ->
-    try build_sql_record_int(Command, SQL, Cover) of
-        Return -> Return
+-spec build_sql_record(riak_kv_qry:query_type(), proplists:proplist(), proplists:proplist()) ->
+                              {ok, ?SQL_SELECT{}} | {error, any()}.
+build_sql_record(Command, SQL, Options) ->
+    try build_sql_record_int(Command, SQL, Options) of
+        {ok, Record} ->
+            {ok, Record};
+        ER ->
+            ER
     catch
         throw:Atom ->
             {error, Atom}
     end.
 
+
 %% Convert the proplist obtained from the QL parser
-build_sql_record_int(select, SQL, Cover) ->
-    T = proplists:get_value(tables, SQL),
-    F = proplists:get_value(fields, SQL),
-    L = proplists:get_value(limit, SQL),
-    W = proplists:get_value(where, SQL),
-    GroupBy = proplists:get_value(group_by, SQL),
-    case is_binary(T) of
-        true ->
-            Mod = riak_ql_ddl:make_module_name(T),
-            {ok,
-             ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
-                         'FROM'     = T,
-                         'WHERE'    = convert_where_timestamps(Mod, W),
-                         'LIMIT'    = L,
-                         helper_mod = Mod,
-                         cover_context = Cover,
-                         group_by = GroupBy }
-            };
-        false ->
-            {error, <<"Must provide exactly one table name">>}
+build_sql_record_int(select, SQL, _Options = undefined) ->
+    build_sql_record_int(select, SQL, []);
+build_sql_record_int(select, SQL, Options) ->
+    AllowQBufReuse = proplists:get_value(allow_qbuf_reuse, Options),
+    Cover          = proplists:get_value(cover, Options),
+    if not (Cover == undefined orelse is_binary(Cover)) ->
+            {error, bad_coverage_context};
+       el/=se ->
+            T = proplists:get_value(tables, SQL),
+            F = proplists:get_value(fields, SQL),
+            W = proplists:get_value(where,  SQL),
+            L = proplists:get_value(limit,  SQL),
+            O = proplists:get_value(offset, SQL),
+            OrderBy = proplists:get_value(order_by, SQL),
+            GroupBy = proplists:get_value(group_by, SQL),
+            case is_binary(T) of
+                true ->
+                    Mod = riak_ql_ddl:make_module_name(T),
+                    {ok,
+                     ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
+                                 'FROM'     = T,
+                                 'WHERE'    = convert_where_timestamps(Mod, W),
+                                 'LIMIT'    = L,
+                                 'OFFSET'   = O,
+                                 'ORDER BY' = OrderBy,
+                                 helper_mod = Mod,
+                                 cover_context = Cover,
+                                 allow_qbuf_reuse = AllowQBufReuse,
+                                 group_by = GroupBy }
+                    };
+                false ->
+                    {error, <<"Must provide exactly one table name">>}
+            end
     end;
 
-build_sql_record_int(explain, SQL, Cover) ->
-    case build_sql_record_int(select, SQL, Cover) of
+build_sql_record_int(explain, SQL, Options) ->
+    case build_sql_record_int(select, SQL, Options) of
         {ok, Select} ->
-            {ok, #riak_sql_explain_query_v1{'EXPLAIN' = Select }};
+            {ok, #riak_sql_explain_query_v1{'EXPLAIN' = Select}};
         Error -> Error
     end;
 
-build_sql_record_int(describe, SQL, _Cover) ->
+build_sql_record_int(describe, SQL, _Options) ->
     D = proplists:get_value(identifier, SQL),
     {ok, #riak_sql_describe_v1{'DESCRIBE' = D}};
 
-build_sql_record_int(insert, SQL, _Cover) ->
-    T = proplists:get_value(table, SQL),
-    case is_binary(T) of
+build_sql_record_int(insert, SQL, _Options) ->
+    Table = proplists:get_value(table, SQL),
+    case is_binary(Table) of
         true ->
-            Mod = riak_ql_ddl:make_module_name(T),
-            %% If columns are not specified, all columns are implied
-            F = riak_ql_ddl:insert_sql_columns(Mod, proplists:get_value(fields, SQL, [])),
-            V = proplists:get_value(values, SQL),
+            %% To support non- and partial specification of columns, the DDL
+            %% Module, Fields specified in the query, and Values specified in
+            %% the query are sent to the riak_ql_ddl module to flesh out the
+            %% missing or partially specified column to value mappings.
+            Mod = riak_ql_ddl:make_module_name(Table),
+            FieldsInQuery = proplists:get_value(fields, SQL, []),
+            ValuesInQuery = proplists:get_value(values, SQL),
+            {Fields, Values} = riak_ql_ddl:insert_sql_columns(Mod, FieldsInQuery, ValuesInQuery),
+
             %% In order to convert timestamps given as strings, rather
-            %% than doing this here, we pass V (Values) as is and
+            %% than doing this here, we pass Values as is and
             %% relegate the timestamp conversion to
             %% riak_kv_qry:do_insert. The conversion will take place
             %% after checking for too many values wrt the number of
@@ -128,17 +157,14 @@ build_sql_record_int(insert, SQL, _Cover) ->
             %% twice as the timestamp conversion code needs to have
             %% the Types available (and check that length(Types) ==
             %% length(Values)).
-            {ok, #riak_sql_insert_v1{'INSERT'   = T,
-                                     fields     = F,
-                                     values     = V,
+            {ok, #riak_sql_insert_v1{'INSERT'   = Table,
+                                     fields     = Fields,
+                                     values     = Values,
                                      helper_mod = Mod
                                     }};
         false ->
             {error, <<"Must provide exactly one table name">>}
     end;
-
-build_sql_record_int(show_tables, _SQL, _Cover) ->
-    {ok, #riak_sql_show_tables_v1{}};
 
 build_sql_record_int(delete, SQL, _Cover) ->
     T = proplists:get_value(table, SQL),
@@ -151,7 +177,12 @@ build_sql_record_int(delete, SQL, _Cover) ->
                                            helper_mod = Mod}};
          false ->
             {error, <<"Must provide exactly one table name">>}
-    end.
+    end;
+build_sql_record_int(show_tables, _SQL, _Options) ->
+    {ok, #riak_sql_show_tables_v1{}};
+build_sql_record_int(show_create_table, SQL, _Options) ->
+    Table = proplists:get_value(identifier, SQL),
+    {ok, #riak_sql_show_create_table_v1{'SHOW_CREATE_TABLE' = Table}}.
 
 convert_where_timestamps(_Mod, []) ->
     [];
@@ -273,7 +304,9 @@ queried_table(#riak_sql_show_tables_v1{})                -> <<>>;
 queried_table(#riak_sql_delete_query_v1{'FROM' = Table}) -> Table;
 queried_table(
     #riak_sql_explain_query_v1{'EXPLAIN'=?SQL_SELECT{'FROM' = Table}}) ->
-        Table.
+        Table;
+queried_table(#riak_sql_show_create_table_v1{'SHOW_CREATE_TABLE' = Table}) ->
+    Table.
 
 -spec get_table_ddl(binary()) ->
                            {ok, module(), ?DDL{}} |
@@ -385,61 +418,11 @@ try_compile_ddl(DDL) ->
     {ok, _, _} = compile:forms(AST),
     ok.
 
-
--spec make_ts_keys([riak_pb_ts_codec:ldbvalue()], ?DDL{}, module()) ->
-                          {ok, {tuple(), tuple()}} |
-                          {error, {bad_key_length, integer(), integer()}}.
-%% Given a list of values (of appropriate types) and a DDL, produce a
-%% partition and local key pair, which can be used in riak_client:get
-%% to fetch TS objects.
-make_ts_keys(CompoundKey, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
-                                     fields = Fields}, Mod) ->
-    %% 1. use elements in Key to form a complete data record:
-    KeyFields = [F || ?SQL_PARAM{name = [F]} <- LKAst],
-    AllFields = [F || #riak_field_v1{name = F} <- Fields],
-    Got = length(CompoundKey),
-    Need = length(KeyFields),
-    case {Got, Need} of
-        {_N, _N} ->
-            DummyObject = build_dummy_object_from_keyed_values(
-                            lists:zip(KeyFields, CompoundKey), AllFields),
-            %% 2. make the PK and LK
-            PK  = encode_typeval_key(
-                    riak_ql_ddl:get_partition_key(DDL, DummyObject, Mod)),
-            LK  = encode_typeval_key(
-                    riak_ql_ddl:get_local_key(DDL, DummyObject, Mod)),
-            {ok, {PK, LK}};
-       {G, N} ->
-            {error, {bad_key_length, G, N}}
-    end.
-
-build_dummy_object_from_keyed_values(LK, AllFields) ->
-    VoidRecord = [{F, void} || F <- AllFields],
-    %% (void values will not be looked at in riak_ql_ddl:make_key;
-    %% only LK-constituent fields matter)
-    list_to_tuple(
-      [proplists:get_value(K, LK)
-       || {K, _} <- VoidRecord]).
-
-
 -spec encode_typeval_key(list({term(), term()})) -> tuple().
 %% Encode a time series key returned by riak_ql_ddl:get_partition_key/3,
 %% riak_ql_ddl:get_local_key/3,
 encode_typeval_key(TypeVals) ->
     list_to_tuple([Val || {_Type, Val} <- TypeVals]).
-
-
--spec lk_to_pk(tuple(), ?DDL{}, module()) -> tuple().
-%% A simplified version of make_key/3 which only returns the PK.
-lk_to_pk(LKVals, DDL = ?DDL{local_key = #key_v1{ast = LKAst},
-                        fields = Fields}, Mod)
-  when is_tuple(LKVals) andalso size(LKVals) == length(LKAst) ->
-    KeyFields = [F || ?SQL_PARAM{name = [F]} <- LKAst],
-    AllFields = [F || #riak_field_v1{name = F} <- Fields],
-    DummyObject = build_dummy_object_from_keyed_values(
-                    lists:zip(KeyFields, tuple_to_list(LKVals)), AllFields),
-    encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, DummyObject, Mod)).
 
 %% Show some debug info about how a query is compiled into sub queries
 %% and what key ranges are created.
@@ -456,7 +439,7 @@ explain_query(QueryString) ->
 explain_query(DDL, ?SQL_SELECT{'FROM' = Table} = Select) ->
     Props = riak_core_bucket_type:get(Table),
     NVal = proplists:get_value(n_val, Props),
-    case riak_kv_qry_compiler:compile(DDL, Select, 10000) of
+    case riak_kv_qry_compiler:compile(DDL, Select) of
         {ok, SubQueries} ->
             {_Total, Rows} =
                 lists:foldl(
@@ -476,7 +459,7 @@ explain_query(DDL, QueryString) ->
 %%
 explain_compile_query(QueryString) ->
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(QueryString)),
-    build_sql_record(select, Q, undefined).
+    build_sql_record(select, Q, []).
 
 %%
 explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
@@ -571,10 +554,6 @@ validate_rows(Mod, Rows) ->
 -spec get_column_types(list(binary()), module()) -> [riak_pb_ts_codec:tscolumntype()].
 get_column_types(ColumnNames, Mod) ->
     [Mod:get_field_type([N]) || N <- ColumnNames].
-
-row_to_key(Row, DDL, Mod) ->
-    encode_typeval_key(
-      riak_ql_ddl:get_partition_key(DDL, Row, Mod)).
 
 %% Result from riak_client:get_cover is a nested list of coverage plan
 %% because KV coverage requests are designed that way, but in our case
@@ -685,6 +664,61 @@ extract_time_boundaries(FieldName, WhereList) ->
     {{Start, StartInclusive}, {End, EndInclusive}}.
 
 
+%% Given the current capability value of the ddl records supported in the
+%% cluster and the decoded request, check if the table features are supported
+%% in the cluster.
+-spec check_table_feature_supported(DDLRecCap::atom(),
+                                    DecodedReq::ts_service_req()) -> ts_service_req() | {error, string()}.
+check_table_feature_supported(DDLRecCap, DecodedReq) ->
+    case DecodedReq of
+        {ok, {?DDL{} = DDL, _}, {_, Table}} ->
+            %% CREATE TABLE requires a separate path because there is no helper
+            %% module yet to check the min required ddl capability, so just
+            %% work it out from the DDL itself.
+            MinCap = riak_ql_ddl:get_minimum_capability(DDL),
+            case is_ddl_version_supported(MinCap, DDLRecCap) of
+                true ->
+                    DecodedReq;
+                false ->
+                    {error, create_table_not_supported_message(Table)}
+            end;
+        {ok, _, {_, Table}} ->
+            case is_table_supported(DDLRecCap, Table) of
+                true ->
+                    DecodedReq;
+                false ->
+                    {error, table_not_supported_message(Table)}
+            end;
+        _ ->
+            DecodedReq
+    end.
+
+%%
+is_table_supported(_, << >>) ->
+    %% an empty binary for the table name means that the request is not for a
+    %% specific table e.g. SHOW TABLES
+    true;
+is_table_supported(DDLRecCap, Table) when is_binary(Table) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    MinCap = Mod:get_min_required_ddl_cap(),
+    MinCap /= disabled andalso is_ddl_version_supported(MinCap, DDLRecCap).
+
+%%
+is_ddl_version_supported(MinCap, DDLRecCap) ->
+    riak_ql_ddl:is_version_greater(DDLRecCap, MinCap) /= false.
+
+%%
+table_not_supported_message(Table) ->
+    Reason = "Request was not executed. Table ~ts has features not supported "
+             "by all nodes in the cluster.",
+    lists:flatten(io_lib:format(Reason, [Table])).
+
+%%
+create_table_not_supported_message(Table) ->
+    Reason = "Table was not ~ts was not created. It contains features which "
+             "are not supported by all nodes in the cluster.",
+    lists:flatten(io_lib:format(Reason, [Table])).
+
 %%%%%%%%%%%%
 %% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
 identify_quantum_field(#key_v1{ast = KeyList}) ->
@@ -701,6 +735,33 @@ find_hash_fn([_H|T]) ->
 
 %%%%%%%%%%%%
 
+%% @doc Does os:cmd(flat_format("rm -rf '~s'", [Dir])).
+rm_rf(Dir) ->
+    rm_direntries(Dir, filelib:wildcard("*", flat_format("~s", [Dir]))).
+
+rm_direntries(Dir, []) ->
+    case file:del_dir(Dir) of
+        {error, enoent} ->
+            ok;
+        OkOrOther ->
+            OkOrOther
+    end;
+rm_direntries(Dir, [F|Rest]) ->
+    Entry = filename:join(Dir, F),
+    Res =
+        case filelib:is_dir(Entry) of
+            true ->
+                rm_rf(Entry);
+            false ->
+                file:delete(Entry)
+        end,
+    case Res of
+        ok ->
+            rm_direntries(Dir, Rest);
+        ER ->
+            ER
+    end.
+
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
@@ -716,59 +777,6 @@ helper_compile_def_to_module(SQL) ->
     {ok, {DDL, _Props}} = riak_ql_parser:parse(Lexed),
     {module, Mod} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     {DDL, Mod}.
-
-% basic family/series/timestamp
-make_ts_keys_1_test() ->
-    {DDL, Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table1 ("
-        "a SINT64 NOT NULL, "
-        "b SINT64 NOT NULL, "
-        "c TIMESTAMP NOT NULL, "
-        "PRIMARY KEY((a, b, quantum(c, 15, 's')), a, b, c))"),
-    ?assertEqual(
-        {ok, {{1,2,0}, {1,2,3}}},
-        make_ts_keys([1,2,3], DDL, Mod)
-    ).
-
-% a two element key, still using the table definition field order
-make_ts_keys_2_test() ->
-    {DDL, Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table1 ("
-        "a SINT64 NOT NULL, "
-        "b TIMESTAMP NOT NULL, "
-        "c SINT64 NOT NULL, "
-        "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
-    ?assertEqual(
-        {ok, {{1,0}, {1,2}}},
-        make_ts_keys([1,2], DDL, Mod)
-    ).
-
-make_ts_keys_3_test() ->
-    {DDL, Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table2 ("
-        "a SINT64 NOT NULL, "
-        "b SINT64 NOT NULL, "
-        "c TIMESTAMP NOT NULL, "
-        "d SINT64 NOT NULL, "
-        "PRIMARY KEY  ((d,a,quantum(c, 1, 's')), d,a,c))"),
-    ?assertEqual(
-        {ok, {{10,20,0}, {10,20,1}}},
-        make_ts_keys([10,20,1], DDL, Mod)
-    ).
-
-make_ts_keys_4_test() ->
-    {DDL, Mod} = helper_compile_def_to_module(
-        "CREATE TABLE table2 ("
-        "ax SINT64 NOT NULL, "
-        "a SINT64 NOT NULL, "
-        "b SINT64 NOT NULL, "
-        "c TIMESTAMP NOT NULL, "
-        "d SINT64 NOT NULL, "
-        "PRIMARY KEY  ((ax,a,quantum(c, 1, 's')), ax,a,c))"),
-    ?assertEqual(
-        {ok, {{10,20,0}, {10,20,1}}},
-        make_ts_keys([10,20,1], DDL, Mod)
-    ).
 
 
 test_helper_validate_rows_mod() ->
@@ -826,7 +834,7 @@ bad_timestamp_select_test() ->
     Lexed = riak_ql_lexer:get_tokens(BadQuery),
     {ok, Q} = riak_ql_parser:parse(Lexed),
     ?assertMatch({error, <<"Invalid date/time string">>},
-                 build_sql_record(select, Q, undefined)).
+                 build_sql_record(select, Q, [])).
 
 good_timestamp_select_test() ->
     GoodQuery = "select * from table1 "
@@ -840,7 +848,7 @@ good_timestamp_select_test() ->
         "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
     Lexed = riak_ql_lexer:get_tokens(GoodQuery),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    {ok, Select} = build_sql_record(select, Q, undefined),
+    {ok, Select} = build_sql_record(select, Q, []),
     Where = Select?SQL_SELECT.'WHERE',
     %% Navigate the tree looking for integer values for b
     %% comparisons. Verify that we find both (hence `2' as our
@@ -885,6 +893,87 @@ timestamp_parsing_test() ->
     Lexed = riak_ql_lexer:get_tokens(BadQuery),
     {ok, Q} = riak_ql_parser:parse(Lexed),
     ?assertMatch({error, <<"Invalid date/time string">>},
-                 build_sql_record(select, Q, undefined)).
+                 build_sql_record(select, Q, [])).
+
+
+rm_rf_test() ->
+    Dir = test_server:temp_name("/tmp/"),
+    os:cmd(flat_format("mkdir -p '~s'", [Dir])),
+    os:cmd(flat_format("mkdir -p '~s/ke'", [Dir])),
+    os:cmd(flat_format("mkdir -p '~s/mi'", [Dir])),
+    os:cmd(flat_format("touch '~s/a'", [Dir])),
+    os:cmd(flat_format("touch '~s/ke/b'", [Dir])),
+    os:cmd(flat_format("touch '~s/d'", [Dir])),
+    os:cmd(flat_format("ln -s '~s/d' '~s/A'", [Dir, Dir])),
+    Exists1 = filelib:is_dir(Dir),
+    ?assertEqual(Exists1, true),
+    ok = rm_rf(Dir),
+    Exists2 = filelib:is_dir(Dir),
+    ?assertEqual(Exists2, false).
+
+
+
+%%
+helper_sql_to_module(SQL) ->
+    Lexed = riak_ql_lexer:get_tokens(SQL),
+    {ddl, DDL, _Props} = riak_ql_parser:ql_parse(Lexed),
+    {module, _Module} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
+
+check_table_feature_supported_error_test() ->
+    ?assertEqual(
+        {error, myerror},
+        check_table_feature_supported(v2, {error, myerror})
+    ).
+
+check_table_feature_supported_is_supported_v1_test() ->
+    Table =
+        "CREATE TABLE check_table_feature_supported_is_supported_v1_test ("
+        " a varchar not null,"
+        " b varchar not null,"
+        " c timestamp not null,"
+        " primary key ((a, b, quantum(c, 1, 'm')), a, b, c))",
+    {module, _Mod} = helper_sql_to_module(Table),
+    DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_is_supported_v1_test">>}},
+    ?assertEqual(
+       DecodedReq,
+       check_table_feature_supported(v1, DecodedReq)
+    ).
+
+check_table_feature_supported_is_supported_v2_test() ->
+    Table =
+        "CREATE TABLE check_table_feature_supported_is_supported_v2_test ("
+        " a varchar not null,"
+        " b varchar not null,"
+        " c timestamp not null,"
+        " primary key ((a, b, quantum(c, 1, 'm')), a, b, c))",
+    {module, _Mod} = helper_sql_to_module(Table),
+    DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_is_supported_v2_test">>}},
+    ?assertEqual(
+       DecodedReq,
+       check_table_feature_supported(v2, DecodedReq)
+    ).
+
+check_table_feature_supported_not_supported_test() ->
+    Table =
+        "CREATE TABLE check_table_feature_supported_not_supported_test ("
+        " a varchar not null,"
+        " b varchar not null,"
+        " c timestamp not null,"
+        " primary key ((a, b, quantum(c, 1, 'm')), a, b, c DESC))",
+    {module, _Mod} = helper_sql_to_module(Table),
+    DecodedReq = {ok, req, {"perm", <<"check_table_feature_supported_not_supported_test">>}},
+    ?assertMatch(
+        {error, _},
+        check_table_feature_supported(v1, DecodedReq)
+    ).
+
+check_table_feature_supported_when_table_is_disabled_test() ->
+    Table = <<"check_table_feature_supported_when_table_is_disabled_test">>,
+    {module, _Mod} = riak_ql_ddl_compiler:compile_and_load_disabled_module_from_tmp(Table),
+    DecodedReq = {ok, req, {"perm", Table}},
+    ?assertMatch(
+        {error, _},
+        check_table_feature_supported(v2, DecodedReq)
+    ).
 
 -endif.

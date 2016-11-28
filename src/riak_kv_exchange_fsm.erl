@@ -108,13 +108,13 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%      remote concurrency lock, and remote tree lock. Exchange will
 %%      timeout if locks cannot be acquired in a timely manner.
 prepare_exchange(start_exchange, State=#state{remote=RemoteVN,
-                                              index_n=IndexN}) ->
+                                              index_n=IndexN,
+                                              local_tree=Tree}) ->
     case riak_kv_entropy_manager:get_lock(exchange) of
         ok ->
-            case riak_kv_index_hashtree:get_lock(State#state.local_tree,
-                                                 local_fsm) of
-                ok ->
-                    remote_exchange_request(RemoteVN, IndexN),
+            case riak_kv_index_hashtree:get_lock_and_version(Tree, local_fsm) of
+                {ok, Version} ->
+                    remote_exchange_request(RemoteVN, IndexN, Version),
                     Timer = gen_fsm:send_event_after(State#state.timeout,
                                                      timeout),
                     {next_state, prepare_exchange, State#state{timer=Timer}};
@@ -297,7 +297,7 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, _Reason}) ->
     end,
     %% Force vnodes to update AAE tree in case read repair wasn't triggered
     riak_kv_vnode:rehash([LocalVN, RemoteVN], Bucket, Key),
-    timer:sleep(riak_kv_entropy_manager:get_aae_throttle()),
+    riak_kv_entropy_manager:throttle(),
     ok.
 
 repair_consistent(BKey) ->
@@ -317,12 +317,13 @@ update_request(Tree, {Index, _}, IndexN) ->
                      end
              end).
 
-remote_exchange_request(RemoteVN, IndexN) ->
+remote_exchange_request(RemoteVN, IndexN, Version) ->
     FsmPid = self(),
     as_event(fun() ->
                      riak_kv_entropy_manager:start_exchange_remote(RemoteVN,
                                                                    IndexN,
-                                                                   FsmPid)
+                                                                   FsmPid,
+                                                                   Version)
              end).
 
 %% @private

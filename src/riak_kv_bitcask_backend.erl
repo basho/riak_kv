@@ -857,14 +857,14 @@ finalize_upgrade(Dir) ->
 simple_test_() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
-    backend_test_util:standard_test(?MODULE,
-                                    [{data_root, "test/bitcask-backend"}]).
+    backend_test_util:standard_test_gen(?MODULE,
+                                        [{data_root, "test/bitcask-backend"}]).
 
 custom_config_test_() ->
     ?assertCmd("rm -rf test/bitcask-backend"),
     application:set_env(bitcask, data_root, ""),
-    backend_test_util:standard_test(?MODULE,
-                                    [{data_root, "test/bitcask-backend"}]).
+    backend_test_util:standard_test_gen(?MODULE,
+                                        [{data_root, "test/bitcask-backend"}]).
 
 startup_data_dir_test() ->
     os:cmd("rm -rf test/bitcask-backend/*"),

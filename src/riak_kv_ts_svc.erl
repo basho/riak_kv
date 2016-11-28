@@ -30,28 +30,32 @@
 -include("riak_kv_ts_svc.hrl").
 
 %% per RIAK-1437, error codes assigned to TS are in the 1000-1500 range
--define(E_SUBMIT,            1001).
--define(E_FETCH,             1002).
--define(E_IRREG,             1003).
--define(E_PUT,               1004).
--define(E_NOCREATE,          1005).   %% unused
--define(E_NOT_TS_TYPE,       1006).
--define(E_MISSING_TYPE,      1007).
--define(E_MISSING_TS_MODULE, 1008).
--define(E_DELETE,            1009).
--define(E_GET,               1010).
--define(E_BAD_KEY_LENGTH,    1011).
--define(E_LISTKEYS,          1012).
--define(E_TIMEOUT,           1013).
--define(E_CREATE,            1014).
--define(E_CREATED_INACTIVE,  1015).
--define(E_CREATED_GHOST,     1016).
--define(E_ACTIVATE,          1017).
--define(E_BAD_QUERY,         1018).
--define(E_TABLE_INACTIVE,    1019).
--define(E_PARSE_ERROR,       1020).
--define(E_NOTFOUND,          1021).
--define(E_INVALID_DELETE,    1022).
+-define(E_SUBMIT,                1001).
+-define(E_FETCH,                 1002).
+-define(E_IRREG,                 1003).
+-define(E_PUT,                   1004).
+-define(E_NOCREATE,              1005).   %% unused
+-define(E_NOT_TS_TYPE,           1006).
+-define(E_MISSING_TYPE,          1007).
+-define(E_MISSING_TS_MODULE,     1008).
+-define(E_DELETE,                1009).
+-define(E_GET,                   1010).
+-define(E_BAD_KEY_LENGTH,        1011).
+-define(E_LISTKEYS,              1012).
+-define(E_TIMEOUT,               1013).
+-define(E_CREATE,                1014).
+-define(E_CREATED_INACTIVE,      1015).
+-define(E_CREATED_GHOST,         1016).
+-define(E_ACTIVATE,              1017).
+-define(E_BAD_QUERY,             1018).
+-define(E_TABLE_INACTIVE,        1019).
+-define(E_PARSE_ERROR,           1020).
+-define(E_NOTFOUND,              1021).
+-define(E_SELECT_RESULT_TOO_BIG, 1022).
+-define(E_QBUF_CREATE_ERROR,     1023).
+-define(E_QBUF_LDB_ERROR,        1024).
+-define(E_QUANTA_LIMIT,          1025).
+-define(E_INVALID_DELETE,        1026).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -75,39 +79,53 @@
               ts_query_response/0, ts_query_responses/0,
               ts_query_types/0]).
 
-decode_query_common(Q, Cover) ->
-    case decode_query(Q, Cover) of
-        {QueryType, {ok, Query}} ->
+decode_query_common(Q, Options) ->
+    case decode_query(Q, Options) of
+        {ok, {QueryType, Query}} ->
             {ok, Query, decode_query_permissions(QueryType, Query)};
-        {_QueryType, {error, Error}} ->
-            {ok, make_decoder_error_response(Error)};
         {error, Error} ->
             %% convert error returns to ok's, this means it will be passed into
             %% process which will not process it and return the error.
             {ok, make_decoder_error_response(Error)}
     end.
 
--spec decode_query(Query::#tsinterpolation{}, Cover::term()) ->
-    {error, _} | {ddl, {ok, {?DDL{}, proplists:proplist()}}}
-               | {ts_query_types(), riak_kv_qry:sql_query_type_record()}.
-decode_query(#tsinterpolation{}, Cover)
-  when not (Cover == undefined orelse is_binary(Cover)) ->
-    {error, bad_coverage_context};
-decode_query(#tsinterpolation{base = BaseQuery}, Cover) ->
-    case catch riak_ql_parser:ql_parse(
-                 riak_ql_lexer:get_tokens(  %% yecc can throw nasty 'EXIT' exceptions
-                   binary_to_list(BaseQuery))) of
-        {ddl, DDL, WithProperties} ->
-            {ddl, {ok, {DDL, WithProperties}}};
-        {QryType, SQL} when QryType /= error,
-                            QryType /= 'EXIT' ->
-            {QryType, riak_kv_ts_util:build_sql_record(QryType, SQL, Cover)};
+-spec decode_query(Query::#tsinterpolation{}, proplists:proplist()) ->
+    {error, _} | {ok, {ddl, {?DDL{}, proplists:proplist()}}}
+               | {ok, {ts_query_types(), riak_kv_qry:sql_query_type_record()}}.
+decode_query(#tsinterpolation{base = BaseQuery}, Options) ->
+    case catch sql_lex_parse(BaseQuery) of
         {'EXIT', {Reason, _StackTrace}} ->
             {error, {lexer_error, flat_format("~s", [Reason])}};
         {error, Other} ->
-            {error, Other}
+            {error, Other};
+        {ok, {DDL = ?DDL{}, WithProperties}} ->
+            %% CREATE TABLE, so don't check if the table exists
+            {ok, {ddl, {DDL, WithProperties}}};
+        {ok, [{type, QryType}|SQL]} ->
+            Table = extract_table_name(SQL),
+            case is_table_query_ready(QryType, Table) of
+                true ->
+                    case riak_kv_ts_util:build_sql_record(QryType, SQL, Options) of
+                        {ok, SQLRec} ->
+                            {ok, {QryType, SQLRec}};
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                _ ->
+                    {error, make_table_not_activated_resp(Table)}
+            end
     end.
 
+%% for SHOW TABLES and other such queries which have no table(s), the "table" is
+%% effectively ready for the query
+is_table_query_ready(_QryType, _Table = << >>) -> true;
+is_table_query_ready(_QryType, Table) ->
+    riak_kv_compile_tab:get_table_status(Table) =:= <<"Active">>.
+
+extract_table_name(SQL) ->
+    proplists:get_value(table, SQL,
+                        proplists:get_value(tables, SQL,
+                                            << >>)).
 
 decode_query_permissions(QryType, {DDL = ?DDL{}, _WithProps}) ->
     decode_query_permissions(QryType, DDL);
@@ -172,6 +190,9 @@ process(#riak_sql_show_tables_v1{}, State) ->
     {reply, make_tsqueryresp({ColNames, ColTypes, Rows}), State};
 
 process(M = #riak_sql_explain_query_v1{'EXPLAIN' = ?SQL_SELECT{'FROM' = Table}}, State) ->
+    check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
+
+process(M = #riak_sql_show_create_table_v1{'SHOW_CREATE_TABLE' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State).
 
 %% There is no two-tuple variants of process_stream for tslistkeysresp
@@ -186,13 +207,11 @@ process_stream({ReqId, From, {keys, []}}, ReqId,
     {ignore, State};
 
 process_stream({ReqId, From, {keys, CompoundKeys}}, ReqId,
-               State = #state{req = #tslistkeysreq{},
-                              req_ctx = ReqId,
-                              column_info = ColumnInfo}) ->
+               #state{req = #tslistkeysreq{},
+                      req_ctx = ReqId,
+                      key_transform_fn = EncodeStreamKeysFn} = State) ->
     riak_kv_keys_fsm:ack_keys(From),
-    Keys = riak_pb_ts_codec:encode_rows(
-             ColumnInfo, [tuple_to_list(sext:decode(A))
-                          || A <- CompoundKeys, A /= []]),
+    Keys = EncodeStreamKeysFn(CompoundKeys),
     {reply, #tslistkeysresp{keys = Keys, done = false}, State};
 
 process_stream({ReqId, {error, Error}}, ReqId,
@@ -202,6 +221,19 @@ process_stream({ReqId, Error}, ReqId,
                #state{req = #tslistkeysreq{}, req_ctx = ReqId}) ->
     {error, {format, Error}, #state{}}.
 
+%%
+encode_rows_for_streaming(Mod, ColumnInfo, CompoundKeys1) ->
+    CompoundKeys2 = decode_keys_for_streaming(Mod, CompoundKeys1),
+    riak_pb_ts_codec:encode_rows(ColumnInfo, CompoundKeys2).
+
+%%
+decode_keys_for_streaming(_, []) ->
+    [];
+decode_keys_for_streaming(Mod, [[]|Tail]) ->
+    decode_keys_for_streaming(Mod, Tail);
+decode_keys_for_streaming(Mod, [K1|Tail]) ->
+    K2 = Mod:revert_ordering_on_local_key(sext:decode(K1)),
+    [K2|decode_keys_for_streaming(Mod, Tail)].
 
 %% ---------------------------------
 %% create_table, the only function for which we don't do
@@ -209,9 +241,11 @@ process_stream({ReqId, Error}, ReqId,
 
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
                           {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
-create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
+create_table({?DDL{table = Table} = DDL1, WithProps}, State) ->
+    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
+    DDL2 = convert_ddl_to_cluster_supported_version(DDLRecCap, DDL1),
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(
-                     DDL, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
+                     DDL2, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
     case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
         {bad_linkfun_modfun, {M, F}} ->
             {reply, make_table_create_fail_resp(
@@ -237,14 +271,25 @@ create_table({DDL = ?DDL{table = Table}, WithProps}, State) ->
             end
     end.
 
+%%
+convert_ddl_to_cluster_supported_version(DDLRecCap, DDL) when is_atom(DDLRecCap) ->
+    DDLConversions = riak_ql_ddl:convert(DDLRecCap, DDL),
+    [LowestDDL|_] = lists:sort(fun ddl_comparator/2, DDLConversions),
+    LowestDDL.
+
+%%
+ddl_comparator(A, B) ->
+    riak_ql_ddl:is_version_greater(element(1,A), element(1,B)) == true.
+
 wait_until_active(Table, State, 0) ->
-    {reply, make_table_activate_fail_resp(Table), State};
+    {reply, make_table_activate_error_timeout_resp(Table), State};
 wait_until_active(Table, State, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
         ok ->
             {reply, tsqueryresp, State};
         {error, not_ready} ->
             timer:sleep(1000),
+            lager:info("Waiting for table ~ts to be ready for activation", [Table]),
             wait_until_active(Table, State, Seconds - 1);
         {error, undefined} ->
             %% this is inconceivable because create(Table) has
@@ -368,7 +413,9 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 
     KeyConvFn =
         fun(Key) when is_binary(Key) ->
-                riak_kv_ts_util:lk_to_pk(sext:decode(Key), DDL, Mod);
+                {ok, PK} = riak_ql_ddl:lk_to_pk(
+                             sext:decode(Key), DDL, Mod),
+                PK;
            (Key) ->
                 %% Key read from leveldb should always be binary.
                 %% This clause is just to keep dialyzer quiet
@@ -393,8 +440,13 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
             ColumnInfo =
                 [Mod:get_field_type(N)
                  || ?SQL_PARAM{name = N} <- DDL?DDL.local_key#key_v1.ast],
+            EncodeStreamKeysFn =
+                fun(CompoundKeys) ->
+                    encode_rows_for_streaming(Mod, ColumnInfo, CompoundKeys)
+                end,
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId,
-                                                 column_info = ColumnInfo}};
+                                                 column_info = ColumnInfo,
+                                                 key_transform_fn = EncodeStreamKeysFn}};
         {error, Reason} ->
             {reply, make_failed_listkeys_resp(Reason), State}
     end.
@@ -411,8 +463,8 @@ sub_tscoveragereq(Mod, _DDL, #tscoveragereq{table = Table,
     Client = {riak_client, [node(), undefined]},
     %% all we need from decode_query is to compile the query,
     %% but also to check permissions
-    case decode_query(Q, undefined) of
-        {_QryType, {ok, SQL}} ->
+    case decode_query(Q, []) of
+        {ok, {_QryType, SQL}} ->
             %% Make sure, if we pass a replacement cover, we use it to
             %% determine the proper where range
             case riak_kv_ts_api:compile_to_per_quantum_queries(Mod,
@@ -469,15 +521,28 @@ sub_tsqueryreq(_Mod, DDL = ?DDL{table = Table}, SQL, State) ->
             {reply, make_too_many_insert_values_resp(BadRowIdxs), State};
         {error, {undefined_fields, BadFields}} ->
             {reply, make_undefined_field_in_insert_resp(BadFields), State};
+        %% from the qbuf subsystem
+        {error, select_result_too_big} ->
+            {reply, make_select_result_too_big_error(), State};
+        {error, {qbuf_create_error, Reason}} ->
+            {reply, make_qbuf_create_error(Reason), State};
+        {error, {qbuf_ldb_error, Reason}} ->
+            {reply, make_qbuf_ldb_error(Reason), State};
+        {error, {identifier_unexpected, Identifier}} ->
+            {reply, make_identifier_unexpected_resp(Identifier), State};
 
         %% these come from riak_kv_qry_compiler, even though the query is a valid SQL.
         {error, {_DDLCompilerErrType, DDLCompilerErrDesc}} when is_atom(_DDLCompilerErrType) ->
             {reply, make_rpberrresp(?E_SUBMIT, DDLCompilerErrDesc), State};
         {error, invalid_coverage_context_checksum} ->
             {reply, make_rpberrresp(?E_SUBMIT, "Query coverage context fails checksum"), State};
+        {error, {too_many_subqueries, NQuanta, MaxQueryQuanta}} ->
+            {reply, make_max_query_quanta_resp(NQuanta, MaxQueryQuanta), State};
 
-        {error, Reason} ->
-            {reply, make_rpberrresp(?E_SUBMIT, Reason), State}
+        {error, Reason} when is_list(Reason) ->
+            {reply, make_rpberrresp(?E_SUBMIT, Reason), State};
+        {error, AReason} -> %%<< i.e. overload, primary_not_available
+            {reply, make_rpberrresp(?E_SUBMIT, to_string(AReason)), State}
     end.
 
 
@@ -512,10 +577,12 @@ check_table_and_call(Table, Fun, TsMessage, State) ->
 
 
 %%
--spec make_rpberrresp(integer(), string()) -> #rpberrorresp{}.
-make_rpberrresp(Code, Message) ->
+-spec make_rpberrresp(integer(), string()|binary()) -> #rpberrorresp{}.
+make_rpberrresp(Code, Message) when is_list(Message) ->
+    make_rpberrresp(Code, list_to_binary(Message));
+make_rpberrresp(Code, Message) when is_binary(Message) ->
     #rpberrorresp{errcode = Code,
-                  errmsg = iolist_to_binary(Message)}.
+                  errmsg = Message}.
 
 %%
 -spec make_missing_helper_module_resp(Table::binary(),
@@ -574,6 +641,31 @@ make_undefined_field_in_insert_resp(BadFields) ->
       ?E_BAD_QUERY,
       flat_format("undefined fields: ~s", [string:join(BadFields, ", ")])).
 
+make_qbuf_create_error(Reason) ->
+    make_rpberrresp(
+      ?E_QBUF_CREATE_ERROR,
+      flat_format("Failed to set up query buffer for an ORDER BY query (~p)", [Reason])).
+
+make_select_result_too_big_error() ->
+    make_rpberrresp(
+      ?E_SELECT_RESULT_TOO_BIG,
+      flat_format("Projected result of a SELECT query is too big", [])).
+
+make_qbuf_ldb_error(Reason) ->
+    make_rpberrresp(
+      ?E_QBUF_LDB_ERROR,
+      flat_format("Query buffer I/O error: ~p", [Reason])).
+
+make_max_query_quanta_resp(NQuanta, MaxQueryQuanta) ->
+    make_rpberrresp(
+      ?E_QUANTA_LIMIT,
+      flat_format("Query spans too many quanta (~b, max ~b)", [NQuanta, MaxQueryQuanta])).
+
+make_identifier_unexpected_resp(Identifier) ->
+    make_rpberrresp(
+        ?E_BAD_QUERY,
+        flat_format("unexpected identifer: ~s", [Identifier])).
+
 make_failed_put_resp(ErrorCount) ->
     make_rpberrresp(
       ?E_PUT,
@@ -593,10 +685,10 @@ make_table_create_fail_resp(Table, Reason) ->
     make_rpberrresp(
       ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])).
 
-make_table_activate_fail_resp(Table) ->
+make_table_activate_error_timeout_resp(Table) ->
     make_rpberrresp(
       ?E_ACTIVATE,
-      flat_format("Failed to activate table ~s", [Table])).
+      flat_format("Timed out while attempting to activate table ~ts", [Table])).
 
 make_table_not_activated_resp(Table) ->
     make_rpberrresp(
@@ -608,6 +700,8 @@ make_table_created_missing_resp(Table) ->
       ?E_CREATED_GHOST,
       flat_format("Table ~s has been created but found missing", [Table])).
 
+to_string(X) when is_atom(X) ->
+    atom_to_list(X);
 to_string(X) ->
     flat_format("~p", [X]).
 
@@ -631,7 +725,8 @@ make_tsqueryresp({_ColumnNames, _ColumnTypes, []}) ->
 make_tsqueryresp(Data = {_ColumnNames, _ColumnTypes, _Rows}) ->
     {tsqueryresp, Data}.
 
-
+make_decoder_error_response(Error = {rpberrorresp, _Msg, _Code}) ->
+    Error;
 make_decoder_error_response(bad_coverage_context) ->
     make_rpberrresp(?E_SUBMIT, "Bad coverage context");
 make_decoder_error_response({lexer_error, Msg}) ->
@@ -647,6 +742,11 @@ make_decoder_error_response(Error) ->
 
 flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
+
+sql_lex_parse(Sql) when is_binary(Sql) ->
+    sql_lex_parse(binary_to_list(Sql));
+sql_lex_parse(Sql) ->
+    riak_ql_parser:parse(riak_ql_lexer:get_tokens(Sql)).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -671,5 +771,104 @@ missing_helper_module_test() ->
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
         make_missing_helper_module_resp(<<"mytype">>, [{ddl, ?DDL{}}])
     ).
+
+convert_ddl_to_cluster_supported_version_v1_test() ->
+    ?assertMatch(
+        #ddl_v1{},
+        convert_ddl_to_cluster_supported_version(
+          v1, #ddl_v2{local_key = ?DDL_KEY{ast = []}, partition_key = ?DDL_KEY{ast = []}})
+    ).
+
+convert_ddl_to_cluster_supported_version_v2_test() ->
+    DDLV2 = #ddl_v2{
+        local_key = ?DDL_KEY{ast = []},
+        partition_key = ?DDL_KEY{ast = []}},
+    ?assertMatch(
+        DDLV2,
+        convert_ddl_to_cluster_supported_version(v2, DDLV2)
+    ).
+
+get_create_table_sql(TableName) when is_binary(TableName) ->
+    get_create_table_sql(binary_to_list(TableName));
+get_create_table_sql(TableName) ->
+    "CREATE TABLE " ++ TableName ++ "("
+    "a VARCHAR NOT NULL,"
+    "PRIMARY KEY((a), a))"
+    " WITH(dw=1)".
+
+create_test_tmp_table(TableName) ->
+    TableDef = get_create_table_sql(TableName),
+    {ok, {DDL, _}} = sql_lex_parse(TableDef),
+    {module, _} = riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL).
+
+decode_query_common_invalid_sql_errors_test() ->
+    Sql = <<"INVALID SQL">>,
+    ?assertMatch(
+       {ok, {rpberrorresp, _, 1020}},
+       decode_query_common(#tsinterpolation{base = Sql}, undefined)).
+
+assert_create_table_decoded(Decoded, TableExpected) when is_list(TableExpected) ->
+    assert_create_table_decoded(Decoded, list_to_binary(TableExpected));
+assert_create_table_decoded(Decoded, TableExpected) ->
+    Ddl = element(1, element(2, Decoded)),
+    WithProps = element(2, element(2, Decoded)),
+    ?assertMatch([{<<"dw">>, 1}], WithProps),
+    DdlV = element(1, Ddl),
+    ?assertMatch(ddl_v2, DdlV),
+    Table = element(2, Ddl),
+    ?assertMatch(TableExpected, Table).
+
+decode_query_common_create_table_dne_passes_test() ->
+    TableName = "dne",
+    Sql = get_create_table_sql(TableName),
+    Decoded = decode_query_common(#tsinterpolation{base = Sql}, undefined),
+    assert_create_table_decoded(Decoded, TableName).
+
+decode_query_common_create_table_existing_passes_test() ->
+    %% table existence is not checked for decoding of CREATE TABLE at this stage.
+    TableName = "my_type1",
+    create_test_tmp_table(TableName),
+    Sql = get_create_table_sql(TableName),
+    Decoded = decode_query_common(#tsinterpolation{base = Sql}, undefined),
+    assert_create_table_decoded(Decoded, TableName).
+
+%% whether a table is expected to be Active or not for testing purpose is
+%% borrowed from riak_kv_compile_tab where the feature of establishing whether
+%% a table is Active is implemented. my_type1 is Active, my_type2 is not.
+decode_query_common_select_notactive_table_errors_test() ->
+    TableName = "my_type2",
+    create_test_tmp_table(TableName),
+    Sql = list_to_binary("SELECT * FROM " ++ TableName),
+    ?assertMatch(
+       {ok, {rpberrorresp, _Msg, 1019}},
+       decode_query_common(#tsinterpolation{base = Sql}, undefined)).
+
+decode_query_common_select_active_table_passes_test() ->
+    TableName = "my_type1",
+    create_test_tmp_table(TableName),
+    Sql = list_to_binary("SELECT * FROM " ++ TableName),
+    Decoded = decode_query_common(#tsinterpolation{base = Sql}, undefined),
+    QryType = element(1, element(2, Decoded)),
+    ?assertMatch(riak_select_v3, QryType).
+
+decode_query_common_insert_notactive_table_errors_test() ->
+    TableName = "my_type2",
+    create_test_tmp_table(TableName),
+    Sql = list_to_binary("INSERT INTO " ++ TableName ++ " VALUES('a')"),
+    ?assertMatch(
+       {ok, {rpberrorresp, _Msg, 1019}},
+       decode_query_common(#tsinterpolation{base = Sql}, undefined)).
+
+decode_query_common_insert_active_table_passes_test() ->
+    TableName = "my_type1",
+    create_test_tmp_table(TableName),
+    Sql = list_to_binary("INSERT INTO " ++ TableName ++ " VALUES('a')"),
+    Decoded = decode_query_common(#tsinterpolation{base = Sql}, undefined),
+    QryType = element(1, element(2, Decoded)),
+    ?assertMatch(riak_sql_insert_v1, QryType).
+
+%% NOTE: unit tests for decode_query_common for all SQL types is not necessary
+%% since the patterns are restricted to EXIT, error, ddl (create table), and
+%% queries of all types.
 
 -endif.

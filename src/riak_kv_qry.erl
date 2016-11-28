@@ -35,13 +35,14 @@
 
 %% enumerate all current SQL query types
 -type query_type() ::
-        ddl | explain | describe | insert | select | show_tables.
+        ddl | explain | describe | insert | select | show_tables | show_create_table.
 %% and also their corresponding records (mainly for use in specs)
 -type sql_query_type_record() ::
         ?SQL_SELECT{} |
         #riak_sql_describe_v1{} |
         #riak_sql_insert_v1{} |
-        #riak_sql_show_tables_v1{}.
+        #riak_sql_show_tables_v1{} |
+        #riak_sql_show_create_table_v1{}.
 
 -type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
                                  [riak_pb_ts_codec:tscolumntype()],
@@ -66,17 +67,20 @@ submit(SQLString, DDL) when is_list(SQLString) ->
         {ok, Compiled} ->
             Type = proplists:get_value(type, Compiled),
             {ok, SQL} = riak_kv_ts_util:build_sql_record(
-                Type, Compiled, undefined),
+                Type, Compiled, []),
             submit(SQL, DDL)
     end;
 
 submit(#riak_sql_describe_v1{}, DDL) ->
-    do_describe(DDL);
+    riak_ql_describe:describe(DDL);
+submit(#riak_sql_show_create_table_v1{}, ?DDL{table = Table} = DDL) ->
+    Props = riak_core_bucket:get_bucket({Table, Table}),
+    riak_ql_show_create_table:show_create_table(DDL, Props);
 submit(SQL = #riak_sql_insert_v1{}, _DDL) ->
     do_insert(SQL);
 submit(SQL = ?SQL_SELECT{}, DDL) ->
     do_select(SQL, DDL);
-submit(#riak_sql_show_tables_v1{} = _SQL, _DDL) ->
+submit(#riak_sql_show_tables_v1{}, _DDL) ->
     do_show_tables();
 submit(#riak_sql_explain_query_v1{'EXPLAIN' = Select}, DDL) ->
     do_explain(DDL, Select);
@@ -194,7 +198,8 @@ xlate_insert_to_putdata(Values, Positions, Empty, FieldTypes) ->
 
 -spec make_insert_row([riak_ql_ddl:data_value()], [pos_integer()], tuple(),
                       [riak_ql_ddl:simple_field_type()]) ->
-                      {ok, tuple()} | {error, string()}.
+                      {ok, tuple()} | {error, string()} |
+                      {error, {atom(), string()}}.
 make_insert_row(Vals, _Positions, Row, _FieldTypes)
   when length(Vals) > size(Row) ->
     %% diagnose too_many_values before eventual timestamp conversion
@@ -204,6 +209,8 @@ make_insert_row([], _Positions, Row, _FieldTypes) ->
     %% Out of entries in the value - row is populated with default values
     %% so if we run out of data for implicit/explicit fieldnames can just return
     {ok, Row};
+make_insert_row([{identifier, Identifier} | _Values], _Positions, _Row, _FieldTypes) ->
+    {error, {identifier_unexpected, Identifier}};
 make_insert_row([TypedVal | Values], [Pos | Positions], Row, FieldTypes) ->
     %% Note the Type in TypedVal = {Type, _} is what the value was
     %% parsed into, while its counterpart in FieldTypes is what DDL
@@ -217,64 +224,7 @@ maybe_convert_timestamp({_NonTSType, Val}, _OtherType) ->
     Val.
 
 
-%% DESCRIBE
 
--spec do_describe(?DDL{}) ->
-                         {ok, query_tabular_result()} | {error, term()}.
-do_describe(?DDL{fields = FieldSpecs,
-                 partition_key = #key_v1{ast = PKSpec},
-                 local_key     = #key_v1{ast = LKSpec}}) ->
-    ColumnNames = [<<"Column">>, <<"Type">>, <<"Is Null">>, <<"Primary Key">>, <<"Local Key">>, <<"Interval">>, <<"Unit">>],
-    ColumnTypes = [   varchar,      varchar,    boolean,       sint64,            sint64,         sint64,         varchar],
-    Quantum = find_quantum_field(PKSpec),
-    Rows =
-        [[Name, list_to_binary(atom_to_list(Type)), Nullable,
-          column_pk_position_or_blank(Name, PKSpec),
-          column_lk_position_or_blank(Name, LKSpec)] ++
-          columns_quantum_or_blank(Name, Quantum)
-         || #riak_field_v1{name = Name,
-                           type = Type,
-                           optional = Nullable} <- FieldSpecs],
-    {ok, {ColumnNames, ColumnTypes, Rows}}.
-
-
-%% the following two functions are identical, for the way fields and
-%% keys are represented as of 2015-12-18; duplication here is a hint
-%% of things to come.
--spec column_pk_position_or_blank(binary(), [?SQL_PARAM{}]) -> integer() | [].
-column_pk_position_or_blank(Col, KSpec) ->
-    count_to_position(Col, KSpec, 1).
-
--spec column_lk_position_or_blank(binary(), [?SQL_PARAM{}]) -> integer() | [].
-column_lk_position_or_blank(Col, KSpec) ->
-    count_to_position(Col, KSpec, 1).
-
-%% Extract the quantum column information, if it exists in the table definition
-%% and put in two additional columns
--spec columns_quantum_or_blank(Col :: binary(), PKSpec :: [?SQL_PARAM{}|#hash_fn_v1{}]) ->
-      [binary() | []].
-columns_quantum_or_blank(Col, #hash_fn_v1{args = [?SQL_PARAM{name = [Col]}, Interval, Unit]}) ->
-    [Interval, list_to_binary(io_lib:format("~p", [Unit]))];
-columns_quantum_or_blank(_Col, _PKSpec) ->
-    [[], []].
-
-%% Find the field associated with the quantum, if there is one
--spec find_quantum_field([?SQL_PARAM{}|#hash_fn_v1{}]) -> [] | #hash_fn_v1{}.
-find_quantum_field([]) ->
-    [];
-find_quantum_field([Q = #hash_fn_v1{}|_]) ->
-    Q;
-find_quantum_field([_|T]) ->
-    find_quantum_field(T).
-
-count_to_position(_, [], _) ->
-    [];
-count_to_position(Col, [?SQL_PARAM{name = [Col]} | _], Pos) ->
-    Pos;
-count_to_position(Col, [#hash_fn_v1{args = [?SQL_PARAM{name = [Col]} | _]} | _], Pos) ->
-    Pos;
-count_to_position(Col, [_ | Rest], Pos) ->
-    count_to_position(Col, Rest, Pos + 1).
 
 
 %% SELECT
@@ -283,21 +233,71 @@ count_to_position(Col, [_ | Rest], Pos) ->
                        {ok, query_tabular_result()} | {error, term()}.
 do_select(SQL, ?DDL{table = BucketType} = DDL) ->
     Mod = riak_ql_ddl:make_module_name(BucketType),
-    MaxSubQueries =
-        app_helper:get_env(riak_kv, timeseries_query_max_quanta_span),
 
     case riak_ql_ddl:is_query_valid(Mod, DDL, riak_kv_ts_util:sql_record_to_tuple(SQL)) of
         true ->
-            case riak_kv_qry_compiler:compile(DDL, SQL, MaxSubQueries) of
+            case riak_kv_qry_compiler:compile(DDL, SQL) of
                 {error,_} = Error ->
                     Error;
                 {ok, SubQueries} ->
-                    maybe_await_query_results(
-                      riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL))
+                    %% these fields are used to create a DDL for the query buffer table;
+                    %% we extract them here to avoid doing another compilation of OrigQry
+                    %% in riak_kv_qry_buffers:get_or_create_qbuf
+                    ?SQL_SELECT{'SELECT' = CompiledSelect,
+                                'ORDER BY' = CompiledOrderBy} = hd(SubQueries),
+                    FullCycle =
+                        fun(QBufRef) ->
+                            maybe_await_query_results(
+                              riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL, QBufRef))
+                        end,
+                    case maybe_create_query_buffer(
+                           SQL, length(SubQueries), CompiledSelect, CompiledOrderBy, []) of
+                        {error, Reason} ->
+                            %% query buffers are non-optional for
+                            %% ORDER BY queries
+                            {error, {qbuf_create_error, Reason}};
+                        {ok, undefined} ->
+                            %% query buffer path not advisable (query
+                            %% has no ORDER BY)
+                            FullCycle(undefined);
+                        {ok, {new, QBufRef}} ->
+                            %% query is eligible, and new buffer is ready
+                            FullCycle(QBufRef);
+                        {ok, {existing, QBufRef}} ->
+                            %% query is eligible AND it is a follow-up
+                            %% query: yay results!
+                            riak_kv_qry_buffers:fetch_limit(
+                              QBufRef,
+                              riak_kv_qry_buffers:limit_to_scalar(SQL?SQL_SELECT.'LIMIT'),
+                              riak_kv_qry_buffers:offset_to_scalar(SQL?SQL_SELECT.'OFFSET'))
+                    end
             end;
         {false, Errors} ->
             {error, {invalid_query, format_query_syntax_errors(Errors)}}
     end.
+
+
+-spec maybe_create_query_buffer(?SQL_SELECT{}, pos_integer(),
+                                #riak_sel_clause_v1{}, [riak_kv_qry_compiler:sorter()],
+                                proplists:proplist()) ->
+                                       {ok, {new|existing, riak_kv_qry_buffers:qbuf_ref()} |
+                                             undefined} |
+                                       {error, any()}.
+maybe_create_query_buffer(?SQL_SELECT{'ORDER BY' = [],
+                                      'LIMIT'    = [],
+                                      'OFFSET'   = []},
+                          _NSubQueries, _CompiledSelect, _CompiledOrderBy, _Options) ->
+    {ok, undefined};
+maybe_create_query_buffer(SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) ->
+    case riak_kv_qry_buffers:get_or_create_qbuf(
+           SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) of
+        {ok, QBufRefNewOrExisting} ->
+            {ok, QBufRefNewOrExisting};
+        {error, Reason} ->
+            lager:warning("Failed to set up query buffer for ~p: ~p", [SQL, Reason]),
+            {error, Reason}
+    end.
+
 
 maybe_await_query_results({error,_} = Error) ->
     Error;
@@ -332,14 +332,14 @@ empty_result() ->
 %%
 -spec do_show_tables() -> {ok, query_tabular_result()} | {error, term()}.
 do_show_tables() ->
-    Tables = riak_kv_compile_tab:get_all_table_names(),
+    Tables = riak_kv_compile_tab:get_table_status_pairs(),
     build_show_tables_result(Tables).
 
--spec build_show_tables_result([binary()]) -> tuple().
+-spec build_show_tables_result([{binary(),binary()}]) -> {ok, query_tabular_result()}.
 build_show_tables_result(Tables) ->
-    ColumnNames = [<<"Table">>],
-    ColumnTypes = [varchar],
-    Rows = [[T] || T <- Tables],
+    ColumnNames = [<<"Table">>, <<"Status">>],
+    ColumnTypes = [varchar,varchar],
+    Rows = [[TableName, Status] || {TableName, Status} <- Tables],
     {ok, {ColumnNames, ColumnTypes, Rows}}.
 
 %%
@@ -399,53 +399,15 @@ do_delete(#riak_sql_delete_query_v1{'FROM'     = F,
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-describe_table_columns_test() ->
-    {ddl, DDL, []} =
-        riak_ql_parser:ql_parse(
-          riak_ql_lexer:get_tokens(
-            "CREATE TABLE fafa ("
-            " f varchar   not null,"
-            " s varchar   not null,"
-            " t timestamp not null,"
-            " w sint64    not null,"
-            " p double,"
-            " PRIMARY KEY ((f, s, quantum(t, 15, m)), "
-            " f, s, t))")),
-    Res = do_describe(DDL),
-    ?assertMatch(
-       {ok, {_, _,
-             [[<<"f">>, <<"varchar">>,   false, 1,  1, [], []],
-              [<<"s">>, <<"varchar">>,   false, 2,  2, [], []],
-              [<<"t">>, <<"timestamp">>, false, 3,  3, 15, <<"m">>],
-              [<<"w">>, <<"sint64">>, false, [], [], [], []],
-              [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
-       Res).
-
-describe_table_columns_no_quantum_test() ->
-    {ddl, DDL, []} =
-        riak_ql_parser:ql_parse(
-            riak_ql_lexer:get_tokens(
-                "CREATE TABLE fafa ("
-                " f varchar   not null,"
-                " s varchar   not null,"
-                " t timestamp not null,"
-                " w sint64    not null,"
-                " p double,"
-                " PRIMARY KEY (f, s, t))")),
-    Res = do_describe(DDL),
-    ?assertMatch(
-        {ok, {_, _,
-            [[<<"f">>, <<"varchar">>,   false, 1,  1, [], []],
-             [<<"s">>, <<"varchar">>,   false, 2,  2, [], []],
-             [<<"t">>, <<"timestamp">>, false, 3,  3, [], []],
-             [<<"w">>, <<"sint64">>, false, [], [], [], []],
-             [<<"p">>, <<"double">>, true,  [], [], [], []]]}},
-        Res).
-
 show_tables_test() ->
-    Res = build_show_tables_result([<<"fafa">>,<<"lala">>]),
+    Res = build_show_tables_result([
+            {<<"fafa">>, <<"Active">>},
+            {<<"lala">>, <<"Not Active">>}]),
     ?assertMatch(
-        {ok, {[<<"Table">>], [varchar], [[<<"fafa">>], [<<"lala">>]]}},
+        {ok, {[<<"Table">>,<<"Status">>],
+                [varchar,varchar],
+                [[<<"fafa">>, <<"Active">>],
+                 [<<"lala">>, <<"Not Active">>]]}},
         Res).
 
 explain_query_test() ->
@@ -463,7 +425,7 @@ explain_query_test() ->
     riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
     SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND f='adios'))",
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
-    {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, undefined),
+    {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, []),
     meck:new(riak_client),
     meck:new(riak_core_apl),
     meck:new(riak_core_bucket),
@@ -506,6 +468,83 @@ explain_query_test() ->
     meck:unload(riak_core_apl),
     meck:unload(riak_core_bucket),
     meck:unload(riak_core_claimant).
+
+show_create_table_test() ->
+    CreateSQL = "CREATE TABLE creation ("
+        "a SINT64 NOT NULL,\n"
+        "b TIMESTAMP NOT NULL,\n"
+        "c VARCHAR NOT NULL,\n"
+        "d SINT64,\n"
+        "e BOOLEAN,\n"
+        "f VARCHAR,\n"
+        "PRIMARY KEY ((c, a, QUANTUM(b, 1, 's')),\nc, a, b))",
+    PropsSQL = "\nWITH (active = true,\n"
+        "allow_mult = true,\n"
+        "dvv_enabled = true,\n"
+        "dw = quorum,\n"
+        "last_write_wins = false,\n"
+        "n_val = 2,\n"
+        "notfound_ok = true,\n"
+        "postcommit = '',\n"
+        "pr = 0,\n"
+        "pw = 0,\n"
+        "r = quorum,\n"
+        "rw = quorum,\n"
+        "w = quorum)",
+    %NoNewLines = re:replace(CreateSQL, "\n", " ", [global,{return,list}]),
+    {ddl, DDL, _Props} =
+        riak_ql_parser:ql_parse(
+            riak_ql_lexer:get_tokens(
+                CreateSQL ++
+                "WITH (n_val=2)")),
+    Props = [
+        {young_vclock, 20},
+        {w, quorum},
+        {small_vclock, 50},
+        {rw, quorum},
+        {r, quorum},
+        {pw, 0},
+        {precommit, []},
+        {pr, 0},
+        {postcommit, []},
+        {old_vclock, 86400},
+        {notfound_ok, true},
+        {n_val, 2},
+        {linkfun, {modfun,riak_kv_wm_link_walker,mapreduce_linkfun}},
+        {last_write_wins, false},
+        {dw, quorum},
+        {dvv_enabled, true},
+        {ddl_compiler_version, 319058810386694792992737611904771446619},
+        {ddl, {ddl_v2,<<"creation">>,
+            [{riak_field_v1,<<"a">>,1,sint64,false},
+                {riak_field_v1,<<"b">>,2,timestamp,false},
+                {riak_field_v1,<<"c">>,3,varchar,false},
+                {riak_field_v1,<<"d">>,4,sint64,true},
+                {riak_field_v1,<<"e">>,5,boolean,true},
+                {riak_field_v1,<<"f">>,6,varchar,true}],
+            {key_v1,[{param_v2,[<<"c">>],undefined},
+                {param_v2,[<<"a">>],undefined},
+                {hash_fn_v1,riak_ql_quanta,quantum,
+                    [{param_v2,[<<"b">>],undefined},1,s],
+                    timestamp}]},
+            {key_v1,[{param_v2,[<<"c">>],undefined},
+                {param_v2,[<<"a">>],undefined},
+                {param_v2,[<<"b">>],undefined}]},
+            v1}},
+        {chash_keyfun, {riak_core_util,chash_std_keyfun}},
+        {big_vclock, 50},
+        {basic_quorum, false},
+        {allow_mult, true},
+        {write_once, true},
+        {active, true},
+        {claimant, 'dev1@127.0.0.1'}
+    ],
+    Res = riak_ql_show_create_table:show_create_table(DDL, Props),
+    ExpectedRows =
+        [[CreateSQL ++ PropsSQL]],
+    ?assertMatch(
+        {ok, {_, _, ExpectedRows}},
+        Res).
 
 validate_make_insert_row_basic_test() ->
     Data = [{integer,4}, {binary,<<"bamboozle">>}, {float, 3.14}],
@@ -556,7 +595,7 @@ good_timestamp_insert_test() ->
         "PRIMARY KEY((a, quantum(b, 15, 's')), a, b))"),
     Lexed = riak_ql_lexer:get_tokens(GoodInsert),
     {ok, Q} = riak_ql_parser:parse(Lexed),
-    {ok, Insert} = riak_kv_ts_util:build_sql_record(insert, Q, undefined),
+    {ok, Insert} = riak_kv_ts_util:build_sql_record(insert, Q, []),
     Res = xlate_insert_to_putdata(
             Insert#riak_sql_insert_v1.values,
             [1,2,3], {undefined, undefined, undefined},
@@ -583,6 +622,22 @@ validate_xlate_insert_to_putdata_too_many_values_test() ->
               [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
     Positions = [3, 1, 2, 4],
     Result = xlate_insert_to_putdata(Values, Positions, Empty, [double, varchar, varchar, binary]),
+    ?assertEqual(
+        {error,{too_many_insert_values, [1]}},
+        Result
+    ).
+
+validate_xlate_insert_to_putdata_unexpected_identifier_test() ->
+    Empty = list_to_tuple(lists:duplicate(4, undefined)),
+    Values = [[{integer, 4}, {identifier, <<"babs">>}, {float, 5.67}, {binary, <<"bingo">>}, {integer, 7}],
+              [{integer, 8}, {binary, <<"scat">>}, {float, 7.65}, {binary, <<"yolo!">>}]],
+    Positions = [3, 1, 2, 4],
+    Result = xlate_insert_to_putdata(Values, Positions, Empty, [double, varchar, varchar, binary]),
+    %% TODO: the error for an insert which may span multiple rows  currently
+    %% only supports a single reason due to levels above and below, most
+    %% constraining being the translation of too_many_insert_values into the
+    %% human-readable message:
+    %% {error,{1003,<<"Invalid data found at row index(es) 1">>}}
     ?assertEqual(
         {error,{too_many_insert_values, [1]}},
         Result

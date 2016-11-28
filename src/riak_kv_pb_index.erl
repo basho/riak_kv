@@ -1,8 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_pb_index: Expose secondary index queries to Protocol Buffers
-%%
-%% Copyright (c) 2013 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2013-2016 Basho Technologies, Inc.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -60,53 +58,66 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
-    Msg = riak_pb_codec:decode(Code, Bin),
-    case Msg of
-        #rpbindexreq{type=T, bucket=B} ->
-            Bucket = bucket_type(T, B),
-            {ok, Msg, {"riak_kv.index", Bucket}}
-    end.
+    #rpbindexreq{type=T, bucket=B} = Msg = riak_pb_codec:decode(Code, Bin),
+    Bucket = bucket_type(T, B),
+    {ok, Msg, {"riak_kv.index", Bucket}}.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
-validate_request(#rpbindexreq{qtype=QType, key=SKey,
-                              range_min=Min, range_max=Max,
-                              term_regex=TermRe, return_body=RB,
-                              index=Index} = Req) ->
-    {ValRe, ValErr} = case TermRe of
+
+validate_request(#rpbindexreq{qtype = eq, key = SKey}) when not is_binary(SKey) ->
+    {error, {format, "Invalid equality query ~p", [SKey]}};
+validate_request(#rpbindexreq{qtype = range, range_min = Min, range_max = Max})
+    when not is_binary(Min); not is_binary(Max) ->
+    {error, {format, "Invalid range query: ~p -> ~p", [Min, Max]}};
+validate_request(#rpbindexreq{term_regex = TermRe} = Req) ->
+    {ValRe, ValErr} = ensure_compiled_re(TermRe),
+    case ValRe of
+        error ->
+            {error, {format, "Invalid term regular expression ~p : ~p", [TermRe, ValErr]}};
+        _ ->
+            validate_query(Req)
+    end.
+
+validate_query(Req) ->
+    Query = riak_index:to_index_query(query_params(Req)),
+    case Query of
+        {ok, ?KV_INDEX_Q{start_term = Start, term_regex = Re}} when is_integer(Start)
+                                                                    andalso Re =/= undefined ->
+            {error, "Can not use term regular expression in integer query"};
+        _ ->
+            Query
+    end.
+
+ensure_compiled_re(TermRe) ->
+    case TermRe of
         undefined ->
             {undefined, undefined};
         _ ->
             re:compile(TermRe)
-    end,
-
-    IsSystemIndex = riak_index:is_system_index(Index),
-
-    if
-        QType == eq andalso not is_binary(SKey) ->
-            {error, {format, "Invalid equality query ~p", [SKey]}};
-        QType == range andalso not(is_binary(Min) andalso is_binary(Max)) ->
-            {error, {format, "Invalid range query: ~p -> ~p", [Min, Max]}};
-        ValRe =:= error ->
-            {error, {format, "Invalid term regular expression ~p : ~p",
-                     [TermRe, ValErr]}};
-        RB andalso not IsSystemIndex ->
-            {error, {format, "For return_body=true index must be one of ~p", [riak_index:system_index_list()]}};
-        true ->
-            Query = riak_index:to_index_query(query_params(Req)),
-            case Query of
-                {ok, ?KV_INDEX_Q{start_term=Start, term_regex=Re}} when is_integer(Start)
-                       andalso Re =/= undefined ->
-                    {error, "Can not use term regular expression in integer query"};
-                _ ->
-                    Query
-            end
     end.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbindexreq{} = Req, State) ->
+process(#rpbindexreq{stream = S} = Req, State) ->
+    Class = case S of
+        true ->
+            {riak_kv, stream_secondary_index};
+        _ -> % NB: any other value should be interpreted as false
+            {riak_kv, secondary_index}
+    end,
+    Accept = riak_core_util:job_class_enabled(Class),
+    _ = riak_core_util:report_job_request_disposition(
+            Accept, Class, ?MODULE, process, ?LINE, protobuf),
+    case Accept of
+        true ->
+            validate_request_and_maybe_perform_query(Req, State);
+        false ->
+            error_accept(Class, State)
+    end.
+
+validate_request_and_maybe_perform_query(Req, State) ->
     case validate_request(Req) of
         {error, Err} ->
             {error, Err, State};
@@ -130,6 +141,9 @@ maybe_add_cover2({error, _Reason}, Opts) ->
 maybe_add_cover2({ok, Cover}, Opts) ->
     Opts ++ [{vnode_target, Cover}].
 
+error_accept(Class, State) ->
+    {error, riak_core_util:job_class_disabled_message(binary, Class), State}.
+
 maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #rpbindexreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout,
                  pagination_sort=PgSort0, continuation=Continuation,
@@ -137,10 +151,7 @@ maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
     %% Special case: a continuation implies pagination even if no max_results
-    PgSort = case Continuation of
-                 undefined -> PgSort0;
-                 _ -> true
-             end,
+    PgSort = maybe_pgsort(Continuation, PgSort0),
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
     Opts1 = riak_index:add_timeout_opt(Timeout, Opts0),
     Opts = maybe_add_cover(Cover, Opts1),
@@ -154,10 +165,7 @@ maybe_perform_query({ok, Query}, Req, State) ->
                  return_body=ReturnBody, cover_context=Cover} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
-    PgSort = case Continuation of
-                 undefined -> PgSort0;
-                 _ -> true
-             end,
+    PgSort = maybe_pgsort(Continuation,PgSort0),
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
     Opts1 = riak_index:add_timeout_opt(Timeout, Opts0),
     Opts = maybe_add_cover(Cover, Opts1),
@@ -165,6 +173,10 @@ maybe_perform_query({ok, Query}, Req, State) ->
     QueryResult = Client:get_index(Bucket, Query, Opts),
     handle_query_results(ReturnBody, ReturnTerms, MaxResults, QueryResult , State).
 
+maybe_pgsort(undefined, PgSort0) ->
+    PgSort0;
+maybe_pgsort(_, _) ->
+    true.
 
 handle_query_results(_, _, _, {error, Reason}, State) ->
     {error, {format, Reason}, State};
