@@ -640,7 +640,7 @@ test_find_never_sweeped({MyRingPart, Participants, State}) ->
             Result = [{get_module(Part), succ} ||Part <- Participants],
             State1 =
                 lists:foldl(fun(Index, AccState) ->
-                                    update_finished_sweep(Index, {0, Result}, AccState)
+                                    update_finished_sweep(AccState, Index, {0, Result})
                             end, State, Rest),
             [NeverRunnedSweep] = get_never_runned_sweeps(State1#state.sweeps),
             ?assertEqual(NeverRunnedSweep#sweep.index, NoResult)
@@ -655,11 +655,11 @@ test_find_missing_part({MyRingPart, Participants, State}) ->
 
             State1 =
                 lists:foldl(fun(Index, AccState) ->
-                                    update_finished_sweep(Index, {0, Result}, AccState)
+                                    update_finished_sweep(AccState, Index, {0, Result})
                             end, State, Rest),
 
             Result2 = [{get_module(Part), succ} || Part <- tl(Participants)],
-            State2 = update_finished_sweep(NotAllResult, {0, Result2}, State1),
+            State2 = update_finished_sweep(State1, NotAllResult, {0, Result2}),
             ?assertEqual([], get_never_runned_sweeps(State2#state.sweeps)),
             MissingPart = find_expired_participant(os:timestamp(), State2#state.sweeps,
                                                    State2#state.sweep_participants),
