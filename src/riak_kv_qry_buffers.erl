@@ -667,7 +667,7 @@ compute_chunk_size(Data) ->
 %% buffer list maintenance
 
 get_qref(_SQL, _QBufs) ->
-    AlwaysUniqueId = crypto:rand_bytes(8),
+    AlwaysUniqueId = term_to_binary(make_ref()),
     {ok, {new, AlwaysUniqueId}}.
 
 kill_all_qbufs(State0 = #state{qbufs = QBufs,
