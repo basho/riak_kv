@@ -93,7 +93,6 @@ build_sql_record_int(select, SQL, _Options = undefined) ->
     build_sql_record_int(select, SQL, []);
 build_sql_record_int(select, SQL, Options) ->
     Cover  = proplists:get_value(cover, Options),
-    QBufId = proplists:get_value(qbuf_id, Options),
     if not (Cover == undefined orelse is_binary(Cover)) ->
             {error, bad_coverage_context};
        el/=se ->
@@ -116,7 +115,6 @@ build_sql_record_int(select, SQL, Options) ->
                                  'ORDER BY' = OrderBy,
                                  helper_mod = Mod,
                                  cover_context = Cover,
-                                 qbuf_id       = QBufId,
                                  group_by      = GroupBy }
                     };
                 false ->

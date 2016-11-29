@@ -103,7 +103,8 @@
           group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}],
           %% since v3
           'OFFSET'       = []   :: [riak_kv_qry_compiler:offset()],
-          %% to be supplied in #tsqueryreq{}
+          %% to be supplied in #tsqueryreq.qbuf_id, which is expected
+          %% to appear in a future release
           qbuf_id               :: undefined | binary()  %% control reuse of existing buffers
        }).
 

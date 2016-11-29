@@ -50,9 +50,7 @@ decode(?TTB_MSG_CODE, Bin) ->
     DecodedReq =
         case Msg of
             #tsqueryreq{query = Query, cover_context = Cover} ->
-                %% this will be supplied in #tsqueryreq in 1.6
-                QBufId = undefined,
-                riak_kv_ts_svc:decode_query_common(Query, [{cover, Cover}, {qbuf_id, QBufId}]);
+                riak_kv_ts_svc:decode_query_common(Query, [{cover, Cover}]);
             #tsgetreq{table = Table}->
                 {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
             #tsputreq{table = Table} ->
