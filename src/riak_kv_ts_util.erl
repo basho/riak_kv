@@ -92,32 +92,32 @@ build_sql_record(Command, SQL, Options) ->
 build_sql_record_int(select, SQL, _Options = undefined) ->
     build_sql_record_int(select, SQL, []);
 build_sql_record_int(select, SQL, Options) ->
-    AllowQBufReuse = proplists:get_value(allow_qbuf_reuse, Options),
-    Cover          = proplists:get_value(cover, Options),
+    Cover  = proplists:get_value(cover, Options),
+    QBufId = proplists:get_value(qbuf_id, Options),
     if not (Cover == undefined orelse is_binary(Cover)) ->
             {error, bad_coverage_context};
        el/=se ->
-            T = proplists:get_value(tables, SQL),
-            F = proplists:get_value(fields, SQL),
-            W = proplists:get_value(where,  SQL),
-            L = proplists:get_value(limit,  SQL),
-            O = proplists:get_value(offset, SQL),
+            Tables  = proplists:get_value(tables, SQL),  %% plural is an historical reference, not a typo
+            Fields  = proplists:get_value(fields, SQL),
+            Where   = proplists:get_value(where,  SQL),
+            Limit   = proplists:get_value(limit,  SQL),
+            Offset  = proplists:get_value(offset, SQL),
             OrderBy = proplists:get_value(order_by, SQL),
             GroupBy = proplists:get_value(group_by, SQL),
-            case is_binary(T) of
+            case is_binary(Tables) of
                 true ->
-                    Mod = riak_ql_ddl:make_module_name(T),
+                    Mod = riak_ql_ddl:make_module_name(Tables),
                     {ok,
-                     ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
-                                 'FROM'     = T,
-                                 'WHERE'    = convert_where_timestamps(Mod, W),
-                                 'LIMIT'    = L,
-                                 'OFFSET'   = O,
+                     ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = Fields},
+                                 'FROM'     = Tables,
+                                 'WHERE'    = convert_where_timestamps(Mod, Where),
+                                 'LIMIT'    = Limit,
+                                 'OFFSET'   = Offset,
                                  'ORDER BY' = OrderBy,
                                  helper_mod = Mod,
                                  cover_context = Cover,
-                                 allow_qbuf_reuse = AllowQBufReuse,
-                                 group_by = GroupBy }
+                                 qbuf_id       = QBufId,
+                                 group_by      = GroupBy }
                     };
                 false ->
                     {error, <<"Must provide exactly one table name">>}
