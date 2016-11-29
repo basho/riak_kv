@@ -54,7 +54,7 @@ new_table(Table, Root) ->
               ],
     case eleveldb:open(Path, Options) of
         {ok, LdbRef} ->
-            lager:info("new LdbRef ~p in ~p", [LdbRef, Path]),
+            lager:debug("new LdbRef ~p in ~p", [LdbRef, Path]),
             {ok, LdbRef};
         {error, {Atom, _Message} = LdbError} ->
             lager:warning("qbuf eleveldb:open(~s) failed: ~p", [Path, LdbError]),

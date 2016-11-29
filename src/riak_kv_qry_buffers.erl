@@ -352,7 +352,7 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                              qbuf_expire_msec = DefaultQBufExpireMsec} = State0) ->
     case get_qref(SQL, QBufs0) of
         {ok, {existing, QBufRef}} ->
-            lager:info("reusing existing query buffer ~p for ~p", [QBufRef, SQL]),
+            lager:debug("reusing existing query buffer ~p for ~p", [QBufRef, SQL]),
             State9 = touch_qbuf(QBufRef, State0),
             {reply, {ok, {existing, QBufRef}}, State9};
         {ok, {new, QBufRef}} ->
@@ -362,7 +362,7 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                 false ->
                     DDL = ?DDL{table = Table} =
                         sql_to_ddl(OrigTable, CompiledSelect, CompiledOrderBy),
-                    lager:info("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
+                    lager:debug("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
                     case riak_kv_qry_buffers_ldb:new_table(Table, RootPath) of
                         {ok, LdbRef} ->
                             QBuf = #qbuf{orig_qry      = SQL,
@@ -579,7 +579,7 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
                   case ExpiresOn < Now of
                       true ->
                           ok = kill_ldb(RootPath, Table, LdbRef),
-                          lager:debug("Reaped incompletely filled qbuf ~p", [Table]),
+                          lager:info("Reaped incompletely filled qbuf ~p", [Table]),
                           false;
                       false ->
                           true
@@ -696,7 +696,7 @@ get_qref(?SQL_SELECT{qbuf_id = RequestedQBufId,
 
 kill_all_qbufs(State0 = #state{qbufs = QBufs,
                                root_path = RootPath}) ->
-    [lager:info("cleaning up ~b buffer(s)", [length(QBufs)]) || QBufs /= []],
+    [lager:debug("cleaning up ~b buffer(s)", [length(QBufs)]) || QBufs /= []],
     lists:foreach(
       fun({_QBufRef, #qbuf{ldb_ref = LdbRef,
                            ddl = ?DDL{table = Table}}}) ->
