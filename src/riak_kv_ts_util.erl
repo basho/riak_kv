@@ -292,6 +292,8 @@ queried_table(
 queried_table(#riak_sql_show_create_table_v1{'SHOW_CREATE_TABLE' = Table}) ->
     Table.
 
+%% Create a simple, mockable version for unit testing, too
+-ifndef(TEST).
 -spec get_table_ddl(binary()) ->
                            {ok, module(), ?DDL{}} |
                            {error, term()}.
@@ -310,6 +312,10 @@ get_table_ddl(Table) when is_binary(Table) ->
                     {ok, Mod, DDL}
             end
     end.
+-else.
+get_table_ddl(_Table) ->
+    {ok, module, ?DDL{}}.
+-endif.
 
 
 %%
@@ -667,17 +673,34 @@ check_table_feature_supported(DDLRecCap, DecodedReq) ->
                     {error, create_table_not_supported_message(Table)}
             end;
         {ok, _, {_, Table}} ->
-            case is_table_supported(DDLRecCap, Table) of
+            case is_table_active_and_supported(DDLRecCap, Table) of
                 true ->
                     DecodedReq;
                 false ->
-                    {error, table_not_supported_message(Table)}
+                    {error, table_not_supported_message(Table)};
+                Error ->
+                    Error
             end;
         _ ->
             DecodedReq
     end.
 
 %%
+-spec is_table_active_and_supported(DDLRecCap::atom(),
+                                    Table::binary()) ->
+                                        boolean() | {error, string()}.
+is_table_active_and_supported(DDLRecCap, Table) ->
+    case get_table_ddl(Table) of
+        {ok, _Mod, _DDL} ->
+            is_table_supported(DDLRecCap, Table);
+        {error, _} ->
+            {error, create_table_not_active_message(Table)}
+    end.
+
+%%
+-spec is_table_supported(DDLRecCap::atom(),
+                         Table::binary()) ->
+                            boolean() | {error, string()}.
 is_table_supported(_, << >>) ->
     %% an empty binary for the table name means that the request is not for a
     %% specific table e.g. SHOW TABLES
@@ -702,6 +725,11 @@ create_table_not_supported_message(Table) ->
     Reason = "Table was not ~ts was not created. It contains features which "
              "are not supported by all nodes in the cluster.",
     lists:flatten(io_lib:format(Reason, [Table])).
+
+create_table_not_active_message(Table) ->
+    Reason = "Table ~ts is not active.",
+    lists:flatten(io_lib:format(Reason, [Table])).
+
 
 %%%%%%%%%%%%
 %% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
