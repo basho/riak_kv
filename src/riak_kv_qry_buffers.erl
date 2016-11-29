@@ -351,11 +351,11 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                              total_size       = TotalSize,
                              qbuf_expire_msec = DefaultQBufExpireMsec} = State0) ->
     case get_qref(SQL, QBufs0) of
-        {existing, QBufRef} ->
+        {ok, {existing, QBufRef}} ->
             lager:info("reusing existing query buffer ~p for ~p", [QBufRef, SQL]),
             State9 = touch_qbuf(QBufRef, State0),
             {reply, {ok, {existing, QBufRef}}, State9};
-        {new, QBufRef} ->
+        {ok, {new, QBufRef}} ->
             case TotalSize > SoftWMark of
                 true ->
                     {reply, {error, total_qbuf_size_limit_reached}, State0};
@@ -382,7 +382,9 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                         {error, Reason} ->
                             {reply, {error, Reason}, State0}
                     end
-            end
+            end;
+        {error, Reason} ->
+            {reply, {error, Reason}, State0}
     end.
 
 
@@ -670,13 +672,26 @@ compute_chunk_size(Data) ->
 
 %% buffer list maintenance
 
-get_qref(?SQL_SELECT{qbuf_id = RequestedQBufId}, QBufs) ->
+get_qref(?SQL_SELECT{qbuf_id = RequestedQBufId,
+                     'SELECT'   = Select,
+                     'FROM'     = From,
+                     'WHERE'    = Where,
+                     'ORDER BY' = OrderBy}, QBufs) ->
     case get_qbuf_record(RequestedQBufId, QBufs) of
+        %% queries must match in parts used to construct this buffer:
+        %% this check is needed to correctly error out when the user
+        %% messes up their qbuf_id's (i.e., issues a wrong follow-up
+        %% query)
+        #qbuf{orig_qry = ?SQL_SELECT{'SELECT'   = Select,
+                                     'FROM'     = From,
+                                     'WHERE'    = Where,
+                                     'ORDER BY' = OrderBy}} ->
+            {ok, {existing, RequestedQBufId}};
         #qbuf{} ->
-            {existing, RequestedQBufId};
+            {error, bad_followup_query};
         false ->
             AlwaysUniqueId = crypto:rand_bytes(8),
-            {new, AlwaysUniqueId}
+            {ok, {new, AlwaysUniqueId}}
     end.
 
 kill_all_qbufs(State0 = #state{qbufs = QBufs,
