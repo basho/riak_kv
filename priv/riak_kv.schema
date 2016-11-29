@@ -814,7 +814,7 @@
 %% @doc Throttle the number of simultaneously running FSMs.  This number times the size of data chunks
 %% determines the max volume of data the coordinator will have to deal with.
 {mapping, "riak_kv.query.timeseries.max_running_fsms", "riak_kv.timeseries_query_max_running_fsms", [
-  {default, 5},
+  {default, 20},
   {datatype, integer},
   {validators, ["validate_timeseries_query_max_running_fsms"]}
 ]}.

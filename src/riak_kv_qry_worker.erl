@@ -45,7 +45,7 @@
 
 -include("riak_kv_ts.hrl").
 
--define(MAX_RUNNING_FSMS, 5).
+-define(MAX_RUNNING_FSMS, 20).
 -define(SUBQUERY_FSM_TIMEOUT, 10000).
 
 %% accumulators for different types of query results.
