@@ -59,11 +59,11 @@
          set_max_query_data_size/1,
          set_qbuf_expiry/2,
          set_ready_waiting_process/2,  %% notify a process when all chunks are here
+         kill_all_qbufs/0,
 
          %% utility functions
          limit_to_scalar/1,
-         offset_to_scalar/1,
-         make_qref/1
+         offset_to_scalar/1
         ]).
 
 -type qbuf_ref() :: binary().
@@ -113,6 +113,11 @@ batch_put(QBufRef, Data) ->
 set_ready_waiting_process(QBufRef, SelfNotifierFun) ->
     gen_server:call(?SERVER, {set_ready_waiting_process, QBufRef, SelfNotifierFun}).
 
+-spec kill_all_qbufs() -> ok.
+%% @doc Kill all query buffers.
+kill_all_qbufs() ->
+    gen_server:call(?SERVER, kill_all_qbufs).
+
 -spec fetch_limit(qbuf_ref(), unlimited | pos_integer(), non_neg_integer()) ->
                     {ok, riak_kv_qry:query_tabular_result()} |
                     {error, bad_qbuf_ref|bad_sql|qbuf_not_ready}.
@@ -144,28 +149,6 @@ set_max_query_data_size(Value) ->
 
 
 %% Utility functions that don't need or use the gen_server
-
--spec make_qref(?SQL_SELECT{}) -> {ok, qbuf_ref()} | {error, query_non_pageable | bad_sql}.
-%% @doc Make a query ref (or hash), to identify this (and similar) queries as
-%%      having certain SELECT, FROM, WHERE and ORDER BY clauses.
-make_qref(?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{col_names = ColNames},
-                      'FROM'     = From,
-                      'WHERE'    = Where,
-                      'ORDER BY' = OrderBy})
-  when OrderBy /= undefined ->
-    Part0 = erlang:phash2(From),
-    Part1 = erlang:phash2(ColNames),
-    Part2 = erlang:phash2(Where),
-    Part3 = erlang:phash2(OrderBy),
-    {ok,
-     <<0,       %% marks an organic qref (1 = random qref for one-shot queries)
-       Part0:32/integer,
-       Part1:32/integer,
-       Part2:32/integer,
-       Part3:32/integer>>};
-make_qref(_) ->
-    {error, query_non_pageable}.
-
 
 limit_to_scalar([]) -> unlimited;
 limit_to_scalar([A]) when is_integer(A) -> A.
@@ -304,6 +287,9 @@ handle_call({batch_put, QBufRef, Data}, _From, State) ->
 handle_call({set_ready_waiting_process, QBufRef, SelfNotifierFun}, _From, State) ->
     do_set_ready_waiting_process(QBufRef, SelfNotifierFun, State);
 
+handle_call(kill_all_qbufs, _From, State) ->
+    do_kill_all_qbufs(State);
+
 handle_call({fetch_limit, QBufRef, Limit, Offset}, _From, State) ->
     do_fetch_limit(QBufRef, Limit, Offset, State);
 
@@ -343,15 +329,8 @@ handle_info(_Msg, State) ->
 
 
 -spec terminate(term(), #state{}) -> term().
-terminate(_Reason, #state{qbufs = QBufs,
-                          root_path = RootPath}) ->
-    [lager:info("cleaning up ~b buffer(s)", [length(QBufs)]) || QBufs /= []],
-    lists:foreach(
-      fun({_QBufRef, #qbuf{ldb_ref = LdbRef,
-                           ddl = ?DDL{table = Table}}}) ->
-              kill_qbuf(RootPath, Table, LdbRef)
-      end,
-      QBufs),
+terminate(_Reason, State) ->
+    _ = kill_all_qbufs(State),
     ok.
 
 -spec code_change(term() | {down, term()}, #state{}, term()) -> {ok, #state{}}.
@@ -371,11 +350,7 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                              root_path        = RootPath,
                              total_size       = TotalSize,
                              qbuf_expire_msec = DefaultQBufExpireMsec} = State0) ->
-    case maybe_ensure_qref(SQL, QBufs0) of
-        {ok, {existing, QBufRef}} ->
-            lager:info("reusing existing query buffer ~p for ~p", [QBufRef, SQL]),
-            State9 = touch_qbuf(QBufRef, State0),
-            {reply, {ok, {existing, QBufRef}}, State9};
+    case get_qref(SQL, QBufs0) of
         {ok, {new, QBufRef}} ->
             case TotalSize > SoftWMark of
                 true ->
@@ -383,7 +358,7 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                 false ->
                     DDL = ?DDL{table = Table} =
                         sql_to_ddl(OrigTable, CompiledSelect, CompiledOrderBy),
-                    lager:info("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
+                    lager:debug("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
                     case riak_kv_qry_buffers_ldb:new_table(Table, RootPath) of
                         {ok, LdbRef} ->
                             QBuf = #qbuf{orig_qry      = SQL,
@@ -403,16 +378,8 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                         {error, Reason} ->
                             {reply, {error, Reason}, State0}
                     end
-            end;
-        {error, Reason} ->
-            {reply, {error, Reason}, State0}
+            end
     end.
-
-maybe_ensure_qref(?SQL_SELECT{allow_qbuf_reuse = true} = SQL, QBufs) ->
-    ensure_qref(SQL, QBufs);
-maybe_ensure_qref(?SQL_SELECT{allow_qbuf_reuse = false}, _QBufs) ->
-    AlwaysUniqueRef = crypto:rand_bytes(8),
-    {ok, {new, <<1, AlwaysUniqueRef/binary>>}}.
 
 
 do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
@@ -521,6 +488,11 @@ do_set_ready_waiting_process(QBufRef, SelfNotifierFun, #state{qbufs = QBufs0} = 
     end.
 
 
+do_kill_all_qbufs(State0) ->
+    State9 = kill_all_qbufs(State0),
+    {reply, ok, State9}.
+
+
 do_fetch_limit(QBufRef,
                Limit, Offset,
                #state{qbufs = QBufs0} = State0) ->
@@ -530,7 +502,7 @@ do_fetch_limit(QBufRef,
         #qbuf{is_ready = false} ->
             {reply, {error, qbuf_not_ready}, State0};
         #qbuf{ldb_ref = LdbRef,
-              orig_qry = ?SQL_SELECT{allow_qbuf_reuse = AllowQBufReuse} = OrigQry,
+              orig_qry = OrigQry,
               ddl = ?DDL{fields = QBufFields,
                          table = Table}} ->
             case riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Offset, Limit) of
@@ -538,13 +510,7 @@ do_fetch_limit(QBufRef,
                     lager:debug("fetched ~p rows from ~p for ~p", [length(Rows), Table, OrigQry]),
                     ColNames = [Name || #riak_field_v1{name = Name} <- QBufFields],
                     ColTypes = [Type || #riak_field_v1{type = Type} <- QBufFields],
-                    State9 =
-                        case AllowQBufReuse of
-                            false ->  %% this is a one-shot query: delete it now
-                                kill_qbuf(QBufRef, State0);
-                            true ->
-                                touch_qbuf(QBufRef, State0)
-                        end,
+                    State9 = touch_qbuf(QBufRef, State0),
                     {reply, {ok, {ColNames, ColTypes, Rows}}, State9}
                 %% {error, Reason} ->
                 %%     {reply, {error, Reason}, State0}
@@ -593,7 +559,7 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
                   ExpiresOn = advance_timestamp(LastAccessed, ExpireMsec),
                   case ExpiresOn < Now of
                       true ->
-                          ok = kill_qbuf(RootPath, Table, LdbRef),
+                          ok = kill_ldb(RootPath, Table, LdbRef),
                           lager:debug("Reaped expired qbuf ~p", [Table]),
                           false;
                       false ->
@@ -606,8 +572,8 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
                   ExpiresOn = advance_timestamp(LastAccessed, IncompleteQbufReleaseMsec),
                   case ExpiresOn < Now of
                       true ->
-                          ok = kill_qbuf(RootPath, Table, LdbRef),
-                          lager:debug("Reaped incompletely filled qbuf ~p", [Table]),
+                          ok = kill_ldb(RootPath, Table, LdbRef),
+                          lager:info("Reaped incompletely filled qbuf ~p", [Table]),
                           false;
                       false ->
                           true
@@ -700,18 +666,21 @@ compute_chunk_size(Data) ->
 
 %% buffer list maintenance
 
-ensure_qref(SQL, QBufs) ->
-    case make_qref(SQL) of
-        {ok, QBufRef} ->
-            case get_qbuf_record(QBufRef, QBufs) of
-                #qbuf{} ->
-                    {ok, {existing, QBufRef}};
-                false ->
-                    {ok, {new, QBufRef}}
-            end;
-        {error, _} = ErrorReason ->
-            ErrorReason
-    end.
+get_qref(_SQL, _QBufs) ->
+    AlwaysUniqueId = term_to_binary(make_ref()),
+    {ok, {new, AlwaysUniqueId}}.
+
+kill_all_qbufs(State0 = #state{qbufs = QBufs,
+                               root_path = RootPath}) ->
+    [lager:debug("cleaning up ~b buffer(s)", [length(QBufs)]) || QBufs /= []],
+    lists:foreach(
+      fun({_QBufRef, #qbuf{ldb_ref = LdbRef,
+                           ddl = ?DDL{table = Table}}}) ->
+              kill_ldb(RootPath, Table, LdbRef)
+      end,
+      QBufs),
+    State0#state{qbufs = [],
+                 total_size = 0}.
 
 touch_qbuf(QBufRef, State0 = #state{qbufs = QBufs0}) ->
     QBuf0 = get_qbuf_record(QBufRef, QBufs0),
@@ -719,15 +688,7 @@ touch_qbuf(QBufRef, State0 = #state{qbufs = QBufs0}) ->
     State0#state{qbufs = lists:keyreplace(
                            QBufRef, 1, QBufs0, {QBufRef, QBuf9})}.
 
-kill_qbuf(QBufRef, #state{root_path = RootPath,
-                          qbufs = QBufs0} = State0) ->
-    #qbuf{ldb_ref = LdbRef,
-          ddl = ?DDL{table = Table}} = get_qbuf_record(QBufRef, QBufs0),
-    ok = kill_qbuf(RootPath, Table, LdbRef),
-    State0#state{qbufs = lists:keydelete(
-                           QBufRef, 1, QBufs0)}.
-
-kill_qbuf(RootPath, Table, LdbRef) ->
+kill_ldb(RootPath, Table, LdbRef) ->
     ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
     ok.
 
