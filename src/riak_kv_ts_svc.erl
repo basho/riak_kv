@@ -171,7 +171,7 @@ process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
 
 process(M = #riak_sql_delete_query_v1{}, State) ->
     case riak_kv_qry:submit(M, ?DDL{}) of
-        ok ->
+        {ok, ?EMPTYRESPONSE} ->
             {reply, make_tsqueryresp(?EMPTYRESPONSE), State};
         {error, Err} ->
             {reply, make_rpberrresp(?E_INVALID_DELETE, Err), State}

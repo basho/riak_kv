@@ -33,6 +33,8 @@
 
 -include("riak_kv_ts.hrl").
 
+-define(EMPTYRESPONSE, {[], [], []}).
+
 %% enumerate all current SQL query types
 -type query_type() ::
         ddl | explain | describe | insert | select | show_tables | show_create_table.
@@ -42,7 +44,8 @@
         #riak_sql_describe_v1{} |
         #riak_sql_insert_v1{} |
         #riak_sql_show_tables_v1{} |
-        #riak_sql_show_create_table_v1{}.
+        #riak_sql_show_create_table_v1{} |
+        #riak_sql_delete_query_v1{}.
 
 -type query_tabular_result() :: {[riak_pb_ts_codec:tscolumnname()],
                                  [riak_pb_ts_codec:tscolumntype()],
@@ -382,10 +385,10 @@ do_delete(#riak_sql_delete_query_v1{'FROM'     = F,
     case Mod:get_delete_key(W) of
         {ok, Key} -> 
             case riak_kv_ts_api:delete_data(Key, F) of
-                ok                -> ok;
-                {error, notfound} -> ok;
-                {err, Err}        -> Msg1 = io_lib:format("Delete failed: ~p", [Err]),
-                              {err, Msg1}
+                ok                -> {ok, ?EMPTYRESPONSE};
+                {error, notfound} -> {ok, ?EMPTYRESPONSE};
+                {error, Err}      -> Msg1 = io_lib:format("Delete failed: ~p", [Err]),
+                                     {error, Msg1}
             end;
         {false, Err} -> 
             Msg2 = io_lib:format("Unable to get delete key: ~p", [Err]),
