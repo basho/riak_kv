@@ -264,6 +264,9 @@ prep_stop(_State) ->
         lager:info("unregistered webmachine routes"),
         wait_for_put_fsms(),
         lager:info("all active put FSMs completed"),
+
+        ok = riak_kv_qry_buffers:kill_all_qbufs(),
+        lager:info("cleaned up query buffers"),
         ok
     catch
         Type:Reason ->

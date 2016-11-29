@@ -59,6 +59,7 @@
          set_max_query_data_size/1,
          set_qbuf_expiry/2,
          set_ready_waiting_process/2,  %% notify a process when all chunks are here
+         kill_all_qbufs/0,
 
          %% utility functions
          limit_to_scalar/1,
@@ -111,6 +112,11 @@ batch_put(QBufRef, Data) ->
 %% @doc Set a process to notify on qbuf completion
 set_ready_waiting_process(QBufRef, SelfNotifierFun) ->
     gen_server:call(?SERVER, {set_ready_waiting_process, QBufRef, SelfNotifierFun}).
+
+-spec kill_all_qbufs() -> ok.
+%% @doc Kill all query buffers.
+kill_all_qbufs() ->
+    gen_server:call(?SERVER, kill_all_qbufs).
 
 -spec fetch_limit(qbuf_ref(), unlimited | pos_integer(), non_neg_integer()) ->
                     {ok, riak_kv_qry:query_tabular_result()} |
@@ -281,6 +287,9 @@ handle_call({batch_put, QBufRef, Data}, _From, State) ->
 handle_call({set_ready_waiting_process, QBufRef, SelfNotifierFun}, _From, State) ->
     do_set_ready_waiting_process(QBufRef, SelfNotifierFun, State);
 
+handle_call(kill_all_qbufs, _From, State) ->
+    do_kill_all_qbufs(State);
+
 handle_call({fetch_limit, QBufRef, Limit, Offset}, _From, State) ->
     do_fetch_limit(QBufRef, Limit, Offset, State);
 
@@ -320,15 +329,8 @@ handle_info(_Msg, State) ->
 
 
 -spec terminate(term(), #state{}) -> term().
-terminate(_Reason, #state{qbufs = QBufs,
-                          root_path = RootPath}) ->
-    [lager:info("cleaning up ~b buffer(s)", [length(QBufs)]) || QBufs /= []],
-    lists:foreach(
-      fun({_QBufRef, #qbuf{ldb_ref = LdbRef,
-                           ddl = ?DDL{table = Table}}}) ->
-              kill_ldb(RootPath, Table, LdbRef)
-      end,
-      QBufs),
+terminate(_Reason, State) ->
+    _ = kill_all_qbufs(State),
     ok.
 
 -spec code_change(term() | {down, term()}, #state{}, term()) -> {ok, #state{}}.
@@ -488,6 +490,11 @@ do_set_ready_waiting_process(QBufRef, SelfNotifierFun, #state{qbufs = QBufs0} = 
                                             QBufRef, 1, QBufs0, {QBufRef, QBuf9})},
             {reply, ok, State9}
     end.
+
+
+do_kill_all_qbufs(State0) ->
+    State9 = kill_all_qbufs(State0),
+    {reply, ok, State9}.
 
 
 do_fetch_limit(QBufRef,
@@ -671,6 +678,18 @@ get_qref(?SQL_SELECT{qbuf_id = RequestedQBufId}, QBufs) ->
             AlwaysUniqueId = crypto:rand_bytes(8),
             {new, AlwaysUniqueId}
     end.
+
+kill_all_qbufs(State0 = #state{qbufs = QBufs,
+                               root_path = RootPath}) ->
+    [lager:info("cleaning up ~b buffer(s)", [length(QBufs)]) || QBufs /= []],
+    lists:foreach(
+      fun({_QBufRef, #qbuf{ldb_ref = LdbRef,
+                           ddl = ?DDL{table = Table}}}) ->
+              kill_ldb(RootPath, Table, LdbRef)
+      end,
+      QBufs),
+    State0#state{qbufs = [],
+                 total_size = 0}.
 
 touch_qbuf(QBufRef, State0 = #state{qbufs = QBufs0}) ->
     QBuf0 = get_qbuf_record(QBufRef, QBufs0),
