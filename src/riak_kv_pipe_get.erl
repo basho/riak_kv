@@ -130,9 +130,10 @@ try_preflist(Input, [NextV|Rest], #state{fd=FittingDetails}=State) ->
 try_partition(Input, Vnode, FittingDetails) ->
     ReqId = make_req_id(),
     Start = os:timestamp(),
+    Req = riak_kv_requests:new_get_request(bkey(Input), ReqId),
     riak_core_vnode_master:command(
       Vnode,
-      ?KV_GET_REQ{bkey=bkey(Input), req_id=ReqId},
+      Req,
       {raw, ReqId, self()},
       riak_kv_vnode_master),
     receive

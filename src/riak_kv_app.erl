@@ -170,10 +170,6 @@ start(_Type, _StartArgs) ->
                                            mapred_2i_pipe,
                                            [{true, true}, {false, false}]}),
 
-            riak_core_capability:register({riak_kv, anti_entropy},
-                                          [enabled_v1, disabled],
-                                          disabled),
-
             riak_core_capability:register({riak_kv, handoff_data_encoding},
                                           [encode_raw, encode_zlib],
                                           encode_zlib),
@@ -277,6 +273,9 @@ prep_stop(_State) ->
         lager:info("unregistered webmachine routes"),
         wait_for_put_fsms(),
         lager:info("all active put FSMs completed"),
+
+        ok = riak_kv_qry_buffers:kill_all_qbufs(),
+        lager:info("cleaned up query buffers"),
         ok
     catch
         Type:Reason ->

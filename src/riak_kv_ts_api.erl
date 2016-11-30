@@ -51,12 +51,13 @@
 -export_type([query_api_call/0, api_call/0]).
 
 -spec api_call_from_sql_type(riak_kv_qry:query_type()) -> query_api_call().
-api_call_from_sql_type(ddl)         -> create_table;
-api_call_from_sql_type(select)      -> query_select;
-api_call_from_sql_type(describe)    -> describe_table;
-api_call_from_sql_type(show_tables) -> show_tables;
-api_call_from_sql_type(insert)      -> query_insert;
-api_call_from_sql_type(explain)     -> query_explain.
+api_call_from_sql_type(ddl)               -> create_table;
+api_call_from_sql_type(select)            -> query_select;
+api_call_from_sql_type(describe)          -> describe_table;
+api_call_from_sql_type(show_create_table) -> show_create_table;
+api_call_from_sql_type(show_tables)       -> show_tables;
+api_call_from_sql_type(insert)            -> query_insert;
+api_call_from_sql_type(explain)           -> query_explain.
 
 -spec api_call_to_perm(api_call()) -> string().
 api_call_to_perm(get) ->
@@ -77,6 +78,9 @@ api_call_to_perm(query_explain) ->
     "riak_ts.query_explain";
 api_call_to_perm(describe_table) ->
     "riak_ts.describe_table";
+%% SHOW CREATE TABLE is an extended version of DESCRIBE
+api_call_to_perm(show_create_table) ->
+    api_call_to_perm(describe_table);
 %% INSERT query is a put, so let's call it that
 api_call_to_perm(query_insert) ->
     api_call_to_perm(put);
@@ -87,7 +91,7 @@ api_call_to_perm(show_tables) ->
 -spec api_calls() -> [api_call()].
 api_calls() ->
     [create_table, query_select, describe_table, query_insert,
-     show_tables, get, put, delete, list_keys, coverage].
+     show_tables, show_create_table, get, put, delete, list_keys, coverage].
 
 
 -spec query(string() | riak_kv_qry:sql_query_type_record(), ?DDL{}) ->
@@ -185,8 +189,10 @@ put_data_to_partitions(Data, Bucket, BucketProps, DDL, Mod) ->
                             list(tuple(chash:index(), list(term()))).
 partition_data(Data, Bucket, BucketProps, DDL, Mod) ->
     PartitionTuples =
-        [ { riak_core_util:chash_key({Bucket, riak_kv_ts_util:row_to_key(R, DDL, Mod)},
-                                     BucketProps), R } || R <- Data ],
+        [ { riak_core_util:chash_key(
+              {Bucket, riak_kv_ts_util:encode_typeval_key(
+                         riak_ql_ddl:get_partition_key(DDL, R, Mod))},
+              BucketProps), R } || R <- Data ],
     dict:to_list(
       lists:foldl(fun({Idx, R}, Dict) ->
                           dict:append(Idx, R, Dict)
@@ -280,16 +286,18 @@ get_data(Key, Table, Mod0, Options) ->
                 Mod0
         end,
     DDL = Mod:get_ddl(),
-    Result =
-        case riak_kv_ts_util:make_ts_keys(Key, DDL, Mod) of
-            {ok, PKLK} ->
+    LK = list_to_tuple(Key),
+    Result1 =
+        case riak_ql_ddl:lk_to_pk(LK, DDL, Mod) of
+            {ok, PK} ->
                 riak_client:get(
-                  riak_kv_ts_util:table_to_bucket(Table), PKLK, Options,
+                  riak_kv_ts_util:table_to_bucket(Table),
+                  {PK, LK}, Options,
                   {riak_client, [node(), undefined]});
-            ErrorReason ->
-                ErrorReason
+            ErrorReason1 ->
+                ErrorReason1
         end,
-    case Result of
+    case Result1 of
         {ok, RObj} ->
             case riak_object:get_value(RObj) of
                 [] ->
@@ -349,17 +357,15 @@ delete_data(Key, Table, Mod0, Options0, VClock0) ->
                 %% to avoid a separate get
                 riak_object:decode_vclock(VClock0)
         end,
-    Result =
-        case riak_kv_ts_util:make_ts_keys(Key, DDL, Mod) of
-            {ok, PKLK} ->
-                riak_client:delete_vclock(
-                  riak_kv_ts_util:table_to_bucket(Table), PKLK, VClock, Options,
-                  {riak_client, [node(), undefined]});
-            ErrorReason ->
-                ErrorReason
-        end,
-    Result.
-
+    LK = list_to_tuple(Key),
+    case riak_ql_ddl:lk_to_pk(LK, DDL, Mod) of
+        {ok, PK} ->
+            riak_client:delete_vclock(
+              riak_kv_ts_util:table_to_bucket(Table), {PK, LK}, VClock, Options,
+              {riak_client, [node(), undefined]});
+        ErrorReason ->
+            ErrorReason
+    end.
 
 
 

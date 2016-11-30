@@ -26,6 +26,8 @@
          delete_dets/1,
          delete_table_ddls/1,
          get_all_table_names/0,
+         get_table_status_pairs/0,
+         get_table_status/1,
          get_compiled_ddl_versions/1,
          get_ddl/2,
          insert/2,
@@ -33,6 +35,7 @@
          populate_v3_table/0
         ]).
 
+-include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 
 -type matchspec_value() :: '_' | '$1'.
@@ -151,7 +154,71 @@ get_ddl(BucketType, Version) when is_binary(BucketType), is_atom(Version) ->
             notfound
     end.
 
-%%
+%% Get the list of {TableName, Status} pairs, no matter what status they are in.
+-spec get_table_status_pairs() ->[{binary(), binary()}].
+get_table_status_pairs() ->
+    Matches = dets:match(?TABLE3, #row_v3{ table = '$1' }),
+    UTables = lists:usort(Matches),
+    Tables = [ {Table, get_table_status(Table)} ||
+               [Table|_T] <- UTables ],
+
+    %% sort by Status (thankfully in alphabetic sort order):
+    %% Active, Not Active, Undefined
+    SortByStatus = fun({L1,L2},{R1,R2}) -> {L2,L1} =< {R2,R1} end,
+    lists:sort(SortByStatus, Tables).
+
+get_table_status(Table) ->
+    case get_table_ddl(Table) of
+        {error, no_type} -> <<"Not Active">>;
+        {error, missing_helper_module} -> <<"Not Active">>;
+        {ok, _Mod, _DDL} -> get_table_status_by_version(Table);
+        _ -> get_table_status_by_version(Table)
+    end.
+
+get_table_status_by_version(Table) ->
+    case is_table_supported(v2, Table) of
+        true -> <<"Active">>;
+        _ -> <<"Not Active">>
+    end.
+
+%% Forwards/Mocks for getting table status, isolating the interaction for testability
+-ifndef(TEST).
+get_table_ddl(Table) ->
+    riak_kv_ts_util:get_table_ddl(Table).
+
+-spec is_table_supported(DDLRecCap::atom(),
+                         Table::binary()) -> boolean() |
+                                             {error, string()}.
+is_table_supported(DDLRecCap, Table) ->
+    riak_kv_ts_util:is_table_supported(DDLRecCap, Table).
+
+-else.
+expected_table_status(<<"my_type2">>) ->
+    <<"Not Active">>;
+expected_table_status(<<"my_type4">>) ->
+    <<"Not Active">>;
+expected_table_status(<<"my_type5">>) ->
+    <<"Not Active">>;
+expected_table_status(_Table) ->
+    <<"Active">>.
+
+get_table_ddl(<<"my_type4">>) ->
+    {error, no_type};
+get_table_ddl(<<"my_type5">>) ->
+    {error, missing_helper_module};
+get_table_ddl(_Table) ->
+    Module = {}, %% not used by caller
+    DDL = {}, %% not used by caller
+    {ok, Module, DDL}.
+
+is_table_supported(_DDLRecCap, <<"my_type2">>) ->
+    {error, "The table is not active"};
+is_table_supported(_DDLRecCap, _Table) ->
+    true.
+
+-endif.
+%% / Forwards/Mocks for getting table status, isolating the interaction for testability
+
 -spec get_all_table_names() -> [binary()].
 get_all_table_names() ->
     Matches = dets:match(?TABLE3, #row_v3{ table = '$1' }),
@@ -265,4 +332,28 @@ delete_table_ddls_test() ->
             )
         end).
 
+get_table_status_pairs_test() ->
+    ?in_process(
+        begin
+            TableNameFun = fun(I) ->
+                                   list_to_binary("my_type" ++ integer_to_list(I))
+                           end,
+            InsertTableFun =
+                fun(I) ->
+                    TableName = TableNameFun(I),
+                    DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }},
+                    ok = insert(TableName, DDLV2)
+                end,
+
+            lists:foreach(InsertTableFun, lists:seq(1, 5)),
+            ExpectedTableStatus0 = [{TableNameFun(I), expected_table_status(TableNameFun(I))} ||
+                                   I <- lists:seq(1, 5)],
+
+            SortByStatus = fun({L1,L2},{R1,R2}) -> {L2,L1} =< {R2,R1} end,
+            ExpectedTableStatus = lists:sort(SortByStatus, ExpectedTableStatus0),
+
+            ActualTableStatus = get_table_status_pairs(),
+
+            ?assertEqual(ExpectedTableStatus, ActualTableStatus)
+        end).
 -endif.

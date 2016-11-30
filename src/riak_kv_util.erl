@@ -47,8 +47,7 @@
          get_write_once/1,
          overload_reply/1,
          get_backend_config/3,
-         is_modfun_allowed/2,
-         get_bucket_from_req/1]).
+         is_modfun_allowed/2]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -132,11 +131,6 @@ make_request(Request, Index) ->
     riak_core_vnode_master:make_request(Request,
                                         {fsm, undefined, self()},
                                         Index).
-
-get_bucket_from_req(#riak_kv_sql_select_req_v1{bucket = B}) ->
-    B;
-get_bucket_from_req(?KV_INDEX_REQ{bucket = B}) ->
-    B.
 
 get_bucket_option(Type, BucketProps) ->
     case lists:keyfind(Type, 1, BucketProps) of
