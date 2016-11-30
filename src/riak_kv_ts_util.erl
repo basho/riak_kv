@@ -689,6 +689,10 @@ check_table_feature_supported(DDLRecCap, DecodedReq) ->
 -spec is_table_active_and_supported(DDLRecCap::atom(),
                                     Table::binary()) ->
                                         boolean() | {error, string()}.
+is_table_active_and_supported(_, << >>) ->
+    %% an empty binary for the table name means that the request is not for a
+    %% specific table e.g. SHOW TABLES
+    true;
 is_table_active_and_supported(DDLRecCap, Table) ->
     case get_table_ddl(Table) of
         {ok, _Mod, _DDL} ->
