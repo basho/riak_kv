@@ -48,9 +48,9 @@ decode(Code, Bin) when Code >= 90, Code =< 103 ->
     Msg = riak_pb_codec:decode(Code, Bin),
     DecodedReq =
         case Msg of
-            #tsqueryreq{query = Q, cover_context = Cover, allow_qbuf_reuse = AllowQBufReuse} ->
+            #tsqueryreq{query = Query, cover_context = Cover} ->
                 riak_kv_ts_svc:decode_query_common(
-                  Q, [{cover, Cover}, {allow_qbuf_reuse, AllowQBufReuse}]);
+                  Query, [{cover, Cover}]);
             #tsgetreq{table = Table}->
                 {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
             #tsputreq{table = Table} ->

@@ -49,10 +49,8 @@ decode(?TTB_MSG_CODE, Bin) ->
     Msg = riak_ttb_codec:decode(Bin),
     DecodedReq =
         case Msg of
-            #tsqueryreq{query = Q,
-                        cover_context = Cover,
-                        allow_qbuf_reuse = AllowQBufReuse} ->
-                riak_kv_ts_svc:decode_query_common(Q, [{cover, Cover}, {allow_qbuf_reuse, AllowQBufReuse}]);
+            #tsqueryreq{query = Query, cover_context = Cover} ->
+                riak_kv_ts_svc:decode_query_common(Query, [{cover, Cover}]);
             #tsgetreq{table = Table}->
                 {ok, Msg, {riak_kv_ts_api:api_call_to_perm(get), Table}};
             #tsputreq{table = Table} ->

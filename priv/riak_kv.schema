@@ -811,6 +811,22 @@
   end
 }.
 
+%% @doc Throttle the number of simultaneously running FSMs.  This number times the size of data chunks
+%% determines the max volume of data the coordinator will have to deal with.
+{mapping, "riak_kv.query.timeseries.max_running_fsms", "riak_kv.timeseries_query_max_running_fsms", [
+  {default, 20},
+  {datatype, integer},
+  {validators, ["validate_timeseries_query_max_running_fsms"]}
+]}.
+
+{validator,
+  "validate_timeseries_query_max_running_fsms",
+  "must be an integer > 0",
+  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
+     (_) -> false
+  end}.
+
+
 %% @doc Largest estimated size of the data a query can return to the client.
 {mapping, "riak_kv.query.timeseries.max_returned_data_size", "riak_kv.timeseries_query_max_returned_data_size", [
   {default, 10*1000*1000},

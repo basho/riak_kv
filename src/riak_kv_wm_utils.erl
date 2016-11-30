@@ -32,7 +32,7 @@
          format_uri/4,
          format_uri/5,
          encode_value/1,
-         accept_value/2,
+         accept_value/3,
          any_to_list/1,
          any_to_bool/1,
          is_forbidden/1,
@@ -226,12 +226,18 @@ encode_value(V) when is_binary(V) ->
 encode_value(V) ->
     term_to_binary(V).
 
--spec accept_value(string(), binary()) -> term().
+-spec accept_value(string(), riak_kv_wm_utils_dict(), binary()) -> term().
 %% @doc Accept the object value as a binary - content type can be used
 %%      to decode
-accept_value("application/x-erlang-binary",V) ->
-    binary_to_term(V);
-accept_value(_Ctype, V) ->
+accept_value("application/x-erlang-binary",MD, V) ->
+    case dict:find(?MD_ENCODING, MD) of
+        {ok, "gzip"} ->
+            binary_to_term(zlib:gunzip(V));
+        _ ->
+            binary_to_term(V)
+    end;
+
+accept_value(_Ctype, _MD, V) ->
     V.
 
 any_to_list(V) when is_list(V) ->

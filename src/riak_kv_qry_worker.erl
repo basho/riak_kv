@@ -40,12 +40,18 @@
          handle_cast/2,
          handle_info/2,
          terminate/2,
-         code_change/3
+         code_change/3,
+
+	 %% decode_results/1 is now exported because it may be used in
+	 %% riak_kv_vnode to pre-decode query results at the vnode
+	 %% rather than here
+
+	 decode_results/1 
         ]).
 
 -include("riak_kv_ts.hrl").
 
--define(MAX_RUNNING_FSMS, 5).
+-define(MAX_RUNNING_FSMS, 20).
 -define(SUBQUERY_FSM_TIMEOUT, 10000).
 
 %% accumulators for different types of query results.
@@ -149,7 +155,9 @@ code_change(_OldVsn, State, _Extra) ->
 
 -spec new_state() -> #state{}.
 new_state() ->
-    #state{ }.
+    MaxRunningFSMs = app_helper:get_env(riak_kv, timeseries_query_max_running_fsms,
+                                        ?MAX_RUNNING_FSMS),
+    #state{max_running_fsms = MaxRunningFSMs}.
 
 prepare_fsm_options([], Acc) ->
     lists:reverse(Acc);
@@ -179,7 +187,8 @@ make_key_conversion_fun(Table) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     DDL = Mod:get_ddl(),
     fun(Key) when is_binary(Key) ->
-            riak_kv_ts_util:lk_to_pk(sext:decode(Key), DDL, Mod);
+            {ok, PK} = riak_ql_ddl:lk_to_pk(sext:decode(Key), DDL, Mod),
+            PK;
        (Key) ->
             lager:error("Key conversion function "
                         "encountered a non-binary object key: ~p", [Key]),
@@ -325,7 +334,13 @@ add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
 run_select_on_chunk(SubQId, Chunk, #state{qry = Query,
                                           result = QueryResult1,
                                           qbuf_ref = QBufRef}) ->
-    DecodedChunk = decode_results(lists:flatten(Chunk)),
+
+    %% Return decoded_results for this chunk.  We delegate this to a
+    %% helper function that determines whether the results have
+    %% already been decoded by the sending vnode
+
+    DecodedChunk = get_decoded_results(Chunk),
+
     SelClause = sql_select_clause(Query),
     case sql_select_calc_type(Query) of
         rows ->
@@ -338,6 +353,20 @@ run_select_on_chunk(SubQId, Chunk, #state{qry = Query,
             %% ditto
             run_select_on_group(Query, SelClause, DecodedChunk, QueryResult1)
     end.
+
+%% ------------------------------------------------------------
+%% Helper function to return decoded query results for the current
+%% Chunk:
+%%
+%%   if already decoded, simply returns the decoded data
+%%
+%%   if not, decodes and returns
+%% ------------------------------------------------------------
+
+get_decoded_results({decoded, Chunk}) ->
+    Chunk;
+get_decoded_results(Chunk) ->
+    decode_results(lists:flatten(Chunk)).
 
 %%
 run_select_on_group(Query, SelClause, Chunk, QueryResult1) ->
