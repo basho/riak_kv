@@ -45,7 +45,7 @@
 
 -include("riak_kv_ts.hrl").
 
--define(MAX_RUNNING_FSMS, 5).
+-define(MAX_RUNNING_FSMS, 20).
 -define(SUBQUERY_FSM_TIMEOUT, 10000).
 
 %% accumulators for different types of query results.
@@ -149,7 +149,9 @@ code_change(_OldVsn, State, _Extra) ->
 
 -spec new_state() -> #state{}.
 new_state() ->
-    #state{ }.
+    MaxRunningFSMs = app_helper:get_env(riak_kv, timeseries_query_max_running_fsms,
+                                        ?MAX_RUNNING_FSMS),
+    #state{max_running_fsms = MaxRunningFSMs}.
 
 prepare_fsm_options([], Acc) ->
     lists:reverse(Acc);
