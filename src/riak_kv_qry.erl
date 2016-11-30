@@ -99,7 +99,7 @@ do_insert(#riak_sql_insert_v1{'INSERT' = Table,
     case lookup_field_positions(Mod, Fields) of
         {ok, Positions} ->
             Empty = make_empty_row(Mod),
-            Types = [catch riak_qql_ddl:get_storage_type(Mod:get_field_type([Column])) || {identifier, [Column]} <- Fields],
+            Types = [catch riak_ql_ddl:get_storage_type(Mod:get_field_type([Column])) || {identifier, [Column]} <- Fields],
             try xlate_insert_to_putdata(Values, Positions, Empty, Types) of
                 {ok, Data} ->
                     insert_putreqs(Mod, Table, Data);
