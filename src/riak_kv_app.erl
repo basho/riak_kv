@@ -59,7 +59,7 @@ start(_Type, _StartArgs) ->
 
     Base = [riak_core_stat:prefix(), riak_kv],
     riak_kv_exometer_sidejob:new_entry(Base ++ [put_fsm, sidejob],
-				       riak_kv_put_fsm_sj, "node_put_fsm", []),
+                                       riak_kv_put_fsm_sj, "node_put_fsm", []),
     riak_kv_exometer_sidejob:new_entry(Base ++ [get_fsm, sidejob],
                                        riak_kv_get_fsm_sj, "node_get_fsm", []),
 
@@ -216,6 +216,15 @@ start(_Type, _StartArgs) ->
                                           [v3,v2,v1],
                                           riak_kv_select:first_version()),
 
+            %% Register a new capability to decode query results at
+            %% the vnode.  Default will be false, causing all vnodes
+            %% to send back encoded results, to be decoded by the
+            %% coordinator (the behavior prior to this change)
+
+            riak_core_capability:register({riak_kv, decode_query_results_at_vnode},
+                                          [true, false],
+                                          false),
+
             riak_kv_compile_tab:populate_v3_table(),
             riak_kv_ts_newtype:recompile_ddl(),
             riak_kv_ts_newtype:verify_helper_modules(),
@@ -264,6 +273,9 @@ prep_stop(_State) ->
         lager:info("unregistered webmachine routes"),
         wait_for_put_fsms(),
         lager:info("all active put FSMs completed"),
+
+        ok = riak_kv_qry_buffers:kill_all_qbufs(),
+        lager:info("cleaned up query buffers"),
         ok
     catch
         Type:Reason ->

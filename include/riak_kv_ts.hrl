@@ -40,7 +40,7 @@
         {
           calc_type        = rows :: select_result_type(),
           initial_state    = []   :: [any()],
-          col_return_types = []   :: [riak_ql_ddl:simple_field_type()],
+          col_return_types = []   :: [riak_ql_ddl:external_field_type()],
           col_names        = []   :: [binary()],
           clause           = []   :: [riak_kv_qry_compiler:compiled_select()],
           finalisers       = []   :: [skip | function()]
@@ -102,9 +102,11 @@
           %% since v2
           group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}],
           %% since v3
-          'OFFSET'       = []      :: [riak_kv_qry_compiler:offset()],
-          allow_qbuf_reuse = false :: boolean()  %% control reuse of query buffers
-        }).
+          'OFFSET'       = []   :: [riak_kv_qry_compiler:offset()],
+          %% to be supplied in #tsqueryreq.qbuf_id, which is expected
+          %% to appear in a future release
+          qbuf_id               :: undefined | binary()  %% control reuse of existing buffers
+       }).
 
 -record(riak_sql_describe_v1,
         {

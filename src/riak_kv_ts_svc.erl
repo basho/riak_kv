@@ -775,13 +775,14 @@ convert_ddl_to_cluster_supported_version_v1_test() ->
     ?assertMatch(
         #ddl_v1{},
         convert_ddl_to_cluster_supported_version(
-          v1, #ddl_v2{local_key = ?DDL_KEY{ast = []}, partition_key = ?DDL_KEY{ast = []}})
+          v1, #ddl_v2{local_key = ?DDL_KEY{ast = []}, partition_key = ?DDL_KEY{ast = []}, fields=[#riak_field_v1{type=varchar}]})
     ).
 
 convert_ddl_to_cluster_supported_version_v2_test() ->
     DDLV2 = #ddl_v2{
         local_key = ?DDL_KEY{ast = []},
-        partition_key = ?DDL_KEY{ast = []}},
+        partition_key = ?DDL_KEY{ast = []},
+        fields=[#riak_field_v1{type=varchar}]},
     ?assertMatch(
         DDLV2,
         convert_ddl_to_cluster_supported_version(v2, DDLV2)

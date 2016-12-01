@@ -211,15 +211,11 @@ get_table_ddl(_Table) ->
     DDL = {}, %% not used by caller
     {ok, Module, DDL}.
 
-is_table_supported(DDLRecCap, Table = <<"my_type2">>) ->
-    is_table_supported_not_active(DDLRecCap, Table);
-is_table_supported(DDLRecCap, Table) ->
-    is_table_supported_active(DDLRecCap, Table).
-
-is_table_supported_active(_DDLRecCap, _Table) ->
+is_table_supported(_DDLRecCap, <<"my_type2">>) ->
+    {error, "The table is not active"};
+is_table_supported(_DDLRecCap, _Table) ->
     true.
-is_table_supported_not_active(_DDLRecCap, _Table) ->
-    {error, "The table is not active"}.
+
 -endif.
 %% / Forwards/Mocks for getting table status, isolating the interaction for testability
 
@@ -297,7 +293,7 @@ get_ddl_v2(BucketType) when is_binary(BucketType) ->
 insert_test() ->
     ?in_process(
         begin
-            DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }},
+            DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }, fields=[#riak_field_v1{type=varchar}]},
             ok = insert(<<"my_type">>, DDLV2),
             ?assertEqual(
                 {ok, DDLV2},
@@ -345,7 +341,7 @@ get_table_status_pairs_test() ->
             InsertTableFun =
                 fun(I) ->
                     TableName = TableNameFun(I),
-                    DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }},
+                    DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }, fields=[#riak_field_v1{type=varchar}]},
                     ok = insert(TableName, DDLV2)
                 end,
 

@@ -92,32 +92,30 @@ build_sql_record(Command, SQL, Options) ->
 build_sql_record_int(select, SQL, _Options = undefined) ->
     build_sql_record_int(select, SQL, []);
 build_sql_record_int(select, SQL, Options) ->
-    AllowQBufReuse = proplists:get_value(allow_qbuf_reuse, Options),
-    Cover          = proplists:get_value(cover, Options),
+    Cover  = proplists:get_value(cover, Options),
     if not (Cover == undefined orelse is_binary(Cover)) ->
             {error, bad_coverage_context};
        el/=se ->
-            T = proplists:get_value(tables, SQL),
-            F = proplists:get_value(fields, SQL),
-            W = proplists:get_value(where,  SQL),
-            L = proplists:get_value(limit,  SQL),
-            O = proplists:get_value(offset, SQL),
+            Tables  = proplists:get_value(tables, SQL),  %% plural is an historical reference, not a typo
+            Fields  = proplists:get_value(fields, SQL),
+            Where   = proplists:get_value(where,  SQL),
+            Limit   = proplists:get_value(limit,  SQL),
+            Offset  = proplists:get_value(offset, SQL),
             OrderBy = proplists:get_value(order_by, SQL),
             GroupBy = proplists:get_value(group_by, SQL),
-            case is_binary(T) of
+            case is_binary(Tables) of
                 true ->
-                    Mod = riak_ql_ddl:make_module_name(T),
+                    Mod = riak_ql_ddl:make_module_name(Tables),
                     {ok,
-                     ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = F},
-                                 'FROM'     = T,
-                                 'WHERE'    = convert_where_timestamps(Mod, W),
-                                 'LIMIT'    = L,
-                                 'OFFSET'   = O,
+                     ?SQL_SELECT{'SELECT'   = #riak_sel_clause_v1{clause = Fields},
+                                 'FROM'     = Tables,
+                                 'WHERE'    = convert_where_timestamps(Mod, Where),
+                                 'LIMIT'    = Limit,
+                                 'OFFSET'   = Offset,
                                  'ORDER BY' = OrderBy,
                                  helper_mod = Mod,
                                  cover_context = Cover,
-                                 allow_qbuf_reuse = AllowQBufReuse,
-                                 group_by = GroupBy }
+                                 group_by      = GroupBy }
                     };
                 false ->
                     {error, <<"Must provide exactly one table name">>}
@@ -308,6 +306,8 @@ queried_table(
 queried_table(#riak_sql_show_create_table_v1{'SHOW_CREATE_TABLE' = Table}) ->
     Table.
 
+%% Create a simple, mockable version for unit testing, too
+-ifndef(TEST).
 -spec get_table_ddl(binary()) ->
                            {ok, module(), ?DDL{}} |
                            {error, term()}.
@@ -326,6 +326,10 @@ get_table_ddl(Table) when is_binary(Table) ->
                     {ok, Mod, DDL}
             end
     end.
+-else.
+get_table_ddl(_Table) ->
+    {ok, module, ?DDL{}}.
+-endif.
 
 
 %%
@@ -481,7 +485,7 @@ explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
      StartInclusive,
      list_to_binary(EndKey2),
      EndInclusive,
-     list_to_binary(filter_to_string(Filter))].
+     list_to_binary(filter_to_string(Filter, HelperMod))].
 
 %%
 format_coverage(Table, CoverKey, NVal) ->
@@ -504,28 +508,32 @@ key_element_to_string(V) -> lists:flatten(io_lib:format("~p", [V])).
 
 %%
 %% This one quotes values which should be quoted for assignment
-element_to_quoted_string(V) when is_binary(V) -> varchar_quotes(V);
-element_to_quoted_string(V) when is_float(V) -> mochinum:digits(V);
-element_to_quoted_string(V) -> lists:flatten(io_lib:format("~p", [V])).
+element_to_quoted_string(V, blob) -> hex_as_string(V);
+element_to_quoted_string(V, varchar)  -> varchar_quotes(V);
+element_to_quoted_string(V, _Type) when is_float(V) -> mochinum:digits(V);
+element_to_quoted_string(V, _Type) -> lists:flatten(io_lib:format("~p", [V])).
+
+hex_as_string(Bin) ->
+    lists:flatten(io_lib:format("0x~s", [mochihex:to_hex(Bin)])).
 
 %%
--spec key_to_string({binary(),any(),term()}) -> string().
-key_to_string({Field, _Op, Value}) ->
+-spec key_to_string({binary(),riak_ql_ddl:external_field_type(),term()}) -> string().
+key_to_string({Field, Type, Value}) ->
     lists:flatten(io_lib:format("~s = ~s",
-        [key_element_to_string(Field), element_to_quoted_string(Value)])).
+        [key_element_to_string(Field), element_to_quoted_string(Value, Type)])).
 
 %%
--spec filter_to_string([]| {const,any()} | {atom(),any(),any()}) ->
+-spec filter_to_string([]| {atom(),tuple(),tuple()}, module()) ->
     string().
-filter_to_string([]) ->
+filter_to_string([], _Mod) ->
     [];
-filter_to_string({const,V}) ->
-    element_to_quoted_string(V);
-filter_to_string({field,V,_}) ->
-    key_element_to_string(V);
-filter_to_string({Op, A, B}) ->
+filter_to_string({Op, {field,F,_}, {const,V}}, Mod) ->
+    Type = Mod:get_field_type([F]),
     lists:flatten(io_lib:format("(~s~s~s)",
-        [filter_to_string(A), op_to_string(Op), filter_to_string(B)])).
+                                [key_element_to_string(F), op_to_string(Op), element_to_quoted_string(V, Type)]));
+filter_to_string({Op, A, B}, Mod) ->
+     lists:flatten(io_lib:format("(~s~s~s)",
+                                 [filter_to_string(A, Mod), op_to_string(Op), filter_to_string(B, Mod)])).
 
 %%
 op_to_string(and_) -> " AND ";
@@ -683,17 +691,38 @@ check_table_feature_supported(DDLRecCap, DecodedReq) ->
                     {error, create_table_not_supported_message(Table)}
             end;
         {ok, _, {_, Table}} ->
-            case is_table_supported(DDLRecCap, Table) of
+            case is_table_active_and_supported(DDLRecCap, Table) of
                 true ->
                     DecodedReq;
                 false ->
-                    {error, table_not_supported_message(Table)}
+                    {error, table_not_supported_message(Table)};
+                Error ->
+                    Error
             end;
         _ ->
             DecodedReq
     end.
 
 %%
+-spec is_table_active_and_supported(DDLRecCap::atom(),
+                                    Table::binary()) ->
+                                        boolean() | {error, string()}.
+is_table_active_and_supported(_, << >>) ->
+    %% an empty binary for the table name means that the request is not for a
+    %% specific table e.g. SHOW TABLES
+    true;
+is_table_active_and_supported(DDLRecCap, Table) ->
+    case get_table_ddl(Table) of
+        {ok, _Mod, _DDL} ->
+            is_table_supported(DDLRecCap, Table);
+        {error, _} ->
+            {error, create_table_not_active_message(Table)}
+    end.
+
+%%
+-spec is_table_supported(DDLRecCap::atom(),
+                         Table::binary()) ->
+                            boolean() | {error, string()}.
 is_table_supported(_, << >>) ->
     %% an empty binary for the table name means that the request is not for a
     %% specific table e.g. SHOW TABLES
@@ -718,6 +747,11 @@ create_table_not_supported_message(Table) ->
     Reason = "Table was not ~ts was not created. It contains features which "
              "are not supported by all nodes in the cluster.",
     lists:flatten(io_lib:format(Reason, [Table])).
+
+create_table_not_active_message(Table) ->
+    Reason = "Table ~ts is not active.",
+    lists:flatten(io_lib:format(Reason, [Table])).
+
 
 %%%%%%%%%%%%
 %% FRAGILE HORRIBLE BAD BAD BAD AST MANGLING
