@@ -72,7 +72,7 @@ make_complete_fold_req() ->
                         Acc1
                 end,
             RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-            fold_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1})
+            apply_sweep_participant_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1})
     end.
 
 make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
@@ -209,78 +209,89 @@ maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
         Acc
     end.
 
-fold_funs(_, #sa{index = Index,
-                 failed_p = FailedParticipants,
-                 active_p = [],
-                 succ_p = []} = SweepAcc) ->
-    lager:info("No more participants in sweep of Index ~p Failed: ~p", [Index, FailedParticipants]),
+apply_sweep_participant_funs({BKey, RObj}, SweepAcc) ->
+    ActiveParticipants = SweepAcc#sa.active_p,
+    FailedParticipants = SweepAcc#sa.failed_p,
+    Index = SweepAcc#sa.index,
+    BucketProps = SweepAcc#sa.bucket_props,
 
-    throw({stop_sweep, SweepAcc});
+    InitialAcc = {RObj,
+                  FailedParticipants,
+                  _Successful = [],
+                  _ModifiedObjs = 0,
+                  BucketProps},
+    FoldFun = fun(E, Acc) -> run_participant_fun(E, Index, BKey, Acc) end,
+    Results = lists:foldl(FoldFun, InitialAcc, ActiveParticipants),
 
-%%% No active participants return all succ for next key to run
-fold_funs(_, #sa{active_p = [],
-                 succ_p = Succ} = SweepAcc) ->
-    SweepAcc#sa{active_p = lists:reverse(Succ),
-                succ_p = []};
+    {_, Failed, Successful, ModifiedObjs, NewBucketProps} = Results,
+
+    SweepAcc1 = update_modified_objs_count(SweepAcc, ModifiedObjs),
+    SweepAcc2 = SweepAcc1#sa{bucket_props = NewBucketProps},
+    update_sa_with_participant_results(SweepAcc2, Failed, Successful).
 
 %% Check if the sweep_participant have reached crash limit.
-fold_funs(KeyObj, #sa{failed_p = Failed,
-                      active_p = [#sweep_participant{errors = ?MAX_SWEEP_CRASHES,
-                                                     module = Module}
-                                      = Sweep | Rest]} = SweepAcc) ->
+run_participant_fun(SP = #sweep_participant{errors = ?MAX_SWEEP_CRASHES, module = Module},
+                    _Index, _BKey, {RObj, Failed, Successful, ModifiedObjs, BucketProps}) ->
     lager:error("Sweeper fun ~p crashed too many times.", [Module]),
-    fold_funs(KeyObj, SweepAcc#sa{active_p = Rest,
-                                  failed_p = [Sweep#sweep_participant{fail_reason = too_many_crashes} | Failed]});
+    FailedSP = SP#sweep_participant{fail_reason = too_many_crashes},
+    {RObj, [FailedSP | Failed], Successful, ModifiedObjs, BucketProps};
 
-%% Key deleted nothing to do
-fold_funs(deleted, #sa{active_p = [Sweep | ActiveRest],
-                       succ_p = Succ} = SweepAcc) ->
-    fold_funs(deleted, SweepAcc#sa{active_p = ActiveRest,
-                                   succ_p = [Sweep | Succ]});
+run_participant_fun(SP, _Index, _BKey,
+                    {deleted, Failed, Successful, ModifiedObjs, BucketProps}) ->
+    {deleted, Failed, [SP | Successful], ModifiedObjs, BucketProps};
 
-%% Main function: call fun with it's acc and aptionals
-fold_funs({BKey, RObj}, #sa{active_p = [Sweep | ActiveRest],
-                            succ_p = Succ,
-                            modified_objects = ModObj} = SweepAcc) ->
-    #sweep_participant{sweep_fun = Fun,
-                       acc = Acc,
-                       errors = Errors,
-                       options = Options} = Sweep,
-    {Opt, SweepAcc1} = maybe_add_opt_info({BKey, RObj}, SweepAcc, Options),
+run_participant_fun(SP, Index, BKey,
+                    {RObj, Failed, Successful, ModifiedObjs, BucketProps}) ->
+    Fun = SP#sweep_participant.sweep_fun,
+    ParticipantAcc = SP#sweep_participant.acc,
+    Errors = SP#sweep_participant.errors,
+    Options = SP#sweep_participant.options,
 
-    try Fun({BKey, RObj}, Acc, Opt) of
-        {deleted, NewAcc} ->
-            riak_kv_vnode:local_reap(SweepAcc1#sa.index, BKey, RObj),
-            fold_funs(deleted,
-                      SweepAcc1#sa{active_p = ActiveRest,
-                                   modified_objects = ModObj + 1,
-                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
-        {mutated, MutatedRObj, NewAcc} ->
-            riak_kv_vnode:local_put(SweepAcc1#sa.index, MutatedRObj, [{hashtree_action, tombstone}]),
-            fold_funs({BKey, MutatedRObj},
-                      SweepAcc1#sa{active_p = ActiveRest,
-                                   modified_objects = ModObj + 1,
-                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]});
-        {ok, NewAcc} ->
-            fold_funs({BKey, RObj},
-                      SweepAcc1#sa{active_p = ActiveRest,
-                                   succ_p = [Sweep#sweep_participant{acc = NewAcc} | Succ]})
+    {OptValues, NewBucketProps} = maybe_add_bucket_info({BKey, RObj}, BucketProps, Options),
+
+    try Fun({BKey, RObj}, ParticipantAcc, OptValues) of
+        Result ->
+            {NewRObj, NumModified, NewParticipantAcc} = do_participant_side_effects(
+                                                          Result, Index, BKey, RObj),
+            NewSucc = [SP#sweep_participant{acc = NewParticipantAcc} | Successful],
+            {NewRObj, Failed, NewSucc, ModifiedObjs + NumModified, NewBucketProps}
     catch C:T ->
-              lager:error("Sweeper fun crashed ~p ~p Key: ~p", [{C, T}, Sweep, BKey]),
-              fold_funs({BKey, RObj},
-                        SweepAcc1#sa{active_p = ActiveRest,
-                                     %% We keep the sweep in succ unil we have enough crashes.
-                                     succ_p = [Sweep#sweep_participant{errors = Errors + 1} | Succ]})
+              lager:error("Sweeper fun crashed ~p ~p Key: ~p Obj: ~p", [{C, T}, SP, BKey, RObj]),
+              %% We keep the sweep in succ unil we have enough crashes
+              NewSucc = [SP#sweep_participant{errors = Errors + 1} | Successful],
+              {RObj, Failed, NewSucc, ModifiedObjs, NewBucketProps}
     end.
 
-maybe_add_opt_info({BKey, RObj}, SweepAcc, Options) ->
-    lists:foldl(fun(Option, InfoSweepAcc) ->
-                        add_opt_info({BKey, RObj}, Option, InfoSweepAcc)
-                end, {[], SweepAcc}, Options).
+do_participant_side_effects({deleted, NewAcc}, Index, BKey, RObj) ->
+    riak_kv_vnode:local_reap(Index, BKey, RObj),
+    {deleted, 1, NewAcc};
+do_participant_side_effects({mutated, MutatedRObj, NewAcc}, Index, _BKey, _RObj) ->
+    riak_kv_vnode:local_put(Index, MutatedRObj, [{hashtree_action, tombstone}]),
+    {MutatedRObj, 1, NewAcc};
+do_participant_side_effects({ok, NewAcc}, _Index, _BKey, RObj) ->
+    {RObj, 0, NewAcc}.
 
-add_opt_info({{Bucket, _Key}, _RObj}, bucket_props, {OptInfo, #sa{bucket_props = BucketPropsDict} = SweepAcc}) ->
-    {BucketProps, BucketPropsDict1} = get_bucket_props(Bucket, BucketPropsDict),
-    {[{bucket_props, BucketProps} | OptInfo], SweepAcc#sa{bucket_props = BucketPropsDict1}}.
+update_modified_objs_count(SweepAcc, ModifiedObjs) ->
+    PreviouslyModObjs = SweepAcc#sa.modified_objects,
+    SweepAcc#sa{modified_objects = PreviouslyModObjs + ModifiedObjs}.
+
+update_sa_with_participant_results(SweepAcc, Failed, []) ->
+    Index = SweepAcc#sa.index,
+    lager:error("No more participants in sweep of Index ~p Failed: ~p", [Index, Failed]),
+    throw({stop_sweep, SweepAcc#sa{failed_p = Failed, active_p = [], succ_p = []}});
+update_sa_with_participant_results(SweepAcc, Failed, Successful) ->
+    SweepAcc#sa{active_p = lists:reverse(Successful),
+                failed_p = Failed,
+                succ_p = []}.
+
+maybe_add_bucket_info(Bucket, BucketPropsDict, Options) ->
+    case lists:member(bucket_props, Options) of
+        true ->
+            {BucketProps, BucketPropsDict1} = get_bucket_props(Bucket, BucketPropsDict),
+            {[{bucket_props, BucketProps}], BucketPropsDict1};
+        false ->
+            {[], BucketPropsDict}
+    end.
 
 get_bucket_props(Bucket, BucketPropsDict) ->
     case dict:find(Bucket, BucketPropsDict) of
