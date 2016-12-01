@@ -136,4 +136,10 @@
             'EXPLAIN' = ?SQL_SELECT{} :: ?SQL_SELECT{}
         }).
 
+-record(riak_sql_delete_query_v1,
+        {
+          'FROM'     = <<>> :: binary() | {list, [binary()]} | {regex, list()},
+          'WHERE'           :: [riak_ql_ddl:filter()],
+          helper_mod        :: atom()
+        }).
 -endif.
