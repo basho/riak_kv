@@ -383,16 +383,16 @@ do_delete(#riak_sql_delete_query_v1{'FROM'     = F,
                                     'WHERE'    = W,
                                     helper_mod = Mod}) ->
     case Mod:get_delete_key(W) of
-        {ok, Key} -> 
+        {ok, Key} ->
             case riak_kv_ts_api:delete_data(Key, F) of
                 ok                -> {ok, ?EMPTYRESPONSE};
                 {error, notfound} -> {ok, ?EMPTYRESPONSE};
                 {error, Err}      -> Msg1 = io_lib:format("Delete failed: ~p", [Err]),
                                      {error, Msg1}
             end;
-        {false, Err} -> 
+        {error, Err} ->
             Msg2 = io_lib:format("Unable to get delete key: ~p", [Err]),
-            {err, Msg2}
+            {error, Msg2}
     end.
 
 %%%===================================================================

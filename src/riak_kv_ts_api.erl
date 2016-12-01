@@ -80,7 +80,7 @@ api_call_to_perm(query_explain) ->
 api_call_to_perm(describe_table) ->
     "riak_ts.describe_table";
 api_call_to_perm(query_delete) ->
-    "riak_ts.query_delete";
+    "riak_ts.delete";
 %% SHOW CREATE TABLE is an extended version of DESCRIBE
 api_call_to_perm(show_create_table) ->
     api_call_to_perm(describe_table);

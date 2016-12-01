@@ -55,7 +55,6 @@
 -define(E_QBUF_CREATE_ERROR,     1023).
 -define(E_QBUF_LDB_ERROR,        1024).
 -define(E_QUANTA_LIMIT,          1025).
--define(E_INVALID_DELETE,        1026).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -174,7 +173,7 @@ process(M = #riak_sql_delete_query_v1{}, State) ->
         {ok, ?EMPTYRESPONSE} ->
             {reply, make_tsqueryresp(?EMPTYRESPONSE), State};
         {error, Err} ->
-            {reply, make_rpberrresp(?E_INVALID_DELETE, Err), State}
+            {reply, make_rpberrresp(?E_DELETE, Err), State}
     end;
 
 process(M = #riak_sql_describe_v1{'DESCRIBE' = Table}, State) ->

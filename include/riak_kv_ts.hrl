@@ -102,9 +102,9 @@
           %% since v2
           group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()}],
           %% since v3
-          'OFFSET'       = []   :: [riak_kv_qry_compiler:offset()],
+          'OFFSET'       = []      :: [riak_kv_qry_compiler:offset()],
           allow_qbuf_reuse = false :: boolean()  %% control reuse of query buffers
-       }).
+        }).
 
 -record(riak_sql_describe_v1,
         {
@@ -137,7 +137,7 @@
 -record(riak_sql_delete_query_v1,
         {
           'FROM'     = <<>> :: binary() | {list, [binary()]} | {regex, list()},
-          'WHERE'    = []   :: [riak_ql_ddl:filter()],
+          'WHERE'           :: [riak_ql_ddl:filter()],
           helper_mod        :: atom()
         }).
 -endif.
