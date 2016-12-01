@@ -293,7 +293,7 @@ get_ddl_v2(BucketType) when is_binary(BucketType) ->
 insert_test() ->
     ?in_process(
         begin
-            DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }},
+            DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }, fields=[#riak_field_v1{type=varchar}]},
             ok = insert(<<"my_type">>, DDLV2),
             ?assertEqual(
                 {ok, DDLV2},
@@ -341,7 +341,7 @@ get_table_status_pairs_test() ->
             InsertTableFun =
                 fun(I) ->
                     TableName = TableNameFun(I),
-                    DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }},
+                    DDLV2 = #ddl_v2{local_key = #key_v1{ }, partition_key = #key_v1{ }, fields=[#riak_field_v1{type=varchar}]},
                     ok = insert(TableName, DDLV2)
                 end,
 

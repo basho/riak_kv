@@ -99,7 +99,7 @@ do_insert(#riak_sql_insert_v1{'INSERT' = Table,
     case lookup_field_positions(Mod, Fields) of
         {ok, Positions} ->
             Empty = make_empty_row(Mod),
-            Types = [catch Mod:get_field_type([Column]) || {identifier, [Column]} <- Fields],
+            Types = [catch riak_ql_ddl:get_storage_type(Mod:get_field_type([Column])) || {identifier, [Column]} <- Fields],
             try xlate_insert_to_putdata(Values, Positions, Empty, Types) of
                 {ok, Data} ->
                     insert_putreqs(Mod, Table, Data);
@@ -175,7 +175,7 @@ lookup_field_positions(Mod, FieldIdentifiers) ->
 %% post-processing step on Data, to avoid another round of
 %% list_to_tuple(tuple_to_list())
 -spec xlate_insert_to_putdata([[riak_ql_ddl:data_value()]], [pos_integer()], tuple(undefined),
-                              [riak_ql_ddl:simple_field_type()]) ->
+                              [riak_ql_ddl:internal_field_type()]) ->
                               {ok, [tuple()]} | {error, string()}.
 xlate_insert_to_putdata(Values, Positions, Empty, FieldTypes) ->
     ConvFn = fun(RowVals, {Good, Bad, RowNum}) ->
@@ -195,7 +195,7 @@ xlate_insert_to_putdata(Values, Positions, Empty, FieldTypes) ->
     end.
 
 -spec make_insert_row([riak_ql_ddl:data_value()], [pos_integer()], tuple(),
-                      [riak_ql_ddl:simple_field_type()]) ->
+                      [riak_ql_ddl:internal_field_type()]) ->
                       {ok, tuple()} | {error, string()} |
                       {error, {atom(), string()}}.
 make_insert_row(Vals, _Positions, Row, _FieldTypes)
@@ -399,9 +399,10 @@ explain_query_test() ->
                 "d SINT64,"
                 "e BOOLEAN,"
                 "f VARCHAR,"
+                "g BLOB,"
                 "PRIMARY KEY  ((c, QUANTUM(b, 1, 's')), c,b,a))")),
     riak_ql_ddl_compiler:compile_and_load_from_tmp(DDL),
-    SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND f='adios'))",
+    SQL = "SELECT a,b,c FROM tab WHERE b > 0 AND b < 2000 AND a=319 AND c='hola' AND (d=15 OR (e=true AND (f='adios' OR g=0xefface)))",
     {ok, Q} = riak_ql_parser:parse(riak_ql_lexer:get_tokens(SQL)),
     {ok, Select} = riak_kv_ts_util:build_sql_record(select, Q, []),
     meck:new(riak_client),
@@ -431,17 +432,15 @@ explain_query_test() ->
     ExpectedRows =
         [[1,<<"dev1@127.0.0.1/0, dev1@127.0.0.1/1, dev1@127.0.0.1/1">>,
             <<"c = 'hola', b = 1">>,false,<<"c = 'hola', b = 1000">>,false,
-            <<"(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))">>],
+            <<"(((d = 15) OR ((e = true) AND ((f = 'adios') OR (g = 0xefface)))) AND (a = 319))">>],
         [2,<<"dev1@127.0.0.1/0, dev1@127.0.0.1/1, dev1@127.0.0.1/1">>,
             <<"c = 'hola', b = 1000">>,false,<<"c = 'hola', b = 2000">>,false,
-            <<"(((d = 15) OR ((e = true) AND (f = 'adios'))) AND (a = 319))">>]],
-    ?assertMatch(
-        {ok, {_, _, ExpectedRows}},
-        Res),
+            <<"(((d = 15) OR ((e = true) AND ((f = 'adios') OR (g = 0xefface)))) AND (a = 319))">>]],
+    {ok, {_, _, ActualRows}} = Res,
+    ?assertEqual(ExpectedRows, ActualRows),
     Res1 = submit("EXPLAIN " ++ SQL, DDL),
-    ?assertMatch(
-        {ok, {_, _, ExpectedRows}},
-        Res1),
+    {ok, {_, _, ActualRows1}} = Res1,
+    ?assertEqual(ExpectedRows, ActualRows1),
     meck:unload(riak_client),
     meck:unload(riak_core_apl),
     meck:unload(riak_core_bucket),

@@ -471,7 +471,7 @@ explain_sub_query(Index, NVal, ?SQL_SELECT{'FROM' = Table,
      StartInclusive,
      list_to_binary(EndKey2),
      EndInclusive,
-     list_to_binary(filter_to_string(Filter))].
+     list_to_binary(filter_to_string(Filter, HelperMod))].
 
 %%
 format_coverage(Table, CoverKey, NVal) ->
@@ -494,28 +494,32 @@ key_element_to_string(V) -> lists:flatten(io_lib:format("~p", [V])).
 
 %%
 %% This one quotes values which should be quoted for assignment
-element_to_quoted_string(V) when is_binary(V) -> varchar_quotes(V);
-element_to_quoted_string(V) when is_float(V) -> mochinum:digits(V);
-element_to_quoted_string(V) -> lists:flatten(io_lib:format("~p", [V])).
+element_to_quoted_string(V, blob) -> hex_as_string(V);
+element_to_quoted_string(V, varchar)  -> varchar_quotes(V);
+element_to_quoted_string(V, _Type) when is_float(V) -> mochinum:digits(V);
+element_to_quoted_string(V, _Type) -> lists:flatten(io_lib:format("~p", [V])).
+
+hex_as_string(Bin) ->
+    lists:flatten(io_lib:format("0x~s", [mochihex:to_hex(Bin)])).
 
 %%
--spec key_to_string({binary(),any(),term()}) -> string().
-key_to_string({Field, _Op, Value}) ->
+-spec key_to_string({binary(),riak_ql_ddl:external_field_type(),term()}) -> string().
+key_to_string({Field, Type, Value}) ->
     lists:flatten(io_lib:format("~s = ~s",
-        [key_element_to_string(Field), element_to_quoted_string(Value)])).
+        [key_element_to_string(Field), element_to_quoted_string(Value, Type)])).
 
 %%
--spec filter_to_string([]| {const,any()} | {atom(),any(),any()}) ->
+-spec filter_to_string([]| {atom(),tuple(),tuple()}, module()) ->
     string().
-filter_to_string([]) ->
+filter_to_string([], _Mod) ->
     [];
-filter_to_string({const,V}) ->
-    element_to_quoted_string(V);
-filter_to_string({field,V,_}) ->
-    key_element_to_string(V);
-filter_to_string({Op, A, B}) ->
+filter_to_string({Op, {field,F,_}, {const,V}}, Mod) ->
+    Type = Mod:get_field_type([F]),
     lists:flatten(io_lib:format("(~s~s~s)",
-        [filter_to_string(A), op_to_string(Op), filter_to_string(B)])).
+                                [key_element_to_string(F), op_to_string(Op), element_to_quoted_string(V, Type)]));
+filter_to_string({Op, A, B}, Mod) ->
+     lists:flatten(io_lib:format("(~s~s~s)",
+                                 [filter_to_string(A, Mod), op_to_string(Op), filter_to_string(B, Mod)])).
 
 %%
 op_to_string(and_) -> " AND ";

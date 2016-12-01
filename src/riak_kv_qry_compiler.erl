@@ -407,7 +407,7 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
 
 %%
 -spec infer_col_type(?DDL{}, riak_ql_ddl:selection(), Errors1::[any()]) ->
-        {Type::riak_ql_ddl:simple_field_type() | error, Errors2::[any()]}.
+        {Type::riak_ql_ddl:external_field_type() | error, Errors2::[any()]}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
     {Type, Errors};
@@ -984,7 +984,7 @@ add_types2([{NullOp, {identifier, Field}} | T], Mod, Acc) when NullOp =:= is_nul
     NewAcc = {EqOp, {field, Field, NewType}, {const, ?SQL_NULL}},
     add_types2(T, Mod, [NewAcc | Acc]);
 add_types2([{Op, Field, {_, Val}} | T], Mod, Acc) ->
-    NewType = Mod:get_field_type([Field]),
+    NewType = riak_ql_ddl:get_storage_type(Mod:get_field_type([Field])),
     NewAcc = {Op, {field, Field, NewType}, {const, normalise(Val, NewType)}},
     add_types2(T, Mod, [NewAcc | Acc]).
 
