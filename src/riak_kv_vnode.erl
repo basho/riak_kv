@@ -1280,7 +1280,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
-            ?INDEX(RObj, delete, Idx),
+            ?INDEX({RObj, no_old_object}, delete, Idx),
             delete_from_hashtree(Bucket, Key, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
