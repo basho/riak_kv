@@ -13,7 +13,6 @@ suite() ->
 
 init_per_testcase(_TestCase, Config) ->
     meck:unload(),
-    file:delete(riak_kv_sweeper_state:sweep_file()),
     application:set_env(riak_kv, sweep_participants, undefined),
     application:set_env(riak_kv, sweep_window, always),
     application:set_env(riak_kv, sweeper_scheduler, false),
@@ -277,17 +276,6 @@ status_index_changed_tick_test(Config) ->
     sweeper_tick(self()),
     {_, Sweeps1} = riak_kv_sweeper:status(),
     NewIndices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps1]),
-    ok.
-
-sweeps_persistent_test(_Config) ->
-    {_SPs, Sweeps0} = riak_kv_sweeper:status(),
-    Sweeps = lists:sort(Sweeps0),
-    false = filelib:is_regular(riak_kv_sweeper_state:sweep_file()),
-    ok = riak_kv_sweeper:stop(),
-    true = filelib:is_regular(riak_kv_sweeper_state:sweep_file()),
-    {ok, [PersistedSweepDict]} = file:consult(riak_kv_sweeper_state:sweep_file()),
-    PersistedSweeps = [Sweep|| {_Index, Sweep} <- dict:to_list(PersistedSweepDict)],
-    Sweeps = lists:sort(PersistedSweeps),
     ok.
 
 add_participant_test(_Config) ->

@@ -221,8 +221,7 @@ handle_info(Msg, State) ->
     lager:error("riak_kv_sweeper received unexpected message ~p", [Msg]),
     {noreply, State}.
 
-terminate(_, State) ->
-    riak_kv_sweeper_state:persist_sweeps(State),
+terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

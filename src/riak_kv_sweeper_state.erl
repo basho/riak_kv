@@ -30,7 +30,6 @@
          update_sweep_specs/1,
          maybe_schedule_sweep/1,
          new/0,
-         persist_sweeps/1,
          remove_sweep_participant/2,
          start_sweep/3,
          status/1,
@@ -41,8 +40,6 @@
          update_started_sweep/4,
          in_sweep_window/0]).
 
-%% Export for testing
--export([sweep_file/0]).
 -ifdef(TEST).
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
@@ -54,7 +51,6 @@
 -compile({parse_transform, pulse_instrument}).
 -endif.
 
--define(SWEEPS_FILE, "sweeps.dat").
 -define(DEFAULT_SWEEP_CONCURRENCY,1).
 
 -record(state, {sweep_participants = dict:new() :: dict(),
@@ -89,15 +85,14 @@
 %% ====================================================================
 -spec new() -> state().
 new() ->
-    State0 =
+    State =
         case get_persistent_participants() of
             undefined ->
                 #state{};
             SP ->
                 #state{sweep_participants = SP}
         end,
-    State1 = State0#state{sweeps = get_persistent_sweeps()},
-    update_sweep_specs(State1).
+    update_sweep_specs(State).
 
 -spec add_sweep_participant(state(), Participant:: #sweep_participant{}) -> state().
 add_sweep_participant(State, Participant) ->
@@ -518,22 +513,6 @@ queue_sweep(Index, #state{sweeps = Sweeps} = State) ->
             State
     end.
 
-persist_sweeps(State) ->
-    #state{sweeps = Sweeps} = State,
-    CleanedSweep =
-        dict:map(fun(_Key, Sweep) ->
-                     #sweep{index = Sweep#sweep.index,
-                            start_time = Sweep#sweep.start_time,
-                            end_time = Sweep#sweep.end_time,
-                            results = Sweep#sweep.results
-                            }
-             end, Sweeps),
-    file:write_file(sweep_file(?SWEEPS_FILE) , io_lib:fwrite("~p.\n",[CleanedSweep])),
-    State.
-
-sweep_file() ->
-    sweep_file(?SWEEPS_FILE).
-
 %% -----------------------------------------------------------------------------
 %% Internal Functions
 %% -----------------------------------------------------------------------------
@@ -568,21 +547,6 @@ remove_sweeps(NotOwnerIdx, Sweeps) ->
 
 get_persistent_participants() ->
     app_helper:get_env(riak_kv, sweep_participants).
-
-get_persistent_sweeps() ->
-    case file:consult(sweep_file(?SWEEPS_FILE)) of
-        {ok, [Sweeps]} ->
-            Sweeps;
-        _ ->
-            dict:new()
-    end.
-
-sweep_file(File) ->
-     PDD = app_helper:get_env(riak_core, platform_data_dir, "/tmp"),
-     SweepDir = filename:join(PDD, ?MODULE),
-     SweepFile = filename:join(SweepDir, File),
-     ok = filelib:ensure_dir(SweepFile),
-     SweepFile.
 
 -ifdef(TEST).
 
