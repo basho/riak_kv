@@ -251,7 +251,8 @@ run_participant_fun(SP, Index, BKey,
     Errors = SP#sweep_participant.errors,
     Options = SP#sweep_participant.options,
 
-    {OptValues, NewBucketProps} = maybe_add_bucket_info({BKey, RObj}, BucketProps, Options),
+    {Bucket, _Key} = BKey,
+    {OptValues, NewBucketProps} = maybe_add_bucket_info(Bucket, BucketProps, Options),
 
     try Fun({BKey, RObj}, ParticipantAcc, OptValues) of
         Result ->
