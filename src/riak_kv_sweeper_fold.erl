@@ -41,9 +41,8 @@
 -define(SWEEP_WINDOW_THROTTLE_DIV, 1).
 
 do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, VnodeState) ->
-    CompleteFoldReq = make_complete_fold_req(),
     InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
-    case Mod:fold_objects(CompleteFoldReq, InitialAcc, Opts, ModState) of
+    case Mod:fold_objects(fun fold_req_fun/4, InitialAcc, Opts, ModState) of
         {ok, #sa{} = Acc} ->
             inform_participants(Acc, Index),
             riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
@@ -60,20 +59,26 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, 
             {reply, Reason, VnodeState}
     end.
 
-make_complete_fold_req() ->
-    fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
-            Acc1 = maybe_throttle_sweep(RObjBin, Acc),
-            Acc2 =
-                case SweptKeys rem 1000 of
-                    0 ->
-                        riak_kv_sweeper:update_progress(Index, SweptKeys),
-                        maybe_receive_request(Acc1);
-                    _ ->
-                        Acc1
-                end,
-            RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-            apply_sweep_participant_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1})
-    end.
+
+-spec fold_req_fun(riak_object:bucket(), riak_object:key(), RObjBin :: binary(), #sa{}) ->
+   #sa{} | no_return().
+fold_req_fun(_Bucket, _Key, _RObjBin,
+             #sa{active_p = [], failed_p = Failed} = Acc) when Failed =/= [] ->
+    lager:error("No more participants in sweep of Index ~p Failed: ~p", [Acc#sa.index, Failed]),
+    throw({stop_sweep, Acc});
+
+fold_req_fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
+    Acc1 = maybe_throttle_sweep(RObjBin, Acc),
+    Acc2 =
+        case SweptKeys rem 1000 of
+            0 ->
+                riak_kv_sweeper:update_progress(Index, SweptKeys),
+                maybe_receive_request(Acc1);
+            _ ->
+                Acc1
+        end,
+    RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+    apply_sweep_participant_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1}).
 
 make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
     SweepsParticipants = sort_participants(ActiveParticipants),
@@ -195,8 +200,7 @@ maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
             Active1 =
                 [ActiveSP#sweep_participant{fail_reason = sweep_stop } ||
                  #sweep_participant{} = ActiveSP <- Active],
-            Acc1 = #sa{active_p = [],  failed_p = Active1 ++ Fail},
-            throw({stop_sweep, Acc1});
+            Acc#sa{active_p = [],  failed_p = Active1 ++ Fail};
         {disable, Module} ->
             case lists:keytake(Module, #sweep_participant.module, Active) of
                 {value, SP, Active1} ->
@@ -275,10 +279,6 @@ update_modified_objs_count(SweepAcc, ModifiedObjs) ->
     PreviouslyModObjs = SweepAcc#sa.modified_objects,
     SweepAcc#sa{modified_objects = PreviouslyModObjs + ModifiedObjs}.
 
-update_sa_with_participant_results(SweepAcc, Failed, []) ->
-    Index = SweepAcc#sa.index,
-    lager:error("No more participants in sweep of Index ~p Failed: ~p", [Index, Failed]),
-    throw({stop_sweep, SweepAcc#sa{failed_p = Failed, active_p = [], succ_p = []}});
 update_sa_with_participant_results(SweepAcc, Failed, Successful) ->
     SweepAcc#sa{active_p = lists:reverse(Successful),
                 failed_p = Failed,
