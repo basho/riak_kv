@@ -465,4 +465,12 @@ sweep_delete_crash_observ_test() ->
     ?assertEqual(Keys, Acc#sa.swept_keys),
     meck:unload().
 
+make_initial_sweep_participant_test() ->
+    SP0s = [#sweep_participant{module = 3, fun_type = observe_fun},
+            #sweep_participant{module = 2, fun_type = modify_fun},
+            #sweep_participant{module = 1, fun_type = delete_fun}],
+    #sa{active_p = SPs} = make_initial_acc(1, SP0s, 100),
+    [1, 2, 3] = [SP#sweep_participant.module || SP <- SPs],
+    ok.
+
 -endif.
