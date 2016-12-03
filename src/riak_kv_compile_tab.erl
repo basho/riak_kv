@@ -34,6 +34,7 @@
          new/1,
          populate_v3_table/0
         ]).
+-export([insert_previous/3]).
 
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
@@ -112,11 +113,24 @@ insert(BucketType, DDL) when is_binary(BucketType), is_tuple(DDL) ->
 
 %% insert into the v2 table so that the record is available
 insert_v2(BucketType, #ddl_v1{} = DDL) ->
-    %% the version is always 1 for the v2 table
-    DDLVersion = 1,
     %% put compiling as the compile state in the old table so that
     %% it will always recompile the modules on a downgrade
     CompileState = compiling,
+    insert_previous(BucketType, DDL, CompileState).
+
+convert_ddl_v2_to_ddl_v1(#ddl_v2{} = DDL) ->
+    #ddl_v1{
+       table = DDL#ddl_v2.table,
+       fields = DDL#ddl_v2.fields,
+       partition_key = DDL#ddl_v2.partition_key,
+       local_key = DDL#ddl_v2.local_key
+      }.
+insert_previous(BucketType, #ddl_v2{} = DDL, CompileState) ->
+    DDL1 = convert_ddl_v2_to_ddl_v1(DDL),
+    insert_previous(BucketType, DDL1, CompileState);
+insert_previous(BucketType, #ddl_v1{} = DDL, CompileState) ->
+    %% the version is always 1 for the v2 table
+    DDLVersion = 1,
     %% the compiler pid is no longer meaningful, but v2 expects it to be unique
     %% so just create a new one
     CompilerPid = spawn(fun() -> ok end),
