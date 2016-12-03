@@ -1105,6 +1105,20 @@ modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
+%% tl;dr put filters that test equality of columns in the local key but not in
+%% in the partition key, in the star and end key.
+%%
+%% PRIMARY KEY((quantum(a,1,'m')),a,b)
+%%
+%% SELECT * FROM table WHERE a > 2 and a < 6 AND b = 5
+%%
+%% Instead of putting b just in the filter, put it in the start and end keys.
+%% This narrows the range from everything between {2,_} and {6,_} to everyting
+%% between {2,5} and {6,5}.
+%%
+%% For equality filters, it is not safe to remove the filter, because {3,7} is
+%% also in the range but should not be returned because only rows where b = 5
+%% are correct for this query.
 rewrite_where_with_additional_filters([], _, WhereProps) ->
     WhereProps;
 rewrite_where_with_additional_filters(AdditionalFields, ToKeyTypeFn, WhereProps) when is_list(WhereProps) ->
@@ -1137,6 +1151,7 @@ rewrite_where_with_additional_filters_key([Field|Tail], ToKeyTypeFn, StartKey, E
 rewrite_where_with_additional_filters_inclusivity_props(SInc, EInc) ->
     [P || {_,V} = P <- [{start_inclusive, SInc}, {end_inclusive, EInc}], V /= undefined].
 
+%% Return filters where the column is in the local key but not the partition key
 find_filters_on_additional_local_key_fields(AdditionalFields, Where) ->
     try
         lists:usort(riak_ql_ddl:fold_where_tree(
@@ -1167,6 +1182,13 @@ find_filters_on_additional_local_key_fields_folder(_, {Op, {field, Name, _}, Val
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+-define(
+    assertPropsEqual(Expected1, Actual1),
+    Expected2 = lists:sort(Expected1),
+    Actual2 = lists:sort(Actual1),
+    ?assertEqual(lists:sort(Expected2), lists:sort(Actual2))
+).
 
 %%
 %% Helper Fns for unit tests
@@ -2385,7 +2407,7 @@ flexible_keys_1_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM tab4 WHERE a > 0 AND a < 1000 AND a1 = 1"),
     {ok, [Select]} = compile(DDL, Q),
-    ?assertEqual(
+    ?assertPropsEqual(
         [{startkey,[{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1}]},
           {endkey, [{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1000}]},
           {filter,[]}],
@@ -2459,7 +2481,7 @@ no_quantum_in_query_2_test() ->
     {ok, [Select]} = compile(DDL, Q),
     Key =
         [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>}],
-    ?assertEqual(
+    ?assertPropsEqual(
         [{startkey, Key},
          {endkey, Key},
          {filter,[]},
@@ -2480,11 +2502,12 @@ no_quantum_in_query_3_test() ->
           "SELECT * FROM tababa WHERE a = 1000 AND b = 'bval' AND c = 3.5 AND d = true"),
     {ok, [Select]} = compile(DDL, Q),
     Key =
-        [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>}],
-    ?assertEqual(
+        [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>},{<<"d">>,boolean,true}],
+    ?assertPropsEqual(
         [{startkey, Key},
          {endkey, Key},
          {filter,{'=',{field,<<"d">>,boolean},{const, true}}},
+         {start_inclusive,true},
          {end_inclusive,true}],
         Select?SQL_SELECT.'WHERE'
     ).
@@ -2753,13 +2776,6 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
         SubQueryWheres
     ).
 
--define(
-    assertPropsEqual(Expected1, Actual1),
-    Expected2 = lists:sort(Expected1),
-    Actual2 = lists:sort(Actual1),
-    ?assertEqual(lists:sort(Expected2), lists:sort(Actual2))
-).
-
 find_filters_on_additional_local_key_fields_test() ->
     ?assertEqual(
         [{'=',<<"a">>,{const,100}}],
@@ -2783,6 +2799,47 @@ rewrite_where_with_additional_filters_test() ->
              {filter,   {'=',{field,<<"a">>,integer},{const, 100}}},
              {end_inclusive,true},
              {start_inclusive,true}])
+    ).
+
+additional_local_key_cols_added_to_query_keys_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((quantum(a,1,'s')),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b = 1 AND a >= 4200 AND a <= 4600"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,4200},{<<"b">>,sint64,1}]},
+         {endkey,[{<<"a">>,timestamp,4600},{<<"b">>,sint64,1}]},
+         {filter,{'=',{field,<<"b">>,sint64},{const, 1}}},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+%% if the pk is (a) and lk is (a,b,c) then b AND c must have filters for c
+%% to be added to the key. If b does not have a filter but c does, then neither
+%% is added.
+additional_local_key_cols_must_be_specified_consecutively_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY ((quantum(a,1,'s')),a,b,c))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE c = 2 AND a >= 4200 AND a <= 4600"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,4200}]},
+         {endkey,[{<<"a">>,timestamp,4600}]},
+         {filter,{'=',{field,<<"c">>,sint64},{const, 2}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
     ).
 
 -endif.
