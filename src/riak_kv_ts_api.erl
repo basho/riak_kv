@@ -289,13 +289,15 @@ get_data(Key, Table, Mod0, Options) ->
                 Mod0
         end,
     DDL = Mod:get_ddl(),
-    LK = list_to_tuple(Key),
     Result1 =
-        case riak_ql_ddl:lk_to_pk(LK, DDL, Mod) of
-            {ok, PK} ->
+        case riak_ql_ddl:desc_adjusted_key(Key, Mod, DDL) of
+            {ok, LKVals} ->
+                %% if riak_ql_ddl:desc_adjusted_key has succeeded,
+                %% :lk_to_pk also must
+                {ok, PKVals} = riak_ql_ddl:lk_to_pk(list_to_tuple(LKVals), DDL, Mod),
                 riak_client:get(
                   riak_kv_ts_util:table_to_bucket(Table),
-                  {PK, LK}, Options,
+                  {PKVals, list_to_tuple(LKVals)}, Options,
                   {riak_client, [node(), undefined]});
             ErrorReason1 ->
                 ErrorReason1
@@ -360,16 +362,15 @@ delete_data(Key, Table, Mod0, Options0, VClock0) ->
                 %% to avoid a separate get
                 riak_object:decode_vclock(VClock0)
         end,
-    LK = list_to_tuple(Key),
-    case riak_ql_ddl:lk_to_pk(LK, DDL, Mod) of
-        {ok, PK} ->
+    case riak_ql_ddl:desc_adjusted_key(Key, Mod, DDL) of
+        {ok, LKVals} ->
+            {ok, PKVals} = riak_ql_ddl:lk_to_pk(list_to_tuple(LKVals), DDL, Mod),
             riak_client:delete_vclock(
-              riak_kv_ts_util:table_to_bucket(Table), {PK, LK}, VClock, Options,
+              riak_kv_ts_util:table_to_bucket(Table), {PKVals, list_to_tuple(LKVals)}, VClock, Options,
               {riak_client, [node(), undefined]});
         ErrorReason ->
             ErrorReason
     end.
-
 
 
 -spec compile_to_per_quantum_queries(module(), ?SQL_SELECT{}) ->
