@@ -736,9 +736,12 @@ swap(Where, QField, Key, Val) ->
 %% for the moment we just brute force assert that the query is a timeseries SQL request
 %% and go with that
 compile_where(DDL, Where) ->
-    case check_if_timeseries(DDL, Where) of
-        {error, E}   -> {error, E};
-        {true, NewW} -> NewW
+    try
+        case check_if_timeseries(DDL, Where) of
+            {error, E}   -> {error, E};
+            {true, NewW} -> NewW
+        end
+    catch throw:V -> V
     end.
 
 %%
@@ -791,11 +794,12 @@ check_if_timeseries(?DDL{table = T, partition_key = PK, local_key = LK0} = DDL,
                      {filter,   RewrittenFilter},
                      IncStart,
                      IncEnd]),
-                WhereProps2 = rewrite_where_with_additional_filters(
+                WhereProps2 = check_where_clause_is_possible(DDL, WhereProps1),
+                WhereProps3 = rewrite_where_with_additional_filters(
                     Mod:additional_local_key_fields(),
                     fun Mod:get_field_type/1,
-                    WhereProps1),
-                {true, WhereProps2};
+                    WhereProps2),
+                {true, WhereProps3};
             Errors ->
                 {error, Errors}
         end
@@ -1104,6 +1108,35 @@ update_where_for_cover(Props, Field, {{StartVal, StartInclusive},
 modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
+-include_lib("eunit/include/eunit.hrl").
+
+check_where_clause_is_possible(DDL, WhereProps) ->
+    ?debugFmt("WHERE PROPS ~p", [WhereProps]),
+    Filter1 = proplists:get_value(filter, WhereProps),
+    _ = riak_ql_ddl:fold_where_tree(
+        fun(Conditional, Filter, Acc) ->
+            ?debugFmt("FILTER ~p", [Filter]),
+            check_where_clause_is_possible_fold(DDL, Conditional, Filter, Acc)
+        end, [], Filter1),
+    % lists:keystore(filter, 1, WhereProps, {filter,Filter2}).
+    WhereProps.
+
+check_where_clause_is_possible_fold(DDL, _Conditional, {'=',{field,FieldName, _},{const, ?SQL_NULL}}, _Acc) ->
+    case is_field_nullable(FieldName, DDL) of
+        true ->
+            ok;
+        false ->
+            throw({error, {impossible_where_clause, << >>}})
+    end;
+check_where_clause_is_possible_fold(_, _Conditional, {is_not_null, {identifier, _Field}}, _Acc) ->
+    ok;
+check_where_clause_is_possible_fold(_, _Conditional, _Filter, _Acc) ->
+    ok.
+
+is_field_nullable(FieldName, ?DDL{fields = Fields}) when is_binary(FieldName)->
+    #riak_field_v1{optional = Optional} = lists:keyfind(FieldName, #riak_field_v1.name, Fields),
+    (Optional == true).
+
 
 %% tl;dr put filters that test equality of columns in the local key but not in
 %% in the partition key, in the star and end key.
@@ -2840,6 +2873,21 @@ additional_local_key_cols_must_be_specified_consecutively_test() ->
          {filter,{'=',{field,<<"c">>,sint64},{const, 2}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
+    ).
+
+
+is_null_clause_on_non_null_column_is_impossible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b IS NULL AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
     ).
 
 -endif.
