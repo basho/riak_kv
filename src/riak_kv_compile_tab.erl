@@ -29,6 +29,7 @@
          get_table_status_pairs/0,
          get_table_status/1,
          get_compiled_ddl_versions/1,
+         assert_compiled_ddl_versions_current/1,
          get_ddl/2,
          insert/2,
          new/1,
@@ -118,16 +119,12 @@ insert_v2(BucketType, #ddl_v1{} = DDL) ->
     CompileState = compiling,
     insert_previous(BucketType, DDL, CompileState).
 
-convert_ddl_v2_to_ddl_v1(#ddl_v2{} = DDL) ->
-    #ddl_v1{
-       table = DDL#ddl_v2.table,
-       fields = DDL#ddl_v2.fields,
-       partition_key = DDL#ddl_v2.partition_key,
-       local_key = DDL#ddl_v2.local_key
-      }.
 insert_previous(BucketType, #ddl_v2{} = DDL, CompileState) ->
-    DDL1 = convert_ddl_v2_to_ddl_v1(DDL),
-    insert_previous(BucketType, DDL1, CompileState);
+    case riak_ql_ddl:convert(v1, DDL) of
+        Errors = [{error, _Reason}|_T] -> Errors;
+        [DDL1] ->
+            insert_previous(BucketType, DDL1, CompileState)
+    end;
 insert_previous(BucketType, #ddl_v1{} = DDL, CompileState) ->
     %% the version is always 1 for the v2 table
     DDLVersion = 1,
@@ -155,6 +152,19 @@ get_compiled_ddl_versions(BucketType) when is_binary(BucketType) ->
                 fun(A,B) ->
                     riak_ql_ddl:is_version_greater(A,B) == true
                 end, Versions)
+    end.
+
+%%
+is_current_version(v2) -> true;
+is_current_version(_V) -> false.
+
+assert_compiled_ddl_versions_current(BucketType) when is_binary(BucketType) ->
+    case get_compiled_ddl_versions(BucketType) of
+        notfound -> {error, notfound};
+        TableVersions -> case lists:any(fun is_current_version/1, TableVersions) of
+                             true -> ok;
+                             _ -> {error, notcurrent}
+                         end
     end.
 
 %%
