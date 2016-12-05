@@ -1163,20 +1163,23 @@ check_where_clause_is_possible_fold(_, _, {'=',{field,FieldName,_},_} = F, Acc) 
         #filtercheck{'=' = F} ->
             %% this filter has been specified twice so remove the second occurence
             {eliminate, Acc};
+        #filtercheck{'=' = F_x} when F_x /= undefined ->
+            %% there are two different checks on the same column, for equality
+            %% this can never be satisfied.
+            throw({error, {impossible_where_clause, << >>}});
         #filtercheck{'=' = undefined} = Check1 ->
             %% this is the first equality check so just record it
             Check2 = Check1#filtercheck{'=' = F},
-            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
-        _ ->
-            %% there are two different checks on the same column, for equality
-            %% this can never be satisfied.
-            throw({error, {impossible_where_clause, << >>}})
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)}
     end;
-check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},_} = F, Acc) ->
+check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},{const,GtVal}} = F, Acc) ->
     case find_filter_check(FieldName, Acc) of
         #filtercheck{'>' = F} ->
             %% this filter has been specified twice so remove the second occurence
             {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when GtVal >= EqVal ->
+            %% query like `a = 10 AND a > 10` cannot be satisfied
+            throw({error, {impossible_where_clause, << >>}});
         #filtercheck{'>' = undefined} = Check1 ->
             %% this is the first equality check so just record it
             Check2 = Check1#filtercheck{'>' = F},
@@ -3017,7 +3020,6 @@ checks_for_different_values_on_the_same_col_is_impossible_test() ->
         compile(DDL, Q)
     ).
 
-
 second_greater_than_check_which_is_a_greater_value_is_removed_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
@@ -3053,6 +3055,34 @@ second_greater_than_check_which_is_a_lesser_value_removes_the_first_test() ->
          {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
+    ).
+
+clause_for_equality_and_greater_than_equality_is_not_possible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b = 5 AND b > 6 AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+clause_for_equality_and_greater_than_equality_is_not_possible_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b > 6 AND b = 5 AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
     ).
 
 -endif.
