@@ -42,11 +42,11 @@
          terminate/2,
          code_change/3,
 
-	 %% decode_results/1 is now exported because it may be used in
-	 %% riak_kv_vnode to pre-decode query results at the vnode
-	 %% rather than here
+         %% decode_results/1 is now exported because it may be used in
+         %% riak_kv_vnode to pre-decode query results at the vnode
+         %% rather than here
 
-	 decode_results/1 
+         decode_results/1
         ]).
 
 -include("riak_kv_ts.hrl").
