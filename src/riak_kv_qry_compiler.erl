@@ -1108,10 +1108,8 @@ update_where_for_cover(Props, Field, {{StartVal, StartInclusive},
 modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
--include_lib("eunit/include/eunit.hrl").
 
 check_where_clause_is_possible(DDL, WhereProps) ->
-    ?debugFmt("WHERE PROPS ~p", [WhereProps]),
     Filter1 = proplists:get_value(filter, WhereProps),
     {Filter2, _} = riak_ql_ddl:mapfold_where_tree(
         fun (_, and_, Acc) ->
@@ -1119,8 +1117,7 @@ check_where_clause_is_possible(DDL, WhereProps) ->
             (_, or_, Acc) ->
                 {skip, Acc};
             (Conditional, Filter, Acc) ->
-            ?debugFmt("FILTER ~p", [Filter]),
-            check_where_clause_is_possible_fold(DDL, Conditional, Filter, Acc)
+                check_where_clause_is_possible_fold(DDL, Conditional, Filter, Acc)
         end, [], Filter1),
     lists:keystore(filter, 1, WhereProps, {filter,Filter2}).
 
@@ -1145,8 +1142,8 @@ check_where_clause_is_possible_fold(DDL, _Conditional, {'!=',{field,FieldName,_}
         false ->
             {eliminate, Acc}
     end;
-check_where_clause_is_possible_fold(_, _Conditional, _Filter, _Acc) ->
-    ok.
+check_where_clause_is_possible_fold(_, _, Filter, Acc) ->
+    {Filter, Acc}.
 
 is_field_nullable(FieldName, ?DDL{fields = Fields}) when is_binary(FieldName)->
     #riak_field_v1{optional = Optional} = lists:keyfind(FieldName, #riak_field_v1.name, Fields),
