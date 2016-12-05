@@ -133,13 +133,13 @@ async_insert(Items, _Opts, Tree) when Tree =:= undefined; Items =:= [] ->
 async_insert(Items=[_|_], Opts, Tree) ->
     gen_server:cast(Tree, {insert, Items, Opts}).
 
--spec delete([{binary(), binary()}], pid()) -> ok.
+-spec delete([{object, {binary(), binary()}}], pid()) -> ok.
 delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
 delete(Items=[{_Id, _Key}|_], Tree) ->
     catch gen_server:call(Tree, {delete, Items}, infinity).
 
--spec async_delete({binary(), binary()}|[{binary(), binary()}], pid()) -> ok.
+-spec async_delete([{object, {binary(), binary()}}], pid()) -> ok.
 async_delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
 async_delete(Items=[{_Id, _Key}|_], Tree) ->
