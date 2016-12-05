@@ -412,9 +412,17 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
 
     KeyConvFn =
         fun(Key) when is_binary(Key) ->
+                %% We need to adjust (negate) values in DESC columns
+                %% in order for lk_to_pk to correctly pick the keys at
+                %% quantum boundaries (this is because for DESC
+                %% columns, the quantum range is defined as `(...]`
+                %% rather than as `[..)`).
+                {ok, DescAdjustedKey} =
+                    riak_ql_ddl:desc_adjusted_key(
+                      tuple_to_list(sext:decode(Key)), Mod, DDL),
                 {ok, PK} = riak_ql_ddl:lk_to_pk(
-                             sext:decode(Key), DDL, Mod),
-                PK;
+                             DescAdjustedKey, DDL, Mod),
+                list_to_tuple(PK);
            (Key) ->
                 %% Key read from leveldb should always be binary.
                 %% This clause is just to keep dialyzer quiet

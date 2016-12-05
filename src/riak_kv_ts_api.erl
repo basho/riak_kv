@@ -294,10 +294,11 @@ get_data(Key, Table, Mod0, Options) ->
             {ok, LKVals} ->
                 %% if riak_ql_ddl:desc_adjusted_key has succeeded,
                 %% :lk_to_pk also must
-                {ok, PKVals} = riak_ql_ddl:lk_to_pk(list_to_tuple(LKVals), DDL, Mod),
+                {ok, PKVals} = riak_ql_ddl:lk_to_pk(Key, DDL, Mod),
                 riak_client:get(
                   riak_kv_ts_util:table_to_bucket(Table),
-                  {PKVals, list_to_tuple(LKVals)}, Options,
+                  {list_to_tuple(PKVals),
+                   list_to_tuple(LKVals)}, Options,
                   {riak_client, [node(), undefined]});
             ErrorReason1 ->
                 ErrorReason1
@@ -364,9 +365,11 @@ delete_data(Key, Table, Mod0, Options0, VClock0) ->
         end,
     case riak_ql_ddl:desc_adjusted_key(Key, Mod, DDL) of
         {ok, LKVals} ->
-            {ok, PKVals} = riak_ql_ddl:lk_to_pk(list_to_tuple(LKVals), DDL, Mod),
+            {ok, PKVals} = riak_ql_ddl:lk_to_pk(Key, DDL, Mod),
             riak_client:delete_vclock(
-              riak_kv_ts_util:table_to_bucket(Table), {PKVals, list_to_tuple(LKVals)}, VClock, Options,
+              riak_kv_ts_util:table_to_bucket(Table),
+              {list_to_tuple(PKVals),
+               list_to_tuple(LKVals)}, VClock, Options,
               {riak_client, [node(), undefined]});
         ErrorReason ->
             ErrorReason
