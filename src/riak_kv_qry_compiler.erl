@@ -1113,15 +1113,29 @@ modify_where_key(TupleList, Field, NewVal) ->
 
 check_where_clause_is_possible(DDL, WhereProps) ->
     Filter1 = proplists:get_value(filter, WhereProps),
-    {Filter2, _} = riak_ql_ddl:mapfold_where_tree(
+    {Filter2, FilterChecks} = riak_ql_ddl:mapfold_where_tree(
         fun (_, and_, Acc) ->
                 {ok, Acc};
             (_, or_, Acc) ->
                 {skip, Acc};
             (Conditional, Filter, Acc) ->
                 check_where_clause_is_possible_fold(DDL, Conditional, Filter, Acc)
-        end, [], Filter1),
-    lists:keystore(filter, 1, WhereProps, {filter,Filter2}).
+        end, [{eliminate_later,[]}], Filter1),
+    ElimLater = proplists:get_value(eliminate_later, FilterChecks),
+    {Filter3, _} = riak_ql_ddl:mapfold_where_tree(
+        fun (_, and_, Acc) ->
+                {ok, Acc};
+            (_, or_, Acc) ->
+                {skip, Acc};
+            (_, Filter, Acc) ->
+                case lists:member(Filter, ElimLater) of
+                  true ->
+                      {eliminate, Acc};
+                  false ->
+                      {Filter, Acc}
+                end
+        end, [], Filter2),
+    lists:keystore(filter, 1, WhereProps, {filter,Filter3}).
 
 check_where_clause_is_possible_fold(DDL, _, {'=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
     %% `IS NULL` filters
@@ -1160,19 +1174,31 @@ check_where_clause_is_possible_fold(_, _, {'=',{field,FieldName,_},_} = F, Acc) 
     end;
 check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},_} = F, Acc) ->
     case find_filter_check(FieldName, Acc) of
-        #filtercheck{'=' = F} ->
+        #filtercheck{'>' = F} ->
             %% this filter has been specified twice so remove the second occurence
             {eliminate, Acc};
-        #filtercheck{'=' = undefined} = Check1 ->
+        #filtercheck{'>' = undefined} = Check1 ->
             %% this is the first equality check so just record it
-            Check2 = Check1#filtercheck{'=' = F},
+            Check2 = Check1#filtercheck{'>' = F},
             {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
-        #filtercheck{'=' = F_x} when F_x < F ->
+        #filtercheck{'>' = F_x} when F_x < F ->
             %% we already have a filter that is a lower value than 
-            {eliminate, Acc}
+            {eliminate, Acc};
+        #filtercheck{'>' = F_x} = Check1 when F_x > F ->
+            %% we already have a filter that is higher than the second one,
+            %% which we can eliminate. Store it and eliminate it on the second
+            %% pass since it has already been iterated
+            Check2 = Check1#filtercheck{'>' = F},
+            Acc2 = lists:keystore(FieldName, #filtercheck.name, Acc, Check2),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3}
     end;
 check_where_clause_is_possible_fold(_, _, Filter, Acc) ->
     {Filter, Acc}.
+
+append_to_eliminate_later(Filter, Acc) ->
+    ElimLater = proplists:get_value(eliminate_later, Acc),
+    lists:keystore(eliminate_later, 1, Acc, {eliminate_later, [Filter|ElimLater]}).
 
 %% TODO put this in the table helper module
 is_field_nullable(FieldName, ?DDL{fields = Fields}) when is_binary(FieldName)->
@@ -2992,7 +3018,7 @@ checks_for_different_values_on_the_same_col_is_impossible_test() ->
     ).
 
 
-second_greater_than_check_which_is_a_great_value_is_removed_test() ->
+second_greater_than_check_which_is_a_greater_value_is_removed_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
@@ -3001,6 +3027,25 @@ second_greater_than_check_which_is_a_great_value_is_removed_test() ->
     {ok, Q} = get_query(
         "SELECT * FROM table1 "
         "WHERE a = 5 AND b > 10 AND b > 11"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+
+second_greater_than_check_which_is_a_lesser_value_removes_the_first_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 11 AND b > 10"),
     {ok, [S|_]} = compile(DDL, Q),
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
