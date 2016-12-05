@@ -1113,23 +1113,38 @@ modify_where_key(TupleList, Field, NewVal) ->
 check_where_clause_is_possible(DDL, WhereProps) ->
     ?debugFmt("WHERE PROPS ~p", [WhereProps]),
     Filter1 = proplists:get_value(filter, WhereProps),
-    _ = riak_ql_ddl:fold_where_tree(
-        fun(Conditional, Filter, Acc) ->
+    {Filter2, _} = riak_ql_ddl:mapfold_where_tree(
+        fun (_, and_, Acc) ->
+                {ok, Acc};
+            (_, or_, Acc) ->
+                {skip, Acc};
+            (Conditional, Filter, Acc) ->
             ?debugFmt("FILTER ~p", [Filter]),
             check_where_clause_is_possible_fold(DDL, Conditional, Filter, Acc)
         end, [], Filter1),
-    % lists:keystore(filter, 1, WhereProps, {filter,Filter2}).
-    WhereProps.
+    lists:keystore(filter, 1, WhereProps, {filter,Filter2}).
 
-check_where_clause_is_possible_fold(DDL, _Conditional, {'=',{field,FieldName, _},{const, ?SQL_NULL}}, _Acc) ->
+check_where_clause_is_possible_fold(DDL, _Conditional, {'=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
+    %% `IS NULL` filters
+    %% if a column is marked NOT NULL, but the WHERE clause has IS NULL for that
+    %% column then no results will ever be returned, so do not execute!
     case is_field_nullable(FieldName, DDL) of
         true ->
-            ok;
+            {F, Acc};
         false ->
             throw({error, {impossible_where_clause, << >>}})
     end;
-check_where_clause_is_possible_fold(_, _Conditional, {is_not_null, {identifier, _Field}}, _Acc) ->
-    ok;
+check_where_clause_is_possible_fold(DDL, _Conditional, {'!=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
+    %% `NOT NULL` filters
+    %% if column is marked NOT NULL, and the WHERE clause has IS NOT NULL for
+    %% that column then we can eliminate it, and reduce the filter, maybe to
+    %% nothing which means leveldb would not have to decode the rows!
+    case is_field_nullable(FieldName, DDL) of
+        true ->
+            {F, Acc};
+        false ->
+            {eliminate, Acc}
+    end;
 check_where_clause_is_possible_fold(_, _Conditional, _Filter, _Acc) ->
     ok.
 
