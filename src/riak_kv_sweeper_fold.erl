@@ -46,12 +46,14 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index, Mod, ModState, 
         {ok, #sa{} = Acc} ->
             inform_participants(Acc, Index),
             riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
-            {reply, Acc, VnodeState};
+            Acc1 = stat_send(Index, Acc),
+            {reply, Acc1, VnodeState};
         {async, Work} ->
             FinishFun =
                 fun(Acc) ->
                         inform_participants(Acc, Index),
-                        riak_kv_sweeper:sweep_result(Index, format_result(Acc))
+                        riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
+                        stat_send(Index, Acc)
                 end,
             {async, {sweep, Work, FinishFun}, Sender, VnodeState};
         Reason ->
@@ -69,16 +71,18 @@ fold_req_fun(_Bucket, _Key, _RObjBin,
 
 fold_req_fun(Bucket, Key, RObjBin, #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
     Acc1 = maybe_throttle_sweep(RObjBin, Acc),
-    Acc2 =
+    Acc3 =
         case SweptKeys rem 1000 of
             0 ->
                 riak_kv_sweeper:update_progress(Index, SweptKeys),
-                maybe_receive_request(Acc1);
+                Acc2 = maybe_receive_request(Acc1),
+                stat_send(Index, Acc2);
             _ ->
                 Acc1
         end,
     RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-    apply_sweep_participant_funs({{Bucket, Key}, RObj}, Acc2#sa{swept_keys = SweptKeys + 1}).
+    Acc4 = update_stat_counters(byte_size(RObjBin), Acc3),
+    apply_sweep_participant_funs({{Bucket, Key}, RObj}, Acc4#sa{swept_keys = SweptKeys + 1}).
 
 make_initial_acc(Index, ActiveParticipants, EstimatedNrKeys) ->
     SweepsParticipants = sort_participants(ActiveParticipants),
@@ -303,6 +307,19 @@ get_bucket_props(Bucket, BucketPropsDict) ->
             BucketPropsDict1 = dict:store(Bucket, BucketProps, BucketPropsDict),
             {BucketProps, BucketPropsDict1}
     end.
+
+update_stat_counters(RObjBinSize, Acc) ->
+    StatSweptKeysCounter = Acc#sa.stat_swept_keys_counter,
+    StatObjSizeCounter = Acc#sa.stat_obj_size_counter,
+
+    Acc#sa{stat_obj_size_counter = StatObjSizeCounter + RObjBinSize,
+           stat_swept_keys_counter = StatSweptKeysCounter + 1}.
+
+stat_send(Index, Acc) ->
+    riak_kv_stat:update({sweeper, Index, keys, Acc#sa.stat_swept_keys_counter}),
+    riak_kv_stat:update({sweeper, Index, bytes, Acc#sa.stat_obj_size_counter}),
+    Acc#sa{stat_swept_keys_counter = 0,
+           stat_obj_size_counter = 0}.
 
 -ifdef(TEST).
 

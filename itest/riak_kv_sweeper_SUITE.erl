@@ -11,6 +11,17 @@
 suite() ->
     [{timetrap, {minutes, 1}}].
 
+init_per_suite(Config) ->
+    {ok, Apps} = application:ensure_all_started(exometer_core),
+    %% Exometer starts lager. Set lager_console_backend to none to
+    %% avoid spamming the console with logs during testing
+    lager:set_loglevel(lager_console_backend, none),
+    [{exometer_apps, Apps}|Config].
+
+end_per_suite(Config) ->
+    [ok = application:stop(App) || App <- ?config(exometer_apps, Config)],
+    ok.
+
 init_per_testcase(_TestCase, Config) ->
     meck:unload(),
     application:set_env(riak_kv, sweep_participants, undefined),
@@ -23,6 +34,12 @@ init_per_testcase(_TestCase, Config) ->
 
     VNodeIndices = meck_new_riak_core_modules(2),
     riak_kv_sweeper:start_link(),
+
+    %% Delete all sweeper exometer metrics
+    [begin
+         exometer:delete([riak, riak_kv, sweeper, Index, keys]),
+         exometer:delete([riak, riak_kv, sweeper, Index, bytes])
+     end || Index <- VNodeIndices],
 
     [{vnode_indices, VNodeIndices}|Config].
 
@@ -781,6 +798,37 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
     #sa{throttle_total_wait_msecs = ActualThrottleTotalWait} = receive_sweep_result(),
 
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
+
+sweeper_exometer_reporting_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    SP = meck_new_sweep_particpant(sweep_observer_1, self()),
+    NumKeys = 5042,
+    ObjSizeBytes = 100,
+    RiakObjSizeBytes = byte_size(riak_object_bin(<<>>, <<>>, ObjSizeBytes)),
+    meck_new_backend(self(), NumKeys, ObjSizeBytes),
+    riak_kv_sweeper:add_sweep_participant(SP),
+
+    Index = pick(Indices),
+    {error, not_found} = exometer:get_value([riak, riak_kv, sweeper, Index, keys]),
+    riak_kv_sweeper:sweep(Index),
+    ok = receive_msg({ok, successful_sweep, sweep_observer_1, Index}),
+    {ok, [{count, KeysCount0}, {one, KeysOne0}]} = exometer:get_value([riak, riak_kv, sweeper, Index, keys]),
+    {ok, [{count, BytesCount0}, {one, BytesOne0}]} = exometer:get_value([riak, riak_kv, sweeper, Index, bytes]),
+    KeysCount0 = NumKeys,
+    KeysOne0 = NumKeys,
+    BytesCount0 = NumKeys * RiakObjSizeBytes,
+    BytesOne0 = NumKeys * RiakObjSizeBytes,
+
+    riak_kv_sweeper:sweep(Index),
+    ok = receive_msg({ok, successful_sweep, sweep_observer_1, Index}),
+    {ok, [{count, KeysCount1}, {one, KeysOne1}]} = exometer:get_value([riak, riak_kv, sweeper, Index, keys]),
+    {ok, [{count, BytesCount1}, {one, BytesOne1}]} = exometer:get_value([riak, riak_kv, sweeper, Index, bytes]),
+    KeysCount1 = 2 * NumKeys,
+    KeysOne1 = 2 * NumKeys,
+    BytesCount1 = 2 * NumKeys * RiakObjSizeBytes,
+    BytesOne1 = 2 * NumKeys * RiakObjSizeBytes,
+    ok.
+
 
 %% ------------------------------------------------------------------------------
 %% Internal Functions

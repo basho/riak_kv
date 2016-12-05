@@ -333,8 +333,13 @@ do_update({write_once_put, Microsecs, ObjSize}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, write_once, puts], 1),
     ok = exometer:update([P, ?APP, write_once, puts, time], Microsecs),
-    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram).
-
+    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram);
+do_update({sweeper, Index, keys, NumKeys}) ->
+    P = ?PFX,
+    create_or_update([P, ?APP, sweeper, Index, keys], NumKeys, spiral);
+do_update({sweeper, Index, bytes, NumBytes}) ->
+    P = ?PFX,
+    create_or_update([P, ?APP, sweeper, Index, bytes], NumBytes, spiral).
 
 %% private
 
