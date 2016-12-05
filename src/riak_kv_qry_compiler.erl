@@ -1109,7 +1109,7 @@ modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
--record(filtercheck, {name,'='}).
+-record(filtercheck, {name,'=','>'}).
 
 check_where_clause_is_possible(DDL, WhereProps) ->
     Filter1 = proplists:get_value(filter, WhereProps),
@@ -1158,9 +1158,23 @@ check_where_clause_is_possible_fold(_, _, {'=',{field,FieldName,_},_} = F, Acc) 
             %% this can never be satisfied.
             throw({error, {impossible_where_clause, << >>}})
     end;
+check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},_} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'=' = F} ->
+            %% this filter has been specified twice so remove the second occurence
+            {eliminate, Acc};
+        #filtercheck{'=' = undefined} = Check1 ->
+            %% this is the first equality check so just record it
+            Check2 = Check1#filtercheck{'=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
+        #filtercheck{'=' = F_x} when F_x < F ->
+            %% we already have a filter that is a lower value than 
+            {eliminate, Acc}
+    end;
 check_where_clause_is_possible_fold(_, _, Filter, Acc) ->
     {Filter, Acc}.
 
+%% TODO put this in the table helper module
 is_field_nullable(FieldName, ?DDL{fields = Fields}) when is_binary(FieldName)->
     #riak_field_v1{optional = Optional} = lists:keyfind(FieldName, #riak_field_v1.name, Fields),
     (Optional == true).
@@ -1202,7 +1216,7 @@ rewrite_where_with_additional_filters(AdditionalFields, ToKeyTypeFn, WhereProps)
 rewrite_where_with_additional_filters_key([], _, StartKey, EndKey, SInc, EInc, _) ->
     [{startkey, StartKey}, {endkey, EndKey} | rewrite_where_with_additional_filters_inclusivity_props(SInc, EInc)];
 rewrite_where_with_additional_filters_key([Field|Tail], ToKeyTypeFn, StartKey, EndKey, SInc, EInc, Filter) ->
-    case lists:keyfind(Field,    2, Filter) of
+    case lists:keyfind(Field, 2, Filter) of
         false ->
             %% there is no filter for the next additional field so give up! The
             %% filters must be consecutive, we can't have a '_' inbetween
@@ -1213,7 +1227,9 @@ rewrite_where_with_additional_filters_key([Field|Tail], ToKeyTypeFn, StartKey, E
             %% cannot safely remove the filter
             KeyElem = {Field, ToKeyTypeFn([Field]), Val},
             rewrite_where_with_additional_filters_key(
-                Tail, ToKeyTypeFn, StartKey++[KeyElem], EndKey++[KeyElem], true, true, Filter)
+                Tail, ToKeyTypeFn, StartKey++[KeyElem], EndKey++[KeyElem], true, true, Filter);
+        _ ->
+            [{startkey, StartKey}, {endkey, EndKey} | rewrite_where_with_additional_filters_inclusivity_props(SInc, EInc)]
     end.
 
 rewrite_where_with_additional_filters_inclusivity_props(SInc, EInc) ->
@@ -2973,6 +2989,25 @@ checks_for_different_values_on_the_same_col_is_impossible_test() ->
     ?assertEqual(
         {error,{impossible_where_clause, << >>}},
         compile(DDL, Q)
+    ).
+
+
+second_greater_than_check_which_is_a_great_value_is_removed_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 10 AND b > 11"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
     ).
 
 -endif.
