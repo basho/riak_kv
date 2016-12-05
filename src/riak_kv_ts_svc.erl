@@ -418,10 +418,10 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                 %% columns, the quantum range is defined as `(...]`
                 %% rather than as `[..)`).
                 {ok, DescAdjustedKey} =
-                    riak_ql_ddl:desc_adjusted_key(
+                    riak_ql_ddl:negate_if_desc(
                       tuple_to_list(sext:decode(Key)), Mod, DDL),
                 {ok, PK} = riak_ql_ddl:lk_to_pk(
-                             DescAdjustedKey, DDL, Mod),
+                             DescAdjustedKey, Mod, DDL),
                 list_to_tuple(PK);
            (Key) ->
                 %% Key read from leveldb should always be binary.

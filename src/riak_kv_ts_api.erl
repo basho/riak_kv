@@ -290,11 +290,11 @@ get_data(Key, Table, Mod0, Options) ->
         end,
     DDL = Mod:get_ddl(),
     Result1 =
-        case riak_ql_ddl:desc_adjusted_key(Key, Mod, DDL) of
+        case riak_ql_ddl:negate_if_desc(Key, Mod, DDL) of
             {ok, LKVals} ->
-                %% if riak_ql_ddl:desc_adjusted_key has succeeded,
+                %% if riak_ql_ddl:negate_if_desc has succeeded,
                 %% :lk_to_pk also must
-                {ok, PKVals} = riak_ql_ddl:lk_to_pk(Key, DDL, Mod),
+                {ok, PKVals} = riak_ql_ddl:lk_to_pk(Key, Mod, DDL),
                 riak_client:get(
                   riak_kv_ts_util:table_to_bucket(Table),
                   {list_to_tuple(PKVals),
@@ -363,9 +363,9 @@ delete_data(Key, Table, Mod0, Options0, VClock0) ->
                 %% to avoid a separate get
                 riak_object:decode_vclock(VClock0)
         end,
-    case riak_ql_ddl:desc_adjusted_key(Key, Mod, DDL) of
+    case riak_ql_ddl:negate_if_desc(Key, Mod, DDL) of
         {ok, LKVals} ->
-            {ok, PKVals} = riak_ql_ddl:lk_to_pk(Key, DDL, Mod),
+            {ok, PKVals} = riak_ql_ddl:lk_to_pk(Key, Mod, DDL),
             riak_client:delete_vclock(
               riak_kv_ts_util:table_to_bucket(Table),
               {list_to_tuple(PKVals),
