@@ -682,7 +682,6 @@ hash_index_data(IndexData) when is_list(IndexData) ->
     Bin = term_to_binary(lists:usort(IndexData)),
     riak_core_util:sha(Bin).
 
-
 do_participate_in_sweep(Pid, #state{index = Index, trees = Trees, version = Version} = State) ->
     Locked = get_all_locks(build, Index, Pid),
     case Locked of
@@ -698,17 +697,17 @@ do_participate_in_sweep(Pid, #state{index = Index, trees = Trees, version = Vers
 %% @doc Generate the folding function
 %% for a riak fold_req
 -spec fold_fun(pid(), boolean(), version()) -> fun().
-fold_fun(Tree, _HasIndexTree = false, Version) ->
-    ObjectFoldFun = object_fold_fun(Tree, Version),
+fold_fun(HashtreePid, _HasIndexTree = false, Version) ->
+    ObjectFoldFun = object_fold_fun(HashtreePid, Version),
     fun({BKey, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey, BucketProps),
             {ok, Acc}
     end;
-fold_fun(Tree, _HasIndexTree = true, Version) ->
+fold_fun(HashtreePid, _HasIndexTree = true, Version) ->
     %% Index AAE backend, so hash the indexes
-    ObjectFoldFun = object_fold_fun(Tree, Version),
-    IndexFoldFun = index_fold_fun(Tree),
+    ObjectFoldFun = object_fold_fun(HashtreePid, Version),
+    IndexFoldFun = index_fold_fun(HashtreePid),
     fun({BKey, RObj}, Acc, [{bucket_props, BucketProps}]) ->
             BinBKey = term_to_binary(BKey),
             IndexFoldFun(RObj, BinBKey),
@@ -717,20 +716,20 @@ fold_fun(Tree, _HasIndexTree = true, Version) ->
     end.
 
 -spec object_fold_fun(pid(), version()) -> fun().
-object_fold_fun(Tree, Version) ->
+object_fold_fun(HashtreePid, Version) ->
     fun(BKey, RObj, BinBKey, BucketProps) ->
             IndexN = riak_kv_util:get_index_n(BKey, BucketProps),
             insert([{IndexN, BinBKey, hash_object(BKey, RObj, Version)}],
                    [if_missing],
-                   Tree)
+                   HashtreePid)
     end.
 
 -spec index_fold_fun(pid()) -> fun().
-index_fold_fun(Tree) ->
+index_fold_fun(HashtreePid) ->
     fun(RObj, BinBKey) ->
             IndexData = riak_object:index_data(RObj),
             insert([{?INDEX_2I_N, BinBKey, hash_index_data(IndexData)}],
-                   [if_missing], Tree)
+                   [if_missing], HashtreePid)
     end.
 
 %% @doc the 2i index hashtree as a Magic index_n of {0, 0}
@@ -1069,17 +1068,17 @@ clear_tree(State=#state{index=Index}) ->
     State3 = init_trees(IndexNs, true, State2#state{trees=orddict:new()}),
     State3#state{built=false, expired=false}.
 
-destroy_trees(State=#state{trees=Trees}) ->
-    {_,Tree0} = hd(State#state.trees), % deliberately using state with live db ref
-    _ = [hashtree:close(Tree) || {_IdxN, Tree} <- Trees],
+destroy_trees(State) ->
+    {_,Tree0} = hd(State#state.trees), %% grab a tree before we clear the list
+    State2 = close_trees(State, true),
     _ = hashtree:destroy(Tree0),
-    State#state{trees=undefined}.
+    State2.
 
 -spec maybe_build(state()) -> state().
 maybe_build(State=#state{built=false}) ->
-    Self = self(),
+    HashtreePid = self(),
     spawn_link(fun() ->
-                       build_or_rehash(Self, State)
+                       build_or_rehash(HashtreePid, State)
                end),
     State#state{built=sweep};
 maybe_build(State) ->
@@ -1091,13 +1090,19 @@ maybe_build(State) ->
 %% current on-disk segments.
 -spec build_or_rehash(pid(), state()) -> ok.
 build_or_rehash(Self, State=#state{index=Index}) ->
-    case load_built(State) of
-        false ->
+    case determine_build_or_rehash(State) of
+        build ->
             lager:debug("Triggering manual sweep for ~p", [Index]),
             riak_kv_sweeper:sweep(Index);
-        true  ->
+        rehash ->
             Locked = get_all_locks(rehash, Index, self()),
             rehash(Self, Locked, State)
+    end.
+
+determine_build_or_rehash(State) ->
+    case load_built(State) of
+        false -> build;
+        true -> rehash
     end.
 
 rehash(Self, true, #state{index=Index, trees=Trees}) ->
@@ -1108,15 +1113,17 @@ rehash(Self, true, #state{index=Index, trees=Trees}) ->
 rehash(Self, _Lock, _State) ->
     gen_server:cast(Self, build_failed).
 
-
 %% Check if the trees contain the magic index tree
 -spec has_index_tree(orddict()) -> boolean().
 has_index_tree(Trees) ->
     orddict:is_key(?INDEX_2I_N, Trees).
 
-close_trees(State=#state{trees=undefined}) ->
+close_trees(State) ->
+    close_trees(State, false).
+
+close_trees(State=#state{trees=undefined}, _WillDestroy) ->
     State;
-close_trees(State=#state{trees=Trees}) ->
+close_trees(State=#state{trees=Trees}, false) ->
     Trees2 = [begin
                   NewTree = try
                                 case hashtree:next_rebuild(Tree) of
@@ -1138,8 +1145,16 @@ close_trees(State=#state{trees=Trees}) ->
                             end,
                   {IdxN, NewTree}
               end || {IdxN, Tree} <- Trees],
-    _ = [hashtree:close(Tree) || {_IdxN, Tree} <- Trees2],
-    State#state{trees=undefined}.
+    really_close_trees(Trees2, State);
+
+close_trees(#state{trees=Trees} = State, true) ->
+    really_close_trees(Trees, State).
+
+really_close_trees(Trees, State) ->
+    lists:foreach(fun really_close_tree/1, Trees),
+    State#state{trees = undefined}.
+
+really_close_tree({_IdxN, Tree}) -> hashtree:close(Tree).
 
 -spec get_all_locks(build | rehash | upgrade, index(), pid()) -> boolean().
 get_all_locks(Type, Index, Pid) ->

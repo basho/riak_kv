@@ -26,7 +26,7 @@
 -export([to_binary/2, to_binary/1, from_binary/1]).
 -export([log_merge_errors/4, meta/2, merge_value/2, maybe_apply_props/2]).
 %% MR helper funs
--export([value/1, counter_value/1, set_value/1, map_value/1, hll_value/1]).
+-export([value/1, counter_value/1, set_value/1, map_value/1, hll_value/1, gset_value/1]).
 %% Other helper funs
 -export([is_crdt/1,
          is_crdt/2,
@@ -146,6 +146,13 @@ set_value(RObj) ->
 -spec hll_value(riak_object:riak_object()) -> riak_kv_hll:card().
 hll_value(RObj) ->
     simple_value(RObj, ?HLL_TYPE).
+
+%% @doc convenience for (e.g.) MapReduce functions. Pass an object,
+%% get a 2.0+ GSet type value, or `[]' if no Set is present.
+-spec gset_value(riak_object:riak_object()) -> list().
+gset_value(RObj) ->
+    {{_Ctx, GSet}, _Stats}  = value(RObj, ?GSET_TYPE),
+    GSet.
 
 %% @doc convenience for (e.g.) MapReduce functions. Pass an object,
 %% get a 2.0+ Map type value, or `[]' if no Map is present.
@@ -398,7 +405,7 @@ meta(undefined, ?CRDT{ctype=CType}) ->
     M3 = dict:store(?MD_VTAG, riak_kv_util:make_vtag(Now), M2),
     dict:store(?MD_CTYPE, CType, M3);
 meta(Meta, _CRDT) ->
-    Meta.
+    drop_the_dot(Meta).
 
 %% Just a simple take the largest for meta values based on last mod
 merge_meta(CType, Meta1, Meta2) ->
@@ -509,7 +516,9 @@ to_record(?MAP_TYPE, Val) ->
 to_record(?SET_TYPE, Val) ->
     ?SET_TYPE(Val);
 to_record(?HLL_TYPE, Val) ->
-    ?HLL_TYPE(Val).
+    ?HLL_TYPE(Val);
+to_record(?GSET_TYPE, Val) ->
+    ?GSET_TYPE(Val).
 
 %% @doc Check cluster capability for crdt support
 supported(Mod) ->
@@ -541,6 +550,8 @@ to_mod("sets") ->
     ?SET_TYPE;
 to_mod("hlls") ->
     ?HLL_TYPE;
+to_mod("gsets") ->
+    ?GSET_TYPE;
 to_mod("counters") ->
     ?COUNTER_TYPE;
 to_mod("maps") ->

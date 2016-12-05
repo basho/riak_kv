@@ -68,7 +68,7 @@ init(From={_, _, ClientPid}, [ItemFilter, Timeout, Stream, BucketType]) ->
     ?DTRACE(?C_BUCKETS_INIT, [2, FilterX],
             [<<"other">>, ClientNode, PidStr]),
     %% Construct the bucket listing request
-    Req = ?KV_LISTBUCKETS_REQ{item_filter=ItemFilter},
+    Req = riak_kv_requests:new_listbuckets_request(ItemFilter),
     {Req, allup, 1, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{from=From, stream=Stream, type=BucketType}}.
 

@@ -35,32 +35,22 @@
 rewrite_cast({vnode_map, {Partition,_Node},
              {ClientPid,QTerm,BKey,KeyData}}) ->
     Req = riak_core_vnode_master:make_request(
-            ?KV_MAP_REQ{
-               qterm = QTerm,
-               bkey = BKey,
-               keydata = KeyData},
+            riak_kv_requests:new_map_request(BKey, QTerm, KeyData),
             {fsm, undefined, ClientPid},
             Partition),
     {ok, Req};
 rewrite_cast({vnode_put, {Partition,_Node},
               {FSM_pid,BKey,RObj,ReqID,FSMTime,Options}}) ->
+    KvReq = riak_kv_requests:new_put_request(BKey, RObj, ReqID, FSMTime, Options),
     Req = riak_core_vnode_master:make_request(
-            ?KV_PUT_REQ{
-               bkey = BKey,
-               object = RObj,
-               req_id = ReqID,
-               start_time = FSMTime,
-               options = Options},
+            KvReq,
             {fsm, undefined, FSM_pid},
             Partition),
     {ok, Req};
 rewrite_cast({vnode_get, {Partition,_Node},
               {FSM_pid,BKey,ReqId}}) ->
     Req = riak_core_vnode_master:make_request(
-            ?KV_GET_REQ{
-               bkey = BKey,
-               req_id = ReqId
-              },
+            riak_kv_requests:new_get_request(BKey, ReqId),
             {fsm, undefined, FSM_pid},
             Partition),
     {ok, Req};
@@ -91,8 +81,7 @@ rewrite_cast({vnode_list_bucket, {Partition,_Node},
 rewrite_call({vnode_del, {Partition,_Node},
               {BKey,ReqID}}, _From) ->
     Req = riak_core_vnode_master:make_request(
-            ?KV_DELETE_REQ{bkey=BKey,
-                           req_id=ReqID},
+            riak_kv_requests:new_delete_request(BKey, ReqID),
             ignore,
             Partition),
     {ok, Req}.

@@ -103,6 +103,7 @@ init([]) ->
     % Build the process list...
     Processes = lists:flatten([
         Sweeper,
+        EntropyManager,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,
@@ -110,7 +111,6 @@ init([]) ->
         BucketsFsmSup,
         KeysFsmSup,
         IndexFsmSup,
-        EntropyManager,
         [EnsemblesKV || riak_core_sup:ensembles_enabled()],
         JSSup,
         MapJSPool,

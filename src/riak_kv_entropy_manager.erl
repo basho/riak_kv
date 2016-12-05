@@ -316,6 +316,7 @@ cancel_exchanges() ->
 
 -spec init([]) -> {'ok',state()}.
 init([]) ->
+    register_capabilities(),
     riak_core_throttle:init(riak_kv,
                             ?AAE_THROTTLE_KEY,
                             {aae_throttle_limits, ?DEFAULT_AAE_THROTTLE_LIMITS},
@@ -341,6 +342,14 @@ init([]) ->
     maybe_add_sweep_participant(),
 
     {ok, State}.
+
+register_capabilities() ->
+    riak_core_capability:register({riak_kv, object_hash_version},
+                                  [0, legacy],
+                                  legacy),
+    riak_core_capability:register({riak_kv, anti_entropy},
+                                  [enabled_v1, disabled],
+                                  disabled).
 
 handle_call({set_mode, Mode}, _From, State=#state{mode=CurrentMode}) ->
     State2 = case {CurrentMode, Mode} of

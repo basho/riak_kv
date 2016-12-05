@@ -93,7 +93,16 @@ service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
     case riak_kv_wm_utils:get_riak_client(RiakProps,
                                           riak_kv_wm_utils:get_client_id(RD)) of
         {ok, C} ->
-            {true, RD, Ctx#ctx { client=C }};
+            {true, RD, Ctx#ctx { 
+                         bucket=case wrq:path_info(bucket, RD) of
+                             undefined -> undefined;
+                             B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
+                         end,
+                         key=case wrq:path_info(key, RD) of
+                             undefined -> undefined;
+                             K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
+                         end,
+                         client=C }};
         Error ->
             {false,
              wrq:set_resp_body(
