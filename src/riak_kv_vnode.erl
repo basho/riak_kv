@@ -1281,7 +1281,7 @@ handle_info({ensemble_put, Key, Obj, From}, State=#state{handoff_target=HOTarget
                         {fail, _Idx, _ReqID} ->
                             failed
                     end,
-            ((Reply =/= failed) and (HOTarget =/= undefined)) andalso raw_put(HOTarget, Key, Obj),
+            ((Reply =/= failed) and (HOTarget =/= undefined)) andalso raw_put({Idx, HOTarget}, Key, Obj),
             riak_kv_ensemble_backend:reply(From, Reply),
             {ok, State2};
         Fwd when is_atom(Fwd) ->
