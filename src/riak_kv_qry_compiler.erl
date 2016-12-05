@@ -1109,6 +1109,8 @@ modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
+-record(filtercheck, {name,'='}).
+
 check_where_clause_is_possible(DDL, WhereProps) ->
     Filter1 = proplists:get_value(filter, WhereProps),
     {Filter2, _} = riak_ql_ddl:mapfold_where_tree(
@@ -1121,7 +1123,7 @@ check_where_clause_is_possible(DDL, WhereProps) ->
         end, [], Filter1),
     lists:keystore(filter, 1, WhereProps, {filter,Filter2}).
 
-check_where_clause_is_possible_fold(DDL, _Conditional, {'=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
+check_where_clause_is_possible_fold(DDL, _, {'=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
     %% `IS NULL` filters
     %% if a column is marked NOT NULL, but the WHERE clause has IS NULL for that
     %% column then no results will ever be returned, so do not execute!
@@ -1131,7 +1133,7 @@ check_where_clause_is_possible_fold(DDL, _Conditional, {'=',{field,FieldName,_},
         false ->
             throw({error, {impossible_where_clause, << >>}})
     end;
-check_where_clause_is_possible_fold(DDL, _Conditional, {'!=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
+check_where_clause_is_possible_fold(DDL, _, {'!=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
     %% `NOT NULL` filters
     %% if column is marked NOT NULL, and the WHERE clause has IS NOT NULL for
     %% that column then we can eliminate it, and reduce the filter, maybe to
@@ -1142,6 +1144,20 @@ check_where_clause_is_possible_fold(DDL, _Conditional, {'!=',{field,FieldName,_}
         false ->
             {eliminate, Acc}
     end;
+check_where_clause_is_possible_fold(_, _, {'=',{field,FieldName,_},_} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'=' = F} ->
+            %% this filter has been specified twice so remove the second occurence
+            {eliminate, Acc};
+        #filtercheck{'=' = undefined} = Check1 ->
+            %% this is the first equality check so just record it
+            Check2 = Check1#filtercheck{'=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
+        _ ->
+            %% there are two different checks on the same column, for equality
+            %% this can never be satisfied.
+            throw({error, {impossible_where_clause, << >>}})
+    end;
 check_where_clause_is_possible_fold(_, _, Filter, Acc) ->
     {Filter, Acc}.
 
@@ -1149,6 +1165,13 @@ is_field_nullable(FieldName, ?DDL{fields = Fields}) when is_binary(FieldName)->
     #riak_field_v1{optional = Optional} = lists:keyfind(FieldName, #riak_field_v1.name, Fields),
     (Optional == true).
 
+find_filter_check(FieldName, Acc) when is_binary(FieldName) ->
+    case lists:keyfind(FieldName, #filtercheck.name, Acc) of
+      false ->
+          #filtercheck{name=FieldName};
+      Val ->
+          Val
+    end.
 
 %% tl;dr put filters that test equality of columns in the local key but not in
 %% in the partition key, in the star and end key.
@@ -2887,7 +2910,6 @@ additional_local_key_cols_must_be_specified_consecutively_test() ->
         S?SQL_SELECT.'WHERE'
     ).
 
-
 is_null_clause_on_non_null_column_is_impossible_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
@@ -2897,6 +2919,57 @@ is_null_clause_on_non_null_column_is_impossible_test() ->
     {ok, Q} = get_query(
         "SELECT * FROM table1 "
         "WHERE b IS NULL AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+same_equality_check_twice_has_duplicate_removed_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 10 AND b = 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+same_equality_check_on_additional_local_key_col_is_not_in_filter_twice_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 10 AND b = 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {start_inclusive,true},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+checks_for_different_values_on_the_same_col_is_impossible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b = 5 AND b = 6 AND a = 4600"),
     ?assertEqual(
         {error,{impossible_where_clause, << >>}},
         compile(DDL, Q)
