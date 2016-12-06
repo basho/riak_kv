@@ -29,11 +29,13 @@
          get_table_status_pairs/0,
          get_table_status/1,
          get_compiled_ddl_versions/1,
+         assert_compiled_ddl_versions_current/1,
          get_ddl/2,
          insert/2,
          new/1,
          populate_v3_table/0
         ]).
+-export([insert_previous/3]).
 
 -include_lib("riak_pb/include/riak_ts_pb.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
@@ -112,11 +114,20 @@ insert(BucketType, DDL) when is_binary(BucketType), is_tuple(DDL) ->
 
 %% insert into the v2 table so that the record is available
 insert_v2(BucketType, #ddl_v1{} = DDL) ->
-    %% the version is always 1 for the v2 table
-    DDLVersion = 1,
     %% put compiling as the compile state in the old table so that
     %% it will always recompile the modules on a downgrade
     CompileState = compiling,
+    insert_previous(BucketType, DDL, CompileState).
+
+insert_previous(BucketType, #ddl_v2{} = DDL, CompileState) ->
+    case riak_ql_ddl:convert(v1, DDL) of
+        Errors = [{error, _Reason}|_T] -> Errors;
+        [DDL1] ->
+            insert_previous(BucketType, DDL1, CompileState)
+    end;
+insert_previous(BucketType, #ddl_v1{} = DDL, CompileState) ->
+    %% the version is always 1 for the v2 table
+    DDLVersion = 1,
     %% the compiler pid is no longer meaningful, but v2 expects it to be unique
     %% so just create a new one
     CompilerPid = spawn(fun() -> ok end),
@@ -141,6 +152,19 @@ get_compiled_ddl_versions(BucketType) when is_binary(BucketType) ->
                 fun(A,B) ->
                     riak_ql_ddl:is_version_greater(A,B) == true
                 end, Versions)
+    end.
+
+%%
+is_current_version(v2) -> true;
+is_current_version(_V) -> false.
+
+assert_compiled_ddl_versions_current(BucketType) when is_binary(BucketType) ->
+    case get_compiled_ddl_versions(BucketType) of
+        notfound -> {error, notfound};
+        TableVersions -> case lists:any(fun is_current_version/1, TableVersions) of
+                             true -> ok;
+                             _ -> {error, notcurrent}
+                         end
     end.
 
 %%
