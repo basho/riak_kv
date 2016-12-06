@@ -21,25 +21,46 @@
 %% -------------------------------------------------------------------
 
 %% @doc
-%% This module implements a gen_server process that manages and schedules sweeps.
-%% Anyone can register a #sweep_participant{} with information about how
-%% often it should run and what kind of fun it include
-%%  (delete_fun, modify_fun or observ_fun)
+%% This module implements a gen_server process that manages and
+%% schedules sweeps.  Anyone can register a #sweep_participant{} with
+%% information about how often it should run and what kind of fun it
+%% include
+%%  (delete_fun, modify_fun or observ_fun) riak_kv_sweeper keep one
+%% sweep per index.
 %%
-%% riak_kv_sweeper keep one sweep per index.
-%% Once every tick  riak_kv_sweeper check if it's in the configured sweep_window
-%% and find sweeps to run. It does this by comparing what the sweeps have swept
-%% before with the requirments in #sweep_participant{}.
+%% Once every tick riak_kv_sweeper check if it's in the configured
+%% sweep_window and find sweeps to run. It does this by comparing what
+%% the sweeps have swept before with the requirments in
+%% #sweep_participant{}.
 -module(riak_kv_sweeper).
 -behaviour(gen_server).
+
+-export([init/1, handle_call/3, handle_cast/2,
+         handle_info/2, terminate/2, code_change/3]).
+
+-export([start_link/0,
+         stop/0,
+         add_sweep_participant/1,
+         remove_sweep_participant/1,
+         status/0,
+         sweep/1,
+         sweep_result/2,
+         update_progress/2,
+         update_started_sweep/3,
+         enable_sweep_scheduling/0,
+         stop_all_sweeps/0,
+         get_run_interval/1,
+         in_sweep_window/0]).
+
+-export_type([fun_type/0,
+              index/0,
+              run_interval_fun/0,
+              participant_module/0]).
+
 -include("riak_kv_sweeper.hrl").
 
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
-
-%% Default number of concurrent sweeps that are allowed to run.
 -define(DEFAULT_SWEEP_TICK, timer:minutes(1)).
--define(ESTIMATE_EXPIRY, 24 * 3600). %% 1 day in s
-
+-define(ESTIMATE_EXPIRY, 24 * 3600). %% 1 day in seconds
 
 %% ====================================================================
 %% Sweep module callback types and specifications
@@ -56,44 +77,33 @@
 
 -type sweep_fun_return() :: {'ok', sweep_fun_acc()}
                           | {'deleted', sweep_fun_acc()}
-                          | {'mutated', riak_object:riak_object(), sweep_fun_acc()}.
+                          | {'mutated',
+                             riak_object:riak_object(),
+                             sweep_fun_acc()}.
 
 -type participant_module() :: 'riak_kv_delete'
                             | 'riak_kv_index_hashtree'
                             | 'riak_kv_object_ttl'.
 
--type sweep_fun() :: fun(({{riak_object:bucket(), riak_object:key()}, riak_object:riak_object()},
-                          sweep_fun_acc(), Options :: [{atom(), term()}])
-                         -> sweep_fun_return()).
+-type sweep_fun() :: fun(({{riak_object:bucket(), riak_object:key()},
+                           riak_object:riak_object()},
+                          sweep_fun_acc(),
+                          Options :: [{atom(), term()}]) ->
+    sweep_fun_return()).
 
--callback participate_in_sweep(Index :: index(), SweeperProc :: pid()) ->
-    'false' | {'ok', sweep_fun(), sweep_fun_acc()}.
+-callback participate_in_sweep(Index :: index(),
+                               SweeperProc :: pid()) ->
+    {'ok', sweep_fun(), sweep_fun_acc()} |
+    'false'.
 
--callback successful_sweep(Index :: index(), FinalAcc :: sweep_fun_acc()) -> _.
+-callback successful_sweep(Index :: index(),
+                           FinalAcc :: sweep_fun_acc()) -> _.
 
 -callback failed_sweep(Index :: index(), Reason :: term()) -> _.
 
--export_type([fun_type/0,
-              index/0,
-              run_interval_fun/0,
-              participant_module/0]).
 %% ====================================================================
 %% API functions
 %% ====================================================================
--export([start_link/0,
-         stop/0,
-         add_sweep_participant/1,
-         remove_sweep_participant/1,
-         status/0,
-         sweep/1,
-         sweep_result/2,
-         update_progress/2,
-         update_started_sweep/3,
-         enable_sweep_scheduling/0,
-         stop_all_sweeps/0,
-         get_run_interval/1,
-         in_sweep_window/0]).
-
 -spec start_link() -> {ok, pid()}.
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -102,7 +112,8 @@ start_link() ->
 stop() ->
     gen_server:call(?MODULE, stop).
 
-%% @doc Add callback module that will be asked to participate in sweeps.
+%% @doc Add callback module that will be asked to participate in
+%% sweeps.
 -spec add_sweep_participant(#sweep_participant{}) -> ok.
 add_sweep_participant(Participant) ->
     gen_server:call(?MODULE, {add_sweep_participant, Participant}).
@@ -112,7 +123,8 @@ add_sweep_participant(Participant) ->
 remove_sweep_participant(Module) ->
     gen_server:call(?MODULE, {remove_sweep_participant, Module}).
 
-%% @doc Initiat a sweep without using scheduling. Can be used as fold replacment.
+%% @doc Initiat a sweep without using scheduling. Can be used as fold
+%% replacment.
 -spec sweep(index()) -> ok.
 sweep(Index) ->
     gen_server:call(?MODULE, {sweep_request, Index}, infinity).
@@ -127,17 +139,21 @@ enable_sweep_scheduling() ->
     lager:info("Enable sweep scheduling"),
     application:set_env(riak_kv, sweeper_scheduler, true).
 
-%% @doc Stop all sweeps and disable the scheduler from starting new sweeps
-%% Only allow manual sweeps throu sweep/1.
-%% Returns the number of running sweeps that were stopped.
+%% @doc Stop all sweeps and disable the scheduler from starting new
+%% sweeps. Only allow manual sweeps throu sweep/1.  Returns the number
+%% of running sweeps that were stopped.
 -spec stop_all_sweeps() -> Running :: non_neg_integer().
 stop_all_sweeps() ->
     application:set_env(riak_kv, sweeper_scheduler, false),
     gen_server:call(?MODULE, stop_all_sweeps).
 
--spec update_started_sweep(index(), [#sweep_participant{}], EstimatedKeys :: non_neg_integer()) -> ok.
+-spec update_started_sweep(index(),
+                           [#sweep_participant{}],
+                           EstimatedKeys :: non_neg_integer()) -> ok.
 update_started_sweep(Index, ActiveParticipants, Estimate) ->
-    gen_server:cast(?MODULE, {update_started_sweep, Index, ActiveParticipants, Estimate}).
+    gen_server:cast(?MODULE,
+                    {update_started_sweep,
+                     Index, ActiveParticipants, Estimate}).
 
 %% @private used by the sweeping process to report results when done.
 -spec sweep_result(index(), riak_kv_sweeper_fold:sweep_result()) -> ok.
@@ -248,33 +264,45 @@ code_change(_OldVsn, State, _Extra) ->
 %% ====================================================================
 %% Internal Functions
 %% ====================================================================
--spec do_sweep(index(), riak_kv_sweeper_state:state()) -> riak_kv_sweeper_state:state().
+-spec do_sweep(index(), riak_kv_sweeper_state:state()) ->
+    riak_kv_sweeper_state:state().
 do_sweep(Index, State) ->
-    %% Ask for estimate before we call get_active_participants, since riak_kv_index_tree
-    %% clears the trees if they are expired.
+    %% Ask for estimate before we call get_active_participants, since
+    %% riak_kv_index_tree clears the trees if they are expired.
     AAEEnabled = riak_kv_entropy_manager:enabled(),
-    Estimate = get_estimate_keys(Index, AAEEnabled, State),
+    EstimatedKeys = get_estimate_keys(Index, AAEEnabled, State),
 
     State2 =
         case riak_kv_sweeper_state:get_active_participants(State, Index) of
             {ok, [], State1} ->
                 State1;
             {ok, ActiveParticipants, State1} ->
-                ?MODULE:update_started_sweep(Index, ActiveParticipants, Estimate),
+                ?MODULE:update_started_sweep(Index,
+                                             ActiveParticipants,
+                                             EstimatedKeys),
                 Workerpid = riak_kv_vnode:sweep({Index, node()},
                                                 ActiveParticipants,
-                                                Estimate),
+                                                EstimatedKeys),
                 riak_kv_sweeper_state:start_sweep(State1, Index, Workerpid)
         end,
     State2.
 
--spec get_estimate_keys(index(), AAEEnabled :: boolean(), riak_kv_sweeper_state:state()) -> EstimatedKeys :: non_neg_integer() | false.
+-spec get_estimate_keys(index(),
+                        AAEEnabled :: boolean(),
+                        riak_kv_sweeper_state:state()) ->
+    EstimatedKeys :: non_neg_integer() | false.
 get_estimate_keys(Index, AAEEnabled, State) ->
-    {ok, OldEstimate, _NewState} = riak_kv_sweeper_state:get_estimate_keys(State, Index),
+    {ok, OldEstimate, _NewState} =
+        riak_kv_sweeper_state:get_estimate_keys(State, Index),
     maybe_estimate_keys(Index, AAEEnabled, OldEstimate).
 
-%% We keep the estimate from previus sweep unless it's older then ?ESTIMATE_EXPIRY.
--spec maybe_estimate_keys(index(), AAEEnabled :: boolean(), undefined| {EstimatedKeys :: non_neg_integer(), TS :: erlang:timestamp()}) -> non_neg_integer() | false.
+%% We keep the estimate from previus sweep unless it's older then
+%% ?ESTIMATE_EXPIRY.
+-spec maybe_estimate_keys(index(),
+                          AAEEnabled :: 'true',
+                          'undefined' | {EstimatedKeys :: non_neg_integer(),
+                                         TS :: erlang:timestamp()}) ->
+   EstimatedKeys :: non_neg_integer() | false.
 maybe_estimate_keys(Index, true, undefined) ->
     get_estimtate(Index);
 maybe_estimate_keys(Index, true, {EstimatedNrKeys, TS}) ->
@@ -290,7 +318,8 @@ maybe_estimate_keys(_Index, false, {EstimatedNrKeys, _TS}) ->
 maybe_estimate_keys(_Index, false, _) ->
     false.
 
--spec get_estimtate(riak_kv_sweeper:index()) -> EstimatedKeys :: non_neg_integer().
+-spec get_estimtate(riak_kv_sweeper:index()) ->
+    EstimatedKeys :: non_neg_integer().
 get_estimtate(Index) ->
     case riak_kv_index_hashtree:get_lock(Index, estimate) of
         ok ->
