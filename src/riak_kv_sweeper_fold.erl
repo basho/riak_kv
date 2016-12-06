@@ -246,7 +246,7 @@ get_sweep_throttle() ->
     end.
 
 -spec send_to_sweep_worker('stop'
-                           | {'disable', Module :: atom()},
+                           | {'disable', riak_kv_sweeper:participant_module()},
                            #sweep{}) -> 'ok' | 'no_pid'.
 send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid) ->
     lager:debug("Send to sweep worker ~p: ~p", [Pid, Msg]),

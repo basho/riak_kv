@@ -104,7 +104,7 @@ add_sweep_participant(State, Participant) ->
     persist_participants(SP1),
     State#state{sweep_participants = SP1}.
 
--spec remove_sweep_participant(state(), Module :: atom()) ->
+-spec remove_sweep_participant(state(), riak_kv_sweeper:participant_module()) ->
     {'ok', boolean(), state()}.
 remove_sweep_participant(State, Module) ->
     #state{sweeps = Sweeps,
@@ -512,7 +512,8 @@ expired(Now, TS, RunInterval) ->
             N
     end.
 
--spec run_interval(Mod :: atom(), Participants :: dict()) ->
+-spec run_interval(riak_kv_sweeper:participant_module(),
+                   Participants :: dict()) ->
     RunInterval :: non_neg_integer() | 'disabled'.
 run_interval(Mod, Participants) ->
     case dict:find(Mod, Participants) of
