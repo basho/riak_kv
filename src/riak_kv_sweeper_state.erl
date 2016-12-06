@@ -60,7 +60,7 @@
 %% Types
 %% ====================================================================
 -type state() :: #state{}.
--type index() :: non_neg_integer().
+-type index() :: riak_kv_sweeper:index().
 
 -type scheduler_event() :: {request, index()} | tick.
 -type scheduler_sweep_window() :: never | always | {non_neg_integer(), non_neg_integer()}.
@@ -160,14 +160,14 @@ get_active_participants(State, Index) ->
     {ok, ActiveParticipants, State}.
 
 -spec get_estimate_keys(state(), index()) ->
-    {ok, OldEstimate :: {EstimatedNrKeys :: non_neg_integer(), erlang:timestamp()}, state()} |
-    {ok, OldEstimate :: undefined, state()}.
+    {ok, {EstimatedKeys :: non_neg_integer(), erlang:timestamp()}, state()}
+  | {ok, undefined, state()}.
 get_estimate_keys(State, Index) ->
     #state{sweeps = Sweeps} = State,
     #sweep{estimated_keys = OldEstimate} = dict:fetch(Index, Sweeps),
     {ok, OldEstimate, State}.
 
--spec update_finished_sweep(state(), index(), any()) -> state().
+-spec update_finished_sweep(state(), index(), [riak_kv_sweeper_fold:sweep_result()]) -> state().
 update_finished_sweep(State, Index, Result) ->
     #state{sweeps = Sweeps} = State,
     case dict:find(Index, Sweeps) of
@@ -178,9 +178,8 @@ update_finished_sweep(State, Index, Result) ->
             State
     end.
 
--spec update_started_sweep(state(), index(), ActiveParticipants :: [],
-                           Estimate :: non_neg_integer()) -> state().
-update_started_sweep(State, Index, ActiveParticipants, Estimate) ->
+-spec update_started_sweep(state(), index(), [#sweep_participant{}], EstimatedKeys :: non_neg_integer()) -> state().
+update_started_sweep(State, Index, ActiveParticipants, EstimatedKeys) ->
     Sweeps = State#state.sweeps,
     SweepParticipants = State#state.sweep_participants,
     TS = os:timestamp(),
@@ -191,7 +190,7 @@ update_started_sweep(State, Index, ActiveParticipants, Estimate) ->
                         %% So they will not be asked again until they expire.
                         Results = add_asked_to_results(Sweep#sweep.results, SweepParticipants),
                         Sweep#sweep{results = Results,
-                                    estimated_keys = {Estimate, TS},
+                                    estimated_keys = {EstimatedKeys, TS},
                                     active_participants = ActiveParticipants,
                                     start_time = TS,
                                     end_time = undefined}
@@ -274,6 +273,7 @@ start_sweep(State, Index, Pid) ->
 %% =============================================================================
 %% Internal Functions
 %% =============================================================================
+-spec finish_sweep(#sweep{}, #state{}) -> #state{}.
 finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
     Sweeps1 =
         dict:update(Index,
@@ -282,6 +282,7 @@ finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
                 end, Sweeps),
     State#state{sweeps = Sweeps1}.
 
+-spec store_result({SweeptKeys :: non_neg_integer(), Result :: [riak_kv_sweeper_fold:sweep_result()]}, #sweep{}) -> #sweep{}.
 store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
     TimeStamp = os:timestamp(),
     UpdatedResults =
@@ -293,6 +294,7 @@ store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
                 results = UpdatedResults,
                 end_time = TimeStamp}.
 
+-spec add_asked_to_results(Results :: dict(), SweepParticipants :: dict()) -> Results :: dict().
 add_asked_to_results(Results, SweepParticipants) ->
     ResultList = dict:to_list(Results),
     MissingResults = missing(module, SweepParticipants, ResultList),
@@ -301,6 +303,7 @@ add_asked_to_results(Results, SweepParticipants) ->
                         dict:store(Mod, {TimeStamp, asked}, Dict)
                 end, Results, MissingResults).
 
+-spec missing(run_interval|module, dict(), ResultsList :: [{riak_kv_sweeper:participant_module(), {erlang:timestamp(), 'succ'| 'fail'}}]) -> [RunInterval :: non_neg_integer() | riak_kv_sweeper:participant_module()].
 missing(Return, Participants, ResultList) ->
     [case Return of
          run_interval ->
@@ -311,6 +314,7 @@ missing(Return, Participants, ResultList) ->
      {Module, #sweep_participant{run_interval = RunInterval}}
          <- dict:to_list(Participants), not lists:keymember(Module, 1, ResultList)].
 
+-spec get_run_interval(RunInterval :: non_neg_integer() | riak_kv_sweeper:run_interval_fun()) -> RunInterval :: non_neg_integer().
 get_run_interval(RunIntervalFun) when is_function(RunIntervalFun) ->
     RunIntervalFun();
 get_run_interval(RunInterval) ->
@@ -367,6 +371,7 @@ schedule_sweep({request, Index}, _Enabled, _SweepWindow, ConcurrencyLimit, _Now,
             {ok, {request, not_index}}
     end.
 
+-spec in_sweep_window() -> boolean().
 in_sweep_window() ->
     {_, {Hour, _, _}} = calendar:local_time(),
     in_sweep_window(Hour, sweep_window()).
@@ -402,13 +407,16 @@ schedule_sweep2(Now, Participants, Sweeps) ->
             {ok, {tick, random_sweep(NeverRunnedSweeps)}}
     end.
 
+-spec get_idle_sweeps(dict()) -> [#sweep{}].
 get_idle_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle} = Sweep} <- dict:to_list(Sweeps)].
 
+-spec get_never_runned_sweeps(dict()) -> [#sweep{}].
 get_never_runned_sweeps(Sweeps) ->
     [Sweep || {_Index, #sweep{state = idle, results = ResDict} = Sweep}
                   <- dict:to_list(Sweeps), dict:size(ResDict) == 0].
 
+-spec get_queued_sweeps(dict()) -> [#sweep{}].
 get_queued_sweeps(Sweeps) ->
     QueuedSweeps =
         [Sweep ||
@@ -416,6 +424,7 @@ get_queued_sweeps(Sweeps) ->
          not (QueueTime == undefined)],
     lists:keysort(#sweep.queue_time, QueuedSweeps).
 
+-spec find_expired_participant(erlang:timestamp(), Sweeps :: dict(), Participants :: dict()) -> [] | #sweep{}.
 find_expired_participant(Now, Sweeps, Participants) ->
     ExpiredMissingSweeps =
         [{expired_or_missing(Now, Sweep, Participants), Sweep} ||
@@ -433,6 +442,7 @@ find_expired_participant(Now, Sweeps, Participants) ->
             end
     end.
 
+-spec expired_or_missing(erlang:timestamp(), #sweep{}, dict()) -> {MissingSum :: non_neg_integer(), ExpiredSum :: non_neg_integer()}.
 expired_or_missing(Now, #sweep{results = Results}, Participants) ->
     ResultsList = dict:to_list(Results),
     Missing = missing(run_interval, Participants, ResultsList),
@@ -446,7 +456,7 @@ expired_or_missing(Now, #sweep{results = Results}, Participants) ->
     ExpiredSum = lists:sum(Expired),
     {MissingSum, ExpiredSum}.
 
-
+-spec expired(erlang:timestamp(), erlang:timestamp(), RunInterval :: non_neg_integer() | disabled) -> non_neg_integer().
 expired(_Now, _TS, disabled) ->
     0;
 expired(Now, TS, RunInterval) ->
@@ -457,6 +467,7 @@ expired(Now, TS, RunInterval) ->
             N
     end.
 
+-spec run_interval(Mod :: atom(), Participants :: dict()) -> RunInterval :: non_neg_integer() | disabled.
 run_interval(Mod, Participants) ->
     case dict:find(Mod, Participants) of
         {ok, #sweep_participant{run_interval = RunInterval}} ->
@@ -467,14 +478,14 @@ run_interval(Mod, Participants) ->
             disabled
     end.
 
-
+-spec elapsed_secs(erlang:timestamp(), erlang:timestamp()) -> non_neg_integer().
 elapsed_secs(Now, Start) ->
     timer:now_diff(Now, Start) div 1000000.
 
+-spec random_sweep([#sweep{}]) -> #sweep{}.
 random_sweep(Sweeps) ->
     Index = random:uniform(length(Sweeps)),
     lists:nth(Index, Sweeps).
-
 
 -spec scheduler_enabled() -> boolean().
 scheduler_enabled() ->
@@ -485,6 +496,7 @@ scheduler_enabled() ->
             false
     end.
 
+-spec sweep_window() -> 'always' | 'never' | {StartHour :: non_neg_integer(), EndHour :: non_neg_integer()}.
 sweep_window() ->
     case application:get_env(riak_kv, sweep_window) of
         {ok, always} ->
@@ -500,9 +512,16 @@ sweep_window() ->
             never
     end.
 
+-spec get_concurrency_limit() -> non_neg_integer().
 get_concurrency_limit() ->
-    app_helper:get_env(riak_kv, sweep_concurrency, ?DEFAULT_SWEEP_CONCURRENCY).
+    case app_helper:get_env(riak_kv, sweep_concurrency, ?DEFAULT_SWEEP_CONCURRENCY) of
+        ?DEFAULT_SWEEP_CONCURRENCY ->
+            ?DEFAULT_SWEEP_CONCURRENCY;
+        Other when is_integer(Other) ->
+            Other
+        end.
 
+-spec queue_sweep(riak_kv_sweeper:index(), #state{}) -> #state{}.
 queue_sweep(Index, #state{sweeps = Sweeps} = State) ->
     case dict:fetch(Index, Sweeps) of
         #sweep{queue_time = undefined} = Sweep ->
@@ -513,38 +532,46 @@ queue_sweep(Index, #state{sweeps = Sweeps} = State) ->
             State
     end.
 
-%% -----------------------------------------------------------------------------
-%% Internal Functions
-%% -----------------------------------------------------------------------------
+-spec stop_sweep(#sweep{}) -> ok.
 stop_sweep(Sweep) ->
-    riak_kv_sweeper_fold:send_to_sweep_worker(stop, Sweep).
+    riak_kv_sweeper_fold:send_to_sweep_worker(stop, Sweep),
+    ok.
 
+-spec get_running_sweeps(dict()) -> [#sweep{}].
 get_running_sweeps(Sweeps) ->
     [Sweep ||
       {_Index, #sweep{state = State} = Sweep} <- dict:to_list(Sweeps),
       State == running orelse State == restart].
 
+-spec disable_sweep_participant_in_running_sweep(riak_kv_sweeper:participant_module(), Sweeps :: dict()) -> ok.
 disable_sweep_participant_in_running_sweep(Module, Sweeps) ->
     [disable_participant(Sweep, Module) ||
        #sweep{active_participants = ActiveP} = Sweep <- get_running_sweeps(Sweeps),
-       lists:keymember(Module, #sweep_participant.module, ActiveP)].
+        lists:keymember(Module, #sweep_participant.module, ActiveP)],
+    ok.
 
+-spec disable_participant(#sweep{}, riak_kv_sweeper:participant_module()) -> ok.
 disable_participant(Sweep, Module) ->
-    riak_kv_sweeper_fold:send_to_sweep_worker({disable, Module}, Sweep).
+    riak_kv_sweeper_fold:send_to_sweep_worker({disable, Module}, Sweep),
+    ok.
 
+-spec persist_participants(Participants :: dict()) -> ok.
 persist_participants(Participants) ->
     application:set_env(riak_kv, sweep_participants, Participants).
 
+-spec add_sweeps([riak_kv_sweeper:index()], Sweeps :: dict()) -> Sweeps :: dict().
 add_sweeps(MissingIdx, Sweeps) ->
     lists:foldl(fun(Idx, SweepsDict) ->
                         dict:store(Idx, #sweep{index = Idx}, SweepsDict)
                 end, Sweeps, MissingIdx).
 
+-spec remove_sweeps([riak_kv_sweeper:index()], Sweeps :: dict()) -> Sweeps :: dict().
 remove_sweeps(NotOwnerIdx, Sweeps) ->
     lists:foldl(fun(Idx, SweepsDict) ->
                         dict:erase(Idx, SweepsDict)
                 end, Sweeps, NotOwnerIdx).
 
+-spec get_persistent_participants() -> SweepParticipants :: dict() | undefined.
 get_persistent_participants() ->
     app_helper:get_env(riak_kv, sweep_participants).
 
