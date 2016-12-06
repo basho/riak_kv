@@ -290,16 +290,19 @@ get_data(Key, Table, Mod0, Options) ->
         end,
     DDL = Mod:get_ddl(),
     Result1 =
-        case riak_ql_ddl:negate_if_desc(Key, Mod, DDL) of
-            {ok, LKVals} ->
-                %% if riak_ql_ddl:negate_if_desc has succeeded,
-                %% :lk_to_pk also must
-                {ok, PKVals} = riak_ql_ddl:lk_to_pk(Key, Mod, DDL),
-                riak_client:get(
-                  riak_kv_ts_util:table_to_bucket(Table),
-                  {list_to_tuple(PKVals),
-                   list_to_tuple(LKVals)}, Options,
-                  {riak_client, [node(), undefined]});
+        case riak_ql_ddl:lk_to_pk(Key, Mod, DDL) of
+            {ok, PK} ->
+                try Mod:revert_ordering_on_local_key(list_to_tuple(Key)) of
+                    LK ->
+                        riak_client:get(
+                          riak_kv_ts_util:table_to_bucket(Table),
+                          {list_to_tuple(PK), list_to_tuple(LK)},
+                          Options,
+                          {riak_client, [node(), undefined]})
+                catch
+                    _:_ ->
+                        {error, bad_compound_key}
+                end;
             ErrorReason1 ->
                 ErrorReason1
         end,
@@ -363,14 +366,20 @@ delete_data(Key, Table, Mod0, Options0, VClock0) ->
                 %% to avoid a separate get
                 riak_object:decode_vclock(VClock0)
         end,
-    case riak_ql_ddl:negate_if_desc(Key, Mod, DDL) of
-        {ok, LKVals} ->
-            {ok, PKVals} = riak_ql_ddl:lk_to_pk(Key, Mod, DDL),
-            riak_client:delete_vclock(
-              riak_kv_ts_util:table_to_bucket(Table),
-              {list_to_tuple(PKVals),
-               list_to_tuple(LKVals)}, VClock, Options,
-              {riak_client, [node(), undefined]});
+    case riak_ql_ddl:lk_to_pk(Key, Mod, DDL) of
+        {ok, PK} ->
+            try Mod:revert_ordering_on_local_key(list_to_tuple(Key)) of
+                LK ->
+                    riak_client:delete_vclock(
+                      riak_kv_ts_util:table_to_bucket(Table),
+                      {list_to_tuple(PK), list_to_tuple(LK)},
+                      VClock,
+                      Options,
+                      {riak_client, [node(), undefined]})
+            catch
+                _:_ ->
+                    {error, bad_compound_key}
+            end;
         ErrorReason ->
             ErrorReason
     end.

@@ -55,6 +55,7 @@
 -define(E_QBUF_CREATE_ERROR,     1023).
 -define(E_QBUF_LDB_ERROR,        1024).
 -define(E_QUANTA_LIMIT,          1025).
+-define(E_BAD_COMPND_KEY,        1026).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
@@ -358,6 +359,8 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
             {reply, make_table_not_activated_resp(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, make_key_element_count_mismatch_resp(Got, Need), State};
+        {error, bad_compound_key} ->
+            {reply, make_bad_compound_key_resp(), State};
         {error, notfound} ->
             {reply, make_tsgetresp([], [], []), State};
         {error, Reason} ->
@@ -388,6 +391,8 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
             {reply, make_table_not_activated_resp(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, make_key_element_count_mismatch_resp(Got, Need), State};
+        {error, bad_compound_key} ->
+            {reply, make_bad_compound_key_resp(), State};
         {error, notfound} ->
             {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
         {error, Reason} ->
@@ -417,9 +422,8 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                 %% quantum boundaries (this is because for DESC
                 %% columns, the quantum range is defined as `(...]`
                 %% rather than as `[..)`).
-                {ok, DescAdjustedKey} =
-                    riak_ql_ddl:negate_if_desc(
-                      tuple_to_list(sext:decode(Key)), Mod, DDL),
+                DescAdjustedKey =
+                    Mod:revert_ordering_on_local_key(sext:decode(Key)),
                 {ok, PK} = riak_ql_ddl:lk_to_pk(
                              DescAdjustedKey, Mod, DDL),
                 list_to_tuple(PK);
@@ -629,6 +633,12 @@ make_key_element_count_mismatch_resp(Got, Need) ->
     make_rpberrresp(
       ?E_BAD_KEY_LENGTH,
       flat_format("Key element count mismatch (key has ~b elements but ~b supplied)", [Need, Got])).
+
+-spec make_bad_compound_key_resp() -> #rpberrorresp{}.
+make_bad_compound_key_resp() ->
+    make_rpberrresp(
+      ?E_BAD_COMPND_KEY,
+      flat_format("Value of inappropriate type in compound key", [])).
 
 -spec make_validate_rows_error_resp([integer()]) -> #rpberrorresp{}.
 make_validate_rows_error_resp(BadRowIdxs) ->

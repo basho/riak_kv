@@ -187,10 +187,8 @@ make_key_conversion_fun(Table) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     DDL = Mod:get_ddl(),
     fun(Key) when is_binary(Key) ->
-            {ok, DescAdjustedKey} =
-                riak_ql_ddl:negate_if_desc(
-                  tuple_to_list(sext:decode(Key)), Mod, DDL),
-            {ok, PK} = riak_ql_ddl:lk_to_pk(DescAdjustedKey, Mod, DDL),
+            {ok, PK} = riak_ql_ddl:lk_to_pk(
+                         Mod:revert_ordering_on_local_key(sext:decode(Key)), Mod, DDL),
             list_to_tuple(PK);
        (Key) ->
             lager:error("Key conversion function "
