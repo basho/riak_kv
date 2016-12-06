@@ -1219,6 +1219,9 @@ check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVa
             %% or equal to clause because if a to be 10 it must also be greater
             %% than 8
             {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when GteVal > EqVal ->
+            %% query like `a = 10 AND a >= 11` cannot be satisfied
+            throw({error, {impossible_where_clause, << >>}});
         #filtercheck{'>=' = undefined} = Check1 ->
             %% this is the first equality check so just record it
             Check2 = Check1#filtercheck{'>=' = F},
@@ -3113,7 +3116,7 @@ clause_for_equality_and_greater_than_equality_is_not_possible_test() ->
         compile(DDL, Q)
     ).
 
-clause_for_equality_and_greater_than_equality_is_not_possible_swap_lhs_rhs_test() ->
+clause_for_equality_and_greater_than_is_not_possible_swap_lhs_rhs_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
@@ -3251,6 +3254,20 @@ greater_than_or_equal_to_value_lower_than_equality_is_eliminated_swap_lhs_rhs_te
          {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
+    ).
+
+clause_for_equality_and_greater_than_or_equalit_to_is_not_possible_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b >= 6 AND b = 5 AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
     ).
 
 -endif.
