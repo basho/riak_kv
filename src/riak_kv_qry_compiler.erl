@@ -1196,6 +1196,11 @@ check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},{const,GtVal}
             %% query like `a = 10 AND a > 8` we can eliminate the greater than
             %% clause because if a to be 10 it must also be greater than 8
             {eliminate, Acc};
+        #filtercheck{'>=' = {_,_,{const,GteVal}}} when GtVal =< GteVal ->
+            %% query like `a >= 10 AND a > 8` we can eliminate the greater than
+            %% clause because if a to be greater than or equal to 10 it must
+            %% also be greater than 8
+            {eliminate, Acc};
         #filtercheck{'>' = undefined} = Check1 ->
             %% this is the first equality check so just record it
             Check2 = Check1#filtercheck{'>' = F},
@@ -1222,10 +1227,17 @@ check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVa
         #filtercheck{'=' = {_,_,{const,EqVal}}} when GteVal > EqVal ->
             %% query like `a = 10 AND a >= 11` cannot be satisfied
             throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'>' = {_,_,{const,GtVal}} = F_x} = Check1 when GtVal >= GteVal ->
+            %% we already have a filter that is higher than the second one,
+            %% which we can eliminate. Store it and eliminate it on the second
+            %% pass since it has already been iterated
+            Check2 = Check1#filtercheck{'>=' = F},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3};
         #filtercheck{'>=' = undefined} = Check1 ->
             %% this is the first equality check so just record it
-            Check2 = Check1#filtercheck{'>=' = F},
-            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
+            {F, store_filter_check(Check1#filtercheck{'>=' = F}, Acc)};
         #filtercheck{'>=' = F} ->
             %% this filter has been specified twice so remove the second occurence
             {eliminate, Acc};
@@ -1247,6 +1259,9 @@ check_where_clause_is_possible_fold(_, _, Filter, Acc) ->
 append_to_eliminate_later(Filter, Acc) ->
     ElimLater = proplists:get_value(eliminate_later, Acc),
     lists:keystore(eliminate_later, 1, Acc, {eliminate_later, [Filter|ElimLater]}).
+
+store_filter_check(#filtercheck{name = FieldName} = Check, Acc) ->
+    lists:keystore(FieldName, #filtercheck.name, Acc, Check).
 
 %% TODO put this in the table helper module
 is_field_nullable(FieldName, ?DDL{fields = Fields}) when is_binary(FieldName)->
@@ -3268,6 +3283,42 @@ clause_for_equality_and_greater_than_or_equalit_to_is_not_possible_swap_lhs_rhs_
     ?assertEqual(
         {error,{impossible_where_clause, << >>}},
         compile(DDL, Q)
+    ).
+
+greater_than_or_equal_to_that_is_less_than_previous_greater_than_clause_removes_greater_than_clause_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 10 AND b >= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_or_equal_to_that_is_less_than_previous_greater_than_clause_removes_greater_than_clause_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 10 AND b > 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
     ).
 
 -endif.
