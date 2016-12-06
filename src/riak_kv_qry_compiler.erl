@@ -1109,7 +1109,7 @@ modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
--record(filtercheck, {name,'=','>'}).
+-record(filtercheck, {name,'=','>','>='}).
 
 check_where_clause_is_possible(DDL, WhereProps) ->
     Filter1 = proplists:get_value(filter, WhereProps),
@@ -1202,6 +1202,27 @@ check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},{const,GtVal}
             %% which we can eliminate. Store it and eliminate it on the second
             %% pass since it has already been iterated
             Check2 = Check1#filtercheck{'>' = F},
+            Acc2 = lists:keystore(FieldName, #filtercheck.name, Acc, Check2),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3}
+    end;
+check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,_GteVal}} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'>=' = undefined} = Check1 ->
+            %% this is the first equality check so just record it
+            Check2 = Check1#filtercheck{'>=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
+        #filtercheck{'>=' = F} ->
+            %% this filter has been specified twice so remove the second occurence
+            {eliminate, Acc};
+        #filtercheck{'>=' = F_x} when F_x < F ->
+            %% we already have a filter that is a lower value than
+            {eliminate, Acc};
+        #filtercheck{'>=' = F_x} = Check1 when F_x > F ->
+            %% we already have a filter that is higher than the second one,
+            %% which we can eliminate. Store it and eliminate it on the second
+            %% pass since it has already been iterated
+            Check2 = Check1#filtercheck{'>=' = F},
             Acc2 = lists:keystore(FieldName, #filtercheck.name, Acc, Check2),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
             {F, Acc3}
@@ -3127,6 +3148,60 @@ greater_than_value_lower_than_equality_is_eliminated_swap_lhs_rhs_test() ->
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
          {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+same_great_than_or_equals_check_is_not_in_filter_twice_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 10 AND b >= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+second_greater_than_or_equal_check_which_is_a_greater_value_is_removed_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 10 AND b >= 11"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+second_greater_than_or_equal_check_which_is_a_lesser_value_removes_the_first_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 11 AND b >= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
