@@ -60,7 +60,7 @@
 -include("riak_kv_sweeper.hrl").
 
 -define(DEFAULT_SWEEP_TICK, timer:minutes(1)).
--define(ESTIMATE_EXPIRY, 24 * 3600). %% 1 day in seconds
+-define(ESTIMATE_EXPIRY, 86400). %% 1 day in seconds
 
 %% ====================================================================
 %% Sweep module callback types and specifications
