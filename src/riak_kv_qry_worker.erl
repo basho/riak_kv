@@ -187,6 +187,8 @@ make_key_conversion_fun(Table) ->
     Mod = riak_ql_ddl:make_module_name(Table),
     DDL = Mod:get_ddl(),
     fun(Key) when is_binary(Key) ->
+            %% The key is organic here (it is read as previously
+            %% written), so no need to check for errors in lk_to_pk.
             {ok, PK} = riak_ql_ddl:lk_to_pk(
                          Mod:revert_ordering_on_local_key(sext:decode(Key)), Mod, DDL),
             list_to_tuple(PK);

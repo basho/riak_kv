@@ -422,6 +422,9 @@ sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                 %% quantum boundaries (this is because for DESC
                 %% columns, the quantum range is defined as `(...]`
                 %% rather than as `[..)`).
+                %% The key is organic here (it is read as previously
+                %% written), so no need to check for errors in lk_to_pk
+                %% result.
                 DescAdjustedKey =
                     Mod:revert_ordering_on_local_key(sext:decode(Key)),
                 {ok, PK} = riak_ql_ddl:lk_to_pk(
