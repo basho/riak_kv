@@ -41,6 +41,7 @@
 -record(rec, {
     w, pw, n_val,
     start_ts,
+    obj_sizes,
     size,
     primary_okays = 0,
     fallback_okays = 0,
@@ -51,6 +52,8 @@
 -define(DICT_TYPE, dict).
 
 -record(state, {
+    max_object_size = 0 :: integer(),
+    warn_object_size = 0 :: integer(),
     entries = ?DICT_TYPE:new(),
     proxies = ?DICT_TYPE:new()
 }).
@@ -143,13 +146,15 @@ async_put(RObj, W, PW, Bucket, NVal, PartitionIdx, Key, EncodeFn, Preflist) ->
     ReqId = erlang:monitor(process, Worker),
     EncodedVal = EncodeFn(w1c_vclock(RObj)),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
+    Size = size(EncodedVal),
 
     gen_server:cast(
       Worker,
       {put, Bucket, BucketProps, PartitionIdx, Key, EncodedVal, ReqId, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
-            size=size(EncodedVal)}}),
+            obj_sizes = [Size],
+            size = Size}}),
     {ok, {ReqId, Worker}}.
 
 -spec ts_batch_put(RObjs :: [{riak_object:key(), riak_object:riak_object()}],
@@ -170,14 +175,16 @@ ts_batch_put(RObjs, W, PW, Bucket, NVal, EncodeFn, DocIdx, Preflist) ->
     EncodedVals =
         lists:map(fun({K, O}) -> {{Bucket, K}, EncodeFn(w1c_vclock(O))} end,
                   RObjs),
-    Size = lists:sum(lists:map(fun({_BK, O}) -> size(O) end, EncodedVals)),
+    Sizes = lists:map(fun({_BK, O}) -> size(O) end, EncodedVals),
+    TotalSize = lists:sum(Sizes),
 
     gen_server:cast(
       Worker,
       {batch_put, Bucket, BucketProps, EncodedVals, ReqId, DocIdx, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
-            size=Size}}),
+            obj_sizes=Sizes,
+            size=TotalSize}}),
     {ok, {ReqId, Worker}}.
 
 %% Primarily for repl support. Put a list of objects represented as
@@ -193,13 +200,15 @@ ts_batch_put_encoded([{{Bucket, _LK}, _RObj0}|_Rest]=RObjs, DocIdx) ->
     PW = proplists:get_value(pw, BucketProps),
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
     Preflist = riak_core_apl:get_apl_ann(DocIdx, NVal, UpNodes),
-    Size = lists:sum(lists:map(fun({_BK, O}) -> size(O) end, RObjs)),
+    Sizes = lists:map(fun({_BK, O}) -> size(O) end, RObjs),
+    TotalSize = lists:sum(Sizes),
     gen_server:cast(
       Worker,
       {batch_put, Bucket, BucketProps, RObjs, ReqId, DocIdx, Preflist,
        #rec{w=W, pw=PW, n_val=NVal, from=self(),
             start_ts=StartTS,
-            size=Size}}),
+            obj_sizes=Sizes,
+            size=TotalSize}}),
     {ok, {ReqId, Worker}}.
 
 
@@ -222,34 +231,54 @@ async_put_replies(ReqIdTuples, Options) ->
 %%%===================================================================
 
 init(_) ->
-    {ok, #state{}}.
+    {ok, #state{
+        max_object_size = app_helper:get_env(riak_kv, max_object_size),
+        warn_object_size = app_helper:get_env(riak_kv, warn_object_size)}}.
 
 handle_call(_Request, _From, State) ->
     {reply, undefined, State}.
 
-handle_cast({put, Bucket, BucketProps, PartitionIdx, Key, EncodedVal, ReqId, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
-    NewState = case store_request_record(ReqId, Rec, State) of
-                   {undefined, S} ->
-                       UpdProxies = send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId),
-                       postcommit(data_type_by_key(Key), Bucket,
-                                  maybe_ts_markup(PartitionIdx, Bucket, Key, EncodedVal),
-                                  BucketProps),
-                       S#state{proxies=UpdProxies};
-                   {_, S} ->
-                       reply(From, ReqId, {error, request_id_already_defined}),
-                       S
-    end,
+handle_cast({put, Bucket, BucketProps, PartitionIdx, Key, EncodedVal, ReqId, Preflist, Rec}, State) ->
+    #rec{from=From, obj_sizes=BinSizes} = Rec,
+    #state{proxies=Proxies, max_object_size=MaxSize, warn_object_size=WarnSize} = State,
+    %% Report or fail on large objects
+    NewState = case are_object_sizes_valid(Bucket, Key, BinSizes, MaxSize, WarnSize) of
+        true ->
+            case store_request_record(ReqId, Rec, State) of
+                {undefined, S} ->
+                    UpdProxies = send_vnodes(Preflist, Proxies, Bucket, Key, EncodedVal, ReqId),
+                    postcommit(data_type_by_key(Key), Bucket,
+                               maybe_ts_markup(PartitionIdx, Bucket, Key, EncodedVal),
+                               BucketProps),
+                    S#state{proxies=UpdProxies};
+                {_, S} ->
+                    reply(From, ReqId, {error, request_id_already_defined}),
+                    S
+            end;
+        false ->
+            reply(From, ReqId, {error, too_large}),
+            State
+     end,
     {noreply, NewState};
-handle_cast({batch_put, Bucket, BucketProps, EncodedVals, ReqId, PK, Preflist, #rec{from=From}=Rec}, #state{proxies=Proxies}=State) ->
-    NewState = case store_request_record(ReqId, Rec, State) of
-                   {undefined, S} ->
-                       UpdProxies = batch_send_vnodes(Preflist, Proxies, EncodedVals, ReqId),
-                       postcommit(ts, Bucket, {PK, EncodedVals}, BucketProps),
-                       S#state{proxies=UpdProxies};
-                   {_, S} ->
-                       reply(From, ReqId, {error, request_id_already_defined}),
-                       S
-    end,
+handle_cast({batch_put, Bucket, BucketProps, EncodedVals, ReqId, PK, Preflist, Rec}, State) ->
+    #rec{from=From, obj_sizes=BinSizes} = Rec,
+    #state{proxies=Proxies, max_object_size=MaxSize, warn_object_size=WarnSize} = State,
+    %% Report or fail on large objects
+    NewState = case are_object_sizes_valid(Bucket, PK, BinSizes, MaxSize, WarnSize) of
+                   true ->
+                       case store_request_record(ReqId, Rec, State) of
+                           {undefined, S} ->
+                               UpdProxies = batch_send_vnodes(Preflist, Proxies, EncodedVals, ReqId),
+                               postcommit(ts, Bucket, {PK, EncodedVals}, BucketProps),
+                               S#state{proxies=UpdProxies};
+                           {_, S} ->
+                               reply(From, ReqId, {error, request_id_already_defined}),
+                               S
+                       end;
+                   false ->
+                       reply(From, ReqId, {error, too_large}),
+                       State
+               end,
     {noreply, NewState};
 handle_cast({cancel, ReqId}, State) ->
     NewState = case erase_request_record(ReqId, State) of
@@ -542,3 +571,33 @@ chash_key(Bucket, {PartitionKey, _LocalKey}, BucketProps) ->
     riak_core_util:chash_key({Bucket, PartitionKey}, BucketProps);
 chash_key(Bucket, Key, BucketProps) ->
     riak_core_util:chash_key({Bucket, Key}, BucketProps).
+
+%%
+%% @doc Ensure the objects do not exceed the configuration limits
+-spec are_object_sizes_valid(Bucket :: binary(),
+                             Key :: any(),
+                             BinSizes :: [integer()],
+                             MaxSize :: integer(),
+                             WarnSize :: integer()) -> boolean().
+are_object_sizes_valid(Bucket, Key, BinSizes, MaxSize, WarnSize) ->
+    TooBig = lists:filter(fun(S) ->
+                              S > MaxSize
+                          end, BinSizes),
+    case TooBig of
+        [] ->
+            Warning = lists:filter(fun(S) ->
+                                       S > WarnSize
+                                   end, BinSizes),
+            case Warning of
+                [] -> ok;
+                _ ->
+                    lager:warning("Writing very large object (~p bytes) to ~p/~p",
+                        [hd(Warning), Bucket, Key])
+            end,
+            true;
+        _ ->
+            lager:error("Write-Once Put failure: object too large to write ~p/~p ~p bytes",
+                [Bucket, Key, hd(TooBig)]),
+            false
+    end.
+
