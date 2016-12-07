@@ -339,7 +339,19 @@ do_update({sweeper, Index, keys, NumKeys}) ->
     create_or_update([P, ?APP, sweeper, Index, keys], NumKeys, spiral);
 do_update({sweeper, Index, bytes, NumBytes}) ->
     P = ?PFX,
-    create_or_update([P, ?APP, sweeper, Index, bytes], NumBytes, spiral).
+    create_or_update([P, ?APP, sweeper, Index, bytes], NumBytes, spiral);
+do_update({sweeper, Index, deleted, Count}) ->
+    P = ?PFX,
+    create_or_update([P, ?APP, sweeper, Index, deleted], Count, spiral);
+do_update({sweeper, Index, mutated, Count}) ->
+    P = ?PFX,
+    create_or_update([P, ?APP, sweeper, Index, mutated], Count, spiral);
+do_update({sweeper, Index, failed, Module, Count}) ->
+    P = ?PFX,
+    create_or_update([P, ?APP, sweeper, Index, failed, Module], Count, spiral);
+do_update({sweeper, Index, successful, Module, Count}) ->
+    P = ?PFX,
+    create_or_update([P, ?APP, sweeper, Index, successful, Module], Count, spiral).
 
 %% private
 

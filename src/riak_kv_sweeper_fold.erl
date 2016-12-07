@@ -75,14 +75,14 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index,
         {ok, #sa{} = Acc} ->
             inform_participants(Acc, Index),
             riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
-            Acc1 = stat_send(Index, Acc),
+            Acc1 = stat_send(Index, {final, Acc}),
             {reply, Acc1, VnodeState};
         {async, Work} ->
             FinishFun =
                 fun(Acc) ->
                         inform_participants(Acc, Index),
                         riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
-                        stat_send(Index, Acc)
+                        stat_send(Index, {final, Acc})
                 end,
             {async, {sweep, Work, FinishFun}, Sender, VnodeState};
         Reason ->
@@ -106,14 +106,15 @@ fold_req_fun(Bucket, Key, RObjBin,
             0 ->
                 riak_kv_sweeper:update_progress(Index, SweptKeys),
                 Acc2 = maybe_receive_request(Acc1),
-                stat_send(Index, Acc2);
+                stat_send(Index, {in_progress, Acc2});
             _ ->
                 Acc1
         end,
     RObj = riak_object:from_binary(Bucket, Key, RObjBin),
-    Acc4 = update_stat_counters(byte_size(RObjBin), Acc3),
-    apply_sweep_participant_funs({{Bucket, Key}, RObj},
-                                 Acc4#sa{swept_keys = SweptKeys + 1}).
+    {NumMutated, NumDeleted, Acc4} =
+        apply_sweep_participant_funs({{Bucket, Key}, RObj},
+                                     Acc3#sa{swept_keys = SweptKeys + 1}),
+    update_stat_counters(NumMutated, NumDeleted, byte_size(RObjBin), Acc4).
 
 -spec make_initial_acc(riak_kv_sweeper:index(),
                        [#sweep_participant{}],
@@ -212,7 +213,8 @@ maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, _, _}} = Acc0) ->
 maybe_extra_throttle(Acc) ->
     #sa{throttle = Throttle,
         throttle_total_wait_msecs = TotalWait,
-        modified_objects = ModObj} = Acc,
+        num_mutated = NumMutated,
+        num_deleted = NumDeleted} = Acc,
     {Limit, Wait} =
         case Throttle of
             {pace, Limit0, Wait0} ->
@@ -221,7 +223,7 @@ maybe_extra_throttle(Acc) ->
                 {100, Wait0}
         end,
     %% +1 since some sweeps doesn't modify any objects
-    case (ModObj + 1) rem Limit of
+    case (NumMutated + NumDeleted + 1) rem Limit of
         0 ->
             timer:sleep(Wait),
             Acc#sa{throttle_total_wait_msecs = TotalWait + Wait};
@@ -279,7 +281,7 @@ maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
 -spec apply_sweep_participant_funs({{riak_object:bucket(),
                                      riak_object:key()},
                                     riak_object:riak_object()}, #sa{}) ->
-    #sa{}.
+    {NumMutated :: non_neg_integer(), NumDeleted :: non_neg_integer(), #sa{}}.
 apply_sweep_participant_funs({BKey, RObj}, SweepAcc) ->
     ActiveParticipants = SweepAcc#sa.active_p,
     FailedParticipants = SweepAcc#sa.failed_p,
@@ -289,16 +291,19 @@ apply_sweep_participant_funs({BKey, RObj}, SweepAcc) ->
     InitialAcc = {RObj,
                   FailedParticipants,
                   _Successful = [],
-                  _ModifiedObjs = 0,
+                  _NumMutated = 0,
+                  _NumDeleted = 0,
                   BucketProps},
     FoldFun = fun(E, Acc) -> run_participant_fun(E, Index, BKey, Acc) end,
     Results = lists:foldl(FoldFun, InitialAcc, ActiveParticipants),
 
-    {_, Failed, Successful, ModifiedObjs, NewBucketProps} = Results,
+    {_, Failed, Successful, NumMutated, NumDeleted, NewBucketProps} = Results,
 
-    SweepAcc1 = update_modified_objs_count(SweepAcc, ModifiedObjs),
+    SweepAcc1 = update_modified_objs_count(SweepAcc, NumMutated, NumDeleted),
     SweepAcc2 = SweepAcc1#sa{bucket_props = NewBucketProps},
-    update_sa_with_participant_results(SweepAcc2, Failed, Successful).
+    SweepAcc3 = update_sa_with_participant_results(SweepAcc2, Failed, Successful),
+    {NumMutated, NumDeleted, SweepAcc3}.
+
 
 %% Check if the sweep_participant have reached crash limit.
 -spec run_participant_fun(#sweep_participant{},
@@ -307,29 +312,36 @@ apply_sweep_participant_funs({BKey, RObj}, SweepAcc) ->
                           {riak_object:riak_object(),
                            [#sweep_participant{}],
                            [#sweep_participant{}],
-                           ModifiedObjs :: non_neg_integer(),
+                           NumMutated :: non_neg_integer(),
+                           NumDeleted :: non_neg_integer(),
                            BucketProps :: []}) ->
     {riak_object:riak_object(),
      [#sweep_participant{}],
      [#sweep_participant{}],
-     ModifiedObjs :: non_neg_integer(),
+     NumMutated :: non_neg_integer(),
+     NumDeleted :: non_neg_integer(),
      BucketProps :: []}.
 run_participant_fun(SP = #sweep_participant{errors = ?MAX_SWEEP_CRASHES,
                                             module = Module},
                     _Index, _BKey,
-                    {RObj, Failed, Successful, ModifiedObjs, BucketProps}) ->
+                    {RObj, Failed, Successful, NumMutated, NumDeleted,
+                     BucketProps}) ->
     lager:error("Sweeper fun ~p crashed too many times.", [Module]),
     FailedSP = SP#sweep_participant{fail_reason = too_many_crashes},
-    {RObj, [FailedSP | Failed], Successful, ModifiedObjs, BucketProps};
+    {RObj, [FailedSP | Failed], Successful, NumMutated, NumDeleted,
+     BucketProps};
 
 run_participant_fun(SP,
                     _Index, _BKey,
-                    {deleted, Failed, Successful, ModifiedObjs, BucketProps}) ->
-    {deleted, Failed, [SP | Successful], ModifiedObjs, BucketProps};
+                    {deleted, Failed, Successful, NumMutated, NumDeleted,
+                     BucketProps}) ->
+    {deleted, Failed, [SP | Successful], NumMutated, NumDeleted,
+     BucketProps};
 
 run_participant_fun(SP,
                     Index, BKey,
-                    {RObj, Failed, Successful, ModifiedObjs, BucketProps}) ->
+                    {RObj, Failed, Successful, NumMutated, NumDeleted,
+                     BucketProps}) ->
     Fun = SP#sweep_participant.sweep_fun,
     ParticipantAcc = SP#sweep_participant.acc,
     Errors = SP#sweep_participant.errors,
@@ -341,15 +353,16 @@ run_participant_fun(SP,
 
     try Fun({BKey, RObj}, ParticipantAcc, OptValues) of
         Result ->
-            {NewRObj, NumModified, NewParticipantAcc} =
+            {NewRObj, Mutated, Deleted, NewParticipantAcc} =
                 do_participant_side_effects(Result, Index, BKey, RObj),
             NewSucc = [SP#sweep_participant{acc = NewParticipantAcc} | Successful],
-            {NewRObj, Failed, NewSucc, ModifiedObjs + NumModified, NewBucketProps}
+            {NewRObj, Failed, NewSucc, NumMutated + Mutated, NumDeleted + Deleted,
+             NewBucketProps}
     catch C:T ->
             lager:error("Sweeper fun crashed ~p ~p Key: ~p Obj: ~p", [{C, T}, SP, BKey, RObj]),
             %% We keep the sweep in succ unil we have enough crashes
             NewSucc = [SP#sweep_participant{errors = Errors + 1} | Successful],
-            {RObj, Failed, NewSucc, ModifiedObjs, NewBucketProps}
+            {RObj, Failed, NewSucc, NumMutated, NumDeleted, NewBucketProps}
     end.
 
 -spec do_participant_side_effects({'mutated', riak_object:riak_object(), #sa{}}
@@ -359,26 +372,30 @@ run_participant_fun(SP,
                                   riak_object:riak_object()) ->
     {'deleted'
      | riak_object:riak_object(),
-     Count :: non_neg_integer(),
+     Modified :: non_neg_integer(),
+     Deleted :: non_neg_integer(),
      #sa{}}.
 do_participant_side_effects({deleted, NewAcc},
                             Index, BKey, RObj) ->
     riak_kv_vnode:local_reap(Index, BKey, RObj),
-    {deleted, 1, NewAcc};
+    {deleted, 0, 1, NewAcc};
 do_participant_side_effects({mutated, MutatedRObj, NewAcc},
                             Index, _BKey, _RObj) ->
     riak_kv_vnode:local_put(Index,
                             MutatedRObj,
                             [{hashtree_action, tombstone}]),
-    {MutatedRObj, 1, NewAcc};
+    {MutatedRObj, 1, 0, NewAcc};
 do_participant_side_effects({ok, NewAcc}, _Index, _BKey, RObj) ->
-    {RObj, 0, NewAcc}.
+    {RObj, 0, 0, NewAcc}.
 
 -spec update_modified_objs_count(#sa{},
-                                 ModifiedObjs :: non_neg_integer()) -> #sa{}.
-update_modified_objs_count(SweepAcc, ModifiedObjs) ->
-    PreviouslyModObjs = SweepAcc#sa.modified_objects,
-    SweepAcc#sa{modified_objects = PreviouslyModObjs + ModifiedObjs}.
+                                 NumMutated :: non_neg_integer(),
+                                 NumDeleted :: non_neg_integer()) -> #sa{}.
+update_modified_objs_count(SweepAcc, NumMutated, NumDeleted) ->
+    Mutated0 = SweepAcc#sa.num_mutated,
+    Deleted0 = SweepAcc#sa.num_deleted,
+    SweepAcc#sa{num_mutated = Mutated0 + NumMutated,
+                num_deleted = Deleted0 + NumDeleted}.
 
 -spec update_sa_with_participant_results(#sa{},
                                          [#sweep_participant{}],
@@ -414,19 +431,39 @@ get_bucket_props(Bucket, BucketPropsDict) ->
             {BucketProps, BucketPropsDict1}
     end.
 
--spec update_stat_counters(BinSize :: non_neg_integer(), #sa{}) -> #sa{}.
-update_stat_counters(RObjBinSize, Acc) ->
+-spec update_stat_counters(NumMutated :: non_neg_integer(),
+                           NumDeleted :: non_neg_integer(),
+                           BinSize :: non_neg_integer(),
+                           #sa{}) -> #sa{}.
+update_stat_counters(NumMutated, NumDeleted, RObjBinSize, Acc) ->
     StatSweptKeysCounter = Acc#sa.stat_swept_keys_counter,
     StatObjSizeCounter = Acc#sa.stat_obj_size_counter,
+    StatNumMutated = Acc#sa.stat_mutated_objects_counter,
+    StatNumDeleted = Acc#sa.stat_deleted_objects_counter,
 
-    Acc#sa{stat_obj_size_counter = StatObjSizeCounter + RObjBinSize,
+    Acc#sa{stat_mutated_objects_counter = StatNumMutated + NumMutated,
+           stat_deleted_objects_counter = StatNumDeleted + NumDeleted,
+           stat_obj_size_counter = StatObjSizeCounter + RObjBinSize,
            stat_swept_keys_counter = StatSweptKeysCounter + 1}.
 
--spec stat_send(riak_kv_sweeper:index(), #sa{}) -> #sa{}.
-stat_send(Index, Acc) ->
+-spec stat_send(riak_kv_sweeper:index(),
+                {'final'| 'in_progress', #sa{}}) -> #sa{}.
+stat_send(Index, {final, Acc}) ->
+    [ riak_kv_stat:update({sweeper, Index, failed, Module, 1})
+      || #sweep_participant{module = Module} <- Acc#sa.failed_p],
+    [ riak_kv_stat:update({sweeper, Index, successful, Module, 1})
+      || #sweep_participant{module = Module} <- Acc#sa.active_p],
+    stat_send(Index, {in_progress, Acc});
+
+stat_send(Index, {in_progress, Acc}) ->
     riak_kv_stat:update({sweeper, Index, keys, Acc#sa.stat_swept_keys_counter}),
     riak_kv_stat:update({sweeper, Index, bytes, Acc#sa.stat_obj_size_counter}),
-    Acc#sa{stat_swept_keys_counter = 0,
+    riak_kv_stat:update({sweeper, Index, deleted, Acc#sa.stat_deleted_objects_counter}),
+    riak_kv_stat:update({sweeper, Index, mutated, Acc#sa.stat_mutated_objects_counter}),
+
+    Acc#sa{stat_deleted_objects_counter = 0,
+           stat_mutated_objects_counter = 0,
+           stat_swept_keys_counter = 0,
            stat_obj_size_counter = 0}.
 
 -ifdef(TEST).
@@ -450,7 +487,9 @@ setup_sweep(N) ->
                                  end, InitialAcc, Keys),
                 {ok, SA}
         end,
-    meck:expect(fake_backend, fold_objects, BackendFun).
+    meck:expect(fake_backend, fold_objects, BackendFun),
+    meck:new(riak_kv_stat),
+    meck:expect(riak_kv_stat, update, fun(_) -> ok end).
 
 observ_sweep() ->
     %% Keep track on nr of modified and original objects

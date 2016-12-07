@@ -9,7 +9,7 @@
 %% COMMON TEST CALLBACK FUNCTIONS
 %%--------------------------------------------------------------------
 suite() ->
-    [{timetrap, {minutes, 1}}].
+    [{timetrap, {minutes, 2}}].
 
 init_per_suite(Config) ->
     {ok, Apps} = application:ensure_all_started(exometer_core),
@@ -38,7 +38,11 @@ init_per_testcase(_TestCase, Config) ->
     %% Delete all sweeper exometer metrics
     [begin
          exometer:delete([riak, riak_kv, sweeper, Index, keys]),
-         exometer:delete([riak, riak_kv, sweeper, Index, bytes])
+         exometer:delete([riak, riak_kv, sweeper, Index, bytes]),
+         exometer:delete([riak, riak_kv, sweeper, Index, failed, sweep_observer_1]),
+         exometer:delete([riak, riak_kv, sweeper, Index, successful, sweep_observer_1]),
+         exometer:delete([riak, riak_kv, sweeper, Index, mutated]),
+         exometer:delete([riak, riak_kv, sweeper, Index, deleted])
      end || Index <- VNodeIndices],
 
     [{vnode_indices, VNodeIndices}|Config].
@@ -154,6 +158,19 @@ visit_function({mutate, Count}) ->
                 case NewAcc =< Count of
                     true ->
                         {mutated, RObj, NewAcc};
+                    false ->
+                        {ok, NewAcc}
+                end
+        end
+    end;
+
+visit_function({delete, Count}) ->
+    fun(_Index) ->
+        fun({{_Bucket, _Key}, _RObj}, Acc, _Opts = []) ->
+                NewAcc = Acc + 1,
+                case NewAcc =< Count of
+                    true ->
+                        {deleted, NewAcc};
                     false ->
                         {ok, NewAcc}
                 end
@@ -812,23 +829,147 @@ sweeper_exometer_reporting_test(Config) ->
     {error, not_found} = exometer:get_value([riak, riak_kv, sweeper, Index, keys]),
     riak_kv_sweeper:sweep(Index),
     ok = receive_msg({ok, successful_sweep, sweep_observer_1, Index}),
-    {ok, [{count, KeysCount0}, {one, KeysOne0}]} = exometer:get_value([riak, riak_kv, sweeper, Index, keys]),
-    {ok, [{count, BytesCount0}, {one, BytesOne0}]} = exometer:get_value([riak, riak_kv, sweeper, Index, bytes]),
+
     KeysCount0 = NumKeys,
     KeysOne0 = NumKeys,
+    {ok, [{count, KeysCount0}, {one, KeysOne0}]} =
+        match_retry(fun() -> exometer:get_value([riak, riak_kv, sweeper, Index, keys]) end,
+                    {ok, [{count, KeysCount0}, {one, KeysOne0}]}),
+
     BytesCount0 = NumKeys * RiakObjSizeBytes,
     BytesOne0 = NumKeys * RiakObjSizeBytes,
 
+    {ok, [{count, BytesCount0}, {one, BytesOne0}]} =
+        match_retry(fun() -> exometer:get_value([riak, riak_kv, sweeper, Index, bytes]) end,
+                    {ok, [{count, BytesCount0}, {one, BytesOne0}]}),
+
     riak_kv_sweeper:sweep(Index),
     ok = receive_msg({ok, successful_sweep, sweep_observer_1, Index}),
-    {ok, [{count, KeysCount1}, {one, KeysOne1}]} = exometer:get_value([riak, riak_kv, sweeper, Index, keys]),
-    {ok, [{count, BytesCount1}, {one, BytesOne1}]} = exometer:get_value([riak, riak_kv, sweeper, Index, bytes]),
     KeysCount1 = 2 * NumKeys,
     KeysOne1 = 2 * NumKeys,
+
+    {ok, [{count, KeysCount1}, {one, KeysOne1}]} =
+        match_retry(fun() -> exometer:get_value([riak, riak_kv, sweeper, Index, keys]) end,
+                    {ok, [{count, KeysCount1}, {one, KeysOne1}]}),
+
     BytesCount1 = 2 * NumKeys * RiakObjSizeBytes,
     BytesOne1 = 2 * NumKeys * RiakObjSizeBytes,
+    {ok, [{count, BytesCount1}, {one, BytesOne1}]} =
+        match_retry(fun() -> exometer:get_value([riak, riak_kv, sweeper, Index, bytes]) end,
+                    {ok, [{count, BytesCount1}, {one, BytesOne1}]}),
     ok.
 
+sweeper_exometer_successful_sweep_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    I0 = pick(Indices),
+    TestCasePid = self(),
+    meck_new_backend(TestCasePid, _NumKeys = 5000),
+    SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
+    SP1 = SP#sweep_participant{run_interval = 1},
+
+    meck_new_visit_function(sweep_observer_1),
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I})
+     || I <- Indices],
+    {error, not_found} =
+        match_retry(fun() ->
+                            exometer:get_value([riak, riak_kv, sweeper, I0,
+                                                failed, sweep_observer_1])
+                    end,
+                    {error, not_found}),
+    {ok, [{count, 1}, {one, 1}]} =
+        match_retry(fun() ->
+                            exometer:get_value([riak, riak_kv, sweeper, I0,
+                                                successful, sweep_observer_1])
+                    end,  {ok, [{count, 1}, {one, 1}]}),
+    sweeper_tick(TestCasePid),
+    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I},
+                      min_scheduler_response_time_msecs())
+     || I <- Indices],
+    {error, not_found} =
+        match_retry(fun() ->
+                            exometer:get_value([riak, riak_kv, sweeper, I0,
+                                                failed, sweep_observer_1])
+                    end,
+                    {error, not_found}),
+    {ok, [{count, 2}, {one, 2}]} =
+        match_retry(fun() ->
+                            exometer:get_value([riak, riak_kv, sweeper, I0,
+                                                successful, sweep_observer_1])
+                    end,  {ok, [{count, 2}, {one, 2}]}),
+    ok.
+
+sweeper_exometer_failed_sweep_test(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    I0 = pick(Indices),
+    TestCasePid = self(),
+    meck_new_backend(TestCasePid, _NumKeys = 5000),
+    SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
+    SP1 = SP#sweep_participant{run_interval = 1},
+
+    meck_new_visit_function(sweep_observer_1, {throw, crash}),
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    [ok = receive_msg({ok, failed_sweep, sweep_observer_1, I})
+     || I <- Indices],
+    {error, not_found} =
+        match_retry(fun() ->
+                            exometer:get_value([riak, riak_kv, sweeper, I0,
+                                                successful, sweep_observer_1])
+                    end,
+                    {error, not_found}),
+    {ok, [{count, 1}, {one, 1}]} =
+        match_retry(fun() ->
+                            exometer:get_value([riak, riak_kv, sweeper, I0,
+                                                failed, sweep_observer_1])
+                    end,  {ok, [{count, 1}, {one, 1}]}),
+    sweeper_tick(TestCasePid),
+    [ok = receive_msg({ok, failed_sweep, sweep_observer_1, I},
+                      min_scheduler_response_time_msecs())
+     || I <- Indices],
+    {error, not_found} =
+        match_retry(fun() ->
+                            exometer:get_value([riak, riak_kv, sweeper, I0,
+                                                successful, sweep_observer_1])
+                    end,
+                    {error, not_found}),
+    {ok, [{count, 2}, {one, 2}]} =
+        match_retry(fun() ->
+                            exometer:get_value([riak, riak_kv, sweeper, I0,
+                                                failed, sweep_observer_1])
+                    end,  {ok, [{count, 2}, {one, 2}]}),
+    ok.
+
+exometer_mutated_object_count(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    I0 = pick(Indices),
+
+    SP = meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_backend(self(), _NumKeys = 5042),
+    riak_kv_sweeper:add_sweep_participant(SP),
+    meck_new_visit_function(sweep_observer_1, {mutate, MutateKeys = 100}),
+    riak_kv_sweeper:sweep(I0),
+    ok = receive_msg({ok, successful_sweep, sweep_observer_1, I0}),
+    {ok, [{count, MutateKeys},{one, MutateKeys}]} =
+        match_retry(fun() -> exometer:get_value([riak, riak_kv, sweeper, I0, mutated]) end,
+                    {ok, [{count, MutateKeys}, {one, MutateKeys}]}),
+    ok.
+
+exometer_deleted_object_count(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    I0 = pick(Indices),
+
+    SP = meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_backend(self(), _NumKeys = 5042),
+    riak_kv_sweeper:add_sweep_participant(SP),
+    meck_new_visit_function(sweep_observer_1, {delete, DeleteKeys = 100}),
+    riak_kv_sweeper:sweep(I0),
+    ok = receive_msg({ok, successful_sweep, sweep_observer_1, I0}),
+    {ok, [{count, DeleteKeys},{one, DeleteKeys}]} =
+        match_retry(fun() -> exometer:get_value([riak, riak_kv, sweeper, I0, mutated]) end,
+                    {ok, [{count, DeleteKeys}, {one, DeleteKeys}]}),
+    ok.
 
 %% ------------------------------------------------------------------------------
 %% Internal Functions
@@ -944,5 +1085,17 @@ is_testcase({F, 1}) ->
 is_testcase({_, _}) ->
     false.
 
-%% watch:remove_file_changed_action(ct).
-%% watch:add_file_changed_action({ct, fun(_) -> ct:run_test({suite, riak_kv_sweeper_SUITE}) end}).
+match_retry(Fun, Result) ->
+   match_retry(_Max = 10,  _N = 1, Fun, Result).
+match_retry(Max, N, _Fun, max_retries) when N > Max ->
+    throw(max_retries);
+match_retry(Max, N, _Fun, _Result) when N > Max ->
+    max_retries;
+match_retry(Max, N, Fun, Result) ->
+    case Fun() of
+        Result ->
+            Result;
+        _ ->
+            timer:sleep(1000),
+            match_retry(Max, N+1, Fun, Result)
+    end.
