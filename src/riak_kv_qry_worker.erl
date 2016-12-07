@@ -403,10 +403,15 @@ run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, undefine
 run_select_on_rows_chunk(_SubQId, SelClause, DecodedChunk, _QueryResult1, QBufRef) ->
     IndexedChunks =
         [riak_kv_qry_compiler:run_select(SelClause, Row) || Row <- DecodedChunk],
-    case riak_kv_qry_buffers:batch_put(QBufRef, IndexedChunks) of
+    try riak_kv_qry_buffers:batch_put(QBufRef, IndexedChunks) of
         ok ->
             ok;
         {error, Reason} ->
+            throw({qbuf_error, Reason})
+    catch
+        Error:Reason ->
+            lager:warning("Failed to send data to qbuf ~p serving subquery ~p of ~p: ~p:~p",
+                          [QBufRef, _SubQId, SelClause, Error, Reason]),
             throw({qbuf_error, Reason})
     end.
 
