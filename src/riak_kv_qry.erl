@@ -246,8 +246,10 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                     %% these fields are used to create a DDL for the query buffer table;
                     %% we extract them here to avoid doing another compilation of OrigQry
                     %% in riak_kv_qry_buffers:get_or_create_qbuf
-                    ?SQL_SELECT{'SELECT' = CompiledSelect,
-                                'ORDER BY' = CompiledOrderBy} = hd(SubQueries),
+                    ?SQL_SELECT{'SELECT'   = CompiledSelect,
+                                'ORDER BY' = CompiledOrderBy,
+                                'LIMIT'    = Limit,
+                                'OFFSET'   = Offset} = hd(SubQueries),
                     FullCycle =
                         fun(QBufRef) ->
                             maybe_await_query_results(
@@ -271,8 +273,8 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                             %% query: yay results!
                             try riak_kv_qry_buffers:fetch_limit(
                                   QBufRef,
-                                  riak_kv_qry_buffers:limit_to_scalar(SQL?SQL_SELECT.'LIMIT'),
-                                  riak_kv_qry_buffers:offset_to_scalar(SQL?SQL_SELECT.'OFFSET')) of
+                                  riak_kv_qry_buffers:limit_to_scalar(Limit),
+                                  riak_kv_qry_buffers:offset_to_scalar(Offset)) of
                                 Result ->
                                     Result
                             catch
