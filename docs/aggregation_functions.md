@@ -120,7 +120,7 @@ Finally:
 
 # Invocation Notes III
 
-![Sequence Diagram](https://raw.githubusercontent.com/basho/riak_kv/feature_gg_documents_and_architecture/docs/aggregation_functions.png)
+![Sequence Diagram](https://raw.githubusercontent.com/basho/riak_kv/riak_ts-develop/docs/diagrams/aggregation_functions.png)
 
 ---
 
