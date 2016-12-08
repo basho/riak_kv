@@ -1329,19 +1329,22 @@ store_to_where_props(_, _, WhereProps) ->
 
 rewrite_start_key_with_filters([], _, _, SKey, SInc) ->
     {SKey, SInc};
-rewrite_start_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, SKey, SInc) when is_binary(AddFieldName) ->
+rewrite_start_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, SKey, SInc1) when is_binary(AddFieldName) ->
     case proplists:get_value(AddFieldName, Filter) of
-        {'=',_,_} = F ->
+        {Op,_,_} = F  when Op == '='; Op == '>' ->
             %% when an equality operator is found, we can put it on the key but
             %% cannot safely remove the filter
             SKeyElem = to_key_elem(ToKeyTypeFn, F),
+            %% if the quantum was inclusive, make sure we stay inclusive or
+            %% the quantum boundary is modified later on
+            SInc2 = ((SInc1 /= false) or is_inclusive_op(Op)),
             rewrite_start_key_with_filters(
-                Tail, ToKeyTypeFn, Filter, SKey++[SKeyElem], true);
+                Tail, ToKeyTypeFn, Filter, SKey++[SKeyElem], SInc2);
         _ ->
             %% there is no filter for the next additional field so give up! The
             %% filters must be consecutive, we can't have a '_' inbetween
             %% values
-            {SKey, SInc}
+            {SKey, SInc1}
     end.
 
 rewrite_end_key_with_filters([], _, _, EKey, EInc) ->
@@ -1360,6 +1363,10 @@ rewrite_end_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, EKey, EIn
             %% values
             {EKey, EInc}
     end.
+
+is_inclusive_op('=')  -> true;
+is_inclusive_op('>')  -> false;
+is_inclusive_op('>=') -> true.
 
 %% Convert a filter to a start/end key element
 to_key_elem(ToKeyTypeFn, {_,{field,FieldName,_},{_,Val}}) ->
@@ -3034,6 +3041,25 @@ additional_local_key_cols_added_to_query_keys_test() ->
         S?SQL_SELECT.'WHERE'
     ).
 
+greater_than_filter_added_to_start_key_if_it_part_of_local_key_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((quantum(a,1,'s')),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b > 1 AND a >= 4200 AND a <= 4600"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,4200},{<<"b">>,sint64,1}]},
+         {endkey,[{<<"a">>,timestamp,4600}]},
+         {filter,{'>',{field,<<"b">>,sint64},{const, 1}}},
+         {start_inclusive,true},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
 %% if the pk is (a) and lk is (a,b,c) then b AND c must have filters for c
 %% to be added to the key. If b does not have a filter but c does, then neither
 %% is added.
@@ -3126,7 +3152,7 @@ second_greater_than_check_which_is_a_greater_value_is_removed_test() ->
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
         "b SINT64 NOT NULL, "
-        "PRIMARY KEY ((a),a,b))"),
+        "PRIMARY KEY ((a),a))"),
     {ok, Q} = get_query(
         "SELECT * FROM table1 "
         "WHERE a = 5 AND b > 10 AND b > 11"),
@@ -3145,7 +3171,7 @@ second_greater_than_check_which_is_a_lesser_value_removes_the_first_test() ->
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
         "b SINT64 NOT NULL, "
-        "PRIMARY KEY ((a),a,b))"),
+        "PRIMARY KEY ((a),a))"),
     {ok, Q} = get_query(
         "SELECT * FROM table1 "
         "WHERE a = 5 AND b > 11 AND b > 10"),
