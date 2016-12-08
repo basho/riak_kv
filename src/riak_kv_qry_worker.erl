@@ -450,11 +450,11 @@ subqueries_done(QId, #state{qid          = QId,
                                     [[riak_pb_ts_codec:ldbvalue()]]}.
 prepare_final_results(#state{qbuf_ref = undefined,
                              result = IndexedChunks,
-                             qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select}}) ->
+                             qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select} = Query}) ->
     %% sort by index, to reassemble according to coverage plan
     {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
-    prepare_final_results2(Select, lists:append(R2));
-
+    R3 = maybe_apply_offset_limit(Query, lists:append(R2)),
+    prepare_final_results2(Select, R3);
 prepare_final_results(#state{qbuf_ref = QBufRef,
                              qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select,
                                                'LIMIT'  = Limit,
@@ -477,7 +477,6 @@ prepare_final_results(#state{qbuf_ref = QBufRef,
             %% the query buffer is gone: we can still retry (should we, really?)
             cancel_error_query(bad_qbuf_ref, State)
     end;
-
 prepare_final_results(#state{
         result = Aggregate1,
         qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate} = Select }} = State) ->
@@ -502,6 +501,26 @@ prepare_final_results(#state{
         error:divide_by_zero ->
             cancel_error_query(divide_by_zero, State)
     end.
+
+maybe_apply_offset_limit(?SQL_SELECT{'OFFSET' = [], 'LIMIT' = []}, Rows) ->
+    Rows;
+maybe_apply_offset_limit(?SQL_SELECT{'OFFSET' = [Offset], 'LIMIT' = []}, Rows) when is_integer(Offset), Offset >= 0 ->
+    safe_nthtail(Offset, Rows);
+maybe_apply_offset_limit(?SQL_SELECT{'OFFSET' = [], 'LIMIT' = [Limit]}, Rows) when is_integer(Limit), Limit >= 0 ->
+    lists:sublist(Rows, Limit);
+maybe_apply_offset_limit(?SQL_SELECT{'OFFSET' = [Offset], 'LIMIT' = [Limit]}, Rows) when is_integer(Offset), is_integer(Limit), Offset >= 0, Limit >= 0 ->
+    lists:sublist(safe_nthtail(Offset, Rows), Limit);
+maybe_apply_offset_limit(_, _) ->
+    [].
+
+%% safe because this function will not throw an exception if the list is not
+%% longer than the offset, unlike lists:nthtail/2
+safe_nthtail(0, Rows) ->
+    Rows;
+safe_nthtail(_, []) ->
+    [];
+safe_nthtail(Offset, [_|Tail]) ->
+    safe_nthtail(Offset-1, Tail).
 
 %%
 prepare_final_results2(#riak_sel_clause_v1{col_return_types = ColTypes,
