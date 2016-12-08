@@ -1196,17 +1196,25 @@ check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},{const,GtVal}
             %% query like `a = 10 AND a > 8` we can eliminate the greater than
             %% clause because if a to be 10 it must also be greater than 8
             {eliminate, Acc};
-        #filtercheck{'>=' = {_,_,{const,GteVal}}} when GtVal =< GteVal ->
+        #filtercheck{'>=' = {_,_,{const,GteVal}}} when GtVal >= GteVal ->
             %% query like `a >= 10 AND a > 8` we can eliminate the greater than
             %% clause because if a to be greater than or equal to 10 it must
             %% also be greater than 8
             {eliminate, Acc};
+        #filtercheck{'>=' = {_,_,{const,GteVal}} = F_x} = Check1 when GtVal < GteVal ->
+            %% query like `b >= 10 AND b > 9`, the previous >= clause should be
+            %% eliminated on the second pass
+            Check2 = Check1#filtercheck{'>' = F, '>=' = undefined},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F,Acc3};
         #filtercheck{'>' = undefined} = Check1 ->
-            %% this is the first equality check so just record it
+            %% this is the first greater than check so just record it
             Check2 = Check1#filtercheck{'>' = F},
             {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
         #filtercheck{'>' = F_x} when F_x < F ->
-            %% we already have a filter that is a lower value than 
+            %% we already have a filter with a lower value than this one, so
+            %% eliminate this one
             {eliminate, Acc};
         #filtercheck{'>' = F_x} = Check1 when F_x > F ->
             %% we already have a filter that is higher than the second one,
@@ -1227,6 +1235,11 @@ check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVa
         #filtercheck{'=' = {_,_,{const,EqVal}}} when GteVal > EqVal ->
             %% query like `a = 10 AND a >= 11` cannot be satisfied
             throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'>' = {_,_,{const,GtVal}}} when GtVal < GteVal ->
+            %% query like `a = 10 AND a >= 8` we can eliminate the greater than
+            %% or equal to clause because if a to be 10 it must also be greater
+            %% than 8
+            {eliminate, Acc};
         #filtercheck{'>' = {_,_,{const,GtVal}} = F_x} = Check1 when GtVal >= GteVal ->
             %% we already have a filter that is higher than the second one,
             %% which we can eliminate. Store it and eliminate it on the second
@@ -1249,7 +1262,7 @@ check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVa
             %% which we can eliminate. Store it and eliminate it on the second
             %% pass since it has already been iterated
             Check2 = Check1#filtercheck{'>=' = F},
-            Acc2 = lists:keystore(FieldName, #filtercheck.name, Acc, Check2),
+            Acc2 = store_filter_check(Check2, Acc),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
             {F, Acc3}
     end;
@@ -3285,7 +3298,7 @@ clause_for_equality_and_greater_than_or_equalit_to_is_not_possible_swap_lhs_rhs_
         compile(DDL, Q)
     ).
 
-greater_than_or_equal_to_that_is_less_than_previous_greater_than_clause_removes_greater_than_clause_test() ->
+greater_than_or_equal_to_is_less_than_previous_greater_than_clause_removes_greater_than_clause_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
@@ -3303,7 +3316,7 @@ greater_than_or_equal_to_that_is_less_than_previous_greater_than_clause_removes_
         S?SQL_SELECT.'WHERE'
     ).
 
-greater_than_or_equal_to_that_is_less_than_previous_greater_than_clause_removes_greater_than_clause_swap_lhs_rhs_test() ->
+greater_than_or_equal_to_is_less_than_previous_greater_than_clause_removes_greater_than_clause_swap_lhs_rhs_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
@@ -3317,6 +3330,42 @@ greater_than_or_equal_to_that_is_less_than_previous_greater_than_clause_removes_
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
          {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_is_less_than_previous_greater_than_or_equal_to_clause_removes_greater_than_or_equal_to_clause_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 9 AND b >= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 9}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_is_less_than_previous_greater_than_or_equal_to_clause_removes_greater_than_or_equal_to_clause_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 10 AND b > 9"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 9}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
