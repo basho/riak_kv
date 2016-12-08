@@ -55,7 +55,7 @@
 -define(E_QBUF_CREATE_ERROR,     1023).
 -define(E_QBUF_LDB_ERROR,        1024).
 -define(E_QUANTA_LIMIT,          1025).
--define(E_QBUF_INTERNAL_ERROR,   1026).
+-define(E_QBUF_INTERNAL_ERROR,   1027).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
 -define(TABLE_ACTIVATE_WAIT, 30). %% ditto
