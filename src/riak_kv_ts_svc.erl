@@ -407,44 +407,8 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
 sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                                            timeout = Timeout} = Req,
                   State) ->
-
-    %% Construct a function to convert from TS local key to TS
-    %% partition key.
-    %%
-    %% This is needed because coverage filter functions must check the
-    %% hash of the partition key, not the local key, when folding over
-    %% keys in the backend.
-
     KeyConvFn =
-        fun(Key) when is_binary(Key) ->
-                %% We need to adjust (negate) values in DESC columns
-                %% in order for lk_to_pk to correctly pick the keys at
-                %% quantum boundaries (this is because for DESC
-                %% columns, the quantum range is defined as `(...]`
-                %% rather than as `[..)`).
-                %% The key is organic here (it is read as previously
-                %% written), so no need to check for errors in lk_to_pk
-                %% result.
-                DescAdjustedKey =
-                    Mod:revert_ordering_on_local_key(sext:decode(Key)),
-                {ok, PK} = riak_ql_ddl:lk_to_pk(
-                             DescAdjustedKey, Mod, DDL),
-                list_to_tuple(PK);
-           (Key) ->
-                %% Key read from leveldb should always be binary.
-                %% This clause is just to keep dialyzer quiet
-                %% (otherwise dialyzer will complain about no local
-                %% return, since we have no way to spec the type
-                %% of Key for an anonymous function).
-                %%
-                %% Nonetheless, we log an error in case this branch is
-                %% ever exercised
-
-                lager:error("Key conversion function "
-                            "encountered a non-binary object key: ~p", [Key]),
-                Key
-        end,
-
+        {riak_kv_ts_util, local_to_partition_key},
     Result =
         riak_client:stream_list_keys(
           riak_kv_ts_util:table_to_bucket(Table), Timeout, KeyConvFn,

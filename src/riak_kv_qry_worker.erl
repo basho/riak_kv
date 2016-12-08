@@ -166,7 +166,7 @@ prepare_fsm_options([{{qry, ?SQL_SELECT{cover_context = CoverContext} = Q1}, {qi
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     Timeout = {timeout, ?SUBQUERY_FSM_TIMEOUT},
     Me = self(),
-    KeyConvFn = make_key_conversion_fun(Table),
+    KeyConvFn = {riak_kv_ts_util, local_to_partition_key},
     Q2 = convert_query_to_cluster_version(Q1),
     CoverageParameter =
         case CoverContext of
@@ -182,21 +182,6 @@ prepare_fsm_options([{{qry, ?SQL_SELECT{cover_context = CoverContext} = Q1}, {qi
     Opts = [Bucket, none, Q2, Timeout, all, undefined, CoverageParameter, riak_kv_qry_coverage_plan, KeyConvFn],
     prepare_fsm_options(T, [[{raw, QId, Me}, Opts] | Acc]).
 
-
-make_key_conversion_fun(Table) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    DDL = Mod:get_ddl(),
-    fun(Key) when is_binary(Key) ->
-            %% The key is organic here (it is read as previously
-            %% written), so no need to check for errors in lk_to_pk.
-            {ok, PK} = riak_ql_ddl:lk_to_pk(
-                         Mod:revert_ordering_on_local_key(sext:decode(Key)), Mod, DDL),
-            list_to_tuple(PK);
-       (Key) ->
-            lager:error("Key conversion function "
-                        "encountered a non-binary object key: ~p", [Key]),
-            Key
-    end.
 
 %% Convert the sql select record to a version that is safe to pass around the
 %% cluster. Do not treat the result as a record in the local node, just as a
