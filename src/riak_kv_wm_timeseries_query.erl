@@ -168,6 +168,10 @@ resource_exists(RD, #ctx{sql_type = ddl,
             riak_kv_wm_ts_util:handle_error({table_exists, Table}, RD, Ctx)
     end;
 resource_exists(RD, #ctx{sql_type = Type,
+                         table = <<>>} = Ctx) when Type /= ddl ->
+    % SHOW TABLES has table = <<>>
+    {true, RD, Ctx};
+resource_exists(RD, #ctx{sql_type = Type,
                          mod = Mod,
                          table = Table} = Ctx) when Type /= ddl ->
     case riak_kv_wm_ts_util:table_module_exists(Mod) of
@@ -191,11 +195,18 @@ process_post(RD, #ctx{sql_type = ddl, compiled_query = SQL, with_props = WithPro
         {error, Reason} ->
             riak_kv_wm_ts_util:handle_error(Reason, RD, Ctx)
     end;
-process_post(RD, #ctx{sql_type = QueryType,
-                      compiled_query = SQL,
-                      table = Table,
-                      mod = Mod} = Ctx) ->
+process_post(RD, #ctx{table = <<>>} = Ctx) ->
+    % SHOW TABLES has table = <<>>
+    process_post_(RD, Ctx, ?DDL{});
+process_post(RD, #ctx{mod = Mod} = Ctx) ->
     DDL = Mod:get_ddl(), %% might be faster to store this earlier on
+    process_post_(RD, Ctx, DDL).
+
+-spec process_post_(#wm_reqdata{}, #ctx{},
+                    ?DDL{}) -> cb_rv_spec(boolean()).
+process_post_(RD, #ctx{sql_type = QueryType,
+                       compiled_query = SQL,
+                       table = Table} = Ctx, DDL) ->
     case riak_kv_ts_api:query(SQL, DDL) of
         {ok, Data} ->
             {ColumnNames, _ColumnTypes, Rows} = Data,
