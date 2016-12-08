@@ -195,19 +195,18 @@ process_post(RD, #ctx{sql_type = ddl, compiled_query = SQL, with_props = WithPro
         {error, Reason} ->
             riak_kv_wm_ts_util:handle_error(Reason, RD, Ctx)
     end;
-process_post(RD, #ctx{sql_type = QueryType,
-                      compiled_query = SQL,
-                      table = <<>>} = Ctx) ->
+process_post(RD, #ctx{table = <<>>} = Ctx) ->
     % SHOW TABLES has table = <<>>
-    process_post_(RD, Ctx, SQL, QueryType, undefined, undefined);
-process_post(RD, #ctx{sql_type = QueryType,
-                      compiled_query = SQL,
-                      table = Table,
-                      mod = Mod} = Ctx) ->
+    process_post_(RD, Ctx, ?DDL{});
+process_post(RD, #ctx{mod = Mod} = Ctx) ->
     DDL = Mod:get_ddl(), %% might be faster to store this earlier on
-    process_post_(RD, Ctx, SQL, QueryType, Table, DDL).
+    process_post_(RD, Ctx, DDL).
 
-process_post_(RD, Ctx, SQL, QueryType, Table, DDL) ->
+-spec process_post_(#wm_reqdata{}, #ctx{},
+                    ?DDL{}) -> cb_rv_spec(boolean()).
+process_post_(RD, #ctx{sql_type = QueryType,
+                       compiled_query = SQL,
+                       table = Table} = Ctx, DDL) ->
     case riak_kv_ts_api:query(SQL, DDL) of
         {ok, Data} ->
             {ColumnNames, _ColumnTypes, Rows} = Data,
