@@ -281,7 +281,7 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                                 Error:Reason ->
                                     lager:warning("Failed to fetch results from qbuf for ~p: ~p:~p",
                                                   [SQL, Error, Reason]),
-                                    {error, Reason}
+                                    {error, {qbuf_internal_error, "qbuf manager died/restarted unexpectedly"}}
                             end
                     end
             end;
