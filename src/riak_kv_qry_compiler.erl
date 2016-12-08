@@ -1306,58 +1306,86 @@ find_filter_check(FieldName, Acc) when is_binary(FieldName) ->
 rewrite_where_with_additional_filters([], _, WhereProps) ->
     WhereProps;
 rewrite_where_with_additional_filters(AdditionalFields, ToKeyTypeFn, WhereProps) when is_list(WhereProps) ->
-    StartKey = proplists:get_value(startkey, WhereProps),
-    EndKey = proplists:get_value(endkey, WhereProps),
-    SInc = proplists:get_value(start_inclusive, WhereProps),
-    EInc = proplists:get_value(end_inclusive, WhereProps),
+    SKey1 = proplists:get_value(startkey, WhereProps),
+    EKey1 = proplists:get_value(endkey, WhereProps),
+    SInc1 = proplists:get_value(start_inclusive, WhereProps),
+    EInc1 = proplists:get_value(end_inclusive, WhereProps),
     Filter = proplists:get_value(filter, WhereProps),
-    AdditionalFilter =
-        find_filters_on_additional_local_key_fields(AdditionalFields, Filter),
-    [{filter, Filter}|rewrite_where_with_additional_filters_key(AdditionalFields, ToKeyTypeFn, StartKey, EndKey, SInc, EInc, AdditionalFilter)].
+    AdditionalFilter = find_filters_on_additional_local_key_fields(
+        AdditionalFields, Filter),
+    {SKey2, SInc2} = rewrite_start_key_with_filters(
+        AdditionalFields, ToKeyTypeFn, AdditionalFilter, SKey1, SInc1),
+    {EKey2, EInc2} = rewrite_end_key_with_filters(
+        AdditionalFields, ToKeyTypeFn, AdditionalFilter, EKey1, EInc1),
+    lists:foldl(
+        fun({K,V},Acc) -> store_to_where_props(K,V,Acc) end, WhereProps,
+        [{startkey,SKey2}, {endkey,EKey2},
+         {start_inclusive,SInc2}, {end_inclusive,EInc2}]).
 
-rewrite_where_with_additional_filters_key([], _, StartKey, EndKey, SInc, EInc, _) ->
-    [{startkey, StartKey}, {endkey, EndKey} | rewrite_where_with_additional_filters_inclusivity_props(SInc, EInc)];
-rewrite_where_with_additional_filters_key([Field|Tail], ToKeyTypeFn, StartKey, EndKey, SInc, EInc, Filter) ->
-    case lists:keyfind(Field, 2, Filter) of
-        false ->
+store_to_where_props(Key, Val, WhereProps) when Val /= undefined ->
+    lists:keystore(Key, 1, WhereProps, {Key, Val});
+store_to_where_props(_, _, WhereProps) ->
+    WhereProps.
+
+rewrite_start_key_with_filters([], _, _, SKey, SInc) ->
+    {SKey, SInc};
+rewrite_start_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, SKey, SInc) when is_binary(AddFieldName) ->
+    case proplists:get_value(AddFieldName, Filter) of
+        {'=',_,_} = F ->
+            %% when an equality operator is found, we can put it on the key but
+            %% cannot safely remove the filter
+            SKeyElem = to_key_elem(ToKeyTypeFn, F),
+            rewrite_start_key_with_filters(
+                Tail, ToKeyTypeFn, Filter, SKey++[SKeyElem], true);
+        _ ->
             %% there is no filter for the next additional field so give up! The
             %% filters must be consecutive, we can't have a '_' inbetween
             %% values
-            [{startkey, StartKey}, {endkey, EndKey} | rewrite_where_with_additional_filters_inclusivity_props(SInc, EInc)];
-        {'=', _, {_, Val}} ->
-            %% when an equality operator is found, we can put it on the key but
-            %% cannot safely remove the filter
-            KeyElem = {Field, ToKeyTypeFn([Field]), Val},
-            rewrite_where_with_additional_filters_key(
-                Tail, ToKeyTypeFn, StartKey++[KeyElem], EndKey++[KeyElem], true, true, Filter);
-        _ ->
-            [{startkey, StartKey}, {endkey, EndKey} | rewrite_where_with_additional_filters_inclusivity_props(SInc, EInc)]
+            {SKey, SInc}
     end.
 
-rewrite_where_with_additional_filters_inclusivity_props(SInc, EInc) ->
-    [P || {_,V} = P <- [{start_inclusive, SInc}, {end_inclusive, EInc}], V /= undefined].
+rewrite_end_key_with_filters([], _, _, EKey, EInc) ->
+    {EKey, EInc};
+rewrite_end_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, EKey, EInc) when is_binary(AddFieldName) ->
+    case proplists:get_value(AddFieldName, Filter) of
+        {'=',_,_} = F ->
+            %% when an equality operator is found, we can put it on the key but
+            %% cannot safely remove the filter
+            EKeyElem = to_key_elem(ToKeyTypeFn, F),
+            rewrite_end_key_with_filters(
+                Tail, ToKeyTypeFn, Filter, EKey++[EKeyElem], true);
+        _ ->
+            %% there is no filter for the next additional field so give up! The
+            %% filters must be consecutive, we can't have a '_' inbetween
+            %% values
+            {EKey, EInc}
+    end.
+
+%% Convert a filter to a start/end key element
+to_key_elem(ToKeyTypeFn, {_,{field,FieldName,_},{_,Val}}) ->
+    {FieldName,ToKeyTypeFn([FieldName]),Val}.
 
 %% Return filters where the column is in the local key but not the partition key
 find_filters_on_additional_local_key_fields(AdditionalFields, Where) ->
     try
-        lists:usort(riak_ql_ddl:fold_where_tree(
+        riak_ql_ddl:fold_where_tree(
             fun(Conditional, Filter, Acc) ->
                 find_filters_on_additional_local_key_fields_folder(Conditional, Filter, AdditionalFields, Acc)
-            end, [], Where))
+            end, [], Where)
     catch throw:Val -> Val %% a throw means the function wanted to exit immediately
     end.
 
 %%
-find_filters_on_additional_local_key_fields_folder(or_, _, _, _) ->
+find_filters_on_additional_local_key_fields_folder(or_,_,_,_) ->
     %% we cannot support filters using OR, because keys must be a singular value
     throw([]);
-find_filters_on_additional_local_key_fields_folder(_, {'!=', _, _}, _, Acc) ->
+find_filters_on_additional_local_key_fields_folder(_, {'!=',_,_}, _, Acc) ->
     %% we can't support additional NOT filters on the key
     Acc;
-find_filters_on_additional_local_key_fields_folder(_, {Op, {field, Name, _}, Val}, AdditionalFields, Acc) when is_binary(Name) ->
+find_filters_on_additional_local_key_fields_folder(_, {_,{field,Name,_},_} = F, AdditionalFields, Acc) when is_binary(Name) ->
     case lists:member(Name, AdditionalFields) of
         true ->
-            [{Op, Name, Val}|Acc];
+            [{Name, F}|Acc];
         false ->
             Acc
     end.
@@ -2964,7 +2992,7 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
 
 find_filters_on_additional_local_key_fields_test() ->
     ?assertEqual(
-        [{'=',<<"a">>,{const,100}}],
+        [{<<"a">>,{'=',{field,<<"a">>,integer},{const, 100}}}],
         find_filters_on_additional_local_key_fields(
             [<<"a">>],
             {'=',{field,<<"a">>,integer},{const, 100}})
