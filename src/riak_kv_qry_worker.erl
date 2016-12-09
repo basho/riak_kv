@@ -136,6 +136,10 @@ handle_info({{SubQId, QId}, {error, Reason} = Error},
 handle_info({{_SubQId, QId1}, _}, State = #state{qid = QId2}) when QId1 =/= QId2 ->
     %% catches late results or errors such getting results for invalid QIds.
     lager:debug("Bad query id ~p (expected ~p)", [QId1, QId2]),
+    {noreply, State};
+
+handle_info(_Unexpected, State) ->
+    lager:info("Not handling unexpected message \"~p\" in state ~p", [_Unexpected, State]),
     {noreply, State}.
 
 -spec terminate(term(), #state{}) -> term().
@@ -310,8 +314,8 @@ add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
             catch
                 error:divide_by_zero ->
                     cancel_error_query(divide_by_zero, State);
-                throw:{qbuf_error, Reason} ->
-                    cancel_error_query(Reason, State)
+                throw:{qbuf_internal_error, Reason} ->
+                    cancel_error_query({qbuf_internal_error, Reason}, State)
             end;
         false ->
             lager:warning("unexpected chunk received for non-existing query ~p when state is ~p", [SubQId, State]),
@@ -395,12 +399,12 @@ run_select_on_rows_chunk(_SubQId, SelClause, DecodedChunk, _QueryResult1, QBufRe
         ok ->
             ok;
         {error, Reason} ->
-            throw({qbuf_error, Reason})
+            throw({qbuf_internal_error, Reason})
     catch
         Error:Reason ->
             lager:warning("Failed to send data to qbuf ~p serving subquery ~p of ~p: ~p:~p",
                           [QBufRef, _SubQId, SelClause, Error, Reason]),
-            throw({qbuf_error, Reason})
+            throw({qbuf_internal_error, "qbuf manager died/restarted mid-query"})
     end.
 
 %%
@@ -415,7 +419,7 @@ run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
         State2::#state{}.
 cancel_error_query(Error, #state{qbuf_ref = QBufRef,
                                  receiver_pid = ReceiverPid}) ->
-    _ = riak_kv_qry_buffers:delete_qbuf(QBufRef),  %% is a noop on undefined
+    catch riak_kv_qry_buffers:delete_qbuf(QBufRef),  %% is a noop on undefined
     ReceiverPid ! {error, Error},
     pop_next_query(),
     new_state().
@@ -452,9 +456,9 @@ prepare_final_results(#state{qbuf_ref = QBufRef,
                              qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select,
                                                'LIMIT'  = Limit,
                                                'OFFSET' = Offset}} = State) ->
-    case riak_kv_qry_buffers:fetch_limit(QBufRef,
-                                         riak_kv_qry_buffers:limit_to_scalar(Limit),
-                                         riak_kv_qry_buffers:offset_to_scalar(Offset)) of
+    try riak_kv_qry_buffers:fetch_limit(QBufRef,
+                                        riak_kv_qry_buffers:limit_to_scalar(Limit),
+                                        riak_kv_qry_buffers:offset_to_scalar(Offset)) of
         {ok, {_ColNames, _ColTypes, FetchedRows}} ->
             prepare_final_results2(Select, FetchedRows);
         {error, qbuf_not_ready} ->
@@ -464,11 +468,17 @@ prepare_final_results(#state{qbuf_ref = QBufRef,
                 {qbuf_ready, QBufRef} ->
                     prepare_final_results(State)
             after 60000 ->
-                    cancel_error_query(qbuf_timeout, State)
+                    lager:error("qbuf ~p took too long to signal ready to ship results", [QBufRef]),
+                    cancel_error_query({qbuf_internal_error, "qbuf took too long to signal ready to ship results"}, State)
             end;
         {error, bad_qbuf_ref} ->
             %% the query buffer is gone: we can still retry (should we, really?)
             cancel_error_query(bad_qbuf_ref, State)
+    catch
+        Error:Reason ->
+            lager:warning("Failed to fetch data from qbuf ~p: ~p:~p",
+                          [QBufRef, Error, Reason]),
+            cancel_error_query({qbuf_internal_error, "qbuf manager died/restarted mid-query"}, State)
     end;
 
 prepare_final_results(#state{
