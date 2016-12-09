@@ -399,7 +399,7 @@ extract_field_value({Name, Type, Optional}, FVList) ->
             throw({missing_field, Name});
         undefined when Optional == true ->
             [];
-        [] when Optional == true ->
+        null when Optional == true ->
             [];
         Value ->
             check_field_value(Name, Type, Value)
@@ -407,6 +407,10 @@ extract_field_value({Name, Type, Optional}, FVList) ->
 
 %% @todo: might be better if the DDL helper module had a
 %% valid_field_value(Field, Value) -> boolean() function.
+%% We could validate the entire record in one go with
+%% Mod:validate_obj/1, but then we lose the details in the error being
+%% reported should it fail.
+check_field_value(_Name, blob, V) when is_binary(V)            -> V;
 check_field_value(_Name, varchar, V) when is_binary(V)         -> V;
 check_field_value(_Name, sint64, V) when is_integer(V)         -> V;
 check_field_value(_Name, double, V) when is_number(V)          -> V;

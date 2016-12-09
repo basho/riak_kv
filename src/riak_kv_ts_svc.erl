@@ -55,6 +55,7 @@
 -define(E_QBUF_CREATE_ERROR,     1023).
 -define(E_QBUF_LDB_ERROR,        1024).
 -define(E_QUANTA_LIMIT,          1025).
+-define(E_BAD_COMPND_KEY,        1026).
 -define(E_QBUF_INTERNAL_ERROR,   1027).
 
 -define(FETCH_RETRIES, 10).  %% TODO make it configurable in tsqueryreq
@@ -359,6 +360,8 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
             {reply, make_table_not_activated_resp(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, make_key_element_count_mismatch_resp(Got, Need), State};
+        {error, bad_compound_key} ->
+            {reply, make_bad_compound_key_resp(), State};
         {error, notfound} ->
             {reply, make_tsgetresp([], [], []), State};
         {error, Reason} ->
@@ -389,6 +392,8 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
             {reply, make_table_not_activated_resp(Table), State};
         {error, {bad_key_length, Got, Need}} ->
             {reply, make_key_element_count_mismatch_resp(Got, Need), State};
+        {error, bad_compound_key} ->
+            {reply, make_bad_compound_key_resp(), State};
         {error, notfound} ->
             {reply, make_rpberrresp(?E_NOTFOUND, "notfound"), State};
         {error, Reason} ->
@@ -403,34 +408,8 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
 sub_tslistkeysreq(Mod, DDL, #tslistkeysreq{table = Table,
                                            timeout = Timeout} = Req,
                   State) ->
-
-    %% Construct a function to convert from TS local key to TS
-    %% partition key.
-    %%
-    %% This is needed because coverage filter functions must check the
-    %% hash of the partition key, not the local key, when folding over
-    %% keys in the backend.
-
     KeyConvFn =
-        fun(Key) when is_binary(Key) ->
-                {ok, PK} = riak_ql_ddl:lk_to_pk(
-                             sext:decode(Key), DDL, Mod),
-                PK;
-           (Key) ->
-                %% Key read from leveldb should always be binary.
-                %% This clause is just to keep dialyzer quiet
-                %% (otherwise dialyzer will complain about no local
-                %% return, since we have no way to spec the type
-                %% of Key for an anonymous function).
-                %%
-                %% Nonetheless, we log an error in case this branch is
-                %% ever exercised
-
-                lager:error("Key conversion function "
-                            "encountered a non-binary object key: ~p", [Key]),
-                Key
-        end,
-
+        {riak_kv_ts_util, local_to_partition_key},
     Result =
         riak_client:stream_list_keys(
           riak_kv_ts_util:table_to_bucket(Table), Timeout, KeyConvFn,
@@ -624,6 +603,12 @@ make_key_element_count_mismatch_resp(Got, Need) ->
     make_rpberrresp(
       ?E_BAD_KEY_LENGTH,
       flat_format("Key element count mismatch (key has ~b elements but ~b supplied)", [Need, Got])).
+
+-spec make_bad_compound_key_resp() -> #rpberrorresp{}.
+make_bad_compound_key_resp() ->
+    make_rpberrresp(
+      ?E_BAD_COMPND_KEY,
+      flat_format("Value of inappropriate type in compound key", [])).
 
 -spec make_validate_rows_error_resp([integer()]) -> #rpberrorresp{}.
 make_validate_rows_error_resp(BadRowIdxs) ->
