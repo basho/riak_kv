@@ -42,11 +42,11 @@
          terminate/2,
          code_change/3,
 
-	 %% decode_results/1 is now exported because it may be used in
-	 %% riak_kv_vnode to pre-decode query results at the vnode
-	 %% rather than here
+         %% decode_results/1 is now exported because it may be used in
+         %% riak_kv_vnode to pre-decode query results at the vnode
+         %% rather than here
 
-	 decode_results/1 
+         decode_results/1
         ]).
 
 -include("riak_kv_ts.hrl").
@@ -166,7 +166,7 @@ prepare_fsm_options([{{qry, ?SQL_SELECT{cover_context = CoverContext} = Q1}, {qi
     Bucket = riak_kv_ts_util:table_to_bucket(Table),
     Timeout = {timeout, ?SUBQUERY_FSM_TIMEOUT},
     Me = self(),
-    KeyConvFn = make_key_conversion_fun(Table),
+    KeyConvFn = {riak_kv_ts_util, local_to_partition_key},
     Q2 = convert_query_to_cluster_version(Q1),
     CoverageParameter =
         case CoverContext of
@@ -182,18 +182,6 @@ prepare_fsm_options([{{qry, ?SQL_SELECT{cover_context = CoverContext} = Q1}, {qi
     Opts = [Bucket, none, Q2, Timeout, all, undefined, CoverageParameter, riak_kv_qry_coverage_plan, KeyConvFn],
     prepare_fsm_options(T, [[{raw, QId, Me}, Opts] | Acc]).
 
-
-make_key_conversion_fun(Table) ->
-    Mod = riak_ql_ddl:make_module_name(Table),
-    DDL = Mod:get_ddl(),
-    fun(Key) when is_binary(Key) ->
-            {ok, PK} = riak_ql_ddl:lk_to_pk(sext:decode(Key), DDL, Mod),
-            PK;
-       (Key) ->
-            lager:error("Key conversion function "
-                        "encountered a non-binary object key: ~p", [Key]),
-            Key
-    end.
 
 %% Convert the sql select record to a version that is safe to pass around the
 %% cluster. Do not treat the result as a record in the local node, just as a

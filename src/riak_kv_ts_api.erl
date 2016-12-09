@@ -289,14 +289,20 @@ get_data(Key, Table, Mod0, Options) ->
                 Mod0
         end,
     DDL = Mod:get_ddl(),
-    LK = list_to_tuple(Key),
     Result1 =
-        case riak_ql_ddl:lk_to_pk(LK, DDL, Mod) of
+        case riak_ql_ddl:lk_to_pk(Key, Mod, DDL) of
             {ok, PK} ->
-                riak_client:get(
-                  riak_kv_ts_util:table_to_bucket(Table),
-                  {PK, LK}, Options,
-                  {riak_client, [node(), undefined]});
+                try Mod:revert_ordering_on_local_key(list_to_tuple(Key)) of
+                    LK ->
+                        riak_client:get(
+                          riak_kv_ts_util:table_to_bucket(Table),
+                          {list_to_tuple(PK), list_to_tuple(LK)},
+                          Options,
+                          {riak_client, [node(), undefined]})
+                catch
+                    _:_ ->
+                        {error, bad_compound_key}
+                end;
             ErrorReason1 ->
                 ErrorReason1
         end,
@@ -360,16 +366,23 @@ delete_data(Key, Table, Mod0, Options0, VClock0) ->
                 %% to avoid a separate get
                 riak_object:decode_vclock(VClock0)
         end,
-    LK = list_to_tuple(Key),
-    case riak_ql_ddl:lk_to_pk(LK, DDL, Mod) of
+    case riak_ql_ddl:lk_to_pk(Key, Mod, DDL) of
         {ok, PK} ->
-            riak_client:delete_vclock(
-              riak_kv_ts_util:table_to_bucket(Table), {PK, LK}, VClock, Options,
-              {riak_client, [node(), undefined]});
+            try Mod:revert_ordering_on_local_key(list_to_tuple(Key)) of
+                LK ->
+                    riak_client:delete_vclock(
+                      riak_kv_ts_util:table_to_bucket(Table),
+                      {list_to_tuple(PK), list_to_tuple(LK)},
+                      VClock,
+                      Options,
+                      {riak_client, [node(), undefined]})
+            catch
+                _:_ ->
+                    {error, bad_compound_key}
+            end;
         ErrorReason ->
             ErrorReason
     end.
-
 
 
 -spec compile_to_per_quantum_queries(module(), ?SQL_SELECT{}) ->
