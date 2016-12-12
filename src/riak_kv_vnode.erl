@@ -92,19 +92,6 @@
 -export([put_merge/6]). %% For fsm_eqc_vnode
 -endif.
 
-%% N.B. The ?INDEX macro should be called any time the object bytes on
-%% disk are modified.
--ifdef(TEST).
-%% Use values so that test compile doesn't give 'unused vars' warning.
--define(INDEX(A,B,C), _=element(1,{{_A1, _A2} = A,B,C}), ok).
--define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
--define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), _=element(1, {BProps}), false).
--else.
--define(INDEX(Objects, Reason, Partition), yz_kv:index(Objects, Reason, Partition)).
--define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
--define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), yz_kv:is_search_enabled_for_bucket(BProps)).
--endif.
-
 -ifdef(TEST).
 -define(YZ_SHOULD_HANDOFF(X), true).
 -else.
@@ -154,7 +141,8 @@
                 md_cache :: ets:tab(),
                 md_cache_size :: pos_integer(),
                 counter :: #counter_state{},
-                status_mgr_pid :: pid() %% a process that manages vnode status persistence
+                status_mgr_pid :: pid(), %% a process that manages vnode status persistence
+                index_module :: module()
                }).
 
 -type index_op() :: add | remove.
@@ -498,7 +486,8 @@ init([Index]) ->
                            key_buf_size=KeyBufSize,
                            mrjobs=dict:new(),
                            md_cache=MDCache,
-                           md_cache_size=MDCacheSize},
+                           md_cache_size=MDCacheSize,
+                           index_module=index_module()},
             try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
@@ -861,7 +850,7 @@ handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=ReplicaType}, State#state{modstate=UpModState}}
     end;
-handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false}) ->
+handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false, index_module=IndexModule}) ->
     {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),
     EncodedVal = riak_kv_requests:get_encoded_obj(Req),
     ReplicaType = riak_kv_requests:get_replica_type(Req),
@@ -872,7 +861,7 @@ handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false}) 
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
-            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+            module_index_binary(IndexModule, Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=ReplicaType}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -1199,9 +1188,9 @@ terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) 
     ok.
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
-            State=#state{idx=Idx}) ->
+            State=#state{idx=Idx, index_module=IndexModule}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
-    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+    module_index_binary(IndexModule, Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
@@ -1420,7 +1409,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
 
 do_backend_delete(BKey, RObj, State = #state{idx = Idx,
                                              mod = Mod,
-                                             modstate = ModState}) ->
+                                             modstate = ModState,
+                                             index_module = IndexModule}) ->
     %% object is a tombstone or all siblings are tombstones
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
@@ -1431,7 +1421,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
-            ?INDEX({RObj, no_old_object}, delete, Idx),
+            module_index(IndexModule, {RObj, no_old_object}, delete, Idx),
             delete_from_hashtree(Bucket, Key, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
@@ -1446,7 +1436,8 @@ delete_hash(RObj) ->
 
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
-                         modstate=ModState},
+                         modstate=ModState,
+                         index_module=IndexModule},
             PutArgs=#putargs{bkey={Bucket, _Key},
                              lww=LWW,
                              coord=Coord,
@@ -1458,7 +1449,7 @@ prepare_put(State=#state{vnodeid=VId,
     %% no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
     IndexBackend = is_indexed_backend(Mod, Bucket, ModState),
-    IsSearchable = ?IS_SEARCH_ENABLED_FOR_BUCKET(BProps),
+    IsSearchable = module_index_is_searchable(IndexModule, BProps),
     SkipReadBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
     case SkipReadBeforeWrite of
         true ->
@@ -1652,13 +1643,14 @@ actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
 actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFlag,
            State=#state{idx=Idx,
                         mod=Mod,
-                        modstate=ModState}) ->
+                        modstate=ModState,
+                        index_module=IndexModule}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
-            ?INDEX({Obj, OldObj}, put, Idx),
+            module_index(IndexModule, {Obj, OldObj}, put, Idx),
             Reply = case RB of
                 true ->
                     {dw, Idx, Obj, ReqID};
@@ -2067,7 +2059,8 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                StateData=#state{mod=Mod,
                                 modstate=ModState,
-                                idx=Idx}) ->
+                                idx=Idx,
+                                index_module=IndexModule}) ->
     StartTS = os:timestamp(),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
@@ -2086,7 +2079,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     update_hashtree(Bucket, Key, DiffObj, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
-                    ?INDEX({DiffObj, no_old_object}, handoff, Idx),
+                    module_index(IndexModule, {DiffObj, no_old_object}, handoff, Idx),
                     InnerRes;
                 {InnerRes, _Val} ->
                     InnerRes
@@ -2112,7 +2105,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                             update_hashtree(Bucket, Key, AMObj, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
-                            ?INDEX({AMObj, OldObj}, handoff, Idx),
+                            module_index(IndexModule, {AMObj, OldObj}, handoff, Idx),
                             InnerRes;
                         {InnerRes, _EncodedVal} ->
                             InnerRes
@@ -2703,6 +2696,45 @@ highest_actor(ActorBase, Obj) ->
                                  Actors),
     %% get the greatest event for the highest/latest actor
     {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
+
+%%
+%% Technical note:  The index_module configuration parameter should contain
+%% a module name which must implement the following functions:
+%%
+%%     - index(object_pair(), write_reason(), p()) -> ok.
+%%     - index_binary(bucket(), key(), binary(), write_reason(), p()) -> ok.
+%%     - is_searchable(riak_kv_bucket:props()) -> boolean().
+%%
+%% The indexing module will be called on puts, deletes, handoff, and
+%% anti-entropy activity.  In the case of puts, if an object is being over-written,
+%% the old object will be passed as the second parameter in the object pair.
+%% The indexing module may use this old object to optimize the update (e.g.,
+%% to handle the special case of sibling writes, which may not map directly to
+%% Riak puts).
+%%
+%% NB. Currently, yokozuna is the only repository that currently
+%% implements this behavior.  C.f., Yokozuna cuttlefish schema, to see
+%% where this configuration is implicitly set.
+%%
+
+
+index_module() ->
+    app_helper:get_env(riak_kv, index_module).
+
+module_index(undefined, _RObjPair, _Reason, _Idx) ->
+    ok;
+module_index(IndexModule, RObjPair, Reason, Idx) ->
+    IndexModule:index(RObjPair, Reason, Idx).
+
+module_index_binary(undefined, _Bucket, _Key, _Binary, _Reason, _Idx) ->
+    ok;
+module_index_binary(IndexModule, Bucket, Key, Binary, Reason, Idx) ->
+    IndexModule:index_binary(Bucket, Key, Binary, Reason, Idx).
+
+module_index_is_searchable(undefined, _BProps) ->
+    false;
+module_index_is_searchable(IndexModule, BProps) ->
+    IndexModule:is_searchable(BProps).
 
 -ifdef(TEST).
 
