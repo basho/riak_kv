@@ -209,8 +209,8 @@ process_post_(RD, #ctx{sql_type = QueryType,
                        table = Table} = Ctx, DDL) ->
     case riak_kv_ts_api:query(SQL, DDL) of
         {ok, Data} ->
-            {ColumnNames, _ColumnTypes, Rows} = Data,
-            Json = to_json({ColumnNames, Rows}),
+            {ColumnNames, ColumnTypes, Rows} = Data,
+            Json = to_json({ColumnNames, ColumnTypes, Rows}),
             {true, wrq:append_to_response_body(Json, RD), Ctx};
         %% the following timeouts are known and distinguished:
         {error, qry_worker_timeout} ->
@@ -302,12 +302,20 @@ produce_doc_body(RD, Ctx = #ctx{result = {Columns, Rows}}) ->
                  {<<"rows">>, Rows}]}),
      RD, Ctx}.
 
-to_json({Columns, Rows}) when is_list(Columns), is_list(Rows) ->
+to_json({Columns, Types, Rows}) ->
     mochijson2:encode(
       {struct, [{<<"columns">>, Columns},
-                {<<"rows">>, Rows}]});
+                {<<"rows">>, rows_to_json_compat(Types, Rows)}]});
 to_json(Other) ->
     mochijson2:encode(Other).
+
+rows_to_json_compat(Types, Rows) ->
+    lists:map(fun(R) -> row_to_json_compat(Types, R) end,
+              Rows).
+
+row_to_json_compat(Types, Row) ->
+    lists:map(fun riak_kv_wm_timeseries:value_to_json_compat/1,
+              lists:zip(Types, Row)).
 
 %% log(Format, Args) ->
 %%     lager:log(info, self(), Format, Args).
