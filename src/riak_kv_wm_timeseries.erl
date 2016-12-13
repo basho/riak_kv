@@ -355,6 +355,8 @@ convert_fv(Table, Mod, FieldRaw, V) ->
             throw({bad_field, Table, Field})
     end.
 
+convert_field(_T, F, blob, V) ->
+    {F, base64:decode(V)};
 convert_field(_T, F, varchar, V) ->
     {F, list_to_binary(V)};
 convert_field(_T, F, sint64, V) ->
