@@ -265,28 +265,92 @@ delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref, write_opts=WriteOpts}=Sta
                    any(),
                    [],
                    state()) -> {ok, any()} | {async, fun()}.
+%% TODO: What fold opts are really supported here?
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
-                                               ref=Ref}) ->
-    FoldFun = fold_buckets_fun(FoldBucketsFun),
-    FirstKey = to_first_key(undefined),
-    FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
-    BucketFolder =
-        fun() ->
-                try
-                    {FoldResult, _} =
-                        eleveldb:fold_keys(Ref, FoldFun, {Acc, []}, FoldOpts1),
-                    FoldResult
-                catch
-                    {break, AccFinal} ->
-                        AccFinal
-                end
-        end,
-    case lists:member(async_fold, Opts) of
+                                               ref=DbRef}) ->
+    Async = proplists:get_bool(async_fold, Opts),
+    BucketFolder = bucket_folder_fun(DbRef, FoldOpts, FoldBucketsFun, Acc),
+
+    case Async of
         true ->
             {async, BucketFolder};
         false ->
             {ok, BucketFolder()}
     end.
+
+%%%% @private
+%%%% Return a function to fold over the buckets on this backend
+%% NOTE: There are some careful usages of `try...of` here
+%% because try...catch constructs can prevent tail call optimizations
+%% and make us run out of stack space on large folds.
+%% Work hard in this and other functions called in the code path
+%% to always return errors, rather than depending on an outer
+%% try...catch to handle issues.
+bucket_folder_fun(DbRef, Opts, FoldBucketsFun, Acc) ->
+    fun() ->
+        try eleveldb:iterator(DbRef, Opts, keys_only) of
+            {ok, Itr} ->
+                iterate_buckets(Itr, FoldBucketsFun, Acc)
+        catch Error ->
+            lager:debug("Could not open eleveldb iterator: ~p", [Error]),
+            throw(Error)
+        end
+    end.
+
+iterate_buckets(Itr, FoldBucketsFun, Acc) ->
+    Outcome = fold_list_buckets(undefined, Itr, FoldBucketsFun, Acc),
+    eleveldb:iterator_close(Itr),
+    case Outcome of
+        {error, _Err} = Error ->
+            throw(Error);
+        {break, _Res} = Result ->
+            throw(Result);
+        Result -> Result
+    end.
+
+
+fold_list_buckets(PrevBucket, Itr, FoldBucketsFun, Acc) ->
+    lager:debug("fold_list_buckets prev=~p~n", [PrevBucket]),
+    Seek = determine_next_bucket_seek(PrevBucket),
+    _Opts = [], %% For object listing, use iterator_prefetch option
+    try eleveldb:iterator_move(Itr, Seek) of
+        {error, invalid_iterator} ->
+            lager:debug( "DBG: NO_MORE_BUCKETS~n", []),
+            Acc;
+        {ok, BinaryBucketKey} ->
+            maybe_accumulate_bucket(from_object_key(BinaryBucketKey), PrevBucket, FoldBucketsFun, Acc, Seek, Itr)
+    catch Error ->
+        {error, {eleveldb_error, Error}}
+    end.
+
+maybe_accumulate_bucket(undefined, _PrevBucket, _FoldBucketsFun, Acc, _Seek, _Itr) ->
+    %% `undefined' means we got something other than {o, Bucket, Key} - iterated
+    %% past the end of objects, so stop iterating and return
+    Acc;
+maybe_accumulate_bucket(ignore, _PrevBucket, _FoldBucketsFun, Acc, _Seek, _Itr) ->
+    %% `ignore' means you got a corrupt bucket/key - should not get into this
+    %% case but we must stop iteration since we can't skip to next bucket.
+    lager:error("Encountered corrupt key while iterating buckets. Bucket list may be incomplete."),
+    Acc;
+maybe_accumulate_bucket({PrevBucket, _}, PrevBucket, _FoldBucketsFun, _Acc, _Seek, _Itr) ->
+    {error, did_not_skip_to_next_bucket};
+maybe_accumulate_bucket({NewBucket, _}, _PrevBucket, FoldBucketsFun, Acc, _Seek, Itr) ->
+    lager:debug("DBG: NEXT_BUCKET ~p~n", [NewBucket]),
+    try
+        NewAcc = FoldBucketsFun(NewBucket, Acc),
+        fold_list_buckets(NewBucket, Itr, FoldBucketsFun, NewAcc)
+    catch Error ->
+        {error, Error}
+    end.
+
+determine_next_bucket_seek(PrevBucket) ->
+    case PrevBucket of
+         undefined ->
+             to_first_key(undefined);
+         _ ->
+             to_next_bucket_key(PrevBucket)
+     end.
+
 
 %% @doc Fold over all the keys for one or all buckets.
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
@@ -558,22 +622,6 @@ config_value(Key, Config, Default) ->
     end.
 
 %% @private
-%% Return a function to fold over the buckets on this backend
-fold_buckets_fun(FoldBucketsFun) ->
-    fun(BK, {Acc, LastBucket}) ->
-            case from_object_key(BK) of
-                {LastBucket, _} ->
-                    {Acc, LastBucket};
-                {Bucket, _} ->
-                    {FoldBucketsFun(Bucket, Acc), Bucket};
-                ignore ->
-                    {Acc, LastBucket};
-                _ ->
-                    throw({break, Acc})
-            end
-    end.
-
-%% @private
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
     %% Fold across everything...
@@ -734,6 +782,11 @@ to_first_key({index, Bucket, Q}) ->
     to_first_key({index, Bucket, UpgradeQ});
 to_first_key(Other) ->
     erlang:throw({unknown_limiter, Other}).
+
+to_next_bucket_key({BucketType, Bucket}=_Bucket) ->
+    to_object_key({BucketType, <<Bucket/binary, 0>>}, <<>>);
+to_next_bucket_key(Bucket) ->
+    to_object_key(<<Bucket/binary, 0>>, <<>>).
 
 to_object_key(Bucket, Key) ->
     sext:encode({o, Bucket, Key}).
