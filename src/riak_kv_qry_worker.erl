@@ -68,7 +68,7 @@
           %% 1. Maintain a limited number of running fsms (i.e.,
           %%    process at most that many subqueries at a time):
           fsm_queue          = []                   :: [list()],
-          n_running_fsms     = 0                    :: non_neg_integer(),
+          running_fsms       = []                   :: [{non_neg_integer(), pid()}],
           max_running_fsms   = ?MAX_RUNNING_FSMS    :: pos_integer(),
           %% 2. Estimate query size (wget-style):
           n_subqueries_done  = 0                    :: non_neg_integer(),
@@ -236,7 +236,7 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
                          qry            = Qry1,
                          sub_qrys       = Indices,
                          fsm_queue      = FsmOptsList,
-                         n_running_fsms = 0,
+                         running_fsms   = [],
                          result         = InitialResult,
                          max_query_data = riak_kv_qry_buffers:get_max_query_data_size(),
                          qbuf_ref       = QBufRef},
@@ -248,12 +248,14 @@ execute_query({query, ReceiverPid, QId, [Qry1|_] = SubQueries, _DDL, QBufRef},
 
 %%
 throttling_spawn_index_fsms(#state{fsm_queue = [Opts | Rest],
-                                   n_running_fsms = NRunning,
+                                   running_fsms = RunningFSMs,
                                    max_running_fsms = SubqFsmSpawnThrottle} = State)
-  when NRunning < SubqFsmSpawnThrottle ->
-    {ok, _PID} = riak_kv_index_fsm_sup:start_index_fsm(node(), Opts),
+  when length(RunningFSMs) < SubqFsmSpawnThrottle ->
+    [{raw, {Idx, SubQId}, _Me}, _SubOpts] = Opts,
+    {ok, FSMPid} = riak_kv_index_fsm_sup:start_index_fsm(node(), Opts),
+    lager:debug("Starting FSM ~p for subquery ~p (~p)", [FSMPid, Idx, SubQId]),
     throttling_spawn_index_fsms(State#state{fsm_queue = Rest,
-                                            n_running_fsms = NRunning + 1});
+                                            running_fsms = RunningFSMs ++ [{Idx, FSMPid}]});
 throttling_spawn_index_fsms(State) ->
     State.
 
@@ -299,7 +301,7 @@ estimate_query_size(#state{total_query_data  = CurrentTotalSize,
 add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
                                           total_query_data = TotalQueryData,
                                           n_subqueries_done = NSubqueriesDone,
-                                          n_running_fsms = NRunning} = State) ->
+                                          running_fsms = RunningFSMs} = State) ->
     case lists:member(SubQId, SubQs) of
         true ->
             try
@@ -309,7 +311,7 @@ add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
                 State#state{result            = QueryResult,
                             total_query_data  = TotalQueryData + ThisChunkData,
                             n_subqueries_done = NSubqueriesDone + 1,
-                            n_running_fsms    = NRunning - 1,
+                            running_fsms      = lists:keydelete(SubQId, 1, RunningFSMs),
                             sub_qrys          = NSubQ}
             catch
                 error:divide_by_zero ->
@@ -418,11 +420,25 @@ run_select_on_aggregate_chunk(SelClause, DecodedChunk, QueryResult1) ->
 -spec cancel_error_query(Error::any(), State1::#state{}) ->
         State2::#state{}.
 cancel_error_query(Error, #state{qbuf_ref = QBufRef,
-                                 receiver_pid = ReceiverPid}) ->
+                                 receiver_pid = ReceiverPid,
+                                 running_fsms = RunningFSMs}) ->
     catch riak_kv_qry_buffers:delete_qbuf(QBufRef),  %% is a noop on undefined
     ReceiverPid ! {error, Error},
+    %% terminate FSMs that may still be spinning
+    kill_outstanding_fsms(RunningFSMs),
     pop_next_query(),
     new_state().
+
+kill_outstanding_fsms(RunningFSMs) when length(RunningFSMs) == 0 ->
+    ok;
+kill_outstanding_fsms(RunningFSMs) ->
+    lager:info("Killing ~b remaining subquery FSM(s)", [length(RunningFSMs)]),
+    ok = lists:foreach(
+           fun({QId, Pid}) ->
+                   lager:debug("killing FSM ~p for subquery ~p", [Pid, QId]),
+                   erlang:exit(Pid, kill)
+           end, RunningFSMs).
+
 
 %%
 subqueries_done(QId, #state{qid          = QId,
