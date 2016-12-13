@@ -196,27 +196,8 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
              end,
     {ObjState, MObj} = Merged,
 
-    ReadRepairs =
-        case ObjState of
-            notfound ->
-                [];
-            ok ->
-                get_read_repairs(Results, MObj);
-            tombstone ->
-                %% We only read repair in the grace period after
-                %% this the reaper start to work.
-                %% obj_outside_grace_period return false
-                %% when no grace period is defined too.
-                %% This keep legacy behavior
-                %% The user need to use delete_mode keep to
-                %% use the sweeper as reaper
-                case riak_kv_delete:obj_outside_grace_period(MObj) of
-                    false ->
-                        get_read_repairs(Results, MObj);
-                    true ->
-                        []
-                end
-        end,
+    ReadRepairs = object_read_repairs(ObjState, Results, MObj),
+
     Action = case ReadRepairs of
                  [] when ObjState == tombstone ->
                      %% Allow delete if merge object is deleted,
@@ -239,6 +220,25 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                      {read_repair, ReadRepairs, MObj}
              end,
     {Action, GetCore#getcore{merged = Merged}}.
+
+object_read_repairs(notfound, _Results, _MObj) ->
+    [];
+object_read_repairs(ok, Results, MObj) ->
+    get_read_repairs(Results, MObj);
+object_read_repairs(tombstone, Results, MObj) ->
+    %% We only read repair in the grace period; after that,
+    %% the reaper may start harvesting tombstones.
+    %% obj_outside_grace_period also returns false if the
+    %% grace period is undefined or disabled, so as to
+    %% maintain legacy behavior.
+    %% The user needs to use delete_mode 'keep' to
+    %% use the tombstone reaping sweeper module.
+    case riak_kv_delete:obj_outside_grace_period(MObj) of
+        false ->
+            get_read_repairs(Results, MObj);
+        true ->
+            []
+    end.
 
 %% Any object that is strictly descended by
 %% the merge result must be read-repaired,
