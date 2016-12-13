@@ -1093,11 +1093,18 @@ build_or_rehash(Self, State=#state{index=Index}) ->
     case determine_build_or_rehash(State) of
         build ->
             lager:debug("Triggering manual sweep for ~p", [Index]),
-            riak_kv_sweeper:sweep(Index);
+            Result = riak_kv_sweeper:sweep(Index),
+            handle_sweep_result(Result, Self);
         rehash ->
             Locked = get_all_locks(rehash, Index, self()),
             rehash(Self, Locked, State)
     end.
+
+handle_sweep_result(ok, _Self) ->
+    ok;
+handle_sweep_result({error, Error}, Self) ->
+    lager:warning("hashtree build failed with sweep error ~p", [Error]),
+    gen_server:cast(Self, build_failed).
 
 determine_build_or_rehash(State) ->
     case load_built(State) of

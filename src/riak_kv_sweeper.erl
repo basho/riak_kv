@@ -125,7 +125,7 @@ remove_sweep_participant(Module) ->
 
 %% @doc Initiat a sweep without using scheduling. Can be used as fold
 %% replacment.
--spec sweep(index()) -> ok.
+-spec sweep(index()) -> ok | {error, term()}.
 sweep(Index) ->
     gen_server:call(?MODULE, {sweep_request, Index}, infinity).
 
@@ -193,14 +193,17 @@ handle_call({remove_sweep_participant, Module}, _From, State) ->
 
 handle_call({sweep_request, Index}, _From, State) ->
     State1 = riak_kv_sweeper_state:update_sweep_specs(State),
-    State3 =
-        case riak_kv_sweeper_state:sweep_request(State1, Index) of
-            {ok, Index, State2} ->
-                do_sweep(Index, State2);
-            State2 ->
-                State2
-        end,
-    {reply, ok, State3};
+    case riak_kv_sweeper_state:sweep_request(State1, Index) of
+        {ok, Index, State2} ->
+            case do_sweep(Index, State2) of
+                {ok, State3} ->
+                    {reply, ok, State3};
+                {error, Reason, State3} ->
+                    {reply, {error, Reason}, State3}
+            end;
+        State2 ->
+            State2
+    end;
 
 handle_call(status, _From, State) ->
     {ok, {Participants, Sweeps}, State1} = riak_kv_sweeper_state:status(State),
@@ -236,20 +239,25 @@ handle_info({test_tick, Ref, From}, State) ->
 
 handle_info(sweep_tick, State) ->
     schedule_sweep_tick(),
-    State3 =
+    State4 =
         case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
             true ->
                 State1 = riak_kv_sweeper_state:update_sweep_specs(State),
                 case riak_kv_sweeper_state:maybe_schedule_sweep(State1) of
                     {ok, Index, State2} ->
-                        do_sweep(Index, State2);
+                        case do_sweep(Index, State2) of
+                            {ok, State3} ->
+                                State3;
+                            {error, _Reason, State3} ->
+                                State3
+                        end;
                     State2 ->
                         State2
                 end;
             false ->
                 State
         end,
-    {noreply, State3};
+    {noreply, State4};
 
 handle_info(Msg, State) ->
     lager:error("riak_kv_sweeper received unexpected message ~p", [Msg]),
@@ -265,27 +273,25 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Functions
 %% ====================================================================
 -spec do_sweep(index(), riak_kv_sweeper_state:state()) ->
-    riak_kv_sweeper_state:state().
+    {ok, riak_kv_sweeper_state:state()} | {error, term(), riak_kv_sweeper_state:state()}.
 do_sweep(Index, State) ->
     %% Ask for estimate before we call get_active_participants, since
     %% riak_kv_index_tree clears the trees if they are expired.
     AAEEnabled = riak_kv_entropy_manager:enabled(),
     EstimatedKeys = get_estimate_keys(Index, AAEEnabled, State),
 
-    State2 =
-        case riak_kv_sweeper_state:get_active_participants(State, Index) of
-            {ok, [], State1} ->
-                State1;
-            {ok, ActiveParticipants, State1} ->
-                ?MODULE:update_started_sweep(Index,
-                                             ActiveParticipants,
-                                             EstimatedKeys),
-                Workerpid = riak_kv_vnode:sweep({Index, node()},
-                                                ActiveParticipants,
-                                                EstimatedKeys),
-                riak_kv_sweeper_state:start_sweep(State1, Index, Workerpid)
-        end,
-    State2.
+    case riak_kv_sweeper_state:get_active_participants(State, Index) of
+        {ok, [], State1} ->
+            {ok, State1};
+        {ok, ActiveParticipants, State1} ->
+            ?MODULE:update_started_sweep(Index,
+                                         ActiveParticipants,
+                                         EstimatedKeys),
+            Result = riak_kv_vnode:sweep({Index, node()},
+                                         ActiveParticipants,
+                                         EstimatedKeys),
+            riak_kv_sweeper_state:handle_vnode_sweep_response(State1, Index, Result)
+    end.
 
 -spec get_estimate_keys(index(),
                         AAEEnabled :: boolean(),

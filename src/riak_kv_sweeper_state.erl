@@ -31,7 +31,7 @@
          maybe_schedule_sweep/1,
          new/0,
          remove_sweep_participant/2,
-         start_sweep/3,
+         handle_vnode_sweep_response/3,
          status/1,
          stop_all_sweeps/1,
          sweep_request/2,
@@ -274,17 +274,22 @@ sweep_request(State, Index) ->
             State1
     end.
 
--spec start_sweep(state(), index(), pid()) -> state().
-start_sweep(State, Index, Pid) ->
+-spec handle_vnode_sweep_response(state(), index(), pid() | term()) ->
+    {ok, state()} | {error, term(), state()}.
+handle_vnode_sweep_response(State, Index, WorkerPid) when is_pid(WorkerPid) ->
     #state{ sweeps = Sweeps} = State,
     Sweeps1 =
         dict:update(Index,
                     fun(Sweep) ->
                             Sweep#sweep{state = running,
-                                        pid = Pid,
+                                        pid = WorkerPid,
                                         queue_time = undefined}
                     end, Sweeps),
-    State#state{sweeps = Sweeps1}.
+    {ok, State#state{sweeps = Sweeps1}};
+handle_vnode_sweep_response(State, Index, Error) ->
+    lager:warning("got error response ~p from vnode when requsting sweep on index ~p",
+                  [Error, Index]),
+    {error, Error, State}.
 
 %% =============================================================================
 %% Internal Functions
