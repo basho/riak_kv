@@ -99,7 +99,7 @@ basic_schema_test() ->
 
     %% Default Sweeper Properties
     cuttlefish_unit:assert_config(Config, "riak_kv.sweep_concurrency", 1),
-    cuttlefish_unit:assert_config(Config, "riak_kv.tombstone_grace_period", false),
+    cuttlefish_unit:assert_config(Config, "riak_kv.tombstone_grace_period", disabled),
     cuttlefish_unit:assert_config(Config, "riak_kv.reap_sweep_interval", 86400), %% 1d
     cuttlefish_unit:assert_config(Config, "riak_kv.obj_ttl_sweep_interval", false),
 

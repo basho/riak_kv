@@ -230,7 +230,7 @@ maybe_reap(RObj, Index, Acc) ->
 
 obj_outside_grace_period(RObj) ->
     obj_outside_grace_period(RObj, app_helper:get_env(riak_kv, tombstone_grace_period)).
-obj_outside_grace_period(_RObj, false) ->
+obj_outside_grace_period(_RObj, disabled) ->
 	false;
 obj_outside_grace_period(RObj, TombstoneGracePeriod) ->
 	Now = os:timestamp(),
