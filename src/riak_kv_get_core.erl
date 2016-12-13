@@ -198,27 +198,8 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
 
     ReadRepairs = object_read_repairs(ObjState, Results, MObj),
 
-    Action = case ReadRepairs of
-                 [] when ObjState == tombstone ->
-                     %% Allow delete if merge object is deleted,
-                     %% there are no read repairs pending and
-                     %% a value was received from all vnodes
-                     case riak_kv_util:is_x_deleted(MObj) andalso
-                         length([xx || {_Idx, {ok, _RObj}} <- Results]) == N of
-                         true ->
-                             delete;
-                         _ ->
-                             maybe_log_old_vclock(Results),
-                             nop
-                     end;
-                 [] when ObjState == notfound ->
-                     nop;
-                 [] ->
-                     maybe_log_old_vclock(Results),
-                     nop;
-                 _ ->
-                     {read_repair, ReadRepairs, MObj}
-             end,
+    Action = determine_final_action(ReadRepairs, ObjState, N, Results, MObj),
+
     {Action, GetCore#getcore{merged = Merged}}.
 
 object_read_repairs(notfound, _Results, _MObj) ->
@@ -239,6 +220,27 @@ object_read_repairs(tombstone, Results, MObj) ->
         true ->
             []
     end.
+
+determine_final_action([], tombstone, N, Results, MObj) ->
+    %% Allow delete if merge object is deleted,
+    %% there are no read repairs pending and
+    %% a value was received from all vnodes
+    case riak_kv_util:is_x_deleted(MObj) andalso
+         length([xx || {_Idx, {ok, _RObj}} <- Results]) == N of
+        true ->
+            delete;
+        _ ->
+            maybe_log_old_vclock(Results),
+            nop
+    end;
+determine_final_action([], notfound, _N, _Results, _MObj) ->
+    nop;
+determine_final_action([], _ObjState, _N, Results, _MObj) ->
+    maybe_log_old_vclock(Results),
+    nop;
+determine_final_action(ReadRepairs, _N, _ObjState, _Results, MObj) ->
+    {read_repair, ReadRepairs, MObj}.
+
 
 %% Any object that is strictly descended by
 %% the merge result must be read-repaired,
