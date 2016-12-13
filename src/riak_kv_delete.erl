@@ -231,16 +231,16 @@ maybe_reap(RObj, Index, Acc) ->
 obj_outside_grace_period(RObj) ->
     obj_outside_grace_period(RObj, app_helper:get_env(riak_kv, tombstone_grace_period)).
 obj_outside_grace_period(_RObj, disabled) ->
-	false;
+    false;
 obj_outside_grace_period(RObj, TombstoneGracePeriod) ->
-	Now = os:timestamp(),
+    Now = os:timestamp(),
 
-	Contents = riak_object:get_contents(RObj),
-	case [{M, V} || {M, V} <- Contents,
-                    in_grace(M, Now, TombstoneGracePeriod)] of
-		[] -> true;
-		_ -> false
-	end.
+    Contents = riak_object:get_contents(RObj),
+
+    case [{M, V} || {M, V} <- Contents, in_grace(M, Now, TombstoneGracePeriod)] of
+        [] -> true;
+        _ -> false
+    end.
 
 in_grace(MetaData, Now, TombstoneGracePeriod) ->
     LastMod = dict:fetch(?MD_LASTMOD, MetaData),
