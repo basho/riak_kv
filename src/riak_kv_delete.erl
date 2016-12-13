@@ -237,12 +237,10 @@ obj_outside_grace_period(RObj, TombstoneGracePeriod) ->
 
     Contents = riak_object:get_contents(RObj),
 
-    case [{M, V} || {M, V} <- Contents, in_grace(M, Now, TombstoneGracePeriod)] of
-        [] -> true;
-        _ -> false
-    end.
+    lists:all(fun(Content) -> not content_in_grace(Content, Now, TombstoneGracePeriod) end,
+              Contents).
 
-in_grace(MetaData, Now, TombstoneGracePeriod) ->
+content_in_grace({MetaData, _Value}, Now, TombstoneGracePeriod) ->
     LastMod = dict:fetch(?MD_LASTMOD, MetaData),
     timer:now_diff(Now, LastMod) div 1000000 < TombstoneGracePeriod.
 
