@@ -35,16 +35,14 @@
 %% riak_kv_sweeper callbacks
 participate_in_sweep(_Index, _Pid) ->
     InitialAcc = 0,
-    {ok, ttl_fun(), InitialAcc}.
+    {ok, fun ttl_fun/3, InitialAcc}.
 
-ttl_fun() ->
-    fun({{_Bucket, _Key}, RObj}, Acc, [{bucket_props, BucketProps}]) ->
-            case riak_kv_util:is_x_expired(RObj, BucketProps) of
-                true ->
-                    {deleted, Acc};
-                _ ->
-                    {ok, Acc}
-            end
+ttl_fun({{_Bucket, _Key}, RObj}, Acc, [{bucket_props, BucketProps}]) ->
+    case riak_kv_util:is_x_expired(RObj, BucketProps) of
+        true ->
+            {deleted, Acc};
+        _ ->
+            {ok, Acc}
     end.
 
 successful_sweep(Index, _FinalAcc) ->
