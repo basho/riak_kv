@@ -1109,7 +1109,7 @@ modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
--record(filtercheck, {name,'=','>','>='}).
+-record(filtercheck, {name,'=','>','>=','<'}).
 
 check_where_clause_is_possible(DDL, WhereProps) ->
     Filter1 = proplists:get_value(filter, WhereProps),
@@ -1265,6 +1265,25 @@ check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVa
             Acc2 = store_filter_check(Check2, Acc),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
             {F, Acc3}
+    end;
+check_where_clause_is_possible_fold(_, _, {'<',{field,FieldName,_},{const,_LtVal}} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'<' = undefined} = Check1 ->
+            %% this is the first less than check so just record it
+            Check2 = Check1#filtercheck{'<' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
+        #filtercheck{'<' = F_x} = Check1 when F_x < F ->
+            %% we already have a filter that is higher than this one,
+            %% which we can eliminate. Store it and eliminate it on the second
+            %% pass since it has already been iterated
+            Check2 = Check1#filtercheck{'<' = F},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3};
+        #filtercheck{'<' = F_x} when F_x > F ->
+            %% we already have a filter that is higher than this one, and so
+            %% includes it so we can safely eliminate this one.
+            {eliminate, Acc}
     end;
 check_where_clause_is_possible_fold(_, _, Filter, Acc) ->
     {Filter, Acc}.
@@ -3457,6 +3476,42 @@ greater_than_is_less_than_previous_greater_than_or_equal_to_clause_removes_great
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
          {filter, {'>',{field,<<"b">>,sint64},{const, 9}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_filters_get_reduced_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 10 AND b < 9"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_filters_get_reduced_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 9 AND b < 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const, 10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
