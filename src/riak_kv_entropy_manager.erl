@@ -571,7 +571,8 @@ check_lock_type(_Type, _Locks) ->
     ok.
 
 get_nr_of_locks(Type, Locks) ->
-   length([Lock || Lock <- Locks, Lock#lock.type == Type]).
+    Pred = fun(Lock) -> Lock#lock.type =:= Type end,
+    riak_core_util:count(Pred, Locks).
 
 -spec do_start_exchange_remote(pid(), index(), index_n(), version(), term(), state())
                   -> {reply, term(), state()} | {noreply, state()}.
