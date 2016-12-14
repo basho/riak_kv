@@ -255,9 +255,19 @@ count_successful(Results) ->
 %% the list of not_found (in need of repair)
 %% indexes.
 get_read_repairs(Results, MObj) ->
-    [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
-                         riak_object:strict_descendant(MObj, RObj)] ++
-        [{Idx, notfound} || {Idx, {error, notfound}} <- Results].
+    lists:filtermap(fun(Res) -> index_read_repair(Res, MObj) end, Results).
+
+index_read_repair({Idx, {ok, RObj}}, MObj) ->
+    case riak_object:strict_descendant(MObj, RObj) of
+        true ->
+            {true, {Idx, outofdate}};
+        false ->
+            false
+    end;
+index_read_repair({Idx, {error, notfound}}, _MObj) ->
+    {true, {Idx, notfound}};
+index_read_repair(_, _) ->
+    false.
 
 %% Return request info
 -spec info(undefined | getcore()) -> [{vnode_oks, non_neg_integer()} |
