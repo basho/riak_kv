@@ -1048,7 +1048,8 @@ add_hours(Hour, Inc)  ->
 %% before a sweep is re-run using the run_interval (now - ts) > 1,
 %% see kv_sweeper:expired
 min_scheduler_response_time_msecs() ->
-    2500.
+    %% Updating to 10000 since we see timeouts on the builders sometimes:
+    10000.
 
 pick(List) when length(List) > 0 ->
     N = random:uniform(length(List)),
