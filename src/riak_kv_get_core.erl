@@ -225,8 +225,8 @@ determine_final_action([], tombstone, N, Results, MObj) ->
     %% Allow delete if merge object is deleted,
     %% there are no read repairs pending and
     %% a value was received from all vnodes
-    case riak_kv_util:is_x_deleted(MObj) andalso
-         length([xx || {_Idx, {ok, _RObj}} <- Results]) == N of
+    SuccessCount = count_successful(Results),
+    case riak_kv_util:is_x_deleted(MObj) andalso SuccessCount =:= N of
         true ->
             delete;
         _ ->
@@ -241,6 +241,11 @@ determine_final_action([], _ObjState, _N, Results, _MObj) ->
 determine_final_action(ReadRepairs, _N, _ObjState, _Results, MObj) ->
     {read_repair, ReadRepairs, MObj}.
 
+count_successful(Results) ->
+    Pred = fun({_Idx, {ok, _RObj}}) -> true;
+              (_) -> false
+           end,
+    riak_core_util:count(Pred, Results).
 
 %% Any object that is strictly descended by
 %% the merge result must be read-repaired,
