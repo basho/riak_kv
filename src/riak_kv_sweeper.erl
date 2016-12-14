@@ -202,7 +202,7 @@ handle_call({sweep_request, Index}, _From, State) ->
                     {reply, {error, Reason}, State3}
             end;
         State2 ->
-            State2
+            {reply, {error, sweep_request_failed}, State2}
     end;
 
 handle_call(status, _From, State) ->
