@@ -1175,6 +1175,10 @@ check_where_clause_is_possible_fold(_, _, {'=',{field,FieldName,_},{const,EqVal}
             Acc2 = append_to_eliminate_later(GteF, Acc),
             Check2 = Check1#filtercheck{'>=' = undefined, '=' = F},
             {F, lists:keystore(FieldName, #filtercheck.name, Acc2, Check2)};
+        #filtercheck{'<' = {_,_,{const,LtVal}}} when LtVal =< EqVal ->
+            %% query requires a column to be equal to a value AND less than that
+            %% value which is impossible
+            throw({error, {impossible_where_clause, << >>}});
         #filtercheck{'=' = F_x} when F_x /= undefined ->
             %% there are two different checks on the same column, for equality
             %% this can never be satisfied.
@@ -3556,6 +3560,20 @@ query_impossible_if_less_than_is_equal_to_equality_filter_on_same_column_test() 
         compile(DDL, Q)
     ).
 
+query_impossible_if_less_than_is_equal_to_equality_filter_on_same_column_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 9 AND b = 9"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
 query_impossible_if_less_than_is_less_than_equality_filter_on_same_column_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
@@ -3565,6 +3583,20 @@ query_impossible_if_less_than_is_less_than_equality_filter_on_same_column_test()
     {ok, Q} = get_query(
         "SELECT * FROM table1 "
         "WHERE a = 5 AND b = 9 AND b < 8"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+query_impossible_if_less_than_is_less_than_equality_filter_on_same_column_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 8 AND b = 9"),
     ?assertEqual(
         {error,{impossible_where_clause, << >>}},
         compile(DDL, Q)
