@@ -743,27 +743,19 @@ create_table(SvcMod, ?DDL{table = Table}=DDL1, WithProps) ->
 
 create_table1(SvcMod, Table, Props, DDLRecCap, Seconds) ->
     case riak_core_bucket_type:create(Table, Props) of
-        ok -> wait_until_active_and_supported(SvcMod, Table, DDLRecCap, Seconds);
+        ok -> wait_until_active(SvcMod, Table, DDLRecCap, Seconds);
         {error, Reason} -> {error, SvcMod:make_table_create_fail_resp(Table, Reason)}
     end.
 
-wait_until_supported(SvcMod, Table, _DDLRecCap, _Seconds=0) ->
+wait_until_active(SvcMod, Table, _DDLRecCap, _Seconds=0) ->
     {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
-wait_until_supported(SvcMod, Table, DDLRecCap, Seconds) ->
-    case is_table_supported(DDLRecCap, Table) of
-        true -> ok;
-        _ -> wait_until_supported(SvcMod, Table, DDLRecCap, Seconds - 1)
-    end.
-
-wait_until_active_and_supported(SvcMod, Table, _DDLRecCap, _Seconds=0) ->
-    {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
-wait_until_active_and_supported(SvcMod, Table, DDLRecCap, Seconds) ->
+wait_until_active(SvcMod, Table, DDLRecCap, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
-        ok -> wait_until_supported(SvcMod, Table, DDLRecCap, Seconds);
+        ok -> ok;
         {error, not_ready} ->
             timer:sleep(1000),
             lager:info("Waiting for table ~ts to be ready for activation", [Table]),
-            wait_until_active_and_supported(SvcMod, Table, DDLRecCap, Seconds - 1);
+            wait_until_active(SvcMod, Table, DDLRecCap, Seconds - 1);
         {error, undefined} ->
             {error, SvcMod:make_table_created_missing_resp(Table)}
     end.
