@@ -892,7 +892,7 @@
 %% @doc Root path for leveldb instances backing node-local query buffers.
 {mapping, "riak_kv.query.timeseries.qbuf_root_path", "riak_kv.timeseries_query_buffers_root_path", [
   {datatype, directory},
-  {default, "$(platform_data_dir)/query_buffers"},
+  {default, "/tmp/riak-qb"},
   {validators, ["validate_timeseries_query_buffers_root_path"]},
   hidden
 ]}.
