@@ -1363,8 +1363,6 @@ rewrite_start_key_with_filters([], _, _, SKey, SInc) ->
 rewrite_start_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, SKey, SInc1) when is_binary(AddFieldName) ->
     case proplists:get_value(AddFieldName, Filter) of
         {Op,_,_} = F  when Op == '='; Op == '>'; Op == '>=' ->
-            %% when an equality operator is found, we can put it on the key but
-            %% cannot safely remove the filter
             SKeyElem = to_key_elem(ToKeyTypeFn, F),
             %% if the quantum was inclusive, make sure we stay inclusive or
             %% the quantum boundary is modified later on
@@ -1380,24 +1378,27 @@ rewrite_start_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, SKey, S
 
 rewrite_end_key_with_filters([], _, _, EKey, EInc) ->
     {EKey, EInc};
-rewrite_end_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, EKey, EInc) when is_binary(AddFieldName) ->
+rewrite_end_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, EKey, EInc1) when is_binary(AddFieldName) ->
     case proplists:get_value(AddFieldName, Filter) of
-        {'=',_,_} = F ->
-            %% when an equality operator is found, we can put it on the key but
-            %% cannot safely remove the filter
+        {Op,_,_} = F  when Op == '='; Op == '<' ->
             EKeyElem = to_key_elem(ToKeyTypeFn, F),
+            %% if the quantum was inclusive, make sure we stay inclusive or
+            %% the quantum boundary is modified later on
+            EInc2 = ((EInc1 /= false) or is_inclusive_op(Op)),
             rewrite_end_key_with_filters(
-                Tail, ToKeyTypeFn, Filter, EKey++[EKeyElem], true);
+                Tail, ToKeyTypeFn, Filter, EKey++[EKeyElem], EInc2);
         _ ->
             %% there is no filter for the next additional field so give up! The
             %% filters must be consecutive, we can't have a '_' inbetween
             %% values
-            {EKey, EInc}
+            {EKey, EInc1}
     end.
 
 is_inclusive_op('=')  -> true;
 is_inclusive_op('>')  -> false;
-is_inclusive_op('>=') -> true.
+is_inclusive_op('>=') -> true;
+is_inclusive_op('<') -> false;
+is_inclusive_op('=<') -> true.
 
 %% Convert a filter to a start/end key element
 to_key_elem(ToKeyTypeFn, {_,{field,FieldName,_},{_,Val}}) ->
@@ -3600,6 +3601,24 @@ query_impossible_if_less_than_is_less_than_equality_filter_on_same_column_swap_f
     ?assertEqual(
         {error,{impossible_where_clause, << >>}},
         compile(DDL, Q)
+    ).
+
+less_than_on_column_in_local_key_is_added_to_endkey_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
     ).
 
 -endif.
