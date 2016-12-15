@@ -28,7 +28,6 @@
          apply_timeseries_bucket_props/3,
          build_sql_record/3,
          check_table_feature_supported/2,
-         create_table/3,
          is_table_supported/2,
          encode_typeval_key/1,
          explain_query/1, explain_query/2,
@@ -708,59 +707,6 @@ check_table_feature_supported(DDLRecCap, DecodedReq) ->
     end.
 
 %%
-convert_ddl_to_cluster_supported_version(DDLRecCap, DDL) when is_atom(DDLRecCap) ->
-    DDLConversions = riak_ql_ddl:convert(DDLRecCap, DDL),
-    [LowestDDL|_] = lists:sort(fun ddl_comparator/2, DDLConversions),
-    LowestDDL.
-
-ddl_comparator(A, B) ->
-    riak_ql_ddl:is_version_greater(element(1,A), element(1,B)) == true.
-
--spec create_table(module(), ?DDL{}, proplists:proplist()) -> ok|{error,term()}.
-create_table(SvcMod, ?DDL{table = Table}=DDL1, WithProps) ->
-    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
-    DDL2 = convert_ddl_to_cluster_supported_version(DDLRecCap, DDL1),
-    CompilerVersion = riak_ql_ddl_compiler:get_compiler_version(),
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL2,
-                                                                 CompilerVersion,
-                                                                 WithProps),
-    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
-        {bad_linkfun_modfun, {M, F}} ->
-            {error, SvcMod:make_table_create_fail_resp(Table,
-                                         flat_format(
-                                           "Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F]))};
-        {bad_linkfun_bkey, {B, K}} ->
-            {error, SvcMod:make_table_create_fail_resp(Table,
-                                         flat_format(
-                                           "Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K]))};
-        {bad_chash_keyfun, {M, F}} ->
-            {error, SvcMod:make_table_create_fail_resp(Table,
-                                         flat_format(
-                                           "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F]))};
-        Props2 ->
-            create_table1(SvcMod, Table, Props2, DDLRecCap, ?TABLE_ACTIVATE_WAIT)
-    end.
-
-create_table1(SvcMod, Table, Props, DDLRecCap, Seconds) ->
-    case riak_core_bucket_type:create(Table, Props) of
-        ok -> wait_until_active(SvcMod, Table, DDLRecCap, Seconds);
-        {error, Reason} -> {error, SvcMod:make_table_create_fail_resp(Table, Reason)}
-    end.
-
-wait_until_active(SvcMod, Table, _DDLRecCap, _Seconds=0) ->
-    {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
-wait_until_active(SvcMod, Table, DDLRecCap, Seconds) ->
-    case riak_core_bucket_type:activate(Table) of
-        ok -> ok;
-        {error, not_ready} ->
-            timer:sleep(1000),
-            lager:info("Waiting for table ~ts to be ready for activation", [Table]),
-            wait_until_active(SvcMod, Table, DDLRecCap, Seconds - 1);
-        {error, undefined} ->
-            {error, SvcMod:make_table_created_missing_resp(Table)}
-    end.
-
-%%
 -spec is_table_active_and_supported(DDLRecCap::atom(),
                                     Table::binary()) ->
                                         boolean() | {error, string()}.
@@ -1105,22 +1051,5 @@ check_table_feature_supported_when_table_is_disabled_test() ->
     ?assertMatch(
         {error, _},
         check_table_feature_supported(v2, DecodedReq)
-    ).
-
-convert_ddl_to_cluster_supported_version_v1_test() ->
-    ?assertMatch(
-       #ddl_v1{},
-       convert_ddl_to_cluster_supported_version(
-         v1, #ddl_v2{local_key = ?DDL_KEY{ast = []}, partition_key = ?DDL_KEY{ast = []}, fields=[#riak_field_v1{type=varchar}]})
-    ).
-
-convert_ddl_to_cluster_supported_version_v2_test() ->
-    DDLV2 = #ddl_v2{
-               local_key = ?DDL_KEY{ast = []},
-               partition_key = ?DDL_KEY{ast = []},
-               fields=[#riak_field_v1{type=varchar}]},
-    ?assertMatch(
-       DDLV2,
-       convert_ddl_to_cluster_supported_version(v2, DDLV2)
     ).
 -endif.

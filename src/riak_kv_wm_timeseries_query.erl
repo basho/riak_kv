@@ -271,7 +271,7 @@ compile_query(QueryStr) ->
 
 
 create_table(DDL = ?DDL{table = Table}, WithProps) ->
-    case riak_kv_ts_util:create_table(?MODULE, DDL, WithProps) of
+    case riak_kv_ts_api:create_table(?MODULE, DDL, WithProps) of
         ok -> ok;
         {error, Reason} -> {error, {table_create_fail, Table, Reason}}
     end.

@@ -248,7 +248,7 @@ decode_keys_for_streaming(Mod, [K1|Tail]) ->
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
                           {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
 create_table({?DDL{} = DDL1, WithProps}, State) ->
-    case riak_kv_ts_util:create_table(?MODULE, DDL1, WithProps) of
+    case riak_kv_ts_api:create_table(?MODULE, DDL1, WithProps) of
         ok -> {reply, tsqueryresp, State};
         {error, Reason} -> {reply, Reason, State}
     end.
