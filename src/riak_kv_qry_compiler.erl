@@ -1179,6 +1179,12 @@ check_where_clause_is_possible_fold(_, _, {'=',{field,FieldName,_},{const,EqVal}
             %% query requires a column to be equal to a value AND less than that
             %% value which is impossible
             throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'<=' = {_,_,{const,LteVal}} = LteF} = Check1 when LteVal >= EqVal ->
+            %% query like `a = 10 AND a <= 10` the less than or equals can be
+            %% eliminated because it is already captured in the equality filter
+            Acc2 = append_to_eliminate_later(LteF, Acc),
+            Check2 = Check1#filtercheck{'<=' = undefined, '=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc2, Check2)};
         #filtercheck{'=' = F_x} when F_x /= undefined ->
             %% there are two different checks on the same column, for equality
             %% this can never be satisfied.
@@ -1297,9 +1303,13 @@ check_where_clause_is_possible_fold(_, _, {'<',{field,FieldName,_},{const,LtVal}
             %% includes it so we can safely eliminate this one.
             {eliminate, Acc}
     end;
-check_where_clause_is_possible_fold(_, _, {'<=',{field,FieldName,_},{const,_LteVal}} = F, Acc) ->
+check_where_clause_is_possible_fold(_, _, {'<=',{field,FieldName,_},{const,LteVal}} = F, Acc) ->
     case find_filter_check(FieldName, Acc) of
         #filtercheck{'<=' = F} ->
+            {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when LteVal >= EqVal ->
+            %% query like `a = 10 AND a <= 10` the less than or equals can be
+            %% eliminated because it is already captured in the equality filter
             {eliminate, Acc};
         #filtercheck{'<=' = undefined} = Check1 ->
             %% this is the first less than check so just record it
@@ -3648,6 +3658,60 @@ duplicate_less_than_or_equal_to_filters_are_eliminated_test() ->
         S?SQL_SELECT.'WHERE'
     ).
 
+less_than_or_equal_to_filters_are_eliminated_when_equality_filter_value_is_equal_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 8 AND b <= 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_equality_filter_value_is_equal_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b <= 8 AND b = 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_equality_filter_value_is_greater_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 8 AND b <= 9"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
 less_than_or_equal_to_on_column_in_local_key_is_added_to_endkey_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
@@ -3665,5 +3729,6 @@ less_than_or_equal_to_on_column_in_local_key_is_added_to_endkey_test() ->
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
+
 
 -endif.
