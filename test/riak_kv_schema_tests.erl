@@ -466,7 +466,7 @@ riak_core_schema({RCDir, Schema}) when erlang:is_list(RCDir) ->
         {module, _} ->
             {true, Schema};
         _ ->
-            Search = filename:join([RCDir, "**", "riak_core_schema_tests.beam"]),
+            Search = filename:join([RCDir, "*", "riak_core_schema_tests.beam"]),
             % ?debugFmt("Checking ~s", [Search]),
             case filelib:wildcard(Search) of
                 [Beam | _] ->
