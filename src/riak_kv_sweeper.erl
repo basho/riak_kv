@@ -59,6 +59,8 @@
 
 -include("riak_kv_sweeper.hrl").
 
+-define(SERVER, ?MODULE).
+
 -define(DEFAULT_SWEEP_TICK, timer:minutes(1)).
 -define(ESTIMATE_EXPIRY, 86400). %% 1 day in seconds
 
@@ -106,33 +108,33 @@
 %% ====================================================================
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 -spec stop() -> ok.
 stop() ->
-    gen_server:call(?MODULE, stop).
+    gen_server:call(?SERVER, stop).
 
 %% @doc Add callback module that will be asked to participate in
 %% sweeps.
 -spec add_sweep_participant(#sweep_participant{}) -> ok.
 add_sweep_participant(Participant) ->
-    gen_server:call(?MODULE, {add_sweep_participant, Participant}).
+    gen_server:call(?SERVER, {add_sweep_participant, Participant}).
 
 %% @doc Remove participant callback module.
 -spec remove_sweep_participant(participant_module()) -> true | false.
 remove_sweep_participant(Module) ->
-    gen_server:call(?MODULE, {remove_sweep_participant, Module}).
+    gen_server:call(?SERVER, {remove_sweep_participant, Module}).
 
 %% @doc Initiat a sweep without using scheduling. Can be used as fold
 %% replacment.
 -spec sweep(index()) -> ok | {error, term()}.
 sweep(Index) ->
-    gen_server:call(?MODULE, {sweep_request, Index}, infinity).
+    gen_server:call(?SERVER, {sweep_request, Index}, infinity).
 
 %% @doc Get information about participants and all sweeps.
 -spec status() -> {[#sweep_participant{}], [#sweep{}]}.
 status() ->
-    gen_server:call(?MODULE, status).
+    gen_server:call(?SERVER, status).
 
 -spec enable_sweep_scheduling() -> ok.
 enable_sweep_scheduling() ->
@@ -145,25 +147,25 @@ enable_sweep_scheduling() ->
 -spec stop_all_sweeps() -> Running :: non_neg_integer().
 stop_all_sweeps() ->
     application:set_env(riak_kv, sweeper_scheduler, false),
-    gen_server:call(?MODULE, stop_all_sweeps).
+    gen_server:call(?SERVER, stop_all_sweeps).
 
 -spec update_started_sweep(index(),
                            [#sweep_participant{}],
                            EstimatedKeys :: non_neg_integer()) -> ok.
 update_started_sweep(Index, ActiveParticipants, Estimate) ->
-    gen_server:cast(?MODULE,
+    gen_server:cast(?SERVER,
                     {update_started_sweep,
                      Index, ActiveParticipants, Estimate}).
 
 %% @private used by the sweeping process to report results when done.
 -spec sweep_result(index(), riak_kv_sweeper_fold:sweep_result()) -> ok.
 sweep_result(Index, Result) ->
-    gen_server:cast(?MODULE, {sweep_result, Index, Result}).
+    gen_server:cast(?SERVER, {sweep_result, Index, Result}).
 
 % @private used by the sweeping process to report progress.
 -spec update_progress(index(), SweptKeys :: non_neg_integer()) -> ok.
 update_progress(Index, SweptKeys) ->
-    gen_server:cast(?MODULE, {update_progress, Index, SweptKeys}).
+    gen_server:cast(?SERVER, {update_progress, Index, SweptKeys}).
 
 -spec in_sweep_window() -> boolean().
 in_sweep_window() ->
@@ -354,11 +356,11 @@ get_estimtate(Index) ->
 -spec schedule_initial_sweep_tick() -> TimerRef :: reference().
 schedule_initial_sweep_tick() ->
     InitialTick = trunc(get_tick() * random:uniform()),
-    erlang:send_after(InitialTick, ?MODULE, sweep_tick).
+    erlang:send_after(InitialTick, ?SERVER, sweep_tick).
 
 -spec schedule_sweep_tick() -> TimerRef :: reference().
 schedule_sweep_tick() ->
-    erlang:send_after(get_tick(), ?MODULE, sweep_tick).
+    erlang:send_after(get_tick(), ?SERVER, sweep_tick).
 
 -spec get_tick() -> non_neg_integer().
 get_tick() ->
