@@ -1278,6 +1278,9 @@ check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVa
     end;
 check_where_clause_is_possible_fold(_, _, {'<',{field,FieldName,_},{const,LtVal}} = F, Acc) ->
     case find_filter_check(FieldName, Acc) of
+        #filtercheck{'<' = F} ->
+            %% duplicate < filter
+            {eliminate, Acc};
         #filtercheck{'=' = {_,_,{const,EqVal}}} when LtVal > EqVal ->
             %% existing equality check is less than than this less than filter,
             %% so this filter is already included so it can be eliminated
@@ -1306,6 +1309,7 @@ check_where_clause_is_possible_fold(_, _, {'<',{field,FieldName,_},{const,LtVal}
 check_where_clause_is_possible_fold(_, _, {'<=',{field,FieldName,_},{const,LteVal}} = F, Acc) ->
     case find_filter_check(FieldName, Acc) of
         #filtercheck{'<=' = F} ->
+            %% duplicate <= filter
             {eliminate, Acc};
         #filtercheck{'=' = {_,_,{const,EqVal}}} when LteVal >= EqVal ->
             %% query like `a = 10 AND a <= 10` the less than or equals can be
@@ -3566,6 +3570,24 @@ less_than_eliminated_if_it_is_greater_than_equals_to_on_same_column_test() ->
         S?SQL_SELECT.'WHERE'
     ).
 
+less_than_duplicates_are_eliminated_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 10 AND b < 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
 query_impossible_if_less_than_is_equal_to_equality_filter_on_same_column_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
@@ -3729,6 +3751,5 @@ less_than_or_equal_to_on_column_in_local_key_is_added_to_endkey_test() ->
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
-
 
 -endif.
