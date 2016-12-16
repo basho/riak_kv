@@ -22,7 +22,8 @@ end_per_suite(Config) ->
     [ok = application:stop(App) || App <- ?config(exometer_apps, Config)],
     ok.
 
-init_per_testcase(_TestCase, Config) ->
+init_per_testcase(TestCase, Config) ->
+    ct:pal("running test case ~p", [TestCase]),
     meck:unload(),
     application:set_env(riak_kv, sweep_participants, undefined),
     application:set_env(riak_kv, sweep_window, always),
@@ -33,6 +34,8 @@ init_per_testcase(_TestCase, Config) ->
     application:set_env(riak_kv, sweep_concurrency, 1),
 
     VNodeIndices = meck_new_riak_core_modules(2),
+    meck:new(chronos),
+    meck:expect(chronos, start_timer, fun(_, _, _, _) -> ok end),
     riak_kv_sweeper:start_link(),
 
     %% Delete all sweeper exometer metrics
@@ -377,12 +380,13 @@ sweep_request_non_existing_index_test(Config) ->
 
 scheduler_sync_backend_test(Config) ->
     Indices = ?config(vnode_indices, Config),
+
     meck_new_backend(self()),
     meck_new_fold_objects_function(sync, self(), 1000, 100),
     SP = meck_new_sweep_particpant(sweep_observer_1, self()),
     riak_kv_sweeper:add_sweep_participant(SP),
-    riak_kv_sweeper:enable_sweep_scheduling(),
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}) || I <- Indices],
+
+    sweep_all_indices(Indices),
     ok.
 
 scheduler_test(Config) ->
@@ -390,8 +394,8 @@ scheduler_test(Config) ->
     meck_new_backend(self()),
     SP = meck_new_sweep_particpant(sweep_observer_1, self()),
     riak_kv_sweeper:add_sweep_participant(SP),
-    riak_kv_sweeper:enable_sweep_scheduling(),
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}) || I <- Indices],
+
+    sweep_all_indices(Indices),
     ok.
 
 %% TODO - Why are we not monitoring the worker process doing the fold ?
@@ -401,8 +405,9 @@ scheduler_worker_process_crashed_test(Config) ->
     SP = meck_new_sweep_particpant(sweep_observer_1, self()),
     meck_new_visit_function(sweep_observer_1, {throw, crash}),
     riak_kv_sweeper:add_sweep_participant(SP),
-    riak_kv_sweeper:enable_sweep_scheduling(),
-    [timeout = receive_msg({ok, successful_sweep, sweep_observer_1, I}) || I <- Indices],
+
+    sweep_all_indices(Indices, timeout),
+
     {_SPs, Sweeps} = riak_kv_sweeper:status(),
     true = [ 1 || #sweep{state = running} <- Sweeps ] > 0,
     ok.
@@ -414,10 +419,10 @@ scheduler_run_interval_test(Config) ->
     SP1 = SP#sweep_participant{run_interval = 1},
     meck_new_visit_function(sweep_observer_1),
     riak_kv_sweeper:add_sweep_participant(SP1),
-    riak_kv_sweeper:enable_sweep_scheduling(),
 
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}) || I <- Indices],
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+    sweep_all_indices(Indices),
+    timer:sleep(min_scheduler_response_time_msecs()),
+    sweep_all_indices(Indices),
 
     ok.
 
@@ -433,19 +438,13 @@ scheduler_remove_participant_test(Config) ->
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
 
+    tick_per_index(Indices),
     receive {From, WaitIndex} ->
             riak_kv_sweeper:remove_sweep_participant(sweep_observer_1),
             From ! {TestCasePid, continue}
     end,
 
-    ok = receive_msg({ok, failed_sweep, sweep_observer_1, WaitIndex}, min_scheduler_response_time_msecs()),
-    #sweep{results = Result} = get_sweep_on_index(WaitIndex),
-    {ok,{_, fail}} = dict:find(sweep_observer_1, Result),
-
-    {_SPs, Sweeps} = riak_kv_sweeper:status(),
-    riak_kv_sweeper:sweep_tick(),
-    {_SPs, Sweeps} = riak_kv_sweeper:status(),
-    ok.
+    ok = receive_msg({ok, failed_sweep, sweep_observer_1, WaitIndex}).
 
 scheduler_queue_test(Config) ->
     Indices = ?config(vnode_indices, Config),
@@ -459,18 +458,28 @@ scheduler_queue_test(Config) ->
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
     meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
+
     %% Lets sweeps run once so they are not in never run state
+    tick_per_index(Indices),
     receive {From0, WaitIndex} ->
             From0 ! {TestCasePid, continue}
     end,
+    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}) || I <- Indices],
+
+    application:set_env(riak_kv, sweep_concurrency, 1),
+    riak_kv_sweeper:sweep(WaitIndex),
     receive {From1, WaitIndex} ->
             riak_kv_sweeper:sweep(WaitIndex1),
             Sweep = get_sweep_on_index(WaitIndex1),
             {_, _, _} = Sweep#sweep.queue_time,
             From1 ! {TestCasePid, continue}
     end,
-    [ ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
-    ok.
+
+    ok = receive_msg({ok, successful_sweep, sweep_observer_1, WaitIndex}),
+    match_retry(fun riak_kv_sweeper:status/0, [{}, {}]),
+
+    riak_kv_sweeper:sweep_tick(),
+    ok = receive_msg({ok, successful_sweep, sweep_observer_1, WaitIndex1}).
 
 scheduler_sweep_window_never_test(Config) ->
     Indices = ?config(vnode_indices, Config),
@@ -489,8 +498,10 @@ scheduler_sweep_window_never_test(Config) ->
     StatusAfter = StatusBefore,
 
     application:set_env(riak_kv, sweep_window, always),
-    riak_kv_sweeper:sweep_tick(),
-    [ ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices].
+    timer:sleep(min_scheduler_response_time_msecs()),
+
+    sweep_all_indices(Indices),
+    ok.
 
 scheduler_now_outside_sleep_window_test(Config) ->
     Indices = ?config(vnode_indices, Config),
@@ -505,7 +516,6 @@ scheduler_now_outside_sleep_window_test(Config) ->
     SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
     SP1 = SP#sweep_participant{run_interval = 1},
     riak_kv_sweeper:add_sweep_participant(SP1),
-    riak_kv_sweeper:enable_sweep_scheduling(),
 
     StatusBefore = riak_kv_sweeper:status(),
     riak_kv_sweeper:sweep_tick(),
@@ -513,8 +523,7 @@ scheduler_now_outside_sleep_window_test(Config) ->
     StatusAfter = StatusBefore,
 
     application:set_env(riak_kv, sweep_window, {Hour, add_hours(Hour, 1)}),
-    riak_kv_sweeper:sweep_tick(),
-    [ ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+    sweep_all_indices(Indices),
     ok.
 
 %%
@@ -534,16 +543,20 @@ stop_all_scheduled_sweeps_test(Config) ->
     riak_kv_sweeper:enable_sweep_scheduling(),
 
     %% Lets sweeps run once so they are not in never run state
-    [ ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}) || I <- Indices],
+    sweep_all_indices(Indices),
 
     meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, Indices}),
+
+    match_retry(fun riak_kv_sweeper:status/0, [{}, {}]),
+    riak_kv_sweeper:sweep_tick(),
+
     receive {From, _AnyIndex} when is_pid(From) ->
             Running = riak_kv_sweeper:stop_all_sweeps(),
             true = Running >= 1,
             From ! {TestCasePid, continue}
 
     end,
-    [ timeout = receive_msg({ok, successful_sweep, sweep_observer_1, I}) || I <- Indices],
+    sweep_all_indices(Indices, timeout),
     ok.
 
 stop_all_scheduled_sweeps_race_condition_test(Config) ->
@@ -567,13 +580,17 @@ scheduler_add_participant_test(Config) ->
 
     SP1 = meck_new_sweep_particpant(sweep_observer_1, self()),
     riak_kv_sweeper:add_sweep_participant(SP1#sweep_participant{run_interval = 1}),
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}) || I <- Indices],
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+
+    sweep_all_indices(Indices),
+    timer:sleep(min_scheduler_response_time_msecs()),
+    sweep_all_indices(Indices),
 
     SP2 = meck_new_sweep_particpant(sweep_observer_2, self()),
     riak_kv_sweeper:add_sweep_participant(SP2#sweep_participant{run_interval = 1}),
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_2, I}) || I <- Indices],
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_2, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+
+    sweep_all_indices(Indices, ok, sweep_observer_2),
+    timer:sleep(min_scheduler_response_time_msecs()),
+    sweep_all_indices(Indices, ok, sweep_observer_2),
     ok.
 
 scheduler_restart_sweep_test(Config) ->
@@ -586,6 +603,8 @@ scheduler_restart_sweep_test(Config) ->
     SP1 = SP#sweep_participant{run_interval = 1},
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
+
+    tick_per_index(Indices),
     receive {From0, WaitIndex} ->
             RunningSweep = get_sweep_on_index(WaitIndex),
             running = RunningSweep#sweep.state,
@@ -597,18 +616,20 @@ scheduler_restart_sweep_test(Config) ->
 
             riak_kv_sweeper:sweep(WaitIndex),
             RestartingSweep = get_sweep_on_index(WaitIndex),
-            undefined = RestartingSweep#sweep.queue_time,
             restart = RestartingSweep#sweep.state,
+            undefined = RestartingSweep#sweep.queue_time,
 
             RestartingSweep = RunningSweep#sweep{state=restart},
             From0 ! {TestCasePid, continue}
     end,
     ok = receive_msg({ok, failed_sweep, sweep_observer_1, WaitIndex}),
+
+    match_retry(fun riak_kv_sweeper:status/0, [{}, {}]),
+    tick_per_index(Indices),
     receive {From1, WaitIndex} ->
             From1 ! {TestCasePid, continue}
     end,
-    ok = receive_msg({ok, successful_sweep, sweep_observer_1, WaitIndex}, min_scheduler_response_time_msecs()),
-    ok.
+    ok = receive_msg({ok, successful_sweep, sweep_observer_1, WaitIndex}, min_scheduler_response_time_msecs()).
 
 scheduler_estimated_keys_lock_ok_test(Config) ->
     Indices = ?config(vnode_indices, Config),
@@ -625,10 +646,12 @@ scheduler_estimated_keys_lock_ok_test(Config) ->
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
 
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+    sweep_all_indices(Indices),
+
     [true = meck:called(riak_kv_index_hashtree, get_lock, [I, estimate]) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, estimate_keys, [I]) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, release_lock, [I]) || I <- Indices],
+
     ok.
 
 scheduler_estimated_keys_lock_fail_test(Config) ->
@@ -639,32 +662,15 @@ scheduler_estimated_keys_lock_fail_test(Config) ->
                          _LockResult = fail),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
     SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
+    meck_new_visit_function(sweep_observer_1),
     SP1 = SP#sweep_participant{run_interval = 1},
     riak_kv_sweeper:add_sweep_participant(SP1),
-    riak_kv_sweeper:enable_sweep_scheduling(),
-    meck_new_visit_function(sweep_observer_1),
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
+
+    sweep_all_indices(Indices),
+
     [true = meck:called(riak_kv_index_hashtree, get_lock, [I, estimate]) || I <- Indices],
     [false = meck:called(riak_kv_index_hashtree, estimate_keys, [I]) || I <- Indices],
     [false = meck:called(riak_kv_index_hashtree, release_lock, [I]) || I <- Indices],
-    ok.
-
-scheduler_sweep_concurrency_test(_Config) ->
-    ConcurrentSweeps = 8,
-    application:set_env(riak_kv, sweep_concurrency, ConcurrentSweeps),
-    Indices = meck_new_riak_core_ring(8),
-    TestCasePid = self(),
-    meck_new_backend(TestCasePid),
-    SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
-    SP1 = SP#sweep_participant{run_interval = 1},
-    riak_kv_sweeper:add_sweep_participant(SP1),
-    riak_kv_sweeper:enable_sweep_scheduling(),
-    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, Indices}),
-    wait_for_concurrent_sweeps(ConcurrentSweeps),
-    {_SPs, Sweeps} = riak_kv_sweeper:status(),
-
-    ConcurrentSweeps = length([1 || #sweep{pid = Pid, state = running} <- Sweeps,
-                                    process_info(Pid) =/= undefined]),
     ok.
 
 %% throttling on object size with no mutated keys
@@ -869,9 +875,9 @@ sweeper_exometer_successful_sweep_test(Config) ->
 
     meck_new_visit_function(sweep_observer_1),
     riak_kv_sweeper:add_sweep_participant(SP1),
-    riak_kv_sweeper:enable_sweep_scheduling(),
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I})
-     || I <- Indices],
+
+    sweep_all_indices(Indices),
+
     {error, not_found} =
         match_retry(fun() ->
                             exometer:get_value([riak, riak_kv, sweeper, I0,
@@ -883,10 +889,9 @@ sweeper_exometer_successful_sweep_test(Config) ->
                             exometer:get_value([riak, riak_kv, sweeper, I0,
                                                 successful, sweep_observer_1])
                     end,  {ok, [{count, 1}, {one, 1}]}),
-    riak_kv_sweeper:sweep_tick(),
-    [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I},
-                      min_scheduler_response_time_msecs())
-     || I <- Indices],
+
+    riak_kv_sweeper:sweep(I0),
+
     {error, not_found} =
         match_retry(fun() ->
                             exometer:get_value([riak, riak_kv, sweeper, I0,
@@ -911,8 +916,10 @@ sweeper_exometer_failed_sweep_test(Config) ->
     meck_new_visit_function(sweep_observer_1, {throw, crash}),
     riak_kv_sweeper:add_sweep_participant(SP1),
     riak_kv_sweeper:enable_sweep_scheduling(),
-    [ok = receive_msg({ok, failed_sweep, sweep_observer_1, I})
-     || I <- Indices],
+
+    tick_per_index(Indices),
+    [ok = receive_msg({ok, failed_sweep, sweep_observer_1, I}) || I <- Indices],
+
     {error, not_found} =
         match_retry(fun() ->
                             exometer:get_value([riak, riak_kv, sweeper, I0,
@@ -924,10 +931,9 @@ sweeper_exometer_failed_sweep_test(Config) ->
                             exometer:get_value([riak, riak_kv, sweeper, I0,
                                                 failed, sweep_observer_1])
                     end,  {ok, [{count, 1}, {one, 1}]}),
-    riak_kv_sweeper:sweep_tick(),
-    [ok = receive_msg({ok, failed_sweep, sweep_observer_1, I},
-                      min_scheduler_response_time_msecs())
-     || I <- Indices],
+
+    riak_kv_sweeper:sweep(I0),
+
     {error, not_found} =
         match_retry(fun() ->
                             exometer:get_value([riak, riak_kv, sweeper, I0,
@@ -1040,12 +1046,30 @@ add_hours(Hour, Inc)  ->
 %% before a sweep is re-run using the run_interval (now - ts) > 1,
 %% see kv_sweeper:expired
 min_scheduler_response_time_msecs() ->
-    %% Updating to 10000 since we see timeouts on the builders sometimes:
-    10000.
+    2500.
 
 pick(List) when length(List) > 0 ->
     N = random:uniform(length(List)),
     lists:nth(N, List).
+
+sweep_all_indices(Indices) ->
+    sweep_all_indices(Indices, ok).
+
+sweep_all_indices(Indices, ExpectedResult) ->
+    sweep_all_indices(Indices, ExpectedResult, sweep_observer_1).
+
+sweep_all_indices(Indices, ExpectedResult, SweepParticipant) ->
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    tick_per_index(Indices),
+    ReceiveFun = fun(I) ->
+                         ExpectedResult = receive_msg({ok, successful_sweep, SweepParticipant, I})
+                 end,
+    lists:foreach(ReceiveFun, Indices).
+
+tick_per_index(Indices) ->
+    application:set_env(riak_kv, sweep_concurrency, length(Indices)),
+    %% Only one sweep scheduled per tick, so send a tick for each index:
+    lists:foreach(fun(_) -> riak_kv_sweeper:sweep_tick() end, Indices).
 
 receive_msg(Msg) ->
     receive_msg(Msg, 1000).
@@ -1079,7 +1103,7 @@ is_testcase({_, _}) ->
     false.
 
 match_retry(Fun, Result) ->
-   match_retry(_Max = 10,  _N = 1, Fun, Result).
+   match_retry(_Max = 15,  _N = 1, Fun, Result).
 match_retry(Max, N, _Fun, max_retries) when N > Max ->
     throw(max_retries);
 match_retry(Max, N, _Fun, _Result) when N > Max ->
