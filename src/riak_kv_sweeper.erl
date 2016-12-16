@@ -354,12 +354,12 @@ get_estimtate(Index) ->
             0
     end.
 
--spec schedule_initial_sweep_tick() -> TimerRef :: reference().
+-spec schedule_initial_sweep_tick() -> _.
 schedule_initial_sweep_tick() ->
     InitialTick = trunc(get_tick() * random:uniform()),
     chronos:start_timer(?CHRONOS, sweep_tick, InitialTick, {?MODULE, sweep_tick, []}).
 
--spec schedule_sweep_tick() -> TimerRef :: reference().
+-spec schedule_sweep_tick() -> _.
 schedule_sweep_tick() ->
     chronos:start_timer(?CHRONOS, sweep_tick, get_tick(), {?MODULE, sweep_tick, []}).
 
