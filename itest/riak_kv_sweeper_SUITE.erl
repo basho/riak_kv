@@ -307,7 +307,7 @@ status_index_changed_tick_test(Config) ->
 
     NewPartitions = 2 * length(Indices),
     NewIndices = meck_new_riak_core_ring(NewPartitions),
-    sweeper_tick(self()),
+    riak_kv_sweeper:sweep_tick(),
     {_, Sweeps1} = riak_kv_sweeper:status(),
     NewIndices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps1]),
     ok.
@@ -443,7 +443,7 @@ scheduler_remove_participant_test(Config) ->
     {ok,{_, fail}} = dict:find(sweep_observer_1, Result),
 
     {_SPs, Sweeps} = riak_kv_sweeper:status(),
-    sweeper_tick(self()),
+    riak_kv_sweeper:sweep_tick(),
     {_SPs, Sweeps} = riak_kv_sweeper:status(),
     ok.
 
@@ -484,12 +484,12 @@ scheduler_sweep_window_never_test(Config) ->
     riak_kv_sweeper:enable_sweep_scheduling(),
 
     StatusBefore = riak_kv_sweeper:status(),
-    sweeper_tick(TestCasePid),
+    riak_kv_sweeper:sweep_tick(),
     StatusAfter = riak_kv_sweeper:status(),
     StatusAfter = StatusBefore,
 
     application:set_env(riak_kv, sweep_window, always),
-    sweeper_tick(TestCasePid),
+    riak_kv_sweeper:sweep_tick(),
     [ ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices].
 
 scheduler_now_outside_sleep_window_test(Config) ->
@@ -508,12 +508,12 @@ scheduler_now_outside_sleep_window_test(Config) ->
     riak_kv_sweeper:enable_sweep_scheduling(),
 
     StatusBefore = riak_kv_sweeper:status(),
-    sweeper_tick(TestCasePid),
+    riak_kv_sweeper:sweep_tick(),
     StatusAfter = riak_kv_sweeper:status(),
     StatusAfter = StatusBefore,
 
     application:set_env(riak_kv, sweep_window, {Hour, add_hours(Hour, 1)}),
-    sweeper_tick(TestCasePid),
+    riak_kv_sweeper:sweep_tick(),
     [ ok = receive_msg({ok, successful_sweep, sweep_observer_1, I}, min_scheduler_response_time_msecs()) || I <- Indices],
     ok.
 
@@ -883,7 +883,7 @@ sweeper_exometer_successful_sweep_test(Config) ->
                             exometer:get_value([riak, riak_kv, sweeper, I0,
                                                 successful, sweep_observer_1])
                     end,  {ok, [{count, 1}, {one, 1}]}),
-    sweeper_tick(TestCasePid),
+    riak_kv_sweeper:sweep_tick(),
     [ok = receive_msg({ok, successful_sweep, sweep_observer_1, I},
                       min_scheduler_response_time_msecs())
      || I <- Indices],
@@ -924,7 +924,7 @@ sweeper_exometer_failed_sweep_test(Config) ->
                             exometer:get_value([riak, riak_kv, sweeper, I0,
                                                 failed, sweep_observer_1])
                     end,  {ok, [{count, 1}, {one, 1}]}),
-    sweeper_tick(TestCasePid),
+    riak_kv_sweeper:sweep_tick(),
     [ok = receive_msg({ok, failed_sweep, sweep_observer_1, I},
                       min_scheduler_response_time_msecs())
      || I <- Indices],
@@ -974,14 +974,6 @@ exometer_deleted_object_count(Config) ->
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
-sweeper_tick(TestCasePid) ->
-    Ref = make_ref(),
-    erlang:send_after(0, riak_kv_sweeper, {test_tick, Ref, TestCasePid}),
-    receive {ok, Ref} ->
-            ok
-    after 100 ->
-            throw(timeout)
-    end.
 
 wait_for_concurrent_sweeps(ConcurrentSweeps) ->
     wait_for_concurrent_sweeps(ConcurrentSweeps, []).

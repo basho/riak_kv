@@ -43,6 +43,7 @@
          add_sweep_participant/1,
          remove_sweep_participant/1,
          status/0,
+         sweep_tick/0,
          sweep/1,
          sweep_result/2,
          update_progress/2,
@@ -60,6 +61,7 @@
 -include("riak_kv_sweeper.hrl").
 
 -define(SERVER, ?MODULE).
+-define(CHRONOS, riak_kv_chronos).
 
 -define(DEFAULT_SWEEP_TICK, timer:minutes(1)).
 -define(ESTIMATE_EXPIRY, 86400). %% 1 day in seconds
@@ -136,6 +138,10 @@ sweep(Index) ->
 status() ->
     gen_server:call(?SERVER, status).
 
+-spec sweep_tick() -> ok.
+sweep_tick() ->
+    gen_server:call(?SERVER, sweep_tick).
+
 -spec enable_sweep_scheduling() -> ok.
 enable_sweep_scheduling() ->
     lager:info("Enable sweep scheduling"),
@@ -211,6 +217,28 @@ handle_call(status, _From, State) ->
     {ok, {Participants, Sweeps}, State1} = riak_kv_sweeper_state:status(State),
     {reply, {Participants , Sweeps}, State1};
 
+handle_call(sweep_tick, _From, State) ->
+    schedule_sweep_tick(),
+    State4 =
+        case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
+            true ->
+                State1 = riak_kv_sweeper_state:update_sweep_specs(State),
+                case riak_kv_sweeper_state:maybe_schedule_sweep(State1) of
+                    {ok, Index, State2} ->
+                        case do_sweep(Index, State2) of
+                            {ok, State3} ->
+                                State3;
+                            {error, _Reason, State3} ->
+                                State3
+                        end;
+                    State2 ->
+                        State2
+                end;
+            false ->
+                State
+        end,
+    {reply, ok, State4};
+
 handle_call(stop_all_sweeps, _From, State) ->
     {ok, Running, State1} = riak_kv_sweeper_state:stop_all_sweeps(State),
     {reply, Running, State1};
@@ -233,33 +261,6 @@ handle_cast({update_progress, Index, SweptKeys}, State) ->
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
-
-handle_info({test_tick, Ref, From}, State) ->
-    {noreply, State1} = handle_info(sweep_tick, State),
-    From ! {ok, Ref},
-    {noreply, State1};
-
-handle_info(sweep_tick, State) ->
-    schedule_sweep_tick(),
-    State4 =
-        case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
-            true ->
-                State1 = riak_kv_sweeper_state:update_sweep_specs(State),
-                case riak_kv_sweeper_state:maybe_schedule_sweep(State1) of
-                    {ok, Index, State2} ->
-                        case do_sweep(Index, State2) of
-                            {ok, State3} ->
-                                State3;
-                            {error, _Reason, State3} ->
-                                State3
-                        end;
-                    State2 ->
-                        State2
-                end;
-            false ->
-                State
-        end,
-    {noreply, State4};
 
 handle_info(Msg, State) ->
     lager:error("riak_kv_sweeper received unexpected message ~p", [Msg]),
@@ -356,11 +357,11 @@ get_estimtate(Index) ->
 -spec schedule_initial_sweep_tick() -> TimerRef :: reference().
 schedule_initial_sweep_tick() ->
     InitialTick = trunc(get_tick() * random:uniform()),
-    erlang:send_after(InitialTick, ?SERVER, sweep_tick).
+    chronos:start_timer(?CHRONOS, sweep_tick, InitialTick, {?MODULE, sweep_tick, []}).
 
 -spec schedule_sweep_tick() -> TimerRef :: reference().
 schedule_sweep_tick() ->
-    erlang:send_after(get_tick(), ?SERVER, sweep_tick).
+    chronos:start_timer(?CHRONOS, sweep_tick, get_tick(), {?MODULE, sweep_tick, []}).
 
 -spec get_tick() -> non_neg_integer().
 get_tick() ->
