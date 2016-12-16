@@ -469,6 +469,11 @@ stat_send(Index, {in_progress, Acc}) ->
 -ifdef(TEST).
 
 setup_sweep(N) ->
+    %% Shouldn't be necessary to run this in setup, but some tests may not clean up
+    %% after themselves. This also helps work around a bug in meck where mocking a
+    %% module that has previously run eunit tests can cause the eunit test process
+    %% to be killed. (See https://github.com/eproxus/meck/issues/133 for more info.)
+    meck:unload(),
     meck:new(riak_kv_vnode, []),
     meck:expect(riak_kv_vnode, local_put, fun(_, _, _) -> [] end),
     meck:expect(riak_kv_vnode, local_reap, fun(_, _, _) -> [] end),
