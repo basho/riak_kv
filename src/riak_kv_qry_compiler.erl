@@ -1281,6 +1281,10 @@ check_where_clause_is_possible_fold(_, _, {'<',{field,FieldName,_},{const,LtVal}
         #filtercheck{'<' = F} ->
             %% duplicate < filter
             {eliminate, Acc};
+        #filtercheck{'<=' = {_,_,{const,LteVal}}} when LteVal >= LtVal ->
+            %% query like `a <= 10 AND a < 10` the less than can be eliminated
+            %% because it is already captured in the less than or equals filter
+            {eliminate, Acc};
         #filtercheck{'=' = {_,_,{const,EqVal}}} when LtVal > EqVal ->
             %% existing equality check is less than than this less than filter,
             %% so this filter is already included so it can be eliminated
@@ -1314,6 +1318,10 @@ check_where_clause_is_possible_fold(_, _, {'<=',{field,FieldName,_},{const,LteVa
         #filtercheck{'=' = {_,_,{const,EqVal}}} when LteVal >= EqVal ->
             %% query like `a = 10 AND a <= 10` the less than or equals can be
             %% eliminated because it is already captured in the equality filter
+            {eliminate, Acc};
+        #filtercheck{'<' = {_,_,{const,LtVal}}} when LteVal >= LtVal ->
+            %% query like `a < 10 AND a <= 10` the less than or equals can be
+            %% eliminated because it is already captured in the less than filter
             {eliminate, Acc};
         #filtercheck{'<=' = undefined} = Check1 ->
             %% this is the first less than check so just record it
@@ -3730,6 +3738,42 @@ less_than_or_equal_to_filters_are_eliminated_when_equality_filter_value_is_great
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
          {filter, {'=',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_less_than_filter_value_is_greater_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 8 AND b <= 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_less_than_filter_value_is_greater_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b <= 8 AND b < 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<=',{field,<<"b">>,sint64},{const,8}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
