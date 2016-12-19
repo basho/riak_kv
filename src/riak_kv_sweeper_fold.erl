@@ -175,14 +175,12 @@ format_result(SuccFail, Results) ->
 -spec maybe_throttle_sweep(binary(), #sa{}) -> #sa{}.
 maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, _, _}} = Acc0) ->
     #sa{throttle = {pace, Limit, Wait},
-        swept_keys = SweepKeys,
-        throttle_total_wait_msecs = TotalWait} = Acc0,
+        swept_keys = SweepKeys} = Acc0,
     case SweepKeys rem Limit of
         0 ->
             %% We use receive after to throttle instead of sleep.
             %% This way we can respond on requests while throttling
-            Acc1 = Acc0#sa{throttle = get_sweep_throttle(),
-                           throttle_total_wait_msecs = TotalWait + Wait},
+            Acc1 = Acc0#sa{throttle = get_sweep_throttle()},
             riak_kv_sweeper:sleep_for_throttle(Wait),
             maybe_extra_throttle(Acc1);
         _ ->
@@ -192,16 +190,14 @@ maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, _, _}} = Acc0) ->
 %% Throttle depending on total obj_size.
 maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, _, _}} = Acc0) ->
     #sa{throttle = {obj_size, Limit, Wait},
-        total_obj_size = TotalObjSize,
-        throttle_total_wait_msecs = TotalWait} = Acc0,
+        total_obj_size = TotalObjSize} = Acc0,
     ObjSize = byte_size(RObjBin),
     TotalObjSize1 = ObjSize + TotalObjSize,
     case (Limit =/= 0) andalso (TotalObjSize1 > Limit) of
         true ->
             %% We use receive after to throttle instead of sleep.
             %% This way we can respond on requests while throttling
-            Acc1 = Acc0#sa{throttle = get_sweep_throttle(),
-                           throttle_total_wait_msecs = TotalWait + Wait},
+            Acc1 = Acc0#sa{throttle = get_sweep_throttle()},
             riak_kv_sweeper:sleep_for_throttle(Wait),
             maybe_extra_throttle(Acc1#sa{total_obj_size = 0});
         _ ->
@@ -212,7 +208,6 @@ maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, _, _}} = Acc0) ->
 -spec maybe_extra_throttle(#sa{}) -> #sa{}.
 maybe_extra_throttle(Acc) ->
     #sa{throttle = Throttle,
-        throttle_total_wait_msecs = TotalWait,
         num_mutated = NumMutated,
         num_deleted = NumDeleted} = Acc,
     {Limit, Wait} =
@@ -225,11 +220,11 @@ maybe_extra_throttle(Acc) ->
     %% +1 since some sweeps doesn't modify any objects
     case (NumMutated + NumDeleted + 1) rem Limit of
         0 ->
-            riak_kv_sweeper:sleep_for_throttle(Wait),
-            Acc#sa{throttle_total_wait_msecs = TotalWait + Wait};
+            riak_kv_sweeper:sleep_for_throttle(Wait);
         _ ->
-            Acc
-    end.
+            ok
+    end,
+    Acc.
 
 %% Throttle depending on how many objects the sweep modify.
 -spec get_sweep_throttle() -> {'obj_size'|'pace',
