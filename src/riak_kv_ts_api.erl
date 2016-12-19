@@ -146,17 +146,23 @@ wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds) ->
             wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds - 1)
     end.
 
-wait_until_supported1(_Nodes=[], _SvcMod, _Table, _DDL, _DDLRecCap, _Seconds) -> ok;
-wait_until_supported1([Node|NodesT], SvcMod, Table, DDL, DDLRecCap, Seconds) when Node =:= node() ->
-    wait_until_supported1(NodesT, SvcMod, Table, DDL, DDLRecCap, Seconds);
-wait_until_supported1(Nodes=[Node|NodesT], SvcMod, Table, DDL, DDLRecCap, Seconds) ->
-    case rpc:call(Node, riak_kv_ts_newtype, is_compiled, [Table, DDL]) of
-        true -> wait_until_supported1(NodesT, SvcMod, Table, DDL, DDLRecCap, Seconds);
+wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds) ->
+    case get_remote_is_compiled(Nodes, Table, DDL) of
+        true -> ok;
         _ ->
             timer:sleep(1000),
-            lager:info("Waiting for table ~ts to be compiled on ~s", [Table, Node]),
+            lager:info("Waiting for table ~ts to be compiled on all active nodes", [Table]),
             wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds - 1)
     end.
+
+get_remote_is_compiled(Nodes, Table, DDL) ->
+    multi_is_compiled(
+      rpc:multicall(Nodes, riak_kv_ts_newtype, is_compiled, [Table, DDL])).
+
+multi_is_compiled({_, BadNodes}) when BadNodes =/= [] ->
+    false;
+multi_is_compiled({Results, _}) ->
+    lists:all(fun(E) -> E == true end, Results).
 
 get_active_peer_nodes() ->
     case riak_core_ring_manager:get_my_ring() of
