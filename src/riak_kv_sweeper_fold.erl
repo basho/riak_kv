@@ -174,10 +174,12 @@ successful_sweep(Succ, Index) ->
                  end,
     lists:foreach(SuccessFun, Succ).
 
--spec failed_sweep([#sweep_participant{}], riak_kv_sweeper:index()) -> [].
+-spec failed_sweep([#sweep_participant{}], riak_kv_sweeper:index()) -> ok.
 failed_sweep(Failed, Index) ->
-    [Module:failed_sweep(Index, Reason) ||
-       #sweep_participant{module = Module, fail_reason = Reason } <- Failed].
+    FailFun = fun(#sweep_participant{module = Module, fail_reason = Reason}) ->
+                      Module:failed_sweep(Index, Reason)
+              end,
+    lists:foreach(FailFun, Failed).
 
 failed_sweep(Failed, Index, Reason) ->
     [Module:failed_sweep(Index, Reason) ||
