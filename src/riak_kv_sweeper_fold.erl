@@ -234,13 +234,8 @@ maybe_extra_throttle(Acc) ->
     #sa{throttle = Throttle,
         num_mutated = NumMutated,
         num_deleted = NumDeleted} = Acc,
-    {Limit, Wait} =
-        case Throttle of
-            {pace, Limit0, Wait0} ->
-                {Limit0, Wait0};
-            {obj_size, _Limit0, Wait0} ->
-                {100, Wait0}
-        end,
+    {Limit, Wait} = get_throttle_params(Throttle),
+
     %% +1 since some sweeps doesn't modify any objects
     case (NumMutated + NumDeleted + 1) rem Limit of
         0 ->
@@ -249,6 +244,11 @@ maybe_extra_throttle(Acc) ->
             ok
     end,
     Acc.
+
+get_throttle_params({pace, Limit, Wait}) ->
+    {Limit, Wait};
+get_throttle_params({obj_size, _Limit, Wait}) ->
+    {100, Wait}.
 
 %% Throttle depending on how many objects the sweep modify.
 -spec get_sweep_throttle() -> {'obj_size'|'pace',
