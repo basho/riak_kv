@@ -22,8 +22,7 @@ end_per_suite(Config) ->
     [ok = application:stop(App) || App <- ?config(exometer_apps, Config)],
     ok.
 
-init_per_testcase(TestCase, Config) ->
-    ct:pal("running test case ~p", [TestCase]),
+init_per_testcase(_TestCase, Config) ->
     meck:unload(),
     application:set_env(riak_kv, sweep_participants, undefined),
     application:set_env(riak_kv, sweep_window, always),
@@ -209,7 +208,7 @@ meck_new_backend(TestCasePid, NumKeys) ->
 meck_new_backend(TestCasePid, NumKeys, ObjSizeBytes) ->
     meck:new(meck_new_backend, [non_strict]),
     meck_new_fold_objects_function(TestCasePid, NumKeys, ObjSizeBytes),
-    meck_new_riak_kv_vnode(TestCasePid).
+    meck_new_riak_kv_vnode().
 
 meck_new_fold_objects_function(TestCasePid, NumKeys, ObjSizeBytes) ->
     meck_new_fold_objects_function(async, TestCasePid, NumKeys, ObjSizeBytes).
@@ -243,20 +242,19 @@ meck_new_fold_objects_function(sync, TestCasePid, NumKeys, ObjSizeBytes) ->
                         {ok, SA}
                 end).
 
-meck_new_riak_kv_vnode(TestCasePid) ->
+meck_new_riak_kv_vnode() ->
     meck:new(riak_kv_vnode),
     meck:expect(riak_kv_vnode, sweep,
                 fun({Index, _Node}, ActiveParticipants, EstimatedKeys) ->
                         meck_riak_kv_vnode_sweep_worker(
-                          TestCasePid, ActiveParticipants, EstimatedKeys, Index)
+                          ActiveParticipants, EstimatedKeys, Index)
                 end),
     meck:expect(riak_kv_vnode, local_put, fun(_, _, _) -> ok end),
     meck:expect(riak_kv_vnode, local_reap, fun(_, _, _) -> ok end).
 
-meck_riak_kv_vnode_sweep_worker(TestCasePid, ActiveParticipants, EstimatedKeys, Index) ->
+meck_riak_kv_vnode_sweep_worker(ActiveParticipants, EstimatedKeys, Index) ->
     spawn_link(fun() ->
-                       SA = meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index),
-                       TestCasePid ! {ok, SA}
+                       meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index)
                end).
 
 meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index) ->
@@ -268,8 +266,7 @@ meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index) ->
         {async, {sweep, FoldFun, FinishFun}, _Sender, _VnodeState} ->
             try
                 SA0 = FoldFun(),
-                FinishFun(SA0),
-                SA0
+                FinishFun(SA0)
             catch throw:{stop_sweep, PrematureAcc} ->
                     FinishFun(PrematureAcc),
                     PrematureAcc;
@@ -280,6 +277,16 @@ meck_vnode_worker_func(ActiveParticipants, EstimatedKeys, Index) ->
         {reply, Acc, _VnodeStat} ->
             Acc
     end.
+
+meck_sleep_for_throttle() ->
+    meck:new(riak_kv_sweeper, [passthrough]),
+    meck:expect(riak_kv_sweeper, sleep_for_throttle, fun(_) -> ok end).
+
+meck_count_msecs_slept() ->
+    ThrottleHistory = meck:history(riak_kv_sweeper),
+    MSecsThrottled = [MSecs || {_Pid, {riak_kv_sweeper, sleep_for_throttle, [MSecs]}, ok} <-
+                               ThrottleHistory],
+    lists:sum(MSecsThrottled).
 
 %%--------------------------------------------------------------------
 %% TEST CASES
@@ -734,6 +741,7 @@ sweep_throttle_obj_size5_test(Config) ->
 
 sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
     application:set_env(riak_kv, sweep_throttle, {obj_size, ThrottleAfterBytes, ThrottleWaitMsecs}),
+    meck_sleep_for_throttle(),
 
     SP = meck_new_sweep_particpant(sweep_observer_1, self()),
     RiakObjSizeBytes = byte_size(riak_object_bin(<<>>, <<>>, ObjSizeBytes)),
@@ -746,7 +754,8 @@ sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAf
 
     riak_kv_sweeper:sweep(Index),
     ok = receive_msg({ok, successful_sweep, sweep_observer_1, Index}, SweepTime),
-    #sa{throttle_total_wait_msecs = ActualThrottleTotalWait} = receive_sweep_result(),
+
+    ActualThrottleTotalWait = meck_count_msecs_slept(),
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
 
 %% throttling on pace every 100 keys
@@ -806,6 +815,7 @@ sweep_throttle_pace5_test(Config) ->
 
 sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMsecs) ->
     application:set_env(riak_kv, sweep_throttle, {pace, NumKeysPace, ThrottleWaitMsecs}),
+    meck_sleep_for_throttle(),
 
     SP = meck_new_sweep_particpant(sweep_observer_1, self()),
     meck_new_backend(self(), NumKeys),
@@ -814,12 +824,10 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
     ExpectedThrottleMsecs = expected_pace_throttle_total_msecs(
                               NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMsecs),
 
-    SweepTime = (min_scheduler_response_time_msecs() + ExpectedThrottleMsecs),
-
     riak_kv_sweeper:sweep(Index),
-    ok = receive_msg({ok, successful_sweep, sweep_observer_1, Index}, SweepTime),
-    #sa{throttle_total_wait_msecs = ActualThrottleTotalWait} = receive_sweep_result(),
+    ok = receive_msg({ok, successful_sweep, sweep_observer_1, Index}),
 
+    ActualThrottleTotalWait = meck_count_msecs_slept(),
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
 
 sweeper_exometer_reporting_test(Config) ->
@@ -1079,14 +1087,6 @@ receive_msg(Msg, TimeoutMsecs) ->
         RcvMsg when RcvMsg == Msg ->
             ok
     after TimeoutMsecs ->
-            timeout
-    end.
-
-receive_sweep_result() ->
-    receive
-        {ok, #sa{} = SA} ->
-            SA
-    after 5000 ->
             timeout
     end.
 

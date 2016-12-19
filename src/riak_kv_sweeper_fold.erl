@@ -183,7 +183,7 @@ maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, _, _}} = Acc0) ->
             %% This way we can respond on requests while throttling
             Acc1 = Acc0#sa{throttle = get_sweep_throttle(),
                            throttle_total_wait_msecs = TotalWait + Wait},
-            timer:sleep(Wait),
+            riak_kv_sweeper:sleep_for_throttle(Wait),
             maybe_extra_throttle(Acc1);
         _ ->
             maybe_extra_throttle(Acc0)
@@ -202,7 +202,7 @@ maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, _, _}} = Acc0) ->
             %% This way we can respond on requests while throttling
             Acc1 = Acc0#sa{throttle = get_sweep_throttle(),
                            throttle_total_wait_msecs = TotalWait + Wait},
-            timer:sleep(Wait),
+            riak_kv_sweeper:sleep_for_throttle(Wait),
             maybe_extra_throttle(Acc1#sa{total_obj_size = 0});
         _ ->
             maybe_extra_throttle(Acc0#sa{total_obj_size = TotalObjSize1})
@@ -225,7 +225,7 @@ maybe_extra_throttle(Acc) ->
     %% +1 since some sweeps doesn't modify any objects
     case (NumMutated + NumDeleted + 1) rem Limit of
         0 ->
-            timer:sleep(Wait),
+            riak_kv_sweeper:sleep_for_throttle(Wait),
             Acc#sa{throttle_total_wait_msecs = TotalWait + Wait};
         _ ->
             Acc
