@@ -182,8 +182,10 @@ failed_sweep(Failed, Index) ->
     lists:foreach(FailFun, Failed).
 
 failed_sweep(Failed, Index, Reason) ->
-    [Module:failed_sweep(Index, Reason) ||
-       #sweep_participant{module = Module} <- Failed].
+    FailFun = fun(#sweep_participant{module = Module}) ->
+                      Module:failed_sweep(Index, Reason)
+              end,
+    lists:foreach(FailFun, Failed).
 
 -spec format_result(#sa{}) -> sweep_result().
 format_result(#sa{swept_keys = SweptKeys,
