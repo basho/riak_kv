@@ -40,6 +40,27 @@
 %% during sweep window.
 -define(SWEEP_WINDOW_THROTTLE_DIV, 1).
 
+%% Sweep accumulator
+-record(sa,
+        {index,
+         bucket_props = dict:new(),
+         active_p,
+         failed_p = [],
+         succ_p = [],
+         estimated_keys = 0  :: non_neg_integer(),
+         swept_keys = 0  :: non_neg_integer(),
+         num_mutated = 0 :: non_neg_integer(),
+         num_deleted = 0 :: non_neg_integer(),
+         throttle = riak_kv_sweeper_fold:get_sweep_throttle(),
+         total_obj_size = 0,
+
+         %% Stats counters to track and report metrics about a sweep
+         stat_mutated_objects_counter = 0 :: non_neg_integer(),
+         stat_deleted_objects_counter = 0 :: non_neg_integer(),
+         stat_swept_keys_counter = 0 :: non_neg_integer(),
+         stat_obj_size_counter = 0 :: non_neg_integer()
+        }).
+
 %% ====================================================================
 %% Types
 %% ====================================================================
