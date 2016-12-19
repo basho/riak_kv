@@ -200,34 +200,31 @@ format_result(SuccFail, Results) ->
 
 %% Throttle depending on swept keys.
 -spec maybe_throttle_sweep(binary(), #sa{}) -> #sa{}.
-maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, _, _}} = Acc0) ->
-    #sa{throttle = {pace, Limit, Wait},
-        swept_keys = SweepKeys} = Acc0,
-    case SweepKeys rem Limit of
-        0 ->
-            %% We use receive after to throttle instead of sleep.
-            %% This way we can respond on requests while throttling
-            Acc1 = Acc0#sa{throttle = get_sweep_throttle()},
-            riak_kv_sweeper:sleep_for_throttle(Wait),
-            maybe_extra_throttle(Acc1);
-        _ ->
-            maybe_extra_throttle(Acc0)
-    end;
-
+maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, Limit, Wait}, swept_keys = SweepKeys} = Acc)
+  when SweepKeys rem Limit =:= 0 ->
+    %% We use receive after to throttle instead of sleep.
+    %% This way we can respond on requests while throttling
+    Acc1 = Acc#sa{throttle = get_sweep_throttle()},
+    riak_kv_sweeper:sleep_for_throttle(Wait),
+    maybe_extra_throttle(Acc1);
+maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, _, _}} = Acc) ->
+    maybe_extra_throttle(Acc);
+maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, Limit, _}} = Acc) when Limit =:= 0 ->
+    ObjSize = byte_size(RObjBin),
+    TotalObjSize1 = ObjSize + Acc#sa.total_obj_size,
+    maybe_extra_throttle(Acc#sa{total_obj_size = TotalObjSize1});
 %% Throttle depending on total obj_size.
 maybe_throttle_sweep(RObjBin, #sa{throttle = {obj_size, _, _}} = Acc0) ->
     #sa{throttle = {obj_size, Limit, Wait},
         total_obj_size = TotalObjSize} = Acc0,
     ObjSize = byte_size(RObjBin),
     TotalObjSize1 = ObjSize + TotalObjSize,
-    case (Limit =/= 0) andalso (TotalObjSize1 > Limit) of
+    case TotalObjSize1 > Limit of
         true ->
-            %% We use receive after to throttle instead of sleep.
-            %% This way we can respond on requests while throttling
             Acc1 = Acc0#sa{throttle = get_sweep_throttle()},
             riak_kv_sweeper:sleep_for_throttle(Wait),
             maybe_extra_throttle(Acc1#sa{total_obj_size = 0});
-        _ ->
+        false ->
             maybe_extra_throttle(Acc0#sa{total_obj_size = TotalObjSize1})
     end.
 
