@@ -162,7 +162,7 @@ fun_type_rank(delete_fun) -> 1;
 fun_type_rank(modify_fun) -> 2;
 fun_type_rank(observe_fun) -> 3.
 
--spec inform_participants(#sa{}, riak_kv_sweeper:index()) -> [].
+-spec inform_participants(#sa{}, riak_kv_sweeper:index()) -> ok.
 inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
     successful_sweep(Succ, Index),
     failed_sweep(Failed, Index).
