@@ -126,24 +126,53 @@ create_table(SvcMod, ?DDL{table = Table}=DDL1, WithProps) ->
                                                        flat_format(
                                                          "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F]))};
         Props2 ->
-            create_table1(SvcMod, Table, Props2, DDLRecCap, ?TABLE_ACTIVATE_WAIT)
+            create_table1(SvcMod, Table, Props2, DDL2, DDLRecCap, ?TABLE_ACTIVATE_WAIT)
     end.
 
-create_table1(SvcMod, Table, Props, DDLRecCap, Seconds) ->
+create_table1(SvcMod, Table, Props, DDL, DDLRecCap, Seconds) ->
     case riak_core_bucket_type:create(Table, Props) of
-        ok -> wait_until_active(SvcMod, Table, DDLRecCap, Seconds);
+        ok -> wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Seconds);
         {error, Reason} -> {error, SvcMod:make_table_create_fail_resp(Table, Reason)}
     end.
 
-wait_until_active(SvcMod, Table, _DDLRecCap, _Seconds=0) ->
+wait_until_supported(SvcMod, Table, _DDL, _DDLRecCap, _Seconds=0) ->
     {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
-wait_until_active(SvcMod, Table, DDLRecCap, Seconds) ->
+wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds) ->
+    case get_active_peer_nodes() of
+        Nodes when is_list(Nodes) ->
+            wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds);
+        {error, _Reason} ->
+            timer:sleep(1000),
+            wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds - 1)
+    end.
+
+wait_until_supported1(_Nodes=[], _SvcMod, _Table, _DDL, _DDLRecCap, _Seconds) -> ok;
+wait_until_supported1([Node|NodesT], SvcMod, Table, DDL, DDLRecCap, Seconds) when Node =:= node() ->
+    wait_until_supported1(NodesT, SvcMod, Table, DDL, DDLRecCap, Seconds);
+wait_until_supported1(Nodes=[Node|NodesT], SvcMod, Table, DDL, DDLRecCap, Seconds) ->
+    case rpc:call(Node, riak_kv_ts_newtype, is_compiled, [Table, DDL]) of
+        true -> wait_until_supported1(NodesT, SvcMod, Table, DDL, DDLRecCap, Seconds);
+        _ ->
+            timer:sleep(1000),
+            lager:info("Waiting for table ~ts to be compiled on ~s", [Table, Node]),
+            wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds - 1)
+    end.
+
+get_active_peer_nodes() ->
+    case riak_core_ring_manager:get_my_ring() of
+        {ok, Ring} -> riak_core_ring:active_members(Ring);
+        _ -> {error, retry}
+    end.
+
+wait_until_active_and_supported(SvcMod, Table, _DDL, _DDLRecCap, _Seconds=0) ->
+    {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
+wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Seconds) ->
     case riak_core_bucket_type:activate(Table) of
-        ok -> ok;
+        ok -> wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds);
         {error, not_ready} ->
             timer:sleep(1000),
             lager:info("Waiting for table ~ts to be ready for activation", [Table]),
-            wait_until_active(SvcMod, Table, DDLRecCap, Seconds - 1);
+            wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Seconds - 1);
         {error, undefined} ->
             {error, SvcMod:make_table_created_missing_resp(Table)}
     end.
