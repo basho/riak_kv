@@ -465,10 +465,14 @@ update_stat_counters(NumMutated, NumDeleted, RObjBinSize, Acc) ->
 -spec stat_send(riak_kv_sweeper:index(),
                 {'final'| 'in_progress', #sa{}}) -> #sa{}.
 stat_send(Index, {final, Acc}) ->
-    [ riak_kv_stat:update({sweeper, Index, failed, Module, 1})
-      || #sweep_participant{module = Module} <- Acc#sa.failed_p],
-    [ riak_kv_stat:update({sweeper, Index, successful, Module, 1})
-      || #sweep_participant{module = Module} <- Acc#sa.active_p],
+    FailedFun = fun(#sweep_participant{module = Module}) ->
+                        riak_kv_stat:update({sweeper, Index, failed, Module, 1})
+                end,
+    SuccessFun = fun(#sweep_participant{module = Module}) ->
+                         riak_kv_stat:update({sweeper, Index, successful, Module, 1})
+                 end,
+    lists:foreach(FailedFun, Acc#sa.failed_p),
+    lists:foreach(SuccessFun, Acc#sa.active_p),
     stat_send(Index, {in_progress, Acc});
 
 stat_send(Index, {in_progress, Acc}) ->
