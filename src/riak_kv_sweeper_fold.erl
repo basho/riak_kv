@@ -284,20 +284,25 @@ send_to_sweep_worker(Msg, #sweep{index = Index}) ->
 maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
     receive
         stop ->
-            Active1 =
-                [ActiveSP#sweep_participant{fail_reason = sweep_stop } ||
-                 #sweep_participant{} = ActiveSP <- Active],
-            Acc#sa{active_p = [],  failed_p = Active1 ++ Fail};
+            Active1 = set_fail_reason_for_participants(sweep_stop, Active),
+            Acc#sa{active_p = [], failed_p = Active1 ++ Fail};
         {disable, Module} ->
-            case lists:keytake(Module, #sweep_participant.module, Active) of
-                {value, SP, Active1} ->
-                    Acc#sa{active_p = Active1,
-                           failed_p = [SP#sweep_participant{fail_reason = disable} | Fail]};
-                _ ->
-                    Acc
-            end
+            maybe_disable_participant_for_module(Module, Acc)
     after 0 ->
         Acc
+    end.
+
+set_fail_reason_for_participants(Reason, Participants) ->
+    [SP#sweep_participant{fail_reason = Reason} || SP <- Participants].
+
+maybe_disable_participant_for_module(Module, Acc) ->
+    #sa{active_p = Active, failed_p = Failed} = Acc,
+    case lists:keytake(Module, #sweep_participant.module, Active) of
+        {value, SP, Active1} ->
+            Acc#sa{active_p = Active1,
+                   failed_p = [SP#sweep_participant{fail_reason = disable} | Failed]};
+        _ ->
+            Acc
     end.
 
 -spec apply_sweep_participant_funs({{riak_object:bucket(),
