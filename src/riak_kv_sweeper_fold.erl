@@ -167,10 +167,12 @@ inform_participants(#sa{active_p = Succ, failed_p = Failed}, Index) ->
     successful_sweep(Succ, Index),
     failed_sweep(Failed, Index).
 
--spec successful_sweep([#sweep_participant{}], riak_kv_sweeper:index()) -> [].
+-spec successful_sweep([#sweep_participant{}], riak_kv_sweeper:index()) -> ok.
 successful_sweep(Succ, Index) ->
-    [Module:successful_sweep(Index, FinalAcc) ||
-       #sweep_participant{module = Module, acc = FinalAcc} <- Succ].
+    SuccessFun = fun(#sweep_participant{module = Module, acc = FinalAcc}) ->
+                         Module:successful_sweep(Index, FinalAcc)
+                 end,
+    lists:foreach(SuccessFun, Succ).
 
 -spec failed_sweep([#sweep_participant{}], riak_kv_sweeper:index()) -> [].
 failed_sweep(Failed, Index) ->
