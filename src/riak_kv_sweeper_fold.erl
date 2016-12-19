@@ -255,15 +255,18 @@ get_throttle_params({obj_size, _Limit, Wait}) ->
                                Limit :: non_neg_integer(),
                                Sleep :: non_neg_integer()}.
 get_sweep_throttle() ->
-    {Type, Limit, Sleep} =
-        app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE),
+    {Type, Limit, Sleep} = app_helper:get_env(riak_kv, sweep_throttle, ?DEFAULT_SWEEP_THROTTLE),
+    AdjustedSleep = adjust_sleep(Sleep),
+    {Type, Limit, AdjustedSleep}.
+
+adjust_sleep(Sleep) ->
     case riak_kv_sweeper:in_sweep_window() of
         true ->
             Div = app_helper:get_env(riak_kv, sweep_window_throttle_div,
                                      ?SWEEP_WINDOW_THROTTLE_DIV),
-            {Type, Limit, Sleep div Div};
+            Sleep div Div;
         false ->
-            {Type, Limit, Sleep}
+            Sleep
     end.
 
 -spec send_to_sweep_worker('stop'
