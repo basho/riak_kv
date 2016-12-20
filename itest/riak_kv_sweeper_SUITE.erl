@@ -22,7 +22,8 @@ end_per_suite(Config) ->
     [ok = application:stop(App) || App <- ?config(exometer_apps, Config)],
     ok.
 
-init_per_testcase(_TestCase, Config) ->
+init_per_testcase(TestCase, Config) ->
+    ct:pal("Running ~p", [TestCase]),
     meck:unload(),
     application:set_env(riak_kv, sweep_participants, undefined),
     application:set_env(riak_kv, sweep_window, always),
@@ -293,33 +294,28 @@ meck_count_msecs_slept() ->
 %%--------------------------------------------------------------------
 initiailize_sweep_request_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    {_, Sweeps} = riak_kv_sweeper:status(),
-    Indices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
+    assert_all_indices_idle(Indices),
     ok.
 
 status_index_changed_sweep_request_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    {_, Sweeps} = riak_kv_sweeper:status(),
-    Indices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
+    assert_all_indices_idle(Indices),
 
     NewPartitions = 2 * length(Indices),
     NewIndices = meck_new_riak_core_ring(NewPartitions),
     Index = pick(NewIndices -- Indices),
     riak_kv_sweeper:sweep(Index),
-    {_, Sweeps1} = riak_kv_sweeper:status(),
-    NewIndices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps1]),
+    assert_all_indices_idle(NewIndices),
     ok.
 
 status_index_changed_tick_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    {_, Sweeps} = riak_kv_sweeper:status(),
-    Indices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps]),
+    assert_all_indices_idle(Indices),
 
     NewPartitions = 2 * length(Indices),
     NewIndices = meck_new_riak_core_ring(NewPartitions),
     riak_kv_sweeper:sweep_tick(),
-    {_, Sweeps1} = riak_kv_sweeper:status(),
-    NewIndices = lists:sort([I0 || #sweep{state = idle, index = I0} <- Sweeps1]),
+    assert_all_indices_idle(NewIndices),
     ok.
 
 add_participant_test(_Config) ->
@@ -416,7 +412,7 @@ scheduler_worker_process_crashed_test(Config) ->
     sweep_all_indices(Indices, timeout),
 
     {_SPs, Sweeps} = riak_kv_sweeper:status(),
-    true = [ 1 || #sweep{state = running} <- Sweeps ] > 0,
+    false = lists:any(fun(S) -> running =:= riak_kv_sweeper_state:sweep_state(S) end, Sweeps),
     ok.
 
 scheduler_run_interval_test(Config) ->
@@ -478,7 +474,7 @@ scheduler_queue_test(Config) ->
     receive {From1, WaitIndex} ->
             riak_kv_sweeper:sweep(WaitIndex1),
             Sweep = get_sweep_on_index(WaitIndex1),
-            {_, _, _} = Sweep#sweep.queue_time,
+            {_, _, _} = riak_kv_sweeper_state:sweep_queue_time(Sweep),
             From1 ! {TestCasePid, continue}
     end,
 
@@ -614,19 +610,16 @@ scheduler_restart_sweep_test(Config) ->
     tick_per_index(Indices),
     receive {From0, WaitIndex} ->
             RunningSweep = get_sweep_on_index(WaitIndex),
-            running = RunningSweep#sweep.state,
+            running = riak_kv_sweeper_state:sweep_state(RunningSweep),
 
             riak_kv_sweeper:sweep(WaitIndex),
             RestartingSweep = get_sweep_on_index(WaitIndex),
-            restart = RestartingSweep#sweep.state,
-            undefined = RestartingSweep#sweep.queue_time,
+            restart = riak_kv_sweeper_state:sweep_state(RestartingSweep),
+            undefined = riak_kv_sweeper_state:sweep_queue_time(RestartingSweep),
 
             riak_kv_sweeper:sweep(WaitIndex),
             RestartingSweep = get_sweep_on_index(WaitIndex),
-            restart = RestartingSweep#sweep.state,
-            undefined = RestartingSweep#sweep.queue_time,
 
-            RestartingSweep = RunningSweep#sweep{state=restart},
             From0 ! {TestCasePid, continue}
     end,
     ok = receive_msg({ok, failed_sweep, sweep_observer_1, WaitIndex}),
@@ -1079,6 +1072,14 @@ tick_per_index(Indices) ->
     %% Only one sweep scheduled per tick, so send a tick for each index:
     lists:foreach(fun(_) -> riak_kv_sweeper:sweep_tick() end, Indices).
 
+assert_all_indices_idle(Indices) ->
+    {_, Sweeps} = riak_kv_sweeper:status(),
+    SweepData = [{riak_kv_sweeper_state:sweep_state(S),
+                  riak_kv_sweeper_state:sweep_index(S)} ||
+                 S <- Sweeps],
+    SweepIndices = lists:sort([I || {idle, I} <- SweepData]),
+    SweepIndices = Indices.
+
 receive_msg(Msg) ->
     receive_msg(Msg, 1000).
 
@@ -1092,7 +1093,9 @@ receive_msg(Msg, TimeoutMsecs) ->
 
 get_sweep_on_index(Index) ->
     {_, Sweeps} = riak_kv_sweeper:status(),
-    lists:keyfind(Index, #sweep.index, Sweeps).
+    IndexedSweeps = [{riak_kv_sweeper_state:sweep_index(S), S} || S <- Sweeps],
+    {Index, Sweep} = lists:keyfind(Index, 1, IndexedSweeps),
+    Sweep.
 
 all_tests() ->
     [F || {F, A} <- ?MODULE:module_info(exports), is_testcase({F, A})].

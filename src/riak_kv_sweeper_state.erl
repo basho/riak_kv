@@ -42,6 +42,12 @@
          update_started_sweep/4,
          in_sweep_window/0]).
 
+%% For testing/debug use only:
+-export([sweep_state/1,
+         sweep_index/1,
+         sweep_queue_time/1
+        ]).
+
 -export_type([state/0, sweep/0]).
 
 -ifdef(EQC).
@@ -740,6 +746,11 @@ remove_sweeps(NotOwnerIdx, Sweeps) ->
 -spec get_persistent_participants() -> SweepParticipants :: dict() | undefined.
 get_persistent_participants() ->
     app_helper:get_env(riak_kv, sweep_participants).
+
+%% For testing/debug use only:
+sweep_state(#sweep{state = State}) -> State.
+sweep_index(#sweep{index = Index}) -> Index.
+sweep_queue_time(#sweep{queue_time = QueueTime}) -> QueueTime.
 
 -ifdef(TEST).
 
