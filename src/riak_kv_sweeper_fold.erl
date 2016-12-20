@@ -451,7 +451,7 @@ maybe_add_bucket_info(Bucket, BucketPropsDict, Options) ->
 
 -spec get_bucket_props(riak_object:bucket(),
                        BucketProps :: dict()) ->
-    {BucketProps :: [], BucketPropsDict :: dict()}.
+    {BucketProps :: [{atom(), term()}], BucketPropsDict :: dict()}.
 get_bucket_props(Bucket, BucketPropsDict) ->
     case dict:find(Bucket, BucketPropsDict) of
         {ok, BucketProps} ->
