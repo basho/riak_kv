@@ -212,8 +212,6 @@ format_result(SuccFail, Results) ->
 -spec maybe_throttle_sweep(binary(), #sa{}) -> #sa{}.
 maybe_throttle_sweep(_RObjBin, #sa{throttle = {pace, Limit, Wait}, swept_keys = SweepKeys} = Acc)
   when SweepKeys rem Limit =:= 0 ->
-    %% We use receive after to throttle instead of sleep.
-    %% This way we can respond on requests while throttling
     Acc1 = Acc#sa{throttle = get_sweep_throttle()},
     riak_kv_sweeper:sleep_for_throttle(Wait),
     maybe_extra_throttle(Acc1);
