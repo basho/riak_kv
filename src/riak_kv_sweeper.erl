@@ -136,7 +136,7 @@ sweep(Index) ->
     gen_server:call(?SERVER, {sweep_request, Index}, infinity).
 
 %% @doc Get information about participants and all sweeps.
--spec status() -> {[#sweep_participant{}], [#sweep{}]}.
+-spec status() -> {[#sweep_participant{}], [riak_kv_sweeper_state:sweep()]}.
 status() ->
     gen_server:call(?SERVER, status).
 

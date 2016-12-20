@@ -23,7 +23,6 @@
 
 -export([do_sweep/8]).
 -export([get_sweep_throttle/0]).
--export([send_to_sweep_worker/2]).
 
 -export_type([sweep_result/0]).
 
@@ -276,17 +275,6 @@ adjust_sleep(Sleep) ->
         false ->
             Sleep
     end.
-
--spec send_to_sweep_worker('stop'
-                           | {'disable', riak_kv_sweeper:participant_module()},
-                           #sweep{}) -> 'ok' | 'no_pid'.
-send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid) ->
-    lager:debug("Send to sweep worker ~p: ~p", [Pid, Msg]),
-    Pid ! Msg;
-
-send_to_sweep_worker(Msg, #sweep{index = Index}) ->
-    lager:info("no pid ~p to ~p " , [Msg, Index]),
-    no_pid.
 
 -spec maybe_receive_request(#sa{}) -> #sa{}.
 maybe_receive_request(#sa{active_p = Active, failed_p = Fail } = Acc) ->
