@@ -55,8 +55,9 @@
 
 -define(DEFAULT_SWEEP_CONCURRENCY,1).
 
--record(state, {sweep_participants = dict:new() :: dict(),
-                sweeps             = dict:new() :: dict()}).
+-record(state, {sweep_participants = dict:new() :: dict(module(), #sweep_participant{}),
+                sweeps             = dict:new() :: dict(riak_kv_sweeper:index(), #sweep{})
+               }).
 
 %% ====================================================================
 %% Types
