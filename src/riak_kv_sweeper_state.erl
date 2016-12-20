@@ -44,11 +44,12 @@
 
 -export_type([state/0, sweep/0]).
 
--ifdef(TEST).
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_mocking.hrl").
 -endif.
+
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
