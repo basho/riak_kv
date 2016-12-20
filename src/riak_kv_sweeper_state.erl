@@ -75,15 +75,15 @@
          swept_keys :: non_neg_integer() | undefined
         }).
 
--record(state, {sweep_participants = dict:new() :: dict:dict(module(), #sweep_participant{}),
-                sweeps             = dict:new() :: dict:dict(riak_kv_sweeper:index(), #sweep{})
+-record(state, {sweep_participants = dict:new() :: dict(),
+                sweeps             = dict:new() :: dict()
                }).
 
 %% ====================================================================
 %% Types
 %% ====================================================================
--opaque state() :: #state{}.
--opaque sweep() :: #sweep{}.
+-type state() :: #state{}.
+-type sweep() :: #sweep{}.
 
 -type index() :: riak_kv_sweeper:index().
 
@@ -247,7 +247,8 @@ format_active_participants(AcitvePart, IndexedParticipants) ->
                            #sweep{}) -> 'ok' | 'no_pid'.
 send_to_sweep_worker(Msg, #sweep{pid = Pid}) when is_pid(Pid) ->
     lager:debug("Send to sweep worker ~p: ~p", [Pid, Msg]),
-    Pid ! Msg;
+    Pid ! Msg,
+    ok;
 send_to_sweep_worker(Msg, #sweep{index = Index}) ->
     lager:info("no pid ~p to ~p " , [Msg, Index]),
     no_pid.
