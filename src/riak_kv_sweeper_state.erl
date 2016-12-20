@@ -220,20 +220,19 @@ format_progress(#sweep{index = Index,
                        estimated_keys = {EstimatedKeys, _TS},
                        swept_keys = SweptKeys},
                 IndexedParticipants) ->
-    case EstimatedKeys of
-        EstimatedKeys when is_integer(EstimatedKeys) andalso EstimatedKeys > 0 ->
-            [{"Index", Index},
-             {"Swept keys", SweptKeys},
-             {"Estimated Keys", EstimatedKeys}] ++
-                format_active_participants(AcitvePart, IndexedParticipants);
-        _ ->
-            [{"Index", Index},
-             {"Swept keys", SweptKeys}] ++
-                format_active_participants(AcitvePart, IndexedParticipants)
-    end;
+    EstimatedKeysFormat = format_estimated_keys(EstimatedKeys),
+    [{"Index", Index},
+     {"Swept keys", SweptKeys}] ++
+    EstimatedKeysFormat ++
+    format_active_participants(AcitvePart, IndexedParticipants);
 
 format_progress(_, _) ->
     "".
+
+format_estimated_keys(EstimatedKeys) when is_integer(EstimatedKeys), EstimatedKeys > 0 ->
+    [{"Estimated Keys", EstimatedKeys}];
+format_estimated_keys(_EstimatedKeys) ->
+    [].
 
 format_active_participants(AcitvePart, IndexedParticipants) ->
     [begin
