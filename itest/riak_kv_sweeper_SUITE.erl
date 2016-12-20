@@ -982,22 +982,6 @@ is_running_sweep(#sweep{pid = Pid, state = running}) ->
 is_running_sweep(_) ->
     false.
 
-wait_for_concurrent_sweeps(ConcurrentSweeps) ->
-    wait_for_concurrent_sweeps(ConcurrentSweeps, []).
-
-wait_for_concurrent_sweeps(0, Result) ->
-    Result;
-
-wait_for_concurrent_sweeps(ConcurrentSweeps, Result) ->
-    {NewConcurrentSweeps, NewResult} =
-        receive {From, Index} when is_pid(From) ->
-                {ConcurrentSweeps - 1, [Result|Index]};
-                _ ->
-                {ConcurrentSweeps, Result}
-        end,
-
-    wait_for_concurrent_sweeps(NewConcurrentSweeps, NewResult).
-
 expected_obj_size_throttle_total_msecs(NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
     ThrottleMsecs = expected_throttle_msecs(
                       NumKeys, ThrottleAfterBytes, ThrottleWaitMsecs, RiakObjSizeBytes),
