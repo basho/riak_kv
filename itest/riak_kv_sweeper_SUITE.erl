@@ -80,7 +80,7 @@ meck_new_riak_core_modules(Partitions) ->
     VNodeIndices.
 
 meck_new_riak_core_ring(Partitions) ->
-    VNodeIndices = [N || N <- lists:seq(0, Partitions)],
+    VNodeIndices = [N || N <- lists:seq(1, Partitions)],
     meck:expect(riak_core_ring, my_indices, fun(ring) -> VNodeIndices end),
     VNodeIndices.
 
