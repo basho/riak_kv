@@ -321,12 +321,12 @@ get_estimate_keys(Index, AAEEnabled, State) ->
                                          TS :: erlang:timestamp()}) ->
    EstimatedKeys :: non_neg_integer() | false.
 maybe_estimate_keys(Index, true, undefined) ->
-    get_estimtate(Index);
+    get_estimate(Index);
 maybe_estimate_keys(Index, true, {EstimatedNrKeys, TS}) ->
 	EstimateOutdated = elapsed_secs(os:timestamp(), TS) > ?ESTIMATE_EXPIRY,
 	case EstimateOutdated of
             true ->
-                get_estimtate(Index);
+                get_estimate(Index);
             false ->
                 EstimatedNrKeys
 	end;
@@ -335,9 +335,9 @@ maybe_estimate_keys(_Index, false, {EstimatedNrKeys, _TS}) ->
 maybe_estimate_keys(_Index, false, _) ->
     false.
 
--spec get_estimtate(riak_kv_sweeper:index()) ->
+-spec get_estimate(riak_kv_sweeper:index()) ->
     EstimatedKeys :: non_neg_integer().
-get_estimtate(Index) ->
+get_estimate(Index) ->
     case riak_kv_index_hashtree:get_lock(Index, estimate) of
         ok ->
             Result = case riak_kv_index_hashtree:estimate_keys(Index) of
