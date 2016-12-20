@@ -340,14 +340,7 @@ maybe_estimate_keys(_Index, false, _) ->
 get_estimate(Index) ->
     case riak_kv_index_hashtree:get_lock(Index, estimate) of
         ok ->
-            Result = case riak_kv_index_hashtree:estimate_keys(Index) of
-                         {ok, EstimatedNrKeys} ->
-                             EstimatedNrKeys;
-                         Other ->
-                             lager:info("Failed to get estimate for ~p, got result"
-                                        " ~p. Defaulting to 0...", [Index, Other]),
-                             0
-                     end,
+            Result = hashtree_estimate_keys(Index),
             %% If we wanted to be extra paranoid, we could wrap the above in a try
             %% block and put release_lock in an after block, but then that can mask
             %% exceptions in the try block if release_lock fails too...and this will
@@ -359,6 +352,16 @@ get_estimate(Index) ->
         _ ->
             lager:info("Failed to get lock for index ~p for estimate, "
                        "defaulting to 0...", [Index]),
+            0
+    end.
+
+hashtree_estimate_keys(Index) ->
+    case riak_kv_index_hashtree:estimate_keys(Index) of
+        {ok, EstimatedNrKeys} ->
+            EstimatedNrKeys;
+        Other ->
+            lager:info("Failed to get estimate for ~p, got result"
+                       " ~p. Defaulting to 0...", [Index, Other]),
             0
     end.
 
