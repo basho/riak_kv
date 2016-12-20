@@ -953,9 +953,34 @@ exometer_deleted_object_count(Config) ->
                     {ok, [{count, DeleteKeys}, {one, DeleteKeys}]}),
     ok.
 
+scheduler_sweep_concurrency_test(_Config) ->
+    ConcurrentSweeps = 8,
+    application:set_env(riak_kv, sweep_concurrency, ConcurrentSweeps),
+    Indices = meck_new_riak_core_ring(8),
+    TestCasePid = self(),
+    meck_new_backend(TestCasePid),
+    SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
+    SP1 = SP#sweep_participant{run_interval = 1},
+    riak_kv_sweeper:add_sweep_participant(SP1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, Indices}),
+    [ spawn_link(riak_kv_sweeper, sweep_tick, []) || _ <- Indices],
+    ConcurrentSweeps =
+        match_retry(fun() ->
+                            {_SPs, Sweeps} = riak_kv_sweeper:status(),
+                            riak_core_util:count(fun is_running_sweep/1, Sweeps)
+                    end,
+                    ConcurrentSweeps),
+    ok.
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
+is_running_sweep(#sweep{pid = Pid, state = running}) ->
+    process_info(Pid) =/= undefined;
+
+is_running_sweep(_) ->
+    false.
 
 wait_for_concurrent_sweeps(ConcurrentSweeps) ->
     wait_for_concurrent_sweeps(ConcurrentSweeps, []).
