@@ -61,6 +61,16 @@
          stat_obj_size_counter = 0 :: non_neg_integer()
         }).
 
+%% Short-lived accumulator used for applying participant funs
+-record(apply_acc, {
+          obj :: deleted | riak_object:riak_object(),
+          failed = [] :: [#sweep_participant{}],
+          successful = [] :: [#sweep_participant{}],
+          num_mutated = 0 :: non_neg_integer(),
+          num_deleted = 0 :: non_neg_integer(),
+          bucket_props :: dict()
+}).
+
 %% ====================================================================
 %% Types
 %% ====================================================================
@@ -315,16 +325,21 @@ apply_sweep_participant_funs({BKey, RObj}, SweepAcc) ->
     Index = SweepAcc#sa.index,
     BucketProps = SweepAcc#sa.bucket_props,
 
-    InitialAcc = {RObj,
-                  FailedParticipants,
-                  _Successful = [],
-                  _NumMutated = 0,
-                  _NumDeleted = 0,
-                  BucketProps},
+    InitialAcc = #apply_acc{
+                    obj = RObj,
+                    failed = FailedParticipants,
+                    bucket_props = BucketProps},
+
     FoldFun = fun(E, Acc) -> run_participant_fun(E, Index, BKey, Acc) end,
     Results = lists:foldl(FoldFun, InitialAcc, ActiveParticipants),
 
-    {_, Failed, Successful, NumMutated, NumDeleted, NewBucketProps} = Results,
+    #apply_acc{
+       failed = Failed,
+       successful = Successful,
+       num_mutated = NumMutated,
+       num_deleted = NumDeleted,
+       bucket_props = NewBucketProps
+      } = Results,
 
     SweepAcc1 = update_modified_objs_count(SweepAcc, NumMutated, NumDeleted),
     SweepAcc2 = SweepAcc1#sa{bucket_props = NewBucketProps},
@@ -336,60 +351,51 @@ apply_sweep_participant_funs({BKey, RObj}, SweepAcc) ->
 -spec run_participant_fun(#sweep_participant{},
                           riak_kv_sweeper:index(),
                           {riak_object:bucket(), riak_object:key()},
-                          {riak_object:riak_object(),
-                           [#sweep_participant{}],
-                           [#sweep_participant{}],
-                           NumMutated :: non_neg_integer(),
-                           NumDeleted :: non_neg_integer(),
-                           BucketProps :: []}) ->
-    {riak_object:riak_object(),
-     [#sweep_participant{}],
-     [#sweep_participant{}],
-     NumMutated :: non_neg_integer(),
-     NumDeleted :: non_neg_integer(),
-     BucketProps :: []}.
+                          #apply_acc{}) -> #apply_acc{}.
 run_participant_fun(SP = #sweep_participant{errors = ?MAX_SWEEP_CRASHES,
                                             module = Module},
-                    _Index, _BKey,
-                    {RObj, Failed, Successful, NumMutated, NumDeleted,
-                     BucketProps}) ->
+                    _Index, _BKey, Acc) ->
     lager:error("Sweeper fun ~p crashed too many times.", [Module]),
+    PrevFailed = Acc#apply_acc.failed,
     FailedSP = SP#sweep_participant{fail_reason = too_many_crashes},
-    {RObj, [FailedSP | Failed], Successful, NumMutated, NumDeleted,
-     BucketProps};
+    Acc#apply_acc{failed = [FailedSP | PrevFailed]};
 
-run_participant_fun(SP,
-                    _Index, _BKey,
-                    {deleted, Failed, Successful, NumMutated, NumDeleted,
-                     BucketProps}) ->
-    {deleted, Failed, [SP | Successful], NumMutated, NumDeleted,
-     BucketProps};
+run_participant_fun(SP, _Index, _BKey, Acc = #apply_acc{obj = deleted}) ->
+    PrevSuccessful = Acc#apply_acc.successful,
+    Acc#apply_acc{successful = [SP | PrevSuccessful]};
 
-run_participant_fun(SP,
-                    Index, BKey,
-                    {RObj, Failed, Successful, NumMutated, NumDeleted,
-                     BucketProps}) ->
+run_participant_fun(SP, Index, BKey, Acc) ->
     Fun = SP#sweep_participant.sweep_fun,
     ParticipantAcc = SP#sweep_participant.acc,
     Errors = SP#sweep_participant.errors,
     Options = SP#sweep_participant.options,
 
+    RObj = Acc#apply_acc.obj,
+    Successful = Acc#apply_acc.successful,
+    NumMutated = Acc#apply_acc.num_mutated,
+    NumDeleted = Acc#apply_acc.num_deleted,
+
     {Bucket, _Key} = BKey,
     {OptValues, NewBucketProps} =
-        maybe_add_bucket_info(Bucket, BucketProps, Options),
+        maybe_add_bucket_info(Bucket, Acc#apply_acc.bucket_props, Options),
 
     try Fun({BKey, RObj}, ParticipantAcc, OptValues) of
         Result ->
             {NewRObj, Mutated, Deleted, NewParticipantAcc} =
                 do_participant_side_effects(Result, Index, BKey, RObj),
             NewSucc = [SP#sweep_participant{acc = NewParticipantAcc} | Successful],
-            {NewRObj, Failed, NewSucc, NumMutated + Mutated, NumDeleted + Deleted,
-             NewBucketProps}
+            Acc#apply_acc{
+              obj = NewRObj,
+              successful = NewSucc,
+              num_mutated = NumMutated + Mutated,
+              num_deleted = NumDeleted + Deleted,
+              bucket_props = NewBucketProps
+             }
     catch C:T ->
             lager:error("Sweeper fun crashed ~p ~p Key: ~p Obj: ~p", [{C, T}, SP, BKey, RObj]),
             %% We keep the sweep in succ unil we have enough crashes
             NewSucc = [SP#sweep_participant{errors = Errors + 1} | Successful],
-            {RObj, Failed, NewSucc, NumMutated, NumDeleted, NewBucketProps}
+            Acc#apply_acc{successful = NewSucc}
     end.
 
 -spec do_participant_side_effects({'mutated', riak_object:riak_object(), #sa{}}
