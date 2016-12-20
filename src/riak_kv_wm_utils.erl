@@ -42,7 +42,8 @@
          ensure_bucket_type/3,
          bucket_type_exists/1,
          maybe_bucket_type/2,
-         method_to_perm/1
+         method_to_perm/1,
+         extract_user_meta/1
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -495,3 +496,15 @@ method_to_perm('GET') ->
     "riak_kv.get";
 method_to_perm('DELETE') ->
     "riak_kv.delete".
+
+-spec extract_user_meta(#wm_reqdata{}) -> proplists:proplist().
+%% @doc Extract headers prefixed by X-Riak-Meta- in the client's PUT request
+%%      to be returned by subsequent GET requests.
+extract_user_meta(RD) ->
+    lists:filter(
+        fun({K, _V}) ->
+            lists:prefix(
+                ?HEAD_USERMETA_PREFIX,
+                string:to_lower(riak_kv_wm_utils:any_to_list(K)))
+        end,
+        mochiweb_headers:to_list(wrq:req_headers(RD))).
