@@ -51,9 +51,6 @@
 -endif.
 -include_lib("eunit/include/eunit.hrl").
 -endif.
--ifdef(PULSE).
--compile({parse_transform, pulse_instrument}).
--endif.
 
 -define(DEFAULT_SWEEP_CONCURRENCY,1).
 
