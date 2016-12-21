@@ -622,12 +622,7 @@ expired_or_missing(Now, #sweep{results = Results}, Participants) ->
 expired(_Now, _TS, disabled) ->
     0;
 expired(Now, TS, RunInterval) ->
-    case elapsed_secs(Now, TS) - RunInterval of
-        N when N < 0 ->
-            0;
-        N ->
-            N
-    end.
+    max(0, elapsed_secs(Now, TS) - RunInterval).
 
 -spec run_interval(riak_kv_sweeper:participant_module(),
                    Participants :: dict()) ->
