@@ -931,17 +931,18 @@
 
 %% @doc Query buffer expiry time (in msec). Query buffers not accessed
 %% for longer than this value (rounded upward to the next whole
-%% second) will be deleted.
+%% second) will be deleted. A value of 0 will cause the query buffer
+%% to be deleted immediately after serving the query.
 {mapping, "riak_kv.query.timeseries.qbuf_expire_ms", "riak_kv.timeseries_query_buffers_expire_ms", [
-  {default, 5000},
+  {default, 0},
   {datatype, integer},
   {validators, ["validate_timeseries_query_buffers_expire_ms"]}
 ]}.
 
 {validator,
   "validate_timeseries_query_buffers_expire_ms",
-  "must be an integer > 0",
-  fun(Value) when is_integer(Value) andalso Value > 0 -> true;
+  "must be an integer >= 0",
+  fun(Value) when is_integer(Value) andalso Value >= 0 -> true;
      (_) -> false
   end}.
 
