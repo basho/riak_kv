@@ -455,6 +455,13 @@ missing(Return, Participants, ResultList) ->
          <- dict:to_list(Participants),
         not lists:keymember(Module, 1, ResultList)].
 
+expired_counts(Now, ResultsList, Participants) ->
+    [begin
+         RunInterval = run_interval(Mod, Participants),
+         expired(Now, TS, RunInterval)
+     end ||
+     {Mod, {TS, _Outcome}} <- ResultsList].
+
 -spec get_run_interval(RunInterval :: non_neg_integer()
                        | riak_kv_sweeper:run_interval_fun()) ->
     RunInterval :: non_neg_integer().
@@ -603,12 +610,7 @@ find_expired_participant(Now, Sweeps, Participants) ->
 expired_or_missing(Now, #sweep{results = Results}, Participants) ->
     ResultsList = dict:to_list(Results),
     Missing = missing(run_interval, Participants, ResultsList),
-    Expired =
-        [begin
-             RunInterval = run_interval(Mod, Participants),
-             expired(Now, TS, RunInterval)
-         end ||
-         {Mod, {TS, _Outcome}} <- ResultsList],
+    Expired = expired_counts(Now, ResultsList, Participants),
     MissingSum = lists:sum(Missing),
     ExpiredSum = lists:sum(Expired),
     {MissingSum, ExpiredSum}.
