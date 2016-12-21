@@ -295,9 +295,7 @@ do_sweep(Index, State) ->
         {ok, [], State1} ->
             {ok, State1};
         {ok, ActiveParticipants, State1} ->
-            ?MODULE:update_started_sweep(Index,
-                                         ActiveParticipants,
-                                         EstimatedKeys),
+            update_started_sweep(Index, ActiveParticipants, EstimatedKeys),
             Result = riak_kv_vnode:sweep({Index, node()},
                                          ActiveParticipants,
                                          EstimatedKeys),
