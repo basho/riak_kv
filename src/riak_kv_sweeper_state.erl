@@ -650,7 +650,7 @@ random_sweep(Sweeps) ->
 -spec scheduler_enabled() -> boolean().
 scheduler_enabled() ->
     case app_helper:get_env(riak_kv, sweeper_scheduler, true) of
-        E when E == true; E == false ->
+        E when is_boolean(E) ->
             E;
         _ ->
             false
