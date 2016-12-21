@@ -730,7 +730,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, 
            end,
     VclockDoc = riak_object:set_vclock(Doc0, decode_vclock_header(RD)),
     {CType, Charset} = extract_content_type(RD),
-    UserMeta = extract_user_meta(RD),
+    UserMeta = riak_kv_wm_utils:extract_user_meta(RD),
     CTypeMD = dict:store(?MD_CTYPE, CType, dict:new()),
     CharsetMD = if Charset /= undefined ->
                         dict:store(?MD_CHARSET, Charset, CTypeMD);
@@ -811,17 +811,6 @@ extract_content_type(RD) ->
             Params = [ list_to_tuple(string:tokens(P, "=")) || P <- RawParams],
             {CType, proplists:get_value("charset", Params)}
     end.
-
--spec extract_user_meta(#wm_reqdata{}) -> proplists:proplist().
-%% @doc Extract headers prefixed by X-Riak-Meta- in the client's PUT request
-%%      to be returned by subsequent GET requests.
-extract_user_meta(RD) ->
-    lists:filter(fun({K,_V}) ->
-                    lists:prefix(
-                        ?HEAD_USERMETA_PREFIX,
-                        string:to_lower(riak_kv_wm_utils:any_to_list(K)))
-                end,
-                mochiweb_headers:to_list(wrq:req_headers(RD))).
 
 -spec multiple_choices(#wm_reqdata{}, context()) ->
           {boolean(), #wm_reqdata{}, context()}.
