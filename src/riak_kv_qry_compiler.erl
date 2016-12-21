@@ -681,7 +681,7 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, Where1) ->
             false -> Max1
         end,
     %% sanity check for the number of quanta we can handle
-    MaxQueryQuanta = app_helper:get_env(riak_kv, max_query_quanta, ?MAX_QUERY_QUANTA),
+    MaxQueryQuanta = app_helper:get_env(riak_kv, timeseries_query_max_quanta_span, ?MAX_QUERY_QUANTA),
     NQuanta = (Max2 - Min2) div riak_ql_quanta:unit_to_millis(QSize, QUnit),
     case NQuanta < MaxQueryQuanta of
         true ->
