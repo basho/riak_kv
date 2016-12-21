@@ -583,8 +583,18 @@ delete_sweep_crash() ->
                         fun_type = delete_fun,
                         options = [bucket_props]}].
 
+sweep_fold_test_() ->
+    {timeout, 30, [
+                   fun test_sweep_delete/0,
+                   fun test_sweep_delete_bucket_props/0,
+                   fun test_sweep_observ_delete/0,
+                   fun test_sweep_modify_observ_delete/0,
+                   fun test_sweep_delete_crash_observ/0,
+                   fun test_make_initial_sweep_participant/0
+                  ]}.
+
 %% Basic sweep test. Check that callback get complete Acc when sweep finish
-sweep_delete_test() ->
+test_sweep_delete() ->
     setup_sweep(Keys = 100),
     DeleteRem = 3,
     {reply, Acc, _State} =
@@ -596,7 +606,7 @@ sweep_delete_test() ->
     meck:unload().
 
 %% Verify that a sweep asking for bucket_props gets them
-sweep_delete_bucket_props_test() ->
+test_sweep_delete_bucket_props() ->
     setup_sweep(Keys = 100),
     {reply, Acc, _State} =
         do_sweep(delete_sweep_bucket_props(), 0, no_sender, [], no_index, fake_backend, [], []),
@@ -606,7 +616,7 @@ sweep_delete_bucket_props_test() ->
     meck:unload().
 
 %% Delete 1/3 of the keys the rest gets seen by the observer sweep
-sweep_observ_delete_test() ->
+test_sweep_observ_delete() ->
     setup_sweep(Keys = 100),
     DeleteRem = 3,
     Sweeps = delete_sweep(DeleteRem) ++ observ_sweep(),
@@ -623,7 +633,7 @@ sweep_observ_delete_test() ->
     meck:unload().
 
 %% Test including all types of sweeps. Delete 1/4 Modify 1/4 and
-sweep_modify_observ_delete_test() ->
+test_sweep_modify_observ_delete() ->
     setup_sweep(Keys = 100),
     DeleteRem = 4,
     ModifyRem = 2,
@@ -645,7 +655,7 @@ sweep_modify_observ_delete_test() ->
     meck:unload().
 
 %% Verify that even if one sweep crashes for all objects the following participants still run
-sweep_delete_crash_observ_test() ->
+test_sweep_delete_crash_observ() ->
     setup_sweep(Keys = 100),
     Sweeps = delete_sweep_crash() ++ observ_sweep(),
     {reply, Acc, _State} = do_sweep(Sweeps, 0, no_sender, [], no_index, fake_backend, [], []),
@@ -658,7 +668,7 @@ sweep_delete_crash_observ_test() ->
     ?assertEqual(Keys, Acc#sa.swept_keys),
     meck:unload().
 
-make_initial_sweep_participant_test() ->
+test_make_initial_sweep_participant() ->
     SP0s = [#sweep_participant{module = 3, fun_type = observe_fun},
             #sweep_participant{module = 2, fun_type = modify_fun},
             #sweep_participant{module = 1, fun_type = delete_fun}],
