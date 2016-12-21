@@ -676,15 +676,16 @@ sweep_window() ->
             never
     end.
 
--spec get_concurrency_limit() -> non_neg_integer().
+-spec get_concurrency_limit() -> integer().
 get_concurrency_limit() ->
-    case app_helper:get_env(riak_kv, sweep_concurrency,
-                            ?DEFAULT_SWEEP_CONCURRENCY) of
-        ?DEFAULT_SWEEP_CONCURRENCY ->
-            ?DEFAULT_SWEEP_CONCURRENCY;
-        Other when is_integer(Other) ->
-            Other
-        end.
+    case app_helper:get_env(riak_kv, sweep_concurrency, ?DEFAULT_SWEEP_CONCURRENCY) of
+        Value when is_integer(Value) ->
+            Value;
+        Other ->
+            lager:warning("Invalid value ~p for sweep_concurrency. "
+                          "Defaulting to ~p.", [Other, ?DEFAULT_SWEEP_CONCURRENCY]),
+            ?DEFAULT_SWEEP_CONCURRENCY
+    end.
 
 -spec queue_sweep(riak_kv_sweeper:index(), #state{}) -> #state{}.
 queue_sweep(Index, #state{sweeps = Sweeps} = State) ->
