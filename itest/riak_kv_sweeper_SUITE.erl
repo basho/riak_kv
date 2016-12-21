@@ -989,16 +989,20 @@ scheduler_sweep_concurrency_test(_Config) ->
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
-is_running_sweep(#sweep{pid = Pid, state = running}) ->
-    process_info(Pid) =/= undefined;
+is_running_sweep(Sweep) ->
+    State = riak_kv_sweeper_state:sweep_state(Sweep),
+    Pid = riak_kv_sweeper_state:sweep_pid(Sweep),
 
-is_running_sweep(_) ->
-    false.
+    State == running andalso
+        process_info(Pid) =/= undefined.
+
 
 check_sweeps_idle(Indices) ->
     match_retry(fun() ->
                         {_SPs, Sweeps} = riak_kv_sweeper:status(),
-                        length([Index || #sweep{index = Index, state = idle} <- Sweeps])
+                        length([riak_kv_sweeper_state:sweep_index(Sweep) ||
+                                   Sweep <- Sweeps,
+                                   riak_kv_sweeper_state:sweep_state(Sweep) == idle])
                 end,
                 length(Indices)),
     ok.
@@ -1012,7 +1016,9 @@ check_sweeps_running(ConcurrentSweeps) ->
                     end,
                     ConcurrentSweeps),
     {_SPs, Sweeps} = riak_kv_sweeper:status(),
-    [I || #sweep{index = I, state = running} <- Sweeps].
+    [riak_kv_sweeper_state:sweep_index(Sweep) ||
+        Sweep <- Sweeps,
+        riak_kv_sweeper_state:sweep_state(Sweep) == running].
 
 expected_obj_size_throttle_total_msecs(NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
     ThrottleMsecs = expected_throttle_msecs(
