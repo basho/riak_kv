@@ -61,6 +61,8 @@
 
 -define(DEFAULT_SWEEP_CONCURRENCY,1).
 
+-define(IS_HOUR(H), (is_integer(H) andalso H >= 0 andalso H =< 23)).
+
 -record(sweep,
         {
          index,
@@ -666,8 +668,7 @@ sweep_window() ->
             always;
         {ok, never} ->
             never;
-        {ok, {StartHour, EndHour}} when StartHour >= 0, StartHour =< 23,
-                                        EndHour >= 0, EndHour =< 23 ->
+        {ok, {StartHour, EndHour}} when ?IS_HOUR(StartHour), ?IS_HOUR(EndHour) ->
             {StartHour, EndHour};
         Other ->
             lager:warning("Invalid riak_kv_sweep window specified: ~p. "
