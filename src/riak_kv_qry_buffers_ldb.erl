@@ -27,7 +27,7 @@
 
 -export([new_table/2,
          delete_table/3,
-         add_rows/5,
+         add_rows/2,
          fetch_rows/3]).
 
 
@@ -69,55 +69,19 @@ delete_table(Table, LdbRef, Root) ->
     ok.
 
 
--spec add_rows(eleveldb:db_ref(), [riak_kv_qry_buffers:data_row()], integer(),
-               [pos_integer()], [{asc|desc, nulls_first|nulls_last}]) ->
+-spec add_rows(eleveldb:db_ref(), [riak_kv_qry_buffers:data_row()]) ->
                       ok | {error, ldb_put_failed}.
-add_rows(LdbRef, Rows, ChunkId,
-         KeyFieldPositions,
-         OrdByFieldQualifiers) ->
-    %% 0. The new key is composed from fields appearing in the ORDER
-    %%    BY clause, and may therefore not work out to be unique. We
-    %%    now index the rows in the chunk to preserve the original
-    %%    order (because imposing any other order is even worse)
-    RowsIndexed = lists:zip(Rows, lists:seq(1, length(Rows))),
+add_rows(LdbRef, Rows) ->
     try
         lists:foreach(
-          fun({Row, Idx}) ->
-                  %% a. Form a new key from ORDER BY fields
-                  KeyRaw = [lists:nth(Pos, Row) || Pos <- KeyFieldPositions],
-                  %% b. Negate values in columns marked as DESC in ORDER BY clause
-                  KeyOrd = [make_sorted_keys(F, AscDesc, Nulls)
-                            || {F, {AscDesc, Nulls}} <- lists:zip(KeyRaw, OrdByFieldQualifiers)],
-                  %% c. Combine with chunk id and row idx to ensure uniqueness, and encode.
-                  KeyEnc = sext:encode({KeyOrd, ChunkId, Idx}),
-                  %% d. Encode the record (don't bother constructing a
-                  %%    riak_object with metadata, vclocks):
-                  RowEnc = sext:encode(Row),
-                  ok = eleveldb:put(LdbRef, KeyEnc, RowEnc, [{sync, true}])
+          fun({K, V}) ->
+                  ok = eleveldb:put(LdbRef, K, V, [{sync, true}])
           end,
-          RowsIndexed)
+          Rows)
     catch
         error:badmatch ->
             {error, ldb_put_failed}
     end.
-
-make_sorted_keys([], desc, nulls_first) ->
-    0;     %% sort before entupled value
-make_sorted_keys([], asc, nulls_last) ->
-    <<>>;  %% sort after entupled value
-make_sorted_keys([], desc, nulls_last) ->
-    <<>>;
-make_sorted_keys([], asc, nulls_first) ->
-    0;
-make_sorted_keys(F, asc, _) ->
-    {F};
-make_sorted_keys(F, desc, _) when is_number(F) ->
-    {-F};
-make_sorted_keys(F, desc, _) when is_binary(F) ->
-    {[<<bnot X>> || <<X>> <= F]};
-make_sorted_keys(F, desc, _) when is_boolean(F) ->
-    {not F}.
-
 
 
 -spec fetch_rows(eleveldb:db_ref(), non_neg_integer(), unlimited|pos_integer()) ->

@@ -405,7 +405,7 @@ do_batch_put(QBufRef, Data, #state{qbufs          = QBufs0,
         #qbuf{is_ready = true} ->
             {reply, {error, qbuf_already_finished}, State0};
         QBuf0 ->
-            case maybe_add_chunk(
+            case add_chunk(
                    QBuf0, Data, TotalSize0, HardWatermark) of
                 {ok, #qbuf{is_ready = IsReady,
                            ready_waiting_notifier = SelfNotifierFun} = QBuf} ->
@@ -420,18 +420,18 @@ do_batch_put(QBufRef, Data, #state{qbufs          = QBufs0,
             end
     end.
 
--spec maybe_add_chunk(#qbuf{}, [data_row()],
-                      non_neg_integer(), non_neg_integer()) ->
-                             {ok, #qbuf{}, non_neg_integer()} | {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
-maybe_add_chunk(#qbuf{ldb_ref       = LdbRef,
-                      orig_qry      = ?SQL_SELECT{'ORDER BY' = OrderBy},
-                      chunks_got    = ChunksGot0,
-                      chunks_need   = ChunksNeed,
-                      size          = Size,
-                      total_records = TotalRecords0,
-                      key_field_positions = KeyFieldPositions} = QBuf0,
-                Data,
-                TotalSize, HardWatermark) ->
+-spec add_chunk(#qbuf{}, [data_row()],
+                non_neg_integer(), non_neg_integer()) ->
+                       {ok, #qbuf{}, non_neg_integer()} | {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
+add_chunk(#qbuf{ldb_ref       = LdbRef,
+                orig_qry      = ?SQL_SELECT{'ORDER BY' = OrderBy},
+                chunks_got    = ChunksGot0,
+                chunks_need   = ChunksNeed,
+                size          = Size,
+                total_records = TotalRecords0,
+                key_field_positions = KeyFieldPositions} = QBuf0,
+          Data,
+          TotalSize, HardWatermark) ->
     ChunkSize = compute_chunk_size(Data),
     case TotalSize + ChunkSize > HardWatermark of
         true ->
@@ -444,9 +444,8 @@ maybe_add_chunk(#qbuf{ldb_ref       = LdbRef,
             ChunksGot = ChunksGot0 + 1,
             lager:debug("adding chunk ~b of ~b", [ChunksGot, ChunksNeed]),
             OrdByFieldQualifiers = lists:map(fun get_ordby_field_qualifiers/1, OrderBy),
-            case riak_kv_qry_buffers_ldb:add_rows(LdbRef, Data, ChunkId,
-                                                  KeyFieldPositions,
-                                                  OrdByFieldQualifiers) of
+            KeyedData = enkey(Data, KeyFieldPositions, OrdByFieldQualifiers, ChunkId),
+            case riak_kv_qry_buffers_ldb:add_rows(LdbRef, KeyedData) of
                 ok ->
                     IsReady = (ChunksNeed == ChunksGot),
                     QBuf = QBuf0#qbuf{size          = Size + ChunkSize,
@@ -459,6 +458,46 @@ maybe_add_chunk(#qbuf{ldb_ref       = LdbRef,
                     ErrorReason
             end
     end.
+
+-spec enkey([riak_kv_qry_buffers:data_row()], [pos_integer()], [{asc|desc, nulls_first|nulls_last}], non_neg_integer()) ->
+                   [{binary(), binary()}].
+enkey(Rows, KeyFieldPositions, OrdByFieldQualifiers, ChunkId) ->
+    %% 0. The new key is composed from fields appearing in the ORDER
+    %%    BY clause, and may therefore not work out to be unique. We
+    %%    now index the rows in the chunk to preserve the original
+    %%    order (because imposing any other order is even worse)
+    RowsIndexed = lists:zip(Rows, lists:seq(1, length(Rows))),
+    [begin
+         %% a. Form a new key from ORDER BY fields
+         KeyRaw = [lists:nth(Pos, Row) || Pos <- KeyFieldPositions],
+         %% b. Negate values in columns marked as DESC in ORDER BY clause
+         KeyOrd = [make_sorted_keys(F, AscDesc, Nulls)
+                   || {F, {AscDesc, Nulls}} <- lists:zip(KeyRaw, OrdByFieldQualifiers)],
+         %% c. Combine with chunk id and row idx to ensure uniqueness, and encode.
+         KeyEnc = sext:encode({KeyOrd, ChunkId, Idx}),
+         %% d. Encode the record (don't bother constructing a
+         %%    riak_object with metadata, vclocks):
+         RowEnc = sext:encode(Row),
+         {KeyEnc, RowEnc}
+     end || {Row, Idx} <- RowsIndexed].
+
+make_sorted_keys([], desc, nulls_first) ->
+    0;     %% sort before entupled value
+make_sorted_keys([], asc, nulls_last) ->
+    <<>>;  %% sort after entupled value
+make_sorted_keys([], desc, nulls_last) ->
+    <<>>;
+make_sorted_keys([], asc, nulls_first) ->
+    0;
+make_sorted_keys(F, asc, _) ->
+    {F};
+make_sorted_keys(F, desc, _) when is_number(F) ->
+    {-F};
+make_sorted_keys(F, desc, _) when is_binary(F) ->
+    {[<<bnot X>> || <<X>> <= F]};
+make_sorted_keys(F, desc, _) when is_boolean(F) ->
+    {not F}.
+
 
 get_ordby_field_qualifiers({_, AscDesc, Nulls}) ->
     {AscDesc, Nulls}.
