@@ -43,9 +43,9 @@
 %%      and old objects, in the case where a read-before-write resulted
 %%      in an old object.
 -callback update(
-    object_pair(),
-    update_reason(),
-    partition()
+    ObjectPair :: object_pair(),
+    UpdateReason :: update_reason(),
+    Partition :: partition()
 ) ->
     ok.
 
@@ -53,20 +53,20 @@
 %%      is typically called from the write-once path, where there is no
 %%      old object to pass.
 -callback update_binary(
-    riak_core_bucket:bucket(),
-    riak_object:key(),
-    binary(),
-    update_reason(),
-    partition()
+    Bucket :: riak_core_bucket:bucket(),
+    Key :: riak_object:key(),
+    ObjectBinary :: binary(),
+    UpdateReason :: update_reason(),
+    Partition :: partition()
 ) ->
     ok.
 
 %% @doc Determine whether a bucket requires an existing object,
 %%      based on its properties.  If this function returns true,
 %%      this may result in a read-before-write in the vnode.
--callback requires_existing_object(riak_kv_bucket:props()) ->
+-callback requires_existing_object(BucketProps :: riak_kv_bucket:props()) ->
     boolean().
 
 %% @doc Determine whether handoff should start.
--callback should_handoff(handoff_dest()) ->
+-callback should_handoff(Destination :: handoff_dest()) ->
     boolean().
