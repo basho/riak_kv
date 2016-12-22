@@ -511,11 +511,11 @@ fix_start_order(W, Mod, LK) ->
 
 %%
 is_start_key_greater(Mod, LK, StartKey0, EndKey0) ->
-    StartVals = [{N, V} || {N, _T, V} <- StartKey0],
-    EndVals = [{N, V} || {N, _T, V} <- EndKey0],
+    StartVals = [V || {_N, _T, V} <- StartKey0],
+    EndVals = [V || {_N, _T, V} <- EndKey0],
     StartKey = riak_ql_ddl:make_key(Mod, LK,  StartVals),
     EndKey = riak_ql_ddl:make_key(Mod, LK,  EndVals),
-    (StartKey < EndKey).
+    (StartKey > EndKey).
 
 fix_subquery_order(Queries1) ->
     Queries2 = lists:sort(fun fix_subquery_order_compare/2, Queries1),
@@ -2710,6 +2710,112 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
              {end_inclusive,true}]
         ],
         SubQueryWheres
+    ).
+
+desc_query_with_additional_column_in_local_key_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table3 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "c VARCHAR NOT NULL,"
+        "PRIMARY KEY ((a, QUANTUM(b, 1, 'm')),a, b DESC, c))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE a = 'dby' AND b >= 3500 AND b <= 5500"),
+    {ok, [?SQL_SELECT{'WHERE' = W}]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,varchar,<<"dby">>},{<<"b">>,timestamp,5500}]},
+         {endkey,  [{<<"a">>,varchar,<<"dby">>},{<<"b">>,timestamp,3500}]},
+         {filter,[]},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        W
+    ).
+
+desc_query_without_additional_column_in_local_key_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table3 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "c VARCHAR NOT NULL,"
+        "PRIMARY KEY ((a, QUANTUM(b, 1, 'm')),a, b DESC))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE a = 'dby' AND b >= 3500 AND b <= 5500"),
+    {ok, [?SQL_SELECT{'WHERE' = W}]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,varchar,<<"dby">>},{<<"b">>,timestamp,5500}]},
+         {endkey,  [{<<"a">>,varchar,<<"dby">>},{<<"b">>,timestamp,3500}]},
+         {filter,[]},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        W
+    ).
+
+desc_query_with_column_names_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table3 ("
+        "b VARCHAR NOT NULL,"
+        "a TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((b, QUANTUM(a, 1, 'm')),b,a DESC))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE b = 'dby' AND a >= 3500 AND a <= 5500"),
+    {ok, [?SQL_SELECT{'WHERE' = W}]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"b">>,varchar,<<"dby">>},{<<"a">>,timestamp,5500}]},
+         {endkey,  [{<<"b">>,varchar,<<"dby">>},{<<"a">>,timestamp,3500}]},
+         {filter,[]},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        W
+    ).
+
+query_with_desc_on_local_key_additional_column_test() ->
+    DDL = get_ddl(
+    "CREATE TABLE table3("
+    "a SINT64 NOT NULL, "
+    "b VARCHAR NOT NULL, "
+    "c TIMESTAMP NOT NULL, "
+    "d VARCHAR NOT NULL, "
+    "PRIMARY KEY ((a,b,quantum(c, 1, 'm')), a,b, c, d DESC))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE a = 1 AND b = 'dby' AND c >= 3500 AND c <= 5500"),
+    {ok, [?SQL_SELECT{'WHERE' = W}]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,5500}]},
+         {endkey,  [{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,3500}]},
+         {filter,[]},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        W
+    ).
+
+query_with_desc_on_local_key_additional_column_multi_quanta_test() ->
+    DDL = get_ddl(
+    "CREATE TABLE table3("
+    "a SINT64 NOT NULL, "
+    "b VARCHAR NOT NULL, "
+    "c TIMESTAMP NOT NULL, "
+    "d VARCHAR NOT NULL, "
+    "PRIMARY KEY ((a,b,quantum(c, 1, 's')), a,b, c, d DESC))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE a = 1 AND b = 'dby' AND c >= 3500 AND c <= 5500"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,5500}]},
+          {endkey,  [{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,3500}]},
+          {filter,[]},
+          {end_inclusive,true},
+          {start_inclusive,true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
     ).
 
 -endif.
