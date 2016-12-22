@@ -115,7 +115,7 @@
           leasing = false :: boolean()
          }).
 
--type update_hook() :: module() | undefined.
+-type update_hook() :: module().
 
 -record(state, {idx :: partition(),
                 mod :: module(),
@@ -138,7 +138,7 @@
                 md_cache_size :: pos_integer(),
                 counter :: #counter_state{},
                 status_mgr_pid :: pid(), %% a process that manages vnode status persistence
-                update_hook :: update_hook()
+                update_hook = riak_kv_noop_update_hook :: update_hook()
                }).
 
 -type index_op() :: add | remove.
@@ -857,7 +857,7 @@ handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false, u
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
-            maybe_update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
+            update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=ReplicaType}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -1079,7 +1079,7 @@ do_request_hash(_, _) ->
 
 handoff_starting({_HOType, TargetNode}=HandoffDest, State=#state{handoffs_rejected=RejectCount, update_hook=UpdateHook}) ->
     MaxRejects = app_helper:get_env(riak_kv, handoff_rejected_max, 6),
-    case MaxRejects =< RejectCount orelse maybe_should_handoff(UpdateHook, HandoffDest) of
+    case MaxRejects =< RejectCount orelse should_handoff(UpdateHook, HandoffDest) of
         true ->
             {true, State#state{in_handoff=true, handoff_target=TargetNode}};
         false ->
@@ -1186,7 +1186,7 @@ terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx, update_hook=UpdateHook}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
-    maybe_update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
+    update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
@@ -1421,7 +1421,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
-            maybe_update(UpdateHook, {RObj, no_old_object}, delete, Idx),
+            update(UpdateHook, {RObj, no_old_object}, delete, Idx),
             delete_from_hashtree(Bucket, Key, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
@@ -1449,7 +1449,7 @@ prepare_put(State=#state{vnodeid=VId,
     %% no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
     IndexBackend = is_indexed_backend(Mod, Bucket, ModState),
-    IsSearchable = maybe_requires_existing_object(UpdateHook, BProps),
+    IsSearchable = requires_existing_object(UpdateHook, BProps),
     SkipReadBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
     case SkipReadBeforeWrite of
         true ->
@@ -1650,7 +1650,7 @@ actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFla
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
-            maybe_update(UpdateHook, {Obj, OldObj}, put, Idx),
+            update(UpdateHook, {Obj, OldObj}, put, Idx),
             Reply = case RB of
                 true ->
                     {dw, Idx, Obj, ReqID};
@@ -2079,7 +2079,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     update_hashtree(Bucket, Key, DiffObj, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
-                    maybe_update(UpdateHook, {DiffObj, no_old_object}, handoff, Idx),
+                    update(UpdateHook, {DiffObj, no_old_object}, handoff, Idx),
                     InnerRes;
                 {InnerRes, _Val} ->
                     InnerRes
@@ -2105,7 +2105,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                             update_hashtree(Bucket, Key, AMObj, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
-                            maybe_update(UpdateHook, {AMObj, OldObj}, handoff, Idx),
+                            update(UpdateHook, {AMObj, OldObj}, handoff, Idx),
                             InnerRes;
                         {InnerRes, _EncodedVal} ->
                             InnerRes
@@ -2713,51 +2713,43 @@ highest_actor(ActorBase, Obj) ->
 
 -spec update_hook()-> update_hook().
 update_hook() ->
-    app_helper:get_env(riak_kv, update_hook).
+    app_helper:get_env(riak_kv, update_hook, riak_kv_noop_update_hook).
 
--spec maybe_update(
+-spec update(
     update_hook(),
     riak_kv_update_hook:object_pair(),
     riak_kv_update_hook:update_reason(),
     riak_kv_update_hook:partition()
-) ->
+)           ->
     ok.
-maybe_update(undefined, _RObjPair, _Reason, _Idx) ->
-    ok;
-maybe_update(UpdateHook, RObjPair, Reason, Idx) ->
+update(UpdateHook, RObjPair, Reason, Idx) ->
     UpdateHook:update(RObjPair, Reason, Idx).
 
--spec maybe_update_binary(
+-spec update_binary(
     update_hook(),
     riak_core_bucket:bucket(),
     riak_object:key(),
     binary(),
     riak_kv_update_hook:update_reason(),
     riak_kv_update_hook:partition()
-) -> ok.
-maybe_update_binary(undefined, _Bucket, _Key, _Binary, _Reason, _Idx) ->
-    ok;
-maybe_update_binary(UpdateHook, Bucket, Key, Binary, Reason, Idx) ->
+)                  -> ok.
+update_binary(UpdateHook, Bucket, Key, Binary, Reason, Idx) ->
     UpdateHook:update_binary(Bucket, Key, Binary, Reason, Idx).
 
--spec maybe_requires_existing_object(
+-spec requires_existing_object(
     update_hook(),
     riak_kv_bucket:props()
-) ->
+)                             ->
     boolean().
-maybe_requires_existing_object(undefined, _BProps) ->
-    false;
-maybe_requires_existing_object(UpdateHook, BProps) ->
+requires_existing_object(UpdateHook, BProps) ->
     UpdateHook:requires_existing_object(BProps).
 
--spec maybe_should_handoff(
+-spec should_handoff(
     update_hook(),
     riak_kv_update_hook:handoff_dest()
-) ->
+)                   ->
     boolean().
-maybe_should_handoff(undefined, _HandoffDest) ->
-    true;
-maybe_should_handoff(UpdateHook, HandoffDest) ->
+should_handoff(UpdateHook, HandoffDest) ->
     UpdateHook:should_handoff(HandoffDest).
 
 -ifdef(TEST).
