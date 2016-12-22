@@ -2698,23 +2698,17 @@ highest_actor(ActorBase, Obj) ->
     {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
 
 %%
-%% Technical note:  The index_module configuration parameter should contain
-%% a module name which must implement the following functions:
-%%
-%%     - index(object_pair(), write_reason(), p()) -> ok.
-%%     - index_binary(bucket(), key(), binary(), write_reason(), p()) -> ok.
-%%     - is_searchable(riak_kv_bucket:props()) -> boolean().
-%%
-%% The indexing module will be called on puts, deletes, handoff, and
-%% anti-entropy activity.  In the case of puts, if an object is being over-written,
-%% the old object will be passed as the second parameter in the object pair.
-%% The indexing module may use this old object to optimize the update (e.g.,
-%% to handle the special case of sibling writes, which may not map directly to
-%% Riak puts).
-%%
-%% NB. Currently, yokozuna is the only repository that currently
-%% implements this behavior.  C.f., Yokozuna cuttlefish schema, to see
-%% where this configuration is implicitly set.
+%% Maintenance note:  The riak_kv.update_hook configuration parameter should
+%% contain a module name which must implement riak_kv_update_hook behavior.
+%% Currently, this behavior is completely internal and is not intended for
+%% use outside of Riak; Yokozuna is the only repository that currently
+%% implements this behavior.  (C.f., Yokozuna cuttlefish schema, to see
+%% where this configuration is set.)  In the future, we may want
+%% make the riak_kv.update_hook configuration parameter a list of hooks, and
+%% call a sequence of hooks on updates, but since we currently only have one
+%% use-case, and since this is a purely internal API (and local to the riak node),
+%% we can safely make that change in the future without an impact on
+%% backwards compatibility.
 %%
 
 -spec update_hook()-> update_hook().
