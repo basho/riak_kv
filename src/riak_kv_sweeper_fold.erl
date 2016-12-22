@@ -103,21 +103,22 @@ do_sweep(ActiveParticipants, EstimatedKeys, Sender, Opts, Index,
     InitialAcc = make_initial_acc(Index, ActiveParticipants, EstimatedKeys),
     case Mod:fold_objects(fun fold_req_fun/4, InitialAcc, Opts, ModState) of
         {ok, #sa{} = Acc} ->
-            inform_participants(Acc, Index),
-            riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
-            Acc1 = stat_send(Index, {final, Acc}),
-            {reply, Acc1, VnodeState};
+            FinishFun = finish_sweep_fun(Index),
+            {reply, FinishFun(Acc), VnodeState};
         {async, Work} ->
-            FinishFun =
-                fun(Acc) ->
-                        inform_participants(Acc, Index),
-                        riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
-                        stat_send(Index, {final, Acc})
-                end,
+            FinishFun = finish_sweep_fun( Index),
             {async, {sweep, Work, FinishFun}, Sender, VnodeState};
         Reason ->
             failed_sweep(ActiveParticipants, Index, Reason),
             {reply, Reason, VnodeState}
+    end.
+
+-spec finish_sweep_fun(Index :: non_neg_integer()) -> fun((#sa{})-> #sa{}).
+finish_sweep_fun(Index) ->
+    fun(Acc) ->
+            inform_participants(Acc, Index),
+            riak_kv_sweeper:sweep_result(Index, format_result(Acc)),
+            stat_send(Index, {final, Acc})
     end.
 
 -spec fold_req_fun(riak_object:bucket(), riak_object:key(), RObjBin :: binary(),
@@ -331,6 +332,7 @@ apply_sweep_participant_funs({BKey, RObj}, SweepAcc) ->
     SweepAcc2 = SweepAcc1#sa{bucket_props = NewBucketProps},
     SweepAcc3 = update_sa_with_participant_results(SweepAcc2, Failed, Successful),
     {NumMutated, NumDeleted, SweepAcc3}.
+
 
 
 %% Check if the sweep_participant have reached crash limit.
