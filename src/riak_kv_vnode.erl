@@ -92,12 +92,6 @@
 -export([put_merge/6]). %% For fsm_eqc_vnode
 -endif.
 
--ifdef(TEST).
--define(YZ_SHOULD_HANDOFF(X), true).
--else.
--define(YZ_SHOULD_HANDOFF(X), yz_kv:should_handoff(X)).
--endif.
-
 -record(mrjob, {cachekey :: term(),
                 bkey :: term(),
                 reqid :: term(),
@@ -121,6 +115,8 @@
           leasing = false :: boolean()
          }).
 
+-type update_hook() :: module() | undefined.
+
 -record(state, {idx :: partition(),
                 mod :: module(),
                 async_put :: boolean(),
@@ -142,7 +138,7 @@
                 md_cache_size :: pos_integer(),
                 counter :: #counter_state{},
                 status_mgr_pid :: pid(), %% a process that manages vnode status persistence
-                index_module :: module()
+                update_hook :: update_hook()
                }).
 
 -type index_op() :: add | remove.
@@ -487,7 +483,7 @@ init([Index]) ->
                            mrjobs=dict:new(),
                            md_cache=MDCache,
                            md_cache_size=MDCacheSize,
-                           index_module=index_module()},
+                           update_hook=update_hook()},
             try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
@@ -850,7 +846,7 @@ handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=ReplicaType}, State#state{modstate=UpModState}}
     end;
-handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false, index_module=IndexModule}) ->
+handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false, update_hook=UpdateHook}) ->
     {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),
     EncodedVal = riak_kv_requests:get_encoded_obj(Req),
     ReplicaType = riak_kv_requests:get_replica_type(Req),
@@ -861,7 +857,7 @@ handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false, i
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
-            module_index_binary(IndexModule, Bucket, Key, EncodedVal, put, Idx),
+            maybe_update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=ReplicaType}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -1081,9 +1077,9 @@ do_request_hash(_, _) ->
 
 
 
-handoff_starting({_HOType, TargetNode}=_X, State=#state{handoffs_rejected=RejectCount}) ->
+handoff_starting({_HOType, TargetNode}=HandoffDest, State=#state{handoffs_rejected=RejectCount, update_hook=UpdateHook}) ->
     MaxRejects = app_helper:get_env(riak_kv, handoff_rejected_max, 6),
-    case MaxRejects =< RejectCount orelse ?YZ_SHOULD_HANDOFF(_X) of
+    case MaxRejects =< RejectCount orelse maybe_should_handoff(UpdateHook, HandoffDest) of
         true ->
             {true, State#state{in_handoff=true, handoff_target=TargetNode}};
         false ->
@@ -1188,9 +1184,9 @@ terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) 
     ok.
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
-            State=#state{idx=Idx, index_module=IndexModule}) ->
+            State=#state{idx=Idx, update_hook=UpdateHook}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
-    module_index_binary(IndexModule, Bucket, Key, EncodedVal, put, Idx),
+    maybe_update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
@@ -1407,10 +1403,14 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
 
+-spec do_backend_delete(
+    {riak_core_bucket:bucket(), riak_object:key()},
+    riak_object:riak_object(), #state{}
+) -> #state{}.
 do_backend_delete(BKey, RObj, State = #state{idx = Idx,
                                              mod = Mod,
                                              modstate = ModState,
-                                             index_module = IndexModule}) ->
+                                             update_hook = UpdateHook}) ->
     %% object is a tombstone or all siblings are tombstones
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
@@ -1421,7 +1421,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
-            module_index(IndexModule, {RObj, no_old_object}, delete, Idx),
+            maybe_update(UpdateHook, {RObj, no_old_object}, delete, Idx),
             delete_from_hashtree(Bucket, Key, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
@@ -1437,7 +1437,7 @@ delete_hash(RObj) ->
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState,
-                         index_module=IndexModule},
+                         update_hook=UpdateHook},
             PutArgs=#putargs{bkey={Bucket, _Key},
                              lww=LWW,
                              coord=Coord,
@@ -1449,7 +1449,7 @@ prepare_put(State=#state{vnodeid=VId,
     %% no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
     IndexBackend = is_indexed_backend(Mod, Bucket, ModState),
-    IsSearchable = module_index_is_searchable(IndexModule, BProps),
+    IsSearchable = maybe_requires_existing_object(UpdateHook, BProps),
     SkipReadBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
     case SkipReadBeforeWrite of
         true ->
@@ -1644,13 +1644,13 @@ actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFla
            State=#state{idx=Idx,
                         mod=Mod,
                         modstate=ModState,
-                        index_module=IndexModule}) ->
+                        update_hook=UpdateHook}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
-            module_index(IndexModule, {Obj, OldObj}, put, Idx),
+            maybe_update(UpdateHook, {Obj, OldObj}, put, Idx),
             Reply = case RB of
                 true ->
                     {dw, Idx, Obj, ReqID};
@@ -2060,7 +2060,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                StateData=#state{mod=Mod,
                                 modstate=ModState,
                                 idx=Idx,
-                                index_module=IndexModule}) ->
+                                update_hook=UpdateHook}) ->
     StartTS = os:timestamp(),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
@@ -2079,7 +2079,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     update_hashtree(Bucket, Key, DiffObj, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
-                    module_index(IndexModule, {DiffObj, no_old_object}, handoff, Idx),
+                    maybe_update(UpdateHook, {DiffObj, no_old_object}, handoff, Idx),
                     InnerRes;
                 {InnerRes, _Val} ->
                     InnerRes
@@ -2105,7 +2105,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                             update_hashtree(Bucket, Key, AMObj, StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
-                            module_index(IndexModule, {AMObj, OldObj}, handoff, Idx),
+                            maybe_update(UpdateHook, {AMObj, OldObj}, handoff, Idx),
                             InnerRes;
                         {InnerRes, _EncodedVal} ->
                             InnerRes
@@ -2717,24 +2717,54 @@ highest_actor(ActorBase, Obj) ->
 %% where this configuration is implicitly set.
 %%
 
+-spec update_hook()-> update_hook().
+update_hook() ->
+    app_helper:get_env(riak_kv, update_hook).
 
-index_module() ->
-    app_helper:get_env(riak_kv, index_module).
-
-module_index(undefined, _RObjPair, _Reason, _Idx) ->
+-spec maybe_update(
+    update_hook(),
+    riak_kv_update_hook:object_pair(),
+    riak_kv_update_hook:update_reason(),
+    riak_kv_update_hook:partition()
+) ->
+    ok.
+maybe_update(undefined, _RObjPair, _Reason, _Idx) ->
     ok;
-module_index(IndexModule, RObjPair, Reason, Idx) ->
-    IndexModule:index(RObjPair, Reason, Idx).
+maybe_update(UpdateHook, RObjPair, Reason, Idx) ->
+    UpdateHook:update(RObjPair, Reason, Idx).
 
-module_index_binary(undefined, _Bucket, _Key, _Binary, _Reason, _Idx) ->
+-spec maybe_update_binary(
+    update_hook(),
+    riak_core_bucket:bucket(),
+    riak_object:key(),
+    binary(),
+    riak_kv_update_hook:update_reason(),
+    riak_kv_update_hook:partition()
+) -> ok.
+maybe_update_binary(undefined, _Bucket, _Key, _Binary, _Reason, _Idx) ->
     ok;
-module_index_binary(IndexModule, Bucket, Key, Binary, Reason, Idx) ->
-    IndexModule:index_binary(Bucket, Key, Binary, Reason, Idx).
+maybe_update_binary(UpdateHook, Bucket, Key, Binary, Reason, Idx) ->
+    UpdateHook:update_binary(Bucket, Key, Binary, Reason, Idx).
 
-module_index_is_searchable(undefined, _BProps) ->
+-spec maybe_requires_existing_object(
+    update_hook(),
+    riak_kv_bucket:props()
+) ->
+    boolean().
+maybe_requires_existing_object(undefined, _BProps) ->
     false;
-module_index_is_searchable(IndexModule, BProps) ->
-    IndexModule:is_searchable(BProps).
+maybe_requires_existing_object(UpdateHook, BProps) ->
+    UpdateHook:requires_existing_object(BProps).
+
+-spec maybe_should_handoff(
+    update_hook(),
+    riak_kv_update_hook:handoff_dest()
+) ->
+    boolean().
+maybe_should_handoff(undefined, _HandoffDest) ->
+    true;
+maybe_should_handoff(UpdateHook, HandoffDest) ->
+    UpdateHook:should_handoff(HandoffDest).
 
 -ifdef(TEST).
 
