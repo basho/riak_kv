@@ -38,6 +38,7 @@
 -define(TIMESERIES_QUERY_BUFFERS_ROOT_PATH_SUFFIX, "query_buffers").  %% relative to platform_data_dir
 -define(TIMESERIES_QUERY_BUFFERS_SOFT_WATERMARK, 1*1024*1024*1024).
 -define(TIMESERIES_QUERY_BUFFERS_HARD_WATERMARK, 4*1024*1024*1024).
+-define(TIMESERIES_QUERY_BUFFERS_INMEM_MAX, 10*1024*1024).
 -define(TIMESERIES_QUERY_BUFFERS_EXPIRE_MS, 5000).
 -define(TIMESERIES_QUERY_BUFFERS_INCOMPLETE_RELEASE_MS, 9000).
 
@@ -99,6 +100,8 @@ init([]) ->
                                            ?TIMESERIES_QUERY_BUFFERS_SOFT_WATERMARK),
                         app_helper:get_env(riak_kv, timeseries_query_buffers_hard_watermark,
                                            ?TIMESERIES_QUERY_BUFFERS_HARD_WATERMARK),
+                        app_helper:get_env(riak_kv, timeseries_query_buffers_inmem_max,
+                                           ?TIMESERIES_QUERY_BUFFERS_INMEM_MAX),
                         app_helper:get_env(riak_kv, timeseries_query_buffers_expire_ms,
                                            ?TIMESERIES_QUERY_BUFFERS_EXPIRE_MS),
                         app_helper:get_env(riak_kv, timeseries_query_buffers_incomplete_release_ms,

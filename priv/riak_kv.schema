@@ -929,6 +929,20 @@
      (_) -> false
   end}.
 
+%% @doc Max heap size before dumping query buffers to ldb
+{mapping, "riak_kv.query.timeseries.qbuf_inmem_max", "riak_kv.timeseries_query_buffers_inmem_max", [
+  {default, 1000000},
+  {datatype, integer},
+  {validators, ["validate_timeseries_query_buffers_inmem_max"]}
+]}.
+
+{validator,
+  "validate_timeseries_query_buffers_inmem_max",
+  "must be an integer >= 0",
+  fun(Value) when is_integer(Value), Value >= 0 -> true;
+     (_) -> false
+  end}.
+
 %% @doc Query buffer expiry time (in msec). Query buffers not accessed
 %% for longer than this value (rounded upward to the next whole
 %% second) will be deleted.

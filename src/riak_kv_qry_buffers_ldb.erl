@@ -75,7 +75,7 @@ add_rows(LdbRef, Rows) ->
     try
         lists:foreach(
           fun({K, V}) ->
-                  ok = eleveldb:put(LdbRef, K, V, [{sync, true}])
+                  ok = eleveldb:put(LdbRef, sext:encode(K), sext:encode(V), [{sync, false}])
           end,
           Rows)
     catch
