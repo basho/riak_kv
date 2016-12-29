@@ -147,7 +147,7 @@ wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds) ->
     end.
 
 wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds) ->
-    case get_remote_is_compiled(Nodes, Table, DDL) of
+    case get_remote_is_table_active_and_supported(Nodes, Table, DDLRecCap) of
         true -> ok;
         _ ->
             timer:sleep(1000),
@@ -155,13 +155,14 @@ wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds) ->
             wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds - 1)
     end.
 
-get_remote_is_compiled(Nodes, Table, DDL) ->
-    multi_is_compiled(
-      rpc:multicall(Nodes, riak_kv_ts_newtype, is_compiled, [Table, DDL])).
+get_remote_is_table_active_and_supported(Nodes, Table, DDLRecCap) ->
+    multi_is_all_true(
+      rpc:multicall(Nodes, riak_kv_ts_util, is_table_supported,
+                    [DDLRecCap, Table])).
 
-multi_is_compiled({_, BadNodes}) when BadNodes =/= [] ->
+multi_is_all_true({_Results, BadNodes}) when BadNodes =/= [] ->
     false;
-multi_is_compiled({Results, _}) ->
+multi_is_all_true({Results, _BadNodes}) ->
     lists:all(fun(E) -> E == true end, Results).
 
 get_active_peer_nodes() ->
