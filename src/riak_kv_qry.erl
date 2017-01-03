@@ -286,10 +286,7 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                                        {ok, {new|existing, riak_kv_qry_buffers:qbuf_ref()} |
                                              undefined} |
                                        {error, any()}.
-maybe_create_query_buffer(?SQL_SELECT{'ORDER BY' = []
-                                     % ,'LIMIT'    = []
-                                     % ,'OFFSET'   = []
-                                     },
+maybe_create_query_buffer(?SQL_SELECT{'ORDER BY' = []},
                           _NSubQueries, _CompiledSelect, _CompiledOrderBy, _Options) ->
     {ok, undefined};
 maybe_create_query_buffer(SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) ->

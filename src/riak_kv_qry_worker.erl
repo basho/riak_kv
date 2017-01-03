@@ -546,20 +546,66 @@ sql_select_group_by(?SQL_SELECT{ group_by = GroupBy }) ->
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
+sql_select_test_helper() ->
+    ?SQL_SELECT{
+        'SELECT' = #riak_sel_clause_v1{
+            col_names = [<<"a">>, <<"b">>],
+            col_return_types = [sint64, varchar],
+            calc_type = rows
+         }
+    }.
+
 prepare_final_results_test() ->
     Rows = [[12, <<"windy">>], [13, <<"windy">>]],
     ?assertEqual(
         {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
         prepare_final_results(
             #state{
-                qry =
-                    ?SQL_SELECT{
-                        'SELECT' = #riak_sel_clause_v1{
-                            col_names = [<<"a">>, <<"b">>],
-                            col_return_types = [sint64, varchar],
-                            calc_type = rows
-                         }
-                    },
+                qry = sql_select_test_helper(),
+                result = [{1, Rows}]})
+    ).
+
+prepare_final_results_limit_test() ->
+    Rows = [[<<"windy">>, N] || N <- lists:seq(1,10)],
+    State = sql_select_test_helper(),
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], [[<<"windy">>, N] || N <- lists:seq(1,2)]},
+        prepare_final_results(
+            #state{
+                qry = State?SQL_SELECT{'LIMIT' = [2]},
+                result = [{1, Rows}]})
+    ).
+
+prepare_final_results_offset_limit_test() ->
+    Rows = [[<<"windy">>, N] || N <- lists:seq(1,10)],
+    State = sql_select_test_helper(),
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], [[<<"windy">>, N] || N <- lists:seq(5,6)]},
+        prepare_final_results(
+            #state{
+                qry = State?SQL_SELECT{'OFFSET' = [4], 'LIMIT' = [2]},
+                result = [{1, Rows}]})
+    ).
+
+prepare_final_results_offset_is_greater_than_number_of_rows_returns_empty_rows_test() ->
+    Rows = [[<<"windy">>, N] || N <- lists:seq(1,10)],
+    State = sql_select_test_helper(),
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], []},
+        prepare_final_results(
+            #state{
+                qry = State?SQL_SELECT{'OFFSET' = [1000], 'LIMIT' = [2]},
+                result = [{1, Rows}]})
+    ).
+
+prepare_final_results_limit_is_greater_than_number_of_rows_returns_all_rows_test() ->
+    Rows = [[<<"windy">>, N] || N <- lists:seq(1,10)],
+    State = sql_select_test_helper(),
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
+        prepare_final_results(
+            #state{
+                qry = State?SQL_SELECT{'OFFSET' = [], 'LIMIT' = [2000]},
                 result = [{1, Rows}]})
     ).
 
