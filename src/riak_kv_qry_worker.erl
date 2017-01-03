@@ -272,24 +272,6 @@ estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
 estimate_query_size(#state{total_query_data  = CurrentTotalSize,
                            n_subqueries_done = NSubqueriesDone,
                            max_query_data    = MaxQueryData,
-                           qbuf_ref          = QBufRef,
-                           sub_qrys          = SubQrys,
-                           qry = ?SQL_SELECT{'LIMIT' = [Limit]} = OrigQry} = State)
-  when QBufRef /= undefined,
-       is_integer(Limit) ->
-    %% query buffer-backed, has a LIMIT: consider the latter
-    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
-    ProjectedLimitData = round(Limit * BytesPerChunk),
-    if ProjectedLimitData > MaxQueryData ->
-            lager:info("Cancelling LIMIT ~b query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
-                       [Limit, ProjectedLimitData, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
-            cancel_error_query(select_result_too_big, State);
-       el/=se ->
-            State
-    end;
-estimate_query_size(#state{total_query_data  = CurrentTotalSize,
-                           n_subqueries_done = NSubqueriesDone,
-                           max_query_data    = MaxQueryData,
                            sub_qrys          = SubQrys,
                            qry               = OrigQry} = State) ->
     BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
