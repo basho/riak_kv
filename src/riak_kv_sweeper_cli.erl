@@ -26,8 +26,6 @@
 
 -behaviour(clique_handler).
 
--include("riak_kv_sweeper.hrl").
-
 -export([
          format_sweeps/2,
          register_cli/0,
@@ -83,20 +81,7 @@ format_sweeps(Sweeps, IndexedParticipants) ->
 
 format_participants(IndexedParticipants) ->
     Header = io_lib:format("~s", ["Sweep participants:"]),
-    Rows = [format_sweep_participant(Index, Participant)
+    Rows = [riak_kv_sweeper_fold:format_sweep_participant(Index, Participant)
               || {Index, Participant} <- IndexedParticipants],
     [clique_status:text(Header),
      clique_status:table(Rows)].
-
-format_sweep_participant(Index, #sweep_participant{module = Mod,
-                                                   description = Description,
-                                                   run_interval = Interval}) ->
-    IntervalValue = riak_kv_sweeper:get_run_interval(Interval),
-    IntervalString = format_interval(IntervalValue * 1000000),
-    [{"ID", Index},
-     {"Module" ,atom_to_list(Mod)},
-     {"Description", Description},
-     {"Interval",  IntervalString}].
-
-format_interval(Interval) ->
-    riak_core_format:human_time_fmt("~.1f", Interval).

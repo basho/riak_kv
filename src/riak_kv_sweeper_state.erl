@@ -21,9 +21,7 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_sweeper_state).
 
--include("riak_kv_sweeper.hrl").
-
--export([add_sweep_participant/2,
+-export([add_sweep_participant/6,
          get_active_participants/2,
          get_estimate_keys/2,
          get_run_interval/1,
@@ -121,11 +119,13 @@ new() ->
         end,
     update_sweep_specs(State).
 
--spec add_sweep_participant(state(),
-                            Participant:: #sweep_participant{}) -> state().
-add_sweep_participant(State, Participant) ->
+-spec add_sweep_participant(state(), string(), module(), riak_kv_sweeper:fun_type(),
+                            riak_kv_sweeper:run_interval(), [atom()]) -> state().
+add_sweep_participant(State, Description, Module, FunType, RunInterval, Options) ->
+    Participant = riak_kv_sweeper_fold:participant(Description, Module, FunType,
+                                                   RunInterval, Options),
     #state{sweep_participants = SP} = State,
-    SP1 = dict:store(Participant#sweep_participant.module, Participant, SP),
+    SP1 = dict:store(Module, Participant, SP),
     persist_participants(SP1),
     State#state{sweep_participants = SP1}.
 
@@ -157,7 +157,7 @@ update_sweep_specs(State) ->
     State#state{sweeps = Sweeps2}.
 
 -spec status(state()) -> {'ok',
-                          {Participants :: [#sweep_participant{}],
+                          {Participants :: [riak_kv_sweeper_fold:participant()],
                            Sweeps :: [#sweep{}]},
                           state()}.
 status(#state{sweep_participants = Participants0} = State) ->
@@ -168,8 +168,8 @@ status(#state{sweep_participants = Participants0} = State) ->
     SortedSweeps = lists:keysort(#sweep.index, Sweeps),
     {ok, {Participants, SortedSweeps}, State}.
 
--spec format_sweep(sweep(), [{integer(), #sweep_participant{}}], erlang:timestamp()) ->
-    [{string(), term()}].
+-spec format_sweep(sweep(), [{integer(), riak_kv_sweeper_fold:participant()}],
+                   erlang:timestamp()) -> [{string(), term()}].
 format_sweep(Sweep, IndexedParticipants, Now) ->
     StartTime = Sweep#sweep.start_time,
     EndTime = Sweep#sweep.end_time,
@@ -186,7 +186,8 @@ format_results(Now, Results, IndexedParticipants) ->
                      || {Index, Participant} <- IndexedParticipants]).
 
 get_result(Index, Participant, Results, Now) ->
-    case dict:find(Participant#sweep_participant.module, Results) of
+    Module = riak_kv_sweeper_fold:participant_module(Participant),
+    case dict:find(Module, Results) of
         {ok, {TimeStamp, Outcome}} when Outcome == succ orelse Outcome == fail ->
             LastRun = format_timestamp(Now, TimeStamp),
             OutcomeString = string:to_upper(atom_to_list(Outcome));
@@ -226,7 +227,7 @@ format_progress(#sweep{index = Index,
     [{"Index", Index},
      {"Swept keys", SweptKeys}] ++
     EstimatedKeysFormat ++
-    format_active_participants(AcitvePart, IndexedParticipants);
+    riak_kv_sweeper_fold:format_active_participants(AcitvePart, IndexedParticipants);
 
 format_progress(_, _) ->
     "".
@@ -235,14 +236,6 @@ format_estimated_keys(EstimatedKeys) when is_integer(EstimatedKeys), EstimatedKe
     [{"Estimated Keys", EstimatedKeys}];
 format_estimated_keys(_EstimatedKeys) ->
     [].
-
-format_active_participants(AcitvePart, IndexedParticipants) ->
-    [begin
-         IndexString = integer_to_list(Index),
-         {"Active " ++ IndexString,
-          lists:keymember(Mod, #sweep_participant.module, AcitvePart)}
-     end
-     || {Index, #sweep_participant{module = Mod}} <- IndexedParticipants].
 
 -spec send_to_sweep_worker('stop' | {'disable', riak_kv_sweeper:participant_module()},
                            #sweep{}) -> 'ok' | 'no_pid'.
@@ -262,17 +255,10 @@ stop_all_sweeps(State) ->
     {ok, length(Running), State}.
 
 -spec get_active_participants(state(), index()) ->
-    {'ok', Participants :: [#sweep_participant{}], state()}.
+    {'ok', Participants :: [riak_kv_sweeper_fold:participant()], state()}.
 get_active_participants(State, Index) ->
-    #state{sweep_participants = Participants} = State,
-    Funs =
-        [{Participant, Module:participate_in_sweep(Index, self())} ||
-         {Module, Participant} <- dict:to_list(Participants)],
-
-    %% Filter non active participants
-    ActiveParticipants =
-        [Participant#sweep_participant{sweep_fun = Fun, acc = InitialAcc} ||
-            {Participant, {ok, Fun, InitialAcc}} <- Funs],
+    Participants = State#state.sweep_participants,
+    ActiveParticipants = riak_kv_sweeper_fold:get_active_participants(Participants, Index),
     {ok, ActiveParticipants, State}.
 
 -spec get_estimate_keys(state(), index()) ->
@@ -298,7 +284,7 @@ update_finished_sweep(State, Index, Result) ->
 
 -spec update_started_sweep(state(),
                            index(),
-                           [#sweep_participant{}],
+                           [riak_kv_sweeper_fold:participant()],
                            EstimatedKeys :: non_neg_integer()) -> state() .
 update_started_sweep(State, Index, ActiveParticipants, EstimatedKeys) ->
     Sweeps = State#state.sweeps,
@@ -433,29 +419,11 @@ store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
                            SweepParticipants :: dict()) -> Results :: dict().
 add_asked_to_results(Results, SweepParticipants) ->
     ResultList = dict:to_list(Results),
-    MissingResults = missing(module, SweepParticipants, ResultList),
+    MissingResults = riak_kv_sweeper_fold:missing(module, SweepParticipants, ResultList),
     TimeStamp = os:timestamp(),
     lists:foldl(fun(Mod, Dict) ->
                         dict:store(Mod, {TimeStamp, asked}, Dict)
                 end, Results, MissingResults).
-
--spec missing('run_interval'|'module',
-              Participants :: dict(),
-              ResultsList :: [{riak_kv_sweeper:participant_module(),
-                               {erlang:timestamp(),
-                                'succ'| 'fail'}}]) ->
-     [RunInterval :: non_neg_integer()]
-   | [riak_kv_sweeper:participant_module()].
-missing(Return, Participants, ResultList) ->
-    [case Return of
-         run_interval ->
-             get_run_interval(RunInterval);
-         module ->
-             Module
-     end ||
-     {Module, #sweep_participant{run_interval = RunInterval}}
-         <- dict:to_list(Participants),
-        not lists:keymember(Module, 1, ResultList)].
 
 expired_counts(Now, ResultsList, Participants) ->
     [begin
@@ -611,7 +579,7 @@ find_expired_participant(Now, Sweeps, Participants) ->
      ExpiredSum :: non_neg_integer()}.
 expired_or_missing(Now, #sweep{results = Results}, Participants) ->
     ResultsList = dict:to_list(Results),
-    Missing = missing(run_interval, Participants, ResultsList),
+    Missing = riak_kv_sweeper_fold:missing(run_interval, Participants, ResultsList),
     Expired = expired_counts(Now, ResultsList, Participants),
     MissingSum = lists:sum(Missing),
     ExpiredSum = lists:sum(Expired),
@@ -631,7 +599,8 @@ expired(Now, TS, RunInterval) ->
     RunInterval :: non_neg_integer() | 'disabled'.
 run_interval(Mod, Participants) ->
     case dict:find(Mod, Participants) of
-        {ok, #sweep_participant{run_interval = RunInterval}} ->
+        {ok, P} ->
+            RunInterval = riak_kv_sweeper_fold:participant_run_interval(P),
             get_run_interval(RunInterval);
         _ ->
             %% Participant have been disabled since last run.
@@ -716,7 +685,7 @@ get_running_sweeps(Sweeps) ->
 disable_sweep_participant_in_running_sweep(Module, Sweeps) ->
     [disable_participant(Sweep, Module) ||
        #sweep{active_participants = ActiveP} = Sweep <- get_running_sweeps(Sweeps),
-        lists:keymember(Module, #sweep_participant.module, ActiveP)],
+        riak_kv_sweeper_fold:is_participant_in_list(Module, ActiveP)],
     ok.
 
 -spec disable_participant(#sweep{},
@@ -776,9 +745,9 @@ setup() ->
 
 add_test_sweep_participant(StateIn, Participants) ->
     Fun = fun(N, State) ->
-                  Participant = test_sweep_participant(N),
+                  AddParticipantMsg = test_sweep_participant(N),
                   {reply, ok, StateOut} =
-                      riak_kv_sweeper:handle_call({add_sweep_participant, Participant}, nobody, State),
+                      riak_kv_sweeper:handle_call(AddParticipantMsg, nobody, State),
                   StateOut
           end,
     lists:foldl(Fun, StateIn, Participants).
@@ -787,9 +756,7 @@ test_sweep_participant(N) ->
     Module = get_module(N),
     meck:new(Module, [non_strict]),
     meck:expect(Module, participate_in_sweep, fun(_, _) -> {ok, sweepfun, acc} end),
-    #sweep_participant{module = Module,
-                       run_interval = N
-                      }.
+    {add_sweep_participant, "Dummy test participant", Module, observe_fun, N, []}.
 
 get_module(N) ->
     list_to_atom(integer_to_list(N)).
@@ -855,16 +822,9 @@ gen_sweep_participant_modules() ->
 
 
 gen_sweep_participant(Module) ->
-    #sweep_participant{
-       description = 'EQC sweep participant',
-       module = Module,
-       fun_type = oneof([delete_fun, modify_fun, observe_fun]),
-       sweep_fun = eqc_sweep_function,
-       run_interval = oneof([60, 3600]),
-       acc = [],
-       options = [],
-       errors = 0,
-       fail_reason = undefined}.
+    riak_kv_sweeper_fold:participant("EQC sweep participant", Module,
+                                     oneof([delete_fun, modify_fun, observe_fun]),
+                                     oneof([60, 3600]), []).
 
 gen_empty_sweep_results() ->
     dict:new().
@@ -937,7 +897,8 @@ gen_sweep_participants() ->
          ?LET(SPs, [gen_sweep_participant(M) || M <- Modules],
               lists:foldl(
                 fun(SP, D) ->
-                        dict:store(SP#sweep_participant.module, SP, D)
+                        Mod = riak_kv_sweeper_fold:participant_module(SP),
+                        dict:store(Mod, SP, D)
                 end,
                 dict:new(), SPs))).
 

@@ -3,7 +3,6 @@
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
--include("riak_kv_sweeper.hrl").
 
 %%--------------------------------------------------------------------
 %% COMMON TEST CALLBACK FUNCTIONS

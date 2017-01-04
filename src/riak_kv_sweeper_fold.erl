@@ -21,12 +21,26 @@
 %% -------------------------------------------------------------------
 -module(riak_kv_sweeper_fold).
 
--export([do_sweep/8]).
--export([get_sweep_throttle/0]).
+-export([get_active_participants/2,
+         do_sweep/8
+        ]).
 
--export_type([sweep_result/0]).
+-export([get_sweep_throttle/0,
+         missing/3
+        ]).
 
--include("riak_kv_sweeper.hrl").
+-export([participant/5,
+         participant_module/1,
+         participant_run_interval/1,
+         is_participant_in_list/2,
+         format_active_participants/2,
+         format_sweep_participant/2
+        ]).
+
+-export_type([sweep_result/0,
+              participant/0
+             ]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -38,6 +52,19 @@
 %% Default value for how much faster the sweeper throttle should be
 %% during sweep window.
 -define(SWEEP_WINDOW_THROTTLE_DIV, 1).
+
+-record(sweep_participant,
+        {
+         description :: string(),   %% Human readeble description of the user.
+         module :: atom(),          %% module where the sweep call back lives.
+         fun_type :: riak_kv_sweeper:fun_type(), %% delete_fun | modify_fun | observe_fun
+         sweep_fun :: fun(),        %%
+         run_interval :: integer() | fun(), %% Defines how often participant wants to run.
+         acc :: any(),
+         options = [] :: list(),    %% optional values that will be added during sweep
+         errors = 0 :: integer(),
+         fail_reason
+        }).
 
 %% Sweep accumulator
 -record(sa,
@@ -75,6 +102,8 @@
 %% ====================================================================
 -type opaque() :: any(). % Opaque types should not be inspected
 
+-type participant() :: #sweep_participant{}.
+
 -type sweep_result() :: {SweptKeys :: non_neg_integer(),
                          [{riak_kv_sweeper:participant_module(),
                            'succ' | 'fail'}]}.
@@ -82,6 +111,15 @@
 %% ====================================================================
 %% API And callbacks
 %% ====================================================================
+-spec get_active_participants(dict(), riak_kv_sweeper:index()) -> [participant()].
+get_active_participants(Participants, Index) ->
+    Funs = [{Participant, Module:participate_in_sweep(Index, self())} ||
+            {Module, Participant} <- dict:to_list(Participants)],
+
+    %% Filter non-active participants
+    [Participant#sweep_participant{sweep_fun = Fun, acc = InitialAcc} ||
+     {Participant, {ok, Fun, InitialAcc}} <- Funs].
+
 -spec do_sweep([ActiveParticipants :: #sweep_participant{}],
                EstimatedKeys       :: non_neg_integer(),
                Sender              :: opaque(),
@@ -490,6 +528,68 @@ stat_send(Index, {in_progress, Acc}) ->
            stat_mutated_objects_counter = 0,
            stat_swept_keys_counter = 0,
            stat_obj_size_counter = 0}.
+
+%% Participant record constructors/accessors/mutators:
+-spec participant(string(), module(), riak_kv_sweeper:fun_type(),
+                  riak_kv_sweeper:run_interval(), [atom()]) -> participant().
+participant(Description, Module, FunType, RunInterval, Options) ->
+    #sweep_participant{
+       description = Description,
+       module = Module,
+       fun_type = FunType,
+       run_interval = RunInterval,
+       options = Options
+      }.
+
+-spec participant_module(participant()) -> module().
+participant_module(Participant) -> Participant#sweep_participant.module.
+
+-spec participant_run_interval(participant()) -> riak_kv_sweeper:run_interval().
+participant_run_interval(Participant) -> Participant#sweep_participant.run_interval.
+
+-spec is_participant_in_list(module(), [participant()]) -> boolean().
+is_participant_in_list(Module, Participants) ->
+    lists:keymember(Module, #sweep_participant.module, Participants).
+
+-spec format_active_participants([participant()], [{pos_integer(), participant()}]) ->
+    [{string(), boolean()}].
+format_active_participants(AcitvePart, IndexedParticipants) ->
+    [begin
+         IndexString = integer_to_list(Index),
+         {"Active " ++ IndexString,
+          lists:keymember(Mod, #sweep_participant.module, AcitvePart)}
+     end
+     || {Index, #sweep_participant{module = Mod}} <- IndexedParticipants].
+
+-spec format_sweep_participant(riak_kv_sweeper:index(), participant()) -> [{string(), term()}].
+format_sweep_participant(Index, #sweep_participant{module = Mod,
+                                                   description = Description,
+                                                   run_interval = Interval}) ->
+    IntervalValue = riak_kv_sweeper:get_run_interval(Interval),
+    IntervalString = format_interval(IntervalValue * 1000000),
+    [{"ID", Index},
+     {"Module" ,atom_to_list(Mod)},
+     {"Description", Description},
+     {"Interval",  IntervalString}].
+
+format_interval(Interval) ->
+    riak_core_format:human_time_fmt("~.1f", Interval).
+
+-spec missing('run_interval' | 'module', dict(),
+              [{riak_kv_sweeper:participant_module(),
+                {erlang:timestamp(),
+                 'succ'| 'fail'}}]) ->
+     [non_neg_integer()] | [riak_kv_sweeper:participant_module()].
+missing(Return, Participants, ResultList) ->
+    [case Return of
+         run_interval ->
+             riak_kv_sweeper_state:get_run_interval(RunInterval);
+         module ->
+             Module
+     end ||
+     {Module, #sweep_participant{run_interval = RunInterval}}
+         <- dict:to_list(Participants),
+        not lists:keymember(Module, 1, ResultList)].
 
 -ifdef(TEST).
 

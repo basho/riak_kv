@@ -87,7 +87,6 @@
 -include_lib("riak_kv_map_phase.hrl").
 -include_lib("riak_core_pb.hrl").
 -include("riak_kv_types.hrl").
--include("riak_kv_sweeper.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").

@@ -21,8 +21,6 @@
 -module(riak_kv_entropy_manager).
 -behaviour(gen_server).
 
--include("riak_kv_sweeper.hrl").
-
 %% API
 -export([start_link/0,
          manual_exchange/1,
@@ -240,14 +238,11 @@ maybe_add_sweep_participant() ->
 add_sweep_participant() ->
     %% Expire time in ms run interval in s
     RunInterval = fun() -> riak_kv_index_hashtree:get_expire_time() / 1000 end,
-    riak_kv_sweeper:add_sweep_participant(
-      #sweep_participant{
-                         description = "AAE tree rebuild",
-                         module = riak_kv_index_hashtree,
-                         fun_type = observe_fun,
-                         run_interval = RunInterval,
-                         options = [bucket_props]
-                        }).
+    riak_kv_sweeper:add_sweep_participant(_Description = "KV AAE tree rebuild",
+                                          _Module = riak_kv_index_hashtree,
+                                          _FunType = observe_fun,
+                                          RunInterval,
+                                          _Options = [bucket_props]).
 
 remove_sweep_participant() ->
     riak_kv_sweeper:remove_sweep_participant(riak_kv_index_hashtree).

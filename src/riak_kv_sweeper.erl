@@ -22,7 +22,7 @@
 
 %% @doc
 %% This module implements a gen_server process that manages and
-%% schedules sweeps.  Anyone can register a #sweep_participant{} with
+%% schedules sweeps.  Anyone can register a sweep participant with
 %% information about how often it should run and what kind of fun it
 %% include
 %%  (delete_fun, modify_fun or observ_fun) riak_kv_sweeper keep one
@@ -30,8 +30,7 @@
 %%
 %% Once every tick riak_kv_sweeper check if it's in the configured
 %% sweep_window and find sweeps to run. It does this by comparing what
-%% the sweeps have swept before with the requirments in
-%% #sweep_participant{}.
+%% the sweeps have swept before with the requirments in the sweep participant.
 -module(riak_kv_sweeper).
 -behaviour(gen_server).
 
@@ -40,7 +39,8 @@
 
 -export([start_link/0,
          stop/0,
-         add_sweep_participant/1,
+         add_sweep_participant/4,
+         add_sweep_participant/5,
          remove_sweep_participant/1,
          status/0,
          sweep_tick/0,
@@ -57,10 +57,9 @@
 
 -export_type([fun_type/0,
               index/0,
+              run_interval/0,
               run_interval_fun/0,
               participant_module/0]).
-
--include("riak_kv_sweeper.hrl").
 
 -define(SERVER, ?MODULE).
 -define(CHRONOS, riak_kv_chronos).
@@ -80,6 +79,8 @@
                   | 'observe_fun'.
 
 -type run_interval_fun() :: fun(() -> non_neg_integer()).
+
+-type run_interval() :: non_neg_integer() | run_interval_fun().
 
 -type sweep_fun_return() :: {'ok', sweep_fun_acc()}
                           | {'deleted', sweep_fun_acc()}
@@ -118,11 +119,15 @@ start_link() ->
 stop() ->
     gen_server:call(?SERVER, stop).
 
-%% @doc Add callback module that will be asked to participate in
-%% sweeps.
--spec add_sweep_participant(#sweep_participant{}) -> ok.
-add_sweep_participant(Participant) ->
-    gen_server:call(?SERVER, {add_sweep_participant, Participant}).
+%% @doc Add callback module that will be asked to participate in sweeps.
+-spec add_sweep_participant(string(), module(), fun_type(), run_interval()) -> ok.
+add_sweep_participant(Description, Module, FunType, RunInterval) ->
+    add_sweep_participant(Description, Module, FunType, RunInterval, []).
+
+-spec add_sweep_participant(string(), module(), fun_type(), run_interval(), [atom()]) -> ok.
+add_sweep_participant(Description, Module, FunType, RunInterval, Options) ->
+    gen_server:call(?SERVER, {add_sweep_participant, Description, Module,
+                              FunType, RunInterval, Options}).
 
 %% @doc Remove participant callback module.
 -spec remove_sweep_participant(participant_module()) -> true | false.
@@ -136,7 +141,7 @@ sweep(Index) ->
     gen_server:call(?SERVER, {sweep_request, Index}, infinity).
 
 %% @doc Get information about participants and all sweeps.
--spec status() -> {[#sweep_participant{}], [riak_kv_sweeper_state:sweep()]}.
+-spec status() -> {[riak_kv_sweeper_fold:participant()], [riak_kv_sweeper_state:sweep()]}.
 status() ->
     gen_server:call(?SERVER, status).
 
@@ -158,7 +163,7 @@ stop_all_sweeps() ->
     gen_server:call(?SERVER, stop_all_sweeps).
 
 -spec update_started_sweep(index(),
-                           [#sweep_participant{}],
+                           [riak_kv_sweeper_fold:participant()],
                            EstimatedKeys :: non_neg_integer()) -> ok.
 update_started_sweep(Index, ActiveParticipants, Estimate) ->
     gen_server:cast(?SERVER,
@@ -199,8 +204,10 @@ init([]) ->
     State = riak_kv_sweeper_state:new(),
     {ok, State}.
 
-handle_call({add_sweep_participant, Participant}, _From, State) ->
-    State1 = riak_kv_sweeper_state:add_sweep_participant(State, Participant),
+handle_call({add_sweep_participant, Description, Module, FunType, RunInterval, Options},
+            _From, State) ->
+    State1 = riak_kv_sweeper_state:add_sweep_participant(State, Description, Module,
+                                                         FunType, RunInterval, Options),
     {reply, ok, State1};
 
 handle_call({remove_sweep_participant, Module}, _From, State) ->

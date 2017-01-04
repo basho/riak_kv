@@ -26,8 +26,6 @@
 
 -behaviour(supervisor).
 
--include("riak_kv_sweeper.hrl").
-
 -export([start_delete/2]).
 -export([start_link/0]).
 -export([init/1]).
@@ -66,13 +64,11 @@ maybe_add_obj_ttl_sweep_participant() ->
     end.
 
 add_obj_ttl_sweep_participant(RunInterval) ->
-    riak_kv_sweeper:add_sweep_participant(
-      #sweep_participant{ description = "Object TTL",
-                          module = riak_kv_object_ttl,
-                          fun_type = delete_fun,
-                          run_interval = RunInterval,
-                          options = [bucket_props]
-                        }).
+    riak_kv_sweeper:add_sweep_participant(_Description = "Object TTL",
+                                          _Module = riak_kv_object_ttl,
+                                          _FunType = delete_fun,
+                                          RunInterval,
+                                          _Options = [bucket_props]).
 
 maybe_add_reap_sweep_participant() ->
     RunIntervalFun =
@@ -85,9 +81,7 @@ maybe_add_reap_sweep_participant() ->
     end.
 
 add_reap_sweep_participant(RunInterval) ->
-    riak_kv_sweeper:add_sweep_participant(
-      #sweep_participant{ description = "Reap tombstones",
-                          module = riak_kv_delete,
-                          fun_type = delete_fun,
-                          run_interval = RunInterval
-                        }).
+    riak_kv_sweeper:add_sweep_participant(_Description = "Tombstone Reaper",
+                                          _Module = riak_kv_delete,
+                                          _FunType = delete_fun,
+                                          RunInterval).
