@@ -522,7 +522,7 @@ schedule_sweep2(Now, Participants, Sweeps) ->
             case get_queued_sweeps(Sweeps) of
                 [] ->
                     case find_expired_participant(Now, Sweeps, Participants) of
-                        [] ->
+                        not_found ->
                             {ok, {tick, none}};
                         Sweep ->
                             {ok, {tick, Sweep}}
@@ -551,23 +551,20 @@ get_queued_sweeps(Sweeps) ->
          not (QueueTime == undefined)],
     lists:keysort(#sweep.queue_time, QueuedSweeps).
 
--spec find_expired_participant(erlang:timestamp(),
-                               Sweeps :: dict(),
-                               Participants :: dict()) ->
-    [] | #sweep{}.
+-spec find_expired_participant(erlang:timestamp(), dict(), dict()) -> not_found | #sweep{}.
 find_expired_participant(Now, Sweeps, Participants) ->
     ExpiredMissingSweeps =
         [{expired_or_missing(Now, Sweep, Participants), Sweep} ||
          Sweep <- get_idle_sweeps(Sweeps)],
     case ExpiredMissingSweeps of
         [] ->
-            [];
+            not_found;
         _ ->
             MostExpiredMissingSweep =
                 hd(lists:reverse(lists:keysort(1, ExpiredMissingSweeps))),
             case MostExpiredMissingSweep of
                 %% Non of the sweeps have a expired or missing participant.
-                {{0,0}, _} -> [];
+                {{0,0}, _} -> not_found;
                 {_N, Sweep} -> Sweep
             end
     end.
@@ -981,7 +978,7 @@ prop_schedule_sweep_tick() ->
                     {ok, {tick, none}} ->
                         length(NeverRunSweeps) == 0 andalso
                             length (QueuedSweeps) == 0 andalso
-                            ExpiredSweep == [];
+                            ExpiredSweep == not_found;
                     {ok, {tick, concurrency_limit_reached}} ->
                         length(get_running_sweeps(Sweeps)) >= ConcurrencyLimit;
                     {ok, {tick, disabled}} ->
@@ -993,7 +990,7 @@ prop_schedule_sweep_tick() ->
                         not in_sweep_window(NowHour, SweepWindow);
                     {ok, {tick, #sweep{} = Sweep}} ->
                         case {NeverRunSweeps, QueuedSweeps, ExpiredSweep} of
-                            {[], [], []} ->
+                            {[], [], not_found} ->
                                 false ;
                             {[], [], ExpiredSweep} ->
                                 is_sweep_index_in(Sweep, [ExpiredSweep]);
@@ -1001,7 +998,7 @@ prop_schedule_sweep_tick() ->
                                 is_sweep_index_in(Sweep, QueuedSweeps);
                             {NeverRunSweeps, [], _} ->
                                 is_sweep_index_in(Sweep, NeverRunSweeps);
-                            {NeverRunSweeps, QueuedSweeps, []} ->
+                            {NeverRunSweeps, QueuedSweeps, not_found} ->
                                 is_sweep_index_in(Sweep, NeverRunSweeps);
                             {NeverRunSweeps, QueuedSweeps, ExpiredSweep} ->
                                 is_sweep_index_in(Sweep, NeverRunSweeps)
