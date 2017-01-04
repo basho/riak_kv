@@ -92,10 +92,10 @@ meck_new_aae_modules(AAEnabled, EstimatedKeys, LockResult) ->
     meck:expect(riak_kv_index_hashtree, estimate_keys, fun(_) -> {ok, EstimatedKeys} end),
     meck:expect(riak_kv_index_hashtree, release_lock, fun(_) -> ok end).
 
-meck_new_sweep_particpant(Name, TestCasePid) ->
-    meck_new_sweep_particpant(Name, TestCasePid, 60).
+meck_new_sweep_participant(Name, TestCasePid) ->
+    meck_new_sweep_participant(Name, TestCasePid, 60).
 
-meck_new_sweep_particpant(Name, TestCasePid, RunInterval) ->
+meck_new_sweep_participant(Name, TestCasePid, RunInterval) ->
     meck:new(Name, [non_strict, no_link]),
     meck:expect(Name, participate_in_sweep,
                 fun(Index, _Pid) ->
@@ -321,13 +321,13 @@ status_index_changed_tick_test(Config) ->
 
 add_participant_test(_Config) ->
     {[], _Sweeps} = riak_kv_sweeper:status(),
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     {[Participant], _} = riak_kv_sweeper:status(),
     sweep_observer_1 = riak_kv_sweeper_fold:participant_module(Participant),
     ok.
 
 add_participant_persistent_test(_Config) ->
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
 
     {[Participant1], _} = riak_kv_sweeper:status(),
     sweep_observer_1 = riak_kv_sweeper_fold:participant_module(Participant1),
@@ -340,7 +340,7 @@ add_participant_persistent_test(_Config) ->
     ok.
 
 remove_participant_test(_Config) ->
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     {[Participant], _} = riak_kv_sweeper:status(),
     sweep_observer_1 = riak_kv_sweeper_fold:participant_module(Participant),
 
@@ -349,7 +349,7 @@ remove_participant_test(_Config) ->
     ok.
 
 remove_participant_persistent_test(_Config) ->
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     {[Participant], _} = riak_kv_sweeper:status(),
     sweep_observer_1 = riak_kv_sweeper_fold:participant_module(Participant),
 
@@ -363,7 +363,7 @@ remove_participant_persistent_test(_Config) ->
 
 sweep_request_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     meck_new_backend(self()),
 
     I0 = pick(Indices),
@@ -376,7 +376,7 @@ sweep_request_test(Config) ->
 
 sweep_request_non_existing_index_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     meck_new_backend(self()),
 
     Max = lists:max(Indices),
@@ -391,7 +391,7 @@ scheduler_sync_backend_test(Config) ->
 
     meck_new_backend(self()),
     meck_new_fold_objects_function(sync, self(), 1000, 100),
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
 
     sweep_all_indices(Indices),
     ok.
@@ -399,7 +399,7 @@ scheduler_sync_backend_test(Config) ->
 scheduler_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     meck_new_backend(self()),
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
 
     sweep_all_indices(Indices),
     ok.
@@ -408,7 +408,7 @@ scheduler_test(Config) ->
 scheduler_worker_process_crashed_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     meck_new_backend(self()),
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     meck_new_visit_function(sweep_observer_1, {throw, crash}),
 
     sweep_all_indices(Indices, timeout),
@@ -420,7 +420,7 @@ scheduler_worker_process_crashed_test(Config) ->
 scheduler_run_interval_test(Config) ->
     Indices = ?config(vnode_indices, Config),
     meck_new_backend(self()),
-    meck_new_sweep_particpant(sweep_observer_1, self(), 1),
+    meck_new_sweep_participant(sweep_observer_1, self(), 1),
     meck_new_visit_function(sweep_observer_1),
 
     sweep_all_indices(Indices),
@@ -434,7 +434,7 @@ scheduler_remove_participant_test(Config) ->
     WaitIndex = pick(Indices),
     TestCasePid = self(),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
 
     meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -454,7 +454,7 @@ scheduler_queue_test(Config) ->
 
     TestCasePid = self(),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
     riak_kv_sweeper:enable_sweep_scheduling(),
     meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
 
@@ -486,7 +486,7 @@ scheduler_sweep_window_never_test(Config) ->
 
     application:set_env(riak_kv, sweep_window, never),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
     riak_kv_sweeper:enable_sweep_scheduling(),
 
     StatusBefore = riak_kv_sweeper:status(),
@@ -510,7 +510,7 @@ scheduler_now_outside_sleep_window_test(Config) ->
 
     application:set_env(riak_kv, sweep_window, {Start, End}),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
 
     StatusBefore = riak_kv_sweeper:status(),
     riak_kv_sweeper:sweep_tick(),
@@ -531,7 +531,7 @@ stop_all_scheduled_sweeps_test(Config) ->
     NumMsgRecvAfterSweptKeys = 1000,
     application:set_env(riak_kv, sweep_concurrency, length(Indices)),
     meck_new_backend(self(), _NumKeys = NumMsgRecvAfterSweptKeys * 5),
-    meck_new_sweep_particpant(sweep_observer_1, self(), 1),
+    meck_new_sweep_participant(sweep_observer_1, self(), 1),
     meck_new_visit_function(sweep_observer_1),
     riak_kv_sweeper:enable_sweep_scheduling(),
 
@@ -557,7 +557,7 @@ stop_all_scheduled_sweeps_race_condition_test(Config) ->
     NumMsgRecvAfterSweptKeys = 1000,
 
     meck_new_backend(self(), NumMsgRecvAfterSweptKeys*5),
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     meck_new_visit_function(sweep_observer_1),
     riak_kv_sweeper:enable_sweep_scheduling(),
     Running = riak_kv_sweeper:stop_all_sweeps(),
@@ -570,13 +570,13 @@ scheduler_add_participant_test(Config) ->
     meck_new_backend(self()),
     riak_kv_sweeper:enable_sweep_scheduling(),
 
-    meck_new_sweep_particpant(sweep_observer_1, self(), 1),
+    meck_new_sweep_participant(sweep_observer_1, self(), 1),
 
     sweep_all_indices(Indices),
     timer:sleep(min_scheduler_response_time_msecs()),
     sweep_all_indices(Indices),
 
-    meck_new_sweep_particpant(sweep_observer_2, self(), 1),
+    meck_new_sweep_participant(sweep_observer_2, self(), 1),
 
     sweep_all_indices(Indices, ok, sweep_observer_2),
     timer:sleep(min_scheduler_response_time_msecs()),
@@ -588,7 +588,7 @@ scheduler_restart_sweep_test(Config) ->
     TestCasePid = self(),
     WaitIndex = pick(Indices),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
     meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, [WaitIndex]}),
     riak_kv_sweeper:enable_sweep_scheduling(),
 
@@ -624,7 +624,7 @@ scheduler_estimated_keys_lock_ok_test(Config) ->
                          _EstimatedKeys = 4200,
                          _LockResult = ok),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
     meck_new_visit_function(sweep_observer_1),
 
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -644,7 +644,7 @@ scheduler_estimated_keys_lock_fail_test(Config) ->
                          _EstimatedKeys = 4200,
                          _LockResult = fail),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
     meck_new_visit_function(sweep_observer_1),
 
     sweep_all_indices(Indices),
@@ -717,7 +717,7 @@ sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAf
     application:set_env(riak_kv, sweep_throttle, {obj_size, ThrottleAfterBytes, ThrottleWaitMsecs}),
     meck_sleep_for_throttle(),
 
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     RiakObjSizeBytes = byte_size(riak_object_bin(<<>>, <<>>, ObjSizeBytes)),
     meck_new_backend(self(), NumKeys, RiakObjSizeBytes),
     meck_new_visit_function(sweep_observer_1, {mutate, NumMutatedKeys}),
@@ -790,7 +790,7 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
     application:set_env(riak_kv, sweep_throttle, {pace, NumKeysPace, ThrottleWaitMsecs}),
     meck_sleep_for_throttle(),
 
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     meck_new_backend(self(), NumKeys),
     meck_new_visit_function(sweep_observer_1, {mutate, NumMutatedKeys}),
     ExpectedThrottleMsecs = expected_pace_throttle_total_msecs(
@@ -804,7 +804,7 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
 
 sweeper_exometer_reporting_test(Config) ->
     Indices = ?config(vnode_indices, Config),
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     NumKeys = 5042,
     ObjSizeBytes = 100,
     RiakObjSizeBytes = byte_size(riak_object_bin(<<>>, <<>>, ObjSizeBytes)),
@@ -849,7 +849,7 @@ sweeper_exometer_successful_sweep_test(Config) ->
     I0 = pick(Indices),
     TestCasePid = self(),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
 
     meck_new_visit_function(sweep_observer_1),
 
@@ -887,7 +887,7 @@ sweeper_exometer_failed_sweep_test(Config) ->
     I0 = pick(Indices),
     TestCasePid = self(),
     meck_new_backend(TestCasePid, _NumKeys = 5000),
-    meck_new_sweep_particpant(sweep_observer_1, TestCasePid, 1),
+    meck_new_sweep_participant(sweep_observer_1, TestCasePid, 1),
 
     meck_new_visit_function(sweep_observer_1, {throw, crash}),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -926,7 +926,7 @@ exometer_mutated_object_count(Config) ->
     Indices = ?config(vnode_indices, Config),
     I0 = pick(Indices),
 
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     meck_new_backend(self(), _NumKeys = 5042),
     meck_new_visit_function(sweep_observer_1, {mutate, MutateKeys = 100}),
     riak_kv_sweeper:sweep(I0),
@@ -940,7 +940,7 @@ exometer_deleted_object_count(Config) ->
     Indices = ?config(vnode_indices, Config),
     I0 = pick(Indices),
 
-    meck_new_sweep_particpant(sweep_observer_1, self()),
+    meck_new_sweep_participant(sweep_observer_1, self()),
     meck_new_backend(self(), _NumKeys = 5042),
     meck_new_visit_function(sweep_observer_1, {delete, DeleteKeys = 100}),
     riak_kv_sweeper:sweep(I0),
