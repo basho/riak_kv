@@ -681,7 +681,7 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, Where1) ->
             false -> Max1
         end,
     %% sanity check for the number of quanta we can handle
-    MaxQueryQuanta = app_helper:get_env(riak_kv, max_query_quanta, ?MAX_QUERY_QUANTA),
+    MaxQueryQuanta = app_helper:get_env(riak_kv, timeseries_query_max_quanta_span, ?MAX_QUERY_QUANTA),
     NQuanta = (Max2 - Min2) div riak_ql_quanta:unit_to_millis(QSize, QUnit),
     case NQuanta < MaxQueryQuanta of
         true ->
@@ -882,7 +882,7 @@ break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(Qu
             %% filter e.g. mytime = 12345, which is rewritten as
             %% mytime >= 12345 AND mytime <= 12345
             {QEqFilters, OtherFilters} =
-                lists:splitwith(fun({Op, F, _}) ->
+                lists:partition(fun({Op, F, _}) ->
                                     Op == '=' andalso F == QuantumField
                                 end, Filters1),
             case QEqFilters of
@@ -2452,6 +2452,30 @@ eqality_filter_on_quantum_specifies_start_and_end_range_test() ->
     ?assertEqual(
         [{startkey,[{<<"a">>,timestamp,1000}]},
          {endkey,[{<<"a">>,timestamp,1000}]},
+         {filter,[]},
+         {end_inclusive,true}],
+        Select?SQL_SELECT.'WHERE'
+    ).
+
+eqality_filter_on_quantum_specifies_start_and_end_range_2_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab123 ("
+        "StationId     VARCHAR   NOT NULL,"
+        "ReadingTimeStamp  TIMESTAMP NOT NULL,"
+        "Temperature     SINT64,"
+        "Humidity      DOUBLE,"
+        "WindSpeed     DOUBLE,"
+        "WindDirection   DOUBLE,"
+        "PRIMARY KEY ((StationId, QUANTUM(ReadingTimeStamp, 1, 'd')),"
+        "   StationId, ReadingTimeStamp));"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab123 "
+          "WHERE StationId = 'Station-1001' "
+          "AND ReadingTimeStamp = 1469204877;"),
+    {ok, [Select]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"StationId">>,varchar,<<"Station-1001">>},{<<"ReadingTimeStamp">>,timestamp,1469204877}]},
+         {endkey,[  {<<"StationId">>,varchar,<<"Station-1001">>},{<<"ReadingTimeStamp">>,timestamp,1469204877}]},
          {filter,[]},
          {end_inclusive,true}],
         Select?SQL_SELECT.'WHERE'

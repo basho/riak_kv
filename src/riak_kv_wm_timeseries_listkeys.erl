@@ -182,6 +182,8 @@ key_to_string(KFTypes) ->
        || {Key, {Field, Type}} <- KFTypes],
       "/").
 
+value_to_url_string(V, blob) ->
+    base64:encode_to_string(V);
 value_to_url_string(V, varchar) ->
     binary_to_list(V);
 value_to_url_string(V, sint64) ->
