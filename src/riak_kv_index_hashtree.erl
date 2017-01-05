@@ -70,7 +70,7 @@
 
 -export([participate_in_sweep/2,
          successful_sweep/2,
-         failed_sweep/2]).
+         failed_sweep/3]).
 
 -export([poke/1,
          get_build_time/1]).
@@ -289,7 +289,7 @@ successful_sweep(Index, _FinalAcc) ->
     riak_kv_entropy_manager:release_lock(Index),
     lookup_tree_and_cast(Index, build_finished).
 
-failed_sweep(Index, Reason) ->
+failed_sweep(Index, _Acc, Reason) ->
     lager:info("failed_sweep ~p ~p", [Index, Reason]),
     riak_kv_entropy_manager:release_lock(Index),
     lookup_tree_and_cast(Index, build_failed).

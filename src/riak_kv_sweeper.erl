@@ -106,7 +106,7 @@
 -callback successful_sweep(Index :: index(),
                            FinalAcc :: sweep_fun_acc()) -> _.
 
--callback failed_sweep(Index :: index(), Reason :: term()) -> _.
+-callback failed_sweep(Index :: index(), Acc :: sweep_fun_acc(), Reason :: term()) -> _.
 
 %% ====================================================================
 %% API functions

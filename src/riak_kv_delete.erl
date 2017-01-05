@@ -33,7 +33,7 @@
 
 -export([start_link/6, start_link/7, start_link/8, delete/8, obj_outside_grace_period/1,
          create_tombstone/3]).
--export([participate_in_sweep/2, successful_sweep/2, failed_sweep/2]).
+-export([participate_in_sweep/2, successful_sweep/2, failed_sweep/3]).
 
 -include("riak_kv_dtrace.hrl").
 
@@ -248,7 +248,7 @@ successful_sweep(Index, _FinalAcc) ->
     lager:info("successful_sweep ~p", [Index]),
     ok.
 
-failed_sweep(Index, Reason) ->
+failed_sweep(Index, _Acc, Reason) ->
     lager:info("failed_sweep ~p ~p", [Index, Reason]),
     ok.
 

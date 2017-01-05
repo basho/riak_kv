@@ -224,14 +224,14 @@ successful_sweep(Succ, Index) ->
 
 -spec failed_sweep([#sweep_participant{}], riak_kv_sweeper:index()) -> ok.
 failed_sweep(Failed, Index) ->
-    FailFun = fun(#sweep_participant{module = Module, fail_reason = Reason}) ->
-                      Module:failed_sweep(Index, Reason)
+    FailFun = fun(#sweep_participant{module = Module, fail_reason = Reason, acc = Acc}) ->
+                      Module:failed_sweep(Index, Acc, Reason)
               end,
     lists:foreach(FailFun, Failed).
 
 failed_sweep(Failed, Index, Reason) ->
-    FailFun = fun(#sweep_participant{module = Module}) ->
-                      Module:failed_sweep(Index, Reason)
+    FailFun = fun(#sweep_participant{module = Module, acc = Acc}) ->
+                      Module:failed_sweep(Index, Acc, Reason)
               end,
     lists:foreach(FailFun, Failed).
 

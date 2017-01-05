@@ -30,7 +30,7 @@
 %% ====================================================================
 -export([participate_in_sweep/2,
          successful_sweep/2,
-         failed_sweep/2]).
+         failed_sweep/3]).
 
 %% riak_kv_sweeper callbacks
 participate_in_sweep(_Index, _Pid) ->
@@ -49,7 +49,7 @@ successful_sweep(Index, _FinalAcc) ->
     lager:info("successful_sweep ~p", [Index]),
     ok.
 
-failed_sweep(Index, Reason) ->
+failed_sweep(Index, _Acc, Reason) ->
     lager:info("failed_sweep ~p ~p", [Index, Reason]),
     ok.
 
