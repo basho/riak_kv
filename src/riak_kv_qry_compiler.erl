@@ -503,8 +503,6 @@ fix_start_order(W) ->
     %% timestamp field.
     W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
     W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
-    W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
-    W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
     %% start inclusive defaults true, end inclusive defaults false
     W3 = lists:keystore(start_inclusive, 1, W2,
                         {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
