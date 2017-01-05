@@ -961,9 +961,7 @@ scheduler_sweep_concurrency_test(_Config) ->
     TestCasePid = self(),
     meck_new_backend(TestCasePid),
     true = RingSize > ConcurrentSweeps,
-    SP = meck_new_sweep_particpant(sweep_observer_1, TestCasePid),
-    SP1 = SP#sweep_participant{run_interval = 1},
-    riak_kv_sweeper:add_sweep_participant(SP1),
+    new_sweep_participant(sweep_observer_1, TestCasePid, 1),
     riak_kv_sweeper:enable_sweep_scheduling(),
     meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, Indices}),
 
