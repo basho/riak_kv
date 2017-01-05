@@ -254,12 +254,10 @@ stop_all_sweeps(State) ->
     [stop_sweep(Sweep) || Sweep <- Running],
     {ok, length(Running), State}.
 
--spec get_active_participants(state(), index()) ->
-    {'ok', Participants :: [riak_kv_sweeper_fold:participant()], state()}.
+-spec get_active_participants(state(), index()) -> [riak_kv_sweeper_fold:participant()].
 get_active_participants(State, Index) ->
     Participants = State#state.sweep_participants,
-    ActiveParticipants = riak_kv_sweeper_fold:get_active_participants(Participants, Index),
-    {ok, ActiveParticipants, State}.
+    riak_kv_sweeper_fold:get_active_participants(Participants, Index).
 
 -spec get_estimate_keys(state(), index()) ->
     {'ok', {EstimatedKeys :: non_neg_integer(), erlang:timestamp()}, state()}

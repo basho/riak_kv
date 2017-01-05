@@ -299,14 +299,14 @@ do_sweep(Index, State) ->
     EstimatedKeys = get_estimate_keys(Index, AAEEnabled, State),
 
     case riak_kv_sweeper_state:get_active_participants(State, Index) of
-        {ok, [], State1} ->
-            {ok, State1};
-        {ok, ActiveParticipants, State1} ->
+        [] ->
+            {ok, State};
+        ActiveParticipants ->
             update_started_sweep(Index, ActiveParticipants, EstimatedKeys),
             Result = riak_kv_vnode:sweep({Index, node()},
                                          ActiveParticipants,
                                          EstimatedKeys),
-            riak_kv_sweeper_state:handle_vnode_sweep_response(State1, Index, Result)
+            riak_kv_sweeper_state:handle_vnode_sweep_response(State, Index, Result)
     end.
 
 -spec get_estimate_keys(index(),
