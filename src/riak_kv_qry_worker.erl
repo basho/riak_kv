@@ -264,24 +264,6 @@ estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
 estimate_query_size(#state{total_query_data  = CurrentTotalSize,
                            n_subqueries_done = NSubqueriesDone,
                            max_query_data    = MaxQueryData,
-                           qbuf_ref          = QBufRef,
-                           sub_qrys          = SubQrys,
-                           qry = ?SQL_SELECT{'LIMIT' = [Limit]} = OrigQry} = State)
-  when QBufRef /= undefined,
-       is_integer(Limit) ->
-    %% query buffer-backed, has a LIMIT: consider the latter
-    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
-    ProjectedLimitData = round(Limit * BytesPerChunk),
-    if ProjectedLimitData > MaxQueryData ->
-            lager:info("Cancelling LIMIT ~b query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
-                       [Limit, ProjectedLimitData, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
-            cancel_error_query(select_result_too_big, State);
-       el/=se ->
-            State
-    end;
-estimate_query_size(#state{total_query_data  = CurrentTotalSize,
-                           n_subqueries_done = NSubqueriesDone,
-                           max_query_data    = MaxQueryData,
                            sub_qrys          = SubQrys,
                            qry               = OrigQry} = State) ->
     BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
@@ -447,11 +429,11 @@ subqueries_done(QId, #state{qid          = QId,
                                     [[riak_pb_ts_codec:ldbvalue()]]}.
 prepare_final_results(#state{qbuf_ref = undefined,
                              result = IndexedChunks,
-                             qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select}}) ->
+                             qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select} = Query}) ->
     %% sort by index, to reassemble according to coverage plan
     {_, R2} = lists:unzip(lists:sort(IndexedChunks)),
-    prepare_final_results2(Select, lists:append(R2));
-
+    R3 = maybe_apply_offset_limit(Query, lists:append(R2)),
+    prepare_final_results2(Select, R3);
 prepare_final_results(#state{qbuf_ref = QBufRef,
                              qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select,
                                                'LIMIT'  = Limit,
@@ -480,7 +462,6 @@ prepare_final_results(#state{qbuf_ref = QBufRef,
                           [QBufRef, Error, Reason]),
             cancel_error_query({qbuf_internal_error, "qbuf manager died/restarted mid-query"}, State)
     end;
-
 prepare_final_results(#state{
         result = Aggregate1,
         qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate} = Select }} = State) ->
@@ -506,6 +487,26 @@ prepare_final_results(#state{
             cancel_error_query(divide_by_zero, State)
     end.
 
+maybe_apply_offset_limit(?SQL_SELECT{'OFFSET' = [], 'LIMIT' = []}, Rows) ->
+    Rows;
+maybe_apply_offset_limit(?SQL_SELECT{'OFFSET' = [Offset], 'LIMIT' = []}, Rows) when is_integer(Offset), Offset >= 0 ->
+    safe_nthtail(Offset, Rows);
+maybe_apply_offset_limit(?SQL_SELECT{'OFFSET' = [], 'LIMIT' = [Limit]}, Rows) when is_integer(Limit), Limit >= 0 ->
+    lists:sublist(Rows, Limit);
+maybe_apply_offset_limit(?SQL_SELECT{'OFFSET' = [Offset], 'LIMIT' = [Limit]}, Rows) when is_integer(Offset), is_integer(Limit), Offset >= 0, Limit >= 0 ->
+    lists:sublist(safe_nthtail(Offset, Rows), Limit);
+maybe_apply_offset_limit(_, _) ->
+    [].
+
+%% safe because this function will not throw an exception if the list is not
+%% longer than the offset, unlike lists:nthtail/2
+safe_nthtail(0, Rows) ->
+    Rows;
+safe_nthtail(_, []) ->
+    [];
+safe_nthtail(Offset, [_|Tail]) ->
+    safe_nthtail(Offset-1, Tail).
+
 %%
 prepare_final_results2(#riak_sel_clause_v1{col_return_types = ColTypes,
                                            col_names = ColNames}, Rows) ->
@@ -530,20 +531,66 @@ sql_select_group_by(?SQL_SELECT{ group_by = GroupBy }) ->
 -compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
+sql_select_test_helper() ->
+    ?SQL_SELECT{
+        'SELECT' = #riak_sel_clause_v1{
+            col_names = [<<"a">>, <<"b">>],
+            col_return_types = [sint64, varchar],
+            calc_type = rows
+         }
+    }.
+
 prepare_final_results_test() ->
     Rows = [[12, <<"windy">>], [13, <<"windy">>]],
     ?assertEqual(
         {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
         prepare_final_results(
             #state{
-                qry =
-                    ?SQL_SELECT{
-                        'SELECT' = #riak_sel_clause_v1{
-                            col_names = [<<"a">>, <<"b">>],
-                            col_return_types = [sint64, varchar],
-                            calc_type = rows
-                         }
-                    },
+                qry = sql_select_test_helper(),
+                result = [{1, Rows}]})
+    ).
+
+prepare_final_results_limit_test() ->
+    Rows = [[<<"windy">>, N] || N <- lists:seq(1,10)],
+    State = sql_select_test_helper(),
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], [[<<"windy">>, N] || N <- lists:seq(1,2)]},
+        prepare_final_results(
+            #state{
+                qry = State?SQL_SELECT{'LIMIT' = [2]},
+                result = [{1, Rows}]})
+    ).
+
+prepare_final_results_offset_limit_test() ->
+    Rows = [[<<"windy">>, N] || N <- lists:seq(1,10)],
+    State = sql_select_test_helper(),
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], [[<<"windy">>, N] || N <- lists:seq(5,6)]},
+        prepare_final_results(
+            #state{
+                qry = State?SQL_SELECT{'OFFSET' = [4], 'LIMIT' = [2]},
+                result = [{1, Rows}]})
+    ).
+
+prepare_final_results_offset_is_greater_than_number_of_rows_returns_empty_rows_test() ->
+    Rows = [[<<"windy">>, N] || N <- lists:seq(1,10)],
+    State = sql_select_test_helper(),
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], []},
+        prepare_final_results(
+            #state{
+                qry = State?SQL_SELECT{'OFFSET' = [1000], 'LIMIT' = [2]},
+                result = [{1, Rows}]})
+    ).
+
+prepare_final_results_limit_is_greater_than_number_of_rows_returns_all_rows_test() ->
+    Rows = [[<<"windy">>, N] || N <- lists:seq(1,10)],
+    State = sql_select_test_helper(),
+    ?assertEqual(
+        {[<<"a">>, <<"b">>], [sint64, varchar], Rows},
+        prepare_final_results(
+            #state{
+                qry = State?SQL_SELECT{'OFFSET' = [], 'LIMIT' = [2000]},
                 result = [{1, Rows}]})
     ).
 
