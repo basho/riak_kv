@@ -495,14 +495,18 @@ do_kill_all_qbufs(State0) ->
 
 do_fetch_limit(QBufRef,
                Limit, Offset,
-               #state{qbufs = QBufs0} = State0) ->
+               #state{qbufs = QBufs0,
+                      total_size = TotalSize,
+                      root_path = RootPath} = State0) ->
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
         #qbuf{is_ready = false} ->
             {reply, {error, qbuf_not_ready}, State0};
         #qbuf{ldb_ref = LdbRef,
+              size = Size,
               orig_qry = OrigQry,
+              expire_msec = ExpiryMsec,
               ddl = ?DDL{fields = QBufFields,
                          table = Table}} ->
             case riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Offset, Limit) of
@@ -510,7 +514,17 @@ do_fetch_limit(QBufRef,
                     lager:debug("fetched ~p rows from ~p for ~p", [length(Rows), Table, OrigQry]),
                     ColNames = [Name || #riak_field_v1{name = Name} <- QBufFields],
                     ColTypes = [Type || #riak_field_v1{type = Type} <- QBufFields],
-                    State9 = touch_qbuf(QBufRef, State0),
+                    State9 =
+                        case ExpiryMsec == 0 of
+                            true ->
+                                %% delete the qbuf now, without waiting for
+                                %% the next round of the reaper
+                                ok = kill_ldb(RootPath, Table, LdbRef),
+                                State0#state{qbufs = lists:keydelete(QBufRef, 1, QBufs0),
+                                             total_size = TotalSize - Size};
+                            false ->
+                                touch_qbuf(QBufRef, State0)
+                        end,
                     {reply, {ok, {ColNames, ColTypes, Rows}}, State9}
                 %% {error, Reason} ->
                 %%     {reply, {error, Reason}, State0}
