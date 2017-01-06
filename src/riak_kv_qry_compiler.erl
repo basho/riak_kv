@@ -178,9 +178,11 @@ expand_query(?DDL{local_key = LK, partition_key = PK},
 %% Checking the last column in the partition key is safe while the other columns
 %% must be exactly specified e.g. anything but the QUANTUM column must be
 %% covered with an equals operator in the where clause.
-is_last_partition_column_descending(FieldOrders, #key_v1{ast = AST}) ->
-    PKOrders = lists:sublist(FieldOrders, length(AST)),
-    lists:last(PKOrders) == descending.
+is_last_partition_column_descending(FieldOrders, PK) ->
+    lists:nth(key_length(PK), FieldOrders) == descending.
+
+key_length(#key_v1{ast = AST}) ->
+    length(AST).
 
 %% Calulate the final result for an aggregate.
 -spec finalise_aggregate(#riak_sel_clause_v1{}, [any()]) -> [any()].
@@ -2496,7 +2498,7 @@ two_element_key_range_cannot_match_test() ->
         "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,quantum(b, 15, 's')), a,b))"),
     {ok, Q} = get_query(
-          "SELECT * FROM tab1 WHERE a = 1 AND b > 1 AND b < 1"),
+          "SELECT * FROM tabab WHERE a = 1 AND b > 1 AND b < 1"),
     ?assertMatch(
         {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, <<_/binary>>}},
         compile(DDL, Q)
@@ -2509,7 +2511,7 @@ group_by_one_field_test() ->
         "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q1} = get_query(
-        "SELECT b FROM tab1 "
+        "SELECT b FROM mytab "
         "WHERE a = 1 AND b = 2 GROUP BY b"),
     {ok, [Q2]} = compile(DDL, Q1),
     ?assertEqual(
@@ -2524,7 +2526,7 @@ group_by_two_fields_test() ->
         "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q1} = get_query(
-        "SELECT b FROM tab1 "
+        "SELECT b FROM mytab "
         "WHERE a = 1 AND b = 2 GROUP BY b, a"),
     {ok, [Q2]} = compile(DDL, Q1),
     ?assertEqual(
@@ -2539,7 +2541,7 @@ group_by_column_not_in_the_table_test() ->
         "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q1} = get_query(
-        "SELECT x FROM tab1 "
+        "SELECT x FROM mytab "
         "WHERE a = 1 AND b = 2 GROUP BY x"),
     ?assertError(
         {unknown_column,{<<"x">>,[<<"a">>,<<"b">>]}},
