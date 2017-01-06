@@ -173,11 +173,16 @@ expand_query(?DDL{local_key = LK, partition_key = PK},
 
 %% Check if any columns in the partition key have the DESC keyword applied.
 %%
-%% Only check the partition key, otherwise the start/end key does not need to be
-%% flipped. The data is not stored in a different order to the start/end key.
+%% Only check the last column in the partition key, otherwise the start/end key
+%% does not need to be flipped. The data is not stored in a different order to
+%% the start/end key.
+%%
+%% Checking the last column in the partition key is safe while the other columns
+%% must be exactly specified e.g. anything but the QUANTUM column must be
+%% covered with an equals operator in the where clause.
 is_partition_key_cols_descending(FieldOrders, #key_v1{ast = AST}) ->
     PKOrders = lists:sublist(FieldOrders, length(AST)),
-    lists:member(descending, PKOrders).
+    lists:last(PKOrders) == descending.
 
 %% Calulate the final result for an aggregate.
 -spec finalise_aggregate(#riak_sel_clause_v1{}, [any()]) -> [any()].
@@ -2811,6 +2816,70 @@ query_with_desc_on_local_key_additional_column_multi_quanta_test() ->
           {endkey,  [{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,5500}]},
           {filter,[]},
           {end_inclusive,true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_desc_on_not_last_local_key_column_test() ->
+    DDL = get_ddl(
+        "CREATE table desc1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, QUANTUM(b, 1, 's')), a DESC, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM desc1 "
+          "WHERE a = 'hi' AND b >= 3500 AND b <= 5500"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,3500}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4000}]},
+          {filter,[]}],
+         [{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {filter,[]}],
+         [{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5500}]},
+          {filter,[]},
+          {end_inclusive,true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_desc_on_not_last_local_key_column_no_quantum_test() ->
+    DDL = get_ddl(
+        "CREATE table desc1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a DESC, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM desc1 "
+          "WHERE a = 'hi' AND b = 4001"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4001}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4001}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_desc_last_local_key_column_no_quantum_test() ->
+    DDL = get_ddl(
+        "CREATE table desc1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b DESC));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM desc1 "
+          "WHERE a = 'hi' AND b = 4001"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4001}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4001}]},
+          {filter,[]},
+          {end_inclusive, true},
+          {start_inclusive, true}]],
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
     ).
 
