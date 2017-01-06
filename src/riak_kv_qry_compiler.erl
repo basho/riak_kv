@@ -153,7 +153,7 @@ expand_query(?DDL{local_key = LK, partition_key = PK},
         {error, E} ->
             {error, E};
         {ok, Where2} ->
-            IsDescending = is_partition_key_cols_descending(Mod:field_orders(), PK),
+            IsDescending = is_last_partition_column_descending(Mod:field_orders(), PK),
             SubQueries1 =
                 [Q1?SQL_SELECT{
                        is_executable = true,
@@ -171,8 +171,6 @@ expand_query(?DDL{local_key = LK, partition_key = PK},
             {ok, SubQueries2}
     end.
 
-%% Check if any columns in the partition key have the DESC keyword applied.
-%%
 %% Only check the last column in the partition key, otherwise the start/end key
 %% does not need to be flipped. The data is not stored in a different order to
 %% the start/end key.
@@ -180,7 +178,7 @@ expand_query(?DDL{local_key = LK, partition_key = PK},
 %% Checking the last column in the partition key is safe while the other columns
 %% must be exactly specified e.g. anything but the QUANTUM column must be
 %% covered with an equals operator in the where clause.
-is_partition_key_cols_descending(FieldOrders, #key_v1{ast = AST}) ->
+is_last_partition_column_descending(FieldOrders, #key_v1{ast = AST}) ->
     PKOrders = lists:sublist(FieldOrders, length(AST)),
     lists:last(PKOrders) == descending.
 
