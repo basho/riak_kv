@@ -647,7 +647,7 @@ make_keys(Nr) ->
 
 meck_callback_modules(Module) ->
     meck:new(Module, [non_strict]),
-    meck:expect(Module, failed_sweep, fun(_Index, _Reason) -> ok end),
+    meck:expect(Module, failed_sweep, fun(_Index, _Acc, _Reason) -> ok end),
     meck:expect(Module, successful_sweep, fun(_Index, _Reason) -> ok end).
 
 rem_keys(BKey, N, MatchReturn, DefaultReturn) ->
@@ -761,11 +761,11 @@ test_sweep_delete_crash_observ() ->
     setup_sweep(Keys = 100),
     Sweeps = delete_sweep_crash() ++ observ_sweep(),
     {reply, Acc, _State} = do_sweep(Sweeps, 0, no_sender, [], no_index, fake_backend, [], []),
-    [{_Pid,{_,_,[_,DeleteN]},ok}] = meck:history(delete_callback_module),
+    [{_Pid,{_,_,[_,_,FailReason]},ok}] = meck:history(delete_callback_module),
     [{_Pid,{_,_,[_,ObservAcc]},ok}] = meck:history(observ_callback_module),
 
     %% check that the delete sweep failed but observer succeed
-    ?assertEqual(too_many_crashes, DeleteN),
+    ?assertEqual(too_many_crashes, FailReason),
     ?assertEqual({0, Keys}, ObservAcc),
     ?assertEqual(Keys, Acc#sa.swept_keys),
     meck:unload().
