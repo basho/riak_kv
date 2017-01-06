@@ -188,17 +188,15 @@ format_results(Now, Results, IndexedParticipants) ->
 
 get_result(Index, Participant, Results, Now) ->
     Module = riak_kv_sweeper_fold:participant_module(Participant),
+    IndexString = integer_to_list(Index),
     case dict:find(Module, Results) of
         {ok, {TimeStamp, Outcome}} when Outcome == succ orelse Outcome == fail ->
             LastRun = format_timestamp(Now, TimeStamp),
-            OutcomeString = string:to_upper(atom_to_list(Outcome));
+            OutcomeString = string:to_upper(atom_to_list(Outcome)),
+            format_single_result(IndexString, LastRun, OutcomeString);
         _ ->
-            LastRun = "-",
-            OutcomeString = "-"
-    end,
-    IndexString = integer_to_list(Index),
-    [{"Last run " ++ IndexString, LastRun},
-     {"Result "   ++ IndexString, OutcomeString}].
+            format_single_result(IndexString, "-", "-")
+    end.
 
 format_timestamp(_Now, undefined) ->
     "--";
@@ -206,6 +204,10 @@ format_timestamp(undefined, _) ->
     "--";
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
+
+format_single_result(IndexString, LastRun, OutcomeString) ->
+    [{"Last run " ++ IndexString, LastRun},
+     {"Result "   ++ IndexString, OutcomeString}].
 
 format_active_sweeps(Sweeps, IndexedParticipants) ->
     Rows = [format_progress(Sweep, IndexedParticipants)
