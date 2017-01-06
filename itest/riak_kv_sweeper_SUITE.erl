@@ -199,7 +199,7 @@ successful_sweep_function(Name, TestCasePid) ->
     end.
 
 failed_sweep_function(Name, TestCasePid) ->
-    fun(Index, _Reason) ->
+    fun(Index, _Acc, _Reason) ->
             TestCasePid ! {ok, failed_sweep, Name, Index},
             ok
     end.
