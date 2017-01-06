@@ -43,7 +43,8 @@
 %% For testing/debug use only:
 -export([sweep_state/1,
          sweep_index/1,
-         sweep_queue_time/1
+         sweep_queue_time/1,
+         sweep_pid/1
         ]).
 
 -export_type([state/0, sweep/0]).
@@ -714,6 +715,7 @@ get_persistent_participants() ->
 sweep_state(#sweep{state = State}) -> State.
 sweep_index(#sweep{index = Index}) -> Index.
 sweep_queue_time(#sweep{queue_time = QueueTime}) -> QueueTime.
+sweep_pid(#sweep{pid = Pid}) -> Pid.
 
 -ifdef(TEST).
 

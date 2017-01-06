@@ -80,7 +80,7 @@ meck_new_riak_core_modules(Partitions) ->
     VNodeIndices.
 
 meck_new_riak_core_ring(Partitions) ->
-    VNodeIndices = [N || N <- lists:seq(0, Partitions)],
+    VNodeIndices = [N || N <- lists:seq(1, Partitions)],
     meck:expect(riak_core_ring, my_indices, fun(ring) -> VNodeIndices end),
     VNodeIndices.
 
@@ -953,25 +953,70 @@ exometer_deleted_object_count(Config) ->
                     {ok, [{count, DeleteKeys}, {one, DeleteKeys}]}),
     ok.
 
+scheduler_sweep_concurrency_test(_Config) ->
+    ConcurrentSweeps = 4,
+    RingSize = 8,
+    application:set_env(riak_kv, sweep_concurrency, ConcurrentSweeps),
+    Indices = lists:sort(meck_new_riak_core_ring(RingSize)),
+    TestCasePid = self(),
+    meck_new_backend(TestCasePid),
+    true = RingSize > ConcurrentSweeps,
+    new_sweep_participant(sweep_observer_1, TestCasePid, 1),
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    meck_new_visit_function(sweep_observer_1, {wait, TestCasePid, Indices}),
+
+    [ spawn_link(riak_kv_sweeper, sweep_tick, [])
+      || _ <- Indices],
+    Running0 = check_sweeps_running(ConcurrentSweeps),
+    [receive {From, I} ->
+             From ! {TestCasePid, continue}
+     end || I <- Running0],
+    ok = check_sweeps_idle(Indices),
+
+    [ spawn_link(riak_kv_sweeper, sweep_tick, [])
+      || _ <- Indices],
+    Running1 = check_sweeps_running(ConcurrentSweeps),
+    [receive {From, I} ->
+             From ! {TestCasePid, continue}
+     end || I <- Running1],
+    ok = check_sweeps_idle(Indices),
+
+    Indices = lists:sort(Running0 ++ Running1),
+    ok.
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
+is_running_sweep(Sweep) ->
+    State = riak_kv_sweeper_state:sweep_state(Sweep),
+    Pid = riak_kv_sweeper_state:sweep_pid(Sweep),
 
-wait_for_concurrent_sweeps(ConcurrentSweeps) ->
-    wait_for_concurrent_sweeps(ConcurrentSweeps, []).
+    State == running andalso
+        process_info(Pid) =/= undefined.
 
-wait_for_concurrent_sweeps(0, Result) ->
-    Result;
 
-wait_for_concurrent_sweeps(ConcurrentSweeps, Result) ->
-    {NewConcurrentSweeps, NewResult} =
-        receive {From, Index} when is_pid(From) ->
-                {ConcurrentSweeps - 1, [Result|Index]};
-                _ ->
-                {ConcurrentSweeps, Result}
-        end,
+check_sweeps_idle(Indices) ->
+    match_retry(fun() ->
+                        {_SPs, Sweeps} = riak_kv_sweeper:status(),
+                        length([riak_kv_sweeper_state:sweep_index(Sweep) ||
+                                   Sweep <- Sweeps,
+                                   riak_kv_sweeper_state:sweep_state(Sweep) == idle])
+                end,
+                length(Indices)),
+    ok.
 
-    wait_for_concurrent_sweeps(NewConcurrentSweeps, NewResult).
+
+check_sweeps_running(ConcurrentSweeps) ->
+    ConcurrentSweeps =
+        match_retry(fun() ->
+                            {_SPs, Sweeps} = riak_kv_sweeper:status(),
+                            riak_core_util:count(fun is_running_sweep/1, Sweeps)
+                    end,
+                    ConcurrentSweeps),
+    {_SPs, Sweeps} = riak_kv_sweeper:status(),
+    [riak_kv_sweeper_state:sweep_index(Sweep) ||
+        Sweep <- Sweeps,
+        riak_kv_sweeper_state:sweep_state(Sweep) == running].
 
 expected_obj_size_throttle_total_msecs(NumKeys, NumMutatedKeys, RiakObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
     ThrottleMsecs = expected_throttle_msecs(
