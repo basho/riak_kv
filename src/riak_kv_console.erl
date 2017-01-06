@@ -53,6 +53,13 @@
          aae_repair_status/1,
          aae_tree_status/1]).
 
+%% New CLI API
+-export([command/1]).
+
+-spec command([string()]) -> ok.
+command(Cmd) ->
+    clique:run(Cmd).
+
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
          "Sent join request to ~s~n", [NodeStr]).
@@ -355,6 +362,7 @@ format_timestamp(_Now, undefined) ->
     "--";
 format_timestamp(Now, TS) ->
     riak_core_format:human_time_fmt("~.1f", timer:now_diff(Now, TS)).
+
 
 parse_int(IntStr) ->
     try

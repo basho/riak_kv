@@ -118,6 +118,8 @@ start(_Type, _StartArgs) ->
     %% print out critical env limits for support/debugging purposes
     catch riak_kv_env:doc_env(),
 
+    riak_kv_cli_registry:register_cli(),
+
     %% Spin up supervisor
     case riak_kv_sup:start_link() of
         {ok, Pid} ->

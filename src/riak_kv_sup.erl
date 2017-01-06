@@ -45,6 +45,10 @@ init([]) ->
     catch dyntrace:p(),                    % NIF load trigger (R15B01+)
     riak_kv_entropy_info:create_table(),
     riak_kv_hooks:create_table(),
+    Chronos = {riak_kv_chronos,
+               {chronos, start_link,
+                [riak_kv_chronos]},
+               permanent, 5000, worker, [chronos]},
     VMaster = {riak_kv_vnode_master,
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
@@ -93,11 +97,17 @@ init([]) ->
                     {riak_kv_ensembles, start_link, []},
                     permanent, 30000, worker, [riak_kv_ensembles]},
 
+    Sweeper  = {riak_kv_sweeper,
+                {riak_kv_sweeper, start_link, []},
+                permanent, 30000, worker, [riak_kv_sweeper]},
+
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
 
     % Build the process list...
     Processes = lists:flatten([
+        Chronos,
+        Sweeper,
         EntropyManager,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,

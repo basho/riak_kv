@@ -74,6 +74,19 @@ test_set_aae_throttle_limits() ->
     ok = ?TM:set_aae_throttle_limits([{-1,0}, {100, 500}, {100, 500},
                                       {100, 500}, {100, 500}, {100, 500}]).
 
+lock_test() ->
+    ?assertEqual(ok, lock_fold([build])),
+    ?assertEqual(ok, lock_fold([build, any])),
+    ?assertEqual(build_limit_reached, lock_fold([build, build])),
+    ?assertEqual(max_concurrency, lock_fold([build, any, build])),
+    ?assertEqual(max_concurrency, lock_fold([any, any, any])).
+
+lock_fold(Locks) ->
+    {Result, _StateOut} = lists:foldl(fun(Type, {_prevresult, StateIn}) ->
+            ?TM:do_get_lock(Type, self(), 0, StateIn)
+        end, {ignored, ?TM:make_state()}, Locks),
+    Result.
+
 %% Drat, EUnit + Meck won't work if this test is inside the
 %% riak_kv_entropy_manager.erl module.
 
