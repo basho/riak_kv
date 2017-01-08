@@ -129,7 +129,7 @@ handle_info({{SubQId, QId}, {error, Reason} = Error},
                    result = IndexedChunks}) ->
     lager:warning("Error ~p while collecting on QId ~p (~p);"
                   " dropping ~b chunks of data accumulated so far",
-                  [Reason, QId, SubQId, length(IndexedChunks)]),
+                  [Reason, QId, SubQId, IndexedChunks]),
     ReceiverPid ! Error,
     pop_next_query(),
     {noreply, new_state()};
@@ -433,7 +433,14 @@ run_select_on_group_row(Query, SelClause, Row, QueryResult1) ->
 %%
 select_group(Query, Row) ->
     GroupByFields = sql_select_group_by(Query),
-    [lists:nth(N, Row) || {N,_} <- GroupByFields].
+    select_group2(GroupByFields, Row).
+
+select_group2([], _) ->
+    [];
+select_group2([{N,_}|Tail], Row) when is_integer(N) ->
+    [lists:nth(N, Row)|select_group2(Tail, Row)];
+select_group2([{GroupByTimeFn,_}|Tail], Row) when is_function(GroupByTimeFn) ->
+    [GroupByTimeFn(Row)|select_group2(Tail, Row)].
 
 %% Run the selection clause on results that accumulate rows
 run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, undefined) ->
