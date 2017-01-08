@@ -123,7 +123,16 @@ compile_group_by(_, [], Acc, Q) ->
 compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
         when is_binary(FieldName) ->
     Pos = Mod:get_field_position([FieldName]),
-    compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q).
+    compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q);
+compile_group_by(Mod, [{time_fn, {identifier,FieldName},{integer,GroupSize}}|Tail], Acc, Q)
+        when is_binary(FieldName) ->
+    Pos = Mod:get_field_position([FieldName]),
+    TimeGroupFn =
+        fun(Row) ->
+            Time = lists:nth(Pos, Row),
+            riak_ql_quanta:quantum(Time, GroupSize, 'ms')
+        end,
+    compile_group_by(Mod, Tail, [{TimeGroupFn,FieldName}|Acc], Q).
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
