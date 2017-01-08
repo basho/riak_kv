@@ -889,7 +889,8 @@
   end
 }.
 
-%% @doc Root path for leveldb instances backing node-local query buffers.
+%% @doc Root path for leveldb instances backing node-local query
+%% buffers. Placing it on a fast media is recommended.
 {mapping, "riak_kv.query.timeseries.qbuf_root_path", "riak_kv.timeseries_query_buffers_root_path", [
   {datatype, directory},
   {default, "$(platform_data_dir)/query_buffers"},
@@ -901,7 +902,7 @@
 %% queries can be accepted. Does not affect existing queries for which
 %% data collection is in progress.
 {mapping, "riak_kv.query.timeseries.qbuf_soft_watermark", "riak_kv.timeseries_query_buffers_soft_watermark", [
-  {default, 1*1024*1024*1024},
+  {default, 800*1024*1024},
   {datatype, integer},
   {validators, ["validate_timeseries_query_buffers_soft_watermark"]}
 ]}.
@@ -917,7 +918,7 @@
 %% queries can continue to collect data into query buffers. Queries
 %% tripping this threshold will be cancelled.
 {mapping, "riak_kv.query.timeseries.qbuf_hard_watermark", "riak_kv.timeseries_query_buffers_hard_watermark", [
-  {default, 4*1024*1024*1024},
+  {default, 1*1024*1024*1024},
   {datatype, integer},
   {validators, ["validate_timeseries_query_buffers_hard_watermark"]}
 ]}.
@@ -933,7 +934,7 @@
 %% for longer than this value (rounded upward to the next whole
 %% second) will be deleted.
 {mapping, "riak_kv.query.timeseries.qbuf_expire_ms", "riak_kv.timeseries_query_buffers_expire_ms", [
-  {default, 5000},
+  {default, 500},
   {datatype, integer},
   {validators, ["validate_timeseries_query_buffers_expire_ms"]}
 ]}.

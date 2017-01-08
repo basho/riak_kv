@@ -93,7 +93,7 @@ add_rows(LdbRef, Rows, ChunkId,
                   %% d. Encode the record (don't bother constructing a
                   %%    riak_object with metadata, vclocks):
                   RowEnc = sext:encode(Row),
-                  ok = eleveldb:put(LdbRef, KeyEnc, RowEnc, [{sync, true}])
+                  ok = eleveldb:put(LdbRef, KeyEnc, RowEnc, [{sync, false}])
           end,
           RowsIndexed)
     catch

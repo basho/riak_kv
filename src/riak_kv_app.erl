@@ -274,7 +274,7 @@ prep_stop(_State) ->
         wait_for_put_fsms(),
         lager:info("all active put FSMs completed"),
 
-        ok = riak_kv_qry_buffers:kill_all_qbufs(),
+        ok = riak_kv_qry_buffers:shutdown(),
         lager:info("cleaned up query buffers"),
         ok
     catch
