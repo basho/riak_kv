@@ -428,7 +428,15 @@ add_asked_to_results(Results, SweepParticipants) ->
 
 expired_counts(Now, ResultsList, Participants) ->
     [begin
-         RunInterval = run_interval(Mod, Participants),
+         RunInterval =
+             case application:get_env(riak_kv,
+                                      sweep_participant_testing_expire,
+                                      undefined) of
+                 immediate ->
+                     immediate;
+                 undefined ->
+                     run_interval(Mod, Participants)
+             end,
          expired(Now, TS, RunInterval)
      end ||
      {Mod, {TS, _Outcome}} <- ResultsList].
@@ -585,8 +593,10 @@ expired_or_missing(Now, #sweep{results = Results}, Participants) ->
 
 -spec expired(erlang:timestamp(),
               erlang:timestamp(),
-              RunInterval :: non_neg_integer() | disabled) ->
+              RunInterval :: non_neg_integer() | disabled | immediate) ->
     non_neg_integer().
+expired(_Now, _TS, immediate) ->
+    1;
 expired(_Now, _TS, disabled) ->
     0;
 expired(Now, TS, RunInterval) ->
