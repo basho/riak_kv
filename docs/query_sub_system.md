@@ -16,7 +16,7 @@ http://docs.basho.com
 
 Time Series introduces new elements into the supervision tree of `riak_kv`
 
-![Time Series Supervision Tree](https://raw.githubusercontent.com/basho/riak_kv/feature_gg_documents_and_architecture/docs/timeseries_supervision_tree.png)
+![Time Series Supervision Tree](https://raw.githubusercontent.com/basho/riak_kv/riak_ts-develop/docs/diagrams/timeseries_supervision_tree.png)
 
 ---
 
@@ -45,7 +45,7 @@ This overloading (and other behaviours) is configurable in the normal scheme of 
 
 A query is processed through the the riak_ql lexer/parser and validation pipeline, it arrives at the query sub-system **pre-approved** so to speak
 
-![Query Sub System](https://raw.githubusercontent.com/basho/riak_kv/feature_gg_documents_and_architecture/docs/query_sub_system.png)
+![Query Sub System](https://raw.githubusercontent.com/basho/riak_kv/riak_ts-develop/docs/diagrams/query_sub_system.png)
 
 The actual client connection process depends on whether or not protobuffs or http is being used to connect.
 

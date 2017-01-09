@@ -61,7 +61,7 @@
         ]).
 
 %% webmachine body-producing functions
--export([to_json/2]).
+-export([to_json/2, value_to_json_compat/1]).
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
@@ -262,14 +262,28 @@ delete_resource(RD, #ctx{table = Table,
      end.
 
 -spec to_json(#wm_reqdata{}, #ctx{}) ->  cb_rv_spec(iolist()|halt()).
-to_json(RD, #ctx{api_call = get, object = Object} = Ctx) ->
+to_json(RD, #ctx{api_call = get, object = Object, mod = Mod} = Ctx) ->
     try
-        Json = mochijson2:encode(Object),
+        Object2 = row_to_json_compat(Object, Mod),
+        Json = mochijson2:encode(Object2),
         {Json, RD, Ctx}
     catch
         _:Reason ->
             riak_kv_wm_ts_util:handle_error({riak_error, Reason}, RD, Ctx)
     end.
+
+-spec row_to_json_compat(list(tuple(binary(), term())), atom()) ->
+                                list(tuple(binary(), term())).
+row_to_json_compat(Row, Mod) ->
+    lists:map(fun(R) -> field_to_json_compat(R, Mod) end, Row).
+
+field_to_json_compat({Header, Value}, Mod) ->
+    {Header, value_to_json_compat({Mod:get_field_type([Header]), Value})}.
+
+value_to_json_compat({blob, Value}) ->
+    base64:encode(Value);
+value_to_json_compat({_, Value}) ->
+    Value.
 
 -spec extract_params([{string(), string()}], #ctx{}) -> #ctx{} .
 %% @doc right now we only allow a timeout parameter or nothing.
@@ -341,6 +355,8 @@ convert_fv(Table, Mod, FieldRaw, V) ->
             throw({bad_field, Table, Field})
     end.
 
+convert_field(_T, F, blob, V) ->
+    {F, base64:decode(V)};
 convert_field(_T, F, varchar, V) ->
     {F, list_to_binary(V)};
 convert_field(_T, F, sint64, V) ->
@@ -399,7 +415,7 @@ extract_field_value({Name, Type, Optional}, FVList) ->
             throw({missing_field, Name});
         undefined when Optional == true ->
             [];
-        [] when Optional == true ->
+        null when Optional == true ->
             [];
         Value ->
             check_field_value(Name, Type, Value)
@@ -407,6 +423,10 @@ extract_field_value({Name, Type, Optional}, FVList) ->
 
 %% @todo: might be better if the DDL helper module had a
 %% valid_field_value(Field, Value) -> boolean() function.
+%% We could validate the entire record in one go with
+%% Mod:validate_obj/1, but then we lose the details in the error being
+%% reported should it fail.
+check_field_value(_Name, blob, V) when is_binary(V)            -> base64:decode(V);
 check_field_value(_Name, varchar, V) when is_binary(V)         -> V;
 check_field_value(_Name, sint64, V) when is_integer(V)         -> V;
 check_field_value(_Name, double, V) when is_number(V)          -> V;

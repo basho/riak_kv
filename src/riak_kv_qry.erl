@@ -246,8 +246,10 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                     %% these fields are used to create a DDL for the query buffer table;
                     %% we extract them here to avoid doing another compilation of OrigQry
                     %% in riak_kv_qry_buffers:get_or_create_qbuf
-                    ?SQL_SELECT{'SELECT' = CompiledSelect,
-                                'ORDER BY' = CompiledOrderBy} = hd(SubQueries),
+                    ?SQL_SELECT{'SELECT'   = CompiledSelect,
+                                'ORDER BY' = CompiledOrderBy,
+                                'LIMIT'    = Limit,
+                                'OFFSET'   = Offset} = hd(SubQueries),
                     FullCycle =
                         fun(QBufRef) ->
                             maybe_await_query_results(
@@ -269,10 +271,18 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                         {ok, {existing, QBufRef}} ->
                             %% query is eligible AND it is a follow-up
                             %% query: yay results!
-                            riak_kv_qry_buffers:fetch_limit(
-                              QBufRef,
-                              riak_kv_qry_buffers:limit_to_scalar(SQL?SQL_SELECT.'LIMIT'),
-                              riak_kv_qry_buffers:offset_to_scalar(SQL?SQL_SELECT.'OFFSET'))
+                            try riak_kv_qry_buffers:fetch_limit(
+                                  QBufRef,
+                                  riak_kv_qry_buffers:limit_to_scalar(Limit),
+                                  riak_kv_qry_buffers:offset_to_scalar(Offset)) of
+                                Result ->
+                                    Result
+                            catch
+                                Error:Reason ->
+                                    lager:warning("Failed to fetch results from qbuf for ~p: ~p:~p",
+                                                  [SQL, Error, Reason]),
+                                    {error, {qbuf_internal_error, "qbuf manager died/restarted unexpectedly"}}
+                            end
                     end
             end;
         {false, Errors} ->
@@ -292,12 +302,17 @@ maybe_create_query_buffer(?SQL_SELECT{'ORDER BY' = [],
                           _NSubQueries, _CompiledSelect, _CompiledOrderBy, _Options) ->
     {ok, undefined};
 maybe_create_query_buffer(SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) ->
-    case riak_kv_qry_buffers:get_or_create_qbuf(
+    try riak_kv_qry_buffers:get_or_create_qbuf(
            SQL, NSubqueries, CompiledSelect, CompiledOrderBy, Options) of
         {ok, QBufRefNewOrExisting} ->
             {ok, QBufRefNewOrExisting};
         {error, Reason} ->
             lager:warning("Failed to set up query buffer for ~p: ~p", [SQL, Reason]),
+            {error, Reason}
+    catch
+        Error:Reason ->
+            lager:warning("Failed to set up qbuf for ~p: ~p:~p",
+                          [SQL, Error, Reason]),
             {error, Reason}
     end.
 

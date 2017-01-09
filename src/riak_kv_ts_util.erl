@@ -34,6 +34,7 @@
          get_column_types/2,
          get_table_ddl/1,
          lk/1,
+         local_to_partition_key/2,
          maybe_parse_table_def/2,
          pk/1,
          queried_table/1,
@@ -171,7 +172,7 @@ build_sql_record_int(delete, SQL, _Cover) ->
             Mod = riak_ql_ddl:make_module_name(T),
             W = proplists:get_value(where, SQL),
             {ok, #riak_sql_delete_query_v1{'FROM'     = T,
-                                           'WHERE'    = W,
+                                           'WHERE'    = convert_where_timestamps(Mod, W),
                                            helper_mod = Mod}};
          false ->
             {error, <<"Must provide exactly one table name">>}
@@ -795,6 +796,46 @@ rm_direntries(Dir, [F|Rest]) ->
         ER ->
             ER
     end.
+
+
+-spec local_to_partition_key({binary(), binary()}, binary()) -> tuple().
+%% @doc Convert from TS local key to TS partition key.
+%%
+%% This is needed because coverage filter functions must check the
+%% hash of the partition key, not the local key, when folding over
+%% keys in the backend.
+%%
+%% It needs to be an {M, F} tuple and not a simple fun, in order to
+%% allow it to operate in mixed clusters where vnode invoking doing
+%% the conversion and the coordinator starting index FSMs are of
+%% different versions (having different beams).  Passing a function
+%% object is going to result in a badfun error at call site.
+local_to_partition_key({Table, Table}, Key)
+  when is_binary(Key) ->
+    Mod = riak_ql_ddl:make_module_name(Table),
+    DDL = Mod:get_ddl(),
+    %% 1. We need to adjust (negate) values in DESC columns in order
+    %%    for lk_to_pk to correctly pick the keys at quantum
+    %%    boundaries (this is because for DESC columns, the quantum
+    %%    range is defined as `(...]` rather than as `[..)`).
+    %% 2. The key is organic here (it is read as previously written),
+    %%    so no need to check for errors in lk_to_pk result.  The key
+    %%    is organic here (it is read as previously written), so no
+    %%    need to check for errors in lk_to_pk.
+    {ok, PK} = riak_ql_ddl:lk_to_pk(
+                 Mod:revert_ordering_on_local_key(
+                   sext:decode(Key)), Mod, DDL),
+    list_to_tuple(PK);
+local_to_partition_key(Table, Key) ->
+    %% 3. Key read from leveldb should always be binary.  This clause
+    %%    is just to keep dialyzer quiet (otherwise dialyzer will
+    %%    complain about no local return, since we have no way to spec
+    %%    the type of Key for an anonymous function).
+    %%
+    %%    Nonetheless, we log an error in case this branch is ever
+    %%    exercised
+    lager:error("Non-binary object key in table ~p: ~p", [Table, Key]),
+    Key.
 
 
 flat_format(Format, Args) ->
