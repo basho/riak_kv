@@ -159,6 +159,10 @@ finish_sweep_fun(Index) ->
             stat_send(Index, {final, Acc})
     end.
 
+-spec is_receive_request(SweptKeys :: integer()) -> boolean().
+is_receive_request(SweptKeys) ->
+    (SweptKeys rem 1000) == 0.
+
 -spec fold_req_fun(riak_object:bucket(), riak_object:key(), RObjBin :: binary(),
                    #sa{}) -> #sa{} | no_return().
 fold_req_fun(_Bucket, _Key, _RObjBin,
@@ -171,12 +175,12 @@ fold_req_fun(Bucket, Key, RObjBin,
              #sa{index = Index, swept_keys = SweptKeys} = Acc) ->
     Acc1 = maybe_throttle_sweep(RObjBin, Acc),
     Acc3 =
-        case SweptKeys rem 1000 of
-            0 ->
+        case is_receive_request(SweptKeys) of
+            true ->
                 riak_kv_sweeper:update_progress(Index, SweptKeys),
                 Acc2 = maybe_receive_request(Acc1),
                 stat_send(Index, {in_progress, Acc2});
-            _ ->
+            false ->
                 Acc1
         end,
     RObj = riak_object:from_binary(Bucket, Key, RObjBin),
