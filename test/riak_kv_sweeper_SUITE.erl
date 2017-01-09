@@ -318,8 +318,7 @@ test_stop_all_scheduled_sweeps(Config) ->
                   Sweep <- Sweeps,
                   riak_kv_sweeper_state:sweep_state(Sweep) == running],
     [ok = receive_msg({ok, failed_sweep, sweeper_callback_wait, I}) || I <- Running],
-    ok = check_sweeps_idle(Indices),
-    ok.
+    ok = check_sweeps_idle(Indices).
 
 test_stop_all_scheduled_sweeps_race_condition(_Config) ->
     new_sweep_participant(sweeper_callback_1),
@@ -853,6 +852,13 @@ assert_all_indices_idle(Indices) ->
     SweepIndices = lists:sort([I || {idle, I} <- SweepData]),
     SweepIndices = Indices.
 
+%% When running tests on buildbot I have observed that sometimes
+%% messages are not received by the waiting process but are in the
+%% message queue, causing the test case to fail. Adding debug
+%% printing, ct:pal(...), to the receive loop causes the messages to
+%% be delivered. So, I suspect it's a scheduling issue and adding the
+%% match_retry and sleeping is to facilitate the other process being
+%% scheduled.
 receive_msg(Msg) ->
     ok = match_retry(
            fun() ->

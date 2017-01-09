@@ -19,7 +19,19 @@
 %% under the License.
 %%
 %% -------------------------------------------------------------------
-
+%% This module wraps all calls to meck in a separate gen_server
+%% process so that we can call `meck:new(...)` in ct's
+%% `init_per_suite` callback. `init_per_suite` runs in a separate
+%% process, which on termination unloads all mocked modules created
+%% using `meck:new(...)`.
+%%
+%% `meck:new(...)` calls are slow (500 mescs) so we want to do them
+%% them once per suite rather than of once per testcase. Meck's
+%% `no_link` option, i.e., doing a `meck:new(<module>, [no_link])` in
+%% the `init_per_suite function` doesn't help, the process that
+%% creates the mocked modules needs to live as long the mocked modules
+%% are required.
+%%
 -module(sweeper_meck_helper).
 
 -behaviour(gen_server).
