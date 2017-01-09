@@ -31,7 +31,7 @@
 %%--------------------------------------------------------------------
 
 suite() ->
-    [{timetrap, {seconds, 5}}].
+    [{timetrap, {seconds, 10}}].
 
 init_per_suite(Config) ->
     {ok, Apps} = application:ensure_all_started(exometer_core),
@@ -336,10 +336,10 @@ test_scheduler_add_participant(Config) ->
     sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
 
     riak_kv_sweeper:enable_sweep_scheduling(),
-    sweep_all_indices(Indices),
-    sweep_all_indices(Indices),
+    sweep_all_indices(Indices, ok, sweeper_callback_1),
+    sweep_all_indices(Indices, ok, sweeper_callback_1),
     new_sweep_participant(sweeper_callback_2),
-    sweep_all_indices(Indices, ok, sweeper_callback_2),
+    sweep_all_indices(Indices, ok, sweeper_callback_1),
     sweep_all_indices(Indices, ok, sweeper_callback_2),
     ok.
 
@@ -362,7 +362,8 @@ test_scheduler_restart_sweep(Config) ->
                                                undefined = riak_kv_sweeper_state:sweep_queue_time(RestartingSweep),
 
                                                riak_kv_sweeper:sweep(WaitIndex),
-                                               RestartingSweep = get_sweep_on_index(WaitIndex);
+                                               RestartingSweep = match_retry(fun() -> get_sweep_on_index(WaitIndex) end,
+                                                                             RestartingSweep);
                                           (_Index) ->
                                                ok
                                        end),
@@ -858,10 +859,14 @@ assert_all_indices_idle(Indices) ->
     SweepIndices = Indices.
 
 receive_msg(Msg) ->
-    receive
-        RcvMsg when RcvMsg == Msg ->
-            ok
-    end.
+    ok = match_retry(
+           fun() ->
+                   receive Msg0 when Msg0 == Msg ->
+                           ok
+                   after 0 ->
+                           not_ok
+                   end
+           end, ok).
 
 get_sweep_on_index(Index) ->
     {_, Sweeps} = riak_kv_sweeper:status(),
@@ -875,7 +880,7 @@ is_testcase({_, _}) ->
     false.
 
 match_retry(Fun, Result) ->
-    match_retry(_Max = 10,  _N = 1, Fun, Result).
+    match_retry(_Max = 100,  _N = 1, Fun, Result).
 
 match_retry(Max, N, _Fun, max_retries) when N > Max ->
     throw(max_retries);
