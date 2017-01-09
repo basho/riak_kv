@@ -887,6 +887,6 @@ match_retry(Max, N, Sleep, Fun, {'_', Result}) ->
         Result ->
             Result;
         _ ->
-            timer:sleep(Sleep),
+            timer:sleep(trunc(Sleep)),
             match_retry(Max, N+1, max(1000, Sleep*1.1), Fun, {'_', Result})
     end.
