@@ -449,12 +449,15 @@ add_chunk(#qbuf{ldb_ref       = LdbRef,
         true ->
             {error, total_qbuf_size_limit_reached};
         false ->
-            %% update stats/counters
+            %% update stats/counters: ChunkId will be used to
+            %% construct a new and unique key for each record (because
+            %% there may be multiple records with the same key
+            %% constructed from columns BY which to ORDER).  This is
+            %% not the subquery id, but it's ok as long as we entuple
+            %% the new key first.  The entupling happens in enkey/4,
+            %% see below.
             ChunkId = ChunksGot0,
             ChunksGot = ChunksGot0 + 1,
-            %% ChunkId will be used to construct a new and unique key
-            %% for each record. Ideally, this should be the serial
-            %% number of the subquery.
             IsReady = (ChunksNeed == ChunksGot),
 
             %% construct keys for new data
@@ -738,6 +741,11 @@ enkey(Rows, KeyFieldPositions, OrdByFieldQualifiers, ChunkId)
          KeyOrd = [make_sorted_keys(F, AscDesc, Nulls)
                    || {F, {AscDesc, Nulls}} <- lists:zip(KeyRaw, OrdByFieldQualifiers)],
          %% c. Combine with chunk id and row idx to ensure uniqueness, and encode.
+         %%    Make sure the key proper goes first: ChunkId is a thing
+         %%    internal to query buffer, is incrementally increasing,
+         %%    whereas the chunk it refers to may certainly not be
+         %%    increasing because of out-of-order arrivals from the
+         %%    vnodes.
          Key = {KeyOrd, ChunkId, Idx},
          %% d. Encode the record (don't bother constructing a
          %%    riak_object with metadata, vclocks):
