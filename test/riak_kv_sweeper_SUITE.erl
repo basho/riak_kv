@@ -91,13 +91,13 @@ all() ->
 %% TEST CASES
 %%--------------------------------------------------------------------
 
-initiailize_sweep_request_test(Config) ->
+test_initiailize_sweep_request(Config) ->
     Indices = ?config(vnode_indices, Config),
 
     assert_all_indices_idle(Indices),
     ok.
 
-status_index_changed_sweep_request_test(Config) ->
+test_status_index_changed_sweep_request(Config) ->
     Indices = ?config(vnode_indices, Config),
 
     assert_all_indices_idle(Indices),
@@ -108,7 +108,7 @@ status_index_changed_sweep_request_test(Config) ->
     assert_all_indices_idle(NewIndices),
     ok.
 
-status_index_changed_tick_test(Config) ->
+test_status_index_changed_tick(Config) ->
     Indices = ?config(vnode_indices, Config),
 
     assert_all_indices_idle(Indices),
@@ -118,14 +118,14 @@ status_index_changed_tick_test(Config) ->
     assert_all_indices_idle(NewIndices),
     ok.
 
-add_participant_test(_Config) ->
+test_add_participant(_Config) ->
     {[], _Sweeps} = riak_kv_sweeper:status(),
     new_sweep_participant(sweeper_callback_1),
     {[Participant], _} = riak_kv_sweeper:status(),
     sweeper_callback_1 = riak_kv_sweeper_fold:participant_module(Participant),
     ok.
 
-add_participant_persistent_test(_Config) ->
+test_add_participant_persistent(_Config) ->
     new_sweep_participant(sweeper_callback_1),
 
     {[Participant1], _} = riak_kv_sweeper:status(),
@@ -136,7 +136,7 @@ add_participant_persistent_test(_Config) ->
     sweeper_callback_1 = riak_kv_sweeper_fold:participant_module(Participant2),
     ok.
 
-remove_participant_test(_Config) ->
+test_remove_participant(_Config) ->
     new_sweep_participant(sweeper_callback_1),
 
     {[Participant], _} = riak_kv_sweeper:status(),
@@ -145,7 +145,7 @@ remove_participant_test(_Config) ->
     {[], _} = riak_kv_sweeper:status(),
     ok.
 
-remove_participant_persistent_test(_Config) ->
+test_remove_participant_persistent(_Config) ->
     new_sweep_participant(sweeper_callback_1),
 
     {[Participant], _} = riak_kv_sweeper:status(),
@@ -157,7 +157,7 @@ remove_participant_persistent_test(_Config) ->
     {[], _} = riak_kv_sweeper:status(),
     ok.
 
-sweep_request_test(Config) ->
+test_sweep_request(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
@@ -169,7 +169,7 @@ sweep_request_test(Config) ->
     riak_kv_sweeper:sweep(I1),
     ok = receive_msg({ok, successful_sweep, sweeper_callback_1, I1}).
 
-sweep_request_non_existing_index_test(Config) ->
+test_sweep_request_non_existing_index(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
@@ -180,7 +180,7 @@ sweep_request_non_existing_index_test(Config) ->
     riak_kv_sweeper:sweep(NonExisting),
     ok.
 
-scheduler_sync_backend_test(Config) ->
+test_scheduler_sync_backend(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(sync, _NumKeys=1000, _ObjecSizeBytes=100),
@@ -188,7 +188,7 @@ scheduler_sync_backend_test(Config) ->
     sweep_all_indices(Indices),
     ok.
 
-scheduler_test(Config) ->
+test_scheduler(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
@@ -196,7 +196,7 @@ scheduler_test(Config) ->
     sweep_all_indices(Indices),
     ok.
 
-scheduler_worker_process_crashed_test(Config) ->
+test_scheduler_worker_process_crashed(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_crash),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -207,7 +207,7 @@ scheduler_worker_process_crashed_test(Config) ->
     ok = check_sweeps_idle(Indices),
     ok.
 
-scheduler_run_interval_test(Config) ->
+test_scheduler_run_interval(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1, 1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
@@ -217,7 +217,7 @@ scheduler_run_interval_test(Config) ->
     sweep_all_indices(Indices),
     ok.
 
-scheduler_remove_participant_test(Config) ->
+test_scheduler_remove_participant(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -234,7 +234,7 @@ scheduler_remove_participant_test(Config) ->
                                        end),
     ok = receive_msg({ok, failed_sweep, sweeper_callback_wait, WaitIndex}).
 
-scheduler_queue_test(Config) ->
+test_scheduler_queue(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -261,7 +261,7 @@ scheduler_queue_test(Config) ->
     ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, WaitIndex1}),
     ok.
 
-scheduler_sweep_window_never_test(Config) ->
+test_scheduler_sweep_window_never(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -276,7 +276,7 @@ scheduler_sweep_window_never_test(Config) ->
     sweep_all_indices(Indices),
     ok.
 
-scheduler_now_outside_sleep_window_test(Config) ->
+test_scheduler_now_outside_sleep_window(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -297,7 +297,7 @@ scheduler_now_outside_sleep_window_test(Config) ->
 %% This test runs long ~5 seconds because the it schedulers `expired'
 %% and the scheduler has a minimum resolution of 1 second in this
 %% case.
-stop_all_scheduled_sweeps_test(Config) ->
+test_stop_all_scheduled_sweeps(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -321,7 +321,7 @@ stop_all_scheduled_sweeps_test(Config) ->
     ok = check_sweeps_idle(Indices),
     ok.
 
-stop_all_scheduled_sweeps_race_condition_test(_Config) ->
+test_stop_all_scheduled_sweeps_race_condition(_Config) ->
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, 5000, 0),
 
@@ -330,7 +330,7 @@ stop_all_scheduled_sweeps_race_condition_test(_Config) ->
     Running = 0,
     ok.
 
-scheduler_add_participant_test(Config) ->
+test_scheduler_add_participant(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
@@ -343,7 +343,7 @@ scheduler_add_participant_test(Config) ->
     sweep_all_indices(Indices, ok, sweeper_callback_2),
     ok.
 
-scheduler_restart_sweep_test(Config) ->
+test_scheduler_restart_sweep(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -371,7 +371,7 @@ scheduler_restart_sweep_test(Config) ->
     sweeper_callback_wait:before_visit([WaitIndex]),
     ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, WaitIndex}).
 
-scheduler_estimated_keys_lock_ok_test(Config) ->
+test_scheduler_estimated_keys_lock_ok(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -384,7 +384,7 @@ scheduler_estimated_keys_lock_ok_test(Config) ->
     [true = meck:called(riak_kv_index_hashtree, release_lock, [I]) || I <- Indices],
     ok.
 
-scheduler_estimated_keys_lock_fail_test(Config) ->
+test_scheduler_estimated_keys_lock_fail(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
@@ -397,7 +397,7 @@ scheduler_estimated_keys_lock_fail_test(Config) ->
     ok.
 
 %% throttling on object size with no mutated keys
-sweep_throttle_obj_size1_test(Config) ->
+test_sweep_throttle_obj_size1(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_obj_size(
       _Index              = pick(Indices),
@@ -409,7 +409,7 @@ sweep_throttle_obj_size1_test(Config) ->
 
 %% throttling on object size with 100 mutated keys - no extra
 %% throttles because of mutated keys should be done
-sweep_throttle_obj_size2_test(Config) ->
+test_sweep_throttle_obj_size2(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_obj_size(
       _Index              = pick(Indices),
@@ -421,7 +421,7 @@ sweep_throttle_obj_size2_test(Config) ->
 
 %% throttling on obj_size where number of bytes to throttle after if
 %% bigger than object size
-sweep_throttle_obj_size3_test(Config) ->
+test_sweep_throttle_obj_size3(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_obj_size(
       _Index              = pick(Indices),
@@ -432,7 +432,7 @@ sweep_throttle_obj_size3_test(Config) ->
       _ThrottleWaitMsecs  = 1).
 
 %% throttling on obj_size using a sweep_window_throttle_div
-sweep_throttle_obj_size4_test(Config) ->
+test_sweep_throttle_obj_size4(Config) ->
     Indices = ?config(vnode_indices, Config),
     application:set_env(riak_kv, sweep_window_throttle_div, 2),
     sweep_throttle_obj_size(
@@ -444,7 +444,7 @@ sweep_throttle_obj_size4_test(Config) ->
       _ThrottleWaitMsecs  = 2).
 
 %% throttling on obj_size sweep_window > throttle wait time.
-sweep_throttle_obj_size5_test(Config) ->
+test_sweep_throttle_obj_size5(Config) ->
     Indices = ?config(vnode_indices, Config),
     application:set_env(riak_kv, sweep_window_throttle_div, 2),
     sweep_throttle_obj_size(
@@ -474,7 +474,7 @@ sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAf
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
 
 %% throttling on pace every 100 keys
-sweep_throttle_pace1_test(Config) ->
+test_sweep_throttle_pace1(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_pace(
       _Index              = pick(Indices),
@@ -485,7 +485,7 @@ sweep_throttle_pace1_test(Config) ->
 
 %% throttling on pace every 100 keys with one extra throttle because
 %% of mutated objects
-sweep_throttle_pace2_test(Config) ->
+test_sweep_throttle_pace2(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_pace(
       _Index              = pick(Indices),
@@ -496,7 +496,7 @@ sweep_throttle_pace2_test(Config) ->
 
 %% throttling on pace with several extra throttles because of
 %% mutations
-sweep_throttle_pace3_test(Config) ->
+test_sweep_throttle_pace3(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_pace(
       _Index              = pick(Indices),
@@ -506,7 +506,7 @@ sweep_throttle_pace3_test(Config) ->
       _ThrottleWaitMsecs  = 1).
 
 %% throttling on pace using sweep_window_throttle_div
-sweep_throttle_pace4_test(Config) ->
+test_sweep_throttle_pace4(Config) ->
     Indices = ?config(vnode_indices, Config),
     application:set_env(riak_kv, sweep_window_throttle_div, 2),
     sweep_throttle_pace(
@@ -518,7 +518,7 @@ sweep_throttle_pace4_test(Config) ->
 
 %% throttling on pace using sweep_window_throttle_div where
 %% sweep_window_throttle_div > throttle wait time
-sweep_throttle_pace5_test(Config) ->
+test_sweep_throttle_pace5(Config) ->
     Indices = ?config(vnode_indices, Config),
     application:set_env(riak_kv, sweep_window_throttle_div, 2),
     sweep_throttle_pace(
@@ -546,7 +546,7 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
     ActualThrottleTotalWait = meck_count_msecs_slept(),
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
 
-sweeper_exometer_reporting_test(Config) ->
+test_sweeper_exometer_reporting(Config) ->
     Indices = ?config(vnode_indices, Config),
     NumKeys = 5042,
     ObjSizeBytes = 100,
@@ -588,7 +588,7 @@ sweeper_exometer_reporting_test(Config) ->
                     {ok, [{count, BytesCount1}, {one, BytesOne1}]}),
     ok.
 
-sweeper_exometer_successful_sweep_test(Config) ->
+test_sweeper_exometer_successful_sweep(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, 0),
     new_sweep_participant(sweeper_callback_1),
@@ -620,7 +620,7 @@ sweeper_exometer_successful_sweep_test(Config) ->
                     end,  {ok, [{count, 2}, {one, 2}]}),
     ok.
 
-sweeper_exometer_failed_sweep_test(Config) ->
+test_sweeper_exometer_failed_sweep(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_crash),
     sweeper_meck_helper:backend_modules(async,_NumKeys= 5000, 0),
@@ -657,7 +657,7 @@ sweeper_exometer_failed_sweep_test(Config) ->
                     end,  {ok, [{count, 2}, {one, 2}]}),
     ok.
 
-exometer_mutated_object_count_test(Config) ->
+test_exometer_mutated_object_count(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_mutate),
     sweeper_meck_helper:backend_modules(async, _NumKeys = 5042, 0),
@@ -675,7 +675,7 @@ exometer_mutated_object_count_test(Config) ->
                     {ok, [{count, MutateKeys}, {one, MutateKeys}]}),
     ok.
 
-exometer_deleted_object_count_test(Config) ->
+test_exometer_deleted_object_count(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_delete),
     sweeper_meck_helper:backend_modules(async, _NumKeys = 5042, 0),
@@ -695,7 +695,7 @@ exometer_deleted_object_count_test(Config) ->
     ok.
 
 
-scheduler_sweep_concurrency_test(_Config) ->
+test_scheduler_sweep_concurrency(_Config) ->
     new_sweep_participant(sweeper_callback_wait),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, 0),
 
@@ -870,7 +870,7 @@ get_sweep_on_index(Index) ->
     Sweep.
 
 is_testcase({F, 1}) ->
-    match =:= re:run(atom_to_list(F), "_test$", [{capture, none}]);
+    match =:= re:run(atom_to_list(F), "^test_", [{capture, none}]);
 is_testcase({_, _}) ->
     false.
 
