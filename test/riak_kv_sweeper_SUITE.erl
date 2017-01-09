@@ -355,15 +355,10 @@ test_scheduler_restart_sweep(Config) ->
                                        fun(Index) when Index == WaitIndex ->
                                                RunningSweep = get_sweep_on_index(WaitIndex),
                                                running = riak_kv_sweeper_state:sweep_state(RunningSweep),
-
                                                riak_kv_sweeper:sweep(WaitIndex),
                                                RestartingSweep = get_sweep_on_index(WaitIndex),
                                                restart = riak_kv_sweeper_state:sweep_state(RestartingSweep),
-                                               undefined = riak_kv_sweeper_state:sweep_queue_time(RestartingSweep),
-
-                                               riak_kv_sweeper:sweep(WaitIndex),
-                                               RestartingSweep = match_retry(fun() -> get_sweep_on_index(WaitIndex) end,
-                                                                             RestartingSweep);
+                                               undefined = riak_kv_sweeper_state:sweep_queue_time(RestartingSweep);
                                           (_Index) ->
                                                ok
                                        end),
