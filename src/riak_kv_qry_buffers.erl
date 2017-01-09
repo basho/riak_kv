@@ -172,8 +172,10 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
           %% State; can be overridden)
           expire_msec :: non_neg_integer(),
 
-          %% leveldb handle for the temp storage (or, initially, a function to obtain one)
-          ldb_ref :: eleveldb:db_ref() | fun(() -> {ok, eleveldb:db_ref()} | {error, term()}),
+          %% leveldb handle for the temp storage (undefined initially, until created by ldb_setup_fun)
+          ldb_ref :: eleveldb:db_ref() | undefined,
+          %% a function to obtain ldb handle (deferred, possibly never called, eleveldb:open)
+          ldb_setup_fun :: fun(() -> {ok, eleveldb:db_ref()} | {error, term()}),
 
           %% in-memory buffer for small fish
           inmem_buffer = [] :: [{binary(), binary()}],
@@ -374,7 +376,8 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                                  ddl           = DDL,
                                  mother_table  = riak_kv_ts_util:queried_table(SQL),
                                  chunks_need   = NSubqueries,
-                                 ldb_ref       = DelayedLdbCreateF,
+                                 ldb_ref       = undefined,
+                                 ldb_setup_fun = DelayedLdbCreateF,
                                  expire_msec   = proplists:get_value(
                                                    expiry_msec, Options, DefaultQBufExpireMsec),
                                  last_accessed = os:timestamp(),
@@ -430,7 +433,8 @@ do_batch_put(QBufRef, Data, #state{qbufs      = QBufs0,
 -spec add_chunk(#qbuf{}, [data_row()],
                 non_neg_integer(), non_neg_integer(), non_neg_integer()) ->
                        {ok, #qbuf{}, non_neg_integer()} | {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
-add_chunk(#qbuf{ldb_ref       = LdbRefOrDelayedCreateFun,
+add_chunk(#qbuf{ldb_ref       = LdbRef,
+                ldb_setup_fun = DelayedCreateFun,
                 inmem_buffer  = InmemBuffer0,
                 orig_qry      = ?SQL_SELECT{'ORDER BY' = OrderBy},
                 chunks_got    = ChunksGot0,
@@ -463,15 +467,15 @@ add_chunk(#qbuf{ldb_ref       = LdbRefOrDelayedCreateFun,
                                is_ready      = IsReady,
                                last_accessed = os:timestamp()},
 
-            HaveLdbOpened = not is_function(LdbRefOrDelayedCreateFun),
+            HaveLdbOpened = (LdbRef /= undefined),
             InmemAcc = lists:append(InmemBuffer0, KeyedData),
             EleveldbPutF =
-                fun(LdbRef) ->
+                fun(Ref) ->
                         lager:debug("adding chunk ~b of ~b to ldb", [ChunksGot, ChunksNeed]),
-                        case riak_kv_qry_buffers_ldb:add_rows(LdbRef, InmemAcc) of
+                        case riak_kv_qry_buffers_ldb:add_rows(Ref, InmemAcc) of
                             ok ->
                                 QBuf = QBuf1#qbuf{inmem_buffer = [],
-                                                  ldb_ref      = LdbRef},
+                                                  ldb_ref      = Ref},
                                 {ok, QBuf};
                             {error, _} = ErrorReason ->
                                 ErrorReason
@@ -486,11 +490,11 @@ add_chunk(#qbuf{ldb_ref       = LdbRefOrDelayedCreateFun,
                     QBuf = QBuf1#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, IsReady)},
                     {ok, QBuf};
                 true when HaveLdbOpened ->
-                    EleveldbPutF(LdbRefOrDelayedCreateFun);
+                    EleveldbPutF(LdbRef);
                 true ->
-                    case LdbRefOrDelayedCreateFun() of
-                        {ok, LdbRef} ->  %% now it's a real ref
-                            EleveldbPutF(LdbRef);
+                    case DelayedCreateFun() of
+                        {ok, RealLdbRef} ->  %% now it's a real ref
+                            EleveldbPutF(RealLdbRef);
                         {error, _} = ErrorReason ->
                             ErrorReason
                     end
@@ -555,7 +559,7 @@ do_fetch_limit(QBufRef,
               orig_qry     = OrigQry,
               ddl          = ?DDL{fields = QBufFields,
                                   table = Table}} ->
-            AllDataInMem = is_function(LdbRef),
+            AllDataInMem = (LdbRef == undefined),
             Rows =
                 case AllDataInMem of
                     true ->
@@ -785,7 +789,7 @@ touch_qbuf(QBufRef, State0 = #state{qbufs = QBufs0}) ->
     State0#state{qbufs = lists:keyreplace(
                            QBufRef, 1, QBufs0, {QBufRef, QBuf9})}.
 
-kill_ldb(RootPath, Table, LdbRef) when not is_function(LdbRef) ->
+kill_ldb(RootPath, Table, LdbRef) when LdbRef /= undefined ->
     ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
     ok;
 kill_ldb(_RootPath, _Table, _DelayedAndNeverCalledFun) ->
