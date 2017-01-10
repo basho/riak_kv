@@ -470,7 +470,7 @@ add_chunk(#qbuf{ldb_ref       = LdbRef,
                                last_accessed = os:timestamp(),
                                all_chunks_received = AllChunksReceived},
 
-            HaveLdbOpened = (LdbRef /= undefined),
+            IsBackendOpened = (LdbRef /= undefined),
             InmemAcc = lists:append(InmemBuffer0, KeyedData),
             EleveldbPutF =
                 fun(Ref) ->
@@ -485,14 +485,14 @@ add_chunk(#qbuf{ldb_ref       = LdbRef,
                         end
                 end,
 
-            case (HaveLdbOpened orelse not can_afford_inmem(InmemMax)) of
+            case (IsBackendOpened orelse not can_afford_inmem(InmemMax)) of
                 false ->
                     InmemBuffer =
                         lists:sort(InmemAcc),
                     lager:debug("adding chunk ~b of ~b to inmem buffer", [ChunksGot, ChunksNeed]),
                     QBuf = QBuf1#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, AllChunksReceived)},
                     {ok, QBuf};
-                true when HaveLdbOpened ->
+                true when IsBackendOpened ->
                     EleveldbPutF(LdbRef);
                 true ->
                     case DelayedCreateFun() of
