@@ -931,9 +931,8 @@
 
 %% @doc Max heap size before dumping query buffers to ldb
 {mapping, "riak_kv.query.timeseries.qbuf_inmem_max", "riak_kv.timeseries_query_buffers_inmem_max", [
-  {default, "10M"},
-  {datatype, bytesize},
-  {validators, ["validate_timeseries_query_buffers_inmem_max"]}
+  {default, "10MB"},
+  {datatype, bytesize}
 ]}.
 
 %% @doc Query buffer expiry time (in msec). Query buffers not accessed
