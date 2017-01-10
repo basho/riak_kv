@@ -186,7 +186,7 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
           chunks_need :: integer(),
 
           %% flipped to true when chunks_need == chunks_got
-          is_ready = false :: boolean(),
+          all_chunks_received = false :: boolean(),
 
           %% total records stored (when complete)
           total_records = 0 :: non_neg_integer(),
@@ -396,7 +396,7 @@ do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{is_ready = false} ->
+        #qbuf{all_chunks_received = false} ->
             {reply, {error, qbuf_not_ready}, State0};
         #qbuf{ldb_ref = LdbRef,
               ddl = ?DDL{table = Table}} ->
@@ -412,12 +412,12 @@ do_batch_put(QBufRef, Data, #state{qbufs      = QBufs0,
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{is_ready = true} ->
+        #qbuf{all_chunks_received = true} ->
             {reply, {error, qbuf_already_finished}, State0};
         QBuf0 ->
             case add_chunk(
                    QBuf0, Data, TotalSize0, HardWatermark, InmemMax) of
-                {ok, #qbuf{is_ready = IsReady,
+                {ok, #qbuf{all_chunks_received = IsReady,
                            ready_waiting_notifier = SelfNotifierFun} = QBuf} ->
                     State9 = State0#state{total_size = TotalSize0 + QBuf#qbuf.size,
                                           qbufs = lists:keyreplace(
@@ -458,7 +458,7 @@ add_chunk(#qbuf{ldb_ref       = LdbRef,
             %% see below.
             ChunkId = ChunksGot0,
             ChunksGot = ChunksGot0 + 1,
-            IsReady = (ChunksNeed == ChunksGot),
+            AllChunksReceived = (ChunksNeed == ChunksGot),
 
             %% construct keys for new data
             OrdByFieldQualifiers = lists:map(fun get_ordby_field_qualifiers/1, OrderBy),
@@ -467,8 +467,8 @@ add_chunk(#qbuf{ldb_ref       = LdbRef,
             QBuf1 = QBuf0#qbuf{size          = Size + ChunkSize,
                                chunks_got    = ChunksGot,
                                total_records = TotalRecords0 + length(Data),
-                               is_ready      = IsReady,
-                               last_accessed = os:timestamp()},
+                               last_accessed = os:timestamp(),
+                               all_chunks_received = AllChunksReceived},
 
             HaveLdbOpened = (LdbRef /= undefined),
             InmemAcc = lists:append(InmemBuffer0, KeyedData),
@@ -490,7 +490,7 @@ add_chunk(#qbuf{ldb_ref       = LdbRef,
                     InmemBuffer =
                         lists:sort(InmemAcc),
                     lager:debug("adding chunk ~b of ~b to inmem buffer", [ChunksGot, ChunksNeed]),
-                    QBuf = QBuf1#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, IsReady)},
+                    QBuf = QBuf1#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, AllChunksReceived)},
                     {ok, QBuf};
                 true when HaveLdbOpened ->
                     EleveldbPutF(LdbRef);
@@ -530,7 +530,7 @@ do_set_ready_waiting_process(QBufRef, SelfNotifierFun, #state{qbufs = QBufs0} = 
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{is_ready = true} ->
+        #qbuf{all_chunks_received = true} ->
             %% qbuf is already ready: don't wait for the next
             %% batch_put to turn round and notify the process (because
             %% there will be no more batch puts)
@@ -555,7 +555,7 @@ do_fetch_limit(QBufRef,
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{is_ready = false} ->
+        #qbuf{all_chunks_received = false} ->
             {reply, {error, qbuf_not_ready}, State0};
         #qbuf{inmem_buffer = InmemBuffer,
               ldb_ref      = LdbRef,
@@ -617,7 +617,7 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
     Now = os:timestamp(),
     QBufs9 =
         lists:filter(
-          fun({_QBufRef, #qbuf{is_ready = true,
+          fun({_QBufRef, #qbuf{all_chunks_received = true,
                                ldb_ref = LdbRef,
                                ddl = ?DDL{table = Table},
                                expire_msec = ExpireMsec,  %% qbuf-specific, possibly overriden
@@ -631,7 +631,7 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
                       false ->
                           true
                   end;
-             ({_QBufRef, #qbuf{is_ready = false,
+             ({_QBufRef, #qbuf{all_chunks_received = false,
                                ldb_ref = LdbRef,
                                ddl = ?DDL{table = Table},
                                last_accessed = LastAccessed}}) ->
