@@ -433,9 +433,7 @@ do_batch_put(QBufRef, Data, #state{qbufs      = QBufs0,
 -spec add_chunk(#qbuf{}, [data_row()],
                 non_neg_integer(), non_neg_integer(), non_neg_integer()) ->
                        {ok, #qbuf{}, non_neg_integer()} | {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
-add_chunk(#qbuf{ldb_ref       = LdbRef,
-                ldb_setup_fun = DelayedCreateFun,
-                inmem_buffer  = InmemBuffer0,
+add_chunk(#qbuf{inmem_buffer  = InmemBuffer0,
                 orig_qry      = ?SQL_SELECT{'ORDER BY' = OrderBy},
                 chunks_got    = ChunksGot0,
                 chunks_need   = ChunksNeed,
@@ -469,38 +467,48 @@ add_chunk(#qbuf{ldb_ref       = LdbRef,
                                total_records = TotalRecords0 + length(Data),
                                last_accessed = os:timestamp(),
                                all_chunks_received = AllChunksReceived},
+            lager:debug("adding chunk ~b of ~b to ldb", [ChunksGot, ChunksNeed]),
+            store_chunk(
+              QBuf1,
+              %% both the existing accumulated chunks as well as the
+              %% newly added chunk are already sorted, so perhaps a
+              %% more intelligent way would be to insert the new chunk
+              %% at the right place.
+              lists:append(InmemBuffer0, KeyedData),
+              can_afford_inmem(InmemMax),
+              AllChunksReceived)
+    end.
 
-            IsBackendOpened = (LdbRef /= undefined),
-            InmemAcc = lists:append(InmemBuffer0, KeyedData),
-            EleveldbPutF =
-                fun(Ref) ->
-                        lager:debug("adding chunk ~b of ~b to ldb", [ChunksGot, ChunksNeed]),
-                        case riak_kv_qry_buffers_ldb:add_rows(Ref, InmemAcc) of
-                            ok ->
-                                QBuf = QBuf1#qbuf{inmem_buffer = [],
-                                                  ldb_ref      = Ref},
-                                {ok, QBuf};
-                            {error, _} = ErrorReason ->
-                                ErrorReason
-                        end
-                end,
+store_chunk(#qbuf{ldb_ref = LdbRef,
+                  ldb_setup_fun = DelayedCreateFun} = QBuf0,
+            Data, CanAffordInMem, AllChunksReceived) ->
+    EleveldbPutF =
+        fun(Ref) ->
+                case riak_kv_qry_buffers_ldb:add_rows(Ref, Data) of
+                    ok ->
+                        QBuf = QBuf0#qbuf{inmem_buffer = [],
+                                          ldb_ref      = Ref},
+                        {ok, QBuf};
+                    {error, _} = ErrorReason ->
+                        ErrorReason
+                end
+        end,
 
-            case (IsBackendOpened orelse not can_afford_inmem(InmemMax)) of
-                false ->
-                    InmemBuffer =
-                        lists:sort(InmemAcc),
-                    lager:debug("adding chunk ~b of ~b to inmem buffer", [ChunksGot, ChunksNeed]),
-                    QBuf = QBuf1#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, AllChunksReceived)},
-                    {ok, QBuf};
-                true when IsBackendOpened ->
-                    EleveldbPutF(LdbRef);
-                true ->
-                    case DelayedCreateFun() of
-                        {ok, RealLdbRef} ->  %% now it's a real ref
-                            EleveldbPutF(RealLdbRef);
-                        {error, _} = ErrorReason ->
-                            ErrorReason
-                    end
+    IsBackendOpened = (LdbRef /= undefined),
+    case (IsBackendOpened                %% already storing to backend: keep doing so
+          orelse not CanAffordInMem) of  %% can't keep in memory: switch to backend
+        false ->
+            InmemBuffer = lists:sort(Data),
+            QBuf = QBuf0#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, AllChunksReceived)},
+            {ok, QBuf};
+        true when IsBackendOpened ->
+            EleveldbPutF(LdbRef);
+        true ->
+            case DelayedCreateFun() of
+                {ok, RealLdbRef} ->  %% now it's a real ref
+                    EleveldbPutF(RealLdbRef);
+                {error, _} = ErrorReason ->
+                    ErrorReason
             end
     end.
 
@@ -514,16 +522,20 @@ can_afford_inmem(Threshold) ->
 get_ordby_field_qualifiers({_, AscDesc, Nulls}) ->
     {AscDesc, Nulls}.
 
+maybe_only_rows(KeyedRows, _StripKeysUsedForSorting = false) ->
+    %% while collecting chunks, we keep keyed data
+    KeyedRows;
+maybe_only_rows(KeyedRows, _StripKeysUsedForSorting = true) ->
+    %% once collected, we discard the artificial keys; pure records
+    %% remain, in the order and form the client expects
+    {_Keys, Rows} = lists:unzip(KeyedRows),
+    Rows.
+
+
 maybe_inform_waiting_process(true, SelfNotifierFun, QBufRef) when is_function(SelfNotifierFun) ->
     SelfNotifierFun({qbuf_ready, QBufRef});
 maybe_inform_waiting_process(_IsReady, _SelfNotifierFun, _QBufRef) ->
     nop.
-
-maybe_only_rows(KeyedRows, _StripKeysUsedForSorting = true) ->
-    {_Keys, Rows} = lists:unzip(KeyedRows),
-    Rows;
-maybe_only_rows(KeyedRows, _StripKeysUsedForSorting = false) ->
-    KeyedRows.
 
 
 do_set_ready_waiting_process(QBufRef, SelfNotifierFun, #state{qbufs = QBufs0} = State0) ->
