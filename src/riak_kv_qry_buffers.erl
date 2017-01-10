@@ -396,6 +396,8 @@ do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
+        #qbuf{ldb_ref = undefined} ->
+            {reply, ok, State0#state{qbufs = lists:keydelete(QBufRef, 1, QBufs0)}};
         #qbuf{ldb_ref = LdbRef,
               ddl = ?DDL{table = Table}} ->
             ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
