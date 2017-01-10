@@ -739,6 +739,14 @@ tstamp() ->
 
 %% data ops
 
+-spec enkey([data_row()],
+            KeyFieldPositions::[non_neg_integer()],
+            OrdByFieldQualifiers::[{asc|desc, nulls_first|nulls_last}],
+            ChunkId::non_neg_integer()) ->
+                   [{{KeyOrd::riak_pb_ts_codec:ldbvalue(),
+                      ChunkId::non_neg_integer(),
+                      Idx::non_neg_integer()},
+                     data_row()}].
 enkey(Rows, KeyFieldPositions, OrdByFieldQualifiers, ChunkId)
   when is_list(KeyFieldPositions) ->
     %% 0. The new key is composed from fields appearing in the ORDER
