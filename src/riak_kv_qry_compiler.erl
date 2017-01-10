@@ -1275,6 +1275,8 @@ check_where_clause_is_possible_fold(_, _, {'<',{field,FieldName,_},{const,LtVal}
             Acc2 = store_filter_check(Check2, Acc),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
             {F, Acc3};
+        #filtercheck{'<=' = {_,_,{const,LteVal}}} when LteVal < LtVal ->
+            {eliminate, Acc};
         #filtercheck{'=' = {_,_,{const,EqVal}}} when LtVal > EqVal ->
             %% existing equality check is less, eliminate this `>` filter.
             {eliminate, Acc};
@@ -3820,7 +3822,9 @@ less_than_or_equal_to_on_column_in_local_key_is_added_to_endkey_test() ->
         S?SQL_SELECT.'WHERE'
     ).
 
-less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_test() ->
+% less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_test
+
+'< eliminated when greater than <= on same column_test'() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
@@ -3828,13 +3832,17 @@ less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_
         "PRIMARY KEY ((a),a,b))"),
     {ok, Q} = get_query(
         "SELECT * FROM table1 "
-        "WHERE a = 1 AND b <= 8 AND b = 10"),
-    ?assertEqual(
-        {error,{impossible_where_clause, << >>}},
-        compile(DDL, Q)
+        "WHERE a = 5 AND b <= 10 AND b < 11"),
+    {ok, [S]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'<=',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
     ).
 
-less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_swap_lhs_rhs_test() ->
+'< eliminated when greater than <= on same column_swap_filter_order_test'() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
@@ -3852,7 +3860,21 @@ less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_
         S?SQL_SELECT.'WHERE'
     ).
 
-less_than_filter_is_greater_than_less_than_or_equal_to_filter_on_the_same_column_test() ->
+less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 1 AND b <= 8 AND b = 10"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_swap_filter_order_test() ->
     DDL = get_ddl(
         "CREATE TABLE table1("
         "a TIMESTAMP NOT NULL, "
