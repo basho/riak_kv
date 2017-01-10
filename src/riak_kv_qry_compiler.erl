@@ -1186,6 +1186,9 @@ check_where_clause_is_possible_fold(_, _, {'=',{field,FieldName,_},{const,EqVal}
             %% there are two different checks on the same column, for equality
             %% this can never be satisfied.
             throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'<=' = {_,_,{const,LteVal}}} when LteVal < EqVal ->
+            %% query like `a = 10 AND a <= 8`
+            throw({error, {impossible_where_clause, << >>}});
         #filtercheck{'=' = undefined} = Check1 ->
             %% this is the first equality check so just record it
             Check2 = Check1#filtercheck{'=' = F},
@@ -1203,34 +1206,31 @@ check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},{const,GtVal}
             %% query like `a = 10 AND a > 8` we can eliminate the greater than
             %% clause because if a to be 10 it must also be greater than 8
             {eliminate, Acc};
-        #filtercheck{'>=' = {_,_,{const,GteVal}}} when GtVal >= GteVal ->
-            %% query like `a >= 10 AND a > 8` we can eliminate the greater than
-            %% clause because if a to be greater than or equal to 10 it must
-            %% also be greater than 8
-            {eliminate, Acc};
-        #filtercheck{'>=' = {_,_,{const,GteVal}} = F_x} = Check1 when GtVal < GteVal ->
-            %% query like `b >= 10 AND b > 9`, the previous >= clause should be
-            %% eliminated on the second pass
+        #filtercheck{'>=' = {_,_,{const,GteVal}} = F_x} = Check1 when GtVal >= GteVal ->
+            %% query like `a >= 8 AND a > 10` we can eliminate the lesser clause
+            %% because if the value must be greater than 10 it can't be 8 or 9.
             Check2 = Check1#filtercheck{'>' = F, '>=' = undefined},
             Acc2 = store_filter_check(Check2, Acc),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
             {F,Acc3};
+        #filtercheck{'>=' = {_,_,{const,GteVal}}} when GtVal < GteVal ->
+            %% query like `b >= 10 AND b > 9`, the previous >= clause should be
+            %% eliminated on the second pass
+            {eliminate, Acc};
         #filtercheck{'>' = undefined} = Check1 ->
             %% this is the first greater than check so just record it
             Check2 = Check1#filtercheck{'>' = F},
             {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
-        #filtercheck{'>' = F_x} when F_x < F ->
-            %% we already have a filter with a lower value than this one, so
-            %% eliminate this one
-            {eliminate, Acc};
-        #filtercheck{'>' = F_x} = Check1 when F_x > F ->
-            %% we already have a filter that is higher than the second one,
-            %% which we can eliminate. Store it and eliminate it on the second
-            %% pass since it has already been iterated
+        #filtercheck{'>' = F_x} = Check1 when F_x < F ->
+            %% eliminate the lower > value for this column
             Check2 = Check1#filtercheck{'>' = F},
-            Acc2 = lists:keystore(FieldName, #filtercheck.name, Acc, Check2),
+            Acc2 = store_filter_check(Check2, Acc),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
-            {F, Acc3}
+            {F,Acc3};
+        #filtercheck{'>' = F_x} when F_x > F ->
+            %% we already have a filter that is higher than this one, so
+            %% eliminate
+            {eliminate, Acc}
     end;
 check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVal}} = F, Acc) ->
     case find_filter_check(FieldName, Acc) of
@@ -1242,70 +1242,65 @@ check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVa
         #filtercheck{'=' = {_,_,{const,EqVal}}} when GteVal > EqVal ->
             %% query like `a = 10 AND a >= 11` cannot be satisfied
             throw({error, {impossible_where_clause, << >>}});
-        #filtercheck{'>' = {_,_,{const,GtVal}}} when GtVal < GteVal ->
-            %% query like `a = 10 AND a >= 8` we can eliminate the greater than
-            %% or equal to clause because if a to be 10 it must also be greater
-            %% than 8
-            {eliminate, Acc};
-        #filtercheck{'>' = {_,_,{const,GtVal}} = F_x} = Check1 when GtVal >= GteVal ->
-            %% we already have a filter that is higher than the second one,
-            %% which we can eliminate. Store it and eliminate it on the second
-            %% pass since it has already been iterated
+        #filtercheck{'>' = {_,_,{const,GtVal}} = F_x} = Check1 when GtVal < GteVal ->
+            %% query like `a > 6 AND a >= 8` we can eliminate the lesser '>' filter
             Check2 = Check1#filtercheck{'>=' = F},
             Acc2 = store_filter_check(Check2, Acc),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
             {F, Acc3};
+        #filtercheck{'>' = {_,_,{const,GtVal}}} when GtVal >= GteVal ->
+            %% we already have a filter that is higher than the second one
+            {eliminate, Acc};
         #filtercheck{'>=' = undefined} = Check1 ->
             %% this is the first equality check so just record it
             {F, store_filter_check(Check1#filtercheck{'>=' = F}, Acc)};
         #filtercheck{'>=' = F} ->
             %% this filter has been specified twice so remove the second occurence
             {eliminate, Acc};
-        #filtercheck{'>=' = F_x} when F_x < F ->
-            %% we already have a filter that is a lower value than
-            {eliminate, Acc};
-        #filtercheck{'>=' = F_x} = Check1 when F_x > F ->
-            %% we already have a filter that is higher than the second one,
-            %% which we can eliminate. Store it and eliminate it on the second
-            %% pass since it has already been iterated
+        #filtercheck{'>=' = F_x} = Check1 when F_x < F ->
+            %% we already have a filter that is a lower value so eliminate it
             Check2 = Check1#filtercheck{'>=' = F},
             Acc2 = store_filter_check(Check2, Acc),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
-            {F, Acc3}
+            {F, Acc3};
+        #filtercheck{'>=' = F_x} when F_x > F ->
+            %% we already have a filter that is higher than this one
+            {eliminate, Acc}
     end;
 check_where_clause_is_possible_fold(_, _, {'<',{field,FieldName,_},{const,LtVal}} = F, Acc) ->
     case find_filter_check(FieldName, Acc) of
-        #filtercheck{'<' = F} ->
-            %% duplicate < filter
-            {eliminate, Acc};
-        #filtercheck{'<=' = {_,_,{const,LteVal}}} when LteVal >= LtVal ->
-            %% query like `a <= 10 AND a < 10` the less than can be eliminated
-            %% because it is already captured in the less than or equals filter
-            {eliminate, Acc};
+        #filtercheck{'<=' = {_,_,{const,LteVal}} = F_x} = Check1 when LteVal >= LtVal ->
+            %% query like `a <= 10 AND a < 10`, less than or equal is eliminated
+            Check2 = Check1#filtercheck{'<' = F, '<=' = undefined},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3};
         #filtercheck{'=' = {_,_,{const,EqVal}}} when LtVal > EqVal ->
-            %% existing equality check is less than than this less than filter,
-            %% so this filter is already included so it can be eliminated
+            %% existing equality check is less, eliminate this `>` filter.
             {eliminate, Acc};
         #filtercheck{'=' = {_,_,{const,EqVal}}} when LtVal =< EqVal ->
             %% query requires a column to be equal to a value AND less than that
             %% value which is impossible
             throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'<' = F} ->
+            %% duplicate < filter
+            {eliminate, Acc};
         #filtercheck{'<' = undefined} = Check1 ->
             %% this is the first less than check so just record it
             Check2 = Check1#filtercheck{'<' = F},
             {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
-        #filtercheck{'<' = F_x} = Check1 when F_x < F ->
+        #filtercheck{'<' = F_x} when F_x < F ->
             %% we already have a filter that is higher than this one,
             %% which we can eliminate. Store it and eliminate it on the second
             %% pass since it has already been iterated
+            {eliminate, Acc};
+        #filtercheck{'<' = F_x} = Check1 when F_x > F ->
+            %% we already have a filter that is higher than this one, and so
+            %% includes it so we can safely eliminate this one.
             Check2 = Check1#filtercheck{'<' = F},
             Acc2 = store_filter_check(Check2, Acc),
             Acc3 = append_to_eliminate_later(F_x, Acc2),
-            {F, Acc3};
-        #filtercheck{'<' = F_x} when F_x > F ->
-            %% we already have a filter that is higher than this one, and so
-            %% includes it so we can safely eliminate this one.
-            {eliminate, Acc}
+            {F, Acc3}
     end;
 check_where_clause_is_possible_fold(_, _, {'<=',{field,FieldName,_},{const,LteVal}} = F, Acc) ->
     case find_filter_check(FieldName, Acc) of
@@ -1316,10 +1311,18 @@ check_where_clause_is_possible_fold(_, _, {'<=',{field,FieldName,_},{const,LteVa
             %% query like `a = 10 AND a <= 10` the less than or equals can be
             %% eliminated because it is already captured in the equality filter
             {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when LteVal < EqVal ->
+            %% query like `a = 10 AND a <= 8`
+            throw({error, {impossible_where_clause, << >>}});
         #filtercheck{'<' = {_,_,{const,LtVal}}} when LteVal >= LtVal ->
-            %% query like `a < 10 AND a <= 10` the less than or equals can be
-            %% eliminated because it is already captured in the less than filter
+            %% query like `a < 10 AND a <= 10`
             {eliminate, Acc};
+        #filtercheck{'<' = {_,_,{const,LtVal}} = F_x} = Check1 when LteVal < LtVal ->
+            %% query like `a < 11 AND a <= 10`
+            Check2 = Check1#filtercheck{'<' = undefined, '<=' = F},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3};
         #filtercheck{'<=' = undefined} = Check1 ->
             %% this is the first less than check so just record it
             Check2 = Check1#filtercheck{'<=' = F},
@@ -3281,7 +3284,7 @@ second_greater_than_check_which_is_a_greater_value_is_removed_test() ->
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 11}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3300,7 +3303,7 @@ second_greater_than_check_which_is_a_lesser_value_removes_the_first_test() ->
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 11}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3400,7 +3403,7 @@ second_greater_than_or_equal_check_which_is_a_greater_value_is_removed_test() ->
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 11}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3418,7 +3421,7 @@ second_greater_than_or_equal_check_which_is_a_lesser_value_removes_the_first_tes
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 11}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3486,7 +3489,7 @@ greater_than_or_equal_to_is_less_than_previous_greater_than_clause_removes_great
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3504,7 +3507,7 @@ greater_than_or_equal_to_is_less_than_previous_greater_than_clause_removes_great
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3522,7 +3525,7 @@ greater_than_is_less_than_previous_greater_than_or_equal_to_clause_removes_great
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'>',{field,<<"b">>,sint64},{const, 9}}},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3540,7 +3543,7 @@ greater_than_is_less_than_previous_greater_than_or_equal_to_clause_removes_great
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'>',{field,<<"b">>,sint64},{const, 9}}},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3558,7 +3561,7 @@ less_than_filters_get_reduced_test() ->
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'<',{field,<<"b">>,sint64},{const,10}}},
+         {filter, {'<',{field,<<"b">>,sint64},{const,9}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3576,7 +3579,7 @@ less_than_filters_get_reduced_swap_filter_order_test() ->
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'<',{field,<<"b">>,sint64},{const,10}}},
+         {filter, {'<',{field,<<"b">>,sint64},{const,9}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3794,7 +3797,7 @@ less_than_or_equal_to_filters_are_eliminated_when_less_than_filter_value_is_grea
     ?assertPropsEqual(
         [{startkey,[{<<"a">>,timestamp,5}]},
          {endkey,  [{<<"a">>,timestamp,5}]},
-         {filter, {'<=',{field,<<"b">>,sint64},{const,8}}},
+         {filter, {'<',{field,<<"b">>,sint64},{const,8}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
     ).
@@ -3815,6 +3818,52 @@ less_than_or_equal_to_on_column_in_local_key_is_added_to_endkey_test() ->
          {filter, {'<=',{field,<<"b">>,sint64},{const,10}}},
          {end_inclusive,true}],
         S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 1 AND b <= 8 AND b = 10"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 11 AND b <= 10"),
+    {ok, [S]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'<=',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_filter_is_greater_than_less_than_or_equal_to_filter_on_the_same_column_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 1 AND b = 10 AND b <= 8"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
     ).
 
 desc_query_with_additional_column_in_local_key_test() ->
