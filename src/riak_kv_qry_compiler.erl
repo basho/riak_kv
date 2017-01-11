@@ -184,6 +184,9 @@ is_last_partition_column_descending(FieldOrders, PK) ->
 key_length(#key_v1{ast = AST}) ->
     length(AST).
 
+local_key_field_orders(FieldOrders, PK) ->
+    lists:nthtail(key_length(PK), FieldOrders).
+
 %% Calulate the final result for an aggregate.
 -spec finalise_aggregate(#riak_sel_clause_v1{}, [any()]) -> [any()].
 finalise_aggregate(#riak_sel_clause_v1{ calc_type = CalcType,
@@ -794,6 +797,7 @@ check_if_timeseries(?DDL{table = T, partition_key = PK, local_key = LK0} = DDL,
                 WhereProps2 = check_where_clause_is_possible(DDL, WhereProps1),
                 WhereProps3 = rewrite_where_with_additional_filters(
                     Mod:additional_local_key_fields(),
+                    local_key_field_orders(Mod:field_orders(), PK),
                     fun Mod:get_field_type/1,
                     WhereProps2),
                 {true, WhereProps3};
@@ -1367,9 +1371,9 @@ find_filter_check(FieldName, Acc) when is_binary(FieldName) ->
 %% For equality filters, it is not safe to remove the filter, because {3,7} is
 %% also in the range but should not be returned because only rows where b = 5
 %% are correct for this query.
-rewrite_where_with_additional_filters([], _, WhereProps) ->
+rewrite_where_with_additional_filters([], _, _, WhereProps) ->
     WhereProps;
-rewrite_where_with_additional_filters(AdditionalFields, ToKeyTypeFn, WhereProps) when is_list(WhereProps) ->
+rewrite_where_with_additional_filters(AdditionalFields, FieldOrders, ToKeyTypeFn, WhereProps) when is_list(WhereProps) ->
     SKey1 = proplists:get_value(startkey, WhereProps),
     EKey1 = proplists:get_value(endkey, WhereProps),
     SInc1 = proplists:get_value(start_inclusive, WhereProps),
@@ -1378,9 +1382,9 @@ rewrite_where_with_additional_filters(AdditionalFields, ToKeyTypeFn, WhereProps)
     AdditionalFilter = find_filters_on_additional_local_key_fields(
         AdditionalFields, Filter),
     {SKey2, SInc2} = rewrite_start_key_with_filters(
-        AdditionalFields, ToKeyTypeFn, AdditionalFilter, SKey1, SInc1),
+        AdditionalFields, FieldOrders, ToKeyTypeFn, AdditionalFilter, SKey1, SInc1),
     {EKey2, EInc2} = rewrite_end_key_with_filters(
-        AdditionalFields, ToKeyTypeFn, AdditionalFilter, EKey1, EInc1),
+        AdditionalFields, FieldOrders, ToKeyTypeFn, AdditionalFilter, EKey1, EInc1),
     lists:foldl(
         fun({K,V},Acc) -> store_to_where_props(K,V,Acc) end, WhereProps,
         [{startkey,SKey2}, {endkey,EKey2},
@@ -1391,17 +1395,18 @@ store_to_where_props(Key, Val, WhereProps) when Val /= undefined ->
 store_to_where_props(_, _, WhereProps) ->
     WhereProps.
 
-rewrite_start_key_with_filters([], _, _, SKey, SInc) ->
+rewrite_start_key_with_filters([], _, _, _, SKey, SInc) ->
     {SKey, SInc};
-rewrite_start_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, SKey, SInc1) when is_binary(AddFieldName) ->
+rewrite_start_key_with_filters([AddFieldName|Tail], [Order|TailOrder], ToKeyTypeFn, Filter, SKey, SInc1) when is_binary(AddFieldName) ->
     case proplists:get_value(AddFieldName, Filter) of
-        {Op,_,_} = F  when Op == '='; Op == '>'; Op == '>=' ->
+        {Op,_,_} = F  when Op == '=' orelse (Order == ascending andalso (Op == '>'orelse Op == '>='))
+                                     orelse (Order == descending andalso (Op == '<'orelse Op == '<=')) ->
             SKeyElem = to_key_elem(ToKeyTypeFn, F),
             %% if the quantum was inclusive, make sure we stay inclusive or
             %% the quantum boundary is modified later on
             SInc2 = ((SInc1 /= false) or is_inclusive_op(Op)),
             rewrite_start_key_with_filters(
-                Tail, ToKeyTypeFn, Filter, SKey++[SKeyElem], SInc2);
+                Tail, TailOrder, ToKeyTypeFn, Filter, SKey++[SKeyElem], SInc2);
         _ ->
             %% there is no filter for the next additional field so give up! The
             %% filters must be consecutive, we can't have a '_' inbetween
@@ -1409,17 +1414,18 @@ rewrite_start_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, SKey, S
             {SKey, SInc1}
     end.
 
-rewrite_end_key_with_filters([], _, _, EKey, EInc) ->
+rewrite_end_key_with_filters([], _, _, _, EKey, EInc) ->
     {EKey, EInc};
-rewrite_end_key_with_filters([AddFieldName|Tail], ToKeyTypeFn, Filter, EKey, EInc1) when is_binary(AddFieldName) ->
+rewrite_end_key_with_filters([AddFieldName|Tail], [Order|TailOrder], ToKeyTypeFn, Filter, EKey, EInc1) when is_binary(AddFieldName) ->
     case proplists:get_value(AddFieldName, Filter) of
-        {Op,_,_} = F  when Op == '='; Op == '<'; Op == '<=' ->
+        {Op,_,_} = F  when Op == '=' orelse (Order == ascending andalso  (Op == '<' orelse Op == '<='))
+                                     orelse (Order == descending andalso  (Op == '>' orelse Op == '>=')) ->
             EKeyElem = to_key_elem(ToKeyTypeFn, F),
             %% if the quantum was inclusive, make sure we stay inclusive or
             %% the quantum boundary is modified later on
             EInc2 = ((EInc1 /= false) or is_inclusive_op(Op)),
             rewrite_end_key_with_filters(
-                Tail, ToKeyTypeFn, Filter, EKey++[EKeyElem], EInc2);
+                Tail, TailOrder, ToKeyTypeFn, Filter, EKey++[EKeyElem], EInc2);
         _ ->
             %% there is no filter for the next additional field so give up! The
             %% filters must be consecutive, we can't have a '_' inbetween
@@ -3103,6 +3109,7 @@ rewrite_where_with_additional_filters_test() ->
          {start_inclusive, true}],
         rewrite_where_with_additional_filters(
             [<<"a">>],
+            [ascending],
             fun([<<"a">>]) -> sint64 end,
             [{startkey,[{<<"c">>,timestamp,5500}]},
              {endkey,  [{<<"c">>,timestamp,5000}]},
