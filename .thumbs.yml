@@ -1,5 +1,6 @@
 minimum_reviewers: 2
-merge: true
+merge: false
+merge_method: merge
 build_steps:
   - make clean
   - make deps
