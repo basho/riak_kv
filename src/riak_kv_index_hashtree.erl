@@ -521,17 +521,28 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 %% before the fold reaches the now out-of-date version of the object, the old
 %% key/hash pair will be ignored.
 %% If `HasIndexTree` is true, also update the index spec tree.
--spec fold_keys(index(), pid(), boolean()) -> ok.
-fold_keys(Partition, Tree, HasIndexTree) ->
-    FoldFun = fold_fun(Tree, HasIndexTree),
+-spec fold_keys(index(), pid(), partition(), boolean()) -> ok.
+fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
+    FoldFun = fold_fun(HashtreePid, HasIndexTree),
+    {Limit, Wait} = get_build_throttle(),
     Req = riak_core_util:make_fold_req(FoldFun,
-                                       0, false,
+                                       {0, {Limit, Wait}}, false,
                                        [aae_reconstruction,
                                         {iterator_refresh, true}]),
-    riak_core_vnode_master:sync_command({Partition, node()},
+    Result = riak_core_vnode_master:sync_command({Partition, node()},
                                         Req,
                                         riak_kv_vnode_master, infinity),
-    ok.
+    handle_fold_keys_result(Result, HashtreePid, Index).
+
+
+%% The accumulator in the fold is the number of bytes hashed
+%% modulo the "build limit" size. If we get an int back, everything is ok
+handle_fold_keys_result({Result, {_Limit, _Delay}}, HashtreePid, Index) when is_integer(Result) ->
+    lager:info("Finished AAE tree build: ~p", [Index]),
+    gen_server:cast(HashtreePid, build_finished);
+handle_fold_keys_result(Result, HashtreePid, Index) ->
+    lager:error("Failed to build hashtree for index ~p. Result was: ~p", [Index, Result]),
+    gen_server:cast(HashtreePid, build_failed).
 
 get_build_throttle() ->
     app_helper:get_env(riak_kv,
@@ -544,29 +555,28 @@ maybe_throttle_build(RObjBin, Limit, Wait, Acc) ->
     if (Limit =/= 0) andalso (Acc2 > Limit) ->
             lager:debug("Throttling AAE build for ~b ms", [Wait]),
             timer:sleep(Wait),
-            0;
+            NewLimit = get_build_throttle(),
+            {0, NewLimit};
        true ->
-            Acc2
+            {Acc2, {Limit, Wait}}
     end.
 
 %% @doc Generate the folding function
 %% for a riak fold_req
 -spec fold_fun(pid(), boolean()) -> fun().
-fold_fun(Tree, _HasIndexTree = false) ->
-    ObjectFoldFun = object_fold_fun(Tree),
-    {Limit, Wait} = get_build_throttle(),
-    fun(BKey, RObj, Acc) ->
+fold_fun(HashtreePid, _HasIndexTree = false) ->
+    ObjectFoldFun = object_fold_fun(HashtreePid),
+    fun(BKey, RObj, {Acc, {Limit, Wait}}) ->
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
             Acc2 = maybe_throttle_build(RObj, Limit, Wait, Acc),
             Acc2
     end;
-fold_fun(Tree, _HasIndexTree = true) ->
+fold_fun(HashtreePid, _HasIndexTree = true) ->
     %% Index AAE backend, so hash the indexes
-    ObjectFoldFun = object_fold_fun(Tree),
-    IndexFoldFun = index_fold_fun(Tree),
-    {Limit, Wait} = get_build_throttle(),
-    fun(BKey = {Bucket, Key}, BinObj, Acc) ->
+    ObjectFoldFun = object_fold_fun(HashtreePid),
+    IndexFoldFun = index_fold_fun(HashtreePid),
+    fun(BKey = {Bucket, Key}, BinObj, {Acc, {Limit, Wait}}) ->
             RObj = riak_object:from_binary(Bucket, Key, BinObj),
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
@@ -576,20 +586,20 @@ fold_fun(Tree, _HasIndexTree = true) ->
     end.
 
 -spec object_fold_fun(pid()) -> fun().
-object_fold_fun(Tree) ->
+object_fold_fun(HashtreePid) ->
     fun(BKey={Bucket,Key}, RObj, BinBKey) ->
             IndexN = riak_kv_util:get_index_n({Bucket, Key}),
             insert([{IndexN, BinBKey, hash_object(BKey, RObj)}],
                    [if_missing],
-                   Tree)
+                   HashtreePid)
     end.
 
 -spec index_fold_fun(pid()) -> fun().
-index_fold_fun(Tree) ->
+index_fold_fun(HashtreePid) ->
     fun(RObj, BinBKey) ->
             IndexData = riak_object:index_data(RObj),
             insert([{?INDEX_2I_N, BinBKey, hash_index_data(IndexData)}],
-                   [if_missing], Tree)
+                   [if_missing], HashtreePid)
     end.
 
 %% @doc the 2i index hashtree as a Magic index_n of {0, 0}
@@ -897,16 +907,16 @@ clear_tree(State=#state{index=Index}) ->
     State3#state{built=false, expired=false}.
 
 destroy_trees(State) ->
-    State2 = close_trees(State),
+    State2 = close_trees(State, true),
     {_,Tree0} = hd(State#state.trees), % deliberately using state with live db ref
     _ = hashtree:destroy(Tree0),
     State2.
 
 -spec maybe_build(state()) -> state().
 maybe_build(State=#state{built=false}) ->
-    Self = self(),
+    HashtreePid = self(),
     Pid = spawn_link(fun() ->
-                             build_or_rehash(Self, State)
+                             build_or_rehash(HashtreePid, State)
                      end),
     State#state{built=Pid};
 maybe_build(State) ->
@@ -917,29 +927,27 @@ maybe_build(State) ->
 %% a fold/build. Otherwise, trigger a rehash to ensure the hashtrees match the
 %% current on-disk segments.
 -spec build_or_rehash(pid(), state()) -> ok.
-build_or_rehash(Self, State=#state{index=Index}) ->
-    Type = case load_built(State) of
-               false -> build;
-               true  -> rehash
-           end,
-    Locked = get_all_locks(Type, Index, self()),
-    build_or_rehash(Self, Locked, Type, State).
+build_or_rehash(HashtreePid, State = #state{index =Index}) ->
+    BuildOrRehash = determine_build_or_rehash(State),
+    Locked = get_all_locks(BuildOrRehash, Index, self()),
+    build_or_rehash(HashtreePid, Locked, BuildOrRehash, State).
 
-build_or_rehash(Self, Locked, Type, #state{index=Index, trees=Trees}) ->
-    case {Locked, Type} of
-        {true, build} ->
-            lager:info("Starting AAE tree build: ~p", [Index]),
-            fold_keys(Index, Self, has_index_tree(Trees)),
-            lager:info("Finished AAE tree build: ~p", [Index]),
-            gen_server:cast(Self, build_finished);
-        {true, rehash} ->
-            lager:debug("Starting AAE tree rehash: ~p", [Index]),
-            _ = [hashtree:rehash_tree(T) || {_,T} <- Trees],
-            lager:debug("Finished AAE tree rehash: ~p", [Index]),
-            gen_server:cast(Self, build_finished);
-        _ ->
-            gen_server:cast(Self, build_failed)
+determine_build_or_rehash(State) ->
+    case load_built(State) of
+        false -> build;
+        true -> rehash
     end.
+
+build_or_rehash(HashtreePid, true, build, #state{index =Index, trees =Trees}) ->
+    lager:info("Starting AAE tree build: ~p", [Index]),
+    fold_keys(Index, HashtreePid, Index, has_index_tree(Trees));
+build_or_rehash(HashtreePid, true, rehash, #state{index=Index, trees=Trees}) ->
+    lager:debug("Starting AAE tree rehash: ~p", [Index]),
+    _ = [hashtree:rehash_tree(T) || {_,T} <- Trees],
+    lager:debug("Finished AAE tree rehash: ~p", [Index]),
+    gen_server:cast(HashtreePid, build_finished);
+build_or_rehash(HashtreePid, false, _Type, _State) ->
+    gen_server:cast(HashtreePid, build_failed).
 
 -spec maybe_rebuild(state()) -> state().
 maybe_rebuild(State=#state{lock=undefined, built=true, expired=true, index=Index}) ->
@@ -970,9 +978,12 @@ maybe_rebuild(State) ->
 has_index_tree(Trees) ->
     orddict:is_key(?INDEX_2I_N, Trees).
 
-close_trees(State=#state{trees=undefined}) ->
+close_trees(State) ->
+    close_trees(State, false).
+
+close_trees(State=#state{trees=undefined}, _WillDestroy) ->
     State;
-close_trees(State=#state{trees=Trees}) ->
+close_trees(State=#state{trees=Trees}, false) ->
     Trees2 = [begin
                   NewTree = try
                                 case hashtree:next_rebuild(Tree) of
@@ -994,8 +1005,16 @@ close_trees(State=#state{trees=Trees}) ->
                             end,
                   {IdxN, NewTree}
               end || {IdxN, Tree} <- Trees],
-    _ = [hashtree:close(Tree) || {_IdxN, Tree} <- Trees2],
-    State#state{trees=undefined}.
+    really_close_trees(Trees2, State);
+
+close_trees(#state{trees=Trees} = State, true) ->
+    really_close_trees(Trees, State).
+
+really_close_trees(Trees, State) ->
+    lists:foreach(fun really_close_tree/1, Trees),
+    State#state{trees = undefined}.
+
+really_close_tree({_IdxN, Tree}) -> hashtree:close(Tree).
 
 -spec get_all_locks(build | rehash, index(), pid()) -> boolean().
 get_all_locks(Type, Index, Pid) ->
