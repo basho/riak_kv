@@ -534,20 +534,20 @@ make_missing_helper_module_resp(Table, BucketProps)
 make_missing_type_resp(Table) ->
     make_rpberrresp(
       ?E_MISSING_TYPE,
-      flat_format("Time Series table ~s does not exist", [Table])).
+      flat_format("Time Series table ~ts does not exist", [Table])).
 
 %%
 -spec make_nonts_type_resp(Table::binary()) -> #rpberrorresp{}.
 make_nonts_type_resp(Table) ->
     make_rpberrresp(
       ?E_NOT_TS_TYPE,
-      flat_format("Attempt Time Series operation on non Time Series table ~s", [Table])).
+      flat_format("Attempt Time Series operation on non Time Series table ~ts", [Table])).
 
 -spec make_missing_table_module_resp(Table::binary()) -> #rpberrorresp{}.
 make_missing_table_module_resp(Table) ->
     make_rpberrresp(
       ?E_MISSING_TS_MODULE,
-      flat_format("The compiled module for Time Series table ~s cannot be loaded", [Table])).
+      flat_format("The compiled module for Time Series table ~ts cannot be loaded", [Table])).
 
 -spec make_key_element_count_mismatch_resp(Got::integer(), Need::integer()) -> #rpberrorresp{}.
 make_key_element_count_mismatch_resp(Got, Need) ->
@@ -626,7 +626,7 @@ make_failed_listkeys_resp(Reason) ->
 
 make_table_create_fail_resp(Table, Reason) ->
     make_rpberrresp(
-      ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])).
+      ?E_CREATE, flat_format("Failed to create table ~ts: ~p", [Table, Reason])).
 
 make_table_activate_error_timeout_resp(Table) ->
     make_rpberrresp(
@@ -641,7 +641,7 @@ make_table_not_activated_resp(Table) ->
 make_table_created_missing_resp(Table) ->
     make_rpberrresp(
       ?E_CREATED_GHOST,
-      flat_format("Table ~s has been created but found missing", [Table])).
+      flat_format("Table ~ts has been created but found missing", [Table])).
 
 to_string(X) when is_atom(X) ->
     atom_to_list(X);

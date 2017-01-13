@@ -280,13 +280,13 @@ flat_format(Format, Args) ->
     lists:flatten(io_lib:format(Format, Args)).
 
 make_table_create_fail_resp(Table, Reason) ->
-    flat_format("Failed to create table ~s: ~p", [Table, Reason]).
+    flat_format("Failed to create table ~ts: ~p", [Table, Reason]).
 
 make_table_activate_error_timeout_resp(Table) ->
     flat_format("Timed out while attempting to activate table ~ts", [Table]).
 
 make_table_created_missing_resp(Table) ->
-    flat_format("Table ~s has been created but found missing", [Table]).
+    flat_format("Table ~ts has been created but found missing", [Table]).
 
 -spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(iolist()).
 produce_doc_body(RD, Ctx = #ctx{result = {Columns, Rows}}) ->

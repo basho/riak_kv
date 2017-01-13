@@ -51,6 +51,11 @@
 -endif.
 
  -define(TABLE_ACTIVATE_WAIT, 30). %%<< make TABLE_ACTIVATE_WAIT configurable in tsqueryreq
+%% TABLE_ACTIVATE_WAIT_RETRY_DELAY should give sufficient time for bucket_type
+%% activation to propagate via riak_core metadata exchange via plumtree protocol,
+%% which depends on the cluster size. The exchange is gossiped to achieve a
+%% level of parallelization but still takes significant time.
+-define(TABLE_ACTIVATE_WAIT_RETRY_DELAY, 100).
 
 %% external API calls enumerated
 -type query_api_call() :: create_table | query_select | describe_table | query_insert | query_explain | show_tables | query_delete.
@@ -131,28 +136,31 @@ create_table(SvcMod, ?DDL{table = Table}=DDL1, WithProps) ->
 
 create_table1(SvcMod, Table, Props, DDL, DDLRecCap, Seconds) ->
     case riak_core_bucket_type:create(Table, Props) of
-        ok -> wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Seconds);
+        ok ->
+            Milliseconds = Seconds * 1000,
+            WaitMilliseonds = ?TABLE_ACTIVATE_WAIT_RETRY_DELAY,
+            wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds);
         {error, Reason} -> {error, SvcMod:make_table_create_fail_resp(Table, Reason)}
     end.
 
-wait_until_supported(SvcMod, Table, _DDL, _DDLRecCap, _Seconds=0) ->
+wait_until_supported(SvcMod, Table, _DDL, _DDLRecCap, _Milliseconds=0, _WaitMilliseconds) ->
     {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
-wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds) ->
+wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds) ->
     case get_active_peer_nodes() of
         Nodes when is_list(Nodes) ->
-            wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds);
+            wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds);
         {error, _Reason} ->
-            timer:sleep(1000),
-            wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds - 1)
+            timer:sleep(WaitMilliseonds),
+            wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds - WaitMilliseonds, WaitMilliseonds)
     end.
 
-wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds) ->
+wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds) ->
     case get_remote_is_table_active_and_supported(Nodes, Table, DDLRecCap) of
         true -> ok;
         _ ->
-            timer:sleep(1000),
+            timer:sleep(WaitMilliseonds),
             lager:info("Waiting for table ~ts to be compiled on all active nodes", [Table]),
-            wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Seconds - 1)
+            wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Milliseconds - WaitMilliseonds, WaitMilliseonds)
     end.
 
 get_remote_is_table_active_and_supported(Nodes, Table, DDLRecCap) ->
@@ -171,15 +179,15 @@ get_active_peer_nodes() ->
         _ -> {error, retry}
     end.
 
-wait_until_active_and_supported(SvcMod, Table, _DDL, _DDLRecCap, _Seconds=0) ->
+wait_until_active_and_supported(SvcMod, Table, _DDL, _DDLRecCap, _Milliseconds=0, _WaitMilliseonds) ->
     {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
-wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Seconds) ->
+wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds) ->
     case riak_core_bucket_type:activate(Table) of
-        ok -> wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Seconds);
+        ok -> wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds);
         {error, not_ready} ->
-            timer:sleep(1000),
+            timer:sleep(WaitMilliseonds),
             lager:info("Waiting for table ~ts to be ready for activation", [Table]),
-            wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Seconds - 1);
+            wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds - WaitMilliseonds, WaitMilliseonds);
         {error, undefined} ->
             {error, SvcMod:make_table_created_missing_resp(Table)}
     end.
