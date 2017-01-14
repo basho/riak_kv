@@ -25,23 +25,23 @@
 
 -module(riak_kv_qry_buffers_ldb).
 
--export([new_table/2,
-         delete_table/3,
-         add_rows/2,
-         fetch_rows/3]).
+-export([open/1,
+         close/1,
+         destroy/1,
+         add_rows/3,
+         fetch_rows/4]).
 
+-define(EXPIRING_BUCKET_TYPE, <<"expire-me">>).
 
 %% leveldb instance parameters
 -define(LDB_WRITE_BUFFER_SIZE, 10*1024*1024).  %% 10 M should be enough for everybody
 
-
 -type errors() :: ldb_put_failed.
 -export_type([errors/0]).
 
--spec new_table(binary(), string()) -> {ok, eleveldb:db_ref()} | {error, term()}.
-new_table(Table, Root) ->
-    Path = filename:join(Root, binary_to_list(Table)),
-    _ = filelib:ensure_dir(Path),
+-spec open(string()) -> {ok, eleveldb:db_ref()} | {error, term()}.
+open(Name) ->
+    filelib:ensure_dir(Name),
     %% Important settings are is_internal_db and write_buffer_size;
     %% others are set here provisionally, or keps at default values
     Options = [{create_if_missing, true},
@@ -52,30 +52,38 @@ new_table(Table, Root) ->
                %% this prevents leveldb from autoexpiring records:
                {is_internal_db, true}
               ],
-    case eleveldb:open(Path, Options) of
+    case eleveldb:open(Name, Options) of
         {ok, LdbRef} ->
-            lager:debug("new LdbRef ~p in ~p", [LdbRef, Path]),
+            lager:debug("new LdbRef ~p in ~p", [LdbRef, Name]),
+            %% TODO set up expiry for bucket type ?EXPIRING_BUCKET_TYPE
             {ok, LdbRef};
         {error, {Atom, _Message} = LdbError} ->
-            lager:warning("qbuf eleveldb:open(~s) failed: ~p", [Path, LdbError]),
-            riak_kv_ts_util:rm_rf(Path),
+            lager:warning("qbuf eleveldb:open(~s) failed: ~p", [Name, LdbError]),
             {error, Atom}
     end.
 
--spec delete_table(binary(), eleveldb:db_ref(), string()) -> ok.
-delete_table(Table, LdbRef, Root) ->
-    ok = eleveldb:close(LdbRef),
-    riak_kv_ts_util:rm_rf(filename:join(Root, Table)),
+-spec destroy(string()) -> ok.
+destroy(Name) ->
+    ok = eleveldb:destroy(Name, []),
+    ok.
+
+-spec close(eleveldb:db_ref()) -> ok.
+close(Ref) ->
+    ok = eleveldb:close(Ref),
     ok.
 
 
--spec add_rows(eleveldb:db_ref(), [riak_kv_qry_buffers:data_row()]) ->
+-spec add_rows(eleveldb:db_ref(), binary(), [riak_kv_qry_buffers:data_row()]) ->
                       ok | {error, ldb_put_failed}.
-add_rows(LdbRef, Rows) ->
+add_rows(LdbRef, Bucket, Rows) ->
     try
         lists:foreach(
           fun({K, V}) ->
-                  ok = eleveldb:put(LdbRef, sext:encode(K), sext:encode(V), [{sync, false}])
+                  ok = eleveldb:put(
+                         LdbRef,
+                         key_prefix(Bucket, K),
+                         sext:encode(V),
+                         [{sync, false}])
           end,
           Rows)
     catch
@@ -83,10 +91,23 @@ add_rows(LdbRef, Rows) ->
             {error, ldb_put_failed}
     end.
 
+%% 
+key_prefix(Bucket, Key) ->
+    KeyPrefix = sext:prefix(Key),
+    EncodedBucket = sext:encode(Bucket),
+    <<16,0,0,0,3, %% 3-tuple - outer
+      12,183,128,8, %% o-atom
+      16,0,0,0,2, %% 2-tuple for bucket type/name
+      <<"expire-me">>/binary,
+      EncodedBucket/binary,
+      KeyPrefix/binary>>.
 
--spec fetch_rows(eleveldb:db_ref(), non_neg_integer(), unlimited|pos_integer()) ->
+
+
+-spec fetch_rows(eleveldb:db_ref(), binary(),
+                 non_neg_integer(), unlimited|pos_integer()) ->
                         {ok, [riak_kv_qry_buffers:data_row()]} | {error, term()}.
-fetch_rows(LdbRef, Offset, LimitOrUnlim) ->
+fetch_rows(LdbRef, Bucket, Offset, LimitOrUnlim) ->
     %% Because the database is read-only, the plan is to keep a cache
     %% of iterators for faster seeking (to the nearest stored),
     %% ideally also enable eleveldb to do the folding from stored
@@ -111,7 +132,9 @@ fetch_rows(LdbRef, Offset, LimitOrUnlim) ->
         try eleveldb:fold(
               LdbRef, FetchLimitFn,
               {Offset, LimitOrUnlim, 0, []},
-              [{fold_method, streaming}]) of
+              [{fold_method, streaming},
+               {start_key, key_prefix(Bucket, 0)},
+               {end_key, key_prefix(Bucket, <<>>)}]) of
             {_, _, _N, Acc} ->
                 {ok, Acc}
         catch

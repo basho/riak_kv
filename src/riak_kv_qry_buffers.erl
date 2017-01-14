@@ -3,7 +3,7 @@
 %% riak_kv_qry_buffers: Riak SQL query result disk-based temp storage
 %%                     (aka 'query buffers')
 %%
-%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
+%% Copyright (C) 2016, 2017 Basho Technologies, Inc. All rights reserved
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -56,10 +56,11 @@
          get_or_create_qbuf/5,  %% new Query arrives, with some Options
          get_qbuf_expiry/1,
          get_max_query_data_size/0,
+         kill_all_qbufs/0,
+         backend_expiry_request/1,
          set_max_query_data_size/1,
          set_qbuf_expiry/2,
          set_ready_waiting_process/2,  %% notify a process when all chunks are here
-         kill_all_qbufs/0,
 
          %% utility functions
          limit_to_scalar/1,
@@ -70,18 +71,40 @@
         ]).
 
 -type qbuf_ref() :: binary().
+
+%% the lifecycle of query buffers:
+-type qbuf_status() ::
+        %% 1. Collecting chunks. We track and expire incomplete
+        %% buffers, separately from the standard expiry, to ensure
+        %% cancelled queries get their leftovers cleaned up.
+        collecting_chunks
+
+        %% 2. All chunks have been collected. We are ready to serve a
+        %% fetch (or multiple fetches, when qbuf resue is implemented).
+      | serving_fetches
+
+        %% 3. Buffer expired, awaiting ldb code to request permission
+        %% to drop it from us.
+      | expiring
+
+        %% 4. Notified ldb of this bucket, we drop it from our list on
+        %% the next tick.
+      | expired.
+
 -type qbuf_option() :: {expiry_time, Seconds::non_neg_integer()} |
                        {atom(), term()}.
 -type qbuf_options() :: [qbuf_option()].
--type watermark_status() :: underfull | limited_capacity.  %% overengineering much?
+-type watermark_status() :: underfull | limited_capacity.
 -type data_row() :: [riak_pb_ts_codec:ldbvalue()].
 
--export_type([qbuf_ref/0, qbuf_options/0, watermark_status/0, data_row/0]).
+-export_type([qbuf_ref/0, qbuf_status/0, qbuf_options/0, watermark_status/0, data_row/0]).
 
 -include("riak_kv_ts.hrl").
 
 -define(SERVER, ?MODULE).
 -define(TIMER_TICK_MSEC, 1000).
+
+-define(LDB_SINGLE_TABLE_NAME, "favela").
 
 %%%===================================================================
 %%% API
@@ -134,6 +157,16 @@ fetch_limit(QBufRef, Limit, Offset) ->
 get_qbuf_expiry(QBufRef) ->
     gen_server:call(?SERVER, {get_qbuf_expiry, QBufRef}).
 
+-spec backend_expiry_request(qbuf_ref()) ->
+                             {ok, qbuf_status()} | {error, bad_qbuf_ref}.
+%% @doc Process ldb expiry request on this qbuf: tell ldb expiry code
+%% to hold off expiry on active buffers (i.e., buffers in all states
+%% youger than 'expiring'). For 'expiring' state, signal this buffer
+%% can be deleted and move it to the 'expired' state (for it to be
+%% dropped from our records on the next tick).
+backend_expiry_request(QBufRef) ->
+    gen_server:call(?SERVER, {backend_expiry_request, QBufRef}).
+
 -spec set_qbuf_expiry(qbuf_ref(), pos_integer()) ->
                     ok | {error, bad_qbuf_ref}.
 %% @doc Set this query buffer expiry period.
@@ -161,6 +194,9 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
 
 
 -record(qbuf, {
+          %% collecting_chunks -> awaiting_fetch -> expiring -> expired
+          status = collecting_chunks :: qbuf_status(),
+
           %% original SELECT query this buffer holds the data for
           orig_qry :: ?SQL_SELECT{},
           %% a DDL for it
@@ -173,9 +209,7 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
           expire_msec :: non_neg_integer(),
 
           %% leveldb handle for the temp storage (undefined initially, until created by ldb_setup_fun)
-          ldb_ref :: eleveldb:db_ref() | undefined,
-          %% a function to obtain ldb handle (deferred, possibly never called, eleveldb:open)
-          ldb_setup_fun :: fun(() -> {ok, eleveldb:db_ref()} | {error, term()}),
+          ldb_ref :: riak_kv_qry_buffers_ldb:db_ref() | undefined,
 
           %% in-memory buffer for small fish
           inmem_buffer = [] :: [{binary(), binary()}],
@@ -185,13 +219,10 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
           %% total chunks needed (== number of subqueries)
           chunks_need :: integer(),
 
-          %% flipped to true when chunks_need == chunks_got
-          all_chunks_received = false :: boolean(),
-
           %% total records stored (when complete)
           total_records = 0 :: non_neg_integer(),
 
-          %% %% iterator cache (need a working iterator support in eleveldb)
+          %% TODO: iterator cache
           %% iter_cache = [] :: [cached_iter()],
 
           %% total size on disk, for reporting
@@ -228,7 +259,9 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
           %% max query size
           max_query_data_size :: non_neg_integer(),
           %% dir containing qbuf ldb files
-          root_path :: string()
+          root_path :: string(),
+          %% the single instance common for all query buffers
+          ldb_ref :: riak_kv_qry_buffers_ldb:db_ref()
          }).
 
 
@@ -242,7 +275,7 @@ init([RootPath, MaxRetSize,
       SoftWatermark, HardWatermark,
       InmemMax,
       QBufExpireMsec, IncompleteQBufReleaseMsec]) ->
-    spawn(fun() -> prepare_qbuf_dir(RootPath) end),
+    spawn(fun() -> prepare_backend(RootPath) end),
     State =
         #state{status                       = init_in_progress,
                root_path                    = RootPath,
@@ -256,28 +289,49 @@ init([RootPath, MaxRetSize,
     spawn_link(fun() -> schedule_tick() end),
     {ok, State}.
 
-prepare_qbuf_dir(RootPath) ->
-    %% don't bother recovering any leftover tables
+prepare_backend(RootPath) ->
+    lists:foldl(
+      fun(StageFun, ok) -> StageFun(RootPath);
+         (_StageFun, NotOk) -> NotOk
+      end,
+      ok, [fun backend_rmdir/1,
+           fun backend_mkdir/1,
+           fun backend_open/1]).
+
+backend_rmdir(RootPath) ->
     case riak_kv_ts_util:rm_rf(RootPath) of
         ok ->
-            gen_server:cast(?SERVER, {prepare_qbuf_dir, ok});
-        {error, Reason1} ->
-            lager:warning("Found old data in qbuf dir \"~s\" could not be removed: ~p", [RootPath, Reason1]),
-            gen_server:cast(?SERVER, {prepare_qbuf_dir, ok})
-            %% eleveldb:open may fail, users beware
-    end,
+            ok;
+        {error, Reason} ->
+            lager:error("Found old data in qbuf dir \"~s\" could not be removed: ~p", [RootPath, Reason]),
+            gen_server:cast(?SERVER, {prepare_backend, {error, qbuf_rmdir_fail}})
+    end.
+
+backend_mkdir(RootPath) ->
     case filelib:ensure_dir(RootPath) of
         ok ->
-            gen_server:cast(?SERVER, {prepare_qbuf_dir, ok});
-        {error, Reason2} ->
-            lager:warning("Could not create qbuf dir \"~s\": ~p", [RootPath, Reason2]),
-            gen_server:cast(?SERVER, {prepare_qbuf_dir, {fail, Reason2}})
+            ok;
+        {error, Reason} ->
+            lager:error("Failed to create qbuf dir \"~s\": ~p", [RootPath, Reason]),
+            gen_server:cast(?SERVER, {prepare_backend, {error, qbuf_dir_create_fail}})
+    end.
+
+backend_open(RootPath) ->
+    LdbPath = filename:join(RootPath, ?LDB_SINGLE_TABLE_NAME),
+    case riak_kv_qry_buffers_ldb:open(LdbPath) of
+        {error, Reason} ->
+            lager:error("Failed to open single-instance ldb in \"~s\": ~p", [RootPath, Reason]),
+            gen_server:cast(?SERVER, {prepare_backend, {error, qbuf_backend_open_fail}});
+        {ok, LdbRef} ->
+            gen_server:cast(?SERVER, {prepare_backend, {ok, LdbRef}}),
+            ok
     end.
 
 schedule_tick() ->
     gen_server:cast(?SERVER, tick),
     timer:sleep(?TIMER_TICK_MSEC),
     schedule_tick().
+
 
 -spec handle_call(term(), pid() | {pid(), term()}, #state{}) -> {reply, term(), #state{}}.
 handle_call(_Req, _From, State = #state{status = init_in_progress}) ->
@@ -308,6 +362,9 @@ handle_call({fetch_limit, QBufRef, Limit, Offset}, _From, State) ->
 handle_call({get_qbuf_expiry, QBufRef}, _From, State) ->
     do_get_qbuf_expiry(QBufRef, State);
 
+handle_call({backend_expiry_request, QBufRef}, _From, State) ->
+    do_backend_expiry_request(QBufRef, State);
+
 handle_call({set_qbuf_expiry, QBufRef, NewExpiry}, _From, State) ->
     do_set_qbuf_expiry(QBufRef, NewExpiry, State);
 
@@ -319,12 +376,13 @@ handle_call({set_max_query_data_size, Value}, _From, State) ->
 
 
 -spec handle_cast(term(), #state{}) -> {noreply, #state{}}.
-handle_cast({prepare_qbuf_dir, ok}, State) ->
-    {noreply, State#state{status = ready}};
-handle_cast({prepare_qbuf_dir, {error, Reason}}, State) ->
+handle_cast({prepare_backend, {ok, LdbRef}}, State) ->
+    {noreply, State#state{status = ready,
+                          ldb_ref = LdbRef}};
+handle_cast({prepare_backend, {error, Reason}}, State) ->
     {noreply, State#state{status = {init_failed, Reason}}};
 handle_cast(tick, State) ->
-    do_reap_expired_qbufs(State);
+    do_qbuf_lifecycle(State);
 handle_cast(_Msg, State) ->
     lager:warning("Not handling cast message ~p", [_Msg]),
     {noreply, State}.
@@ -359,7 +417,6 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                       Options,
                       #state{qbufs            = QBufs0,
                              soft_watermark   = SoftWMark,
-                             root_path        = RootPath,
                              total_size       = TotalSize,
                              qbuf_expire_msec = DefaultQBufExpireMsec} = State0) ->
     case get_qref(SQL, QBufs0) of
@@ -371,13 +428,11 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                     DDL = ?DDL{table = Table} =
                         sql_to_ddl(OrigTable, CompiledSelect, CompiledOrderBy),
                     lager:debug("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
-                    DelayedLdbCreateF = fun() -> riak_kv_qry_buffers_ldb:new_table(Table, RootPath) end,
                     QBuf = #qbuf{orig_qry      = SQL,
                                  ddl           = DDL,
                                  mother_table  = riak_kv_ts_util:queried_table(SQL),
                                  chunks_need   = NSubqueries,
                                  ldb_ref       = undefined,
-                                 ldb_setup_fun = DelayedLdbCreateF,
                                  expire_msec   = proplists:get_value(
                                                    expiry_msec, Options, DefaultQBufExpireMsec),
                                  last_accessed = os:timestamp(),
@@ -391,49 +446,42 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
     end.
 
 
-do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
-                               root_path = RootPath} = State0) ->
+do_delete_qbuf(QBufRef, #state{qbufs = QBufs0} = State0) ->
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{ldb_ref = undefined} ->
-            {reply, ok, State0#state{qbufs = lists:keydelete(QBufRef, 1, QBufs0)}};
-        #qbuf{ldb_ref = LdbRef,
-              ddl = ?DDL{table = Table}} ->
-            ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
+        #qbuf{} ->
             {reply, ok, State0#state{qbufs = lists:keydelete(QBufRef, 1, QBufs0)}}
     end.
 
 
 do_batch_put(QBufRef, Data, #state{qbufs      = QBufs0,
-                                   total_size = TotalSize0,
-                                   inmem_max  = InmemMax,
-                                   hard_watermark = HardWatermark} = State0) ->
+                                   total_size = TotalSize0} = State0) ->
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{all_chunks_received = true} ->
+        #qbuf{status = Status} when Status /= collecting_chunks ->
             {reply, {error, qbuf_already_finished}, State0};
         QBuf0 ->
-            case add_chunk(
-                   QBuf0, Data, TotalSize0, HardWatermark, InmemMax) of
-                {ok, #qbuf{all_chunks_received = IsReady,
+            case add_chunk(QBufRef, QBuf0, Data, State0) of
+                {ok, #qbuf{status = Status,
                            ready_waiting_notifier = SelfNotifierFun} = QBuf} ->
                     State9 = State0#state{total_size = TotalSize0 + QBuf#qbuf.size,
                                           qbufs = lists:keyreplace(
                                                     QBufRef, 1, QBufs0, {QBufRef, QBuf})},
                     maybe_inform_waiting_process(
-                      IsReady, SelfNotifierFun, QBufRef),
+                      (Status == serving_fetches), SelfNotifierFun, QBufRef),
                     {reply, ok, State9};
                 {error, Reason} ->
                     {reply, {error, Reason}, State0}
             end
     end.
 
--spec add_chunk(#qbuf{}, [data_row()],
-                non_neg_integer(), non_neg_integer(), non_neg_integer()) ->
-                       {ok, #qbuf{}, non_neg_integer()} | {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
-add_chunk(#qbuf{inmem_buffer  = InmemBuffer0,
+-spec add_chunk(binary(), #qbuf{}, [data_row()], #state{}) ->
+                       {ok, #qbuf{}, non_neg_integer()} |
+                       {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
+add_chunk(QBufRef,
+          #qbuf{inmem_buffer  = InmemBuffer0,
                 orig_qry      = ?SQL_SELECT{'ORDER BY' = OrderBy},
                 chunks_got    = ChunksGot0,
                 chunks_need   = ChunksNeed,
@@ -441,7 +489,10 @@ add_chunk(#qbuf{inmem_buffer  = InmemBuffer0,
                 total_records = TotalRecords0,
                 key_field_positions = KeyFieldPositions} = QBuf0,
           Data,
-          TotalSize, HardWatermark, InmemMax) ->
+          #state{total_size     = TotalSize,
+                 hard_watermark = HardWatermark,
+                 inmem_max      = InmemMax,
+                 ldb_ref        = LdbRef}) ->
     ChunkSize = compute_chunk_size(Data),
     case TotalSize + ChunkSize > HardWatermark of
         true ->
@@ -456,62 +507,54 @@ add_chunk(#qbuf{inmem_buffer  = InmemBuffer0,
             %% the constructed key. See enkey/4.
             ChunkId = ChunksGot0,
             ChunksGot = ChunksGot0 + 1,
-            AllChunksReceived = (ChunksNeed == ChunksGot),
+            Status = qbuf_status_with_cbunks(ChunksNeed, ChunksGot),
 
             %% construct keys for new data
-            OrdByFieldQualifiers = lists:map(fun get_ordby_field_qualifiers/1, OrderBy),
+            OrdByFieldQualifiers =
+                [{OrdBySpec, NullsSpec} || {_, OrdBySpec, NullsSpec} <- OrderBy],
             KeyedData = enkey(Data, KeyFieldPositions, OrdByFieldQualifiers, ChunkId),
 
             QBuf1 = QBuf0#qbuf{size          = Size + ChunkSize,
                                chunks_got    = ChunksGot,
                                total_records = TotalRecords0 + length(Data),
                                last_accessed = os:timestamp(),
-                               all_chunks_received = AllChunksReceived},
-            lager:debug("adding chunk ~b of ~b to ldb", [ChunksGot, ChunksNeed]),
+                               status        = Status},
+            lager:debug("adding chunk ~b of ~b", [ChunksGot, ChunksNeed]),
             store_chunk(
-              QBuf1,
-              %% both the existing accumulated chunks as well as the
-              %% newly added chunk are already sorted, so perhaps a
-              %% more intelligent way would be to insert the new chunk
-              %% at the right place.
+              QBufRef, QBuf1, LdbRef,
+              %% the existing accumulated chunks is already sorted, so
+              %% perhaps a more intelligent way would be to insert the
+              %% new chunk at the right place?  Nope,
+              %%   lists:sort(lists:append(SortedAcc, Chunk))
+              %% is only marginally worse than
+              %%   lists:merge(SortedAcc, lists:sort(Chunk))
               lists:append(InmemBuffer0, KeyedData),
               can_afford_inmem(InmemMax),
-              AllChunksReceived)
+              Status)
     end.
 
-store_chunk(#qbuf{ldb_ref = LdbRef,
-                  ldb_setup_fun = DelayedCreateFun} = QBuf0,
-            Data, CanAffordInMem, AllChunksReceived) ->
-    EleveldbPutF =
-        fun(Ref) ->
-                case riak_kv_qry_buffers_ldb:add_rows(Ref, Data) of
-                    ok ->
-                        QBuf = QBuf0#qbuf{inmem_buffer = [],
-                                          ldb_ref      = Ref},
-                        {ok, QBuf};
-                    {error, _} = ErrorReason ->
-                        ErrorReason
-                end
-        end,
+qbuf_status_with_cbunks(Got, Got) -> serving_fetches;
+qbuf_status_with_cbunks(_Need, _Got) -> collecting_chunks.
 
-    IsBackendOpened = (LdbRef /= undefined),
+
+store_chunk(QBufRef, #qbuf{ldb_ref = QbufLdbRef} = QBuf0, MasterLdbRef,
+            Data, CanAffordInMem, QbufStatus) ->
+    IsBackendOpened = (QbufLdbRef /= undefined),
     case (IsBackendOpened orelse not CanAffordInMem) of
         false ->
             %% we have not switched to writing to ldb yet, and we
             %% don't need to: keep accumulating data in memory
             InmemBuffer = lists:sort(Data),
-            QBuf = QBuf0#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, AllChunksReceived)},
+            QBuf = QBuf0#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, QbufStatus)},
             {ok, QBuf};
-        true when IsBackendOpened ->
-            %% already writing to ldb: keep doing so, irrespective of
-            %% memory availability
-            EleveldbPutF(LdbRef);
         true ->
-            %% this is when we switch to writing to ldb; don't forget
-            %% to open the temp table
-            case DelayedCreateFun() of
-                {ok, RealLdbRef} ->  %% now it's a real ref
-                    EleveldbPutF(RealLdbRef);
+            %% switch to/carry on writing to ldb (idempotent things,
+            %% now that we don't need to explicitly do `eleveldb:open`
+            case riak_kv_qry_buffers_ldb:add_rows(MasterLdbRef, QBufRef, Data) of
+                ok ->
+                    QBuf = QBuf0#qbuf{inmem_buffer = [],
+                                      ldb_ref      = MasterLdbRef},
+                    {ok, QBuf};
                 {error, _} = ErrorReason ->
                     ErrorReason
             end
@@ -524,13 +567,10 @@ can_afford_inmem(Threshold) ->
     Allocated = HeapSize - StackSize,
     Allocated < Threshold.
 
-get_ordby_field_qualifiers({_, AscDesc, Nulls}) ->
-    {AscDesc, Nulls}.
-
-maybe_only_rows(KeyedRows, _StripKeysUsedForSorting = false) ->
+maybe_only_rows(KeyedRows, collecting_chunks) ->
     %% while collecting chunks, we keep keyed data
     KeyedRows;
-maybe_only_rows(KeyedRows, _StripKeysUsedForSorting = true) ->
+maybe_only_rows(KeyedRows, serving_fetches) ->
     %% once collected, we discard the artificial keys; pure records
     %% remain, in the order and form the client expects
     {_Keys, Rows} = lists:unzip(KeyedRows),
@@ -547,7 +587,7 @@ do_set_ready_waiting_process(QBufRef, SelfNotifierFun, #state{qbufs = QBufs0} = 
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{all_chunks_received = true} ->
+        #qbuf{status = awaiting_fetch} ->
             %% qbuf is already ready: don't wait for the next
             %% batch_put to turn round and notify the process (because
             %% there will be no more batch puts)
@@ -572,7 +612,7 @@ do_fetch_limit(QBufRef,
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{all_chunks_received = false} ->
+        #qbuf{status = collecting_chunks} ->
             {reply, {error, qbuf_not_ready}, State0};
         #qbuf{inmem_buffer = InmemBuffer,
               ldb_ref      = LdbRef,
@@ -590,7 +630,8 @@ do_fetch_limit(QBufRef,
                                 lists:sublist(InmemBuffer, Offset + 1, Limit)
                         end;
                     false ->
-                        {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Offset, Limit),
+                        {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(
+                                          LdbRef, QBufRef, Offset, Limit),
                         LdbRows
                 end,
             lager:debug("fetched ~p rows from ~p for ~p", [length(Rows), Table, OrigQry]),
@@ -620,6 +661,22 @@ do_set_qbuf_expiry(QBufRef, NewExpiry, #state{qbufs = QBufs0} = State0) ->
     end.
 
 
+do_backend_expiry_request({<<"$abuf">>, QBufRef},
+                      #state{qbufs = QBufs0} = State0) ->
+    case get_qbuf_record(QBufRef, QBufs0) of
+        false ->
+            {reply, {error, bad_qbuf_ref}, State0};
+        #qbuf{status = expiring} = QBuf0 ->
+            QBuf9 = QBuf0#qbuf{status = expired},
+            State9 = State0#state{qbufs = lists:keyreplace(
+                                            QBufRef, 1, QBufs0, {QBufRef, QBuf9})},
+            {reply, {ok, expiring}, State9}
+    end;
+do_backend_expiry_request(_NotAQBufBucket, State) ->
+    {reply, {error, not_a_qbuf}, State}.
+
+
+
 do_get_max_query_data_size(#state{max_query_data_size = Value} = State) ->
     {reply, Value, State}.
 
@@ -628,39 +685,46 @@ do_set_max_query_data_size(Value, State0) ->
     {reply, ok, State9}.
 
 
-do_reap_expired_qbufs(#state{qbufs = QBufs0,
-                             root_path = RootPath,
-                             incomplete_qbuf_release_msec = IncompleteQbufReleaseMsec} = State) ->
+do_qbuf_lifecycle(#state{incomplete_qbuf_release_msec = IncompleteQbufReleaseMsec,
+                         qbufs = QBufs0} = State) ->
     Now = os:timestamp(),
     QBufs9 =
-        lists:filter(
-          fun({_QBufRef, #qbuf{all_chunks_received = true,
-                               ldb_ref = LdbRef,
-                               ddl = ?DDL{table = Table},
-                               expire_msec = ExpireMsec,  %% qbuf-specific, possibly overriden
-                               last_accessed = LastAccessed}}) ->
-                  ExpiresOn = advance_timestamp(LastAccessed, ExpireMsec),
-                  case ExpiresOn < Now of
-                      true ->
-                          ok = kill_ldb(RootPath, Table, LdbRef),
-                          lager:debug("Reaped expired qbuf ~p", [Table]),
-                          false;
-                      false ->
-                          true
-                  end;
-             ({_QBufRef, #qbuf{all_chunks_received = false,
-                               ldb_ref = LdbRef,
-                               ddl = ?DDL{table = Table},
-                               last_accessed = LastAccessed}}) ->
+        lists:filtermap(
+          fun({_QBufRef, #qbuf{status = expired,
+                               ddl = ?DDL{table = Table}}}) ->
+                  %% ldb expiry module already knows this qbuf has
+                  %% expired, has dropped it or will drop it,
+                  %% asynchronously. We can safely drop it, too.
+                  lager:info("Reaped expired qbuf ~s", [Table]),
+                  false;
+             ({QBufRef, #qbuf{status = collecting_chunks,
+                              ddl = ?DDL{table = Table},
+                              last_accessed = LastAccessed} = QBuf0}) ->
+                  %% handle incomplete qbufs left from cancelled queries
                   ExpiresOn = advance_timestamp(LastAccessed, IncompleteQbufReleaseMsec),
                   case ExpiresOn < Now of
                       true ->
-                          ok = kill_ldb(RootPath, Table, LdbRef),
-                          lager:info("Reaped incompletely filled qbuf ~p", [Table]),
-                          false;
+                          lager:info("Force-expiring incompletely filled qbuf ~s", [Table]),
+                          {true, {QBufRef, QBuf0#qbuf{status = expiring}}};
                       false ->
                           true
-                  end
+                  end;
+             ({QBufRef, #qbuf{status = serving_fetches,
+                              ddl = ?DDL{table = Table},
+                              expire_msec = ExpireMsec,
+                              last_accessed = LastAccessed} = QBuf0}) ->
+                  %% handle normal expiry
+                  ExpiresOn = advance_timestamp(LastAccessed, ExpireMsec),
+                  case ExpiresOn < Now of
+                      true ->
+                          lager:info("Expiring regular qbuf ~s", [Table]),
+                          {true, {QBufRef, QBuf0#qbuf{status = expiring}}};
+                      false ->
+                          true
+                  end;
+             (_LeaveAlone) ->
+                  %% 'expiring' qbufs are waiting for backend expiry requests
+                  true
           end,
           QBufs0),
     TotalSize =
@@ -804,15 +868,13 @@ get_qref(_SQL, _QBufs) ->
     AlwaysUniqueId = term_to_binary(make_ref()),
     {ok, {new, AlwaysUniqueId}}.
 
-kill_all_qbufs(State0 = #state{qbufs = QBufs,
-                               root_path = RootPath}) ->
-    [lager:debug("cleaning up ~b buffer(s)", [length(QBufs)]) || QBufs /= []],
-    lists:foreach(
-      fun({_QBufRef, #qbuf{ldb_ref = LdbRef,
-                           ddl = ?DDL{table = Table}}}) ->
-              kill_ldb(RootPath, Table, LdbRef)
-      end,
-      QBufs),
+kill_all_qbufs(State0 = #state{qbufs     = QBufs,
+                               root_path = RootPath,
+                               ldb_ref   = LdbRef}) ->
+    lager:debug("cleaning up (~b buffer(s))", [length(QBufs)]),
+    LdbPath = filename:join(RootPath, ?LDB_SINGLE_TABLE_NAME),
+    ok = riak_kv_qry_buffers_ldb:close(LdbRef),
+    ok = riak_kv_qry_buffers_ldb:destroy(LdbPath),
     State0#state{qbufs = [],
                  total_size = 0}.
 
@@ -821,13 +883,6 @@ touch_qbuf(QBufRef, State0 = #state{qbufs = QBufs0}) ->
     QBuf9 = QBuf0#qbuf{last_accessed = os:timestamp()},
     State0#state{qbufs = lists:keyreplace(
                            QBufRef, 1, QBufs0, {QBufRef, QBuf9})}.
-
-kill_ldb(RootPath, Table, LdbRef) when LdbRef /= undefined ->
-    ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
-    ok;
-kill_ldb(_RootPath, _Table, _DelayedAndNeverCalledFun) ->
-    ok.
-
 
 
 compute_total_qbuf_size(QBufs) ->
