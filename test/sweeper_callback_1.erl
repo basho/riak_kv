@@ -24,7 +24,7 @@
 
 -export([participate_in_sweep/2,
          successful_sweep/2,
-         failed_sweep/2,
+         failed_sweep/3,
          visit_function/3]).
 
 participate_in_sweep(_Index, _Pid) ->
@@ -36,7 +36,7 @@ successful_sweep(Index, _FinalAcc) ->
     riak_kv_sweeper_SUITE ! {ok, successful_sweep, ?MODULE, Index},
     ok.
 
-failed_sweep(Index, _Reason) ->
+failed_sweep(Index, _Reason, _Acc) ->
     riak_kv_sweeper_SUITE ! {ok, failed_sweep, ?MODULE, Index},
     ok.
 
