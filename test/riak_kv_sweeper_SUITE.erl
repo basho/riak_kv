@@ -200,7 +200,7 @@ test_remove_participant_persistent(_Config) ->
 test_sweep_request(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     I0 = pick(Indices),
     riak_kv_sweeper:sweep(I0),
@@ -224,7 +224,7 @@ test_sweep_request(Config) ->
 test_sweep_request_non_existing_index(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     Max = lists:max(Indices),
     NonExisting = Max * Max,
@@ -246,7 +246,7 @@ test_sweep_request_non_existing_index(Config) ->
 test_scheduler_sync_backend(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(sync, _NumKeys=1000, _ObjecSizeBytes=100),
+    sweeper_meck_helper:backend_modules(sync, _NumKeys=1000, _ObjectSizeBytes=100),
 
     sweep_all_indices(Indices),
     ok.
@@ -266,7 +266,7 @@ test_scheduler_sync_backend(Config) ->
 test_scheduler_async_backend(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=100),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=100),
 
     sweep_all_indices(Indices),
     ok.
@@ -284,7 +284,7 @@ test_scheduler_async_backend(Config) ->
 test_scheduler(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     sweep_all_indices(Indices),
     ok.
@@ -302,7 +302,7 @@ test_scheduler(Config) ->
 test_scheduler_worker_process_crashed(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_crash),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     riak_kv_sweeper:enable_sweep_scheduling(),
     tick_per_index(Indices),
@@ -325,7 +325,7 @@ test_scheduler_run_interval(Config) ->
     Indices = ?config(vnode_indices, Config),
     RunInterval = 1,
     new_sweep_participant(sweeper_callback_1, RunInterval),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     sweep_all_indices(Indices),
     timer:sleep(timer:seconds(RunInterval + 1)),
@@ -347,7 +347,7 @@ test_scheduler_run_interval_as_fun(Config) ->
     Indices = ?config(vnode_indices, Config),
     RunIntervalFun = fun() -> 1 end,
     new_sweep_participant(sweeper_callback_1, RunIntervalFun),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     sweep_all_indices(Indices),
     timer:sleep(timer:seconds(RunIntervalFun() + 1)),
@@ -369,7 +369,7 @@ test_scheduler_run_interval_as_fun(Config) ->
 test_scheduler_remove_participant(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     WaitIndex = pick(Indices),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -397,7 +397,7 @@ test_scheduler_remove_participant(Config) ->
 test_scheduler_queue(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     WaitIndex = pick(Indices),
     WaitIndex1 = pick(Indices -- [WaitIndex]),
@@ -440,7 +440,7 @@ test_scheduler_queue(Config) ->
 test_scheduler_sweep_window_never(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(sync, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(sync, _NumKeys=5000, _ObjectSizeBytes=0),
 
     application:set_env(riak_kv, sweep_window, never),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -470,7 +470,7 @@ test_scheduler_sweep_window_never(Config) ->
 test_scheduler_now_outside_sleep_window(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(sync, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(sync, _NumKeys=5000, _ObjectSizeBytes=0),
 
     {_, {Hour, _, _}} = calendar:local_time(),
     Start = add_hours(Hour, 2),
@@ -502,7 +502,7 @@ test_scheduler_now_outside_sleep_window(Config) ->
 test_stop_all_scheduled_sweeps(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     application:set_env(riak_kv, sweep_concurrency, length(Indices)),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -561,7 +561,7 @@ test_stop_all_scheduled_sweeps_race_condition(Config) ->
 test_scheduler_add_participant(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     riak_kv_sweeper:enable_sweep_scheduling(),
     sweep_all_indices(Indices, ok, sweeper_callback_1),
@@ -588,7 +588,7 @@ test_scheduler_add_participant(Config) ->
 test_scheduler_restart_sweep(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     WaitIndex = pick(Indices),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -625,7 +625,7 @@ test_scheduler_restart_sweep(Config) ->
 test_scheduler_estimated_keys_lock_ok(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
     sweeper_meck_helper:aae_modules(_AAEnabled = true, EstimatedKeys = 4200, _LockResult = ok),
 
     sweep_all_indices(Indices),
@@ -652,7 +652,7 @@ test_scheduler_estimated_keys_lock_ok(Config) ->
 test_scheduler_estimated_keys_lock_fail(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
     sweeper_meck_helper:aae_modules(_AAEnabled = true, _EstimatedKeys = 4200, _LockResult = fail),
 
     sweep_all_indices(Indices),
@@ -1107,7 +1107,7 @@ test_scheduler_sweep_concurrency(_Config) ->
 test_bucket_props(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_bucket_props, _RunInterval = 1, _Options = [bucket_props]),
-    sweeper_meck_helper:backend_modules(async, NumKeys=16, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, NumKeys=16, _ObjectSizeBytes=0),
 
     Index = pick(Indices),
     riak_kv_sweeper:sweep(Index),
@@ -1127,7 +1127,7 @@ test_bucket_props(Config) ->
 test_no_bucket_props(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1, _RunInterval = 1, _Options = []),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     Index = pick(Indices),
     riak_kv_sweeper:sweep(Index),
