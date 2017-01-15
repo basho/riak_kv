@@ -353,6 +353,42 @@ test_scheduler_run_interval_as_fun(Config) ->
     sweep_all_indices(Indices),
     ok.
 
+%% Test riak_kv_sweeper's re-scheduling of sweeper, configured by the
+%% run_interval property. Elapsed time is less than the run interval.
+%%
+%% The test uses sweep participant sweeper_callback_wait that calls
+%% back a Fun before visiting an keys to pause and then signal to the
+%% sweeps to continue. See raik_kv_sweeper:before_visit(...), the Fun
+%% for this test case defaults to no-op.
+%%
+%% The test asserts that sweep scheduler does not schedule sweeps
+%% before run_interval + 1 seconds have elapsed and that we have at
+%% least one running sweep after run_interval + 1.
+%%
+test_scheduler_run_interval_not_expired(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    RunInterval = 60,
+    new_sweep_participant(sweeper_callback_wait, RunInterval),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
+
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    tick_per_index(Indices),
+    sweeper_callback_wait:before_visit(Indices),
+    [ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, I}) || I <- Indices],
+    sweeper_meck_helper:advance_time({seconds, 1}),
+    tick_per_index(Indices),
+    check_sweeps_idle(Indices),
+    sweeper_meck_helper:advance_time({seconds, 59}),
+    tick_per_index(Indices),
+    check_sweeps_idle(Indices),
+    sweeper_meck_helper:advance_time({seconds, 1}),
+    tick_per_index(Indices),
+    {_, Sweeps} = riak_kv_sweeper:status(),
+    [_|_] = [riak_kv_sweeper_state:sweep_index(Sweep) ||
+                Sweep <- Sweeps,
+                riak_kv_sweeper_state:sweep_state(Sweep) == running],
+    ok.
+
 %%
 %% Test removing a sweep participant during a sweep.
 %%
