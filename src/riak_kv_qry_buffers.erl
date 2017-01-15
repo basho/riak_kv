@@ -451,9 +451,9 @@ add_chunk(#qbuf{inmem_buffer  = InmemBuffer0,
             %% construct a new and unique key for each record (because
             %% there may be multiple records with the same key
             %% constructed from columns BY which to ORDER).  This is
-            %% not the subquery id, but it's ok as long as we entuple
-            %% the new key first.  The entupling happens in enkey/4,
-            %% see below.
+            %% not the subquery id, but it's ok as long as we have the
+            %% new key as the first element in the tuple representing
+            %% the constructed key. See enkey/4.
             ChunkId = ChunksGot0,
             ChunksGot = ChunksGot0 + 1,
             AllChunksReceived = (ChunksNeed == ChunksGot),
