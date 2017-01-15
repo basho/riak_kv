@@ -581,10 +581,8 @@ expired_or_missing(Now, #sweep{results = Results}, Participants) ->
 
 -spec expired(erlang:timestamp(),
               erlang:timestamp(),
-              RunInterval :: non_neg_integer() | disabled | immediate) ->
+              RunInterval :: non_neg_integer() | disabled ) ->
     non_neg_integer().
-expired(_Now, _TS, immediate) ->
-    1;
 expired(_Now, _TS, disabled) ->
     0;
 expired(Now, TS, RunInterval) ->
