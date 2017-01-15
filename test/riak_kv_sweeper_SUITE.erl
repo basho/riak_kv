@@ -64,6 +64,7 @@ init_per_testcase(_TestCase, Config) ->
 
     meck:reset(riak_kv_sweeper),
     meck:reset(riak_kv_index_hashtree),
+    meck:reset(riak_core_bucket),
 
     %% Delete all sweeper exometer metrics
     [catch (ets:delete_all_objects(Tab)) || Tab <- exometer_util:tables()],
@@ -1093,6 +1094,47 @@ test_scheduler_sweep_concurrency(_Config) ->
     Indices = lists:sort(Running0 ++ Running1),
     ok.
 
+%%
+%% Test that the bucket props are collected as part of the sweep if
+%% the bucket_props options is set for the sweep participant.
+%%
+%% Assert that the number of requests to get bucket_props equals to
+%% the number of keys, because the mocked backends treat each key as
+%% though in a separate bucket. Accumlated bucket props are not
+%% observable outside a sweep right and we are assuming it is
+%% sufficent to count the number of get_bucket calls.
+%%
+test_bucket_props(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    new_sweep_participant(sweeper_callback_bucket_props, _RunInterval = 1, _Options = [bucket_props]),
+    sweeper_meck_helper:backend_modules(async, NumKeys=16, _ObjecSizeBytes=0),
+
+    Index = pick(Indices),
+    riak_kv_sweeper:sweep(Index),
+    ok = receive_msg({ok, successful_sweep, sweeper_callback_bucket_props, Index}),
+    true = NumKeys == length(meck_bucket_props()),
+    ok.
+
+%%
+%% Test that the bucket props are not collected as part of the sweep
+%% if the bucket_props option is not set set for the sweep_participant.
+%%
+%% Assert that the number of requests to get bucket_props equals to
+%% 0. Accumlated bucket props are not observable outside a sweep
+%% right and we are assuming it is sufficent to count the number of
+%% get_bucket calls.
+%%
+test_no_bucket_props(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    new_sweep_participant(sweeper_callback_1, _RunInterval = 1, _Options = []),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+
+    Index = pick(Indices),
+    riak_kv_sweeper:sweep(Index),
+    ok = receive_msg({ok, successful_sweep, sweeper_callback_1, Index}),
+    [] = meck_bucket_props(),
+    ok.
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
@@ -1108,11 +1150,16 @@ new_sweep_participant(Name) ->
     new_sweep_participant(Name, 1).
 
 new_sweep_participant(Name, RunInterval) ->
+    new_sweep_participant(Name, RunInterval, []).
+
+new_sweep_participant(Name, RunInterval, Options) ->
     riak_kv_sweeper:add_sweep_participant(
       _Description = atom_to_list(Name) ++ " sweep participant",
       _Module = Name,
       _FunType = observe_fun,
-      RunInterval).
+      RunInterval,
+      Options).
+
 
 meck_sleep_for_throttle() ->
     meck:expect(riak_kv_sweeper, sleep_for_throttle, fun(_) -> ok end).
@@ -1122,6 +1169,10 @@ meck_count_msecs_slept() ->
     MSecsThrottled = [MSecs || {_Pid, {riak_kv_sweeper, sleep_for_throttle, [MSecs]}, ok} <-
                                    ThrottleHistory],
     lists:sum(MSecsThrottled).
+
+meck_bucket_props() ->
+    [B || {_Pid, {riak_core_bucket, get_bucket, [B]}, _ReturnValue} <-
+              meck:history(riak_core_bucket)].
 
 check_sweeps_idle(Indices) ->
     Sorted = lists:sort(Indices),

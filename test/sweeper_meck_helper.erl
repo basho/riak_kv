@@ -125,12 +125,14 @@ meck_new_riak_core_modules() ->
     meck:new(riak_kv_vnode),
     meck:new(meck_new_backend, [non_strict]),
     meck:new(riak_kv_sweeper, [passthrough]),
+    meck:new(riak_core_bucket),
 
     meck:expect(riak_kv_entropy_manager, enabled, fun() -> false end),
     meck:expect(chronos, start_timer, fun(_, _, _, _) -> ok end),
     meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, Ring} end),
     meck:expect(riak_core_node_watcher, services, fun(_Node) -> [riak_kv] end),
-    meck:expect(riak_core_ring, my_indices, fun get_my_indices/1 ).
+    meck:expect(riak_core_ring, my_indices, fun get_my_indices/1),
+    meck:expect(riak_core_bucket, get_bucket, fun(BucketName) -> [{name, BucketName}] end).
 
 meck_new_aae_modules(AAEnabled, EstimatedKeys, LockResult) ->
     meck:expect(riak_kv_entropy_manager, enabled, fun() -> AAEnabled end),
