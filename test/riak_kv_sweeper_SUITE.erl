@@ -51,7 +51,6 @@ end_per_suite(Config) ->
 init_per_testcase(_TestCase, Config) ->
     true = register(?MODULE, self()),
     application:set_env(riak_kv, sweep_participants, undefined),
-    application:set_env(riak_kv, sweep_participant_testing_expire, undefined),
     application:set_env(riak_kv, sweep_window, always),
     application:set_env(riak_kv, sweeper_scheduler, false),
     application:set_env(riak_kv, sweep_tick, 10), % MSecs
@@ -328,7 +327,7 @@ test_scheduler_run_interval(Config) ->
     sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     sweep_all_indices(Indices),
-    timer:sleep(timer:seconds(RunInterval + 1)),
+    sweeper_meck_helper:advance_time({seconds, RunInterval+1}),
     sweep_all_indices(Indices),
     ok.
 
@@ -350,7 +349,7 @@ test_scheduler_run_interval_as_fun(Config) ->
     sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     sweep_all_indices(Indices),
-    timer:sleep(timer:seconds(RunIntervalFun() + 1)),
+    sweeper_meck_helper:advance_time({seconds, RunIntervalFun()+1}),
     sweep_all_indices(Indices),
     ok.
 
@@ -362,8 +361,8 @@ test_scheduler_run_interval_as_fun(Config) ->
 %% 1000 keys, here 5000, because messages, e.g, stop, sent to the
 %% process running a sweep are only received once every 1000 keys.
 %%
-%% The test cases uses the uses the sweeper_callback_wait:before_visit
-%% to remove the participant while it is active in a sweep and asserts
+%% The test cases uses the sweeper_callback_wait:before_visit to
+%% remove the participant while it is active in a sweep and asserts
 %% that we receive a failed_sweep message.
 %%
 test_scheduler_remove_participant(Config) ->
@@ -501,7 +500,7 @@ test_scheduler_now_outside_sleep_window(Config) ->
 %%
 test_stop_all_scheduled_sweeps(Config) ->
     Indices = ?config(vnode_indices, Config),
-    new_sweep_participant(sweeper_callback_wait),
+    new_sweep_participant(sweeper_callback_wait, RunInterval=1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     application:set_env(riak_kv, sweep_concurrency, length(Indices)),
@@ -510,6 +509,7 @@ test_stop_all_scheduled_sweeps(Config) ->
     tick_per_index(Indices),
     sweeper_callback_wait:before_visit(Indices),
     [ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, I}) || I <- Indices],
+    sweeper_meck_helper:advance_time({seconds, RunInterval+1}),
     riak_kv_sweeper:sweep_tick(),
     {_, Sweeps} = riak_kv_sweeper:status(),
     sweeper_callback_wait:before_visit(any, fun(_) ->
@@ -538,12 +538,13 @@ test_stop_all_scheduled_sweeps(Config) ->
 %% complete successfully.
 test_stop_all_scheduled_sweeps_race_condition(Config) ->
     Indices = ?config(vnode_indices, Config),
-    new_sweep_participant(sweeper_callback_1),
+    new_sweep_participant(sweeper_callback_1, RunInterval=1),
     sweeper_meck_helper:backend_modules(async, 5000, 0),
 
     riak_kv_sweeper:enable_sweep_scheduling(),
     sweep_all_indices(Indices),
     0 = _Running = riak_kv_sweeper:stop_all_sweeps(),
+    sweeper_meck_helper:advance_time({seconds, RunInterval+1}),
     sweep_all_indices(Indices),
     ok.
 
@@ -587,7 +588,7 @@ test_scheduler_add_participant(Config) ->
 %%
 test_scheduler_restart_sweep(Config) ->
     Indices = ?config(vnode_indices, Config),
-    new_sweep_participant(sweeper_callback_wait),
+    new_sweep_participant(sweeper_callback_wait, RunInterval=1),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     WaitIndex = pick(Indices),
@@ -605,6 +606,7 @@ test_scheduler_restart_sweep(Config) ->
                                                ok
                                        end),
     ok = receive_msg({ok, failed_sweep, sweeper_callback_wait, WaitIndex}),
+    sweeper_meck_helper:advance_time({seconds, RunInterval+1}),
     tick_per_index(Indices),
     sweeper_callback_wait:before_visit([WaitIndex]),
     ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, WaitIndex}).
@@ -1146,7 +1148,6 @@ is_running_sweep(Sweep) ->
         process_info(Pid) =/= undefined.
 
 new_sweep_participant(Name) ->
-    application:set_env(riak_kv, sweep_participant_testing_expire, immediate),
     new_sweep_participant(Name, 1).
 
 new_sweep_participant(Name, RunInterval) ->

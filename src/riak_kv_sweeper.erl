@@ -52,7 +52,8 @@
          stop_all_sweeps/0,
          get_run_interval/1,
          in_sweep_window/0,
-         sleep_for_throttle/1
+         sleep_for_throttle/1,
+         timestamp/0
         ]).
 
 -export_type([fun_type/0,
@@ -193,6 +194,10 @@ get_run_interval(RunIntervalFun) when is_function(RunIntervalFun) ->
 -spec sleep_for_throttle(timeout()) -> ok.
 sleep_for_throttle(Time) ->
     timer:sleep(Time).
+
+-spec timestamp() -> erlang:timestamp().
+timestamp() ->
+    os:timestamp().
 
 %% ====================================================================
 %% Behavioural functions

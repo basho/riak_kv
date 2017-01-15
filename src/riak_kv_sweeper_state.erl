@@ -290,7 +290,7 @@ update_finished_sweep(State, Index, Result) ->
 update_started_sweep(State, Index, ActiveParticipants, EstimatedKeys) ->
     Sweeps = State#state.sweeps,
     SweepParticipants = State#state.sweep_participants,
-    TS = os:timestamp(),
+    TS = riak_kv_sweeper:timestamp(),
     Sweeps1 =
         dict:update(Index,
                     fun(Sweep) ->
@@ -323,8 +323,7 @@ maybe_schedule_sweep(State) ->
     Enabled = scheduler_enabled(),
     ConcurrenyLimit = get_concurrency_limit(),
     SweepWindow = sweep_window(),
-    Now = os:timestamp(),
-
+    Now = riak_kv_sweeper:timestamp(),
     Result =
         case schedule_sweep(_Event = tick,
                             Enabled,
@@ -406,7 +405,7 @@ finish_sweep(#sweep{index = Index}, #state{sweeps = Sweeps} = State) ->
                     Result :: [riak_kv_sweeper_fold:sweep_result()]},
                    #sweep{}) -> #sweep{}.
 store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
-    TimeStamp = os:timestamp(),
+    TimeStamp = riak_kv_sweeper:timestamp(),
     UpdatedResults =
         lists:foldl(fun({Mod, Outcome}, Dict) ->
                             dict:store(Mod, {TimeStamp, Outcome}, Dict)
@@ -421,25 +420,14 @@ store_result({SweptKeys, Result}, #sweep{results = OldResult} = Sweep) ->
 add_asked_to_results(Results, SweepParticipants) ->
     ResultList = dict:to_list(Results),
     MissingResults = riak_kv_sweeper_fold:missing(module, SweepParticipants, ResultList),
-    TimeStamp = os:timestamp(),
+    TimeStamp = riak_kv_sweeper:timestamp(),
     lists:foldl(fun(Mod, Dict) ->
                         dict:store(Mod, {TimeStamp, asked}, Dict)
                 end, Results, MissingResults).
 
 expired_counts(Now, ResultsList, Participants) ->
-    [begin
-         RunInterval =
-             case application:get_env(riak_kv,
-                                      sweep_participant_testing_expire,
-                                      undefined) of
-                 immediate ->
-                     immediate;
-                 undefined ->
-                     run_interval(Mod, Participants)
-             end,
-         expired(Now, TS, RunInterval)
-     end ||
-     {Mod, {TS, _Outcome}} <- ResultsList].
+    [ expired(Now, TS, run_interval(Mod, Participants))
+      || {Mod, {TS, _Outcome}} <- ResultsList].
 
 -spec get_run_interval(RunInterval :: non_neg_integer()
                        | riak_kv_sweeper:run_interval_fun()) ->
@@ -670,7 +658,7 @@ queue_sweep(Index, #state{sweeps = Sweeps} = State) ->
         #sweep{queue_time = undefined} = Sweep ->
             Sweeps1 =
                 dict:store(Index,
-                           Sweep#sweep{queue_time = os:timestamp()},
+                           Sweep#sweep{queue_time = riak_kv_sweeper:timestamp()},
                            Sweeps),
             State#state{sweeps = Sweeps1};
         _ ->

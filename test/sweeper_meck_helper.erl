@@ -41,7 +41,8 @@
          stop/0,
          aae_modules/3,
          backend_modules/3,
-         num_partitions/1]).
+         num_partitions/1,
+         advance_time/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -58,7 +59,6 @@
 start() ->
     gen_server:start({local, ?SERVER}, ?MODULE, [], []).
 
-
 stop() ->
     gen_server:call(?SERVER, stop).
 
@@ -71,12 +71,18 @@ backend_modules(Type, NumKeys, ObjSizeBytes) ->
 num_partitions(N) ->
     gen_server:call(?SERVER, {num_partitions, N}).
 
+advance_time({seconds, Secs}) ->
+    gen_server:call(?SERVER, {advance_time, Secs}).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
 init([]) ->
-    meck_new_riak_core_modules(),
+    Now = os:timestamp(),
+    meck_init_new(),
+    meck_init_expect(),
+    meck_set_sweeper_timestamp(Now),
     {ok, #state{}}.
 
 handle_call(stop, _From, State) ->
@@ -93,6 +99,11 @@ handle_call({backend_modules, Type, NumKeys, ObjSizeBytes}, _From, State) ->
 
 handle_call({num_partitions, N}, _From, State) ->
     application:set_env('MECK CTRL', 'PARTITIONS', N),
+    {reply, ok, State};
+
+handle_call({advance_time, DeltaSecs}, _From, State) ->
+    {Mega, Secs, Msecs} = riak_kv_sweeper:timestamp(),
+    meck:expect(riak_kv_sweeper, timestamp, fun() -> {Mega, Secs+DeltaSecs, Msecs} end),
     {reply, ok, State}.
 
 handle_cast(_Msg, State) ->
@@ -114,8 +125,7 @@ get_my_indices(ring) ->
     {ok, Partitions} = application:get_env('MECK CTRL', 'PARTITIONS'),
     [N || N <- lists:seq(1, Partitions)].
 
-meck_new_riak_core_modules() ->
-    Ring = ring,
+meck_init_new() ->
     meck:new(riak_core_node_watcher),
     meck:new(riak_core_ring_manager),
     meck:new(riak_kv_entropy_manager),
@@ -125,14 +135,19 @@ meck_new_riak_core_modules() ->
     meck:new(riak_kv_vnode),
     meck:new(meck_new_backend, [non_strict]),
     meck:new(riak_kv_sweeper, [passthrough]),
-    meck:new(riak_core_bucket),
+    meck:new(riak_core_bucket).
 
+meck_init_expect() ->
+    Ring = ring,
     meck:expect(riak_kv_entropy_manager, enabled, fun() -> false end),
     meck:expect(chronos, start_timer, fun(_, _, _, _) -> ok end),
     meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, Ring} end),
     meck:expect(riak_core_node_watcher, services, fun(_Node) -> [riak_kv] end),
     meck:expect(riak_core_ring, my_indices, fun get_my_indices/1),
     meck:expect(riak_core_bucket, get_bucket, fun(BucketName) -> [{name, BucketName}] end).
+
+meck_set_sweeper_timestamp(Now) ->
+    meck:expect(riak_kv_sweeper, timestamp, fun() -> Now end).
 
 meck_new_aae_modules(AAEnabled, EstimatedKeys, LockResult) ->
     meck:expect(riak_kv_entropy_manager, enabled, fun() -> AAEnabled end),
