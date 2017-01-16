@@ -495,15 +495,20 @@ store_chunk(#qbuf{ldb_ref = LdbRef,
         end,
 
     IsBackendOpened = (LdbRef /= undefined),
-    case (IsBackendOpened                %% already storing to backend: keep doing so
-          orelse not CanAffordInMem) of  %% can't keep in memory: switch to backend
+    case (IsBackendOpened orelse not CanAffordInMem) of
         false ->
+            %% we have not switched to writing to ldb yet, and we
+            %% don't need to: keep accumulating data in memory
             InmemBuffer = lists:sort(Data),
             QBuf = QBuf0#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, AllChunksReceived)},
             {ok, QBuf};
         true when IsBackendOpened ->
+            %% already writing to ldb: keep doing so, irrespective of
+            %% memory availability
             EleveldbPutF(LdbRef);
         true ->
+            %% this is when we switch to writing to ldb; don't forget
+            %% to open the temp table
             case DelayedCreateFun() of
                 {ok, RealLdbRef} ->  %% now it's a real ref
                     EleveldbPutF(RealLdbRef);
