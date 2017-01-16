@@ -124,15 +124,16 @@ compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
         when is_binary(FieldName) ->
     Pos = Mod:get_field_position([FieldName]),
     compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q);
-compile_group_by(Mod, [{time_fn, {identifier,FieldName},{integer,GroupSize}}|Tail], Acc, Q)
-        when is_binary(FieldName) ->
+compile_group_by(Mod, [{time_fn,{_,FieldName},_} = GroupTimeFnAST|Tail], Acc, Q) when is_binary(FieldName) ->
+    GroupTimeFn = make_group_by_time_fn(Mod, GroupTimeFnAST),
+    compile_group_by(Mod, Tail, [{GroupTimeFn,FieldName}|Acc], Q).
+
+make_group_by_time_fn(Mod, {time_fn, {identifier,FieldName},{integer,GroupSize}}) when is_binary(FieldName) ->
     Pos = Mod:get_field_position([FieldName]),
-    TimeGroupFn =
-        fun(Row) ->
-            Time = lists:nth(Pos, Row),
-            riak_ql_quanta:quantum(Time, GroupSize, 'ms')
-        end,
-    compile_group_by(Mod, Tail, [{TimeGroupFn,FieldName}|Acc], Q).
+    fun(Row) ->
+        Time = lists:nth(Pos, Row),
+        riak_ql_quanta:quantum(Time, GroupSize, 'ms')
+    end.
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -236,48 +237,75 @@ my_mapfoldl(F, Accu0, [Hd|Tail]) ->
 my_mapfoldl(F, Accu, []) when is_function(F, 2) -> {[],Accu}.
 
 %%
-compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
+compile_select_clause(DDL, ?SQL_SELECT{group_by = GroupBy,
+                                       helper_mod = Mod,
+                                       'SELECT' = #riak_sel_clause_v1{clause = Sel}} = Q) ->
+    %% if the query groups by time e.g. `GROUP BY time(mytime, 10m)` then one
+    %% column called "time" is added as the first column, which is the first
+    %% millisecond of the group's timestamp. This needs to be done first so the
+    %% indexes used by the columns in the select clause are compiled correctly.
+    #riak_sel_clause_v1{
+        col_names = ColNames,
+        col_return_types = ColTypes1} = Sel1 = maybe_add_group_by_time_columns(Mod, GroupBy, #riak_sel_clause_v1{ }),
+    %% compile each select column and put all the calc types into a set, if
+    %% any of the results are aggregate then aggregate is the calc type for the
+    %% whole query
     CompileColFn =
         fun(ColX, AccX) ->
             select_column_clause_folder(DDL, ColX, AccX)
         end,
-    %% compile each select column and put all the calc types into a set, if
-    %% any of the results are aggregate then aggregate is the calc type for the
-    %% whole query
-    Acc = {sets:new(), #riak_sel_clause_v1{ }},
+    Acc = {sets:new(), Sel1},
     %% iterate from the right so we can append to the head of lists
-    {ResultTypeSet, Sel1} = lists:foldl(CompileColFn, Acc, Sel),
-
-    {ColTypes, Errors} = my_mapfoldl(
+    {ResultTypeSet, Sel2} = lists:foldl(CompileColFn, Acc, Sel),
+    {ColTypes2, Errors} = my_mapfoldl(
         fun(ColASTX, Errors) ->
             infer_col_type(DDL, ColASTX, Errors)
         end, [], Sel),
-
     IsGroupBy = (Q?SQL_SELECT.group_by /= []),
     IsAggregate = sets:is_element(aggregate, ResultTypeSet),
     if
         IsGroupBy ->
-            Sel2 = Sel1#riak_sel_clause_v1{
-                   calc_type = group_by,
-                   col_names = get_col_names(DDL, Q) };
+            Sel3 = Sel2#riak_sel_clause_v1{calc_type = group_by};
         IsAggregate ->
-            Sel2 = Sel1#riak_sel_clause_v1{
-                   calc_type = aggregate,
-                   col_names = get_col_names(DDL, Q) };
+            Sel3 = Sel2#riak_sel_clause_v1{calc_type = aggregate};
         not IsAggregate ->
-            Sel2 = Sel1#riak_sel_clause_v1{
+            Sel3 = Sel2#riak_sel_clause_v1{
                    calc_type = rows,
-                   initial_state = [],
-                   col_names = get_col_names(DDL, Q) }
+                   initial_state = []}
     end,
     case Errors of
-      [] ->
-          {ok, Sel2#riak_sel_clause_v1{
-              col_names = get_col_names(DDL, Q),
-              col_return_types = lists:flatten(ColTypes) }};
-      [_|_] ->
-          {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
+        [] ->
+            Sel4 = Sel3#riak_sel_clause_v1{
+                col_return_types = lists:flatten(ColTypes1++ColTypes2),
+                col_names = ColNames++get_col_names(DDL, Q)},
+            {ok, Sel4};
+        [_|_] ->
+            {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
     end.
+
+%%
+maybe_add_group_by_time_columns(Mod,
+                                GroupBy,
+                                #riak_sel_clause_v1{
+                                    clause = Clause,
+                                    col_names = ColNames,
+                                    col_return_types = ReturnTypes,
+                                    initial_state = InitialState
+                                } = SelClause) ->
+    TimeFns = filter_group_by_time_fns(GroupBy),
+    FnsLen = length(TimeFns),
+    SelClause#riak_sel_clause_v1{
+        clause = [fun(_,Acc) -> Acc end || _ <- lists:seq(1, FnsLen)] ++ Clause,
+        col_names = lists:duplicate(FnsLen, <<"time">>) ++ ColNames,
+        col_return_types = lists:duplicate(FnsLen, timestamp) ++ ReturnTypes,
+        finalisers = [fun(Row,_) -> lists:nth(N, Row) end || N <- lists:seq(1, FnsLen)],
+        initial_state = [make_group_by_time_fn(Mod, TFn) || TFn <- TimeFns] ++ InitialState
+    };
+maybe_add_group_by_time_columns(_,_,SelClause) ->
+    SelClause.
+
+filter_group_by_time_fns(GroupBy) ->
+    [TFn || {time_fn,_,_} = TFn <- GroupBy].
 
 %%
 -spec get_col_names(?DDL{}, ?SQL_SELECT{}) -> [binary()].
@@ -2720,5 +2748,23 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
         ],
         SubQueryWheres
     ).
+
+group_by_time_adds_a_column_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "b sint64, "
+        "PRIMARY KEY ((a), a))"),
+    {ok, Q} = get_query(
+        "SELECT COUNT(*) FROM t
+         WHERE a = 1
+         GROUP BY time(a,1m);"),
+    {ok,[?SQL_SELECT{'SELECT'=SelClause}]} = compile(DDL, Q),
+    ?assertEqual(group_by, SelClause#riak_sel_clause_v1.calc_type),
+    ?assertEqual([<<"time">>, <<"COUNT(*)">>], SelClause#riak_sel_clause_v1.col_names),
+    ?assertEqual([timestamp,sint64], SelClause#riak_sel_clause_v1.col_return_types),
+    %% these are funs so just check we have the right number
+    ?assertMatch([_,_], SelClause#riak_sel_clause_v1.clause),
+    ?assertMatch([_,_], SelClause#riak_sel_clause_v1.finalisers).
 
 -endif.
