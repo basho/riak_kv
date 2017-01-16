@@ -422,13 +422,21 @@ run_select_on_group_row(Query, SelClause, Row, QueryResult1) ->
     Aggregate1 =
         case dict:find(Key, Dict1) of
             error ->
-                InitialGroupState;
+                prepare_group_by_initial_state(Row, InitialGroupState);
             {ok, AggregateX} ->
                 AggregateX
         end,
     Aggregate2 = riak_kv_qry_compiler:run_select(SelClause, Row, Aggregate1),
     Dict2 = dict:store(Key, Aggregate2, Dict1),
     {group_by, InitialGroupState, Dict2}.
+
+prepare_group_by_initial_state(Row, InitialState) ->
+    [prepare_group_by_initial_state2(Row, Col) || Col <- InitialState].
+
+prepare_group_by_initial_state2(Row, InitFn) when is_function(InitFn) ->
+    InitFn(Row);
+prepare_group_by_initial_state2(_, InitVal) ->
+    InitVal.
 
 %%
 select_group(Query, Row) ->
