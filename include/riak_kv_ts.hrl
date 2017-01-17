@@ -36,7 +36,7 @@
 %% returns one row calculated from the result set for the query.
 -type select_result_type() :: rows | aggregate | group_by.
 
--type group_time_fn() :: {time_fn, {identifier, binary(), {integer, integer()}}}.
+-type group_time_fn() :: {time_fn, {identifier, binary()}, {integer, integer()}}.
 
 -record(riak_sel_clause_v1,
         {
@@ -102,7 +102,7 @@
           %% prolly a mistake to put this here - should be in DDL
           local_key,
           %% since v2
-          group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()} | group_time_fn() | function()],
+          group_by = ?GROUP_BY_DEFAULT :: [{identifier, binary()}] | [{FieldPos::integer(), FieldName::binary()} | group_time_fn() | {function(),FieldName::binary()}],
           %% since v3
           'OFFSET'       = []   :: [riak_kv_qry_compiler:offset()],
           %% to be supplied in #tsqueryreq.qbuf_id, which is expected
