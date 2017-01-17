@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(sweeper_callback_1).
+-module(sweeper_callback_bucket_props).
 
 -export([participate_in_sweep/2,
          successful_sweep/2,
@@ -40,6 +40,6 @@ failed_sweep(Index, _Reason, _Acc) ->
     riak_kv_sweeper_SUITE ! {ok, failed_sweep, ?MODULE, Index},
     ok.
 
-visit_function({{_Bucket, _Key}, _RObj}, Acc, _Opts = []) ->
+visit_function({{Bucket, _Key}, _RObj}, Acc, _Opts = [{bucket_props, [{name, Bucket}]}]) ->
     Visited = Acc,
     {ok, Visited + 1}.

@@ -51,7 +51,6 @@ end_per_suite(Config) ->
 init_per_testcase(_TestCase, Config) ->
     true = register(?MODULE, self()),
     application:set_env(riak_kv, sweep_participants, undefined),
-    application:set_env(riak_kv, sweep_participant_testing_expire, undefined),
     application:set_env(riak_kv, sweep_window, always),
     application:set_env(riak_kv, sweeper_scheduler, false),
     application:set_env(riak_kv, sweep_tick, 10), % MSecs
@@ -64,6 +63,7 @@ init_per_testcase(_TestCase, Config) ->
 
     meck:reset(riak_kv_sweeper),
     meck:reset(riak_kv_index_hashtree),
+    meck:reset(riak_core_bucket),
 
     %% Delete all sweeper exometer metrics
     [catch (ets:delete_all_objects(Tab)) || Tab <- exometer_util:tables()],
@@ -91,12 +91,21 @@ all() ->
 %% TEST CASES
 %%--------------------------------------------------------------------
 
+%%
+%% Assert that riak_kv_sweeper initializes with a #sweep{} entry for
+%% all partition indices owned by the node.
+%%
 test_initiailize_sweep_request(Config) ->
     Indices = ?config(vnode_indices, Config),
 
     assert_all_indices_idle(Indices),
     ok.
 
+%%
+%% Assert that a sweep request, riak_kv_sweeper:sweep(...), has the
+%% effect of updating it's the state when partition indices ownded
+%% by the node change.
+%%
 test_status_index_changed_sweep_request(Config) ->
     Indices = ?config(vnode_indices, Config),
 
@@ -108,6 +117,10 @@ test_status_index_changed_sweep_request(Config) ->
     assert_all_indices_idle(NewIndices),
     ok.
 
+%%
+%% Assert that scheduling of a sweep, has the effect of updating it's
+%% the state when partition indices ownded by the node change.
+%%
 test_status_index_changed_tick(Config) ->
     Indices = ?config(vnode_indices, Config),
 
@@ -118,6 +131,10 @@ test_status_index_changed_tick(Config) ->
     assert_all_indices_idle(NewIndices),
     ok.
 
+%%
+%% Assert adding a new sweep participant to the riak_kv_sweeper,
+%% includes in the sweeper state.
+%%
 test_add_participant(_Config) ->
     {[], _Sweeps} = riak_kv_sweeper:status(),
     new_sweep_participant(sweeper_callback_1),
@@ -125,6 +142,10 @@ test_add_participant(_Config) ->
     sweeper_callback_1 = riak_kv_sweeper_fold:participant_module(Participant),
     ok.
 
+%%
+%% Assert sweep participants persist across riak_kv_sweeper
+%% restarts.
+%%
 test_add_participant_persistent(_Config) ->
     new_sweep_participant(sweeper_callback_1),
 
@@ -136,6 +157,10 @@ test_add_participant_persistent(_Config) ->
     sweeper_callback_1 = riak_kv_sweeper_fold:participant_module(Participant2),
     ok.
 
+%%
+%% Assert removing a sweep participant removes it from
+%% riak_kv_sweeper state.
+%%
 test_remove_participant(_Config) ->
     new_sweep_participant(sweeper_callback_1),
 
@@ -145,6 +170,11 @@ test_remove_participant(_Config) ->
     {[], _} = riak_kv_sweeper:status(),
     ok.
 
+%%
+%% Assert that removing a sweep participant from riak_kv_sweeper removes it
+%% from persistent storage for sweep participants and participant
+%% removed do not re-appear on sweeper restart.
+%%
 test_remove_participant_persistent(_Config) ->
     new_sweep_participant(sweeper_callback_1),
 
@@ -157,10 +187,19 @@ test_remove_participant_persistent(_Config) ->
     {[], _} = riak_kv_sweeper:status(),
     ok.
 
+%%
+%% riak_kv_kv_sweeper:sweep(...)  sweeps an index.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% The test asserts receipt of successful_sweep messages for each
+%% swept index.
+%%
 test_sweep_request(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     I0 = pick(Indices),
     riak_kv_sweeper:sweep(I0),
@@ -169,37 +208,100 @@ test_sweep_request(Config) ->
     riak_kv_sweeper:sweep(I1),
     ok = receive_msg({ok, successful_sweep, sweeper_callback_1, I1}).
 
+%%
+%% riak_kv_sweeper:sweep(...) on an invalid index returns an error.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% Test that asserts that a sweep request for a non-existing index
+%% returns an error and ignores the request. Since the
+%% riak_kv_sweeper:sweep(...) may be called manually to start a sweep,
+%% so we don't want an invalid argument to the function to terminate
+%% the riak_kv_sweeper process.
+%%
 test_sweep_request_non_existing_index(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     Max = lists:max(Indices),
     NonExisting = Max * Max,
     false = lists:member(NonExisting, Indices),
-    riak_kv_sweeper:sweep(NonExisting),
+    {error, sweep_request_failed} = riak_kv_sweeper:sweep(NonExisting),
     ok.
 
+%%
+%% Test the sync behaviour of the backend, i.e., when it fold's keys
+%% synchronously.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled and a mocked backend with
+%% sync behaviour.
+%%
+%% The test asserts receipt of successful_sweep messages for each
+%% swept index.
+%%
 test_scheduler_sync_backend(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(sync, _NumKeys=1000, _ObjecSizeBytes=100),
+    sweeper_meck_helper:backend_modules(sync, _NumKeys=1000, _ObjectSizeBytes=100),
 
     sweep_all_indices(Indices),
     ok.
 
+%%
+%% Test the async behaviour of the backend, i.e., when it returns a
+%% Work which is run in the using a process from the vnode worker from
+%% the pool.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled with and a mocked backend
+%% with async behaviour.
+%%
+%% The test asserts receipt of successful_sweep messages for each
+%% swept index.
+%%
+test_scheduler_async_backend(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    new_sweep_participant(sweeper_callback_1),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=100),
+
+    sweep_all_indices(Indices),
+    ok.
+
+%%
+%% Test riak_kv_sweeper's scheduling of sweeps.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% The test asserts receipt of successful_sweep messages for each
+%% swept index after sending sweep_tick's to schedule the sweeps on all
+%% indices.
+%%
 test_scheduler(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     sweep_all_indices(Indices),
     ok.
 
+%%
+%% Test scheduling of failing sweeps.
+%%
+%% The test uses sweep participant sweeper_callback_crash that fails
+%% by throwing a crash as soon as it is scheduled.
+%%
+%% The test asserts that the sweep has failed by receipt of a
+%% failed_sweep message. Test also asserts that the state all sweeps
+%% returns to idle.
+%%
 test_scheduler_worker_process_crashed(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_crash),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     riak_kv_sweeper:enable_sweep_scheduling(),
     tick_per_index(Indices),
@@ -207,20 +309,102 @@ test_scheduler_worker_process_crashed(Config) ->
     ok = check_sweeps_idle(Indices),
     ok.
 
+%%
+%% Test riak_kv_sweeper's re-scheduling of sweeps, configured by the
+%% run_interval property. run_interval is an integer.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% The test asserts receipt of successful_sweep messages after sending
+%% sweep_ticks and then waiting run_interval+1 seconds, and then
+%% re-sending sweep_tick's.
+%%
 test_scheduler_run_interval(Config) ->
     Indices = ?config(vnode_indices, Config),
-    new_sweep_participant(sweeper_callback_1, 1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    RunInterval = 1,
+    new_sweep_participant(sweeper_callback_1, RunInterval),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     sweep_all_indices(Indices),
-    timer:sleep(min_scheduler_response_time_msecs()),
+    sweeper_meck_helper:advance_time({seconds, RunInterval+1}),
     sweep_all_indices(Indices),
     ok.
 
+%%
+%% Test riak_kv_sweeper's re-scheduling of sweeps, configured by the
+%% run_interval property. run_interval is a fun.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% The test asserts receipt of successful_sweep messages after sending
+%% sweep_ticks and then waiting run_interval+1 seconds, and then
+%% re-sending sweep_tick's.
+%%
+test_scheduler_run_interval_as_fun(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    RunIntervalFun = fun() -> 1 end,
+    new_sweep_participant(sweeper_callback_1, RunIntervalFun),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
+
+    sweep_all_indices(Indices),
+    sweeper_meck_helper:advance_time({seconds, RunIntervalFun()+1}),
+    sweep_all_indices(Indices),
+    ok.
+
+%% Test riak_kv_sweeper's re-scheduling of sweeper, configured by the
+%% run_interval property. Elapsed time is less than the run interval.
+%%
+%% The test uses sweep participant sweeper_callback_wait that calls
+%% back a Fun before visiting an keys to pause and then signal to the
+%% sweeps to continue. See raik_kv_sweeper:before_visit(...), the Fun
+%% for this test case defaults to no-op.
+%%
+%% The test asserts that sweep scheduler does not schedule sweeps
+%% before run_interval + 1 seconds have elapsed and that we have at
+%% least one running sweep after run_interval + 1.
+%%
+test_scheduler_run_interval_not_expired(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    RunInterval = 60,
+    new_sweep_participant(sweeper_callback_wait, RunInterval),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
+
+    riak_kv_sweeper:enable_sweep_scheduling(),
+    tick_per_index(Indices),
+    sweeper_callback_wait:before_visit(Indices),
+    [ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, I}) || I <- Indices],
+    sweeper_meck_helper:advance_time({seconds, 1}),
+    tick_per_index(Indices),
+    check_sweeps_idle(Indices),
+    sweeper_meck_helper:advance_time({seconds, 59}),
+    tick_per_index(Indices),
+    check_sweeps_idle(Indices),
+    sweeper_meck_helper:advance_time({seconds, 1}),
+    tick_per_index(Indices),
+    {_, Sweeps} = riak_kv_sweeper:status(),
+    [_|_] = [riak_kv_sweeper_state:sweep_index(Sweep) ||
+                Sweep <- Sweeps,
+                riak_kv_sweeper_state:sweep_state(Sweep) == running],
+    ok.
+
+%%
+%% Test removing a sweep participant during a sweep.
+%%
+%% The test uses sweep participant sweeper_callback_wait that calls
+%% back a Fun before visiting an keys. The backend used must have >
+%% 1000 keys, here 5000, because messages, e.g, stop, sent to the
+%% process running a sweep are only received once every 1000 keys.
+%%
+%% The test cases uses the sweeper_callback_wait:before_visit to
+%% remove the participant while it is active in a sweep and asserts
+%% that we receive a failed_sweep message.
+%%
 test_scheduler_remove_participant(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     WaitIndex = pick(Indices),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -234,10 +418,21 @@ test_scheduler_remove_participant(Config) ->
                                        end),
     ok = receive_msg({ok, failed_sweep, sweeper_callback_wait, WaitIndex}).
 
+%%
+%% Test that riak_kv_sweeper:sweep(...) queues requests if the
+%% sweep_concurrency limit has been reached.
+%%
+%% The test uses sweep participant sweeper_callback_wait that calls
+%% back a Fun before visiting an keys.
+%%
+%% The test cases uses the sweeper_callback_wait:before_visit to make
+%% a sweep request on an idle index when we have reached the max
+%% concurrency limit, and asserts that the requested sweep is queued.
+%%
 test_scheduler_queue(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_wait),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     WaitIndex = pick(Indices),
     WaitIndex1 = pick(Indices -- [WaitIndex]),
@@ -250,6 +445,8 @@ test_scheduler_queue(Config) ->
     riak_kv_sweeper:sweep(WaitIndex),
     sweeper_callback_wait:before_visit([WaitIndex],
                                        fun(_Index) ->
+                                               Sweep0 = get_sweep_on_index(WaitIndex1),
+                                               undefined = riak_kv_sweeper_state:sweep_queue_time(Sweep0),
                                                riak_kv_sweeper:sweep(WaitIndex1),
                                                Sweep = get_sweep_on_index(WaitIndex1),
                                                {_, _, _} = riak_kv_sweeper_state:sweep_queue_time(Sweep)
@@ -261,10 +458,24 @@ test_scheduler_queue(Config) ->
     ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, WaitIndex1}),
     ok.
 
+%%
+%% Test that sweep_window == never disables scheduling of sweeps by
+%% the riak_kv_sweeper.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% This tests asserts that the state of the riak_kv_sweeper does not
+%% change even after a sweep_tick, when sweep_window is never. A sweep
+%% on an index, caused by a sweep_tick, changes the state. Note that
+%% we use the sync backend here to avoid race conditions; the sync
+%% behaviour ensures that the sweep on the index complets when the
+%% sweep_tick function returns.
+%%
 test_scheduler_sweep_window_never(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(sync, _NumKeys=5000, _ObjectSizeBytes=0),
 
     application:set_env(riak_kv, sweep_window, never),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -276,10 +487,25 @@ test_scheduler_sweep_window_never(Config) ->
     sweep_all_indices(Indices),
     ok.
 
+%%
+%% Test riak_kv_sweeper scheduling when the current time is outside
+%% the sweep window.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% When a sweep_window described by a {start, end} hour is set then
+%% sweep tick events scheduled outside this period will not schedule a
+%% sweep. This tests asserts that the state of the riak_kv_sweeper
+%% does not change even after a sweep_tick. A sweep on an index,
+%% caused by a sweep_tick, changes the state. Note that we use the
+%% sync backend here to avoid race conditions; the sync behaviour
+%% ensures that the sweep on the index complets when the sweep_tick
+%% function returns.
 test_scheduler_now_outside_sleep_window(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(sync, _NumKeys=5000, _ObjectSizeBytes=0),
 
     {_, {Hour, _, _}} = calendar:local_time(),
     Start = add_hours(Hour, 2),
@@ -294,13 +520,24 @@ test_scheduler_now_outside_sleep_window(Config) ->
     ok.
 
 %%
-%% This test runs long ~5 seconds because the it schedulers `expired'
-%% and the scheduler has a minimum resolution of 1 second in this
-%% case.
+%% riak_kv_kv_sweeper:stop_all_sweeps() stops all running sweeps
+%% causing them to return failed as their result.
+%%
+%% The test uses sweep participant sweeper_callback_wait that calls
+%% back a Fun before visiting an keys. The backend used must have >
+%% 1000 keys, here 5000, because messages, e.g, stop, sent to the
+%% process running a sweep are only received once every 1000 keys.
+%%
+%% The stop_all_sweeps request is made in this call back Fun
+%% guaranteeing that we have at least one running sweep. The test
+%% asserts that the sweep has failed by receipt of a failed_sweep
+%% message. Test also asserts that the state all sweeps returns to
+%% idle.
+%%
 test_stop_all_scheduled_sweeps(Config) ->
     Indices = ?config(vnode_indices, Config),
-    new_sweep_participant(sweeper_callback_wait),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    new_sweep_participant(sweeper_callback_wait, RunInterval=1),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     application:set_env(riak_kv, sweep_concurrency, length(Indices)),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -308,44 +545,87 @@ test_stop_all_scheduled_sweeps(Config) ->
     tick_per_index(Indices),
     sweeper_callback_wait:before_visit(Indices),
     [ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, I}) || I <- Indices],
+    sweeper_meck_helper:advance_time({seconds, RunInterval+1}),
     riak_kv_sweeper:sweep_tick(),
     {_, Sweeps} = riak_kv_sweeper:status(),
     sweeper_callback_wait:before_visit(any, fun(_) ->
                                                     Running = riak_kv_sweeper:stop_all_sweeps(),
                                                     true = Running >= 1
                                             end),
-    Running = [riak_kv_sweeper_state:sweep_index(Sweep) ||
-                  Sweep <- Sweeps,
-                  riak_kv_sweeper_state:sweep_state(Sweep) == running],
+    Running = [_|_] = [riak_kv_sweeper_state:sweep_index(Sweep) ||
+                          Sweep <- Sweeps,
+                          riak_kv_sweeper_state:sweep_state(Sweep) == running],
     [ok = receive_msg({ok, failed_sweep, sweeper_callback_wait, I}) || I <- Running],
     ok = check_sweeps_idle(Indices).
 
-test_stop_all_scheduled_sweeps_race_condition(_Config) ->
-    new_sweep_participant(sweeper_callback_1),
+
+%%
+%% riak_kv_kv_sweeper:stop_all_sweeps() only stop sweeps that are
+%% running when it is called. Sweeps before or after the
+%% stop_all_sweeps requests complete successfully.
+%%
+%% The test uses sweep participant sweeper_callback_wait that calls
+%% back a Fun before visiting an keys. The backend used must have >
+%% 1000 keys, here 5000, because messages, e.g, stop, sent to the
+%% process running a sweep are only received once every 1000 keys.
+%%
+%% The test asserts that a stop_all_sweeps returns 0 running sweeps
+%% stopped when there are no running sweeps and subsequent sweeps
+%% complete successfully.
+test_stop_all_scheduled_sweeps_race_condition(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    new_sweep_participant(sweeper_callback_1, RunInterval=1),
     sweeper_meck_helper:backend_modules(async, 5000, 0),
 
     riak_kv_sweeper:enable_sweep_scheduling(),
-    Running = riak_kv_sweeper:stop_all_sweeps(),
-    Running = 0,
+    sweep_all_indices(Indices),
+    0 = _Running = riak_kv_sweeper:stop_all_sweeps(),
+    sweeper_meck_helper:advance_time({seconds, RunInterval+1}),
+    sweep_all_indices(Indices),
     ok.
 
+%%
+%% The sweep scheduler includes a new participant in sweeps.
+%%
+%% The test uses sweep participant sweeper_callback_1, and
+%% sweeper_callback_2 that complete successfully as soon they are
+%% scheduled.
+%%
+%% The test asserts receipt of successful_sweep messages for the
+%% previous and new sweep participant sweep_callback_2 after the have
+%% been scheduled to run.
+%%
 test_scheduler_add_participant(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
 
     riak_kv_sweeper:enable_sweep_scheduling(),
-    sweep_all_indices(Indices, ok, sweeper_callback_1),
     sweep_all_indices(Indices, ok, sweeper_callback_1),
     new_sweep_participant(sweeper_callback_2),
     sweep_all_indices(Indices, ok, sweeper_callback_1),
     sweep_all_indices(Indices, ok, sweeper_callback_2),
     ok.
 
+
+%%
+%% riak_kv_sweeper:sweep(...) request restarts running sweep.
+%%
+%% The test uses sweep participant sweeper_callback_wait that calls
+%% back a Fun before visiting an keys. The backend used must have >
+%% 1000 keys, here 5000, because messages, e.g, stop, sent to the
+%% process running a sweep are only received once every 1000 keys.
+%%
+%% The sweep request is made in this call back Fun guaranteeing that
+%% we have a running sweep. The test asserts that the sweep has failed
+%% by receipt of a failed_sweep message. Test also asserts that the
+%% state of the restarted sweep changes to restart and then completes
+%% successfully.
+%%
 test_scheduler_restart_sweep(Config) ->
     Indices = ?config(vnode_indices, Config),
-    new_sweep_participant(sweeper_callback_wait),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    new_sweep_participant(sweeper_callback_wait, RunInterval=1),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
 
     WaitIndex = pick(Indices),
     riak_kv_sweeper:enable_sweep_scheduling(),
@@ -362,36 +642,68 @@ test_scheduler_restart_sweep(Config) ->
                                                ok
                                        end),
     ok = receive_msg({ok, failed_sweep, sweeper_callback_wait, WaitIndex}),
+    sweeper_meck_helper:advance_time({seconds, RunInterval+1}),
     tick_per_index(Indices),
     sweeper_callback_wait:before_visit([WaitIndex]),
     ok = receive_msg({ok, successful_sweep, sweeper_callback_wait, WaitIndex}).
 
+%%
+%% Test sweep behaviour when we can get a lock on the
+%% riak_kv_index_hashtree.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled and mocks riak_kv_vnode to
+%% return ok for lock result.
+%%
+%% The test asserts that all the mocked calls for
+%% riak_kv_index_hashtree are called with expected arguments and that
+%% the mocked call to riak_kv_vnode sweep function is called with the
+%% value of EstimatedKeys returned by riak_kv_index_hashtree.
+%%
 test_scheduler_estimated_keys_lock_ok(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
-    sweeper_meck_helper:aae_modules(_AAEnabled = true, _EstimatedKeys = 4200, _LockResult = ok),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
+    sweeper_meck_helper:aae_modules(_AAEnabled = true, EstimatedKeys = 4200, _LockResult = ok),
 
-    riak_kv_sweeper:enable_sweep_scheduling(),
     sweep_all_indices(Indices),
+    [true = meck:called(riak_kv_vnode, sweep, [{I, '_'}, '_', EstimatedKeys]) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, get_lock, [I, estimate]) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, estimate_keys, [I]) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, release_lock, [I]) || I <- Indices],
     ok.
 
+%%
+%% Test sweep behaviour when we can not get a lock on the
+%% riak_kv_index_hashtree.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled and mocks riak_kv_vnode to
+%% return fail for lock result.
+%%
+%% The test asserts that all the mocked calls for
+%% riak_kv_index_hashtree are called with expected arguments and we do
+%% not make a request to estimate_keys or release the lock.  the
+%% mocked call to riak_kv_vnode sweep function is called with the
+%% value of 0 for Estimated Keys.
+%%
 test_scheduler_estimated_keys_lock_fail(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_1),
-    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjecSizeBytes=0),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=5000, _ObjectSizeBytes=0),
     sweeper_meck_helper:aae_modules(_AAEnabled = true, _EstimatedKeys = 4200, _LockResult = fail),
 
     sweep_all_indices(Indices),
+    [true = meck:called(riak_kv_vnode, sweep, [{I, '_'}, '_', 0]) || I <- Indices],
     [true = meck:called(riak_kv_index_hashtree, get_lock, [I, estimate]) || I <- Indices],
     [false = meck:called(riak_kv_index_hashtree, estimate_keys, [I]) || I <- Indices],
     [false = meck:called(riak_kv_index_hashtree, release_lock, [I]) || I <- Indices],
     ok.
 
-%% throttling on object size with no mutated keys
+%%
+%% Test throttling on obj_size with no mutated keys, see
+%% sweep_throttle_obj_size.
+%%
 test_sweep_throttle_obj_size1(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_obj_size(
@@ -402,8 +714,11 @@ test_sweep_throttle_obj_size1(Config) ->
       _ThrottleAfterBytes = 100,
       _ThrottleWaitMsecs  = 1).
 
-%% throttling on object size with 100 mutated keys - no extra
-%% throttles because of mutated keys should be done
+%%
+%% Test throttling on obj_size with 100 mutated keys - no extra
+%% throttles because of mutated keys should be done, see
+%% sweep_throttle_obj_size.
+%%
 test_sweep_throttle_obj_size2(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_obj_size(
@@ -414,8 +729,10 @@ test_sweep_throttle_obj_size2(Config) ->
       _ThrottleAfterBytes = 200,
       _ThrottleWaitMsecs  = 1).
 
-%% throttling on obj_size where number of bytes to throttle after if
-%% bigger than object size
+%%
+%% Test throttling on obj_size where number of bytes to throttle after
+%% is bigger than object size, see sweep_throttle_obj_size.
+%%
 test_sweep_throttle_obj_size3(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_obj_size(
@@ -426,7 +743,10 @@ test_sweep_throttle_obj_size3(Config) ->
       _ThrottleAfterBytes = 500,
       _ThrottleWaitMsecs  = 1).
 
-%% throttling on obj_size using a sweep_window_throttle_div
+%%
+%% Test throttling on obj_size using a sweep_window_throttle_div, see
+%% sweep_throttle_obj_size.
+%%
 test_sweep_throttle_obj_size4(Config) ->
     Indices = ?config(vnode_indices, Config),
     application:set_env(riak_kv, sweep_window_throttle_div, 2),
@@ -438,7 +758,10 @@ test_sweep_throttle_obj_size4(Config) ->
       _ThrottleAfterBytes = 500,
       _ThrottleWaitMsecs  = 2).
 
-%% throttling on obj_size sweep_window > throttle wait time.
+%%
+%% Test throttling on obj_size sweep_window > throttle wait time, see
+%% sweep_throttle_obj_size
+%%
 test_sweep_throttle_obj_size5(Config) ->
     Indices = ?config(vnode_indices, Config),
     application:set_env(riak_kv, sweep_window_throttle_div, 2),
@@ -450,6 +773,16 @@ test_sweep_throttle_obj_size5(Config) ->
       _ThrottleAfterBytes = 500,
       _ThrottleWaitMsecs  = 1).
 
+%%
+%% Helper function to test throttling of obj_size throttling strategy.
+%%
+%% The test uses sweep participant sweeper_callback_mutate that
+%% mutates a configured count of keys. The number of keys to mutate
+%% are sent to the participant before it starts visiting the keys.
+%%
+%% The test calculates the expected throttle msecs and asserts it
+%% matches the actual throttle msecs.
+%%
 sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAfterBytes, ThrottleWaitMsecs) ->
     RiakObjSizeBytes = byte_size(riak_object_bin(<<>>, <<>>, ObjSizeBytes)),
     new_sweep_participant(sweeper_callback_mutate),
@@ -468,7 +801,9 @@ sweep_throttle_obj_size(Index, NumKeys, NumMutatedKeys, ObjSizeBytes, ThrottleAf
     ActualThrottleTotalWait = meck_count_msecs_slept(),
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
 
-%% throttling on pace every 100 keys
+%%
+%% Test throttling on pace every 100 keys, see sweep_throttle_pace.
+%%
 test_sweep_throttle_pace1(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_pace(
@@ -478,8 +813,10 @@ test_sweep_throttle_pace1(Config) ->
       _NumKeysPace        = 100,
       _ThrottleWaitMsecs  = 1).
 
-%% throttling on pace every 100 keys with one extra throttle because
-%% of mutated objects
+%%
+%% Test throttling on pace every 100 keys with one extra throttle
+%% because of mutated objects, see sweep_throttle_pace.
+%%
 test_sweep_throttle_pace2(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_pace(
@@ -489,8 +826,10 @@ test_sweep_throttle_pace2(Config) ->
       _NumKeysPace        = 100,
       _ThrottleWaitMsecs  = 1).
 
-%% throttling on pace with several extra throttles because of
-%% mutations
+%%
+%% Test throttling on pace with several extra throttles because of
+%% mutations, see sweep_throttle_pace.
+%%
 test_sweep_throttle_pace3(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweep_throttle_pace(
@@ -500,7 +839,10 @@ test_sweep_throttle_pace3(Config) ->
       _NumKeysPace        = 100,
       _ThrottleWaitMsecs  = 1).
 
-%% throttling on pace using sweep_window_throttle_div
+%%
+%% Test throttling on pace using sweep_window_throttle_div, see
+%% sweep_throttle_pace.
+%%
 test_sweep_throttle_pace4(Config) ->
     Indices = ?config(vnode_indices, Config),
     application:set_env(riak_kv, sweep_window_throttle_div, 2),
@@ -511,8 +853,11 @@ test_sweep_throttle_pace4(Config) ->
       _NumKeysPace        = 100,
       _ThrottleWaitMsecs  = 2).
 
-%% throttling on pace using sweep_window_throttle_div where
-%% sweep_window_throttle_div > throttle wait time
+%%
+%% Test throttling on pace using sweep_window_throttle_div where
+%% sweep_window_throttle_div > throttle wait time, see
+%% sweep_throttle_pace.
+%%
 test_sweep_throttle_pace5(Config) ->
     Indices = ?config(vnode_indices, Config),
     application:set_env(riak_kv, sweep_window_throttle_div, 2),
@@ -523,6 +868,16 @@ test_sweep_throttle_pace5(Config) ->
       _NumKeysPace        = 100,
       _ThrottleWaitMsecs  = 1).
 
+%%
+%% Helper function to test throttling of pace throttling strategy.
+%%
+%% The test uses sweep participant sweeper_callback_mutate that
+%% mutates a configured count of keys. The number of keys to mutate
+%% are sent to the participant before it starts visiting the keys.
+%%
+%% The test calculates the expected throttle msecs and asserts it
+%% matches the actual throttle msecs.
+%%
 sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMsecs) ->
     new_sweep_participant(sweeper_callback_mutate),
     sweeper_meck_helper:backend_modules(async, NumKeys, 0),
@@ -541,6 +896,15 @@ sweep_throttle_pace(Index, NumKeys, NumMutatedKeys, NumKeysPace, ThrottleWaitMse
     ActualThrottleTotalWait = meck_count_msecs_slept(),
     ActualThrottleTotalWait = ExpectedThrottleMsecs.
 
+%%
+%% Test sweeper reporting of swept keys and bytes swept to exometer.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% Asserts that the number of swept keys and size of bytes swept are
+%% correctly reported to exometer.
+%%
 test_sweeper_exometer_reporting(Config) ->
     Indices = ?config(vnode_indices, Config),
     NumKeys = 5042,
@@ -583,6 +947,16 @@ test_sweeper_exometer_reporting(Config) ->
                     {ok, [{count, BytesCount1}, {one, BytesOne1}]}),
     ok.
 
+%%
+%% Test sweeper reporting of successful_sweep counts per participant
+%% to exometer.
+%%
+%% The test uses sweep participant sweeper_callback_1 that completes
+%% successfully as soon as it is scheduled.
+%%
+%% Asserts that the number of successful sweeps to sweeper_callback_1
+%% are reported correctly to exometer.
+%%
 test_sweeper_exometer_successful_sweep(Config) ->
     Indices = ?config(vnode_indices, Config),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, 0),
@@ -615,6 +989,15 @@ test_sweeper_exometer_successful_sweep(Config) ->
                     end,  {ok, [{count, 2}, {one, 2}]}),
     ok.
 
+%%
+%% Test sweeper reporting of swept keys and bytes swept to exometer.
+%%
+%% The test uses sweep participant sweeper_callback_crash that fails
+%% the sweep as soon as it is scheduled.
+%%
+%% Asserts that the number of failed sweeps to sweeper_callback_crash
+%% are reported correctly to exometer.
+%%
 test_sweeper_exometer_failed_sweep(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_crash),
@@ -652,6 +1035,16 @@ test_sweeper_exometer_failed_sweep(Config) ->
                     end,  {ok, [{count, 2}, {one, 2}]}),
     ok.
 
+%%
+%% Test sweeper reporting of mutated objects during sweep to exometer.
+%%
+%% The test uses sweep participant sweeper_callback_mutate that
+%% mutates a configured count of keys. The number of keys to mutate
+%% are sent to the participant before it starts visiting the keys.
+%%
+%% Asserts that the number of mutaed keys are reported correctly to
+%% exometer.
+%%
 test_exometer_mutated_object_count(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_mutate),
@@ -670,6 +1063,16 @@ test_exometer_mutated_object_count(Config) ->
                     {ok, [{count, MutateKeys}, {one, MutateKeys}]}),
     ok.
 
+%%
+%% Test sweeper reporting of mutated objects during sweep to exometer.
+%%
+%% The test uses sweep participant sweeper_callback_delete that
+%% mutates a configured count of keys. The number of keys to delete
+%% are sent to the participant before it starts visiting the keys.
+%%
+%% Asserts that the number of deleted keys are reported correctly to
+%% exometer.
+%%
 test_exometer_deleted_object_count(Config) ->
     Indices = ?config(vnode_indices, Config),
     new_sweep_participant(sweeper_callback_delete),
@@ -690,6 +1093,19 @@ test_exometer_deleted_object_count(Config) ->
     ok.
 
 
+%%
+%% Test scheduling of concurrent sweeps, controlled by the
+%% sweep_concurrency application environment variable.
+%%
+%% The test uses sweep participant sweeper_callback_wait that calls
+%% back a Fun before visiting an keys to pause and then signal to the
+%% sweeps to continue. See raik_kv_sweeper:before_visit(...), the Fun
+%% for this test case defaults to no-op.
+%%
+%% Test asserts that we have a RingSize > ConcurrentSweeps and that
+%% have exactly ConcurrentSweeps number of sweeps in the running state
+%% after sending RingSize number of tick events.
+%%
 test_scheduler_sweep_concurrency(_Config) ->
     new_sweep_participant(sweeper_callback_wait),
     sweeper_meck_helper:backend_modules(async, _NumKeys=5000, 0),
@@ -716,6 +1132,47 @@ test_scheduler_sweep_concurrency(_Config) ->
     Indices = lists:sort(Running0 ++ Running1),
     ok.
 
+%%
+%% Test that the bucket props are collected as part of the sweep if
+%% the bucket_props options is set for the sweep participant.
+%%
+%% Assert that the number of requests to get bucket_props equals to
+%% the number of keys, because the mocked backends treat each key as
+%% though in a separate bucket. Accumlated bucket props are not
+%% observable outside a sweep right and we are assuming it is
+%% sufficent to count the number of get_bucket calls.
+%%
+test_bucket_props(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    new_sweep_participant(sweeper_callback_bucket_props, _RunInterval = 1, _Options = [bucket_props]),
+    sweeper_meck_helper:backend_modules(async, NumKeys=16, _ObjectSizeBytes=0),
+
+    Index = pick(Indices),
+    riak_kv_sweeper:sweep(Index),
+    ok = receive_msg({ok, successful_sweep, sweeper_callback_bucket_props, Index}),
+    true = NumKeys == length(meck_bucket_props()),
+    ok.
+
+%%
+%% Test that the bucket props are not collected as part of the sweep
+%% if the bucket_props option is not set set for the sweep_participant.
+%%
+%% Assert that the number of requests to get bucket_props equals to
+%% 0. Accumlated bucket props are not observable outside a sweep
+%% right and we are assuming it is sufficent to count the number of
+%% get_bucket calls.
+%%
+test_no_bucket_props(Config) ->
+    Indices = ?config(vnode_indices, Config),
+    new_sweep_participant(sweeper_callback_1, _RunInterval = 1, _Options = []),
+    sweeper_meck_helper:backend_modules(async, _NumKeys=1000, _ObjectSizeBytes=0),
+
+    Index = pick(Indices),
+    riak_kv_sweeper:sweep(Index),
+    ok = receive_msg({ok, successful_sweep, sweeper_callback_1, Index}),
+    [] = meck_bucket_props(),
+    ok.
+
 %% ------------------------------------------------------------------------------
 %% Internal Functions
 %% ------------------------------------------------------------------------------
@@ -727,15 +1184,19 @@ is_running_sweep(Sweep) ->
         process_info(Pid) =/= undefined.
 
 new_sweep_participant(Name) ->
-    application:set_env(riak_kv, sweep_participant_testing_expire, immediate),
     new_sweep_participant(Name, 1).
 
 new_sweep_participant(Name, RunInterval) ->
+    new_sweep_participant(Name, RunInterval, []).
+
+new_sweep_participant(Name, RunInterval, Options) ->
     riak_kv_sweeper:add_sweep_participant(
       _Description = atom_to_list(Name) ++ " sweep participant",
       _Module = Name,
       _FunType = observe_fun,
-      RunInterval).
+      RunInterval,
+      Options).
+
 
 meck_sleep_for_throttle() ->
     meck:expect(riak_kv_sweeper, sleep_for_throttle, fun(_) -> ok end).
@@ -745,6 +1206,10 @@ meck_count_msecs_slept() ->
     MSecsThrottled = [MSecs || {_Pid, {riak_kv_sweeper, sleep_for_throttle, [MSecs]}, ok} <-
                                    ThrottleHistory],
     lists:sum(MSecsThrottled).
+
+meck_bucket_props() ->
+    [B || {_Pid, {riak_core_bucket, get_bucket, [B]}, _ReturnValue} <-
+              meck:history(riak_core_bucket)].
 
 check_sweeps_idle(Indices) ->
     Sorted = lists:sort(Indices),
@@ -814,12 +1279,6 @@ riak_object_bin(B, K, ObjSizeBytes) ->
 
 add_hours(Hour, Inc)  ->
     (Hour + Inc) rem 24.
-
-%% Waiting for 2500 msecs because at least 1 second must elapse
-%% before a sweep is re-run using the run_interval (now - ts) > 1,
-%% see kv_sweeper:expired
-min_scheduler_response_time_msecs() ->
-    2000.
 
 pick(List) when length(List) > 0 ->
     N = random:uniform(length(List)),
