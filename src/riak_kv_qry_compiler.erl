@@ -128,7 +128,8 @@ compile_group_by(Mod, [{time_fn,{_,FieldName},_} = GroupTimeFnAST|Tail], Acc, Q)
     GroupTimeFn = make_group_by_time_fn(Mod, GroupTimeFnAST),
     compile_group_by(Mod, Tail, [{GroupTimeFn,FieldName}|Acc], Q).
 
-make_group_by_time_fn(Mod, {time_fn, {identifier,FieldName},{integer,GroupSize}}) when is_binary(FieldName) ->
+-spec make_group_by_time_fn(module(), group_time_fn()) -> function().
+make_group_by_time_fn(Mod, {time_fn, {identifier,FieldName},{integer,GroupSize}}) ->
     Pos = Mod:get_field_position([FieldName]),
     fun(Row) ->
         Time = lists:nth(Pos, Row),
@@ -315,12 +316,10 @@ maybe_add_group_by_time_columns(Mod,
         col_return_types = lists:duplicate(FnsLen, timestamp) ++ ReturnTypes,
         finalisers = [fun(Row,_) -> lists:nth(N, Row) end || N <- lists:seq(1, FnsLen)],
         initial_state = [make_group_by_time_fn(Mod, TFn) || TFn <- TimeFns] ++ InitialState
-    };
-maybe_add_group_by_time_columns(_,_,SelClause) ->
-    SelClause.
+    }.
 
 filter_group_by_time_fns(GroupBy) ->
-    [TFn || {time_fn,_,_} = TFn <- GroupBy].
+    [TFn || TFn <- GroupBy, element(1,TFn) == time_fn].
 
 %%
 -spec get_col_names(?DDL{}, ?SQL_SELECT{}) -> [binary()].
