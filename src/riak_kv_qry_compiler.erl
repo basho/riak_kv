@@ -132,9 +132,10 @@ compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
                                   {ok, [?SQL_SELECT{}]} | {error, term()}.
 compile_where_clause(?DDL{} = DDL,
                      ?SQL_SELECT{is_executable = false,
-                                 'WHERE'       = W,
+                                 'WHERE'       = W1,
                                  cover_context = Cover} = Q) ->
-    case {compile_where(DDL, W), unwrap_cover(Cover)} of
+    {W2,_} = resolve_expressions(W1),
+    case {compile_where(DDL, [W2]), unwrap_cover(Cover)} of
         {{error, E}, _} ->
             {error, E};
         {_, {error, E}} ->
@@ -1109,6 +1110,24 @@ update_where_for_cover(Props, Field, {{StartVal, StartInclusive},
 modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
+
+resolve_expressions(WhereAST) ->
+    Acc = [], %% not used
+    riak_ql_ddl:mapfold_where_tree(
+        fun (_, and_, Acc_x) ->
+                {ok, Acc_x};
+            (_, or_, Acc_x) ->
+                {ok, Acc_x};
+            (_, Filter, Acc_x) ->
+                {resolve_expressions_folder(Filter), Acc_x}
+        end, Acc, WhereAST).
+-include_lib("eunit/include/eunit.hrl").
+
+resolve_expressions_folder({Op,LHS,{'+',{integer,A},{integer,B}}}) ->
+    {Op,LHS,{integer,A+B}};
+resolve_expressions_folder(AST) ->
+    ?debugFmt("AST IS ~p", [AST]),
+    AST.
 
 -record(filtercheck, {name,'=','>','>=','<','<='}).
 
@@ -4066,6 +4085,24 @@ query_with_desc_last_local_key_column_no_quantum_test() ->
           {filter,[]},
           {end_inclusive, true},
           {start_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 + 1s"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {filter,[]},
+          {end_inclusive, true}]],
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
     ).
 
