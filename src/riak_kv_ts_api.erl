@@ -29,6 +29,7 @@
          api_call_from_sql_type/1,
          api_call_to_perm/1,
          api_calls/0,
+         create_table/3,
          put_data/2, put_data/3,
          get_data/2, get_data/3, get_data/4,
          delete_data/2, delete_data/3, delete_data/4, delete_data/5,
@@ -44,6 +45,17 @@
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_ts.hrl").
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
+ -define(TABLE_ACTIVATE_WAIT, 30). %%<< make TABLE_ACTIVATE_WAIT configurable in tsqueryreq
+%% TABLE_ACTIVATE_WAIT_RETRY_DELAY should give sufficient time for bucket_type
+%% activation to propagate via riak_core metadata exchange via plumtree protocol,
+%% which depends on the cluster size. The exchange is gossiped to achieve a
+%% level of parallelization but still takes significant time.
+-define(TABLE_ACTIVATE_WAIT_RETRY_DELAY, 100).
 
 %% external API calls enumerated
 -type query_api_call() :: create_table | query_select | describe_table | query_insert | query_explain | show_tables | query_delete.
@@ -96,6 +108,96 @@ api_calls() ->
     [create_table, query_select, describe_table, query_insert,
      show_tables, show_create_table, get, put, delete, list_keys, coverage].
 
+
+-spec create_table(module(), ?DDL{}, proplists:proplist()) -> ok|{error,term()}.
+create_table(SvcMod, ?DDL{table = Table}=DDL1, WithProps) ->
+    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
+    DDL2 = convert_ddl_to_cluster_supported_version(DDLRecCap, DDL1),
+    CompilerVersion = riak_ql_ddl_compiler:get_compiler_version(),
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL2,
+                                                                 CompilerVersion,
+                                                                 WithProps),
+    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
+        {bad_linkfun_modfun, {M, F}} ->
+            {error, SvcMod:make_table_create_fail_resp(Table,
+                                                       flat_format(
+                                                         "Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F]))};
+        {bad_linkfun_bkey, {B, K}} ->
+            {error, SvcMod:make_table_create_fail_resp(Table,
+                                                       flat_format(
+                                                         "Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K]))};
+        {bad_chash_keyfun, {M, F}} ->
+            {error, SvcMod:make_table_create_fail_resp(Table,
+                                                       flat_format(
+                                                         "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F]))};
+        Props2 ->
+            create_table1(SvcMod, Table, Props2, DDL2, DDLRecCap, ?TABLE_ACTIVATE_WAIT)
+    end.
+
+create_table1(SvcMod, Table, Props, DDL, DDLRecCap, Seconds) ->
+    case riak_core_bucket_type:create(Table, Props) of
+        ok ->
+            Milliseconds = Seconds * 1000,
+            WaitMilliseonds = ?TABLE_ACTIVATE_WAIT_RETRY_DELAY,
+            wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds);
+        {error, Reason} -> {error, SvcMod:make_table_create_fail_resp(Table, Reason)}
+    end.
+
+wait_until_supported(SvcMod, Table, _DDL, _DDLRecCap, _Milliseconds=0, _WaitMilliseconds) ->
+    {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
+wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds) ->
+    case get_active_peer_nodes() of
+        Nodes when is_list(Nodes) ->
+            wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds);
+        {error, _Reason} ->
+            timer:sleep(WaitMilliseonds),
+            wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds - WaitMilliseonds, WaitMilliseonds)
+    end.
+
+wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds) ->
+    case get_remote_is_table_active_and_supported(Nodes, Table, DDLRecCap) of
+        true -> ok;
+        _ ->
+            timer:sleep(WaitMilliseonds),
+            lager:info("Waiting for table ~ts to be compiled on all active nodes", [Table]),
+            wait_until_supported1(Nodes, SvcMod, Table, DDL, DDLRecCap, Milliseconds - WaitMilliseonds, WaitMilliseonds)
+    end.
+
+get_remote_is_table_active_and_supported(Nodes, Table, DDLRecCap) ->
+    multi_is_all_true(
+      rpc:multicall(Nodes, riak_kv_ts_util, is_table_supported,
+                    [DDLRecCap, Table])).
+
+multi_is_all_true({_Results, BadNodes}) when BadNodes =/= [] ->
+    false;
+multi_is_all_true({Results, _BadNodes}) ->
+    lists:all(fun(E) -> E == true end, Results).
+
+get_active_peer_nodes() ->
+    case riak_core_ring_manager:get_my_ring() of
+        {ok, Ring} -> riak_core_ring:active_members(Ring);
+        _ -> {error, retry}
+    end.
+
+wait_until_active_and_supported(SvcMod, Table, _DDL, _DDLRecCap, _Milliseconds=0, _WaitMilliseonds) ->
+    {error, SvcMod:make_table_activate_error_timeout_resp(Table)};
+wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds) ->
+    case riak_core_bucket_type:activate(Table) of
+        ok -> wait_until_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds);
+        {error, not_ready} ->
+            timer:sleep(WaitMilliseonds),
+            lager:info("Waiting for table ~ts to be ready for activation", [Table]),
+            wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds - WaitMilliseonds, WaitMilliseonds);
+        {error, undefined} ->
+            {error, SvcMod:make_table_created_missing_resp(Table)}
+    end.
+convert_ddl_to_cluster_supported_version(DDLRecCap, DDL) when is_atom(DDLRecCap) ->
+    DDLConversions = riak_ql_ddl:convert(DDLRecCap, DDL),
+    [LowestDDL|_] = lists:sort(fun ddl_comparator/2, DDLConversions),
+    LowestDDL.
+
+ddl_comparator(A, B) ->
+    riak_ql_ddl:is_version_greater(element(1,A), element(1,B)) == true.
 
 -spec query(string() | riak_kv_qry:sql_query_type_record(), ?DDL{}) ->
                    {ok, riak_kv_qry:query_tabular_result()} |
@@ -405,3 +507,28 @@ compile_to_per_quantum_queries(Mod, SQL) ->
                     {error, invalid_query}
             end
     end.
+
+flat_format(Format, Args) ->
+    lists:flatten(io_lib:format(Format, Args)).
+
+-ifdef(TEST).
+convert_ddl_to_cluster_supported_version_v1_test() ->
+    ?assertMatch(
+       #ddl_v1{},
+       convert_ddl_to_cluster_supported_version(
+         v1, #ddl_v2{local_key = ?DDL_KEY{ast = []},
+                     partition_key = ?DDL_KEY{ast = []},
+                     fields=[#riak_field_v1{type=varchar}]})
+      ).
+
+convert_ddl_to_cluster_supported_version_v2_test() ->
+    DDLV2 = #ddl_v2{
+               local_key = ?DDL_KEY{ast = []},
+               partition_key = ?DDL_KEY{ast = []},
+               fields = [#riak_field_v1{type = varchar}]
+              },
+    ?assertMatch(
+       DDLV2,
+       convert_ddl_to_cluster_supported_version(v2, DDLV2)
+      ).
+-endif. %%<< TEST
