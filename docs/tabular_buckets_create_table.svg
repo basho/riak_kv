@@ -1,0 +1,1391 @@
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1"
+ width="1800px" height="2668px"
+ viewBox="0 0 1800 2668"
+ xmlns="http://www.w3.org/2000/svg" shape-rendering="crispEdges"
+ stroke-width="1" text-rendering="geometricPrecision">
+<polygon fill="white" points="96,7 126,7 126,16 96,16"/>
+<text x="112" y="16" textLength="28" font-family="Helvetica" font-size="12" fill="black" text-anchor="middle">
+
+client
+</text>
+<polygon fill="white" points="297,7 375,7 375,16 297,16"/>
+<text x="337" y="16" textLength="77" font-family="Helvetica" font-size="12" fill="black" text-anchor="middle">
+
+riak_kv_ts_api
+</text>
+<polygon fill="white" points="500,7 622,7 622,16 500,16"/>
+<text x="562" y="16" textLength="121" font-family="Helvetica" font-size="12" fill="black" text-anchor="middle">
+
+riak_core_bucket_type
+</text>
+<polygon fill="white" points="735,7 837,7 837,16 735,16"/>
+<text x="787" y="16" textLength="101" font-family="Helvetica" font-size="12" fill="black" text-anchor="middle">
+
+riak_core_claimant
+</text>
+<polygon fill="white" points="957,7 1065,7 1065,16 957,16"/>
+<text x="1012" y="16" textLength="106" font-family="Helvetica" font-size="12" fill="black" text-anchor="middle">
+
+riak_core_metadata
+</text>
+<polygon fill="white" points="1155,7 1317,7 1317,16 1155,16"/>
+<text x="1237" y="16" textLength="160" font-family="Helvetica" font-size="12" fill="black" text-anchor="middle">
+
+riak_core_metadata_manager
+</text>
+<polygon fill="white" points="1374,7 1548,7 1548,16 1374,16"/>
+<text x="1462" y="16" textLength="173" font-family="Helvetica" font-size="12" fill="black" text-anchor="middle">
+
+riak_kv_metadata_store_listener
+</text>
+<polygon fill="white" points="1633,7 1739,7 1739,16 1633,16"/>
+<text x="1687" y="16" textLength="105" font-family="Helvetica" font-size="12" fill="black" text-anchor="middle">
+
+riak_kv_ts_newtype
+</text>
+<line x1="112" y1="22" x2="112" y2="50" stroke="black"/>
+<line x1="337" y1="22" x2="337" y2="50" stroke="black"/>
+<line x1="562" y1="22" x2="562" y2="50" stroke="black"/>
+<line x1="787" y1="22" x2="787" y2="50" stroke="black"/>
+<line x1="1012" y1="22" x2="1012" y2="50" stroke="black"/>
+<line x1="1237" y1="22" x2="1237" y2="50" stroke="black"/>
+<line x1="1462" y1="22" x2="1462" y2="50" stroke="black"/>
+<line x1="1687" y1="22" x2="1687" y2="50" stroke="black"/>
+<line x1="112" y1="33" x2="337" y2="33" stroke="black"/>
+<line x1="337" y1="33" x2="327" y2="39" stroke="black"/>
+<polygon fill="white" points="192,23 257,23 257,32 192,32"/>
+<text x="193" y="32" textLength="63" font-family="Helvetica" font-size="12" fill="black">
+create table
+</text>
+<line x1="112" y1="50" x2="112" y2="78" stroke="black"/>
+<line x1="337" y1="50" x2="337" y2="78" stroke="black"/>
+<line x1="562" y1="50" x2="562" y2="78" stroke="black"/>
+<line x1="787" y1="50" x2="787" y2="78" stroke="black"/>
+<line x1="1012" y1="50" x2="1012" y2="78" stroke="black"/>
+<line x1="1237" y1="50" x2="1237" y2="78" stroke="black"/>
+<line x1="1462" y1="50" x2="1462" y2="78" stroke="black"/>
+<line x1="1687" y1="50" x2="1687" y2="78" stroke="black"/>
+<line x1="337" y1="61" x2="562" y2="61" stroke="black"/>
+<line x1="562" y1="61" x2="552" y2="67" stroke="black"/>
+<polygon fill="white" points="432,51 467,51 467,60 432,60"/>
+<text x="433" y="60" textLength="33" font-family="Helvetica" font-size="12" fill="black">
+create
+</text>
+<line x1="112" y1="78" x2="112" y2="106" stroke="black"/>
+<line x1="337" y1="78" x2="337" y2="106" stroke="black"/>
+<line x1="562" y1="78" x2="562" y2="106" stroke="black"/>
+<line x1="787" y1="78" x2="787" y2="106" stroke="black"/>
+<line x1="1012" y1="78" x2="1012" y2="106" stroke="black"/>
+<line x1="1237" y1="78" x2="1237" y2="106" stroke="black"/>
+<line x1="1462" y1="78" x2="1462" y2="106" stroke="black"/>
+<line x1="1687" y1="78" x2="1687" y2="106" stroke="black"/>
+<line x1="562" y1="89" x2="787" y2="89" stroke="black"/>
+<line x1="787" y1="89" x2="777" y2="95" stroke="black"/>
+<polygon fill="white" points="621,79 728,79 728,88 621,88"/>
+<text x="622" y="88" textLength="105" font-family="Helvetica" font-size="12" fill="black">
+create_bucket_type
+</text>
+<line x1="112" y1="106" x2="112" y2="134" stroke="black"/>
+<line x1="337" y1="106" x2="337" y2="134" stroke="black"/>
+<line x1="562" y1="106" x2="562" y2="134" stroke="black"/>
+<line x1="787" y1="106" x2="787" y2="134" stroke="black"/>
+<line x1="1012" y1="106" x2="1012" y2="134" stroke="black"/>
+<line x1="1237" y1="106" x2="1237" y2="134" stroke="black"/>
+<line x1="1462" y1="106" x2="1462" y2="134" stroke="black"/>
+<line x1="1687" y1="106" x2="1687" y2="134" stroke="black"/>
+<path d="M 787 123 A110,6 0 0,1 787,111" stroke="black" fill="none"/><line x1="787" y1="123" x2="777" y2="129" stroke="black"/>
+<polygon fill="white" points="787,107 834,107 834,116 787,116"/>
+<text x="788" y="116" textLength="45" font-family="Helvetica" font-size="12" fill="black">
+claimant
+</text>
+<line x1="112" y1="134" x2="112" y2="162" stroke="black"/>
+<line x1="337" y1="134" x2="337" y2="162" stroke="black"/>
+<line x1="562" y1="134" x2="562" y2="162" stroke="black"/>
+<line x1="787" y1="134" x2="787" y2="162" stroke="black"/>
+<line x1="1012" y1="134" x2="1012" y2="162" stroke="black"/>
+<line x1="1237" y1="134" x2="1237" y2="162" stroke="black"/>
+<line x1="1462" y1="134" x2="1462" y2="162" stroke="black"/>
+<line x1="1687" y1="134" x2="1687" y2="162" stroke="black"/>
+<path d="M 787 151 A110,6 0 0,1 787,139" stroke="black" fill="none"/><line x1="787" y1="151" x2="777" y2="157" stroke="black"/>
+<polygon fill="white" points="787,135 894,135 894,144 787,144"/>
+<text x="788" y="144" textLength="105" font-family="Helvetica" font-size="12" fill="black">
+create_bucket_type
+</text>
+<line x1="112" y1="162" x2="112" y2="190" stroke="black"/>
+<line x1="337" y1="162" x2="337" y2="190" stroke="black"/>
+<line x1="562" y1="162" x2="562" y2="190" stroke="black"/>
+<line x1="787" y1="162" x2="787" y2="190" stroke="black"/>
+<line x1="1012" y1="162" x2="1012" y2="190" stroke="black"/>
+<line x1="1237" y1="162" x2="1237" y2="190" stroke="black"/>
+<line x1="1462" y1="162" x2="1462" y2="190" stroke="black"/>
+<line x1="1687" y1="162" x2="1687" y2="190" stroke="black"/>
+<path d="M 787 179 A110,6 0 0,1 787,167" stroke="black" fill="none"/><line x1="787" y1="179" x2="777" y2="185" stroke="black"/>
+<polygon fill="white" points="787,163 877,163 877,172 787,172"/>
+<text x="788" y="172" textLength="88" font-family="Helvetica" font-size="12" fill="black">
+get_bucket_type
+</text>
+<line x1="112" y1="190" x2="112" y2="218" stroke="black"/>
+<line x1="337" y1="190" x2="337" y2="218" stroke="black"/>
+<line x1="562" y1="190" x2="562" y2="218" stroke="black"/>
+<line x1="787" y1="190" x2="787" y2="218" stroke="black"/>
+<line x1="1012" y1="190" x2="1012" y2="218" stroke="black"/>
+<line x1="1237" y1="190" x2="1237" y2="218" stroke="black"/>
+<line x1="1462" y1="190" x2="1462" y2="218" stroke="black"/>
+<line x1="1687" y1="190" x2="1687" y2="218" stroke="black"/>
+<line x1="787" y1="201" x2="1012" y2="201" stroke="black"/>
+<line x1="1012" y1="201" x2="1002" y2="207" stroke="black"/>
+<polygon fill="white" points="890,191 909,191 909,200 890,200"/>
+<text x="891" y="200" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+get
+</text>
+<line x1="112" y1="218" x2="112" y2="235" stroke="black"/>
+<line x1="337" y1="218" x2="337" y2="235" stroke="black"/>
+<line x1="562" y1="218" x2="562" y2="235" stroke="black"/>
+<line x1="787" y1="218" x2="787" y2="235" stroke="black"/>
+<line x1="1012" y1="218" x2="1012" y2="235" stroke="black"/>
+<line x1="1237" y1="218" x2="1237" y2="235" stroke="black"/>
+<line x1="1462" y1="218" x2="1462" y2="235" stroke="black"/>
+<line x1="1687" y1="218" x2="1687" y2="235" stroke="black"/>
+<line x1="56" y1="223" x2="1744" y2="223" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="866,219 932,219 932,228 866,228"/>
+<text x="867" y="228" textLength="64" font-family="Helvetica" font-size="12" fill="black">
+bucket DNE
+</text>
+<line x1="112" y1="235" x2="112" y2="263" stroke="black"/>
+<line x1="337" y1="235" x2="337" y2="263" stroke="black"/>
+<line x1="562" y1="235" x2="562" y2="263" stroke="black"/>
+<line x1="787" y1="235" x2="787" y2="263" stroke="black"/>
+<line x1="1012" y1="235" x2="1012" y2="263" stroke="black"/>
+<line x1="1237" y1="235" x2="1237" y2="263" stroke="black"/>
+<line x1="1462" y1="235" x2="1462" y2="263" stroke="black"/>
+<line x1="1687" y1="235" x2="1687" y2="263" stroke="black"/>
+<line x1="1012" y1="246" x2="787" y2="246" stroke="black"/>
+<line x1="787" y1="246" x2="797" y2="252" stroke="black"/>
+<polygon fill="white" points="853,236 945,236 945,245 853,245"/>
+<text x="854" y="245" textLength="90" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get, undefined
+</text>
+<line x1="112" y1="263" x2="112" y2="291" stroke="black"/>
+<line x1="337" y1="263" x2="337" y2="291" stroke="black"/>
+<line x1="562" y1="263" x2="562" y2="291" stroke="black"/>
+<line x1="787" y1="263" x2="787" y2="291" stroke="black"/>
+<line x1="1012" y1="263" x2="1012" y2="291" stroke="black"/>
+<line x1="1237" y1="263" x2="1237" y2="291" stroke="black"/>
+<line x1="1462" y1="263" x2="1462" y2="291" stroke="black"/>
+<line x1="1687" y1="263" x2="1687" y2="291" stroke="black"/>
+<line x1="787" y1="274" x2="1012" y2="274" stroke="black"/>
+<line x1="1012" y1="274" x2="1002" y2="280" stroke="black"/>
+<polygon fill="white" points="817,264 981,264 981,273 817,273"/>
+<text x="818" y="273" textLength="162" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get_bucket_type, undefined
+</text>
+<line x1="112" y1="291" x2="112" y2="308" stroke="black"/>
+<line x1="337" y1="291" x2="337" y2="308" stroke="black"/>
+<line x1="562" y1="291" x2="562" y2="308" stroke="black"/>
+<line x1="787" y1="291" x2="787" y2="308" stroke="black"/>
+<line x1="1012" y1="291" x2="1012" y2="308" stroke="black"/>
+<line x1="1237" y1="291" x2="1237" y2="308" stroke="black"/>
+<line x1="1462" y1="291" x2="1462" y2="308" stroke="black"/>
+<line x1="1687" y1="291" x2="1687" y2="308" stroke="black"/>
+<line x1="56" y1="296" x2="1744" y2="296" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="849,292 949,292 949,301 849,301"/>
+<text x="850" y="301" textLength="98" font-family="Helvetica" font-size="12" fill="black">
+create bucket type
+</text>
+<line x1="112" y1="308" x2="112" y2="336" stroke="black"/>
+<line x1="337" y1="308" x2="337" y2="336" stroke="black"/>
+<line x1="562" y1="308" x2="562" y2="336" stroke="black"/>
+<line x1="787" y1="308" x2="787" y2="336" stroke="black"/>
+<line x1="1012" y1="308" x2="1012" y2="336" stroke="black"/>
+<line x1="1237" y1="308" x2="1237" y2="336" stroke="black"/>
+<line x1="1462" y1="308" x2="1462" y2="336" stroke="black"/>
+<line x1="1687" y1="308" x2="1687" y2="336" stroke="black"/>
+<line x1="787" y1="319" x2="1012" y2="319" stroke="black"/>
+<line x1="1012" y1="319" x2="1002" y2="325" stroke="black"/>
+<polygon fill="white" points="890,309 909,309 909,318 890,318"/>
+<text x="891" y="318" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+put
+</text>
+<line x1="112" y1="336" x2="112" y2="364" stroke="black"/>
+<line x1="337" y1="336" x2="337" y2="364" stroke="black"/>
+<line x1="562" y1="336" x2="562" y2="364" stroke="black"/>
+<line x1="787" y1="336" x2="787" y2="364" stroke="black"/>
+<line x1="1012" y1="336" x2="1012" y2="364" stroke="black"/>
+<line x1="1237" y1="336" x2="1237" y2="364" stroke="black"/>
+<line x1="1462" y1="336" x2="1462" y2="364" stroke="black"/>
+<line x1="1687" y1="336" x2="1687" y2="364" stroke="black"/>
+<line x1="1012" y1="347" x2="1237" y2="347" stroke="black"/>
+<line x1="1237" y1="347" x2="1227" y2="353" stroke="black"/>
+<polygon fill="white" points="1115,337 1134,337 1134,346 1115,346"/>
+<text x="1116" y="346" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+put
+</text>
+<line x1="112" y1="364" x2="112" y2="392" stroke="black"/>
+<line x1="337" y1="364" x2="337" y2="392" stroke="black"/>
+<line x1="562" y1="364" x2="562" y2="392" stroke="black"/>
+<line x1="787" y1="364" x2="787" y2="392" stroke="black"/>
+<line x1="1012" y1="364" x2="1012" y2="392" stroke="black"/>
+<line x1="1237" y1="364" x2="1237" y2="392" stroke="black"/>
+<line x1="1462" y1="364" x2="1462" y2="392" stroke="black"/>
+<line x1="1687" y1="364" x2="1687" y2="392" stroke="black"/>
+<line x1="1237" y1="375" x2="1462" y2="375" stroke="black"/>
+<line x1="1462" y1="375" x2="1452" y2="381" stroke="black"/>
+<polygon fill="white" points="1303,365 1395,365 1395,374 1303,374"/>
+<text x="1304" y="374" textLength="90" font-family="Helvetica" font-size="12" fill="black">
+metadata_stored
+</text>
+<line x1="112" y1="392" x2="112" y2="420" stroke="black"/>
+<line x1="337" y1="392" x2="337" y2="420" stroke="black"/>
+<line x1="562" y1="392" x2="562" y2="420" stroke="black"/>
+<line x1="787" y1="392" x2="787" y2="420" stroke="black"/>
+<line x1="1012" y1="392" x2="1012" y2="420" stroke="black"/>
+<line x1="1237" y1="392" x2="1237" y2="420" stroke="black"/>
+<line x1="1462" y1="392" x2="1462" y2="420" stroke="black"/>
+<line x1="1687" y1="392" x2="1687" y2="420" stroke="black"/>
+<line x1="1462" y1="403" x2="1687" y2="403" stroke="black"/>
+<line x1="1687" y1="403" x2="1677" y2="409" stroke="black"/>
+<polygon fill="white" points="1548,393 1601,393 1601,402 1548,402"/>
+<text x="1549" y="402" textLength="51" font-family="Helvetica" font-size="12" fill="black">
+new_type
+</text>
+<line x1="112" y1="420" x2="112" y2="448" stroke="black"/>
+<line x1="337" y1="420" x2="337" y2="448" stroke="black"/>
+<line x1="562" y1="420" x2="562" y2="448" stroke="black"/>
+<line x1="787" y1="420" x2="787" y2="448" stroke="black"/>
+<line x1="1012" y1="420" x2="1012" y2="448" stroke="black"/>
+<line x1="1237" y1="420" x2="1237" y2="448" stroke="black"/>
+<line x1="1462" y1="420" x2="1462" y2="448" stroke="black"/>
+<line x1="1687" y1="420" x2="1687" y2="448" stroke="black"/>
+<path d="M 1687 425 A112,6 0 0,1 1687,437" stroke="black" fill="none"/><line x1="1687" y1="437" x2="1697" y2="443" stroke="black"/>
+<polygon fill="white" points="1625,421 1685,421 1685,430 1625,430"/>
+<text x="1626" y="430" textLength="58" font-family="Helvetica" font-size="12" fill="black">
+! new_type
+</text>
+<line x1="112" y1="448" x2="112" y2="465" stroke="black"/>
+<line x1="337" y1="448" x2="337" y2="465" stroke="black"/>
+<line x1="562" y1="448" x2="562" y2="465" stroke="black"/>
+<line x1="787" y1="448" x2="787" y2="465" stroke="black"/>
+<line x1="1012" y1="448" x2="1012" y2="465" stroke="black"/>
+<line x1="1237" y1="448" x2="1237" y2="465" stroke="black"/>
+<line x1="1462" y1="448" x2="1462" y2="465" stroke="black"/>
+<line x1="1687" y1="448" x2="1687" y2="465" stroke="black"/>
+<line x1="56" y1="453" x2="1744" y2="453" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="873,449 926,449 926,458 873,458"/>
+<text x="874" y="458" textLength="51" font-family="Helvetica" font-size="12" fill="black">
+ASYNC 1
+</text>
+<line x1="112" y1="465" x2="112" y2="493" stroke="black"/>
+<line x1="337" y1="465" x2="337" y2="493" stroke="black"/>
+<line x1="562" y1="465" x2="562" y2="493" stroke="black"/>
+<line x1="787" y1="465" x2="787" y2="493" stroke="black"/>
+<line x1="1012" y1="465" x2="1012" y2="493" stroke="black"/>
+<line x1="1237" y1="465" x2="1237" y2="493" stroke="black"/>
+<line x1="1462" y1="465" x2="1462" y2="493" stroke="black"/>
+<line x1="1687" y1="465" x2="1687" y2="493" stroke="black"/>
+<line x1="1687" y1="476" x2="1462" y2="476" stroke="black"/>
+<line x1="1462" y1="476" x2="1472" y2="482" stroke="black"/>
+<polygon fill="white" points="1531,466 1618,466 1618,475 1531,475"/>
+<text x="1532" y="475" textLength="85" font-family="Helvetica" font-size="12" fill="black">
+&lt;- new_type, ok
+</text>
+<line x1="112" y1="493" x2="112" y2="521" stroke="black"/>
+<line x1="337" y1="493" x2="337" y2="521" stroke="black"/>
+<line x1="562" y1="493" x2="562" y2="521" stroke="black"/>
+<line x1="787" y1="493" x2="787" y2="521" stroke="black"/>
+<line x1="1012" y1="493" x2="1012" y2="521" stroke="black"/>
+<line x1="1237" y1="493" x2="1237" y2="521" stroke="black"/>
+<line x1="1462" y1="493" x2="1462" y2="521" stroke="black"/>
+<line x1="1687" y1="493" x2="1687" y2="521" stroke="black"/>
+<line x1="1237" y1="504" x2="1012" y2="504" stroke="black"/>
+<line x1="1012" y1="504" x2="1022" y2="510" stroke="black"/>
+<polygon fill="white" points="1079,494 1169,494 1169,503 1079,503"/>
+<text x="1080" y="503" textLength="88" font-family="Helvetica" font-size="12" fill="black">
+&lt;- put, metadata
+</text>
+<line x1="112" y1="521" x2="112" y2="538" stroke="black"/>
+<line x1="337" y1="521" x2="337" y2="538" stroke="black"/>
+<line x1="562" y1="521" x2="562" y2="538" stroke="black"/>
+<line x1="787" y1="521" x2="787" y2="538" stroke="black"/>
+<line x1="1012" y1="521" x2="1012" y2="538" stroke="black"/>
+<line x1="1237" y1="521" x2="1237" y2="538" stroke="black"/>
+<line x1="1462" y1="521" x2="1462" y2="538" stroke="black"/>
+<line x1="1687" y1="521" x2="1687" y2="538" stroke="black"/>
+<line x1="56" y1="526" x2="1744" y2="526" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="864,522 935,522 935,531 864,531"/>
+<text x="865" y="531" textLength="69" font-family="Helvetica" font-size="12" fill="black">
+interleaved 1
+</text>
+<line x1="112" y1="538" x2="112" y2="566" stroke="black"/>
+<line x1="337" y1="538" x2="337" y2="566" stroke="black"/>
+<line x1="562" y1="538" x2="562" y2="566" stroke="black"/>
+<line x1="787" y1="538" x2="787" y2="566" stroke="black"/>
+<line x1="1012" y1="538" x2="1012" y2="566" stroke="black"/>
+<line x1="1237" y1="538" x2="1237" y2="566" stroke="black"/>
+<line x1="1462" y1="538" x2="1462" y2="566" stroke="black"/>
+<line x1="1687" y1="538" x2="1687" y2="566" stroke="black"/>
+<path d="M 1687 543 A112,6 0 0,1 1687,555" stroke="black" fill="none"/><line x1="1687" y1="555" x2="1697" y2="561" stroke="black"/>
+<polygon fill="white" points="1564,539 1685,539 1685,548 1564,548"/>
+<text x="1565" y="548" textLength="119" font-family="Helvetica" font-size="12" fill="black">
+handle_cast new_type
+</text>
+<line x1="112" y1="566" x2="112" y2="594" stroke="black"/>
+<line x1="337" y1="566" x2="337" y2="594" stroke="black"/>
+<line x1="562" y1="566" x2="562" y2="594" stroke="black"/>
+<line x1="787" y1="566" x2="787" y2="594" stroke="black"/>
+<line x1="1012" y1="566" x2="1012" y2="594" stroke="black"/>
+<line x1="1237" y1="566" x2="1237" y2="594" stroke="black"/>
+<line x1="1462" y1="566" x2="1462" y2="594" stroke="black"/>
+<line x1="1687" y1="566" x2="1687" y2="594" stroke="black"/>
+<line x1="1687" y1="577" x2="1012" y2="577" stroke="black"/>
+<line x1="1012" y1="577" x2="1022" y2="583" stroke="black"/>
+<polygon fill="white" points="1340,567 1359,567 1359,576 1340,576"/>
+<text x="1341" y="576" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+get
+</text>
+<line x1="112" y1="594" x2="112" y2="622" stroke="black"/>
+<line x1="337" y1="594" x2="337" y2="622" stroke="black"/>
+<line x1="562" y1="594" x2="562" y2="622" stroke="black"/>
+<line x1="787" y1="594" x2="787" y2="622" stroke="black"/>
+<line x1="1012" y1="594" x2="1012" y2="622" stroke="black"/>
+<line x1="1237" y1="594" x2="1237" y2="622" stroke="black"/>
+<line x1="1462" y1="594" x2="1462" y2="622" stroke="black"/>
+<line x1="1687" y1="594" x2="1687" y2="622" stroke="black"/>
+<path d="M 1012 599 A112,6 0 0,1 1012,611" stroke="black" fill="none"/><line x1="1012" y1="611" x2="1022" y2="617" stroke="black"/>
+<polygon fill="white" points="955,595 1010,595 1010,604 955,604"/>
+<text x="956" y="604" textLength="53" font-family="Helvetica" font-size="12" fill="black">
+broadcast
+</text>
+<line x1="112" y1="622" x2="112" y2="639" stroke="black"/>
+<line x1="337" y1="622" x2="337" y2="639" stroke="black"/>
+<line x1="562" y1="622" x2="562" y2="639" stroke="black"/>
+<line x1="787" y1="622" x2="787" y2="639" stroke="black"/>
+<line x1="1012" y1="622" x2="1012" y2="639" stroke="black"/>
+<line x1="1237" y1="622" x2="1237" y2="639" stroke="black"/>
+<line x1="1462" y1="622" x2="1462" y2="639" stroke="black"/>
+<line x1="1687" y1="622" x2="1687" y2="639" stroke="black"/>
+<line x1="56" y1="627" x2="1744" y2="627" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="873,623 926,623 926,632 873,632"/>
+<text x="874" y="632" textLength="51" font-family="Helvetica" font-size="12" fill="black">
+ASYNC 2
+</text>
+<line x1="112" y1="639" x2="112" y2="667" stroke="black"/>
+<line x1="337" y1="639" x2="337" y2="667" stroke="black"/>
+<line x1="562" y1="639" x2="562" y2="667" stroke="black"/>
+<line x1="787" y1="639" x2="787" y2="667" stroke="black"/>
+<line x1="1012" y1="639" x2="1012" y2="667" stroke="black"/>
+<line x1="1237" y1="639" x2="1237" y2="667" stroke="black"/>
+<line x1="1462" y1="639" x2="1462" y2="667" stroke="black"/>
+<line x1="1687" y1="639" x2="1687" y2="667" stroke="black"/>
+<line x1="1012" y1="650" x2="787" y2="650" stroke="black"/>
+<line x1="787" y1="650" x2="797" y2="656" stroke="black"/>
+<polygon fill="white" points="873,640 925,640 925,649 873,649"/>
+<text x="874" y="649" textLength="50" font-family="Helvetica" font-size="12" fill="black">
+&lt;- put, ok
+</text>
+<line x1="112" y1="667" x2="112" y2="695" stroke="black"/>
+<line x1="337" y1="667" x2="337" y2="695" stroke="black"/>
+<line x1="562" y1="667" x2="562" y2="695" stroke="black"/>
+<line x1="787" y1="667" x2="787" y2="695" stroke="black"/>
+<line x1="1012" y1="667" x2="1012" y2="695" stroke="black"/>
+<line x1="1237" y1="667" x2="1237" y2="695" stroke="black"/>
+<line x1="1462" y1="667" x2="1462" y2="695" stroke="black"/>
+<line x1="1687" y1="667" x2="1687" y2="695" stroke="black"/>
+<line x1="787" y1="678" x2="562" y2="678" stroke="black"/>
+<line x1="562" y1="678" x2="572" y2="684" stroke="black"/>
+<polygon fill="white" points="604,668 744,668 744,677 604,677"/>
+<text x="605" y="677" textLength="138" font-family="Helvetica" font-size="12" fill="black">
+&lt;- create_bucket_type, ok
+</text>
+<line x1="112" y1="695" x2="112" y2="723" stroke="black"/>
+<line x1="337" y1="695" x2="337" y2="723" stroke="black"/>
+<line x1="562" y1="695" x2="562" y2="723" stroke="black"/>
+<line x1="787" y1="695" x2="787" y2="723" stroke="black"/>
+<line x1="1012" y1="695" x2="1012" y2="723" stroke="black"/>
+<line x1="1237" y1="695" x2="1237" y2="723" stroke="black"/>
+<line x1="1462" y1="695" x2="1462" y2="723" stroke="black"/>
+<line x1="1687" y1="695" x2="1687" y2="723" stroke="black"/>
+<line x1="562" y1="706" x2="337" y2="706" stroke="black"/>
+<line x1="337" y1="706" x2="347" y2="712" stroke="black"/>
+<polygon fill="white" points="416,696 482,696 482,705 416,705"/>
+<text x="417" y="705" textLength="64" font-family="Helvetica" font-size="12" fill="black">
+&lt;-create, ok
+</text>
+<line x1="112" y1="723" x2="112" y2="751" stroke="black"/>
+<line x1="337" y1="723" x2="337" y2="751" stroke="black"/>
+<line x1="562" y1="723" x2="562" y2="751" stroke="black"/>
+<line x1="787" y1="723" x2="787" y2="751" stroke="black"/>
+<line x1="1012" y1="723" x2="1012" y2="751" stroke="black"/>
+<line x1="1237" y1="723" x2="1237" y2="751" stroke="black"/>
+<line x1="1462" y1="723" x2="1462" y2="751" stroke="black"/>
+<line x1="1687" y1="723" x2="1687" y2="751" stroke="black"/>
+<path d="M 337 740 A110,6 0 0,1 337,728" stroke="black" fill="none"/><line x1="337" y1="740" x2="327" y2="746" stroke="black"/>
+<polygon fill="white" points="337,724 514,724 514,733 337,733"/>
+<text x="338" y="733" textLength="175" font-family="Helvetica" font-size="12" fill="black">
+wait_until_active_and_supported
+</text>
+<line x1="112" y1="751" x2="112" y2="768" stroke="black"/>
+<line x1="337" y1="751" x2="337" y2="768" stroke="black"/>
+<line x1="562" y1="751" x2="562" y2="768" stroke="black"/>
+<line x1="787" y1="751" x2="787" y2="768" stroke="black"/>
+<line x1="1012" y1="751" x2="1012" y2="768" stroke="black"/>
+<line x1="1237" y1="751" x2="1237" y2="768" stroke="black"/>
+<line x1="1462" y1="751" x2="1462" y2="768" stroke="black"/>
+<line x1="1687" y1="751" x2="1687" y2="768" stroke="black"/>
+<line x1="56" y1="756" x2="1744" y2="756" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="862,752 937,752 937,761 862,761"/>
+<text x="863" y="761" textLength="73" font-family="Helvetica" font-size="12" fill="black">
+SYNC POINT
+</text>
+<line x1="112" y1="768" x2="112" y2="785" stroke="black" stroke-dasharray="2,2"/>
+<line x1="337" y1="768" x2="337" y2="785" stroke="black" stroke-dasharray="2,2"/>
+<line x1="562" y1="768" x2="562" y2="785" stroke="black" stroke-dasharray="2,2"/>
+<line x1="787" y1="768" x2="787" y2="785" stroke="black" stroke-dasharray="2,2"/>
+<line x1="1012" y1="768" x2="1012" y2="785" stroke="black" stroke-dasharray="2,2"/>
+<line x1="1237" y1="768" x2="1237" y2="785" stroke="black" stroke-dasharray="2,2"/>
+<line x1="1462" y1="768" x2="1462" y2="785" stroke="black" stroke-dasharray="2,2"/>
+<line x1="1687" y1="768" x2="1687" y2="785" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="848,769 951,769 951,778 848,778"/>
+<text x="849" y="778" textLength="101" font-family="Helvetica" font-size="12" fill="black">
+broadcast handling
+</text>
+<line x1="112" y1="785" x2="112" y2="813" stroke="black"/>
+<line x1="337" y1="785" x2="337" y2="813" stroke="black"/>
+<line x1="562" y1="785" x2="562" y2="813" stroke="black"/>
+<line x1="787" y1="785" x2="787" y2="813" stroke="black"/>
+<line x1="1012" y1="785" x2="1012" y2="813" stroke="black"/>
+<line x1="1237" y1="785" x2="1237" y2="813" stroke="black"/>
+<line x1="1462" y1="785" x2="1462" y2="813" stroke="black"/>
+<line x1="1687" y1="785" x2="1687" y2="813" stroke="black"/>
+<line x1="337" y1="796" x2="562" y2="796" stroke="black"/>
+<line x1="562" y1="796" x2="552" y2="802" stroke="black"/>
+<polygon fill="white" points="392,786 507,786 507,795 392,795"/>
+<text x="393" y="795" textLength="113" font-family="Helvetica" font-size="12" fill="black">
+activate_bucket_type
+</text>
+<line x1="112" y1="813" x2="112" y2="841" stroke="black"/>
+<line x1="337" y1="813" x2="337" y2="841" stroke="black"/>
+<line x1="562" y1="813" x2="562" y2="841" stroke="black"/>
+<line x1="787" y1="813" x2="787" y2="841" stroke="black"/>
+<line x1="1012" y1="813" x2="1012" y2="841" stroke="black"/>
+<line x1="1237" y1="813" x2="1237" y2="841" stroke="black"/>
+<line x1="1462" y1="813" x2="1462" y2="841" stroke="black"/>
+<line x1="1687" y1="813" x2="1687" y2="841" stroke="black"/>
+<line x1="562" y1="824" x2="787" y2="824" stroke="black"/>
+<line x1="787" y1="824" x2="777" y2="830" stroke="black"/>
+<polygon fill="white" points="617,814 732,814 732,823 617,823"/>
+<text x="618" y="823" textLength="113" font-family="Helvetica" font-size="12" fill="black">
+activate_bucket_type
+</text>
+<line x1="112" y1="841" x2="112" y2="869" stroke="black"/>
+<line x1="337" y1="841" x2="337" y2="869" stroke="black"/>
+<line x1="562" y1="841" x2="562" y2="869" stroke="black"/>
+<line x1="787" y1="841" x2="787" y2="869" stroke="black"/>
+<line x1="1012" y1="841" x2="1012" y2="869" stroke="black"/>
+<line x1="1237" y1="841" x2="1237" y2="869" stroke="black"/>
+<line x1="1462" y1="841" x2="1462" y2="869" stroke="black"/>
+<line x1="1687" y1="841" x2="1687" y2="869" stroke="black"/>
+<path d="M 787 858 A110,6 0 0,1 787,846" stroke="black" fill="none"/><line x1="787" y1="858" x2="777" y2="864" stroke="black"/>
+<polygon fill="white" points="787,842 834,842 834,851 787,851"/>
+<text x="788" y="851" textLength="45" font-family="Helvetica" font-size="12" fill="black">
+claimant
+</text>
+<line x1="112" y1="869" x2="112" y2="897" stroke="black"/>
+<line x1="337" y1="869" x2="337" y2="897" stroke="black"/>
+<line x1="562" y1="869" x2="562" y2="897" stroke="black"/>
+<line x1="787" y1="869" x2="787" y2="897" stroke="black"/>
+<line x1="1012" y1="869" x2="1012" y2="897" stroke="black"/>
+<line x1="1237" y1="869" x2="1237" y2="897" stroke="black"/>
+<line x1="1462" y1="869" x2="1462" y2="897" stroke="black"/>
+<line x1="1687" y1="869" x2="1687" y2="897" stroke="black"/>
+<line x1="787" y1="880" x2="1012" y2="880" stroke="black"/>
+<line x1="1012" y1="880" x2="1002" y2="886" stroke="black"/>
+<polygon fill="white" points="890,870 909,870 909,879 890,879"/>
+<text x="891" y="879" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+get
+</text>
+<line x1="112" y1="897" x2="112" y2="914" stroke="black"/>
+<line x1="337" y1="897" x2="337" y2="914" stroke="black"/>
+<line x1="562" y1="897" x2="562" y2="914" stroke="black"/>
+<line x1="787" y1="897" x2="787" y2="914" stroke="black"/>
+<line x1="1012" y1="897" x2="1012" y2="914" stroke="black"/>
+<line x1="1237" y1="897" x2="1237" y2="914" stroke="black"/>
+<line x1="1462" y1="897" x2="1462" y2="914" stroke="black"/>
+<line x1="1687" y1="897" x2="1687" y2="914" stroke="black"/>
+<line x1="56" y1="902" x2="1744" y2="902" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="864,898 935,898 935,907 864,907"/>
+<text x="865" y="907" textLength="69" font-family="Helvetica" font-size="12" fill="black">
+interleaved 2
+</text>
+<line x1="112" y1="914" x2="112" y2="942" stroke="black"/>
+<line x1="337" y1="914" x2="337" y2="942" stroke="black"/>
+<line x1="562" y1="914" x2="562" y2="942" stroke="black"/>
+<line x1="787" y1="914" x2="787" y2="942" stroke="black"/>
+<line x1="1012" y1="914" x2="1012" y2="942" stroke="black"/>
+<line x1="1237" y1="914" x2="1237" y2="942" stroke="black"/>
+<line x1="1462" y1="914" x2="1462" y2="942" stroke="black"/>
+<line x1="1687" y1="914" x2="1687" y2="942" stroke="black"/>
+<path d="M 1687 919 A112,6 0 0,1 1687,931" stroke="black" fill="none"/><line x1="1687" y1="931" x2="1697" y2="937" stroke="black"/>
+<polygon fill="white" points="1612,915 1685,915 1685,924 1612,924"/>
+<text x="1613" y="924" textLength="71" font-family="Helvetica" font-size="12" fill="black">
+do_new_type
+</text>
+<line x1="112" y1="942" x2="112" y2="970" stroke="black"/>
+<line x1="337" y1="942" x2="337" y2="970" stroke="black"/>
+<line x1="562" y1="942" x2="562" y2="970" stroke="black"/>
+<line x1="787" y1="942" x2="787" y2="970" stroke="black"/>
+<line x1="1012" y1="942" x2="1012" y2="970" stroke="black"/>
+<line x1="1237" y1="942" x2="1237" y2="970" stroke="black"/>
+<line x1="1462" y1="942" x2="1462" y2="970" stroke="black"/>
+<line x1="1687" y1="942" x2="1687" y2="970" stroke="black"/>
+<line x1="1012" y1="953" x2="1237" y2="953" stroke="black"/>
+<line x1="1237" y1="953" x2="1227" y2="959" stroke="black"/>
+<polygon fill="white" points="1115,943 1134,943 1134,952 1115,952"/>
+<text x="1116" y="952" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+get
+</text>
+<line x1="112" y1="970" x2="112" y2="998" stroke="black"/>
+<line x1="337" y1="970" x2="337" y2="998" stroke="black"/>
+<line x1="562" y1="970" x2="562" y2="998" stroke="black"/>
+<line x1="787" y1="970" x2="787" y2="998" stroke="black"/>
+<line x1="1012" y1="970" x2="1012" y2="998" stroke="black"/>
+<line x1="1237" y1="970" x2="1237" y2="998" stroke="black"/>
+<line x1="1462" y1="970" x2="1462" y2="998" stroke="black"/>
+<line x1="1687" y1="970" x2="1687" y2="998" stroke="black"/>
+<line x1="1012" y1="981" x2="787" y2="981" stroke="black"/>
+<line x1="787" y1="981" x2="797" y2="987" stroke="black"/>
+<polygon fill="white" points="854,971 944,971 944,980 854,980"/>
+<text x="855" y="980" textLength="88" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get, metadata
+</text>
+<line x1="112" y1="998" x2="112" y2="1026" stroke="black"/>
+<line x1="337" y1="998" x2="337" y2="1026" stroke="black"/>
+<line x1="562" y1="998" x2="562" y2="1026" stroke="black"/>
+<line x1="787" y1="998" x2="787" y2="1026" stroke="black"/>
+<line x1="1012" y1="998" x2="1012" y2="1026" stroke="black"/>
+<line x1="1237" y1="998" x2="1237" y2="1026" stroke="black"/>
+<line x1="1462" y1="998" x2="1462" y2="1026" stroke="black"/>
+<line x1="1687" y1="998" x2="1687" y2="1026" stroke="black"/>
+<path d="M 787 1015 A110,6 0 0,1 787,1003" stroke="black" fill="none"/><line x1="787" y1="1015" x2="777" y2="1021" stroke="black"/>
+<polygon fill="white" points="787,999 931,999 931,1008 787,1008"/>
+<text x="788" y="1008" textLength="142" font-family="Helvetica" font-size="12" fill="black">
+maybe_filter_inactive_type
+</text>
+<line x1="112" y1="1026" x2="112" y2="1054" stroke="black"/>
+<line x1="337" y1="1026" x2="337" y2="1054" stroke="black"/>
+<line x1="562" y1="1026" x2="562" y2="1054" stroke="black"/>
+<line x1="787" y1="1026" x2="787" y2="1054" stroke="black"/>
+<line x1="1012" y1="1026" x2="1012" y2="1054" stroke="black"/>
+<line x1="1237" y1="1026" x2="1237" y2="1054" stroke="black"/>
+<line x1="1462" y1="1026" x2="1462" y2="1054" stroke="black"/>
+<line x1="1687" y1="1026" x2="1687" y2="1054" stroke="black"/>
+<path d="M 787 1043 A110,6 0 0,1 787,1031" stroke="black" fill="none"/><line x1="787" y1="1043" x2="777" y2="1049" stroke="black"/>
+<polygon fill="white" points="787,1027 1002,1027 1002,1036 787,1036"/>
+<text x="788" y="1036" textLength="213" font-family="Helvetica" font-size="12" fill="black">
+&lt;- maybe_filter_inactive_type, metadata
+</text>
+<line x1="112" y1="1054" x2="112" y2="1082" stroke="black"/>
+<line x1="337" y1="1054" x2="337" y2="1082" stroke="black"/>
+<line x1="562" y1="1054" x2="562" y2="1082" stroke="black"/>
+<line x1="787" y1="1054" x2="787" y2="1082" stroke="black"/>
+<line x1="1012" y1="1054" x2="1012" y2="1082" stroke="black"/>
+<line x1="1237" y1="1054" x2="1237" y2="1082" stroke="black"/>
+<line x1="1462" y1="1054" x2="1462" y2="1082" stroke="black"/>
+<line x1="1687" y1="1054" x2="1687" y2="1082" stroke="black"/>
+<path d="M 787 1071 A110,6 0 0,1 787,1059" stroke="black" fill="none"/><line x1="787" y1="1071" x2="777" y2="1077" stroke="black"/>
+<polygon fill="white" points="787,1055 948,1055 948,1064 787,1064"/>
+<text x="788" y="1064" textLength="159" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get_bucket_type, metadata
+</text>
+<line x1="112" y1="1082" x2="112" y2="1110" stroke="black"/>
+<line x1="337" y1="1082" x2="337" y2="1110" stroke="black"/>
+<line x1="562" y1="1082" x2="562" y2="1110" stroke="black"/>
+<line x1="787" y1="1082" x2="787" y2="1110" stroke="black"/>
+<line x1="1012" y1="1082" x2="1012" y2="1110" stroke="black"/>
+<line x1="1237" y1="1082" x2="1237" y2="1110" stroke="black"/>
+<line x1="1462" y1="1082" x2="1462" y2="1110" stroke="black"/>
+<line x1="1687" y1="1082" x2="1687" y2="1110" stroke="black"/>
+<path d="M 787 1099 A110,6 0 0,1 787,1087" stroke="black" fill="none"/><line x1="787" y1="1099" x2="777" y2="1105" stroke="black"/>
+<polygon fill="white" points="787,1083 874,1083 874,1092 787,1092"/>
+<text x="788" y="1092" textLength="85" font-family="Helvetica" font-size="12" fill="black">
+get_type_status
+</text>
+<line x1="112" y1="1110" x2="112" y2="1138" stroke="black"/>
+<line x1="337" y1="1110" x2="337" y2="1138" stroke="black"/>
+<line x1="562" y1="1110" x2="562" y2="1138" stroke="black"/>
+<line x1="787" y1="1110" x2="787" y2="1138" stroke="black"/>
+<line x1="1012" y1="1110" x2="1012" y2="1138" stroke="black"/>
+<line x1="1237" y1="1110" x2="1237" y2="1138" stroke="black"/>
+<line x1="1462" y1="1110" x2="1462" y2="1138" stroke="black"/>
+<line x1="1687" y1="1110" x2="1687" y2="1138" stroke="black"/>
+<path d="M 787 1127 A110,6 0 0,1 787,1115" stroke="black" fill="none"/><line x1="787" y1="1127" x2="777" y2="1133" stroke="black"/>
+<polygon fill="white" points="787,1111 850,1111 850,1120 787,1120"/>
+<text x="788" y="1120" textLength="61" font-family="Helvetica" font-size="12" fill="black">
+type_active
+</text>
+<line x1="112" y1="1138" x2="112" y2="1166" stroke="black"/>
+<line x1="337" y1="1138" x2="337" y2="1166" stroke="black"/>
+<line x1="562" y1="1138" x2="562" y2="1166" stroke="black"/>
+<line x1="787" y1="1138" x2="787" y2="1166" stroke="black"/>
+<line x1="1012" y1="1138" x2="1012" y2="1166" stroke="black"/>
+<line x1="1237" y1="1138" x2="1237" y2="1166" stroke="black"/>
+<line x1="1462" y1="1138" x2="1462" y2="1166" stroke="black"/>
+<line x1="1687" y1="1138" x2="1687" y2="1166" stroke="black"/>
+<path d="M 787 1155 A110,6 0 0,1 787,1143" stroke="black" fill="none"/><line x1="787" y1="1155" x2="777" y2="1161" stroke="black"/>
+<polygon fill="white" points="787,1139 896,1139 896,1148 787,1148"/>
+<text x="788" y="1148" textLength="107" font-family="Helvetica" font-size="12" fill="black">
+&lt;- type_active, false
+</text>
+<line x1="112" y1="1166" x2="112" y2="1194" stroke="black"/>
+<line x1="337" y1="1166" x2="337" y2="1194" stroke="black"/>
+<line x1="562" y1="1166" x2="562" y2="1194" stroke="black"/>
+<line x1="787" y1="1166" x2="787" y2="1194" stroke="black"/>
+<line x1="1012" y1="1166" x2="1012" y2="1194" stroke="black"/>
+<line x1="1237" y1="1166" x2="1237" y2="1194" stroke="black"/>
+<line x1="1462" y1="1166" x2="1462" y2="1194" stroke="black"/>
+<line x1="1687" y1="1166" x2="1687" y2="1194" stroke="black"/>
+<path d="M 787 1183 A110,6 0 0,1 787,1171" stroke="black" fill="none"/><line x1="787" y1="1183" x2="777" y2="1189" stroke="black"/>
+<polygon fill="white" points="787,1167 966,1167 966,1176 787,1176"/>
+<text x="788" y="1176" textLength="177" font-family="Helvetica" font-size="12" fill="black">
+get_remote_ddl_compiled_status
+</text>
+<line x1="112" y1="1194" x2="112" y2="1211" stroke="black"/>
+<line x1="337" y1="1194" x2="337" y2="1211" stroke="black"/>
+<line x1="562" y1="1194" x2="562" y2="1211" stroke="black"/>
+<line x1="787" y1="1194" x2="787" y2="1211" stroke="black"/>
+<line x1="1012" y1="1194" x2="1012" y2="1211" stroke="black"/>
+<line x1="1237" y1="1194" x2="1237" y2="1211" stroke="black"/>
+<line x1="1462" y1="1194" x2="1462" y2="1211" stroke="black"/>
+<line x1="1687" y1="1194" x2="1687" y2="1211" stroke="black"/>
+<line x1="56" y1="1199" x2="1744" y2="1199" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="796,1195 1003,1195 1003,1204 796,1204"/>
+<text x="797" y="1204" textLength="205" font-family="Helvetica" font-size="12" fill="black">
+RPC get_remote_ddl_compiled_status
+</text>
+<line x1="112" y1="1211" x2="112" y2="1239" stroke="black"/>
+<line x1="337" y1="1211" x2="337" y2="1239" stroke="black"/>
+<line x1="562" y1="1211" x2="562" y2="1239" stroke="black"/>
+<line x1="787" y1="1211" x2="787" y2="1239" stroke="black"/>
+<line x1="1012" y1="1211" x2="1012" y2="1239" stroke="black"/>
+<line x1="1237" y1="1211" x2="1237" y2="1239" stroke="black"/>
+<line x1="1462" y1="1211" x2="1462" y2="1239" stroke="black"/>
+<line x1="1687" y1="1211" x2="1687" y2="1239" stroke="black"/>
+<path d="M 1462 1216 A112,6 0 0,1 1462,1228" stroke="black" fill="none"/><line x1="1462" y1="1228" x2="1472" y2="1234" stroke="black"/>
+<polygon fill="white" points="1301,1212 1460,1212 1460,1221 1301,1221"/>
+<text x="1302" y="1221" textLength="157" font-family="Helvetica" font-size="12" fill="black">
+handle_call is_type_compiled
+</text>
+<line x1="112" y1="1239" x2="112" y2="1267" stroke="black"/>
+<line x1="337" y1="1239" x2="337" y2="1267" stroke="black"/>
+<line x1="562" y1="1239" x2="562" y2="1267" stroke="black"/>
+<line x1="787" y1="1239" x2="787" y2="1267" stroke="black"/>
+<line x1="1012" y1="1239" x2="1012" y2="1267" stroke="black"/>
+<line x1="1237" y1="1239" x2="1237" y2="1267" stroke="black"/>
+<line x1="1462" y1="1239" x2="1462" y2="1267" stroke="black"/>
+<line x1="1687" y1="1239" x2="1687" y2="1267" stroke="black"/>
+<line x1="1462" y1="1250" x2="1687" y2="1250" stroke="black"/>
+<line x1="1687" y1="1250" x2="1677" y2="1256" stroke="black"/>
+<polygon fill="white" points="1542,1240 1607,1240 1607,1249 1542,1249"/>
+<text x="1543" y="1249" textLength="63" font-family="Helvetica" font-size="12" fill="black">
+is_compiled
+</text>
+<line x1="112" y1="1267" x2="112" y2="1295" stroke="black"/>
+<line x1="337" y1="1267" x2="337" y2="1295" stroke="black"/>
+<line x1="562" y1="1267" x2="562" y2="1295" stroke="black"/>
+<line x1="787" y1="1267" x2="787" y2="1295" stroke="black"/>
+<line x1="1012" y1="1267" x2="1012" y2="1295" stroke="black"/>
+<line x1="1237" y1="1267" x2="1237" y2="1295" stroke="black"/>
+<line x1="1462" y1="1267" x2="1462" y2="1295" stroke="black"/>
+<line x1="1687" y1="1267" x2="1687" y2="1295" stroke="black"/>
+<path d="M 1687 1272 A112,6 0 0,1 1687,1284" stroke="black" fill="none"/><line x1="1687" y1="1284" x2="1697" y2="1290" stroke="black"/>
+<polygon fill="white" points="1616,1268 1685,1268 1685,1277 1616,1277"/>
+<text x="1617" y="1277" textLength="67" font-family="Helvetica" font-size="12" fill="black">
+beam_exists
+</text>
+<line x1="112" y1="1295" x2="112" y2="1323" stroke="black"/>
+<line x1="337" y1="1295" x2="337" y2="1323" stroke="black"/>
+<line x1="562" y1="1295" x2="562" y2="1323" stroke="black"/>
+<line x1="787" y1="1295" x2="787" y2="1323" stroke="black"/>
+<line x1="1012" y1="1295" x2="1012" y2="1323" stroke="black"/>
+<line x1="1237" y1="1295" x2="1237" y2="1323" stroke="black"/>
+<line x1="1462" y1="1295" x2="1462" y2="1323" stroke="black"/>
+<line x1="1687" y1="1295" x2="1687" y2="1323" stroke="black"/>
+<path d="M 1687 1300 A112,6 0 0,1 1687,1312" stroke="black" fill="none"/><line x1="1687" y1="1312" x2="1697" y2="1318" stroke="black"/>
+<polygon fill="white" points="1569,1296 1685,1296 1685,1305 1569,1305"/>
+<text x="1570" y="1305" textLength="114" font-family="Helvetica" font-size="12" fill="black">
+&lt;- beam_exists, false
+</text>
+<line x1="112" y1="1323" x2="112" y2="1351" stroke="black"/>
+<line x1="337" y1="1323" x2="337" y2="1351" stroke="black"/>
+<line x1="562" y1="1323" x2="562" y2="1351" stroke="black"/>
+<line x1="787" y1="1323" x2="787" y2="1351" stroke="black"/>
+<line x1="1012" y1="1323" x2="1012" y2="1351" stroke="black"/>
+<line x1="1237" y1="1323" x2="1237" y2="1351" stroke="black"/>
+<line x1="1462" y1="1323" x2="1462" y2="1351" stroke="black"/>
+<line x1="1687" y1="1323" x2="1687" y2="1351" stroke="black"/>
+<line x1="1687" y1="1334" x2="1462" y2="1334" stroke="black"/>
+<line x1="1462" y1="1334" x2="1472" y2="1340" stroke="black"/>
+<polygon fill="white" points="1518,1324 1630,1324 1630,1333 1518,1333"/>
+<text x="1519" y="1333" textLength="110" font-family="Helvetica" font-size="12" fill="black">
+&lt;- is_compiled, false
+</text>
+<line x1="112" y1="1351" x2="112" y2="1368" stroke="black"/>
+<line x1="337" y1="1351" x2="337" y2="1368" stroke="black"/>
+<line x1="562" y1="1351" x2="562" y2="1368" stroke="black"/>
+<line x1="787" y1="1351" x2="787" y2="1368" stroke="black"/>
+<line x1="1012" y1="1351" x2="1012" y2="1368" stroke="black"/>
+<line x1="1237" y1="1351" x2="1237" y2="1368" stroke="black"/>
+<line x1="1462" y1="1351" x2="1462" y2="1368" stroke="black"/>
+<line x1="1687" y1="1351" x2="1687" y2="1368" stroke="black"/>
+<line x1="56" y1="1356" x2="1744" y2="1356" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="842,1352 956,1352 956,1361 842,1361"/>
+<text x="843" y="1361" textLength="112" font-family="Helvetica" font-size="12" fill="black">
+resume interleaved 2
+</text>
+<line x1="112" y1="1368" x2="112" y2="1396" stroke="black"/>
+<line x1="337" y1="1368" x2="337" y2="1396" stroke="black"/>
+<line x1="562" y1="1368" x2="562" y2="1396" stroke="black"/>
+<line x1="787" y1="1368" x2="787" y2="1396" stroke="black"/>
+<line x1="1012" y1="1368" x2="1012" y2="1396" stroke="black"/>
+<line x1="1237" y1="1368" x2="1237" y2="1396" stroke="black"/>
+<line x1="1462" y1="1368" x2="1462" y2="1396" stroke="black"/>
+<line x1="1687" y1="1368" x2="1687" y2="1396" stroke="black"/>
+<line x1="787" y1="1379" x2="1012" y2="1379" stroke="black"/>
+<line x1="1012" y1="1379" x2="1002" y2="1385" stroke="black"/>
+<polygon fill="white" points="890,1369 909,1369 909,1378 890,1378"/>
+<text x="891" y="1378" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+get
+</text>
+<line x1="112" y1="1396" x2="112" y2="1424" stroke="black"/>
+<line x1="337" y1="1396" x2="337" y2="1424" stroke="black"/>
+<line x1="562" y1="1396" x2="562" y2="1424" stroke="black"/>
+<line x1="787" y1="1396" x2="787" y2="1424" stroke="black"/>
+<line x1="1012" y1="1396" x2="1012" y2="1424" stroke="black"/>
+<line x1="1237" y1="1396" x2="1237" y2="1424" stroke="black"/>
+<line x1="1462" y1="1396" x2="1462" y2="1424" stroke="black"/>
+<line x1="1687" y1="1396" x2="1687" y2="1424" stroke="black"/>
+<line x1="1012" y1="1407" x2="787" y2="1407" stroke="black"/>
+<line x1="787" y1="1407" x2="797" y2="1413" stroke="black"/>
+<polygon fill="white" points="854,1397 944,1397 944,1406 854,1406"/>
+<text x="855" y="1406" textLength="88" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get, metadata
+</text>
+<line x1="112" y1="1424" x2="112" y2="1452" stroke="black"/>
+<line x1="337" y1="1424" x2="337" y2="1452" stroke="black"/>
+<line x1="562" y1="1424" x2="562" y2="1452" stroke="black"/>
+<line x1="787" y1="1424" x2="787" y2="1452" stroke="black"/>
+<line x1="1012" y1="1424" x2="1012" y2="1452" stroke="black"/>
+<line x1="1237" y1="1424" x2="1237" y2="1452" stroke="black"/>
+<line x1="1462" y1="1424" x2="1462" y2="1452" stroke="black"/>
+<line x1="1687" y1="1424" x2="1687" y2="1452" stroke="black"/>
+<path d="M 787 1441 A110,6 0 0,1 787,1429" stroke="black" fill="none"/><line x1="787" y1="1441" x2="777" y2="1447" stroke="black"/>
+<polygon fill="white" points="787,1425 945,1425 945,1434 787,1434"/>
+<text x="788" y="1434" textLength="156" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get_type_status, metadata
+</text>
+<line x1="112" y1="1452" x2="112" y2="1480" stroke="black"/>
+<line x1="337" y1="1452" x2="337" y2="1480" stroke="black"/>
+<line x1="562" y1="1452" x2="562" y2="1480" stroke="black"/>
+<line x1="787" y1="1452" x2="787" y2="1480" stroke="black"/>
+<line x1="1012" y1="1452" x2="1012" y2="1480" stroke="black"/>
+<line x1="1237" y1="1452" x2="1237" y2="1480" stroke="black"/>
+<line x1="1462" y1="1452" x2="1462" y2="1480" stroke="black"/>
+<line x1="1687" y1="1452" x2="1687" y2="1480" stroke="black"/>
+<path d="M 787 1469 A110,6 0 0,1 787,1457" stroke="black" fill="none"/><line x1="787" y1="1469" x2="777" y2="1475" stroke="black"/>
+<polygon fill="white" points="787,1453 864,1453 864,1462 787,1462"/>
+<text x="788" y="1462" textLength="75" font-family="Helvetica" font-size="12" fill="black">
+is_type_ready
+</text>
+<line x1="112" y1="1480" x2="112" y2="1508" stroke="black"/>
+<line x1="337" y1="1480" x2="337" y2="1508" stroke="black"/>
+<line x1="562" y1="1480" x2="562" y2="1508" stroke="black"/>
+<line x1="787" y1="1480" x2="787" y2="1508" stroke="black"/>
+<line x1="1012" y1="1480" x2="1012" y2="1508" stroke="black"/>
+<line x1="1237" y1="1480" x2="1237" y2="1508" stroke="black"/>
+<line x1="1462" y1="1480" x2="1462" y2="1508" stroke="black"/>
+<line x1="1687" y1="1480" x2="1687" y2="1508" stroke="black"/>
+<path d="M 787 1497 A110,6 0 0,1 787,1485" stroke="black" fill="none"/><line x1="787" y1="1497" x2="777" y2="1503" stroke="black"/>
+<polygon fill="white" points="787,1481 925,1481 925,1490 787,1490"/>
+<text x="788" y="1490" textLength="136" font-family="Helvetica" font-size="12" fill="black">
+&lt;- is_type_ready, created
+</text>
+<line x1="112" y1="1508" x2="112" y2="1536" stroke="black"/>
+<line x1="337" y1="1508" x2="337" y2="1536" stroke="black"/>
+<line x1="562" y1="1508" x2="562" y2="1536" stroke="black"/>
+<line x1="787" y1="1508" x2="787" y2="1536" stroke="black"/>
+<line x1="1012" y1="1508" x2="1012" y2="1536" stroke="black"/>
+<line x1="1237" y1="1508" x2="1237" y2="1536" stroke="black"/>
+<line x1="1462" y1="1508" x2="1462" y2="1536" stroke="black"/>
+<line x1="1687" y1="1508" x2="1687" y2="1536" stroke="black"/>
+<path d="M 787 1525 A110,6 0 0,1 787,1513" stroke="black" fill="none"/><line x1="787" y1="1525" x2="777" y2="1531" stroke="black"/>
+<polygon fill="white" points="787,1509 902,1509 902,1518 787,1518"/>
+<text x="788" y="1518" textLength="113" font-family="Helvetica" font-size="12" fill="black">
+maybe_activate_type
+</text>
+<line x1="112" y1="1536" x2="112" y2="1564" stroke="black"/>
+<line x1="337" y1="1536" x2="337" y2="1564" stroke="black"/>
+<line x1="562" y1="1536" x2="562" y2="1564" stroke="black"/>
+<line x1="787" y1="1536" x2="787" y2="1564" stroke="black"/>
+<line x1="1012" y1="1536" x2="1012" y2="1564" stroke="black"/>
+<line x1="1237" y1="1536" x2="1237" y2="1564" stroke="black"/>
+<line x1="1462" y1="1536" x2="1462" y2="1564" stroke="black"/>
+<line x1="1687" y1="1536" x2="1687" y2="1564" stroke="black"/>
+<path d="M 787 1553 A110,6 0 0,1 787,1541" stroke="black" fill="none"/><line x1="787" y1="1553" x2="777" y2="1559" stroke="black"/>
+<polygon fill="white" points="787,1537 977,1537 977,1546 787,1546"/>
+<text x="788" y="1546" textLength="188" font-family="Helvetica" font-size="12" fill="black">
+&lt;- maybe_activate_type, not_ready
+</text>
+<line x1="112" y1="1564" x2="112" y2="1581" stroke="black"/>
+<line x1="337" y1="1564" x2="337" y2="1581" stroke="black"/>
+<line x1="562" y1="1564" x2="562" y2="1581" stroke="black"/>
+<line x1="787" y1="1564" x2="787" y2="1581" stroke="black"/>
+<line x1="1012" y1="1564" x2="1012" y2="1581" stroke="black"/>
+<line x1="1237" y1="1564" x2="1237" y2="1581" stroke="black"/>
+<line x1="1462" y1="1564" x2="1462" y2="1581" stroke="black"/>
+<line x1="1687" y1="1564" x2="1687" y2="1581" stroke="black"/>
+<line x1="56" y1="1569" x2="1744" y2="1569" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="852,1565 946,1565 946,1574 852,1574"/>
+<text x="853" y="1574" textLength="92" font-family="Helvetica" font-size="12" fill="black">
+more interleaving
+</text>
+<line x1="112" y1="1581" x2="112" y2="1609" stroke="black"/>
+<line x1="337" y1="1581" x2="337" y2="1609" stroke="black"/>
+<line x1="562" y1="1581" x2="562" y2="1609" stroke="black"/>
+<line x1="787" y1="1581" x2="787" y2="1609" stroke="black"/>
+<line x1="1012" y1="1581" x2="1012" y2="1609" stroke="black"/>
+<line x1="1237" y1="1581" x2="1237" y2="1609" stroke="black"/>
+<line x1="1462" y1="1581" x2="1462" y2="1609" stroke="black"/>
+<line x1="1687" y1="1581" x2="1687" y2="1609" stroke="black"/>
+<path d="M 1687 1586 A112,6 0 0,1 1687,1598" stroke="black" fill="none"/><line x1="1687" y1="1598" x2="1697" y2="1604" stroke="black"/>
+<polygon fill="white" points="1602,1582 1685,1582 1685,1591 1602,1591"/>
+<text x="1603" y="1591" textLength="81" font-family="Helvetica" font-size="12" fill="black">
+compile_to_ast
+</text>
+<line x1="112" y1="1609" x2="112" y2="1637" stroke="black"/>
+<line x1="337" y1="1609" x2="337" y2="1637" stroke="black"/>
+<line x1="562" y1="1609" x2="562" y2="1637" stroke="black"/>
+<line x1="787" y1="1609" x2="787" y2="1637" stroke="black"/>
+<line x1="1012" y1="1609" x2="1012" y2="1637" stroke="black"/>
+<line x1="1237" y1="1609" x2="1237" y2="1637" stroke="black"/>
+<line x1="1462" y1="1609" x2="1462" y2="1637" stroke="black"/>
+<line x1="1687" y1="1609" x2="1687" y2="1637" stroke="black"/>
+<path d="M 1687 1614 A112,6 0 0,1 1687,1626" stroke="black" fill="none"/><line x1="1687" y1="1626" x2="1697" y2="1632" stroke="black"/>
+<polygon fill="white" points="1543,1610 1685,1610 1685,1619 1543,1619"/>
+<text x="1544" y="1619" textLength="140" font-family="Helvetica" font-size="12" fill="black">
+compile_to_ast, beam info
+</text>
+<line x1="112" y1="1637" x2="112" y2="1665" stroke="black"/>
+<line x1="337" y1="1637" x2="337" y2="1665" stroke="black"/>
+<line x1="562" y1="1637" x2="562" y2="1665" stroke="black"/>
+<line x1="787" y1="1637" x2="787" y2="1665" stroke="black"/>
+<line x1="1012" y1="1637" x2="1012" y2="1665" stroke="black"/>
+<line x1="1237" y1="1637" x2="1237" y2="1665" stroke="black"/>
+<line x1="1462" y1="1637" x2="1462" y2="1665" stroke="black"/>
+<line x1="1687" y1="1637" x2="1687" y2="1665" stroke="black"/>
+<path d="M 1687 1642 A112,6 0 0,1 1687,1654" stroke="black" fill="none"/><line x1="1687" y1="1654" x2="1697" y2="1660" stroke="black"/>
+<polygon fill="white" points="1610,1638 1685,1638 1685,1647 1610,1647"/>
+<text x="1611" y="1647" textLength="73" font-family="Helvetica" font-size="12" fill="black">
+store_module
+</text>
+<line x1="112" y1="1665" x2="112" y2="1693" stroke="black"/>
+<line x1="337" y1="1665" x2="337" y2="1693" stroke="black"/>
+<line x1="562" y1="1665" x2="562" y2="1693" stroke="black"/>
+<line x1="787" y1="1665" x2="787" y2="1693" stroke="black"/>
+<line x1="1012" y1="1665" x2="1012" y2="1693" stroke="black"/>
+<line x1="1237" y1="1665" x2="1237" y2="1693" stroke="black"/>
+<line x1="1462" y1="1665" x2="1462" y2="1693" stroke="black"/>
+<line x1="1687" y1="1665" x2="1687" y2="1693" stroke="black"/>
+<path d="M 1687 1670 A112,6 0 0,1 1687,1682" stroke="black" fill="none"/><line x1="1687" y1="1682" x2="1697" y2="1688" stroke="black"/>
+<polygon fill="white" points="1577,1666 1685,1666 1685,1675 1577,1675"/>
+<text x="1578" y="1675" textLength="106" font-family="Helvetica" font-size="12" fill="black">
+&lt;- store_module, ok
+</text>
+<line x1="112" y1="1693" x2="112" y2="1721" stroke="black"/>
+<line x1="337" y1="1693" x2="337" y2="1721" stroke="black"/>
+<line x1="562" y1="1693" x2="562" y2="1721" stroke="black"/>
+<line x1="787" y1="1693" x2="787" y2="1721" stroke="black"/>
+<line x1="1012" y1="1693" x2="1012" y2="1721" stroke="black"/>
+<line x1="1237" y1="1693" x2="1237" y2="1721" stroke="black"/>
+<line x1="1462" y1="1693" x2="1462" y2="1721" stroke="black"/>
+<line x1="1687" y1="1693" x2="1687" y2="1721" stroke="black"/>
+<path d="M 1687 1698 A112,6 0 0,1 1687,1710" stroke="black" fill="none"/><line x1="1687" y1="1710" x2="1697" y2="1716" stroke="black"/>
+<polygon fill="white" points="1578,1694 1685,1694 1685,1703 1578,1703"/>
+<text x="1579" y="1703" textLength="105" font-family="Helvetica" font-size="12" fill="black">
+&lt;- do_new_type, ok
+</text>
+<line x1="112" y1="1721" x2="112" y2="1749" stroke="black"/>
+<line x1="337" y1="1721" x2="337" y2="1749" stroke="black"/>
+<line x1="562" y1="1721" x2="562" y2="1749" stroke="black"/>
+<line x1="787" y1="1721" x2="787" y2="1749" stroke="black"/>
+<line x1="1012" y1="1721" x2="1012" y2="1749" stroke="black"/>
+<line x1="1237" y1="1721" x2="1237" y2="1749" stroke="black"/>
+<line x1="1462" y1="1721" x2="1462" y2="1749" stroke="black"/>
+<line x1="1687" y1="1721" x2="1687" y2="1749" stroke="black"/>
+<path d="M 1687 1726 A112,6 0 0,1 1687,1738" stroke="black" fill="none"/><line x1="1687" y1="1738" x2="1697" y2="1744" stroke="black"/>
+<polygon fill="white" points="1591,1722 1685,1722 1685,1731 1591,1731"/>
+<text x="1592" y="1731" textLength="92" font-family="Helvetica" font-size="12" fill="black">
+&lt;- ! new_type, ok
+</text>
+<line x1="112" y1="1749" x2="112" y2="1766" stroke="black"/>
+<line x1="337" y1="1749" x2="337" y2="1766" stroke="black"/>
+<line x1="562" y1="1749" x2="562" y2="1766" stroke="black"/>
+<line x1="787" y1="1749" x2="787" y2="1766" stroke="black"/>
+<line x1="1012" y1="1749" x2="1012" y2="1766" stroke="black"/>
+<line x1="1237" y1="1749" x2="1237" y2="1766" stroke="black"/>
+<line x1="1462" y1="1749" x2="1462" y2="1766" stroke="black"/>
+<line x1="1687" y1="1749" x2="1687" y2="1766" stroke="black"/>
+<line x1="56" y1="1754" x2="1744" y2="1754" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="874,1750 924,1750 924,1759 874,1759"/>
+<text x="875" y="1759" textLength="48" font-family="Helvetica" font-size="12" fill="black">
+compiled
+</text>
+<line x1="112" y1="1766" x2="112" y2="1794" stroke="black"/>
+<line x1="337" y1="1766" x2="337" y2="1794" stroke="black"/>
+<line x1="562" y1="1766" x2="562" y2="1794" stroke="black"/>
+<line x1="787" y1="1766" x2="787" y2="1794" stroke="black"/>
+<line x1="1012" y1="1766" x2="1012" y2="1794" stroke="black"/>
+<line x1="1237" y1="1766" x2="1237" y2="1794" stroke="black"/>
+<line x1="1462" y1="1766" x2="1462" y2="1794" stroke="black"/>
+<line x1="1687" y1="1766" x2="1687" y2="1794" stroke="black"/>
+<line x1="337" y1="1777" x2="562" y2="1777" stroke="black"/>
+<line x1="562" y1="1777" x2="552" y2="1783" stroke="black"/>
+<polygon fill="white" points="428,1767 471,1767 471,1776 428,1776"/>
+<text x="429" y="1776" textLength="41" font-family="Helvetica" font-size="12" fill="black">
+activate
+</text>
+<line x1="112" y1="1794" x2="112" y2="1822" stroke="black"/>
+<line x1="337" y1="1794" x2="337" y2="1822" stroke="black"/>
+<line x1="562" y1="1794" x2="562" y2="1822" stroke="black"/>
+<line x1="787" y1="1794" x2="787" y2="1822" stroke="black"/>
+<line x1="1012" y1="1794" x2="1012" y2="1822" stroke="black"/>
+<line x1="1237" y1="1794" x2="1237" y2="1822" stroke="black"/>
+<line x1="1462" y1="1794" x2="1462" y2="1822" stroke="black"/>
+<line x1="1687" y1="1794" x2="1687" y2="1822" stroke="black"/>
+<line x1="562" y1="1805" x2="787" y2="1805" stroke="black"/>
+<line x1="787" y1="1805" x2="777" y2="1811" stroke="black"/>
+<polygon fill="white" points="617,1795 732,1795 732,1804 617,1804"/>
+<text x="618" y="1804" textLength="113" font-family="Helvetica" font-size="12" fill="black">
+activate_bucket_type
+</text>
+<line x1="112" y1="1822" x2="112" y2="1850" stroke="black"/>
+<line x1="337" y1="1822" x2="337" y2="1850" stroke="black"/>
+<line x1="562" y1="1822" x2="562" y2="1850" stroke="black"/>
+<line x1="787" y1="1822" x2="787" y2="1850" stroke="black"/>
+<line x1="1012" y1="1822" x2="1012" y2="1850" stroke="black"/>
+<line x1="1237" y1="1822" x2="1237" y2="1850" stroke="black"/>
+<line x1="1462" y1="1822" x2="1462" y2="1850" stroke="black"/>
+<line x1="1687" y1="1822" x2="1687" y2="1850" stroke="black"/>
+<path d="M 787 1839 A110,6 0 0,1 787,1827" stroke="black" fill="none"/><line x1="787" y1="1839" x2="777" y2="1845" stroke="black"/>
+<polygon fill="white" points="787,1823 834,1823 834,1832 787,1832"/>
+<text x="788" y="1832" textLength="45" font-family="Helvetica" font-size="12" fill="black">
+claimant
+</text>
+<line x1="112" y1="1850" x2="112" y2="1878" stroke="black"/>
+<line x1="337" y1="1850" x2="337" y2="1878" stroke="black"/>
+<line x1="562" y1="1850" x2="562" y2="1878" stroke="black"/>
+<line x1="787" y1="1850" x2="787" y2="1878" stroke="black"/>
+<line x1="1012" y1="1850" x2="1012" y2="1878" stroke="black"/>
+<line x1="1237" y1="1850" x2="1237" y2="1878" stroke="black"/>
+<line x1="1462" y1="1850" x2="1462" y2="1878" stroke="black"/>
+<line x1="1687" y1="1850" x2="1687" y2="1878" stroke="black"/>
+<path d="M 787 1867 A110,6 0 0,1 787,1855" stroke="black" fill="none"/><line x1="787" y1="1867" x2="777" y2="1873" stroke="black"/>
+<polygon fill="white" points="787,1851 877,1851 877,1860 787,1860"/>
+<text x="788" y="1860" textLength="88" font-family="Helvetica" font-size="12" fill="black">
+get_bucket_type
+</text>
+<line x1="112" y1="1878" x2="112" y2="1906" stroke="black"/>
+<line x1="337" y1="1878" x2="337" y2="1906" stroke="black"/>
+<line x1="562" y1="1878" x2="562" y2="1906" stroke="black"/>
+<line x1="787" y1="1878" x2="787" y2="1906" stroke="black"/>
+<line x1="1012" y1="1878" x2="1012" y2="1906" stroke="black"/>
+<line x1="1237" y1="1878" x2="1237" y2="1906" stroke="black"/>
+<line x1="1462" y1="1878" x2="1462" y2="1906" stroke="black"/>
+<line x1="1687" y1="1878" x2="1687" y2="1906" stroke="black"/>
+<line x1="787" y1="1889" x2="1012" y2="1889" stroke="black"/>
+<line x1="1012" y1="1889" x2="1002" y2="1895" stroke="black"/>
+<polygon fill="white" points="890,1879 909,1879 909,1888 890,1888"/>
+<text x="891" y="1888" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+get
+</text>
+<line x1="112" y1="1906" x2="112" y2="1934" stroke="black"/>
+<line x1="337" y1="1906" x2="337" y2="1934" stroke="black"/>
+<line x1="562" y1="1906" x2="562" y2="1934" stroke="black"/>
+<line x1="787" y1="1906" x2="787" y2="1934" stroke="black"/>
+<line x1="1012" y1="1906" x2="1012" y2="1934" stroke="black"/>
+<line x1="1237" y1="1906" x2="1237" y2="1934" stroke="black"/>
+<line x1="1462" y1="1906" x2="1462" y2="1934" stroke="black"/>
+<line x1="1687" y1="1906" x2="1687" y2="1934" stroke="black"/>
+<line x1="1012" y1="1917" x2="1237" y2="1917" stroke="black"/>
+<line x1="1237" y1="1917" x2="1227" y2="1923" stroke="black"/>
+<polygon fill="white" points="1115,1907 1134,1907 1134,1916 1115,1916"/>
+<text x="1116" y="1916" textLength="17" font-family="Helvetica" font-size="12" fill="black">
+get
+</text>
+<line x1="112" y1="1934" x2="112" y2="1962" stroke="black"/>
+<line x1="337" y1="1934" x2="337" y2="1962" stroke="black"/>
+<line x1="562" y1="1934" x2="562" y2="1962" stroke="black"/>
+<line x1="787" y1="1934" x2="787" y2="1962" stroke="black"/>
+<line x1="1012" y1="1934" x2="1012" y2="1962" stroke="black"/>
+<line x1="1237" y1="1934" x2="1237" y2="1962" stroke="black"/>
+<line x1="1462" y1="1934" x2="1462" y2="1962" stroke="black"/>
+<line x1="1687" y1="1934" x2="1687" y2="1962" stroke="black"/>
+<line x1="1237" y1="1945" x2="1012" y2="1945" stroke="black"/>
+<line x1="1012" y1="1945" x2="1022" y2="1951" stroke="black"/>
+<polygon fill="white" points="1079,1935 1169,1935 1169,1944 1079,1944"/>
+<text x="1080" y="1944" textLength="88" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get, metadata
+</text>
+<line x1="112" y1="1962" x2="112" y2="1990" stroke="black"/>
+<line x1="337" y1="1962" x2="337" y2="1990" stroke="black"/>
+<line x1="562" y1="1962" x2="562" y2="1990" stroke="black"/>
+<line x1="787" y1="1962" x2="787" y2="1990" stroke="black"/>
+<line x1="1012" y1="1962" x2="1012" y2="1990" stroke="black"/>
+<line x1="1237" y1="1962" x2="1237" y2="1990" stroke="black"/>
+<line x1="1462" y1="1962" x2="1462" y2="1990" stroke="black"/>
+<line x1="1687" y1="1962" x2="1687" y2="1990" stroke="black"/>
+<line x1="1012" y1="1973" x2="787" y2="1973" stroke="black"/>
+<line x1="787" y1="1973" x2="797" y2="1979" stroke="black"/>
+<polygon fill="white" points="854,1963 944,1963 944,1972 854,1972"/>
+<text x="855" y="1972" textLength="88" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get, metadata
+</text>
+<line x1="112" y1="1990" x2="112" y2="2018" stroke="black"/>
+<line x1="337" y1="1990" x2="337" y2="2018" stroke="black"/>
+<line x1="562" y1="1990" x2="562" y2="2018" stroke="black"/>
+<line x1="787" y1="1990" x2="787" y2="2018" stroke="black"/>
+<line x1="1012" y1="1990" x2="1012" y2="2018" stroke="black"/>
+<line x1="1237" y1="1990" x2="1237" y2="2018" stroke="black"/>
+<line x1="1462" y1="1990" x2="1462" y2="2018" stroke="black"/>
+<line x1="1687" y1="1990" x2="1687" y2="2018" stroke="black"/>
+<path d="M 787 2007 A110,6 0 0,1 787,1995" stroke="black" fill="none"/><line x1="787" y1="2007" x2="777" y2="2013" stroke="black"/>
+<polygon fill="white" points="787,1991 931,1991 931,2000 787,2000"/>
+<text x="788" y="2000" textLength="142" font-family="Helvetica" font-size="12" fill="black">
+maybe_filter_inactive_type
+</text>
+<line x1="112" y1="2018" x2="112" y2="2046" stroke="black"/>
+<line x1="337" y1="2018" x2="337" y2="2046" stroke="black"/>
+<line x1="562" y1="2018" x2="562" y2="2046" stroke="black"/>
+<line x1="787" y1="2018" x2="787" y2="2046" stroke="black"/>
+<line x1="1012" y1="2018" x2="1012" y2="2046" stroke="black"/>
+<line x1="1237" y1="2018" x2="1237" y2="2046" stroke="black"/>
+<line x1="1462" y1="2018" x2="1462" y2="2046" stroke="black"/>
+<line x1="1687" y1="2018" x2="1687" y2="2046" stroke="black"/>
+<path d="M 787 2035 A110,6 0 0,1 787,2023" stroke="black" fill="none"/><line x1="787" y1="2035" x2="777" y2="2041" stroke="black"/>
+<polygon fill="white" points="787,2019 1002,2019 1002,2028 787,2028"/>
+<text x="788" y="2028" textLength="213" font-family="Helvetica" font-size="12" fill="black">
+&lt;- maybe_filter_inactive_type, metadata
+</text>
+<line x1="112" y1="2046" x2="112" y2="2074" stroke="black"/>
+<line x1="337" y1="2046" x2="337" y2="2074" stroke="black"/>
+<line x1="562" y1="2046" x2="562" y2="2074" stroke="black"/>
+<line x1="787" y1="2046" x2="787" y2="2074" stroke="black"/>
+<line x1="1012" y1="2046" x2="1012" y2="2074" stroke="black"/>
+<line x1="1237" y1="2046" x2="1237" y2="2074" stroke="black"/>
+<line x1="1462" y1="2046" x2="1462" y2="2074" stroke="black"/>
+<line x1="1687" y1="2046" x2="1687" y2="2074" stroke="black"/>
+<path d="M 787 2063 A110,6 0 0,1 787,2051" stroke="black" fill="none"/><line x1="787" y1="2063" x2="777" y2="2069" stroke="black"/>
+<polygon fill="white" points="787,2047 948,2047 948,2056 787,2056"/>
+<text x="788" y="2056" textLength="159" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get_bucket_type, metadata
+</text>
+<line x1="112" y1="2074" x2="112" y2="2102" stroke="black"/>
+<line x1="337" y1="2074" x2="337" y2="2102" stroke="black"/>
+<line x1="562" y1="2074" x2="562" y2="2102" stroke="black"/>
+<line x1="787" y1="2074" x2="787" y2="2102" stroke="black"/>
+<line x1="1012" y1="2074" x2="1012" y2="2102" stroke="black"/>
+<line x1="1237" y1="2074" x2="1237" y2="2102" stroke="black"/>
+<line x1="1462" y1="2074" x2="1462" y2="2102" stroke="black"/>
+<line x1="1687" y1="2074" x2="1687" y2="2102" stroke="black"/>
+<path d="M 787 2091 A110,6 0 0,1 787,2079" stroke="black" fill="none"/><line x1="787" y1="2091" x2="777" y2="2097" stroke="black"/>
+<polygon fill="white" points="787,2075 977,2075 977,2084 787,2084"/>
+<text x="788" y="2084" textLength="188" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get_type_status, table, metadata
+</text>
+<line x1="112" y1="2102" x2="112" y2="2130" stroke="black"/>
+<line x1="337" y1="2102" x2="337" y2="2130" stroke="black"/>
+<line x1="562" y1="2102" x2="562" y2="2130" stroke="black"/>
+<line x1="787" y1="2102" x2="787" y2="2130" stroke="black"/>
+<line x1="1012" y1="2102" x2="1012" y2="2130" stroke="black"/>
+<line x1="1237" y1="2102" x2="1237" y2="2130" stroke="black"/>
+<line x1="1462" y1="2102" x2="1462" y2="2130" stroke="black"/>
+<line x1="1687" y1="2102" x2="1687" y2="2130" stroke="black"/>
+<path d="M 787 2119 A110,6 0 0,1 787,2107" stroke="black" fill="none"/><line x1="787" y1="2119" x2="777" y2="2125" stroke="black"/>
+<polygon fill="white" points="787,2103 850,2103 850,2112 787,2112"/>
+<text x="788" y="2112" textLength="61" font-family="Helvetica" font-size="12" fill="black">
+type_active
+</text>
+<line x1="112" y1="2130" x2="112" y2="2158" stroke="black"/>
+<line x1="337" y1="2130" x2="337" y2="2158" stroke="black"/>
+<line x1="562" y1="2130" x2="562" y2="2158" stroke="black"/>
+<line x1="787" y1="2130" x2="787" y2="2158" stroke="black"/>
+<line x1="1012" y1="2130" x2="1012" y2="2158" stroke="black"/>
+<line x1="1237" y1="2130" x2="1237" y2="2158" stroke="black"/>
+<line x1="1462" y1="2130" x2="1462" y2="2158" stroke="black"/>
+<line x1="1687" y1="2130" x2="1687" y2="2158" stroke="black"/>
+<path d="M 787 2147 A110,6 0 0,1 787,2135" stroke="black" fill="none"/><line x1="787" y1="2147" x2="777" y2="2153" stroke="black"/>
+<polygon fill="white" points="787,2131 896,2131 896,2140 787,2140"/>
+<text x="788" y="2140" textLength="107" font-family="Helvetica" font-size="12" fill="black">
+&lt;- type_active, false
+</text>
+<line x1="112" y1="2158" x2="112" y2="2186" stroke="black"/>
+<line x1="337" y1="2158" x2="337" y2="2186" stroke="black"/>
+<line x1="562" y1="2158" x2="562" y2="2186" stroke="black"/>
+<line x1="787" y1="2158" x2="787" y2="2186" stroke="black"/>
+<line x1="1012" y1="2158" x2="1012" y2="2186" stroke="black"/>
+<line x1="1237" y1="2158" x2="1237" y2="2186" stroke="black"/>
+<line x1="1462" y1="2158" x2="1462" y2="2186" stroke="black"/>
+<line x1="1687" y1="2158" x2="1687" y2="2186" stroke="black"/>
+<path d="M 787 2175 A110,6 0 0,1 787,2163" stroke="black" fill="none"/><line x1="787" y1="2175" x2="777" y2="2181" stroke="black"/>
+<polygon fill="white" points="787,2159 966,2159 966,2168 787,2168"/>
+<text x="788" y="2168" textLength="177" font-family="Helvetica" font-size="12" fill="black">
+get_remote_ddl_compiled_status
+</text>
+<line x1="112" y1="2186" x2="112" y2="2203" stroke="black"/>
+<line x1="337" y1="2186" x2="337" y2="2203" stroke="black"/>
+<line x1="562" y1="2186" x2="562" y2="2203" stroke="black"/>
+<line x1="787" y1="2186" x2="787" y2="2203" stroke="black"/>
+<line x1="1012" y1="2186" x2="1012" y2="2203" stroke="black"/>
+<line x1="1237" y1="2186" x2="1237" y2="2203" stroke="black"/>
+<line x1="1462" y1="2186" x2="1462" y2="2203" stroke="black"/>
+<line x1="1687" y1="2186" x2="1687" y2="2203" stroke="black"/>
+<line x1="56" y1="2191" x2="1744" y2="2191" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="796,2187 1003,2187 1003,2196 796,2196"/>
+<text x="797" y="2196" textLength="205" font-family="Helvetica" font-size="12" fill="black">
+RPC get_remote_ddl_compiled_status
+</text>
+<line x1="112" y1="2203" x2="112" y2="2231" stroke="black"/>
+<line x1="337" y1="2203" x2="337" y2="2231" stroke="black"/>
+<line x1="562" y1="2203" x2="562" y2="2231" stroke="black"/>
+<line x1="787" y1="2203" x2="787" y2="2231" stroke="black"/>
+<line x1="1012" y1="2203" x2="1012" y2="2231" stroke="black"/>
+<line x1="1237" y1="2203" x2="1237" y2="2231" stroke="black"/>
+<line x1="1462" y1="2203" x2="1462" y2="2231" stroke="black"/>
+<line x1="1687" y1="2203" x2="1687" y2="2231" stroke="black"/>
+<line x1="787" y1="2214" x2="1462" y2="2214" stroke="black"/>
+<line x1="1462" y1="2214" x2="1452" y2="2220" stroke="black"/>
+<polygon fill="white" points="1077,2204 1172,2204 1172,2213 1077,2213"/>
+<text x="1078" y="2213" textLength="93" font-family="Helvetica" font-size="12" fill="black">
+is_type_compiled
+</text>
+<line x1="112" y1="2231" x2="112" y2="2259" stroke="black"/>
+<line x1="337" y1="2231" x2="337" y2="2259" stroke="black"/>
+<line x1="562" y1="2231" x2="562" y2="2259" stroke="black"/>
+<line x1="787" y1="2231" x2="787" y2="2259" stroke="black"/>
+<line x1="1012" y1="2231" x2="1012" y2="2259" stroke="black"/>
+<line x1="1237" y1="2231" x2="1237" y2="2259" stroke="black"/>
+<line x1="1462" y1="2231" x2="1462" y2="2259" stroke="black"/>
+<line x1="1687" y1="2231" x2="1687" y2="2259" stroke="black"/>
+<line x1="1462" y1="2242" x2="1687" y2="2242" stroke="black"/>
+<line x1="1687" y1="2242" x2="1677" y2="2248" stroke="black"/>
+<polygon fill="white" points="1542,2232 1607,2232 1607,2241 1542,2241"/>
+<text x="1543" y="2241" textLength="63" font-family="Helvetica" font-size="12" fill="black">
+is_compiled
+</text>
+<line x1="112" y1="2259" x2="112" y2="2287" stroke="black"/>
+<line x1="337" y1="2259" x2="337" y2="2287" stroke="black"/>
+<line x1="562" y1="2259" x2="562" y2="2287" stroke="black"/>
+<line x1="787" y1="2259" x2="787" y2="2287" stroke="black"/>
+<line x1="1012" y1="2259" x2="1012" y2="2287" stroke="black"/>
+<line x1="1237" y1="2259" x2="1237" y2="2287" stroke="black"/>
+<line x1="1462" y1="2259" x2="1462" y2="2287" stroke="black"/>
+<line x1="1687" y1="2259" x2="1687" y2="2287" stroke="black"/>
+<path d="M 1687 2264 A112,6 0 0,1 1687,2276" stroke="black" fill="none"/><line x1="1687" y1="2276" x2="1697" y2="2282" stroke="black"/>
+<polygon fill="white" points="1616,2260 1685,2260 1685,2269 1616,2269"/>
+<text x="1617" y="2269" textLength="67" font-family="Helvetica" font-size="12" fill="black">
+beam_exists
+</text>
+<line x1="112" y1="2287" x2="112" y2="2315" stroke="black"/>
+<line x1="337" y1="2287" x2="337" y2="2315" stroke="black"/>
+<line x1="562" y1="2287" x2="562" y2="2315" stroke="black"/>
+<line x1="787" y1="2287" x2="787" y2="2315" stroke="black"/>
+<line x1="1012" y1="2287" x2="1012" y2="2315" stroke="black"/>
+<line x1="1237" y1="2287" x2="1237" y2="2315" stroke="black"/>
+<line x1="1462" y1="2287" x2="1462" y2="2315" stroke="black"/>
+<line x1="1687" y1="2287" x2="1687" y2="2315" stroke="black"/>
+<path d="M 1687 2292 A112,6 0 0,1 1687,2304" stroke="black" fill="none"/><line x1="1687" y1="2304" x2="1697" y2="2310" stroke="black"/>
+<polygon fill="white" points="1574,2288 1685,2288 1685,2297 1574,2297"/>
+<text x="1575" y="2297" textLength="109" font-family="Helvetica" font-size="12" fill="black">
+&lt;- beam_exists, true
+</text>
+<line x1="112" y1="2315" x2="112" y2="2343" stroke="black"/>
+<line x1="337" y1="2315" x2="337" y2="2343" stroke="black"/>
+<line x1="562" y1="2315" x2="562" y2="2343" stroke="black"/>
+<line x1="787" y1="2315" x2="787" y2="2343" stroke="black"/>
+<line x1="1012" y1="2315" x2="1012" y2="2343" stroke="black"/>
+<line x1="1237" y1="2315" x2="1237" y2="2343" stroke="black"/>
+<line x1="1462" y1="2315" x2="1462" y2="2343" stroke="black"/>
+<line x1="1687" y1="2315" x2="1687" y2="2343" stroke="black"/>
+<line x1="1462" y1="2326" x2="787" y2="2326" stroke="black"/>
+<line x1="787" y1="2326" x2="797" y2="2332" stroke="black"/>
+<polygon fill="white" points="1014,2316 1234,2316 1234,2325 1014,2325"/>
+<text x="1015" y="2325" textLength="218" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get_remote_ddl_compiled_status, true
+</text>
+<line x1="112" y1="2343" x2="112" y2="2371" stroke="black"/>
+<line x1="337" y1="2343" x2="337" y2="2371" stroke="black"/>
+<line x1="562" y1="2343" x2="562" y2="2371" stroke="black"/>
+<line x1="787" y1="2343" x2="787" y2="2371" stroke="black"/>
+<line x1="1012" y1="2343" x2="1012" y2="2371" stroke="black"/>
+<line x1="1237" y1="2343" x2="1237" y2="2371" stroke="black"/>
+<line x1="1462" y1="2343" x2="1462" y2="2371" stroke="black"/>
+<line x1="1687" y1="2343" x2="1687" y2="2371" stroke="black"/>
+<path d="M 787 2360 A110,6 0 0,1 787,2348" stroke="black" fill="none"/><line x1="787" y1="2360" x2="777" y2="2366" stroke="black"/>
+<polygon fill="white" points="787,2344 945,2344 945,2353 787,2353"/>
+<text x="788" y="2353" textLength="156" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get_type_status, metadata
+</text>
+<line x1="112" y1="2371" x2="112" y2="2399" stroke="black"/>
+<line x1="337" y1="2371" x2="337" y2="2399" stroke="black"/>
+<line x1="562" y1="2371" x2="562" y2="2399" stroke="black"/>
+<line x1="787" y1="2371" x2="787" y2="2399" stroke="black"/>
+<line x1="1012" y1="2371" x2="1012" y2="2399" stroke="black"/>
+<line x1="1237" y1="2371" x2="1237" y2="2399" stroke="black"/>
+<line x1="1462" y1="2371" x2="1462" y2="2399" stroke="black"/>
+<line x1="1687" y1="2371" x2="1687" y2="2399" stroke="black"/>
+<path d="M 787 2388 A110,6 0 0,1 787,2376" stroke="black" fill="none"/><line x1="787" y1="2388" x2="777" y2="2394" stroke="black"/>
+<polygon fill="white" points="787,2372 962,2372 962,2381 787,2381"/>
+<text x="788" y="2381" textLength="173" font-family="Helvetica" font-size="12" fill="black">
+&lt;- is_type_ready, metadata, true
+</text>
+<line x1="112" y1="2399" x2="112" y2="2427" stroke="black"/>
+<line x1="337" y1="2399" x2="337" y2="2427" stroke="black"/>
+<line x1="562" y1="2399" x2="562" y2="2427" stroke="black"/>
+<line x1="787" y1="2399" x2="787" y2="2427" stroke="black"/>
+<line x1="1012" y1="2399" x2="1012" y2="2427" stroke="black"/>
+<line x1="1237" y1="2399" x2="1237" y2="2427" stroke="black"/>
+<line x1="1462" y1="2399" x2="1462" y2="2427" stroke="black"/>
+<line x1="1687" y1="2399" x2="1687" y2="2427" stroke="black"/>
+<path d="M 787 2416 A110,6 0 0,1 787,2404" stroke="black" fill="none"/><line x1="787" y1="2416" x2="777" y2="2422" stroke="black"/>
+<polygon fill="white" points="787,2400 925,2400 925,2409 787,2409"/>
+<text x="788" y="2409" textLength="136" font-family="Helvetica" font-size="12" fill="black">
+&lt;- get_type_status, ready
+</text>
+<line x1="112" y1="2427" x2="112" y2="2444" stroke="black"/>
+<line x1="337" y1="2427" x2="337" y2="2444" stroke="black"/>
+<line x1="562" y1="2427" x2="562" y2="2444" stroke="black"/>
+<line x1="787" y1="2427" x2="787" y2="2444" stroke="black"/>
+<line x1="1012" y1="2427" x2="1012" y2="2444" stroke="black"/>
+<line x1="1237" y1="2427" x2="1237" y2="2444" stroke="black"/>
+<line x1="1462" y1="2427" x2="1462" y2="2444" stroke="black"/>
+<line x1="1687" y1="2427" x2="1687" y2="2444" stroke="black"/>
+<line x1="56" y1="2432" x2="1744" y2="2432" stroke="black" stroke-dasharray="2,2"/>
+<polygon fill="white" points="703,2428 1095,2428 1095,2437 703,2437"/>
+<text x="704" y="2437" textLength="390" font-family="Helvetica" font-size="12" fill="black">
+eliding metadata put, triggers metadata_stored, but should be idempotent
+</text>
+<line x1="112" y1="2444" x2="112" y2="2472" stroke="black"/>
+<line x1="337" y1="2444" x2="337" y2="2472" stroke="black"/>
+<line x1="562" y1="2444" x2="562" y2="2472" stroke="black"/>
+<line x1="787" y1="2444" x2="787" y2="2472" stroke="black"/>
+<line x1="1012" y1="2444" x2="1012" y2="2472" stroke="black"/>
+<line x1="1237" y1="2444" x2="1237" y2="2472" stroke="black"/>
+<line x1="1462" y1="2444" x2="1462" y2="2472" stroke="black"/>
+<line x1="1687" y1="2444" x2="1687" y2="2472" stroke="black"/>
+<path d="M 1687 2449 A112,6 0 0,1 1687,2461" stroke="black" fill="none"/><line x1="1687" y1="2461" x2="1697" y2="2467" stroke="black"/>
+<polygon fill="white" points="1564,2445 1685,2445 1685,2454 1564,2454"/>
+<text x="1565" y="2454" textLength="119" font-family="Helvetica" font-size="12" fill="black">
+handle_cast new_type
+</text>
+<line x1="112" y1="2472" x2="112" y2="2500" stroke="black"/>
+<line x1="337" y1="2472" x2="337" y2="2500" stroke="black"/>
+<line x1="562" y1="2472" x2="562" y2="2500" stroke="black"/>
+<line x1="787" y1="2472" x2="787" y2="2500" stroke="black"/>
+<line x1="1012" y1="2472" x2="1012" y2="2500" stroke="black"/>
+<line x1="1237" y1="2472" x2="1237" y2="2500" stroke="black"/>
+<line x1="1462" y1="2472" x2="1462" y2="2500" stroke="black"/>
+<line x1="1687" y1="2472" x2="1687" y2="2500" stroke="black"/>
+<path d="M 1687 2477 A112,6 0 0,1 1687,2489" stroke="black" fill="none"/><line x1="1687" y1="2489" x2="1697" y2="2495" stroke="black"/>
+<polygon fill="white" points="1569,2473 1685,2473 1685,2482 1569,2482"/>
+<text x="1570" y="2482" textLength="114" font-family="Helvetica" font-size="12" fill="black">
+do_maybe_new_type
+</text>
+<line x1="112" y1="2500" x2="112" y2="2528" stroke="black"/>
+<line x1="337" y1="2500" x2="337" y2="2528" stroke="black"/>
+<line x1="562" y1="2500" x2="562" y2="2528" stroke="black"/>
+<line x1="787" y1="2500" x2="787" y2="2528" stroke="black"/>
+<line x1="1012" y1="2500" x2="1012" y2="2528" stroke="black"/>
+<line x1="1237" y1="2500" x2="1237" y2="2528" stroke="black"/>
+<line x1="1462" y1="2500" x2="1462" y2="2528" stroke="black"/>
+<line x1="1687" y1="2500" x2="1687" y2="2528" stroke="black"/>
+<path d="M 1687 2505 A112,6 0 0,1 1687,2517" stroke="black" fill="none"/><line x1="1687" y1="2517" x2="1697" y2="2523" stroke="black"/>
+<polygon fill="white" points="1589,2501 1685,2501 1685,2510 1589,2510"/>
+<text x="1590" y="2510" textLength="94" font-family="Helvetica" font-size="12" fill="black">
+maybe_new_type
+</text>
+<line x1="112" y1="2528" x2="112" y2="2556" stroke="black"/>
+<line x1="337" y1="2528" x2="337" y2="2556" stroke="black"/>
+<line x1="562" y1="2528" x2="562" y2="2556" stroke="black"/>
+<line x1="787" y1="2528" x2="787" y2="2556" stroke="black"/>
+<line x1="1012" y1="2528" x2="1012" y2="2556" stroke="black"/>
+<line x1="1237" y1="2528" x2="1237" y2="2556" stroke="black"/>
+<line x1="1462" y1="2528" x2="1462" y2="2556" stroke="black"/>
+<line x1="1687" y1="2528" x2="1687" y2="2556" stroke="black"/>
+<line x1="787" y1="2539" x2="1012" y2="2539" stroke="black"/>
+<line x1="1012" y1="2539" x2="1002" y2="2545" stroke="black"/>
+<polygon fill="white" points="872,2529 927,2529 927,2538 872,2538"/>
+<text x="873" y="2538" textLength="53" font-family="Helvetica" font-size="12" fill="black">
+broadcast
+</text>
+<line x1="112" y1="2556" x2="112" y2="2584" stroke="black"/>
+<line x1="337" y1="2556" x2="337" y2="2584" stroke="black"/>
+<line x1="562" y1="2556" x2="562" y2="2584" stroke="black"/>
+<line x1="787" y1="2556" x2="787" y2="2584" stroke="black"/>
+<line x1="1012" y1="2556" x2="1012" y2="2584" stroke="black"/>
+<line x1="1237" y1="2556" x2="1237" y2="2584" stroke="black"/>
+<line x1="1462" y1="2556" x2="1462" y2="2584" stroke="black"/>
+<line x1="1687" y1="2556" x2="1687" y2="2584" stroke="black"/>
+<path d="M 787 2573 A110,6 0 0,1 787,2561" stroke="black" fill="none"/><line x1="787" y1="2573" x2="777" y2="2579" stroke="black"/>
+<polygon fill="white" points="787,2557 935,2557 935,2566 787,2566"/>
+<text x="788" y="2566" textLength="146" font-family="Helvetica" font-size="12" fill="black">
+&lt;- activate_bucket_type, ok
+</text>
+<line x1="112" y1="2584" x2="112" y2="2612" stroke="black"/>
+<line x1="337" y1="2584" x2="337" y2="2612" stroke="black"/>
+<line x1="562" y1="2584" x2="562" y2="2612" stroke="black"/>
+<line x1="787" y1="2584" x2="787" y2="2612" stroke="black"/>
+<line x1="1012" y1="2584" x2="1012" y2="2612" stroke="black"/>
+<line x1="1237" y1="2584" x2="1237" y2="2612" stroke="black"/>
+<line x1="1462" y1="2584" x2="1462" y2="2612" stroke="black"/>
+<line x1="1687" y1="2584" x2="1687" y2="2612" stroke="black"/>
+<line x1="787" y1="2595" x2="562" y2="2595" stroke="black"/>
+<line x1="562" y1="2595" x2="572" y2="2601" stroke="black"/>
+<polygon fill="white" points="636,2585 713,2585 713,2594 636,2594"/>
+<text x="637" y="2594" textLength="75" font-family="Helvetica" font-size="12" fill="black">
+&lt;- activate, ok
+</text>
+<line x1="112" y1="2612" x2="112" y2="2640" stroke="black"/>
+<line x1="337" y1="2612" x2="337" y2="2640" stroke="black"/>
+<line x1="562" y1="2612" x2="562" y2="2640" stroke="black"/>
+<line x1="787" y1="2612" x2="787" y2="2640" stroke="black"/>
+<line x1="1012" y1="2612" x2="1012" y2="2640" stroke="black"/>
+<line x1="1237" y1="2612" x2="1237" y2="2640" stroke="black"/>
+<line x1="1462" y1="2612" x2="1462" y2="2640" stroke="black"/>
+<line x1="1687" y1="2612" x2="1687" y2="2640" stroke="black"/>
+<path d="M 1687 2617 A112,6 0 0,1 1687,2629" stroke="black" fill="none"/><line x1="1687" y1="2629" x2="1697" y2="2635" stroke="black"/>
+<polygon fill="white" points="1520,2613 1685,2613 1685,2622 1520,2622"/>
+<text x="1521" y="2622" textLength="163" font-family="Helvetica" font-size="12" fill="black">
+&lt;- maybe_new_type, duplicate
+</text>
+<line x1="112" y1="2640" x2="112" y2="2668" stroke="black"/>
+<line x1="337" y1="2640" x2="337" y2="2668" stroke="black"/>
+<line x1="562" y1="2640" x2="562" y2="2668" stroke="black"/>
+<line x1="787" y1="2640" x2="787" y2="2668" stroke="black"/>
+<line x1="1012" y1="2640" x2="1012" y2="2668" stroke="black"/>
+<line x1="1237" y1="2640" x2="1237" y2="2668" stroke="black"/>
+<line x1="1462" y1="2640" x2="1462" y2="2668" stroke="black"/>
+<line x1="1687" y1="2640" x2="1687" y2="2668" stroke="black"/>
+<path d="M 1687 2645 A112,6 0 0,1 1687,2657" stroke="black" fill="none"/><line x1="1687" y1="2657" x2="1697" y2="2663" stroke="black"/>
+<polygon fill="white" points="1535,2641 1685,2641 1685,2650 1535,2650"/>
+<text x="1536" y="2650" textLength="148" font-family="Helvetica" font-size="12" fill="black">
+&lt;- do_maybe_new_type, ok
+</text>
+<line x1="112" y1="2662" x2="112" y2="2668" stroke="black"/>
+<line x1="337" y1="2662" x2="337" y2="2668" stroke="black"/>
+<line x1="562" y1="2662" x2="562" y2="2668" stroke="black"/>
+<line x1="787" y1="2662" x2="787" y2="2668" stroke="black"/>
+<line x1="1012" y1="2662" x2="1012" y2="2668" stroke="black"/>
+<line x1="1237" y1="2662" x2="1237" y2="2668" stroke="black"/>
+<line x1="1462" y1="2662" x2="1462" y2="2668" stroke="black"/>
+<line x1="1687" y1="2662" x2="1687" y2="2668" stroke="black"/>
+</svg>
