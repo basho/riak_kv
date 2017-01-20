@@ -42,11 +42,14 @@
          ensure_bucket_type/3,
          bucket_type_exists/1,
          maybe_bucket_type/2,
-         method_to_perm/1
+         method_to_perm/1,
+         register_allowable_origins/1
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
+
+-define(ALLOWABLE_ORIGINS_TABLE, 'cors_allowable_origins').
 
 -ifdef(namespaced_types).
 -type riak_kv_wm_utils_dict() :: dict:dict().
@@ -335,9 +338,59 @@ is_valid_referer(RD) ->
         OriginTuple ->
             true;
         RefererTuple ->
-            lager:debug("WM referrer not origin.  Origin ~p != Referer ~p\n", [OriginTuple, RefererTuple]),
-            false
+            allowable_origin(OriginTuple, RefererTuple)
     end.
+
+%% @doc Register allowable origins (for CORS), specified as a CSV of base urls,
+%% i.e. "http://localhost". "*" is the special allow all case which is not
+%% recommended, but is used in enough cases to provide support.
+-spec register_allowable_origins(string()) -> ok.
+register_allowable_origins(Origins) ->
+    register_allowable_origins1(string:tokens(Origins, ",")).
+
+register_allowable_origins1([]) -> ok;
+register_allowable_origins1(Origins) ->
+    maybe_create_allowable_origins_ets(),
+    %% wrap the origin for full match on ets lookup
+    Origins1 = [{normalize_referer(Origin)} || Origin <- Origins],
+    ets:insert(?ALLOWABLE_ORIGINS_TABLE, Origins1).
+
+allowable_origins_table_exists() ->
+    undefined /= ets:info(?ALLOWABLE_ORIGINS_TABLE).
+
+maybe_create_allowable_origins_ets() ->
+    case allowable_origins_table_exists() of
+        false ->
+            ets:new(?ALLOWABLE_ORIGINS_TABLE,
+                    [named_table, ordered_set]);
+        _ ->
+            ok
+    end.
+
+allowable_origin(OriginTuple, RefererTuple) ->
+    RefererTuple1 = normalize_referer(RefererTuple),
+    case allowable_origins_table_exists() andalso
+        (ets:member(?ALLOWABLE_ORIGINS_TABLE, RefererTuple1) orelse
+         ets:member(?ALLOWABLE_ORIGINS_TABLE, {"*"})) of
+        false ->
+            lager:debug("WM referrer not origin. Origin ~p != Referer ~p" ++
+                        " and Referer not in allowable origins.\n",
+                        [OriginTuple, RefererTuple]),
+            false;
+        _ -> true
+    end.
+
+normalize_referer({"*"}) -> {"*"};
+normalize_referer("*") -> {"*"};
+normalize_referer(BaseUrl) when is_list(BaseUrl) ->
+    [Scheme, Host|_T] = string:tokens(BaseUrl, "://"),
+    normalize_referer({list_to_atom(Scheme), Host});
+normalize_referer({Scheme, Host, _Port}) ->
+    normalize_referer({Scheme, Host});
+normalize_referer({Scheme, "127.0.0.1"}) ->
+    {Scheme, "localhost"};
+normalize_referer(RefererTuple) ->
+    RefererTuple.
 
 referer_tuple(RD) ->
     case wrq:get_req_header("Referer", RD) of
@@ -572,5 +625,29 @@ erlify_property_check_exceptions_test() ->
     ?assertThrow({bad_chash_keyfun, {<<"nomod">>, <<"nofun">>}},
                  erlify_bucket_prop({?JSON_CHASH, {struct, [{?JSON_MOD, <<"nomod">>},
                                                             {?JSON_FUN, <<"nofun">>}]}})).
+allowable_origin_riak() -> {http, "localhost"}.
+allowable_origin_none_registered_test() ->
+    register_allowable_origins(""),
+    ?assertEqual(false,
+                 allowable_origin(allowable_origin_riak(), {http, "notlocalhost"})).
 
+allowable_origin_not_registered_test() ->
+    register_allowable_origins("http://basho.com"),
+    ?assertEqual(false,
+                 allowable_origin(allowable_origin_riak(), {http, "notlocalhost"})).
+
+allowable_origin_single_registered_test() ->
+    register_allowable_origins("https://notlocalhost"),
+    ?assertEqual(true,
+                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
+
+allowable_origin_multi_registered_test() ->
+    register_allowable_origins("http://basho.com,https://notlocalhost"),
+    ?assertEqual(true,
+                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
+
+allowable_origin_wildcard_registered_test() ->
+    register_allowable_origins("*"),
+    ?assertEqual(true,
+                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
 -endif.

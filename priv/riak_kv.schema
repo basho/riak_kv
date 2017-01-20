@@ -961,3 +961,12 @@
   fun(Value) when is_integer(Value) andalso Value > 0 -> true;
      (_) -> false
   end}.
+
+%% @doc Register allowable origins (for CORS), specified as a CSV of base urls,
+%% i.e. "http://localhost". "*" is the special allow all case which is not
+%% recommended, but is used in enough cases to provide support.
+{mapping, "riak_kv.allowable_origins", "riak_kv.allowable_origins", [
+    {datatype, string},
+    {default, ""},
+    {level, advanced}
+]}.
