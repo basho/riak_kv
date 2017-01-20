@@ -192,6 +192,12 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
              end,
     case Result of
         consistent ->
+            %% NB This is a minor hack: we set if_not_modified to
+            %% undefined so that we'll fall down into the next clause
+            %% of process/2 when we recurse, but the fact that we're
+            %% setting #state.consistent to true means we *will* ultimately
+            %% set if_not_modified to true in the put request that we
+            %% submit to Riak.
             process(Req#rpbputreq{if_not_modified=undefined,
                                   if_none_match=undefined},
                     State#state{consistent = true});
