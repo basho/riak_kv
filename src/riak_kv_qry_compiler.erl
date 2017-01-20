@@ -131,10 +131,11 @@ compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
 -spec compile_where_clause(?DDL{}, ?SQL_SELECT{}) ->
                                   {ok, [?SQL_SELECT{}]} | {error, term()}.
 compile_where_clause(?DDL{} = DDL,
-                     ?SQL_SELECT{is_executable = false,
+                     ?SQL_SELECT{helper_mod = Mod,
+                                 is_executable = false,
                                  'WHERE'       = W1,
                                  cover_context = Cover} = Q) ->
-    {W2,_} = resolve_expressions(W1),
+    {W2,_} = resolve_expressions(Mod, W1),
     case {compile_where(DDL, [W2]), unwrap_cover(Cover)} of
         {{error, E}, _} ->
             {error, E};
@@ -1111,23 +1112,36 @@ modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
-resolve_expressions(WhereAST) ->
+resolve_expressions(Mod, WhereAST) ->
     Acc = [], %% not used
     riak_ql_ddl:mapfold_where_tree(
-        fun (_, and_, Acc_x) ->
-                {ok, Acc_x};
-            (_, or_, Acc_x) ->
+        fun (_, Op, Acc_x) when Op == and_; Op == or_ ->
                 {ok, Acc_x};
             (_, Filter, Acc_x) ->
-                {resolve_expressions_folder(Filter), Acc_x}
+                {resolve_expressions_folder(Mod, Filter), Acc_x}
         end, Acc, WhereAST).
--include_lib("eunit/include/eunit.hrl").
 
-resolve_expressions_folder({Op,LHS,{'+',{integer,A},{integer,B}}}) ->
-    {Op,LHS,{integer,A+B}};
-resolve_expressions_folder(AST) ->
-    ?debugFmt("AST IS ~p", [AST]),
+resolve_expressions_folder(_Mod, {ExpOp,{_,A},{_,B}}) when ExpOp == '+'; ExpOp == '*';
+                                                           ExpOp == '-'; ExpOp == '/' ->
+    % Type = typeof_ast(Mod, LHS),
+    Value =
+        case ExpOp of
+            '+' -> riak_ql_window_agg_fns:add(A,B);
+            '*' -> riak_ql_window_agg_fns:multiply(A,B);
+            '-' -> riak_ql_window_agg_fns:subtract(A,B);
+            '/' -> riak_ql_window_agg_fns:divide(A,B)
+        end,
+    cast_value_to_ast(integer, Value); %% FIXME hardcoded integer
+resolve_expressions_folder(_, AST) ->
     AST.
+
+cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_integer(V) -> {T, V};
+cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_float(V)   -> {T, erlang:round(V)};
+cast_value_to_ast(float, V) when is_integer(V) -> {integer, V*1.0};
+cast_value_to_ast(float, V) when is_float(V)   -> {integer, V}.
+
+% typeof_ast(Mod, FieldName) when is_binary(FieldName) ->
+%     Mod:get_field_type([FieldName]).
 
 -record(filtercheck, {name,'=','>','>=','<','<='}).
 
@@ -4104,6 +4118,80 @@ query_with_arithmetic_in_where_clause_test() ->
           {filter,[]},
           {end_inclusive, true}]],
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_add_double_to_integer_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 + 2.4"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4002}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4002}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_multiple_additions_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 + 2.4 + 7"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4009}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4009}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+
+
+query_with_arithmetic_in_where_clause_operator_precedence_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 2+3*4"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,14}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,14}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_operator_precedence_queries_equal_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, QA} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 2+3*4"),
+    {ok, QB} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 3*4+2"),
+    {ok, SubQueriesA} = compile(DDL, QA),
+    {ok, SubQueriesB} = compile(DDL, QB),
+    ?assertEqual(
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueriesA],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueriesB]
     ).
 
 -endif.
