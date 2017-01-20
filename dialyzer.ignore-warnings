@@ -16,7 +16,6 @@ riak_kv_pb_object.erl:252: The pattern 'consistent' can never match the type 'fa
 # Callback info not available
 Callback info about the riak_core_vnode_worker behaviour is not available
 Callback info about the riak_core_coverage_fsm behaviour is not available
-Callback info about the riak_kv_backend behaviour is not available
 Unknown functions:
   cluster_info:dump_all_connected/1
   cluster_info:dump_nodes/2
