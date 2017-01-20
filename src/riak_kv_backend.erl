@@ -31,9 +31,12 @@
                                        any() |
                                        no_return()).
 
+-type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+
 -export_type([fold_buckets_fun/0,
               fold_keys_fun/0,
-              fold_objects_fun/0]).
+              fold_objects_fun/0,
+              index_spec/0]).
 
 %% These are just here to make the callback specs more succinct and readable
 -type state() :: term().
@@ -54,12 +57,11 @@
     {ok, Value :: term(), state()} |
     {ok, not_found, state()} |
     {error, term(), state()}.
-%% TODO pull all the copy-pasted index_spec() type specs into this mod and use in the callback spec
--callback put(riak_object:bucket(), riak_object:key(), IndexSpecs :: term(), Value :: binary(),
+-callback put(riak_object:bucket(), riak_object:key(), [index_spec()], Value :: binary(),
               state()) ->
     {ok, state()} |
     {error, term(), state()}.
--callback delete(riak_object:bucket(), riak_object:key(), IndexSpecs :: term(), state()) ->
+-callback delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
     {ok, state()} |
     {error, term(), state()}.
 
