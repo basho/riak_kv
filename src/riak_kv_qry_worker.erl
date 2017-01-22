@@ -72,6 +72,7 @@
           max_running_fsms   = ?MAX_RUNNING_FSMS    :: pos_integer(),
           %% 2. Estimate query size (wget-style):
           n_subqueries_done  = 0                    :: non_neg_integer(),
+          total_query_rows   = 0                    :: non_neg_integer(),
           total_query_data   = 0                    :: non_neg_integer(),
           max_query_data                            :: non_neg_integer(),
           %% For queries not backed by query buffers, results are
@@ -261,36 +262,46 @@ throttling_spawn_index_fsms(State) ->
 estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
   when NSubqueriesDone < 2  ->
     State;
-estimate_query_size(#state{total_query_data  = CurrentTotalSize,
+
+estimate_query_size(#state{total_query_data  = TotalQueryData,
+                           total_query_rows  = TotalQueryRows,
                            n_subqueries_done = NSubqueriesDone,
                            max_query_data    = MaxQueryData,
                            qbuf_ref          = QBufRef,
                            sub_qrys          = SubQrys,
                            qry = ?SQL_SELECT{'LIMIT' = [Limit]} = OrigQry} = State)
-  when QBufRef /= undefined,
-       is_integer(Limit) ->
+  when QBufRef /= undefined ->
+
     %% query buffer-backed, has a LIMIT: consider the latter
-    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
-    ProjectedLimitData = round(Limit * BytesPerChunk),
-    if ProjectedLimitData > MaxQueryData ->
-            lager:info("Cancelling LIMIT ~b query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
-                       [Limit, ProjectedLimitData, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
+    EstLimitData = round(Limit * (TotalQueryData / TotalQueryRows)),
+    IsLimitTooBig = EstLimitData > MaxQueryData,
+
+    %% but also check the grand total, for the case when LIMIT is big
+    %% but WHERE range is still tiny
+    EstTotalData = round(TotalQueryData + (TotalQueryData / NSubqueriesDone) * length(SubQrys)),
+    IsWhereTooBig = EstTotalData > MaxQueryData,
+
+    case IsLimitTooBig and IsWhereTooBig of
+        true ->
+            lager:info("Cancelling query with projected LIMIT (~b) or total (~b) result size exceeding limit (~b), subqueries ~b of ~b done, query ~p)",
+                       [EstLimitData, EstTotalData, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
             cancel_error_query(select_result_too_big, State);
-       el/=se ->
+        false ->
             State
     end;
-estimate_query_size(#state{total_query_data  = CurrentTotalSize,
+
+estimate_query_size(#state{total_query_data  = TotalQueryData,
                            n_subqueries_done = NSubqueriesDone,
                            max_query_data    = MaxQueryData,
                            sub_qrys          = SubQrys,
                            qry               = OrigQry} = State) ->
-    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
-    ProjectedGrandTotal = round(CurrentTotalSize + BytesPerChunk * length(SubQrys)),
-    if ProjectedGrandTotal > MaxQueryData ->
-            lager:info("Cancelling regular query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
-                       [ProjectedGrandTotal, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
+    EstTotalData = round(TotalQueryData + (TotalQueryData / NSubqueriesDone) * length(SubQrys)),
+    case EstTotalData > MaxQueryData of
+        true ->
+            lager:info("Cancelling query with projected total (~b) result size exceeding limit (~b), subqueries ~b of ~b done, query ~p)",
+                       [EstTotalData, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
             cancel_error_query(select_result_too_big, State);
-       el/=se ->
+        false ->
             State
     end.
 
@@ -298,6 +309,7 @@ estimate_query_size(#state{total_query_data  = CurrentTotalSize,
 %%
 add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
                                           total_query_data = TotalQueryData,
+                                          total_query_rows = TotalQueryRows,
                                           n_subqueries_done = NSubqueriesDone,
                                           n_running_fsms = NRunning} = State) ->
     case lists:member(SubQId, SubQs) of
@@ -308,6 +320,7 @@ add_subquery_result(SubQId, Chunk, #state{sub_qrys = SubQs,
                 ThisChunkData = erlang:external_size(Chunk),
                 State#state{result            = QueryResult,
                             total_query_data  = TotalQueryData + ThisChunkData,
+                            total_query_rows  = TotalQueryRows + rows_in_chunk(Chunk),
                             n_subqueries_done = NSubqueriesDone + 1,
                             n_running_fsms    = NRunning - 1,
                             sub_qrys          = NSubQ}
@@ -359,6 +372,12 @@ get_decoded_results({decoded, Chunk}) ->
     Chunk;
 get_decoded_results(Chunk) ->
     decode_results(lists:flatten(Chunk)).
+
+rows_in_chunk({decoded, Chunk}) ->
+    length(Chunk);
+rows_in_chunk(Chunk) ->
+    length(Chunk).
+
 
 %%
 run_select_on_group(Query, SelClause, Chunk, QueryResult1) ->
