@@ -208,7 +208,21 @@ async_put(Context, Bucket, PrimaryKey, Val, #state{ref=Ref, write_opts=WriteOpts
     eleveldb:async_put(Ref, Context, StorageKey, Val, WriteOpts),
     {ok, State}.
 
-indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
+indexes_fixed(State) ->
+    %% This provides an escape hatch that we can use to override the
+    %% fixed_indexes check on startup, in case a customer somehow gets into
+    %% a weird situation where that metadata key is missing on an otherwise
+    %% healthy instance of leveldb:
+    case app_helper:get_env(riak_kv, override_fixed_indexes_check, false) of
+        false ->
+            get_indexes_fixed_from_db(State);
+        true ->
+            lager:notice("override_fixed_indexes_check set to true; overriding fixed index "
+                         "formatting check during eleveldb backend startup"),
+            true
+    end.
+
+get_indexes_fixed_from_db(#state{ref=Ref,read_opts=ReadOpts}) ->
     case eleveldb:get(Ref, to_md_key(?FIXED_INDEXES_KEY), ReadOpts) of
         {ok, <<1>>} ->
             true;
