@@ -71,16 +71,14 @@
          is_empty/1,
          data_size/1,
          status/1,
-         callback/3,
-         set_legacy_indexes/2,
-         mark_indexes_fixed/2]).
+         callback/3]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, index_reformat]).
+-define(CAPABILITIES, [async_fold]).
 -define(ANY_CAPABILITIES, [indexes, iterator_refresh]).
 
 -record (state, {backends :: [{atom(), atom(), term()}], % [{BackendName, BackendModule, SubState}]
@@ -354,38 +352,6 @@ callback(Ref, Msg, #state{backends=Backends}=State) ->
     _ = [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
     {ok, State}.
 
-set_legacy_indexes(State=#state{backends=Backends}, WriteLegacy) ->
-    NewBackends = [{I, Mod, maybe_set_legacy_indexes(Mod, ModState, WriteLegacy)} ||
-                      {I, Mod, ModState} <- Backends],
-    State#state{backends=NewBackends}.
-
-maybe_set_legacy_indexes(Mod, ModState, WriteLegacy) ->
-    case backend_can_index_reformat(Mod, ModState) of
-        true -> Mod:set_legacy_indexes(ModState, WriteLegacy);
-        false -> ModState
-    end.
-
-mark_indexes_fixed(State=#state{backends=Backends}, ForUpgrade) ->
-    NewBackends = mark_indexes_fixed(Backends, [], ForUpgrade),
-    {ok, State#state{backends=NewBackends}}.
-
-mark_indexes_fixed([], NewBackends, _) ->
-    lists:reverse(NewBackends);
-mark_indexes_fixed([{I, Mod, ModState} | Backends], NewBackends, ForUpgrade) ->
-    Res = maybe_mark_indexes_fixed(Mod, ModState, ForUpgrade),
-    case Res of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, NewModState} ->
-            mark_indexes_fixed(Backends, [{I, Mod, NewModState} | NewBackends], ForUpgrade)
-    end.
-
-maybe_mark_indexes_fixed(Mod, ModState, ForUpgrade) ->
-    case backend_can_index_reformat(Mod, ModState) of
-        true -> Mod:mark_indexes_fixed(ModState, ForUpgrade);
-        false -> {ok, ModState}
-    end.
-
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
@@ -458,21 +424,8 @@ fold_in_bucket(Bucket, ModFun, FoldFun, Acc, Opts, State) ->
                   Opts,
                   SubState).
 
-default_backend_filter(Opts, Name, _Module, _SubState, ModCaps) ->
-    filter_on_backend_opts(Opts, Name) andalso
-        filter_on_index_reformat(Opts, ModCaps).
-
-%% @doc Skips folding if index reformat operation on
-%% non-index reformat capable backend.
-filter_on_index_reformat(Opts, ModCaps) ->
-    Indexes = lists:keyfind(index, 1, Opts),
-    CanReformatIndex = lists:member(index_reformat, ModCaps),
-    case {Indexes, CanReformatIndex} of
-        {{index, incorrect_format, _ForUpgrade}, false} ->
-            false;
-        _ ->
-            true
-    end.
+default_backend_filter(Opts, Name, _Module, _SubState, _ModCaps) ->
+    filter_on_backend_opts(Opts, Name).
 
 %% @doc If a {backend, [BACKEND_LIST]} option is specified,
 %% don't fold over any backends that aren't in the list.
@@ -550,10 +503,6 @@ error_filter({error, _, _}) ->
     true;
 error_filter(_) ->
     false.
-
-backend_can_index_reformat(Mod, ModState) ->
-    {ok, Caps} = Mod:capabilities(ModState),
-    lists:member(index_reformat, Caps).
 
 %% ===================================================================
 %% EUnit tests
