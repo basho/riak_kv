@@ -184,6 +184,9 @@ is_last_partition_column_descending(FieldOrders, PK) ->
 key_length(#key_v1{ast = AST}) ->
     length(AST).
 
+local_key_field_orders(FieldOrders, PK) ->
+    lists:nthtail(key_length(PK), FieldOrders).
+
 %% Calulate the final result for an aggregate.
 -spec finalise_aggregate(#riak_sel_clause_v1{}, [any()]) -> [any()].
 finalise_aggregate(#riak_sel_clause_v1{ calc_type = CalcType,
@@ -733,9 +736,12 @@ swap(Where, QField, Key, Val) ->
 %% for the moment we just brute force assert that the query is a timeseries SQL request
 %% and go with that
 compile_where(DDL, Where) ->
-    case check_if_timeseries(DDL, Where) of
-        {error, E}   -> {error, E};
-        {true, NewW} -> NewW
+    try
+        case check_if_timeseries(DDL, Where) of
+            {error, E}   -> {error, E};
+            {true, NewW} -> NewW
+        end
+    catch throw:V -> V
     end.
 
 %%
@@ -782,12 +788,19 @@ check_if_timeseries(?DDL{table = T, partition_key = PK, local_key = LK0} = DDL,
                              false -> [{end_inclusive, true}]
                          end,
                 RewrittenFilter = add_types_to_filter(Filter, Mod),
-                {true, lists:flatten([
-                                      {startkey, StartKey},
-                                      {endkey,   EndKey},
-                                      {filter,   RewrittenFilter}
-                                     ] ++ IncStart ++ IncEnd
-                                    )};
+                WhereProps1 = lists:flatten(
+                    [{startkey, StartKey},
+                     {endkey,   EndKey},
+                     {filter,   RewrittenFilter},
+                     IncStart,
+                     IncEnd]),
+                WhereProps2 = check_where_clause_is_possible(DDL, WhereProps1),
+                WhereProps3 = rewrite_where_with_additional_filters(
+                    Mod:additional_local_key_fields(),
+                    local_key_field_orders(Mod:field_orders(), PK),
+                    fun Mod:get_field_type/1,
+                    WhereProps2),
+                {true, WhereProps3};
             Errors ->
                 {error, Errors}
         end
@@ -1097,8 +1110,377 @@ modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
+-record(filtercheck, {name,'=','>','>=','<','<='}).
+
+check_where_clause_is_possible(DDL, WhereProps) ->
+    Filter1 = proplists:get_value(filter, WhereProps),
+    {Filter2, FilterChecks} = riak_ql_ddl:mapfold_where_tree(
+        fun (_, and_, Acc) ->
+                {ok, Acc};
+            (_, or_, Acc) ->
+                {skip, Acc};
+            (Conditional, Filter, Acc) ->
+                check_where_clause_is_possible_fold(DDL, Conditional, Filter, Acc)
+        end, [{eliminate_later,[]}], Filter1),
+    ElimLater = proplists:get_value(eliminate_later, FilterChecks),
+    {Filter3, _} = riak_ql_ddl:mapfold_where_tree(
+        fun (_, and_, Acc) ->
+                {ok, Acc};
+            (_, or_, Acc) ->
+                {skip, Acc};
+            (_, Filter, Acc) ->
+                case lists:member(Filter, ElimLater) of
+                  true ->
+                      {eliminate, Acc};
+                  false ->
+                      {Filter, Acc}
+                end
+        end, [], Filter2),
+    lists:keystore(filter, 1, WhereProps, {filter,Filter3}).
+
+check_where_clause_is_possible_fold(DDL, _, {'=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
+    %% `IS NULL` filters
+    %% if a column is marked NOT NULL, but the WHERE clause has IS NULL for that
+    %% column then no results will ever be returned, so do not execute!
+    case is_field_nullable(FieldName, DDL) of
+        true ->
+            {F, Acc};
+        false ->
+            throw({error, {impossible_where_clause, << >>}})
+    end;
+check_where_clause_is_possible_fold(DDL, _, {'!=',{field,FieldName,_},{const,?SQL_NULL}} = F, Acc) ->
+    %% `NOT NULL` filters
+    %% if column is marked NOT NULL, and the WHERE clause has IS NOT NULL for
+    %% that column then we can eliminate it, and reduce the filter, maybe to
+    %% nothing which means leveldb would not have to decode the rows!
+    case is_field_nullable(FieldName, DDL) of
+        true ->
+            {F, Acc};
+        false ->
+            {eliminate, Acc}
+    end;
+check_where_clause_is_possible_fold(_, _, {'=',{field,FieldName,_},{const,EqVal}} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'=' = F} ->
+            %% this filter has been specified twice so remove the second occurence
+            {eliminate, Acc};
+        #filtercheck{'>' = {_,_,{const,GtVal}} = GtF} = Check1 when GtVal < EqVal ->
+            %% query like `a = 10 AND a > 8` we can eliminate the greater than
+            %% clause because if a to be 10 it must also be greater than 8
+            Acc2 = append_to_eliminate_later(GtF, Acc),
+            Check2 = Check1#filtercheck{'>' = undefined, '=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc2, Check2)};
+        #filtercheck{'>=' = {_,_,{const,GteVal}} = GteF} = Check1 when GteVal < EqVal ->
+            %% query like `a = 10 AND a > 8` we can eliminate the greater than
+            %% clause because if a to be 10 it must also be greater than 8
+            Acc2 = append_to_eliminate_later(GteF, Acc),
+            Check2 = Check1#filtercheck{'>=' = undefined, '=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc2, Check2)};
+        #filtercheck{'<' = {_,_,{const,LtVal}}} when LtVal =< EqVal ->
+            %% query requires a column to be equal to a value AND less than that
+            %% value which is impossible
+            throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'<=' = {_,_,{const,LteVal}} = LteF} = Check1 when LteVal >= EqVal ->
+            %% query like `a = 10 AND a <= 10` the less than or equals can be
+            %% eliminated because it is already captured in the equality filter
+            Acc2 = append_to_eliminate_later(LteF, Acc),
+            Check2 = Check1#filtercheck{'<=' = undefined, '=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc2, Check2)};
+        #filtercheck{'=' = F_x} when F_x /= undefined ->
+            %% there are two different checks on the same column, for equality
+            %% this can never be satisfied.
+            throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'<=' = {_,_,{const,LteVal}}} when LteVal < EqVal ->
+            %% query like `a = 10 AND a <= 8`
+            throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'=' = undefined} = Check1 ->
+            %% this is the first equality check so just record it
+            Check2 = Check1#filtercheck{'=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)}
+    end;
+check_where_clause_is_possible_fold(_, _, {'>',{field,FieldName,_},{const,GtVal}} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'>' = F} ->
+            %% this filter has been specified twice so remove the second occurence
+            {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when GtVal >= EqVal ->
+            %% query like `a = 10 AND a > 10` cannot be satisfied
+            throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when GtVal < EqVal ->
+            %% query like `a = 10 AND a > 8` we can eliminate the greater than
+            %% clause because if a to be 10 it must also be greater than 8
+            {eliminate, Acc};
+        #filtercheck{'>=' = {_,_,{const,GteVal}} = F_x} = Check1 when GtVal >= GteVal ->
+            %% query like `a >= 8 AND a > 10` we can eliminate the lesser clause
+            %% because if the value must be greater than 10 it can't be 8 or 9.
+            Check2 = Check1#filtercheck{'>' = F, '>=' = undefined},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F,Acc3};
+        #filtercheck{'>=' = {_,_,{const,GteVal}}} when GtVal < GteVal ->
+            %% query like `b >= 10 AND b > 9`, the previous >= clause should be
+            %% eliminated on the second pass
+            {eliminate, Acc};
+        #filtercheck{'>' = undefined} = Check1 ->
+            %% this is the first greater than check so just record it
+            Check2 = Check1#filtercheck{'>' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
+        #filtercheck{'>' = F_x} = Check1 when F_x < F ->
+            %% eliminate the lower > value for this column
+            Check2 = Check1#filtercheck{'>' = F},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F,Acc3};
+        #filtercheck{'>' = F_x} when F_x > F ->
+            %% we already have a filter that is higher than this one, so
+            %% eliminate
+            {eliminate, Acc}
+    end;
+check_where_clause_is_possible_fold(_, _, {'>=',{field,FieldName,_},{const,GteVal}} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when GteVal =< EqVal ->
+            %% query like `a = 10 AND a >= 8` we can eliminate the greater than
+            %% or equal to clause because if a to be 10 it must also be greater
+            %% than 8
+            {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when GteVal > EqVal ->
+            %% query like `a = 10 AND a >= 11` cannot be satisfied
+            throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'>' = {_,_,{const,GtVal}} = F_x} = Check1 when GtVal < GteVal ->
+            %% query like `a > 6 AND a >= 8` we can eliminate the lesser '>' filter
+            Check2 = Check1#filtercheck{'>=' = F},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3};
+        #filtercheck{'>' = {_,_,{const,GtVal}}} when GtVal >= GteVal ->
+            %% we already have a filter that is higher than the second one
+            {eliminate, Acc};
+        #filtercheck{'>=' = undefined} = Check1 ->
+            %% this is the first equality check so just record it
+            {F, store_filter_check(Check1#filtercheck{'>=' = F}, Acc)};
+        #filtercheck{'>=' = F} ->
+            %% this filter has been specified twice so remove the second occurence
+            {eliminate, Acc};
+        #filtercheck{'>=' = F_x} = Check1 when F_x < F ->
+            %% we already have a filter that is a lower value so eliminate it
+            Check2 = Check1#filtercheck{'>=' = F},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3};
+        #filtercheck{'>=' = F_x} when F_x > F ->
+            %% we already have a filter that is higher than this one
+            {eliminate, Acc}
+    end;
+check_where_clause_is_possible_fold(_, _, {'<',{field,FieldName,_},{const,LtVal}} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'<=' = {_,_,{const,LteVal}} = F_x} = Check1 when LteVal >= LtVal ->
+            %% query like `a <= 10 AND a < 10`, less than or equal is eliminated
+            Check2 = Check1#filtercheck{'<' = F, '<=' = undefined},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3};
+        #filtercheck{'<=' = {_,_,{const,LteVal}}} when LteVal < LtVal ->
+            {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when LtVal > EqVal ->
+            %% existing equality check is less, eliminate this `>` filter.
+            {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when LtVal =< EqVal ->
+            %% query requires a column to be equal to a value AND less than that
+            %% value which is impossible
+            throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'<' = F} ->
+            %% duplicate < filter
+            {eliminate, Acc};
+        #filtercheck{'<' = undefined} = Check1 ->
+            %% this is the first less than check so just record it
+            Check2 = Check1#filtercheck{'<' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)};
+        #filtercheck{'<' = F_x} when F_x < F ->
+            %% we already have a filter that is higher than this one,
+            %% which we can eliminate. Store it and eliminate it on the second
+            %% pass since it has already been iterated
+            {eliminate, Acc};
+        #filtercheck{'<' = F_x} = Check1 when F_x > F ->
+            %% we already have a filter that is higher than this one, and so
+            %% includes it so we can safely eliminate this one.
+            Check2 = Check1#filtercheck{'<' = F},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3}
+    end;
+check_where_clause_is_possible_fold(_, _, {'<=',{field,FieldName,_},{const,LteVal}} = F, Acc) ->
+    case find_filter_check(FieldName, Acc) of
+        #filtercheck{'<=' = F} ->
+            %% duplicate <= filter
+            {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when LteVal >= EqVal ->
+            %% query like `a = 10 AND a <= 10` the less than or equals can be
+            %% eliminated because it is already captured in the equality filter
+            {eliminate, Acc};
+        #filtercheck{'=' = {_,_,{const,EqVal}}} when LteVal < EqVal ->
+            %% query like `a = 10 AND a <= 8`
+            throw({error, {impossible_where_clause, << >>}});
+        #filtercheck{'<' = {_,_,{const,LtVal}}} when LteVal >= LtVal ->
+            %% query like `a < 10 AND a <= 10`
+            {eliminate, Acc};
+        #filtercheck{'<' = {_,_,{const,LtVal}} = F_x} = Check1 when LteVal < LtVal ->
+            %% query like `a < 11 AND a <= 10`
+            Check2 = Check1#filtercheck{'<' = undefined, '<=' = F},
+            Acc2 = store_filter_check(Check2, Acc),
+            Acc3 = append_to_eliminate_later(F_x, Acc2),
+            {F, Acc3};
+        #filtercheck{'<=' = undefined} = Check1 ->
+            %% this is the first less than check so just record it
+            Check2 = Check1#filtercheck{'<=' = F},
+            {F, lists:keystore(FieldName, #filtercheck.name, Acc, Check2)}
+    end;
+check_where_clause_is_possible_fold(_, _, Filter, Acc) ->
+    {Filter, Acc}.
+
+append_to_eliminate_later(Filter, Acc) ->
+    ElimLater = proplists:get_value(eliminate_later, Acc),
+    lists:keystore(eliminate_later, 1, Acc, {eliminate_later, [Filter|ElimLater]}).
+
+store_filter_check(#filtercheck{name = FieldName} = Check, Acc) ->
+    lists:keystore(FieldName, #filtercheck.name, Acc, Check).
+
+%% TODO put this in the table helper module
+is_field_nullable(FieldName, ?DDL{fields = Fields}) when is_binary(FieldName)->
+    #riak_field_v1{optional = Optional} = lists:keyfind(FieldName, #riak_field_v1.name, Fields),
+    (Optional == true).
+
+find_filter_check(FieldName, Acc) when is_binary(FieldName) ->
+    case lists:keyfind(FieldName, #filtercheck.name, Acc) of
+      false ->
+          #filtercheck{name=FieldName};
+      Val ->
+          Val
+    end.
+
+%% tl;dr put filters that test equality of columns in the local key but not in
+%% in the partition key, in the star and end key.
+%%
+%% PRIMARY KEY((quantum(a,1,'m')),a,b)
+%%
+%% SELECT * FROM table WHERE a > 2 and a < 6 AND b = 5
+%%
+%% Instead of putting b just in the filter, put it in the start and end keys.
+%% This narrows the range from everything between {2,_} and {6,_} to everyting
+%% between {2,5} and {6,5}.
+%%
+%% For equality filters, it is not safe to remove the filter, because {3,7} is
+%% also in the range but should not be returned because only rows where b = 5
+%% are correct for this query.
+rewrite_where_with_additional_filters([], _, _, WhereProps) ->
+    WhereProps;
+rewrite_where_with_additional_filters(AdditionalFields, FieldOrders, ToKeyTypeFn, WhereProps) when is_list(WhereProps) ->
+    SKey1 = proplists:get_value(startkey, WhereProps),
+    EKey1 = proplists:get_value(endkey, WhereProps),
+    SInc1 = proplists:get_value(start_inclusive, WhereProps),
+    EInc1 = proplists:get_value(end_inclusive, WhereProps),
+    Filter = proplists:get_value(filter, WhereProps),
+    AdditionalFilter = find_filters_on_additional_local_key_fields(
+        AdditionalFields, Filter),
+    {SKey2, SInc2} = rewrite_start_key_with_filters(
+        AdditionalFields, FieldOrders, ToKeyTypeFn, AdditionalFilter, SKey1, SInc1),
+    {EKey2, EInc2} = rewrite_end_key_with_filters(
+        AdditionalFields, FieldOrders, ToKeyTypeFn, AdditionalFilter, EKey1, EInc1),
+    lists:foldl(
+        fun({K,V},Acc) -> store_to_where_props(K,V,Acc) end, WhereProps,
+        [{startkey,SKey2}, {endkey,EKey2},
+         {start_inclusive,SInc2}, {end_inclusive,EInc2}]).
+
+store_to_where_props(Key, Val, WhereProps) when Val /= undefined ->
+    lists:keystore(Key, 1, WhereProps, {Key, Val});
+store_to_where_props(_, _, WhereProps) ->
+    WhereProps.
+
+rewrite_start_key_with_filters([], _, _, _, SKey, SInc) ->
+    {SKey, SInc};
+rewrite_start_key_with_filters([AddFieldName|Tail], [Order|TailOrder], ToKeyTypeFn, Filter, SKey, SInc1) when is_binary(AddFieldName) ->
+    case proplists:get_value(AddFieldName, Filter) of
+        {Op,_,_} = F  when Op == '=' orelse (Order == ascending andalso (Op == '>'orelse Op == '>='))
+                                     orelse (Order == descending andalso (Op == '<'orelse Op == '<=')) ->
+            SKeyElem = to_key_elem(ToKeyTypeFn, F),
+            %% if the quantum was inclusive, make sure we stay inclusive or
+            %% the quantum boundary is modified later on
+            SInc2 = ((SInc1 /= false) or is_inclusive_op(Op)),
+            rewrite_start_key_with_filters(
+                Tail, TailOrder, ToKeyTypeFn, Filter, SKey++[SKeyElem], SInc2);
+        _ ->
+            %% there is no filter for the next additional field so give up! The
+            %% filters must be consecutive, we can't have a '_' inbetween
+            %% values
+            {SKey, SInc1}
+    end.
+
+rewrite_end_key_with_filters([], _, _, _, EKey, EInc) ->
+    {EKey, EInc};
+rewrite_end_key_with_filters([AddFieldName|Tail], [Order|TailOrder], ToKeyTypeFn, Filter, EKey, EInc1) when is_binary(AddFieldName) ->
+    case proplists:get_value(AddFieldName, Filter) of
+        {Op,_,_} = F  when Op == '=' orelse (Order == ascending andalso  (Op == '<' orelse Op == '<='))
+                                     orelse (Order == descending andalso  (Op == '>' orelse Op == '>=')) ->
+            EKeyElem = to_key_elem(ToKeyTypeFn, F),
+            %% if the quantum was inclusive, make sure we stay inclusive or
+            %% the quantum boundary is modified later on
+            EInc2 = ((EInc1 /= false) or is_inclusive_op(Op)),
+            rewrite_end_key_with_filters(
+                Tail, TailOrder, ToKeyTypeFn, Filter, EKey++[EKeyElem], EInc2);
+        _ ->
+            %% there is no filter for the next additional field so give up! The
+            %% filters must be consecutive, we can't have a '_' inbetween
+            %% values
+            {EKey, EInc1}
+    end.
+
+is_inclusive_op('=')  -> true;
+is_inclusive_op('>')  -> false;
+is_inclusive_op('>=') -> true;
+is_inclusive_op('<') -> false;
+is_inclusive_op('<=') -> true.
+
+%% Convert a filter to a start/end key element
+to_key_elem(ToKeyTypeFn, {_,{field,FieldName,_},{_,Val}}) ->
+    {FieldName,ToKeyTypeFn([FieldName]),Val}.
+
+%% Return filters where the column is in the local key but not the partition key
+find_filters_on_additional_local_key_fields(AdditionalFields, Where) ->
+    try
+        riak_ql_ddl:fold_where_tree(
+            fun(Conditional, Filter, Acc) ->
+                find_filters_on_additional_local_key_fields_folder(Conditional, Filter, AdditionalFields, Acc)
+            end, [], Where)
+    catch throw:Val -> Val %% a throw means the function wanted to exit immediately
+    end.
+
+%%
+find_filters_on_additional_local_key_fields_folder(or_,_,_,_) ->
+    %% we cannot support filters using OR, because keys must be a singular value
+    throw([]);
+find_filters_on_additional_local_key_fields_folder(_, {'!=',_,_}, _, Acc) ->
+    %% we can't support additional NOT filters on the key
+    Acc;
+find_filters_on_additional_local_key_fields_folder(_, {_,{field,Name,_},_} = F, AdditionalFields, Acc) when is_binary(Name) ->
+    case lists:member(Name, AdditionalFields) of
+        true ->
+            [{Name, F}|Acc];
+        false ->
+            Acc
+    end.
+
+%% -------------------------------------------------------------------
+%% TESTS
+%% -------------------------------------------------------------------
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+
+-define(
+    assertPropsEqual(Expected1, Actual1),
+    Expected2 = lists:sort(Expected1),
+    Actual2 = lists:sort(Actual1),
+    ?assertEqual(lists:sort(Expected2), lists:sort(Actual2))
+).
 
 %%
 %% Helper Fns for unit tests
@@ -2317,7 +2699,7 @@ flexible_keys_1_test() ->
     {ok, Q} = get_query(
           "SELECT * FROM tab4 WHERE a > 0 AND a < 1000 AND a1 = 1"),
     {ok, [Select]} = compile(DDL, Q),
-    ?assertEqual(
+    ?assertPropsEqual(
         [{startkey,[{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1}]},
           {endkey, [{<<"a1">>,sint64,1}, {<<"a">>,timestamp,1000}]},
           {filter,[]}],
@@ -2391,7 +2773,7 @@ no_quantum_in_query_2_test() ->
     {ok, [Select]} = compile(DDL, Q),
     Key =
         [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>}],
-    ?assertEqual(
+    ?assertPropsEqual(
         [{startkey, Key},
          {endkey, Key},
          {filter,[]},
@@ -2412,11 +2794,12 @@ no_quantum_in_query_3_test() ->
           "SELECT * FROM tababa WHERE a = 1000 AND b = 'bval' AND c = 3.5 AND d = true"),
     {ok, [Select]} = compile(DDL, Q),
     Key =
-        [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>}],
-    ?assertEqual(
+        [{<<"c">>,double,3.5}, {<<"a">>,sint64,1000},{<<"b">>,varchar,<<"bval">>},{<<"d">>,boolean,true}],
+    ?assertPropsEqual(
         [{startkey, Key},
          {endkey, Key},
          {filter,{'=',{field,<<"d">>,boolean},{const, true}}},
+         {start_inclusive,true},
          {end_inclusive,true}],
         Select?SQL_SELECT.'WHERE'
     ).
@@ -2707,6 +3090,809 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
              {end_inclusive,true}]
         ],
         SubQueryWheres
+    ).
+
+find_filters_on_additional_local_key_fields_test() ->
+    ?assertEqual(
+        [{<<"a">>,{'=',{field,<<"a">>,integer},{const, 100}}}],
+        find_filters_on_additional_local_key_fields(
+            [<<"a">>],
+            {'=',{field,<<"a">>,integer},{const, 100}})
+    ).
+
+rewrite_where_with_additional_filters_test() ->
+    ?assertPropsEqual(
+        [{startkey,[{<<"c">>,timestamp,5500},{<<"a">>,sint64,100}]},
+         {endkey,  [{<<"c">>,timestamp,5000},{<<"a">>,sint64,100}]},
+         {filter, {'=',{field,<<"a">>,integer},{const, 100}}},
+         {end_inclusive, true},
+         {start_inclusive, true}],
+        rewrite_where_with_additional_filters(
+            [<<"a">>],
+            [ascending],
+            fun([<<"a">>]) -> sint64 end,
+            [{startkey,[{<<"c">>,timestamp,5500}]},
+             {endkey,  [{<<"c">>,timestamp,5000}]},
+             {filter,   {'=',{field,<<"a">>,integer},{const, 100}}},
+             {end_inclusive,true},
+             {start_inclusive,true}])
+    ).
+
+additional_local_key_cols_added_to_query_keys_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((quantum(a,1,'s')),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b = 1 AND a >= 4200 AND a <= 4600"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,4200},{<<"b">>,sint64,1}]},
+         {endkey,[{<<"a">>,timestamp,4600},{<<"b">>,sint64,1}]},
+         {filter,{'=',{field,<<"b">>,sint64},{const, 1}}},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_filter_added_to_start_key_if_it_part_of_local_key_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((quantum(a,1,'s')),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b > 1 AND a >= 4200 AND a <= 4600"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,4200},{<<"b">>,sint64,1}]},
+         {endkey,[{<<"a">>,timestamp,4600}]},
+         {filter,{'>',{field,<<"b">>,sint64},{const, 1}}},
+         {start_inclusive,true},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_filter_added_to_start_key_if_it_part_of_local_key_when_start_inclusive_false_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((quantum(a,1,'s')),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b > 1 AND a > 4200 AND a <= 4600"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,4201},{<<"b">>,sint64,1}]},
+         {endkey,[{<<"a">>,timestamp,4600}]},
+         {filter,{'>',{field,<<"b">>,sint64},{const, 1}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_or_equal_filter_added_to_start_key_if_it_part_of_local_key_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((quantum(a,1,'s')),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b >= 1 AND a >= 4200 AND a <= 4600"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,4200},{<<"b">>,sint64,1}]},
+         {endkey,[{<<"a">>,timestamp,4600}]},
+         {filter,{'>=',{field,<<"b">>,sint64},{const, 1}}},
+         {start_inclusive,true},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+%% if the pk is (a) and lk is (a,b,c) then b AND c must have filters for c
+%% to be added to the key. If b does not have a filter but c does, then neither
+%% is added.
+additional_local_key_cols_must_be_specified_consecutively_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "c SINT64 NOT NULL, "
+        "PRIMARY KEY ((quantum(a,1,'s')),a,b,c))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE c = 2 AND a >= 4200 AND a <= 4600"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,4200}]},
+         {endkey,[{<<"a">>,timestamp,4600}]},
+         {filter,{'=',{field,<<"c">>,sint64},{const, 2}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+is_null_clause_on_non_null_column_is_impossible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b IS NULL AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+same_equality_check_twice_has_duplicate_removed_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 10 AND b = 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+same_equality_check_on_additional_local_key_col_is_not_in_filter_twice_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 10 AND b = 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {start_inclusive,true},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+checks_for_different_values_on_the_same_col_is_impossible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b = 5 AND b = 6 AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+second_greater_than_check_which_is_a_greater_value_is_removed_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 10 AND b > 11"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 11}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+
+second_greater_than_check_which_is_a_lesser_value_removes_the_first_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 11 AND b > 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 11}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+clause_for_equality_and_greater_than_equality_is_not_possible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b = 5 AND b > 6 AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+clause_for_equality_and_greater_than_is_not_possible_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b > 6 AND b = 5 AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+greater_than_value_lower_than_equality_is_eliminated_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 10 AND b > 5"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_value_lower_than_equality_is_eliminated_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 5 AND b = 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+same_great_than_or_equals_check_is_not_in_filter_twice_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 10 AND b >= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+second_greater_than_or_equal_check_which_is_a_greater_value_is_removed_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 10 AND b >= 11"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 11}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+second_greater_than_or_equal_check_which_is_a_lesser_value_removes_the_first_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 11 AND b >= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 11}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_or_equal_to_value_lower_than_equality_is_eliminated_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 10 AND b >= 5"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_or_equal_to_value_lower_than_equality_is_eliminated_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 5 AND b = 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+clause_for_equality_and_greater_than_or_equalit_to_is_not_possible_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE b >= 6 AND b = 5 AND a = 4600"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+greater_than_or_equal_to_is_less_than_previous_greater_than_clause_removes_greater_than_clause_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 10 AND b >= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_or_equal_to_is_less_than_previous_greater_than_clause_removes_greater_than_clause_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 10 AND b > 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_is_less_than_previous_greater_than_or_equal_to_clause_removes_greater_than_or_equal_to_clause_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b > 9 AND b >= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+greater_than_is_less_than_previous_greater_than_or_equal_to_clause_removes_greater_than_or_equal_to_clause_swap_lhs_rhs_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b >= 10 AND b > 9"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'>=',{field,<<"b">>,sint64},{const, 10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_filters_get_reduced_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 10 AND b < 9"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,9}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_filters_get_reduced_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 9 AND b < 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,9}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_eliminated_if_it_is_greater_than_equals_to_on_same_column_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 9 AND b < 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const,9}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_duplicates_are_eliminated_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 10 AND b < 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+query_impossible_if_less_than_is_equal_to_equality_filter_on_same_column_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 9 AND b < 9"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+query_impossible_if_less_than_is_equal_to_equality_filter_on_same_column_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 9 AND b = 9"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+query_impossible_if_less_than_is_less_than_equality_filter_on_same_column_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 9 AND b < 8"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+query_impossible_if_less_than_is_less_than_equality_filter_on_same_column_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 8 AND b = 9"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+less_than_on_column_in_local_key_is_added_to_endkey_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+duplicate_less_than_or_equal_to_filters_are_eliminated_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b <= 8 AND b <= 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<=',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_equality_filter_value_is_equal_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 8 AND b <= 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_equality_filter_value_is_equal_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b <= 8 AND b = 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_equality_filter_value_is_greater_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b = 8 AND b <= 9"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'=',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_less_than_filter_value_is_greater_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 8 AND b <= 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_filters_are_eliminated_when_less_than_filter_value_is_greater_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b <= 8 AND b < 8"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5}]},
+         {filter, {'<',{field,<<"b">>,sint64},{const,8}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_on_column_in_local_key_is_added_to_endkey_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b <= 10"),
+    {ok, [S|_]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'<=',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+% less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_test
+
+'< eliminated when greater than <= on same column_test'() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b <= 10 AND b < 11"),
+    {ok, [S]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'<=',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+'< eliminated when greater than <= on same column_swap_filter_order_test'() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 5 AND b < 11 AND b <= 10"),
+    {ok, [S]} = compile(DDL, Q),
+    ?assertPropsEqual(
+        [{startkey,[{<<"a">>,timestamp,5}]},
+         {endkey,  [{<<"a">>,timestamp,5},{<<"b">>,sint64,10}]},
+         {filter, {'<=',{field,<<"b">>,sint64},{const,10}}},
+         {end_inclusive,true}],
+        S?SQL_SELECT.'WHERE'
+    ).
+
+less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 1 AND b <= 8 AND b = 10"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
+    ).
+
+less_than_or_equal_to_is_less_than_equality_filter_on_same_column_is_impossible_swap_filter_order_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table1("
+        "a TIMESTAMP NOT NULL, "
+        "b SINT64 NOT NULL, "
+        "PRIMARY KEY ((a),a,b))"),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a = 1 AND b = 10 AND b <= 8"),
+    ?assertEqual(
+        {error,{impossible_where_clause, << >>}},
+        compile(DDL, Q)
     ).
 
 desc_query_with_additional_column_in_local_key_test() ->
