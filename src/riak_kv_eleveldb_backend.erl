@@ -34,8 +34,6 @@
          async_put/5,
          delete/4,
          drop/1,
-         fix_index/3,
-         mark_indexes_fixed/2,
          set_legacy_indexes/2,
          fixed_index_status/1,
          fold_buckets/4,
@@ -137,7 +135,7 @@ determine_fixed_index_status(State) ->
     end.
 
 mark_indexes_fixed_on_start(State) ->
-    case mark_indexes_fixed(State, true) of
+    case mark_indexes_fixed(State) of
         {error, Reason, _} -> {error, Reason};
         Res -> Res
     end.
@@ -229,72 +227,11 @@ index_deletes(FixedIndexes, Bucket, PrimaryKey, Field, Value) ->
                     || FixedIndexes =:= false andalso IndexKey =/= LegacyKey],
     KeyDelete ++ LegacyDelete.
 
-fix_index(IndexKeys, ForUpgrade, #state{ref=Ref,
-                                                read_opts=ReadOpts,
-                                                write_opts=WriteOpts} = State)
-                                        when is_list(IndexKeys) ->
-    FoldFun =
-        fun(ok, {Success, Ignore, Error}) ->
-               {Success+1, Ignore, Error};
-           (ignore, {Success, Ignore, Error}) ->
-               {Success, Ignore+1, Error};
-           ({error, _}, {Success, Ignore, Error}) ->
-               {Success, Ignore, Error+1}
-        end,
-    Totals =
-        lists:foldl(FoldFun, {0,0,0},
-                    [fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts)
-                        || {_Bucket, IndexKey} <- IndexKeys]),
-    {reply, Totals, State};
-fix_index(IndexKey, ForUpgrade, #state{ref=Ref,
-                                                read_opts=ReadOpts,
-                                                write_opts=WriteOpts} = State) ->
-    case fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) of
-        Atom when is_atom(Atom) ->
-            {Atom, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
-
-fix_index(IndexKey, ForUpgrade, Ref, ReadOpts, WriteOpts) ->
-    case eleveldb:get(Ref, IndexKey, ReadOpts) of
-        {ok, _} ->
-            case from_index_key(IndexKey) of
-                {Bucket, Key, Field, Value} ->
-
-                    NewKey = case ForUpgrade of
-                                 true -> to_index_key(Bucket, Key, Field, Value);
-                                 false -> to_legacy_index_key(Bucket, Key, Field, Value)
-                             end,
-                    Updates = [{delete, IndexKey}, {put, NewKey, <<>>}],
-                    case eleveldb:write(Ref, Updates, WriteOpts) of
-                        ok ->
-                            ok;
-                        {error, Reason} ->
-                            {error, Reason}
-                    end;
-                ignore ->
-                    ignore
-            end;
-        not_found ->
-            ignore;
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-mark_indexes_fixed(State=#state{fixed_indexes=true}, true) ->
-    {ok, State};
-mark_indexes_fixed(State=#state{fixed_indexes=false}, false) ->
-    {ok, State};
-mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}, ForUpgrade) ->
-    Value = case ForUpgrade of
-                true -> <<1>>;
-                false -> <<0>>
-            end,
-    Updates = [{put, to_md_key(?FIXED_INDEXES_KEY), Value}],
+mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}) ->
+    Updates = [{put, to_md_key(?FIXED_INDEXES_KEY), <<1>>}],
     case eleveldb:write(Ref, Updates, WriteOpts) of
         ok ->
-            {ok, State#state{fixed_indexes=ForUpgrade}};
+            {ok, State#state{fixed_indexes=true}};
         {error, Reason} ->
             {error, Reason, State}
     end.
