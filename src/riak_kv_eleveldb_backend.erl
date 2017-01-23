@@ -128,7 +128,7 @@ determine_fixed_index_status(State) ->
                     %% We no longer support reformatting legacy indexes, but we still watch
                     %% and set the corresponding flag so as to support downgrades, and to error
                     %% out if anyone ever tries to upgrade from <1.3.1 to >2.2 in one go.
-                    mark_indexes_fixed_on_start(State);
+                    mark_indexes_fixed(State);
                 false ->
                     ErrorMsg = "LevelDB backend not empty, but no tag found to indicate "
                     "fixed index format. If you are upgrading from Riak version 1.3.0 or "
@@ -140,10 +140,13 @@ determine_fixed_index_status(State) ->
             end
     end.
 
-mark_indexes_fixed_on_start(State) ->
-    case mark_indexes_fixed(State) of
-        {error, Reason, _} -> {error, Reason};
-        Res -> Res
+mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}) ->
+    Updates = [{put, to_md_key(?FIXED_INDEXES_KEY), <<1>>}],
+    case eleveldb:write(Ref, Updates, WriteOpts) of
+        ok ->
+            {ok, State};
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 %% @doc Stop the eleveldb backend
@@ -220,15 +223,6 @@ indexes_fixed(#state{ref=Ref,read_opts=ReadOpts}) ->
 index_deletes(Bucket, PrimaryKey, Field, Value) ->
     IndexKey = to_index_key(Bucket, PrimaryKey, Field, Value),
     [{delete, IndexKey}].
-
-mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}) ->
-    Updates = [{put, to_md_key(?FIXED_INDEXES_KEY), <<1>>}],
-    case eleveldb:write(Ref, Updates, WriteOpts) of
-        ok ->
-            {ok, State};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
 
 %% @doc Delete an object from the eleveldb backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
