@@ -63,7 +63,6 @@
 %% chunks will need to be really small, for the result to be within
 %% max query size.
 
-
 -spec compile(?DDL{}, ?SQL_SELECT{}) ->
     {ok, [?SQL_SELECT{}]} | {error, any()}.
 compile(?DDL{}, ?SQL_SELECT{is_executable = true}) ->
@@ -136,7 +135,7 @@ compile_where_clause(?DDL{} = DDL,
                                  'WHERE'       = W1,
                                  cover_context = Cover} = Q) ->
     {W2,_} = resolve_expressions(Mod, W1),
-    case {compile_where(DDL, [W2]), unwrap_cover(Cover)} of
+    case {compile_where(DDL, lists:flatten([W2])), unwrap_cover(Cover)} of
         {{error, E}, _} ->
             {error, E};
         {_, {error, E}} ->
@@ -1113,7 +1112,7 @@ modify_where_key(TupleList, Field, NewVal) ->
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
 resolve_expressions(Mod, WhereAST) ->
-    Acc = [], %% not used
+    Acc = acc, %% not used
     riak_ql_ddl:mapfold_where_tree(
         fun (_, Op, Acc_x) when Op == and_; Op == or_ ->
                 {ok, Acc_x};
@@ -1123,7 +1122,6 @@ resolve_expressions(Mod, WhereAST) ->
 
 resolve_expressions_folder(_Mod, {ExpOp,{_,A},{_,B}}) when ExpOp == '+'; ExpOp == '*';
                                                            ExpOp == '-'; ExpOp == '/' ->
-    % Type = typeof_ast(Mod, LHS),
     Value =
         case ExpOp of
             '+' -> riak_ql_window_agg_fns:add(A,B);
@@ -1131,7 +1129,10 @@ resolve_expressions_folder(_Mod, {ExpOp,{_,A},{_,B}}) when ExpOp == '+'; ExpOp =
             '-' -> riak_ql_window_agg_fns:subtract(A,B);
             '/' -> riak_ql_window_agg_fns:divide(A,B)
         end,
-    cast_value_to_ast(integer, Value); %% FIXME hardcoded integer
+    {calculated, Value};
+resolve_expressions_folder(Mod, {ExpOp,FieldName,{calculated,V1}}) when is_binary(FieldName) ->
+    V2 = cast_value_to_ast(Mod:get_field_type([FieldName]),V1),
+    {ExpOp,FieldName,V2};
 resolve_expressions_folder(_, AST) ->
     AST.
 
@@ -1139,9 +1140,6 @@ cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_integer(V)
 cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_float(V)   -> {T, erlang:round(V)};
 cast_value_to_ast(float, V) when is_integer(V) -> {integer, V*1.0};
 cast_value_to_ast(float, V) when is_float(V)   -> {integer, V}.
-
-% typeof_ast(Mod, FieldName) when is_binary(FieldName) ->
-%     Mod:get_field_type([FieldName]).
 
 -record(filtercheck, {name,'=','>','>=','<','<='}).
 
@@ -4120,6 +4118,24 @@ query_with_arithmetic_in_where_clause_test() ->
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
     ).
 
+query_with_arithmetic_in_where_clause_expresson_on_lhs_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND 4000 + 1s = b"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
 query_with_arithmetic_in_where_clause_add_double_to_integer_test() ->
     DDL = get_ddl(
         "CREATE table table1 ("
@@ -4155,8 +4171,6 @@ query_with_arithmetic_in_where_clause_multiple_additions_test() ->
           {end_inclusive, true}]],
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
     ).
-
-
 
 query_with_arithmetic_in_where_clause_operator_precedence_test() ->
     DDL = get_ddl(
