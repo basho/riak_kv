@@ -35,7 +35,6 @@
          delete/4,
          drop/1,
          set_legacy_indexes/2,
-         fixed_index_status/1,
          fold_buckets/4,
          fold_keys/4,
          fold_objects/4,
@@ -238,10 +237,6 @@ mark_indexes_fixed(State=#state{ref=Ref, write_opts=WriteOpts}) ->
 
 set_legacy_indexes(State, WriteLegacy) ->
     State#state{legacy_indexes=WriteLegacy}.
-
--spec fixed_index_status(state()) -> boolean().
-fixed_index_status(#state{fixed_indexes=Fixed}) ->
-    Fixed.
 
 %% @doc Delete an object from the eleveldb backend
 -spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
