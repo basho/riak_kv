@@ -101,8 +101,12 @@ api_calls() ->
                    {ok, riak_kv_qry:query_tabular_result()} |
                    {error, term()}.
 query(QueryStringOrSQL, DDL) ->
-    riak_kv_qry:submit(QueryStringOrSQL, DDL).
-
+    case riak_kv_qry:submit(QueryStringOrSQL, DDL) of
+        {error, {impossible_where_clause, _}} ->
+            {ok, {[],[], []}};
+        Result ->
+            Result
+    end.
 
 -spec put_data([[riak_pb_ts_codec:ldbvalue()]], binary()) ->
                       ok | {error, {some_failed, integer()}} | {error, term()}.
