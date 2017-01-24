@@ -31,7 +31,7 @@
                                        any() |
                                        no_return()).
 
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+-type index_spec() :: {add | remove, binary(), riak_object:index_value()}.
 
 -export_type([fold_buckets_fun/0,
               fold_keys_fun/0,
