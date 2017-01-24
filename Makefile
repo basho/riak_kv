@@ -21,3 +21,7 @@ DIALYZER_APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto in
 	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler
 
 include tools.mk
+
+protogen:
+	@${REBAR} --config protogen.config get-deps
+	@${REBAR} --config protogen.config compile
