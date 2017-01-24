@@ -1138,8 +1138,8 @@ resolve_expressions_folder(_, AST) ->
 
 cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_integer(V) -> {T, V};
 cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_float(V)   -> {T, erlang:round(V)};
-cast_value_to_ast(float, V) when is_integer(V) -> {integer, V*1.0};
-cast_value_to_ast(float, V) when is_float(V)   -> {integer, V}.
+cast_value_to_ast(double, V) when is_integer(V) -> {double, float(V)};
+cast_value_to_ast(double, V) when is_float(V)   -> {double, V}.
 
 -record(filtercheck, {name,'=','>','>=','<','<='}).
 
@@ -4180,12 +4180,30 @@ query_with_arithmetic_in_where_clause_operator_precedence_test() ->
         "PRIMARY KEY ((a, b), a, b));"
     ),
     {ok, Q} = get_query(
-          "SELECT * FROM table1 WHERE a = 'hi' AND b = 2+3*4"),
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 1+3*2/4 - 0.5"),
     {ok, SubQueries} = compile(DDL, Q),
     ?assertEqual(
-        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,14}]},
-          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,14}]},
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp, round(1+3*2/4-0.5)}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp, round(1+3*2/4-0.5)}]},
           {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+cast_integer_expression_to_double_column_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a TIMESTAMP NOT NULL,"
+        "b DOUBLE NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 10 AND b = 1+5"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,timestamp,10}]},
+          {endkey,  [{<<"a">>,timestamp,10}]},
+          {filter, {'=',{field,<<"b">>,double},{const,6.0}}},
           {end_inclusive, true}]],
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
     ).
@@ -4207,5 +4225,35 @@ query_with_arithmetic_in_where_clause_operator_precedence_queries_equal_test() -
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueriesA],
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueriesB]
     ).
+
+select_with_arithmetic_on_identifier_throws_an_error_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a+1 = 10"),
+    ?assertEqual(
+        {false,[{arithmetic_on_identifier,<<"a">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
+select_with_arithmetic_on_identifier_throws_an_error_literal_on_lhs_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE 10 = a+1"),
+    ?assertEqual(
+        {false,[{arithmetic_on_identifier,<<"a">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
+
 
 -endif.
