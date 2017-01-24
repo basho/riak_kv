@@ -46,11 +46,12 @@
 -include("riak_kv_ts.hrl").
 
 %% external API calls enumerated
--type query_api_call() :: create_table | query_select | describe_table | query_insert | query_explain | show_tables | query_delete.
+-type query_api_call() :: alter_table | create_table | query_select | describe_table | query_insert | query_explain | show_tables | query_delete.
 -type api_call() :: get | put | delete | list_keys | coverage | query_api_call().
 -export_type([query_api_call/0, api_call/0]).
 
 -spec api_call_from_sql_type(riak_kv_qry:query_type()) -> query_api_call().
+api_call_from_sql_type(alter_table)       -> alter_table;
 api_call_from_sql_type(ddl)               -> create_table;
 api_call_from_sql_type(select)            -> query_select;
 api_call_from_sql_type(describe)          -> describe_table;
@@ -71,6 +72,8 @@ api_call_to_perm(list_keys) ->
     "riak_ts.list_keys";
 api_call_to_perm(coverage) ->
     "riak_ts.coverage";
+api_call_to_perm(alter_table) ->
+    "riak_ts.create_table";
 api_call_to_perm(create_table) ->
     "riak_ts.create_table";
 api_call_to_perm(query_select) ->
@@ -93,7 +96,7 @@ api_call_to_perm(show_tables) ->
 %%
 -spec api_calls() -> [api_call()].
 api_calls() ->
-    [create_table, query_select, describe_table, query_insert,
+    [alter_table, create_table, query_select, describe_table, query_insert,
      show_tables, show_create_table, get, put, delete, list_keys, coverage].
 
 

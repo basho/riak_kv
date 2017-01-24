@@ -102,6 +102,16 @@ decode_query(#tsinterpolation{base = BaseQuery}, Options) ->
         {ok, {DDL = ?DDL{}, WithProperties}} ->
             %% CREATE TABLE, so don't check if the table exists
             {ok, {ddl, {DDL, WithProperties}}};
+        {ok, {alter_table, Table, Changes, WithProperties}} ->
+            case is_table_query_ready(alter_table, Table) of
+                true ->
+                    %% The redundant `alter_table' atom here allows
+                    %% query permissions to be determined without
+                    %% changing more of the call path
+                    {ok, {alter_table, {alter_table, Table, Changes, WithProperties}}};
+                _ ->
+                    {error, make_table_not_activated_resp(Table)}
+            end;
         {ok, [{type, QryType}|SQL]} ->
             Table = extract_table_name(SQL),
             case is_table_query_ready(QryType, Table) of
@@ -160,12 +170,16 @@ process(M = #tscoveragereq{table = Table}, State) ->
 
 %% The following heads of `process' are all, in terms of protobuffer
 %% structures, a `#tsqueryreq{}', subdivided per query type (CREATE
-%% TABLE, SELECT, DESCRIBE, INSERT, SHOW TABLES). The first argument will
+%% TABLE, ALTER TABLE, SELECT, DESCRIBE, INSERT, SHOW TABLES). The first argument will
 %% be the specific SQL converted from the original `#tsqueryreq{}' in
 %% `riak_kv_pb_ts:decode' via `decode_query_common').
 process({DDL = ?DDL{}, WithProperties}, State) ->
     %% the only one that doesn't require an activated table
     create_table({DDL, WithProperties}, State);
+
+process({alter_table, Table, Changes, WithProperties}, State) ->
+    check_table_and_call(Table, fun alter_table/4,
+                         {Changes, WithProperties}, State);
 
 process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
@@ -247,7 +261,34 @@ create_table({?DDL{table = Table} = DDL1, WithProps}, State) ->
     DDL2 = convert_ddl_to_cluster_supported_version(DDLRecCap, DDL1),
     {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(
                      DDL2, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
-    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
+
+    ApplyProps =
+        fun(Props) ->
+                case riak_core_bucket_type:create(Table, Props) of
+                    ok ->
+                        wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
+                    {error, Reason} ->
+                        {reply, make_table_create_fail_resp(Table, Reason), State}
+                end
+        end,
+    apply_bucket_properties(Props1, Table, ApplyProps, State).
+
+-spec alter_table(module(), ?DDL{}, {list(), list()}, #state{}) ->
+                         {reply, ts_query_responses() | #rpberrorresp{}, #state{}}.
+alter_table(_Mod, ?DDL{table=Table}, {_Changes, BucketProperties}, State) ->
+    ApplyProps =
+        fun(Props) ->
+                case riak_core_bucket_type:update(Table, Props) of
+                    ok ->
+                        {reply, tsqueryresp, State};
+                    {error, Reason} ->
+                        {reply, make_table_create_fail_resp(Table, Reason), State}
+                end
+        end,
+    apply_bucket_properties(BucketProperties, Table, ApplyProps, State).
+
+apply_bucket_properties(Properties, Table, Fun, State) ->
+    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Properties] of
         {bad_linkfun_modfun, {M, F}} ->
             {reply, make_table_create_fail_resp(
                       Table, flat_format(
@@ -263,14 +304,10 @@ create_table({?DDL{table = Table} = DDL1, WithProps}, State) ->
                       Table, flat_format(
                                "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F])),
              State};
-        Props2 ->
-            case riak_core_bucket_type:create(Table, Props2) of
-                ok ->
-                    wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
-                {error, Reason} ->
-                    {reply, make_table_create_fail_resp(Table, Reason), State}
-            end
+        Props ->
+            Fun(Props)
     end.
+
 
 %%
 convert_ddl_to_cluster_supported_version(DDLRecCap, DDL) when is_atom(DDLRecCap) ->
