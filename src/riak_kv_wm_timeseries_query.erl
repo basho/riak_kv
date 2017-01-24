@@ -48,6 +48,11 @@
          produce_doc_body/2
         ]).
 
+%% exports for create table
+-export([make_table_create_fail_resp/2,
+         make_table_activate_error_timeout_resp/1,
+         make_table_created_missing_resp/1]).
+
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -265,35 +270,23 @@ compile_query(QueryStr) ->
     end.
 
 
-create_table(DDL = ?DDL{table = Table}, Props) ->
-    %% would be better to use a function to get the table out.
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(
-                     DDL, riak_ql_ddl_compiler:get_compiler_version(), Props),
-    Props2 = [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1],
-    case riak_core_bucket_type:create(Table, Props2) of
-        ok ->
-            wait_until_active(Table, ?TABLE_ACTIVATE_WAIT);
-        {error, Reason} ->
-            {error, {table_create_fail, Table, Reason}}
+create_table(DDL = ?DDL{table = Table}, WithProps) ->
+    case riak_kv_ts_api:create_table(?MODULE, DDL, WithProps) of
+        ok -> ok;
+        {error, Reason} -> {error, {table_create_fail, Table, Reason}}
     end.
 
-wait_until_active(Table, 0) ->
-    {error, {table_activate_fail, Table}};
-wait_until_active(Table, Seconds) ->
-    case riak_core_bucket_type:activate(Table) of
-        ok ->
-            ok;
-        {error, not_ready} ->
-            timer:sleep(1000),
-            wait_until_active(Table, Seconds - 1);
-        {error, undefined} ->
-            %% this is inconceivable because create(Table) has
-            %% just succeeded, so it's here mostly to pacify
-            %% the dialyzer (and of course, for the odd chance
-            %% of Erlang imps crashing nodes between create
-            %% and activate calls)
-            {error, {table_created_missing, Table}}
-    end.
+flat_format(Format, Args) ->
+    lists:flatten(io_lib:format(Format, Args)).
+
+make_table_create_fail_resp(Table, Reason) ->
+    flat_format("Failed to create table ~ts: ~p", [Table, Reason]).
+
+make_table_activate_error_timeout_resp(Table) ->
+    flat_format("Timed out while attempting to activate table ~ts", [Table]).
+
+make_table_created_missing_resp(Table) ->
+    flat_format("Table ~ts has been created but found missing", [Table]).
 
 -spec produce_doc_body(#wm_reqdata{}, #ctx{}) -> cb_rv_spec(iolist()).
 produce_doc_body(RD, Ctx = #ctx{result = {Columns, Rows}}) ->
