@@ -3,7 +3,7 @@
 %% riak_kv_qry_compiler: generate the coverage for a hashed query
 %%
 %%
-%% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2016-2017 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,7 +24,7 @@
 
 -export([compile/2]).
 -export([compile_select_clause/2,  %% used in riak_kv_qry_buffers;
-         compile_order_by/1]).     %% to deliver chunks more efficiently
+         compile_order_by/2]).     %% to deliver chunks more efficiently
 -export([finalise_aggregate/2]).
 -export([run_select/2, run_select/3]).
 
@@ -46,9 +46,13 @@
                         {end_inclusive, boolean()}].
 -type combinator()       :: [binary()].
 -type limit()            :: pos_integer().
--type offset()           :: non_neg_integer().
+-type offset()           :: non_neg_integer() | function().
 -type operator()         :: [binary()].
 -type sorter()           :: {binary(), asc|desc, nulls_first|nulls_last}.
+
+-type inverse_distrib_fun_spec() :: {riak_ql_inverse_distrib_fns:invdist_function(),
+                                     ColumnArg::binary(),
+                                     [riak_pb_ts_codec:ldbvalue()]}.
 
 
 -export_type([combinator/0,
@@ -71,35 +75,124 @@ compile(?DDL{}, ?SQL_SELECT{is_executable = true}) ->
 compile(?DDL{table = T} = DDL,
         ?SQL_SELECT{is_executable = false} = Q1) ->
     Mod = riak_ql_ddl:make_module_name(T),
-    case compile_order_by(
-           maybe_compile_group_by(
-             Mod, compile_select_clause(DDL, Q1), Q1)) of
-        {ok, Q2} ->
-            compile_where_clause(DDL, Q2);
-        {error, _} = Error ->
-            Error
+
+    case compile_select_clause(DDL, Q1) of
+        {error, _} = ER ->
+            ER;
+        {ok, Q2, InvDistFuns} ->
+            case maybe_compile_group_by(Mod, Q2, Q1) of
+                {error, _} = ER ->
+                    ER;
+                {ok, Q3} ->
+                    case compile_order_by(Q3, InvDistFuns) of
+                        {error, _} = ER ->
+                            ER;
+                        {ok, Q4} ->
+                            compile_where_clause(DDL, Q4)
+                    end
+            end
     end.
 
-
--spec compile_order_by({ok, ?SQL_SELECT{}} | {error, any()}) ->
+-spec compile_order_by(?SQL_SELECT{}, list()) ->
                               {ok, ?SQL_SELECT{}} | {error, any()}.
-compile_order_by({error,_} = E) ->
-    E;
-compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = OrderBy,
-                                  'OFFSET'   = Offset,
-                                  'LIMIT'    = Limit,
-                                  'SELECT' = #riak_sel_clause_v1{calc_type = CalcType}}})
-  when (length(OrderBy) > 0 orelse
-        length(Limit)   > 0 orelse
-        length(Offset)  > 0) andalso CalcType /= rows ->
+compile_order_by(?SQL_SELECT{'ORDER BY' = OrderBy,
+                             'OFFSET'   = Offset,
+                             'LIMIT'    = Limit,
+                             'SELECT' = #riak_sel_clause_v1{calc_type = CalcType}},
+                 _InvDistFuns)
+  when (length(Limit) > 0 orelse
+        length(Offset) > 0 orelse
+        length(OrderBy) > 0) andalso CalcType /= rows ->
     {error, {order_by_with_aggregate_calc_type, ?E_ORDER_BY_WITH_AGGREGATE_CALC_TYPE}};
-compile_order_by({ok, ?SQL_SELECT{'ORDER BY' = OrderBy} = Q}) ->
+
+%% inverdist functions of arg x will simulate 'ORDER BY' = [{x, asc,
+%% nulls_last}], 'LIMIT' = [1], 'OFFSET' = [FunctionOfSelectionRows].
+%% They are 'compiled' and handled here for this reason.
+compile_order_by(?SQL_SELECT{'ORDER BY' = OrderBy,
+                             'OFFSET'   = Offset,
+                             'LIMIT'    = Limit},
+                 InvDistFuns)
+  when (length(Limit) > 0 orelse
+        length(Offset) > 0 orelse
+        length(OrderBy) > 0) andalso
+       length(InvDistFuns) > 0 ->
+    {error, {inverdist_function_with_orderby,
+             ?E_CANNOT_HAVE_ORDERBY_WITH_INVERSE_DIST_FUNCTION}};
+
+compile_order_by(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = CalcType}},
+                 InvDistFuns)
+  when CalcType /= rows,
+       length(InvDistFuns) > 0 ->
+    {error, {inverdist_function_with_groupby_or_aggregate_function,
+             ?E_CANNOT_HAVE_GROUPING_OR_AGGREGATION_WITH_INVERSE_DIST_FUNCTION}};
+
+compile_order_by(?SQL_SELECT{'SELECT' = Select} = Q,
+                 InvDistFuns)
+  when InvDistFuns /= [] ->
+    %% Offset is now a computable thing
+    case compile_inverdist_funcalls_to_orderby(InvDistFuns) of
+        {CompiledSpecs, []} ->
+            {CompiledOrderBys,
+             CompiledLimits,
+             CompiledOffsets} = lists:unzip3(CompiledSpecs),
+            case check_invdist_funs_consistent_with_select(
+                   CompiledOrderBys, Select) of
+                ok ->
+                    %% Select has one compiled column per PERCENTILE call, but
+                    %% only one makes sense
+                    {SubstituteColName, _, _} = hd(CompiledOrderBys),
+                    SingleColumnSelect = make_single_column_select(Select, SubstituteColName),
+                    {ok, Q?SQL_SELECT{'SELECT'   = SingleColumnSelect,
+                                      'ORDER BY' = CompiledOrderBys,
+                                      'OFFSET'   = CompiledOffsets,
+                                      'LIMIT'    = CompiledLimits}};
+                ER ->
+                    ER
+            end;
+        {_, BadFunCalls} ->
+            %% there can be multiple errors to report, but we can only
+            %% report one, so:
+            {error, hd(BadFunCalls)}
+    end;
+
+%% this is the real ORDER BY (no InvDistFuns)
+compile_order_by(?SQL_SELECT{'ORDER BY' = OrderBy} = Q,
+                 _InvDistFuns = []) ->
     case non_unique_identifiers(OrderBy) of
         [] ->
-            {ok, Q?SQL_SELECT{'ORDER BY' = OrderBy}};
+            {ok, Q};
         WhichNonUnique ->
-            {error, {non_unique_orderby_fields, ?E_NON_UNIQUE_ORDERBY_FIELDS(hd(WhichNonUnique))}}
+            {error, {non_unique_orderby_fields,
+                     ?E_NON_UNIQUE_ORDERBY_FIELDS(hd(WhichNonUnique))}}
     end.
+
+
+check_invdist_funs_consistent_with_select(CompiledOrderBys,
+                                          #riak_sel_clause_v1{col_names = ColNames}) ->
+    lists:foldl(
+      fun(F, ok) -> F(); (_F, Error) -> Error end,
+      ok,
+      [fun() ->
+               %% we allow multiple PERCENTILE calls in a single SELECT,
+               %% but they all must have the same column argument
+               case lists:usort(CompiledOrderBys) of
+                   [_SameColumndOrderBy] ->
+                       ok;
+                   _Multiple ->
+                       {error, {multiple_invdist_funs_with_different_column_args,
+                                ?E_INVERSE_DIST_FUN_MULTIPLE_COLUMN_ARG}}
+               end
+       end,
+       fun() ->
+               %% only inverse distrib functions please
+               case length(CompiledOrderBys) == length(ColNames) of
+                   true ->
+                       ok;
+                   false ->
+                       {error, {plain_column_with_invdist_function,
+                                ?E_INVERSE_DIST_FUN_WITH_OTHER_COLUMN}}
+               end
+       end]).
 
 non_unique_identifiers(FF) ->
     Occurrences = [{F, occurs(F, FF)} || {F, _, _} <- FF],
@@ -111,10 +204,52 @@ occurs(F, FF) ->
       end,
       0, FF).
 
+-spec compile_inverdist_funcalls_to_orderby(
+        [{ok, {atom(), [{FName::riak_ql_ddl:external_field_type(),
+                         ThisColumn::binary(),
+                         Args::riak_pb_ts_codec:ldbvalue()}]}} |
+         {error, tuple()}]) -> {[
+                                 {CompiledOrderBy::sorter(),
+                                  %% invdist functions returns one row
+                                  CompiledLimit::1,
+                                  CompiledOffset::function()}
+                                ],
+                                [tuple()]}.
+%% convert successfully validated invdist funcalls (a list of them,
+%% to allow for percentile(x, 0.42), percentile(y, 0.24)) into a list
+%% of ORDER BYs, LIMITs and OFFSETs; or report validation errors if any.
+compile_inverdist_funcalls_to_orderby(InvDistFuns) ->
+    lists:foldl(
+      fun({ok, FC}, {AccSpecs, AccErrors}) ->
+              CompiledSpec = compile_invdist_funcall(FC),
+              {AccSpecs ++ [ CompiledSpec], AccErrors};
+         ({error, Reason}, {AccSpecs, AccErrors}) ->
+              {AccSpecs, AccErrors ++ [Reason]}
+      end,
+      {[], []},
+      InvDistFuns).
+
+compile_invdist_funcall({FnName, ThisColumn, Args}) ->
+    {_OrderBy = {ThisColumn, asc, nulls_last},
+     _Limit   = 1,
+     _Offset  = fun(TotalRows) ->
+                        erlang:apply(riak_ql_inverse_distrib_fns,
+                                     FnName,
+                                     [TotalRows | Args])
+                end}.
+
+make_single_column_select(#riak_sel_clause_v1{col_return_types = [ColReturnType1|_],
+                                              clause           = [Clause1|_],
+                                              finalisers       = [Finaliser1|_]} = S,
+                         SubstituteColName) ->
+    S#riak_sel_clause_v1{col_return_types = [ColReturnType1],
+                         col_names        = [SubstituteColName],  %% needs to match real column
+                         clause           = [Clause1],
+                         finalisers       = [Finaliser1]}.
+
+
 %%
-maybe_compile_group_by(_, {error,_} = E, _) ->
-    E;
-maybe_compile_group_by(Mod, {ok, Sel3}, ?SQL_SELECT{ group_by = GroupBy } = Q1) ->
+maybe_compile_group_by(Mod, Sel3, ?SQL_SELECT{ group_by = GroupBy } = Q1) ->
     compile_group_by(Mod, GroupBy, [], Q1?SQL_SELECT{ 'SELECT' = Sel3 }).
 
 %%
@@ -122,8 +257,12 @@ compile_group_by(_, [], Acc, Q) ->
     {ok, Q?SQL_SELECT{ group_by = lists:reverse(Acc) }};
 compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
         when is_binary(FieldName) ->
-    Pos = Mod:get_field_position([FieldName]),
-    compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q).
+    case Mod:get_field_position([FieldName]) of
+        undefined ->
+            {error, {unknown_column, FieldName}};
+        Pos ->
+            compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q)
+    end.
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -243,46 +382,47 @@ my_mapfoldl(F, Accu, []) when is_function(F, 2) -> {[],Accu}.
 
 %%
 compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = Sel } } = Q) ->
-    CompileColFn =
-        fun(ColX, AccX) ->
-            select_column_clause_folder(DDL, ColX, AccX)
-        end,
-    %% compile each select column and put all the calc types into a set, if
-    %% any of the results are aggregate then aggregate is the calc type for the
-    %% whole query
-    Acc = {sets:new(), #riak_sel_clause_v1{ }},
-    %% iterate from the right so we can append to the head of lists
-    {ResultTypeSet, Sel1} = lists:foldl(CompileColFn, Acc, Sel),
-
     {ColTypes, Errors} = my_mapfoldl(
         fun(ColASTX, Errors) ->
             infer_col_type(DDL, ColASTX, Errors)
         end, [], Sel),
 
-    IsGroupBy = (Q?SQL_SELECT.group_by /= []),
-    IsAggregate = sets:is_element(aggregate, ResultTypeSet),
-    if
-        IsGroupBy ->
-            Sel2 = Sel1#riak_sel_clause_v1{
-                   calc_type = group_by,
-                   col_names = get_col_names(DDL, Q) };
-        IsAggregate ->
-            Sel2 = Sel1#riak_sel_clause_v1{
-                   calc_type = aggregate,
-                   col_names = get_col_names(DDL, Q) };
-        not IsAggregate ->
-            Sel2 = Sel1#riak_sel_clause_v1{
-                   calc_type = rows,
-                   initial_state = [],
-                   col_names = get_col_names(DDL, Q) }
-    end,
     case Errors of
-      [] ->
-          {ok, Sel2#riak_sel_clause_v1{
-              col_names = get_col_names(DDL, Q),
-              col_return_types = lists:flatten(ColTypes) }};
-      [_|_] ->
-          {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
+        [] ->
+            CompileColFn =
+                fun(ColX, AccX) ->
+                        select_column_clause_folder(DDL, ColX, AccX)
+                end,
+            %% compile each select column and put all the calc types into a set, if
+            %% any of the results are aggregate then aggregate is the calc type for the
+            %% whole query
+            Acc = {sets:new(), #riak_sel_clause_v1{ }, []},
+            %% iterate from the right so we can append to the head of lists
+            {ResultTypeSet, Sel1, InvDistFuns1} = lists:foldl(CompileColFn, Acc, Sel),
+
+            IsGroupBy = (Q?SQL_SELECT.group_by /= []),
+            IsAggregate = sets:is_element(aggregate, ResultTypeSet),
+            if
+                IsGroupBy ->
+                    Sel2 = Sel1#riak_sel_clause_v1{
+                             calc_type = group_by,
+                             col_names = get_col_names(DDL, Q) };
+                IsAggregate ->
+                    Sel2 = Sel1#riak_sel_clause_v1{
+                             calc_type = aggregate,
+                             col_names = get_col_names(DDL, Q) };
+                not IsAggregate ->
+                    Sel2 = Sel1#riak_sel_clause_v1{
+                             calc_type = rows,
+                             initial_state = [],
+                             col_names = get_col_names(DDL, Q) }
+            end,
+            {ok, Sel2#riak_sel_clause_v1{
+                   col_names = get_col_names(DDL, Q),
+                   col_return_types = lists:flatten(ColTypes) },
+             InvDistFuns1};
+        [_|_] ->
+            {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
     end.
 
 %%
@@ -307,15 +447,18 @@ get_col_names2(_, Name) ->
           col_return_types :: [riak_pb_ts_codec:ldbvalue()],
           col_name         :: riak_pb_ts_codec:tscolumnname(),
           clause           :: function(),
-          finaliser        :: [function()]
+          finaliser        :: [function()],
+          inverdist_fn     :: [{ok, inverse_distrib_fun_spec()} |
+                                {error, {DescriptiveAtom::atom(), DisplayString::binary()}}]
          }).
 
 %%
 -spec select_column_clause_folder(?DDL{}, riak_ql_ddl:selection(),
-                                  {set(), #riak_sel_clause_v1{}}) ->
-                {set(), #riak_sel_clause_v1{}}.
+                                  {set(), #riak_sel_clause_v1{}, list()}) ->
+                {set(), #riak_sel_clause_v1{}, list()}.
 select_column_clause_folder(DDL, ColAST1,
-                            {TypeSet1, #riak_sel_clause_v1{ finalisers = Finalisers } = SelClause}) ->
+                            {TypeSet1, #riak_sel_clause_v1{ finalisers = Finalisers } = SelClause,
+                             InvDistFuns1}) ->
     %% extract the stateful functions then treat them as separate select columns
     LenFinalisers = length(Finalisers),
     case extract_stateful_functions(ColAST1, LenFinalisers) of
@@ -337,13 +480,14 @@ select_column_clause_folder(DDL, ColAST1,
         fun(E, Acc) ->
             select_column_clause_exploded_folder(DDL, E, Acc)
         end,
-    lists:foldl(FolderFn, {TypeSet1, SelClause}, ColAstList).
+    lists:foldl(FolderFn, {TypeSet1, SelClause, InvDistFuns1}, ColAstList).
 
 
 %% When the select column is "exploded" it means that multiple functions that
 %% collect state have been extracted and given their own temporary columns
 %% which will be merged by the finalisers.
-select_column_clause_exploded_folder(DDL, {ColAst, Finaliser}, {TypeSet1, SelClause1}) ->
+select_column_clause_exploded_folder(DDL, {ColAst, Finaliser},
+                                     {TypeSet1, SelClause1, InvDistFnCalls1}) ->
     #riak_sel_clause_v1{
        initial_state = InitX,
        clause = RunFnX,
@@ -359,7 +503,8 @@ select_column_clause_exploded_folder(DDL, {ColAst, Finaliser}, {TypeSet1, SelCla
                     initial_state    = Init2,
                     clause           = RunFn2,
                     finalisers       = lists:flatten(Finalisers2)},
-    {TypeSet2, SelClause2}.
+    InvDistFnCalls2 = InvDistFnCalls1 ++ S#single_sel_column.inverdist_fn,
+    {TypeSet2, SelClause2, InvDistFnCalls2}.
 
 %% Compile a single selection column into a fun that can extract the cell
 %% from the row.
@@ -372,6 +517,7 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) when is_atom(FnName
             Fn = compile_select_col_stateless(DDL, FnArg1),
             #single_sel_column{ calc_type        = rows,
                                 initial_state    = undefined,
+                                inverdist_fn     = [],
                                 clause           = Fn };
         Initial_state ->
             Compiled_arg1 = compile_select_col_stateless(DDL, FnArg1),
@@ -384,12 +530,122 @@ compile_select_col(DDL, {{window_agg_fn, FnName}, [FnArg1]}) when is_atom(FnName
                 end,
             #single_sel_column{ calc_type        = aggregate,
                                 initial_state    = Initial_state,
+                                inverdist_fn     = [],
                                 clause           = SelectFn }
     end;
+compile_select_col(DDL, {{inverse_distrib_fn, FnName}, FnArgs}) when is_atom(FnName) ->
+    %% 1. Convert to plain 'rows' result type, for qry_worker to
+    %%    prepare selection as usual, substituting PERCENTILE(x, 0.75) with x;
+    %%
+    %% 2. Make a function to determine the row position, given the
+    %%    total number of rows (N) in selection (thus N*0.75), for
+    %%    qry_buffers to emulate OFFSET P LIMIT 1.
+    %%
+    %%    This function is not a running aggregator function as those
+    %%    of the window_agg_fn kind.  It will be invoked at a later
+    %%    stage, at the coordinator, once, to produce a virtual OFFSET.
+    %%
+    MaybeInvdistSpec =
+        prepare_invdist_funcall(FnName, FnArgs),
+    ReplacedColumn = hd(FnArgs),
+    #single_sel_column{ calc_type = rows,
+                        initial_state = undefined,
+                        %% thread result up to compile_order_by, where
+                        %% errors are reported properly and the actual
+                        %% functions are constructed
+                        inverdist_fn = [MaybeInvdistSpec],
+                        clause = compile_select_col_stateless(DDL, ReplacedColumn) };
 compile_select_col(DDL, Select) ->
     #single_sel_column{ calc_type = rows,
                         initial_state = undefined,
+                        inverdist_fn = [],
                         clause = compile_select_col_stateless(DDL, Select) }.
+
+%% Given a SELECT column `PERCENTILE(x, 0.42)`, convert it to
+%% `{'PERCENTILE', <<"x">>, [0.42]}`, for it to be validated against
+%% possible other such columns and converted to the actual function in
+%% `compile_order_by`.
+prepare_invdist_funcall(FnName, [{identifier, [ColumnArg]}|_] = Args) ->
+    case validate_invdist_funcall(FnName, Args) of
+        {ok, OtherArgsBare} ->
+            {ok, {FnName, ColumnArg, OtherArgsBare}};
+        ER ->
+            ER
+    end;
+prepare_invdist_funcall(FnName, _Args) ->
+    {error, {missing_invdist_fn_column_arg,
+             ?E_INVERSE_DIST_FUN_MISSING_COLUMN_ARG(FnName)}}.
+
+validate_invdist_funcall(FnName, [{identifier, [_ColumnArg]}|Args]) ->
+    case evaluate_const_args(Args) of
+        {error, _} = ER ->
+            ER;
+        {ok, StaticArgs} ->
+            {_StaticArgTypes, StaticArgValues} = lists:unzip(StaticArgs),
+            case riak_ql_inverse_distrib_fns:fn_param_check(FnName, StaticArgValues) of
+                ok ->
+                    {ok, StaticArgValues};
+                {error, InvalidParamPos} ->
+                    {error, {invalid_static_invdist_fn_param,
+                             ?E_INVERSE_DIST_FUN_BAD_PARAMETER(FnName, InvalidParamPos)}}
+            end
+    end.
+
+evaluate_const_args(Args) ->
+    lists:foldl(
+      fun(_, {error, _} = ER) ->
+              ER;
+         (Expr, {ok, Acc}) ->
+              case evaluate_const_expr(Expr) of
+                  {ok, Val} ->
+                      {ok, Acc ++ [Val]};
+                  ER ->
+                      ER
+              end
+      end,
+      {ok, []},
+      Args).
+
+evaluate_const_expr({Type, _} = Arg)
+  when Type == varchar; Type == boolean; Type == binary; Type == integer; Type == float ->
+    {ok, Arg};
+evaluate_const_expr({negate, Expr}) ->
+    case evaluate_const_expr(Expr) of
+        {ok, {Type, Value}} ->
+            {ok, {Type, -Value}};
+        ER ->
+            ER
+    end;
+evaluate_const_expr({Op, Expr1, Expr2}) ->
+    case {evaluate_const_expr(Expr1),
+          evaluate_const_expr(Expr2)} of
+        {{ok, A1}, {ok, A2}} ->
+            apply_op(Op, A1, A2);
+        {{error, _} = ER, _} ->
+            ER;
+        {_, ER} ->
+            ER
+    end;
+evaluate_const_expr({identifier, _}) ->
+    {error, {nonconst_expr_in_invdist_fun_arglist,
+             ?E_INVERSE_DIST_FUN_NONCONST_ARG}}.
+
+apply_op(Op, {T1, E1}, {T2, E2})
+  when Op == '+'; Op == '-'; Op == '*'; Op == '/' ->
+    try
+        {ok, {infer_type(Op, T1, T2),
+              apply(erlang, Op, [E1, E2])}}
+    catch
+        error:badarith ->
+            {error, {invalid_expr_in_invdist_fun_arglist,
+                     ?E_INVERSE_DIST_FUN_INVAL_EXPR}}
+    end.
+
+infer_type('/', _, _) -> double;
+infer_type(_, T1, T2) -> numeric_promote(T1, T2).
+
+numeric_promote(sint64, sint64) -> sint64;
+numeric_promote(_, _) -> double.
 
 
 %% Returns a one arity fun which is stateless for example pulling a field from a
@@ -435,18 +691,38 @@ infer_col_type(_, {float, _}, Errors) ->
 infer_col_type(?DDL{ fields = Fields }, {identifier, ColName1}, Errors) ->
     case to_column_name_binary(ColName1) of
         <<"*">> ->
-            Type = [T || #riak_field_v1{ type = T } <- Fields];
+            Type = [T || #riak_field_v1{ type = T } <- Fields],
+            {Type, Errors};
         ColName2 ->
-            {_, Type} = col_index_and_type_of(Fields, ColName2)
-    end,
-    {Type, Errors};
-infer_col_type(DDL, {{window_agg_fn, FnName}, [FnArg1]}, Errors1) ->
-    case infer_col_type(DDL, FnArg1, Errors1) of
-        {error, _} = Error ->
-            Error;
-        {ArgType, Errors2} ->
-            infer_col_function_type(FnName, [ArgType], Errors2)
+            case col_index_and_type_of(Fields, ColName2) of
+                {error, {unknown_column, _} = ER} ->
+                    {error, [ER|Errors]};
+                {_, Type} ->
+                    {Type, Errors}
+            end
     end;
+infer_col_type(DDL, {{FnClass, FnName}, FnArgs}, Errors0)
+  when FnClass == window_agg_fn;
+       FnClass == inverse_distrib_fn ->
+    MaybeArgTypes =
+        lists:foldl(
+          fun(_, {error, _} = ER) -> ER;
+             (Arg, {AccTypes, Errors}) ->
+                  case infer_col_type(DDL, Arg, Errors) of
+                      {error, _} = ER ->
+                          ER;
+                      {Type, Errors2} ->
+                          {AccTypes ++ [Type], Errors2}
+                  end
+          end,
+          {[], Errors0}, FnArgs),
+    case MaybeArgTypes of
+        {error, _} = Errors ->
+            Errors;
+        {ArgTypes, Errors} ->
+            infer_col_function_type(FnClass, FnName, ArgTypes, Errors)
+    end;
+
 infer_col_type(DDL, {Op, A, B}, Errors1) when Op == '/'; Op == '+'; Op == '-'; Op == '*' ->
     {AType, Errors2} = infer_col_type(DDL, A, Errors1),
     {BType, Errors3} = infer_col_type(DDL, B, Errors2),
@@ -455,13 +731,19 @@ infer_col_type(DDL, {negate, AST}, Errors) ->
     infer_col_type(DDL, AST, Errors).
 
 %%
-infer_col_function_type(FnName, ArgTypes, Errors) ->
-    case riak_ql_window_agg_fns:fn_type_signature(FnName, ArgTypes) of
+infer_col_function_type(FnClass, FnName, ArgTypes, Errors) ->
+    Mod = fn_module(FnClass),
+    case Mod:fn_type_signature(FnName, ArgTypes) of
         {error, Reason} ->
             {error, [Reason | Errors]};
         ReturnType ->
             {ReturnType, Errors}
     end.
+
+%%
+fn_module(window_agg_fn)      -> riak_ql_window_agg_fns;
+fn_module(inverse_distrib_fn) -> riak_ql_inverse_distrib_fns.
+
 
 %%
 pull_from_row(N, Row) ->
@@ -490,6 +772,8 @@ extract_stateful_functions2({negate, Arg1}, FinaliserLen, Fns1) ->
 extract_stateful_functions2({Tag, _} = Node, _, Fns)
         when Tag == identifier; Tag == sint64; Tag == integer; Tag == float;
              Tag == binary;     Tag == varchar; Tag == boolean ->
+    {Node, Fns};
+extract_stateful_functions2({{inverse_distrib_fn, _FnName}, _} = Node, _, Fns) ->
     {Node, Fns};
 extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLen, Fns1) ->
     Fns2 = [Function | Fns1],
@@ -616,8 +900,7 @@ to_column_name_binary(Name) when is_binary(Name) ->
 col_index_and_type_of(Fields, ColumnName) ->
     case lists:keyfind(ColumnName, #riak_field_v1.name, Fields) of
         false ->
-            FieldNames = [X#riak_field_v1.name || X <- Fields],
-            error({unknown_column, {ColumnName, FieldNames}});
+            {error, {unknown_column, ColumnName}};
         #riak_field_v1{ position = Position, type = Type } ->
             {Position, Type}
     end.
@@ -2292,7 +2575,7 @@ basic_select_test() ->
         " WHERE myfamily = 'familyX'"
         " and myseries = 'seriesX' and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
-    {ok, Sel} = compile_select_clause(DDL, Rec),
+    {ok, Sel, []} = compile_select_clause(DDL, Rec),
     ?assertMatch(#riak_sel_clause_v1{calc_type        = rows,
                                      col_return_types = [
                                                          varchar
@@ -2307,7 +2590,7 @@ basic_select_wildcard_test() ->
     DDL = get_sel_ddl(),
     SQL = "SELECT * from mytab WHERE myfamily = 'familyX' and myseries = 'seriesX' and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
-    {ok, Sel} = compile_select_clause(DDL, Rec),
+    {ok, Sel, []} = compile_select_clause(DDL, Rec),
     ?assertMatch(#riak_sel_clause_v1{calc_type        = rows,
                                      col_return_types = [
                                                          varchar,
@@ -2332,7 +2615,7 @@ select_all_and_column_test() ->
     {ok, Rec} = get_query(
                   "SELECT *, location from mytab WHERE myfamily = 'familyX' "
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
-    {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Selection, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{
           calc_type = rows,
@@ -2349,7 +2632,7 @@ select_column_and_all_test() ->
     {ok, Rec} = get_query(
                   "SELECT location, * from mytab WHERE myfamily = 'familyX' "
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
-    {ok, Selection} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Selection, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{
           calc_type = rows,
@@ -2367,7 +2650,7 @@ basic_select_window_agg_fn_test() ->
         " from mytab WHERE myfamily = 'familyX'"
         " and myseries = 'seriesX' and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
-    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Sel, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(#riak_sel_clause_v1{calc_type        = aggregate,
                                      col_return_types = [
                                                          sint64,
@@ -2388,7 +2671,7 @@ basic_select_arith_1_test() ->
         " WHERE myfamily = 'familyX' and myseries = 'seriesX'"
         " and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
-    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Sel, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{
           calc_type        = rows,
@@ -2399,7 +2682,7 @@ basic_select_arith_1_test() ->
 
 varchar_literal_test() ->
     {ok, Rec} = get_query("SELECT 'hello' from mytab"),
-    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Sel, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{
           calc_type        = rows,
@@ -2410,7 +2693,7 @@ varchar_literal_test() ->
 
 boolean_true_literal_test() ->
     {ok, Rec} = get_query("SELECT true from mytab"),
-    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Sel, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{
           calc_type        = rows,
@@ -2421,7 +2704,7 @@ boolean_true_literal_test() ->
 
 boolean_false_literal_test() ->
     {ok, Rec} = get_query("SELECT false from mytab"),
-    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Sel, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{
           calc_type        = rows,
@@ -2436,7 +2719,7 @@ basic_select_arith_2_test() ->
         " WHERE myfamily = 'familyX' and myseries = 'seriesX'"
         " and time > 1 and time < 2",
     {ok, Rec} = get_query(SQL),
-    {ok, Sel} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Sel, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{
           calc_type = rows,
@@ -2449,7 +2732,7 @@ rows_initial_state_test() ->
     {ok, Rec} = get_query(
                   "SELECT * FROM mytab WHERE myfamily = 'familyX' "
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{ initial_state = [] },
        Select
@@ -2459,7 +2742,7 @@ function_1_initial_state_test() ->
     {ok, Rec} = get_query(
                   "SELECT SUM(mydouble) FROM mytab WHERE myfamily = 'familyX' "
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{ initial_state = [[]] },
        Select
@@ -2469,7 +2752,7 @@ function_2_initial_state_test() ->
     {ok, Rec} = get_query(
                   "SELECT SUM(mydouble), SUM(mydouble) FROM mytab WHERE myfamily = 'familyX' "
                   "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
        #riak_sel_clause_v1{ initial_state = [[], []] },
        Select
@@ -2481,7 +2764,7 @@ select_negation_test() ->
         "WHERE myfamily = 'familyX' AND myseries = 'seriesX' "
         "AND time > 1 AND time < 2",
     {ok, Rec} = get_query(SQL),
-    {ok, Sel} = compile_select_clause(DDL, Rec),
+    {ok, Sel, []} = compile_select_clause(DDL, Rec),
     ?assertMatch(#riak_sel_clause_v1{calc_type        = rows,
                                      col_return_types = [
                                                          sint64,
@@ -2509,7 +2792,7 @@ select_negation_test() ->
 sum_sum_finalise_test() ->
     {ok, Rec} = get_query(
         "SELECT mydouble, SUM(mydouble), SUM(mydouble) FROM mytab"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertEqual(
         [1.0,3,7],
         finalise_aggregate(Select, [1.0, 3, 7])
@@ -2536,7 +2819,7 @@ count_plus_count_test() ->
         "SELECT COUNT(mydouble) + COUNT(mydouble) FROM mytab "
         "WHERE myfamily = 'familyX' "
         "AND myseries = 'seriesX' AND time > 1 AND time < 2"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
         #riak_sel_clause_v1{
             initial_state = [0,0],
@@ -2547,7 +2830,7 @@ count_plus_count_test() ->
 count_plus_count_finalise_test() ->
     {ok, Rec} = get_query(
         "SELECT COUNT(mydouble) + COUNT(mydouble) FROM mytab"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
         [6],
         finalise_aggregate(Select, [3,3])
@@ -2556,7 +2839,7 @@ count_plus_count_finalise_test() ->
 count_multiplied_by_count_finalise_test() ->
     {ok, Rec} = get_query(
         "SELECT COUNT(mydouble) * COUNT(mydouble) FROM mytab"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
         [9],
         finalise_aggregate(Select, [3,3])
@@ -2565,7 +2848,7 @@ count_multiplied_by_count_finalise_test() ->
 count_plus_seven_finalise_test() ->
     {ok, Rec} = get_query(
         "SELECT COUNT(mydouble) + 7 FROM mytab"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
         [10],
         finalise_aggregate(Select, [3])
@@ -2574,7 +2857,7 @@ count_plus_seven_finalise_test() ->
 count_plus_seven_sum__test() ->
     {ok, Rec} = get_query(
         "SELECT COUNT(mydouble) + 7, SUM(mydouble) FROM mytab"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
         #riak_sel_clause_v1{
             initial_state = [0,[]],
@@ -2585,7 +2868,7 @@ count_plus_seven_sum__test() ->
 count_plus_seven_sum_finalise_1_test() ->
     {ok, Rec} = get_query(
         "SELECT COUNT(mydouble) + 7, SUM(mydouble) FROM mytab"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
         [10, 11.0],
         finalise_aggregate(Select, [3, 11.0])
@@ -2594,7 +2877,7 @@ count_plus_seven_sum_finalise_1_test() ->
 count_plus_seven_sum_finalise_2_test() ->
     {ok, Rec} = get_query(
         "SELECT COUNT(mydouble+1) + 1 FROM mytab"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertEqual(
         [2],
         finalise_aggregate(Select, [1])
@@ -2603,7 +2886,7 @@ count_plus_seven_sum_finalise_2_test() ->
 avg_finalise_test() ->
     {ok, Rec} = get_query(
         "SELECT AVG(mydouble) FROM mytab"),
-    {ok, #riak_sel_clause_v1{ clause = [AvgFn] } = Select} =
+    {ok, #riak_sel_clause_v1{ clause = [AvgFn] } = Select, []} =
         compile_select_clause(get_sel_ddl(), Rec),
     InitialState = riak_ql_window_agg_fns:start_state('AVG'),
     Rows = [[x,x,x,x,N,x] || N <- lists:seq(1, 5)],
@@ -2926,8 +3209,8 @@ group_by_column_not_in_the_table_test() ->
     {ok, Q1} = get_query(
         "SELECT x FROM mytab "
         "WHERE a = 1 AND b = 2 GROUP BY x"),
-    ?assertError(
-        {unknown_column,{<<"x">>,[<<"a">>,<<"b">>]}},
+    ?assertEqual(
+        {error, {invalid_query, <<"Unknown column \"x\".">>}},
         compile(DDL, Q1)
     ).
 
@@ -2996,7 +3279,7 @@ order_by_with_aggregate_calc_type_test() ->
 negate_an_aggregation_function_test() ->
     {ok, Rec} = get_query(
         "SELECT -COUNT(*) FROM mytab"),
-    {ok, Select} = compile_select_clause(get_sel_ddl(), Rec),
+    {ok, Select, []} = compile_select_clause(get_sel_ddl(), Rec),
     ?assertMatch(
         [-3],
         finalise_aggregate(Select, [3])

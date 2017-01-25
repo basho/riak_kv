@@ -246,17 +246,17 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                     %% these fields are used to create a DDL for the query buffer table;
                     %% we extract them here to avoid doing another compilation of OrigQry
                     %% in riak_kv_qry_buffers:get_or_create_qbuf
-                    ?SQL_SELECT{'SELECT'   = CompiledSelect,
-                                'ORDER BY' = CompiledOrderBy,
+                    ?SQL_SELECT{'SELECT'   = Select,
+                                'ORDER BY' = OrderBy,
                                 'LIMIT'    = Limit,
-                                'OFFSET'   = Offset} = hd(SubQueries),
+                                'OFFSET'   = Offset} = CompiledQry = hd(SubQueries),
                     FullCycle =
                         fun(QBufRef) ->
                             maybe_await_query_results(
                               riak_kv_qry_queue:put_on_queue(self(), SubQueries, DDL, QBufRef))
                         end,
                     case maybe_create_query_buffer(
-                           SQL, length(SubQueries), CompiledSelect, CompiledOrderBy, []) of
+                           CompiledQry, length(SubQueries), Select, OrderBy, []) of
                         {error, Reason} ->
                             %% query buffers are non-optional for
                             %% ORDER BY queries
@@ -272,9 +272,7 @@ do_select(SQL, ?DDL{table = BucketType} = DDL) ->
                             %% query is eligible AND it is a follow-up
                             %% query: yay results!
                             try riak_kv_qry_buffers:fetch_limit(
-                                  QBufRef,
-                                  riak_kv_qry_buffers:limit_to_scalar(Limit),
-                                  riak_kv_qry_buffers:offset_to_scalar(Offset)) of
+                                  QBufRef, Limit, Offset) of
                                 Result ->
                                     Result
                             catch

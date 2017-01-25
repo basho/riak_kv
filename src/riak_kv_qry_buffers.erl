@@ -3,7 +3,7 @@
 %% riak_kv_qry_buffers: Riak SQL query result disk-based temp storage
 %%                     (aka 'query buffers')
 %%
-%% Copyright (C) 2016 Basho Technologies, Inc. All rights reserved
+%% Copyright (C) 2016, 2017 Basho Technologies, Inc. All rights reserved
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -61,10 +61,6 @@
          set_ready_waiting_process/2,  %% notify a process when all chunks are here
          kill_all_qbufs/0,
 
-         %% utility functions
-         limit_to_scalar/1,
-         offset_to_scalar/1,
-
          %% needed to survive reinit
          schedule_tick/0
         ]).
@@ -121,7 +117,7 @@ set_ready_waiting_process(QBufRef, SelfNotifierFun) ->
 kill_all_qbufs() ->
     gen_server:call(?SERVER, kill_all_qbufs).
 
--spec fetch_limit(qbuf_ref(), unlimited | pos_integer(), non_neg_integer()) ->
+-spec fetch_limit(qbuf_ref(), [riak_kv_qry_compiler:limit()], [riak_kv_qry_compiler:offset()]) ->
                     {ok, riak_kv_qry:query_tabular_result()} |
                     {error, bad_qbuf_ref|bad_sql|qbuf_not_ready}.
 %% @doc Emulate SELECT.
@@ -149,15 +145,6 @@ get_max_query_data_size() ->
 %% @doc Get the max query buffer size
 set_max_query_data_size(Value) ->
     gen_server:call(?SERVER, {set_max_query_data_size, Value}).
-
-
-%% Utility functions that don't need or use the gen_server
-
-limit_to_scalar([]) -> unlimited;
-limit_to_scalar([A]) when is_integer(A) -> A.
-
-offset_to_scalar([]) -> 0;
-offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
 
 
 -record(qbuf, {
@@ -567,38 +554,85 @@ do_kill_all_qbufs(State0) ->
 
 
 do_fetch_limit(QBufRef,
-               Limit, Offset,
+               LimitSpec, OffsetSpec,
                #state{qbufs = QBufs0} = State0) ->
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
         #qbuf{all_chunks_received = false} ->
             {reply, {error, qbuf_not_ready}, State0};
-        #qbuf{inmem_buffer = InmemBuffer,
-              ldb_ref      = LdbRef,
-              orig_qry     = OrigQry,
-              ddl          = ?DDL{fields = QBufFields,
-                                  table = Table}} ->
-            AllDataInMem = (LdbRef == undefined),
+        #qbuf{inmem_buffer  = InmemBuffer,
+              total_records = TotalRecords,
+              ldb_ref       = LdbRef,
+              orig_qry      = OrigQry,
+              ddl           = ?DDL{fields = QBufFields,
+                                   table = Table}} ->
+            %% evaluate any functions to integers
+            {FetchFor, EffectiveOffsets} =
+                maybe_compute_offsets(OffsetSpec, TotalRecords),
+            EffectiveLimits =
+                maybe_supply_limits(LimitSpec),
+            %% fetch from inmem buffer or backend; possibly take
+            %% multiple passes to assemble values in a single row for
+            %% PERCENTILE(x, 0.2), PERCENTILE(x, 0.8)
             Rows =
-                case AllDataInMem of
-                    true ->
-                        case Limit of
-                            unlimited ->
-                                lists:nthtail(Offset, InmemBuffer);
-                            Limit ->
-                                lists:sublist(InmemBuffer, Offset + 1, Limit)
-                        end;
-                    false ->
-                        {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Offset, Limit),
-                        LdbRows
-                end,
+                fetch_rows_from_backend(
+                  FetchFor, {InmemBuffer, LdbRef}, lists:zip(EffectiveOffsets, EffectiveLimits)),
             lager:debug("fetched ~p rows from ~p for ~p", [length(Rows), Table, OrigQry]),
             ColNames = [Name || #riak_field_v1{name = Name} <- QBufFields],
             ColTypes = [Type || #riak_field_v1{type = Type} <- QBufFields],
             State9 = touch_qbuf(QBufRef, State0),
             {reply, {ok, {ColNames, ColTypes, Rows}}, State9}
     end.
+
+maybe_compute_offsets([], _TotalRecords) ->
+    {regular_select, [0]};
+maybe_compute_offsets([Offset], _TotalRecords) when is_integer(Offset) ->
+    {regular_select, [Offset]};
+maybe_compute_offsets(InvDistFuns, TotalRecords) ->
+    {simulated_for_invdist_function, [Fun(TotalRecords) || Fun <- InvDistFuns]}.
+
+maybe_supply_limits([]) -> [unlimited];
+maybe_supply_limits(List) when is_list(List) -> List.
+
+
+
+%% real ORDER BY: always a single-element list, yielding a set of rows
+%% straight from temp table
+%%
+fetch_rows_from_backend(regular_select, {InmemBuffer, undefined}, OffLimPairs) ->
+    [{Offset, Limit}] = OffLimPairs,
+    case Limit of
+        unlimited ->
+            lists:nthtail(Offset, InmemBuffer);
+        Limit ->
+            lists:sublist(InmemBuffer, Offset + 1, Limit)
+    end;
+fetch_rows_from_backend(regular_select, {_InmemBuffer, LdbRef}, OffLimPairs) ->
+    [{Offset, Limit}] = OffLimPairs,
+    {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Offset, Limit),
+    LdbRows;
+%%
+%% simulated ORDER BY: maybe multiple fetches, one for each
+%% PERCENTILE(x, Pc) in query, concatenated to yield a single row
+%%
+fetch_rows_from_backend(simulated_for_invdist_function, {Buffer, undefined}, OffLimPairs) ->
+    assemble_row_from_cells(
+      [lists:nth(Off, Buffer) || {Off, _Lim = 1} <- OffLimPairs]);
+fetch_rows_from_backend(simulated_for_invdist_function, {_Buffer, LdbRef}, OffLimPairs) ->
+    assemble_row_from_cells(
+      [begin
+           {ok, [Cell]} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Off - 1, Lim),
+           Cell
+       end || {Off, Lim} <- OffLimPairs]).
+
+assemble_row_from_cells(Cells) ->
+    [  %% result set of one row
+       %% consisting cells, each retrieved at a certain position, as computed
+       %%  per Pc in PERCENTILE(x, Pc), for each entry of PERCENTILE in the query
+       lists:append(
+         Cells)
+    ].
 
 do_get_qbuf_expiry(QBufRef, #state{qbufs = QBufs} = State) ->
     case get_qbuf_record(QBufRef, QBufs) of

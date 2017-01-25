@@ -510,9 +510,7 @@ prepare_final_results(#state{qbuf_ref = QBufRef,
                              qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows} = Select,
                                                'LIMIT'  = Limit,
                                                'OFFSET' = Offset}} = State) ->
-    try riak_kv_qry_buffers:fetch_limit(QBufRef,
-                                        riak_kv_qry_buffers:limit_to_scalar(Limit),
-                                        riak_kv_qry_buffers:offset_to_scalar(Offset)) of
+    try riak_kv_qry_buffers:fetch_limit(QBufRef, Limit, Offset) of
         {ok, {_ColNames, _ColTypes, FetchedRows}} ->
             prepare_final_results2(Select, FetchedRows);
         {error, qbuf_not_ready} ->

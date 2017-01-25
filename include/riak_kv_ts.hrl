@@ -2,7 +2,7 @@
 %%
 %% riak_kv_ts: defines records used in the data description language
 %%
-%% Copyright (c) 2016 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2016-2017 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file

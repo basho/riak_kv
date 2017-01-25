@@ -108,3 +108,45 @@
      "Where clause when a range is not specified, but more than one was ",
      "specified.">>
 ).
+
+-define(
+   E_CANNOT_HAVE_ORDERBY_WITH_INVERSE_DIST_FUNCTION,
+   <<"Inverse distribution functions cannot be used with any of ORDER BY, LIMIT or OFFSET clauses.">>
+).
+-define(
+   E_CANNOT_HAVE_GROUPING_OR_AGGREGATION_WITH_INVERSE_DIST_FUNCTION,
+   <<"Inverse distribution functions cannot be used with GROUP BY clause or aggregating window functions.">>
+).
+-define(
+   E_INVERSE_DIST_FUN_MISSING_COLUMN_ARG(FName),
+   iolist_to_binary(
+     ["Inverse distribution function ", atom_to_list(FName), " missing column argument."])
+).
+-define(
+   E_INVERSE_DIST_FUN_INVAL_COLUMN_ARG(FName, Column),
+   iolist_to_binary(
+     ["Invalid column argument (", Column, ") in call to inverse distribution function ", atom_to_list(FName), "."])
+).
+-define(
+   E_INVERSE_DIST_FUN_MULTIPLE_COLUMN_ARG,
+   <<"Multiple inverse distribution functions must all have the same column argument.">>
+).
+-define(
+   E_INVERSE_DIST_FUN_WITH_OTHER_COLUMN,
+   <<"Inverse distribution functions cannot be used with other columns in SELECT clause.">>
+).
+-define(
+   E_INVERSE_DIST_FUN_BAD_PARAMETER(FnName, Pos),
+   iolist_to_binary(
+     ["Invalid argument ", integer_to_list(Pos), " in call to function ", atom_to_list(FnName), "."])
+).
+-define(
+   E_INVERSE_DIST_FUN_NONCONST_ARG,
+   iolist_to_binary(
+     ["Non-const expression passed as parameter for inverse distribution function."])
+).
+-define(
+   E_INVERSE_DIST_FUN_INVAL_EXPR,
+   iolist_to_binary(
+     ["Invalid expression passed as parameter for inverse distribution function."])
+).
