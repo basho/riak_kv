@@ -66,6 +66,11 @@
          process/2,
          process_stream/3]).
 
+%% exports for create_table
+-export([make_table_create_fail_resp/2,
+         make_table_activate_error_timeout_resp/1,
+         make_table_created_missing_resp/1]).
+
 -type ts_requests() :: #tsputreq{} | #tsdelreq{} | #tsgetreq{} |
                        #tslistkeysreq{} | #tsqueryreq{}.
 -type ts_responses() :: #tsputresp{} | #tsdelresp{} | #tsgetresp{} |
@@ -256,88 +261,17 @@ decode_keys_for_streaming(Mod, [K1|Tail]) ->
 
 -spec create_table({?DDL{}, proplists:proplist()}, #state{}) ->
                           {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
-create_table({?DDL{table = Table} = DDL1, WithProps}, State) ->
-    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
-    DDL2 = convert_ddl_to_cluster_supported_version(DDLRecCap, DDL1),
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(
-                     DDL2, riak_ql_ddl_compiler:get_compiler_version(), WithProps),
+create_table({?DDL{} = DDL1, WithProps}, State) ->
+    case riak_kv_ts_api:create_table(?MODULE, DDL1, WithProps) of
+        ok -> {reply, tsqueryresp, State};
+        {error, Reason} -> {reply, Reason, State}
+    end.
 
-    ApplyProps =
-        fun(Props) ->
-                case riak_core_bucket_type:create(Table, Props) of
-                    ok ->
-                        wait_until_active(Table, State, ?TABLE_ACTIVATE_WAIT);
-                    {error, Reason} ->
-                        {reply, make_table_create_fail_resp(Table, Reason), State}
-                end
-        end,
-    apply_bucket_properties(Props1, Table, ApplyProps, State).
-
--spec alter_table(module(), ?DDL{}, {list(), list()}, #state{}) ->
-                         {reply, ts_query_responses() | #rpberrorresp{}, #state{}}.
 alter_table(_Mod, ?DDL{table=Table}, {_Changes, BucketProperties}, State) ->
-    ApplyProps =
-        fun(Props) ->
-                case riak_core_bucket_type:update(Table, Props) of
-                    ok ->
-                        {reply, tsqueryresp, State};
-                    {error, Reason} ->
-                        {reply, make_table_create_fail_resp(Table, Reason), State}
-                end
-        end,
-    apply_bucket_properties(BucketProperties, Table, ApplyProps, State).
-
-apply_bucket_properties(Properties, Table, Fun, State) ->
-    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Properties] of
-        {bad_linkfun_modfun, {M, F}} ->
-            {reply, make_table_create_fail_resp(
-                      Table, flat_format(
-                               "Invalid link mod or fun in bucket type properties: ~p:~p\n", [M, F])),
-             State};
-        {bad_linkfun_bkey, {B, K}} ->
-            {reply, make_table_create_fail_resp(
-                      Table, flat_format(
-                               "Malformed bucket/key for anon link fun in bucket type properties: ~p/~p\n", [B, K])),
-             State};
-        {bad_chash_keyfun, {M, F}} ->
-            {reply, make_table_create_fail_resp(
-                      Table, flat_format(
-                               "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F])),
-             State};
-        Props ->
-            Fun(Props)
+    case riak_kv_ts_api:alter_table(?MODULE, Table, BucketProperties) of
+        ok -> {reply, tsqueryresp, State};
+        {error, Reason} -> {reply, Reason, State}
     end.
-
-
-%%
-convert_ddl_to_cluster_supported_version(DDLRecCap, DDL) when is_atom(DDLRecCap) ->
-    DDLConversions = riak_ql_ddl:convert(DDLRecCap, DDL),
-    [LowestDDL|_] = lists:sort(fun ddl_comparator/2, DDLConversions),
-    LowestDDL.
-
-%%
-ddl_comparator(A, B) ->
-    riak_ql_ddl:is_version_greater(element(1,A), element(1,B)) == true.
-
-wait_until_active(Table, State, 0) ->
-    {reply, make_table_activate_error_timeout_resp(Table), State};
-wait_until_active(Table, State, Seconds) ->
-    case riak_core_bucket_type:activate(Table) of
-        ok ->
-            {reply, tsqueryresp, State};
-        {error, not_ready} ->
-            timer:sleep(1000),
-            lager:info("Waiting for table ~ts to be ready for activation", [Table]),
-            wait_until_active(Table, State, Seconds - 1);
-        {error, undefined} ->
-            %% this is inconceivable because create(Table) has
-            %% just succeeded, so it's here mostly to pacify
-            %% the dialyzer (and of course, for the odd chance
-            %% of Erlang imps crashing nodes between create
-            %% and activate calls)
-            {reply, make_table_created_missing_resp(Table), State}
-    end.
-
 
 %% ---------------------------------------------------
 %% functions called from check_table_and_call, one per ts* request
@@ -620,20 +554,20 @@ make_missing_helper_module_resp(Table, BucketProps)
 make_missing_type_resp(Table) ->
     make_rpberrresp(
       ?E_MISSING_TYPE,
-      flat_format("Time Series table ~s does not exist", [Table])).
+      flat_format("Time Series table ~ts does not exist", [Table])).
 
 %%
 -spec make_nonts_type_resp(Table::binary()) -> #rpberrorresp{}.
 make_nonts_type_resp(Table) ->
     make_rpberrresp(
       ?E_NOT_TS_TYPE,
-      flat_format("Attempt Time Series operation on non Time Series table ~s", [Table])).
+      flat_format("Attempt Time Series operation on non Time Series table ~ts", [Table])).
 
 -spec make_missing_table_module_resp(Table::binary()) -> #rpberrorresp{}.
 make_missing_table_module_resp(Table) ->
     make_rpberrresp(
       ?E_MISSING_TS_MODULE,
-      flat_format("The compiled module for Time Series table ~s cannot be loaded", [Table])).
+      flat_format("The compiled module for Time Series table ~ts cannot be loaded", [Table])).
 
 -spec make_key_element_count_mismatch_resp(Got::integer(), Need::integer()) -> #rpberrorresp{}.
 make_key_element_count_mismatch_resp(Got, Need) ->
@@ -712,7 +646,7 @@ make_failed_listkeys_resp(Reason) ->
 
 make_table_create_fail_resp(Table, Reason) ->
     make_rpberrresp(
-      ?E_CREATE, flat_format("Failed to create table ~s: ~p", [Table, Reason])).
+      ?E_CREATE, flat_format("Failed to create table ~ts: ~p", [Table, Reason])).
 
 make_table_activate_error_timeout_resp(Table) ->
     make_rpberrresp(
@@ -727,7 +661,7 @@ make_table_not_activated_resp(Table) ->
 make_table_created_missing_resp(Table) ->
     make_rpberrresp(
       ?E_CREATED_GHOST,
-      flat_format("Table ~s has been created but found missing", [Table])).
+      flat_format("Table ~ts has been created but found missing", [Table])).
 
 to_string(X) when is_atom(X) ->
     atom_to_list(X);
@@ -799,23 +733,6 @@ missing_helper_module_test() ->
     ?assertMatch(
         #rpberrorresp{errcode = ?E_MISSING_TS_MODULE },
         make_missing_helper_module_resp(<<"mytype">>, [{ddl, ?DDL{}}])
-    ).
-
-convert_ddl_to_cluster_supported_version_v1_test() ->
-    ?assertMatch(
-        #ddl_v1{},
-        convert_ddl_to_cluster_supported_version(
-          v1, #ddl_v2{local_key = ?DDL_KEY{ast = []}, partition_key = ?DDL_KEY{ast = []}, fields=[#riak_field_v1{type=varchar}]})
-    ).
-
-convert_ddl_to_cluster_supported_version_v2_test() ->
-    DDLV2 = #ddl_v2{
-        local_key = ?DDL_KEY{ast = []},
-        partition_key = ?DDL_KEY{ast = []},
-        fields=[#riak_field_v1{type=varchar}]},
-    ?assertMatch(
-        DDLV2,
-        convert_ddl_to_cluster_supported_version(v2, DDLV2)
     ).
 
 get_create_table_sql(TableName) when is_binary(TableName) ->
