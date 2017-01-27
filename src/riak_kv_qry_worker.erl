@@ -283,7 +283,7 @@ estimate_query_size(#state{total_query_data  = TotalQueryData,
 
     case IsLimitTooBig and IsWhereTooBig of
         true ->
-            lager:info("Cancelling query with projected LIMIT (~b) or total (~b) result size exceeding limit (~b), subqueries ~b of ~b done, query ~p)",
+            lager:info("Cancelling query with both projected LIMIT (~b) and total (~b) result size exceeding limit (~b), subqueries ~b of ~b done, query ~p)",
                        [EstLimitData, EstTotalData, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
             cancel_error_query(select_result_too_big, State);
         false ->
