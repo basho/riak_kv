@@ -260,9 +260,33 @@ throttling_spawn_index_fsms(State) ->
 
 
 estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
-  when NSubqueriesDone < 2  ->
+  when NSubqueriesDone =< 2  ->
     State;
-
+estimate_query_size(#state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate}}} =
+                        State) ->
+    %% Aggregation alone does not increase the size of result (there
+    %% is only one row returned)
+    State;
+estimate_query_size(#state{n_subqueries_done = NSubqueriesDone,
+                           max_query_data    = MaxQueryData,
+                           sub_qrys          = SubQrys,
+                           result            = Result,
+                           qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = group_by}} =
+                               OrigQry} = State) ->
+    %% Grouping queries will grow its result set to the number of
+    %% unique values in the selection.  In the extreme case of
+    %% grouping by a column of all-unique values, its size will be the
+    %% size of the entire selection.
+    CurrentTotalSize = erlang:external_size(Result),
+    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
+    ProjectedGrandTotal = round(CurrentTotalSize + BytesPerChunk * length(SubQrys)),
+    if ProjectedGrandTotal > MaxQueryData ->
+            lager:info("Cancelling aggregating query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
+                       [ProjectedGrandTotal, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
+            cancel_error_query(select_result_too_big, State);
+       el/=se ->
+            State
+    end;
 estimate_query_size(#state{total_query_data  = TotalQueryData,
                            total_query_rows  = TotalQueryRows,
                            n_subqueries_done = NSubqueriesDone,
@@ -565,5 +589,50 @@ prepare_final_results_test() ->
                     },
                 result = [{1, Rows}]})
     ).
+
+estimate_query_size_limit_applies_to_aggregating_queries_test() ->
+    ErrorReceiverPid =
+        erlang:spawn(
+          fun() -> receive {error, select_result_too_big} -> ok end end),
+    BigData = [<<"BIGFATDATA">>],
+    State = #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = group_by}},
+                   result            = BigData,
+                   n_subqueries_done = 3,
+                   max_query_data    = erlang:external_size(BigData) - 1,
+                   qbuf_ref          = undefined,
+                   sub_qrys          = lists:seq(1, 100),
+                   receiver_pid      = ErrorReceiverPid},
+    ?assertEqual(estimate_query_size(State),
+                 new_state()),
+    check_error_receiver_self_destructs(ErrorReceiverPid, 50).
+
+estimate_query_size_limit_applies_to_regular_queries_test() ->
+    ErrorReceiverPid =
+        erlang:spawn(
+          fun() -> receive {error, select_result_too_big} -> ok end end),
+    State = #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows}},
+                   total_query_data  = 10,
+                   n_subqueries_done = 3,
+                   max_query_data    = 30,
+                   qbuf_ref          = undefined,
+                   sub_qrys          = lists:seq(1, 100),
+                   receiver_pid      = ErrorReceiverPid},
+    %% 10 bytes accumulated over 3 subqueries, with 100 more to go,
+    %% surely that will exceed the limit of 30
+    ?assertEqual(estimate_query_size(State),
+                 new_state()),
+    %% is 5 sec enough for a term sent by us to be received by us?
+    check_error_receiver_self_destructs(ErrorReceiverPid, 50).
+
+check_error_receiver_self_destructs(_Pid, 0) ->
+    didnt_receive_error_message;
+check_error_receiver_self_destructs(Pid, N) ->
+    case is_process_alive(Pid) of
+        false ->
+            ok;
+        true ->
+            timer:sleep(100),
+            check_error_receiver_self_destructs(Pid, N-1)
+    end.
 
 -endif.
