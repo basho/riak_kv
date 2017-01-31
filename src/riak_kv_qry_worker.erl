@@ -279,7 +279,7 @@ estimate_query_size(#state{n_subqueries_done = NSubqueriesDone,
     %% size of the entire selection.
     CurrentTotalSize = erlang:external_size(Result),
     BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
-    ProjectedGrandTotal = round(CurrentTotalSize + BytesPerChunk * length(SubQrys)),
+    ProjectedGrandTotal = round(CurrentTotalSize + (BytesPerChunk * length(SubQrys))),
     if ProjectedGrandTotal > MaxQueryData ->
             lager:info("Cancelling aggregating query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
                        [ProjectedGrandTotal, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
@@ -615,21 +615,12 @@ check_states(State) ->
 check_states2(State, passing) ->
     ?assertEqual(estimate_query_size(State), State);
 check_states2(State, cancelled) ->
-    ErrorReceiverPid =
-        erlang:spawn(
-          fun() -> receive {error, select_result_too_big} -> ok end end),
-    ?assertEqual(estimate_query_size(State#state{receiver_pid = ErrorReceiverPid}), new_state()),
-    ok = check_error_receiver_self_destructs(ErrorReceiverPid, 50).
-
-check_error_receiver_self_destructs(_Pid, 0) ->
-    didnt_receive_error_message;
-check_error_receiver_self_destructs(Pid, N) ->
-    case is_process_alive(Pid) of
-        false ->
-            ok;
-        true ->
-            timer:sleep(100),
-            check_error_receiver_self_destructs(Pid, N-1)
+    ?assertEqual(estimate_query_size(State#state{receiver_pid = self()}), new_state()),
+    receive
+        {error, select_result_too_big} ->
+            ok
+    after 1000 ->
+            didnt_receive_select_result_too_big_error
     end.
 
 -endif.
