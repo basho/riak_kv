@@ -591,38 +591,35 @@ prepare_final_results_test() ->
     ).
 
 estimate_query_size_limit_applies_to_aggregating_queries_test() ->
-    ErrorReceiverPid =
-        erlang:spawn(
-          fun() -> receive {error, select_result_too_big} -> ok end end),
     BigData = [<<"BIGFATDATA">>],
-    State = #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = group_by}},
-                   result            = BigData,
-                   n_subqueries_done = 3,
-                   max_query_data    = erlang:external_size(BigData) - 1,
-                   qbuf_ref          = undefined,
-                   sub_qrys          = lists:seq(1, 100),
-                   receiver_pid      = ErrorReceiverPid},
-    ?assertEqual(estimate_query_size(State),
-                 new_state()),
-    check_error_receiver_self_destructs(ErrorReceiverPid, 50).
+    check_states(
+      #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = group_by}},
+             result            = BigData,
+             max_query_data    = erlang:external_size(BigData) - 1,
+             sub_qrys          = lists:seq(1, 100)}).
 
 estimate_query_size_limit_applies_to_regular_queries_test() ->
+    check_states(
+      #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows}},
+             total_query_data  = 10,
+             max_query_data    = 30,
+             sub_qrys          = lists:seq(1, 100)}).
+
+check_states(State) ->
+    lists:foreach(
+      fun({StateN, Outcome}) -> ok = check_states2(StateN, Outcome) end,
+      [{State#state{n_subqueries_done = 1}, passing},
+       {State#state{n_subqueries_done = 2}, cancelled},
+       {State#state{n_subqueries_done = 3}, cancelled}]).
+
+check_states2(State, passing) ->
+    ?assertEqual(estimate_query_size(State), State);
+check_states2(State, cancelled) ->
     ErrorReceiverPid =
         erlang:spawn(
           fun() -> receive {error, select_result_too_big} -> ok end end),
-    State = #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows}},
-                   total_query_data  = 10,
-                   n_subqueries_done = 3,
-                   max_query_data    = 30,
-                   qbuf_ref          = undefined,
-                   sub_qrys          = lists:seq(1, 100),
-                   receiver_pid      = ErrorReceiverPid},
-    %% 10 bytes accumulated over 3 subqueries, with 100 more to go,
-    %% surely that will exceed the limit of 30
-    ?assertEqual(estimate_query_size(State),
-                 new_state()),
-    %% is 5 sec enough for a term sent by us to be received by us?
-    check_error_receiver_self_destructs(ErrorReceiverPid, 50).
+    ?assertEqual(estimate_query_size(State#state{receiver_pid = ErrorReceiverPid}), new_state()),
+    ok = check_error_receiver_self_destructs(ErrorReceiverPid, 50).
 
 check_error_receiver_self_destructs(_Pid, 0) ->
     didnt_receive_error_message;
