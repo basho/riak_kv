@@ -260,7 +260,12 @@ throttling_spawn_index_fsms(State) ->
 
 
 estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
-  when NSubqueriesDone < 2  ->
+  when NSubqueriesDone < 2 ->
+    %% If not enough chunks are received, defer checks
+    State;
+estimate_query_size(#state{sub_qrys = []} = State) ->
+    %% If all chunks are here (no more left in sub_qrys), consider it
+    %% is safe to proceed.
     State;
 estimate_query_size(#state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate}}} =
                         State) ->
