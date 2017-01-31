@@ -260,7 +260,7 @@ throttling_spawn_index_fsms(State) ->
 
 
 estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
-  when NSubqueriesDone =< 2  ->
+  when NSubqueriesDone < 2  ->
     State;
 estimate_query_size(#state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate}}} =
                         State) ->
