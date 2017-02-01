@@ -380,7 +380,6 @@ allowable_origin(OriginTuple, RefererTuple) ->
         _ -> true
     end.
 
-normalize_referer({"*"}) -> {"*"};
 normalize_referer("*") -> {"*"};
 normalize_referer(BaseUrl) when is_list(BaseUrl) ->
     [Scheme, Host|_T] = string:tokens(BaseUrl, "://"),

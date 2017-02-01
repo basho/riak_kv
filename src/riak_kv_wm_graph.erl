@@ -32,6 +32,11 @@
 
 -export([to_json/2]).
 
+%% error response formatting functions for riak_kv_ts_api:create_table/3
+-export([make_table_create_fail_resp/2,
+         make_table_activate_error_timeout_resp/1,
+         make_table_created_missing_resp/1]).
+
 -include_lib("webmachine/include/webmachine.hrl").
 -include_lib("riak_ql/include/riak_ql_ddl.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -182,8 +187,7 @@ ts_get_time_field(Table, RD, Ctx) ->
                    IsInLocalKey =:= true
            end, Fields) of
         [] -> undefined;
-        [[TimeField|_TFields]|_T] -> binary_to_list(TimeField);
-        [TimeField|_T] -> binary_to_list(TimeField)
+        [[TimeField|_TFields]|_T] -> binary_to_list(TimeField)
     end.
 
 show_table_fields(Table, RD, Ctx) ->
@@ -267,7 +271,7 @@ is_in_key(Column, ?DDL_KEY{ast=[
 
 ts_query(Query, RD, Ctx) ->
     try
-       Res = [{table, _Table},
+       [{table, _Table},
          {mod, Mod},
          {ddl, DDL},
          {sql, SQL},
@@ -277,11 +281,10 @@ ts_query(Query, RD, Ctx) ->
             {_Mod, _DDL, _WithProps, {riak_sql_show_tables_v1, <<>>}} ->
                 riak_kv_qry:submit(SQL, DDL);
             {undefined, ?DDL{} = DDL, WithProps, _SQL} ->
-                {reply, tsqueryresp ,{state}} =
-                    riak_kv_ts_svc:process({DDL, WithProps}, {state}),
-                    result_set_empty();
+                ok = riak_kv_ts_api:create_table(?MODULE, DDL, WithProps),
+                result_set_empty();
             {undefined, undefined, _WithProps, _SQL} ->
-                {ok, {[], [], []}};
+                result_set_empty();
             _ ->
                 riak_kv_qry:submit(SQL, DDL)
         end
@@ -352,6 +355,19 @@ lex_parse(Query) ->
 
 result_set_empty() ->
     {ok, {[], [], []}}.
+
+%% error response formatting functions for riak_kv_ts_api:create_table/3
+flat_format(Format, Args) ->
+    lists:flatten(io_lib:format(Format, Args)).
+
+make_table_create_fail_resp(Table, Reason) ->
+    flat_format("Failed to create table ~ts: ~p", [Table, Reason]).
+
+make_table_activate_error_timeout_resp(Table) ->
+    flat_format("Timed out while attempting to activate table ~ts", [Table]).
+
+make_table_created_missing_resp(Table) ->
+    flat_format("Table ~ts has been created but found missing", [Table]).
 
 -ifdef(TEST).
 create_test_table(FuT, Condition) ->
@@ -448,14 +464,14 @@ ts_query_invalid_sql_test() ->
 ts_query_empty_select_test() ->
     ?assertEqual(result_set_empty(), ts_query("select * from t1 where ts = 1", {}, {})).
 ts_query_create_test() ->
-    meck:new(riak_kv_ts_svc),
-    meck:expect(riak_kv_ts_svc, process,
-                fun({_DDL, _WithProps}, {state}) ->
-                        {reply, tsqueryresp ,{state}}
+    meck:new(riak_kv_ts_api),
+    meck:expect(riak_kv_ts_api, create_table,
+                fun(_SvcMod, _DDL, _WithProps) ->
+                        ok
                 end),
     Res = ts_query("create table t1(ts timestamp not null," ++
                    "primary key((ts),ts))", {}, {}),
-    meck:unload(riak_kv_ts_svc),
+    meck:unload(riak_kv_ts_api),
     ?assertEqual(result_set_empty(), Res).
 ts_query_non_empty_select_test() ->
     {Table, _Mod} = create_test_table("ts_query", "non_empty_select"),
