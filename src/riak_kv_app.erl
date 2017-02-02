@@ -249,7 +249,8 @@ start(_Type, _StartArgs) ->
             ok = riak_api_pb_service:register(?SERVICES),
 
             %% register allowable origins (CORS)
-            AllowableOrigins = app_helper:get_env(riak_kv, allowable_origins, []),
+            AllowableOrigins = tuple_to_list(
+                                 app_helper:get_env(riak_kv, allowable_origin, {})),
             riak_kv_wm_utils:register_allowable_origins(AllowableOrigins),
 
             %% Add routes to webmachine

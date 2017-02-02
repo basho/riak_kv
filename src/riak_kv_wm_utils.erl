@@ -20,7 +20,7 @@
 
 %% @doc Common functions used by riak_kv_wm_* modules.
 -module(riak_kv_wm_utils).
-
+-compile(export_all).
 %% webmachine resource exports
 -export([
          maybe_decode_uri/2,
@@ -341,19 +341,29 @@ is_valid_referer(RD) ->
             allowable_origin(OriginTuple, RefererTuple)
     end.
 
-%% @doc Register allowable origins (for CORS), specified as a CSV of base urls,
-%% i.e. "http://localhost". "*" is the special allow all case which is not
-%% recommended, but is used in enough cases to provide support.
--spec register_allowable_origins(string()) -> ok.
+%% @doc Register allowable origins (for CORS), see riak_kv.allowable_origin
+%% w/i riak_kv.schema.
+-spec register_allowable_origins(tuple()) -> ok.
 register_allowable_origins(Origins) ->
-    register_allowable_origins1(string:tokens(Origins, ",")).
+    maybe_create_allowable_origins_ets(),
+    register_allowable_origins1(Origins).
 
 register_allowable_origins1([]) -> ok;
-register_allowable_origins1(Origins) ->
-    maybe_create_allowable_origins_ets(),
+register_allowable_origins1([Origin = '*'|_T]) ->
+    Origin1 = normalize_referer(Origin),
     %% wrap the origin for full match on ets lookup
-    Origins1 = [{normalize_referer(Origin)} || Origin <- Origins],
-    ets:insert(?ALLOWABLE_ORIGINS_TABLE, Origins1).
+    ets:insert(?ALLOWABLE_ORIGINS_TABLE, {Origin1});
+register_allowable_origins1([http, HttpOrigins|T]) ->
+    register_allowable_origins2(http, HttpOrigins),
+    register_allowable_origins1(T);
+register_allowable_origins1([https, HttpOrigins|T]) ->
+    register_allowable_origins2(https, HttpOrigins),
+    register_allowable_origins1(T).
+
+register_allowable_origins2(Scheme, HostPortPairs) ->
+    OriginsWild = [{normalize_referer({Scheme, Host, "*"})} || {Host} <- HostPortPairs],
+    Origins = [{normalize_referer({Scheme, Host, Port})} || {Host, Port} <- HostPortPairs],
+    ets:insert(?ALLOWABLE_ORIGINS_TABLE, OriginsWild ++ Origins).
 
 allowable_origins_table_exists() ->
     undefined /= ets:info(?ALLOWABLE_ORIGINS_TABLE).
@@ -362,16 +372,20 @@ maybe_create_allowable_origins_ets() ->
     case allowable_origins_table_exists() of
         false ->
             ets:new(?ALLOWABLE_ORIGINS_TABLE,
-                    [named_table, ordered_set]);
+                    [named_table, public, ordered_set]);
         _ ->
             ok
     end.
 
 allowable_origin(OriginTuple, RefererTuple) ->
-    RefererTuple1 = normalize_referer(RefererTuple),
+    RefererTuple1 = {Scheme, Host, Port} = normalize_referer(RefererTuple),
     case allowable_origins_table_exists() andalso
         (ets:member(?ALLOWABLE_ORIGINS_TABLE, RefererTuple1) orelse
-         ets:member(?ALLOWABLE_ORIGINS_TABLE, {"*"})) of
+         ets:member(?ALLOWABLE_ORIGINS_TABLE, {Scheme, Host, "*"}) orelse
+         ets:member(?ALLOWABLE_ORIGINS_TABLE, {Scheme, "*", "*"}) orelse
+         ets:member(?ALLOWABLE_ORIGINS_TABLE, {Scheme, "*", Port}) orelse
+         ets:member(?ALLOWABLE_ORIGINS_TABLE, {"*", Host, Port}) orelse
+         ets:member(?ALLOWABLE_ORIGINS_TABLE, {"*", "*", "*"})) of
         false ->
             lager:debug("WM referrer not origin. Origin ~p != Referer ~p" ++
                         " and Referer not in allowable origins.\n",
@@ -380,14 +394,15 @@ allowable_origin(OriginTuple, RefererTuple) ->
         _ -> true
     end.
 
-normalize_referer("*") -> {"*"};
+normalize_referer('*') -> {"*", "*", "*"};
+normalize_referer("*") -> normalize_referer('*');
 normalize_referer(BaseUrl) when is_list(BaseUrl) ->
     [Scheme, Host|_T] = string:tokens(BaseUrl, "://"),
     normalize_referer({list_to_atom(Scheme), Host});
-normalize_referer({Scheme, Host, _Port}) ->
-    normalize_referer({Scheme, Host});
-normalize_referer({Scheme, "127.0.0.1"}) ->
-    {Scheme, "localhost"};
+normalize_referer({Scheme, Host}) ->
+    normalize_referer({Scheme, Host, "*"});
+normalize_referer({Scheme, "127.0.0.1", Port}) ->
+    {Scheme, "localhost", Port};
 normalize_referer(RefererTuple) ->
     RefererTuple.
 
