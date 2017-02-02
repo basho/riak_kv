@@ -29,6 +29,9 @@
           max_keys :: pos_integer()
          }).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
 fold_keys(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
     Bucket = proplists:get_value(bucket, Opts),
@@ -168,27 +171,118 @@ maybe_accumulate({{_DifferentBucket, _Key}, _BinaryValue}, _PrevEntry, _Bucket, 
 %% we match the bucket that we're looking for.
 accumulate({{TargetBucket, Key}=BKey, BinaryValue},
            TargetBucket,
-           GroupParams = #group_params{delimiter = Delimiter},
+           GroupParams,
            FoldFun,
            Acc,
            Itr) ->
     NewAcc = try
-                 Contents = get_contents(BKey, BinaryValue),
-                 FoldFun(TargetBucket, Key, Contents, Acc)
+                 PrefixOrMeta = common_prefix_or_metadata(BKey, BinaryValue, GroupParams),
+                 FoldFun(TargetBucket, Key, PrefixOrMeta, Acc)
              catch Error ->
                      FoldFun(TargetBucket, Key, {error, Error}, Acc)
              end,
     enumerate(BKey, TargetBucket, GroupParams, Itr, FoldFun, NewAcc).
 
-%% TODO: rename all contents to metadata once we have it wired through
-get_contents({Bucket, Key} = _BKey, BinaryValue) ->
+common_prefix_or_metadata({_Bucket, Key} = BKey,
+                          BinaryValue,
+                          #group_params{prefix = Prefix, delimiter = Delimiter}) ->
+
+    case common_prefix(Key, Prefix, Delimiter) of
+        undefined -> {metadata, extract_metadata(BKey, BinaryValue)};
+        CommonPrefix -> {common_prefix, CommonPrefix}
+    end.
+
+common_prefix(Key, Prefix, Delimiter) ->
+    Index = binary:longest_common_prefix([Key, Prefix]),
+    KeySansPrefix = binary_part(Key, Index, byte_size(Key) - Index),
+    Parts = binary:split(KeySansPrefix, Delimiter, [global]),
+    case length(Parts) > 1 andalso lists:all(fun(X) -> X =/= <<>> end, Parts) of
+        true ->
+            Head = hd(Parts),
+            <<Head/binary, Delimiter/binary>>;
+        false ->
+            undefined
+    end.
+
+extract_metadata({Bucket, Key} = _BKey,
+                 BinaryValue) ->
     RObj = riak_object:from_binary(Bucket, Key, BinaryValue),
     Contents = riak_object:get_contents(RObj),
     case Contents of
         [_Content] ->
-            Metadata = riak_object:get_metadata(RObj),
-            {metadata, Metadata};
+            riak_object:get_metadata(RObj);
         _ ->
             %% TODO
             {error, riak_object_has_siblings}
     end.
+
+%% ====================
+%% TESTS
+%% ====================
+
+-ifdef(TEST).
+
+common_prefix_test() ->
+    Key = <<"foo/bar/baz">>,
+    Prefix = <<"foo/">>,
+    Delimiter = <<"/">>,
+    Expected = <<"bar/">>,
+    Result = common_prefix(Key, Prefix, Delimiter),
+    ?assertEqual(Expected, Result).
+
+common_prefix_with_no_delimiter_test() ->
+    Key = <<"foo/bar">>,
+    Prefix = <<"foo/">>,
+    Delimiter = <<"/">>,
+    Expected = undefined,
+    Result = common_prefix(Key, Prefix, Delimiter),
+    ?assertEqual(Expected, Result).
+
+common_prefix_with_key_equal_prefix_test() ->
+    Key = <<"foo/">>,
+    Prefix = <<"foo/">>,
+    Delimiter = <<"/">>,
+    Expected = undefined,
+    Result = common_prefix(Key, Prefix, Delimiter),
+    ?assertEqual(Expected, Result).
+
+common_prefix_with_invalid_terminating_delimiter_test() ->
+    Key = <<"foo/bar/">>,
+    Prefix = <<"foo/">>,
+    Delimiter = <<"/">>,
+    Expected = undefined,
+    Result = common_prefix(Key, Prefix, Delimiter),
+    ?assertEqual(Expected, Result).
+
+common_prefix_with_empty_segment_test() ->
+    Key = <<"foo//bar/baz">>,
+    Prefix = <<"foo/">>,
+    Delimiter = <<"/">>,
+    Expected = undefined,
+    Result = common_prefix(Key, Prefix, Delimiter),
+    ?assertEqual(Expected, Result).
+
+common_prefix_with_empty_prefix_test() ->
+    Key = <<"foo/bar/baz">>,
+    Prefix = <<"">>,
+    Delimiter = <<"/">>,
+    Expected = <<"foo/">>,
+    Result = common_prefix(Key, Prefix, Delimiter),
+    ?assertEqual(Expected, Result).
+
+common_prefix_with_multi_char_delimiter_test() ->
+    Key = <<"foo::bar::baz">>,
+    Prefix = <<"foo::">>,
+    Delimiter = <<"::">>,
+    Expected = <<"bar::">>,
+    Result = common_prefix(Key, Prefix, Delimiter),
+    ?assertEqual(Expected, Result).
+
+common_prefix_with_emoji_delimiter_test() ->
+    Key = <<"foo🤔bar🤔baz">>,
+    Prefix = <<"foo🤔">>,
+    Delimiter = <<"🤔">>,
+    Expected = <<"bar🤔">>,
+    Result = common_prefix(Key, Prefix, Delimiter),
+    ?assertEqual(Expected, Result).
+-endif.
