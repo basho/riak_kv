@@ -23,9 +23,9 @@
 
 -record(group_params, {
           backend_mod :: module(),
-          prefix :: string(),
-          delimiter :: string(),
-          start_after :: string(),
+          prefix :: binary(),
+          delimiter :: binary(),
+          start_after :: binary(),
           max_keys :: pos_integer()
          }).
 
@@ -192,14 +192,16 @@ common_prefix_or_metadata({_Bucket, Key} = BKey,
         CommonPrefix -> {common_prefix, CommonPrefix}
     end.
 
+common_prefix(_Key, _Prefix, undefined) ->
+    undefined;
 common_prefix(Key, Prefix, Delimiter) ->
     Index = binary:longest_common_prefix([Key, Prefix]),
     KeySansPrefix = binary_part(Key, Index, byte_size(Key) - Index),
     Parts = binary:split(KeySansPrefix, Delimiter, [global]),
     case length(Parts) > 1 andalso lists:all(fun(X) -> X =/= <<>> end, Parts) of
         true ->
-            Head = hd(Parts),
-            <<Head/binary, Delimiter/binary>>;
+            CommonPrefix = hd(Parts),
+            <<CommonPrefix/binary, Delimiter/binary>>;
         false ->
             undefined
     end.
@@ -285,4 +287,29 @@ common_prefix_with_emoji_delimiter_test() ->
     Expected = <<"bar🤔">>,
     Result = common_prefix(Key, Prefix, Delimiter),
     ?assertEqual(Expected, Result).
+
+common_prefix_or_metadata_returns_metadata_test() ->
+    Bucket = {<<"bucket_type">>, <<"bucket">>},
+    Key  = <<"foo/actual_object">>,
+    BKey = {Bucket, Key},
+    RObj = riak_object:new(Bucket, Key,<<"value">>),
+    GroupParams = #group_params{prefix = <<"foo/">>, delimiter = <<"/">>},
+    ?assertMatch({metadata, _Anything}, common_prefix_or_metadata(BKey, RObj, GroupParams)).
+
+common_prefix_or_metadata_returns_common_prefix_test() ->
+    Bucket = {<<"bucket_type">>, <<"bucket">>},
+    Key  = <<"foo/prefix/actual_object">>,
+    BKey = {Bucket, Key},
+    RObj = riak_object:new(Bucket, Key,<<"value">>),
+    GroupParams = #group_params{prefix = <<"foo/">>, delimiter = <<"/">>},
+    ?assertMatch({common_prefix, <<"prefix/">>}, common_prefix_or_metadata(BKey, RObj, GroupParams)).
+
+common_prefix_or_metadata_with_undefined_delimiter_test() ->
+    Bucket = {<<"bucket_type">>, <<"bucket">>},
+    Key  = <<"foo/prefix/actual_object">>,
+    BKey = {Bucket, Key},
+    RObj = riak_object:new(Bucket, Key,<<"value">>),
+    GroupParams = #group_params{prefix = <<"foo/">>},
+    ?assertMatch({metadata, _Anything}, common_prefix_or_metadata(BKey, RObj, GroupParams)).
+
 -endif.
