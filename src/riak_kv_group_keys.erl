@@ -117,7 +117,7 @@ start_pos(Bucket, GroupParams = #group_params{prefix=undefined, start_after=unde
 start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=undefined}) ->
     to_object_key(GroupParams, Bucket, Prefix);
 start_pos(Bucket, GroupParams = #group_params{prefix=undefined, start_after=StartAfter}) ->
-    to_object_key(GroupParams, Bucket, <<StartAfter/binary, 0>>);
+    to_object_key(GroupParams, Bucket, append_null_byte(StartAfter));
 start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=StartAfter}) ->
     case StartAfter =< Prefix of
         true ->
@@ -128,18 +128,28 @@ start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=StartAf
 
 next_pos(undefined, Bucket, GroupParams) ->
     start_pos(Bucket, GroupParams);
-next_pos(_PrevBKey, _Bucket, #group_params{prefix=undefined}) ->
-    next;
-next_pos({_Bucket, PrevKey} = _PrevBKey, _Bucket, #group_params{prefix=Prefix}) ->
+next_pos({_Bucket, PrevKey}, _Bucket, #group_params{prefix=Prefix, delimiter=Delimiter}) ->
     case is_prefix(Prefix, PrevKey) of
         true ->
-            next;
+            next_pos_after_key(PrevKey, Prefix, Delimiter);
         _ ->
             npos
     end.
 
-is_prefix(B1, B2) ->
-    binary:longest_common_prefix([B1, B2]) == size(B1).
+next_pos_after_key(_Key, _Prefix = undefined, _Delimiter = undefined) ->
+    next;
+next_pos_after_key(Key, Prefix, Delimiter) ->
+    case common_prefix(Key, Prefix, Delimiter) of
+        undefined ->
+            next;
+        CommonPrefix ->
+            append_null_byte(CommonPrefix)
+    end.
+
+is_prefix(B1, B2) when is_binary(B1), is_binary(B2) ->
+    binary:longest_common_prefix([B1, B2]) == size(B1);
+is_prefix(_B1, _B2) ->
+    false.
 
 to_object_key(GroupParams, Bucket, Key) ->
     BackendMod = backend_from(GroupParams),
@@ -194,6 +204,8 @@ common_prefix_or_metadata({_Bucket, Key} = BKey,
 
 common_prefix(_Key, _Prefix, undefined) ->
     undefined;
+common_prefix(Key, undefined, Delimiter) ->
+    common_prefix(Key, <<>>, Delimiter);
 common_prefix(Key, Prefix, Delimiter) ->
     Index = binary:longest_common_prefix([Key, Prefix]),
     KeySansPrefix = binary_part(Key, Index, byte_size(Key) - Index),
@@ -217,6 +229,10 @@ extract_metadata({Bucket, Key} = _BKey,
             %% TODO
             {error, riak_object_has_siblings}
     end.
+
+-spec append_null_byte(binary()) -> binary().
+append_null_byte(Binary) when is_binary(Binary) ->
+    <<Binary/binary, 0>>.
 
 %% ====================
 %% TESTS
@@ -311,5 +327,39 @@ common_prefix_or_metadata_with_undefined_delimiter_test() ->
     RObj = riak_object:new(Bucket, Key,<<"value">>),
     GroupParams = #group_params{prefix = <<"foo/">>},
     ?assertMatch({metadata, _Anything}, common_prefix_or_metadata(BKey, RObj, GroupParams)).
+
+next_pos_after_key_with_no_prefix_or_delimiter_test() ->
+    Prefix = undefined,
+    Delimiter = undefined,
+    ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
+    ?assertEqual(next, next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
+    ?assertEqual(next, next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
+
+next_pos_after_key_with_delimiter_test() ->
+    Prefix = undefined,
+    Delimiter = <<"/">>,
+    ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
+    ?assertEqual(append_null_byte(<<"foo/">>),
+                 next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
+    ?assertEqual(append_null_byte(<<"foo/">>),
+                 next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
+
+next_pos_after_key_with_prefix_test() ->
+    Prefix = <<"foo/">>,
+    Delimiter = undefined,
+    ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
+    ?assertEqual(next,
+                 next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
+    ?assertEqual(next,
+                 next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
+
+next_pos_after_key_with_prefix_and_delimiter_test() ->
+    Prefix = <<"foo/">>,
+    Delimiter = <<"/">>,
+    ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
+    ?assertEqual(next,
+                 next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
+    ?assertEqual(append_null_byte(<<"bar/">>),
+                 next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
 
 -endif.
