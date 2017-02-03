@@ -54,6 +54,8 @@
 -compile(export_all).
 -endif.
 
+-define(TABLE_ACTIVATE_WAIT, 30). %%<< make TABLE_ACTIVATE_WAIT configurable in tsqueryreq
+
 %% NOTE on table_to_bucket/1: Clients will work with table
 %% names. Those names map to a bucket type/bucket name tuple in Riak,
 %% with both the type name and the bucket name matching the table.
@@ -1050,5 +1052,4 @@ check_table_feature_supported_when_table_is_disabled_test() ->
         {error, _},
         check_table_feature_supported(v2, DecodedReq)
     ).
-
 -endif.

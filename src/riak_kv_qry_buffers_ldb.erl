@@ -102,12 +102,12 @@ add_rows(LdbRef, Rows, ChunkId,
     end.
 
 make_sorted_keys([], desc, nulls_first) ->
-    0;     %% sort before entupled value
-make_sorted_keys([], asc, nulls_last) ->
-    <<>>;  %% sort after entupled value
+    <<>>;  %% sorts before entupled value
+make_sorted_keys([], asc,  nulls_last) ->
+    <<>>;  %% sorts after entupled value
+make_sorted_keys([], asc,  nulls_first) ->
+    0;
 make_sorted_keys([], desc, nulls_last) ->
-    <<>>;
-make_sorted_keys([], asc, nulls_first) ->
     0;
 make_sorted_keys(F, asc, _) ->
     {F};
