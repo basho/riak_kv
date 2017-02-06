@@ -174,7 +174,7 @@ build_sql_record_int(delete, SQL, _Cover) ->
             Mod = riak_ql_ddl:make_module_name(T),
             W = proplists:get_value(where, SQL),
             {ok, #riak_sql_delete_query_v1{'FROM'     = T,
-                                           'WHERE'    = W,
+                                           'WHERE'    = convert_where_timestamps(Mod, W),
                                            helper_mod = Mod}};
          false ->
             {error, <<"Must provide exactly one table name">>}

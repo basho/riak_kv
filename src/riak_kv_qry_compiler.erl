@@ -147,19 +147,18 @@ compile_where_clause(?DDL{} = DDL,
 %% now break out the query on quantum boundaries
 -spec expand_query(?DDL{}, ?SQL_SELECT{}, proplists:proplist()) ->
                           {ok, [?SQL_SELECT{}]} | {error, term()}.
-expand_query(?DDL{table = Table, local_key = LK, partition_key = PK},
-             ?SQL_SELECT{} = Q1, Where1) ->
+expand_query(?DDL{local_key = LK, partition_key = PK},
+             ?SQL_SELECT{helper_mod = Mod} = Q1, Where1) ->
     case expand_where(Where1, PK) of
         {error, E} ->
             {error, E};
         {ok, Where2} ->
-            Mod = riak_ql_ddl:make_module_name(Table),
-            IsDescending = lists:member(descending, Mod:field_orders()),
+            IsDescending = is_last_partition_column_descending(Mod:field_orders(), PK),
             SubQueries1 =
                 [Q1?SQL_SELECT{
                        is_executable = true,
                        type          = timeseries,
-                       'WHERE'       = maybe_fix_start_order(IsDescending, X, Mod, LK),
+                       'WHERE'       = maybe_fix_start_order(IsDescending, X),
                        local_key     = LK,
                        partition_key = PK} || X <- Where2],
             SubQueries2 =
@@ -171,6 +170,19 @@ expand_query(?DDL{table = Table, local_key = LK, partition_key = PK},
                 end,
             {ok, SubQueries2}
     end.
+
+%% Only check the last column in the partition key, otherwise the start/end key
+%% does not need to be flipped. The data is not stored in a different order to
+%% the start/end key.
+%%
+%% Checking the last column in the partition key is safe while the other columns
+%% must be exactly specified e.g. anything but the QUANTUM column must be
+%% covered with an equals operator in the where clause.
+is_last_partition_column_descending(FieldOrders, PK) ->
+    lists:nth(key_length(PK), FieldOrders) == descending.
+
+key_length(#key_v1{ast = AST}) ->
+    length(AST).
 
 %% Calulate the final result for an aggregate.
 -spec finalise_aggregate(#riak_sel_clause_v1{}, [any()]) -> [any()].
@@ -482,40 +494,25 @@ extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLe
 
 %% Only change the start order if the query has descending fields, otherwise
 %% the natural order is correct.
-maybe_fix_start_order(false, W, _, _) ->
+maybe_fix_start_order(false, W) ->
     W;
-maybe_fix_start_order(true, W, Mod, LK) ->
-    fix_start_order(W, Mod, LK).
+maybe_fix_start_order(true, W) ->
+    fix_start_order(W).
 
 %%
-fix_start_order(W, Mod, LK) ->
+fix_start_order(W) ->
     {startkey, StartKey0} = lists:keyfind(startkey, 1, W),
     {endkey, EndKey0} = lists:keyfind(endkey, 1, W),
-    case is_start_key_greater(Mod, LK, StartKey0, EndKey0) of
-        true ->
-            W;
-        false ->
-            %% Swap the start/end keys so that the backends will
-            %% scan over them correctly.  Likely cause is a descending
-            %% timestamp field.
-            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
-            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
-            W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
-            W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
-            %% start inclusive defaults true, end inclusive defaults false
-            W3 = lists:keystore(start_inclusive, 1, W2,
-                                {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
-            _W4 = lists:keystore(end_inclusive, 1, W3,
-                                 {end_inclusive, proplists:get_value(start_inclusive, W2, true)})
-    end.
-
-%%
-is_start_key_greater(Mod, LK, StartKey0, EndKey0) ->
-    StartVals = [{N, V} || {N, _T, V} <- StartKey0],
-    EndVals = [{N, V} || {N, _T, V} <- EndKey0],
-    StartKey = riak_ql_ddl:make_key(Mod, LK,  StartVals),
-    EndKey = riak_ql_ddl:make_key(Mod, LK,  EndVals),
-    (StartKey < EndKey).
+    %% Swap the start/end keys so that the backends will
+    %% scan over them correctly.  Likely cause is a descending
+    %% timestamp field.
+    W1 = lists:keystore(startkey, 1, W, {startkey, EndKey0}),
+    W2 = lists:keystore(endkey, 1, W1, {endkey, StartKey0}),
+    %% start inclusive defaults true, end inclusive defaults false
+    W3 = lists:keystore(start_inclusive, 1, W2,
+                        {start_inclusive, proplists:get_value(end_inclusive, W, false)}),
+    _W4 = lists:keystore(end_inclusive, 1, W3,
+                         {end_inclusive, proplists:get_value(start_inclusive, W2, true)}).
 
 fix_subquery_order(Queries1) ->
     Queries2 = lists:sort(fun fix_subquery_order_compare/2, Queries1),
@@ -681,7 +678,7 @@ hash_timestamp_to_quanta(QField, QSize, QUnit, QIndex, Where1) ->
             false -> Max1
         end,
     %% sanity check for the number of quanta we can handle
-    MaxQueryQuanta = app_helper:get_env(riak_kv, max_query_quanta, ?MAX_QUERY_QUANTA),
+    MaxQueryQuanta = app_helper:get_env(riak_kv, timeseries_query_max_quanta_span, ?MAX_QUERY_QUANTA),
     NQuanta = (Max2 - Min2) div riak_ql_quanta:unit_to_millis(QSize, QUnit),
     case NQuanta < MaxQueryQuanta of
         true ->
@@ -882,7 +879,7 @@ break_out_timeseries(Filters1, PartitionFields1, QuantumField) when is_binary(Qu
             %% filter e.g. mytime = 12345, which is rewritten as
             %% mytime >= 12345 AND mytime <= 12345
             {QEqFilters, OtherFilters} =
-                lists:splitwith(fun({Op, F, _}) ->
+                lists:partition(fun({Op, F, _}) ->
                                     Op == '=' andalso F == QuantumField
                                 end, Filters1),
             case QEqFilters of
@@ -2457,6 +2454,30 @@ eqality_filter_on_quantum_specifies_start_and_end_range_test() ->
         Select?SQL_SELECT.'WHERE'
     ).
 
+eqality_filter_on_quantum_specifies_start_and_end_range_2_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE tab123 ("
+        "StationId     VARCHAR   NOT NULL,"
+        "ReadingTimeStamp  TIMESTAMP NOT NULL,"
+        "Temperature     SINT64,"
+        "Humidity      DOUBLE,"
+        "WindSpeed     DOUBLE,"
+        "WindDirection   DOUBLE,"
+        "PRIMARY KEY ((StationId, QUANTUM(ReadingTimeStamp, 1, 'd')),"
+        "   StationId, ReadingTimeStamp));"),
+    {ok, Q} = get_query(
+          "SELECT * FROM tab123 "
+          "WHERE StationId = 'Station-1001' "
+          "AND ReadingTimeStamp = 1469204877;"),
+    {ok, [Select]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"StationId">>,varchar,<<"Station-1001">>},{<<"ReadingTimeStamp">>,timestamp,1469204877}]},
+         {endkey,[  {<<"StationId">>,varchar,<<"Station-1001">>},{<<"ReadingTimeStamp">>,timestamp,1469204877}]},
+         {filter,[]},
+         {end_inclusive,true}],
+        Select?SQL_SELECT.'WHERE'
+    ).
+
 cannot_have_two_equality_filters_on_quantum_without_range_test() ->
     DDL = get_ddl(
         "CREATE TABLE tab1("
@@ -2477,7 +2498,7 @@ two_element_key_range_cannot_match_test() ->
         "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,quantum(b, 15, 's')), a,b))"),
     {ok, Q} = get_query(
-          "SELECT * FROM tab1 WHERE a = 1 AND b > 1 AND b < 1"),
+          "SELECT * FROM tabab WHERE a = 1 AND b > 1 AND b < 1"),
     ?assertMatch(
         {error, {lower_and_upper_bounds_are_equal_when_no_equals_operator, <<_/binary>>}},
         compile(DDL, Q)
@@ -2490,7 +2511,7 @@ group_by_one_field_test() ->
         "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q1} = get_query(
-        "SELECT b FROM tab1 "
+        "SELECT b FROM mytab "
         "WHERE a = 1 AND b = 2 GROUP BY b"),
     {ok, [Q2]} = compile(DDL, Q1),
     ?assertEqual(
@@ -2505,7 +2526,7 @@ group_by_two_fields_test() ->
         "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q1} = get_query(
-        "SELECT b FROM tab1 "
+        "SELECT b FROM mytab "
         "WHERE a = 1 AND b = 2 GROUP BY b, a"),
     {ok, [Q2]} = compile(DDL, Q1),
     ?assertEqual(
@@ -2520,7 +2541,7 @@ group_by_column_not_in_the_table_test() ->
         "b TIMESTAMP NOT NULL, "
         "PRIMARY KEY  ((a,b), a,b))"),
     {ok, Q1} = get_query(
-        "SELECT x FROM tab1 "
+        "SELECT x FROM mytab "
         "WHERE a = 1 AND b = 2 GROUP BY x"),
     ?assertError(
         {unknown_column,{<<"x">>,[<<"a">>,<<"b">>]}},
@@ -2686,6 +2707,180 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
              {end_inclusive,true}]
         ],
         SubQueryWheres
+    ).
+
+desc_query_with_additional_column_in_local_key_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table3 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "c VARCHAR NOT NULL,"
+        "PRIMARY KEY ((a, QUANTUM(b, 1, 'm')),a, b DESC, c))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE a = 'dby' AND b >= 3500 AND b <= 5500"),
+    {ok, [?SQL_SELECT{'WHERE' = W}]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,varchar,<<"dby">>},{<<"b">>,timestamp,5500}]},
+         {endkey,  [{<<"a">>,varchar,<<"dby">>},{<<"b">>,timestamp,3500}]},
+         {filter,[]},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        W
+    ).
+
+desc_query_without_additional_column_in_local_key_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table3 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "c VARCHAR NOT NULL,"
+        "PRIMARY KEY ((a, QUANTUM(b, 1, 'm')),a, b DESC))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE a = 'dby' AND b >= 3500 AND b <= 5500"),
+    {ok, [?SQL_SELECT{'WHERE' = W}]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,varchar,<<"dby">>},{<<"b">>,timestamp,5500}]},
+         {endkey,  [{<<"a">>,varchar,<<"dby">>},{<<"b">>,timestamp,3500}]},
+         {filter,[]},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        W
+    ).
+
+desc_query_with_column_names_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table3 ("
+        "b VARCHAR NOT NULL,"
+        "a TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((b, QUANTUM(a, 1, 'm')),b,a DESC))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE b = 'dby' AND a >= 3500 AND a <= 5500"),
+    {ok, [?SQL_SELECT{'WHERE' = W}]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"b">>,varchar,<<"dby">>},{<<"a">>,timestamp,5500}]},
+         {endkey,  [{<<"b">>,varchar,<<"dby">>},{<<"a">>,timestamp,3500}]},
+         {filter,[]},
+         {end_inclusive,true},
+         {start_inclusive,true}],
+        W
+    ).
+
+query_with_desc_on_local_key_additional_column_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table3("
+        "a SINT64 NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "c TIMESTAMP NOT NULL, "
+        "d VARCHAR NOT NULL, "
+        "PRIMARY KEY ((a,b,quantum(c, 1, 'm')), a,b, c, d DESC))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE a = 1 AND b = 'dby' AND c >= 3500 AND c <= 5500"),
+    {ok, [?SQL_SELECT{'WHERE' = W}]} = compile(DDL, Q),
+    ?assertEqual(
+        [{startkey,[{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,3500}]},
+         {endkey,  [{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,5500}]},
+         {filter,[]},
+         {end_inclusive,true}],
+        W
+    ).
+
+query_with_desc_on_local_key_additional_column_multi_quanta_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE table3("
+        "a SINT64 NOT NULL, "
+        "b VARCHAR NOT NULL, "
+        "c TIMESTAMP NOT NULL, "
+        "d VARCHAR NOT NULL, "
+        "PRIMARY KEY ((a,b,quantum(c, 1, 's')), a,b, c, d DESC))"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table3 "
+          "WHERE a = 1 AND b = 'dby' AND c >= 3500 AND c <= 5500"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,3500}]},
+          {endkey,  [{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,4000}]},
+          {filter,[]}],
+         [{startkey,[{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,4000}]},
+          {endkey,  [{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,5000}]},
+          {filter,[]}],
+         [{startkey,[{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,5000}]},
+          {endkey,  [{<<"a">>,sint64,1},{<<"b">>,varchar,<<"dby">>},{<<"c">>,timestamp,5500}]},
+          {filter,[]},
+          {end_inclusive,true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_desc_on_not_last_local_key_column_test() ->
+    DDL = get_ddl(
+        "CREATE table desc1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, QUANTUM(b, 1, 's')), a DESC, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM desc1 "
+          "WHERE a = 'hi' AND b >= 3500 AND b <= 5500"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,3500}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4000}]},
+          {filter,[]}],
+         [{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {filter,[]}],
+         [{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5500}]},
+          {filter,[]},
+          {end_inclusive,true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_desc_on_not_last_local_key_column_no_quantum_test() ->
+    DDL = get_ddl(
+        "CREATE table desc1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a DESC, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM desc1 "
+          "WHERE a = 'hi' AND b = 4001"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4001}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4001}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_desc_last_local_key_column_no_quantum_test() ->
+    DDL = get_ddl(
+        "CREATE table desc1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b DESC));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM desc1 "
+          "WHERE a = 'hi' AND b = 4001"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4001}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4001}]},
+          {filter,[]},
+          {end_inclusive, true},
+          {start_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
     ).
 
 -endif.
