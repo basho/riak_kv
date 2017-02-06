@@ -874,7 +874,7 @@ wait_for_listgroupkeys(ReqId, Acc) ->
 
 collate_list_group_keys(List) ->
     Results = lists:flatten(List),
-    Keys = [Metadata || {_, {metadata, Metadata}} <- Results],
+    Keys = [{Key, Metadata} || {{_, Key}, {metadata, Metadata}} <- Results],
     CommonPrefixes = [Prefix || {_, {common_prefix, Prefix}} <- Results],
     [{common_prefixes, CommonPrefixes}, {metadatas, Keys}].
 
