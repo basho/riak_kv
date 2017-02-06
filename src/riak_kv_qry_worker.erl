@@ -302,7 +302,13 @@ estimate_query_size(#state{total_query_data  = TotalQueryData,
   when QBufRef /= undefined ->
 
     %% query buffer-backed, has a LIMIT: consider the latter
-    EstLimitData = round(Limit * (TotalQueryData / TotalQueryRows)),
+    EstLimitData =
+        case TotalQueryRows of
+            0 ->
+                0;
+            _ ->
+                round(Limit * (TotalQueryData / TotalQueryRows))
+        end,
     IsLimitTooBig = EstLimitData > MaxQueryData,
 
     %% but also check the grand total, for the case when LIMIT is big
