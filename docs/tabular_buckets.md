@@ -6,15 +6,15 @@ utilizes several function call paths of Riak KV but fundamentally differs
 as neither the table nor a record within a table is a Riak Object in the sense
 that consumers as well as developers of Riak KV have committed to memory, the
 rules to reason about to guarantee eventual consistency in an AP system. To
-create a coherent understanding of Riak TS Table and Record entities, the
-operations that act upon these entities with specific callouts to differences
-between the TS entities and Riak KV ~entities Bucket Type, Bucket, Key, and
-Object.
+create a coherent understanding of Riak TS Table and Record entities, we will
+explore the operations that act upon these entities with specific callouts to
+differences between the TS entities and Riak KV ~entities Bucket Type, Bucket,
+Key, and Object.
 
 Subsets of Riak TS operations are exposed via native Erlang, riak-admin, HTTP,
 and protobuf (PB). However, the full set of operations described herein are
 exposed via the SQL subset supported by Riak TS. The SQL language implementation
-is exposed via the HTTP and PB interfaces, so available to all clients in a
+is exposed via the HTTP and PB interfaces, so is available to all clients in a
 distributed network setting. For this reason, all client operations herein will
 be described via SQL while all Riak TS internal operations will be described via
 Erlang snippets or message sequence chart.
@@ -41,23 +41,25 @@ Since LevelDB and Riak KV are unaware of the Riak TS record format, translation
 to and from a raw Riak Object format are performed by Riak TS. While a general
 translation could be performed, this would require traversing lists to access
 fields. Therefore table-specific mapping is preferred and provided by compiling
-such modules, generally termed DDL module within Riak TS.
+such modules, generally termed DDL module (compiled and beamed around the
+cluster for each table) within Riak TS.
 
 The compilation of the table module on each node is handled by a Riak TS specific
 metadata store listener which forwards metadata store events to the Riak TS
-new type module which translates the DDL into a compiled module, storing the
-beam in the ddl_ebin directory. These modules are also responsible for providing
-the status of the table-specific compiled module on each node.
+new type module which translates the DDL into a compiled module. Compilation
+results in storing the beam in the ddl_ebin directory. The presence of these
+modules is used in determining the status of the table-specific compiled module
+on each node.
 
 While the SQL `CREATE TABLE <table_name> ...` operation could be labeled
 eventually consistent, like most Riak KV storage operations, this would put the
-burden of retrying on failure due to a "not yet active" statefor subsequent
-queries. Such a lack of certainly consistent postcondition, especially for the
-high frequency of SQL `INSERT INTO <table_name> ...` or PB PUT of records for
-Riak TS workloads, would lead not only a less desireable user experience, but
-also a degradation in performance. To that end, the table create operation is
-consistent, not returning until the table is created on all active nodes in the
-cluster.
+burden upon the caller to retry on failure due to a "not yet active" state for
+subsequent queries. Such a lack of certainly consistent postcondition,
+especially for the high frequency of SQL `INSERT INTO <table_name> ...` or
+PB PUT of records for Riak TS workloads, would lead not only a less desireable
+user experience, but also a degradation in performance. To that end, the table
+create operation is consistent, not returning until the table is created on all
+active nodes in the cluster.
 
 A high-level trace of the activity of table creation is provided to highlight
 the interaction points between key modules as well as indicate sync and async
