@@ -206,6 +206,7 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
 -record(state, {
           status :: init_in_progress | {init_failed, Reason::term()} | ready,
           qbufs = [] :: [{qbuf_ref(), #qbuf{}}],
+          qbuf_serial_id = 0 :: non_neg_integer(),
           total_size = 0 :: non_neg_integer(),
           %% no new queries; accumulation allowed
           soft_watermark :: non_neg_integer(),
@@ -342,13 +343,14 @@ code_change(_OldVsn, State, _Extra) ->
 %%% do_thing functions
 %%%===================================================================
 
-do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
+do_get_or_create_qbuf(SQL,
                       NSubqueries, CompiledSelect, CompiledOrderBy,
                       Options,
                       #state{qbufs            = QBufs0,
                              soft_watermark   = SoftWMark,
                              root_path        = RootPath,
                              total_size       = TotalSize,
+                             qbuf_serial_id   = QBufSerialId0,
                              qbuf_expire_msec = DefaultQBufExpireMsec} = State0) ->
     case get_qref(SQL, QBufs0) of
         {ok, {new, QBufRef}} ->
@@ -357,7 +359,7 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                     {reply, {error, total_qbuf_size_limit_reached}, State0};
                 false ->
                     DDL = ?DDL{table = Table} =
-                        sql_to_ddl(OrigTable, CompiledSelect, CompiledOrderBy),
+                        sql_to_ddl(CompiledSelect, CompiledOrderBy, QBufSerialId0),
                     lager:debug("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
                     case riak_kv_qry_buffers_ldb:new_table(Table, RootPath) of
                         {ok, LdbRef} ->
@@ -372,8 +374,9 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                                          options       = Options,
                                          key_field_positions = get_lk_field_positions(DDL)},
                             QBufs = QBufs0 ++ [{QBufRef, QBuf}],
-                            State = State0#state{qbufs = QBufs,
-                                                 total_size = compute_total_qbuf_size(QBufs)},
+                            State = State0#state{qbufs          = QBufs,
+                                                 qbuf_serial_id = QBufSerialId0 + 1,
+                                                 total_size     = compute_total_qbuf_size(QBufs)},
                             {reply, {ok, {new, QBufRef}}, State};
                         {error, Reason} ->
                             {reply, {error, Reason}, State0}
@@ -599,17 +602,17 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
 %% original query comes here not compiled and therefore, has fields
 %% appearing as `{identifier, Field}` rather than `Field` (and has no
 %% types).
-sql_to_ddl(Table, CompiledSelect, CompiledOrderBy) ->
-    ?DDL{table         = make_qbuf_id(Table, CompiledSelect, CompiledOrderBy),
+sql_to_ddl(CompiledSelect, CompiledOrderBy, SerialId) ->
+    ?DDL{table         = make_qbuf_id(SerialId),
          fields        = make_fields_from_select(CompiledSelect),
          partition_key = none,
          %% this ensures the right natural order in the newly created
          %% eleveldb
          local_key     = make_lk_from_orderby(CompiledOrderBy)}.
 
-make_qbuf_id(From, Select, OrderBy) ->
+make_qbuf_id(Id) ->
     list_to_binary(
-      fmt("~.36B", [erlang:phash2([From, Select, OrderBy, erlang:make_ref()])])).
+      fmt("~.36B", [Id])).
 
 make_fields_from_select(#riak_sel_clause_v1{col_return_types = ColReturnTypes,
                                             col_names = ColNames}) ->
@@ -690,3 +693,19 @@ advance_timestamp({Mega0, Sec0, Micro0}, Msec) ->
 
 fmt(F, A) ->
     lists:flatten(io_lib:format(F, A)).
+
+
+%%%===================================================================
+%%% Unit tests
+%%%===================================================================
+
+-ifdef(TEST).
+-compile(export_all).
+-include_lib("eunit/include/eunit.hrl").
+
+make_qbuf_id_test() ->
+    ?assertEqual(make_qbuf_id( 1), <<"1">>),
+    ?assertEqual(make_qbuf_id(35), <<"Z">>),
+    ?assertEqual(make_qbuf_id(36), <<"10">>).
+
+-endif.
