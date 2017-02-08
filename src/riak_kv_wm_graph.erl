@@ -109,33 +109,57 @@ query_result(<<"SHOW FIELD KEYS FROM ", TableNRest/binary>>, RD, Ctx) ->
     %% NOTE: discarding clauses after FROM intentionally
     Table = hd(string:tokens(binary_to_list(TableNRest), " ")),
     show_table_fields(Table, RD, Ctx);
-%% TODO: add support for TAG VALUES using Riak TS table
-%%  writing tag values TBD via Riak TS multi-put or SQL bulk insert.
-%% query_result(<<"SHOW TAG VALUES FROM ", TableNRest/binary>>, RD, Ctx) ->
-%%     {ok, [{table, Table},
-%%           {field, Field}]} = parse_query_table_with_key(TableNRest),
-%%     show_tag_values(Table, Field, RD, Ctx);
+query_result(<<"SHOW TAG VALUES ", TableNRest/binary>>, RD, Ctx) ->
+    case parse_query_table_with_key(TableNRest) of
+        {ok, [{table, Table},
+              {field, Field}]} ->
+            show_tag_values(Table, Field, RD, Ctx);
+        {ok, [{table, Table},
+              {field, Field},
+              {values, _Values}]} ->
+            show_tag_values(Table, Field, RD, Ctx)
+    end;
 query_result(Query = <<"SELECT ", _T/binary>>, RD, Ctx) ->
+    %% TODO: test/fix GROUP BY ___ fill(null)
+    %%  time($interval)
+    %%  tag(host) ... each field, likely remove tag() aspect from FE
     %% TODO: ensure values in WHERE filter are in the field type, type coercion
-    ts_select(Query, RD, Ctx).
+    select(Query, RD, Ctx);
+query_result(<<"INSERT TAG VALUES ", TableNRest/binary>>, RD, Ctx) ->
+    {ok, [{table, Table},
+          {field, Field},
+          {values, Values}]} = parse_query_table_with_key(TableNRest),
+    insert_tag_values(Table, Field, Values, RD, Ctx);
+query_result(<<"DELETE TAG VALUES ", TableNRest/binary>>, RD, Ctx) ->
+    {ok, [{table, Table},
+          {field, Field},
+          {values, Values}]} = parse_query_table_with_key(TableNRest),
+    delete_tag_values(Table, Field, Values, RD, Ctx).
 
-ts_select(Query, RD, Ctx) when is_binary(Query) ->
-    ts_select(binary_to_list(Query), RD, Ctx);
-ts_select(Query, RD, Ctx) ->
-    Query1 = replace_time_field(Query, RD, Ctx),
-    {ok, {FieldNames, _FieldTypes, Rows}} = ts_query(Query1, RD, Ctx),
+select(Query, RD, Ctx) when is_binary(Query) ->
+    select(binary_to_list(Query), RD, Ctx);
+select(Query, RD, Ctx) ->
+    Queries = string:tokens(Query, ";"),
+    Results = [ select_each(Query0, RD, Ctx) || Query0 <- Queries],
+    Series = series_results(Results, 0, []),
     iolist_to_binary(mochijson2:encode(
         {struct, [{results, [
-                    {struct, [{series, [
-                        {struct, [{name, <<"q">>},
-                                  {columns, FieldNames},
-                                  {values, Rows}
-                                 ]}
-                                       ]}
-                             ]}
-                            ]}
-                 ]}
-                      )).
+                    {struct, [{series, Series }]}
+                 ]}]})).
+
+select_each(Query, RD, Ctx) ->
+    Query1 = replace_time_field(Query, RD, Ctx),
+    {ok, {FieldNames, _FieldTypes, Rows}} = ts_query(Query1, RD, Ctx),
+    {ok, {FieldNames, Rows}}.
+
+series_results([], _I, Acc) ->
+    lists:reverse(Acc);
+series_results([{ok, {FieldNames, Rows}}|T], I, Acc) ->
+    Series = {struct, [{name, list_to_binary(io_lib:format("~c", [$A + I]))},
+                       {columns, FieldNames},
+                       {values, Rows}
+                      ]},
+    series_results(T, I + 1, [Series|Acc]).
 
 replace_time_field(Query, RD, Ctx) ->
     %% if the first field in the query is not the time field, prepend the time
@@ -162,9 +186,36 @@ table_from_query(["FROM",Table|_T]) ->
 table_from_query([_H|T]) ->
     table_from_query(T).
 
+parse_query_table_with_key(TableNRest) when is_binary(TableNRest) ->
+    parse_query_table_with_key(binary_to_list(TableNRest));
+parse_query_table_with_key(TableNRest) ->
+    QParts = string:tokens(TableNRest, " "),
+    parse_query_table_with_key1(QParts, []).
+
+parse_query_table_with_key1([], Acc) ->
+    {ok, Acc};
+parse_query_table_with_key1(["FROM", Table|T], []) ->
+    parse_query_table_with_key1(T, [{table, Table}]);
+parse_query_table_with_key1(["WITH", "KEY", "=", Column|T], [{table, Table}]) ->
+    Column1 = string:strip(Column, both, $"),
+    parse_query_table_with_key1(T, [{table, Table},
+                                     {field, Column1}]);
+parse_query_table_with_key1([_H|T], [{table, Table},
+                                     {field, Column}]) ->
+    Values = [string:strip(V, both, $,) || V <- T],
+    parse_query_table_with_key1([], [{table, Table},
+                                     {field, Column},
+                                     {values, Values}]);
+parse_query_table_with_key1([_H|T], Acc) ->
+    parse_query_table_with_key1(T, Acc).
+
 show_tables(Limit, RD, Ctx) ->
     Tables = show_tables_(Limit, RD, Ctx),
-    Tables1 = [Table || [Table,<<"Active">>|_T] <- Tables],
+    %% filter out inactive tables and tag lookup tables by prefix
+    LookupPrefix = "lookup_t_",
+    Tables1 = [Table || [Table, <<"Active">>|_T] <- Tables,
+                lists:sublist(binary_to_list(Table), 1,
+                              length(LookupPrefix)) /= LookupPrefix],
     iolist_to_binary(mochijson2:encode(
         {struct, [{results, [
                     {struct, [{series, [
@@ -271,7 +322,7 @@ is_in_key(Column, ?DDL_KEY{ast=[
 
 ts_query(Query, RD, Ctx) ->
     try
-       [{table, _Table},
+        [{table, _Table},
          {mod, Mod},
          {ddl, DDL},
          {sql, SQL},
@@ -348,6 +399,79 @@ ts_get_query_ddl1(_SqlType, SQL, WithProps) ->
      {ddl, DDL},
      {sql, SQL},
      {props, WithProps}].
+
+tag_values_table_name(Table, Column) ->
+    "lookup_t_" ++ Table ++ "_f_" ++ Column.
+
+table_exists(Table) ->
+    TableB = list_to_binary(Table),
+    case ts_get_query_ddl("DESCRIBE " ++ Table) of
+        [{table, TableB},
+         {mod, undefined},
+         {ddl, undefined},
+         {sql, {riak_sql_describe_v1, TableB}},
+         {props, undefined}] -> false;
+        _ -> true
+    end.
+
+maybe_create_tag_values_table(Table, Column, RD, Ctx) ->
+    TagValuesTable = tag_values_table_name(Table, Column),
+    maybe_create_tag_values_table1(table_exists(TagValuesTable), TagValuesTable,
+                                   RD, Ctx).
+
+maybe_create_tag_values_table1(true, _TagValuesTable, _RD, _Ctx) ->
+    ok;
+maybe_create_tag_values_table1(_TableExists, TagValuesTable, RD, Ctx) ->
+    Query = "CREATE TABLE " ++ TagValuesTable ++
+            "(z SINT64 NOT NULL, v VARCHAR NOT NULL, a BOOLEAN NOT NULL," ++
+            " PRIMARY KEY((z), z, v))",
+    {ok, {_FieldNames, _FieldTypes, _Rows}} = ts_query(Query, RD, Ctx).
+
+show_tag_values(Table, Column, RD, Ctx) ->
+    Query1 = "SELECT v FROM " ++ tag_values_table_name(Table, Column) ++
+             " WHERE z = 1",
+    {ok, {FieldNames, _FieldTypes, Rows}} = ts_query(Query1, RD, Ctx),
+    iolist_to_binary(mochijson2:encode(
+        {struct, [{results, [
+                    {struct, [{series, [
+                        {struct, [{name, <<"A">>},
+                                  {columns, FieldNames},
+                                  {values, Rows}
+                                 ]}
+                                       ]}
+                             ]}
+                            ]}
+                 ]}
+                      )).
+
+insert_tag_values(Table, Column, Values, RD, Ctx) ->
+    update_tag_values(Table, Column, Values, true, RD, Ctx).
+
+delete_tag_values(Table, Column, Values, RD, Ctx) ->
+    update_tag_values(Table, Column, Values, false, RD, Ctx).
+
+update_tag_values(Table, Column, Values, Active, RD, Ctx) ->
+    maybe_create_tag_values_table(Table, Column, RD, Ctx),
+    ValuesS0 = lists:flatten(
+                 [ "(1, " ++ atom_to_list(Active) ++ ", '" ++ Value ++ "')," ||
+                   Value <- Values]),
+    ValuesS = lists:sublist(ValuesS0, length(ValuesS0) - 1),
+    Query1 = "INSERT INTO " ++ tag_values_table_name(Table, Column) ++
+             "(z, a, v) VALUES " ++
+             ValuesS,
+    {ok, {[], [], []}} = ts_query(Query1, RD, Ctx),
+    iolist_to_binary(mochijson2:encode(
+        {struct, [{results, [
+                    {struct, [{series, [
+                        {struct, [{name, <<"i">>},
+                                  {columns, <<"v">>},
+                                  {values, Values}
+                                 ]}
+                                       ]}
+                             ]}
+                            ]}
+                 ]}
+                      )).
 
 lex_parse(Query) ->
     catch riak_ql_parser:parse(
@@ -570,33 +694,33 @@ ts_get_time_field_present_test() ->
                                       true, false, true, true),
     ?assertEqual("ts", ts_get_time_field(Table, {}, {})).
 
-ts_select_result_empty() ->
-    <<"{\"results\":[{\"series\":[{\"name\":\"q\","
+select_result_empty() ->
+    <<"{\"results\":[{\"series\":[{\"name\":\"A\","
       "\"columns\":[],\"values\":[]}]}]}">>.
 
-ts_select_result_non_empty(Columns, Values) ->
+select_result_non_empty(Columns, Values) ->
     ColumnsL = ["\"" ++ Column ++ "\"" || Column <- Columns],
     ValuesL = [io_lib:format("~p", [Row])|| Row <- Values],
-    list_to_binary("{\"results\":[{\"series\":[{\"name\":\"q\"," ++
+    list_to_binary("{\"results\":[{\"series\":[{\"name\":\"A\"," ++
       "\"columns\":[" ++ ColumnsL ++ "]," ++
       "\"values\":[" ++ ValuesL ++ "]}]}]}").
 
-ts_select_no_time_field_test() ->
-     {Table, _Mod} = create_test_table("ts_select", "no_time_field",
+select_no_time_field_test() ->
+     {Table, _Mod} = create_test_table("select", "no_time_field",
                                       true, false, false, false),
-     ?assertEqual(ts_select_result_empty(),
-                  ts_select("SELECT * FROM " ++ Table ++ " WHERE $time=1", {}, {})).
+     ?assertEqual(select_result_empty(),
+                  select("SELECT * FROM " ++ Table ++ " WHERE $time=1", {}, {})).
 
-ts_select_time_field_test() ->
+select_time_field_test() ->
     meck:new(riak_kv_qry),
     meck:expect(riak_kv_qry, submit,
                 fun(_SQL, _DDL) ->
                     {ok, {[<<"ts">>], [timestamp], [[1]]}}
                 end),
-     {Table, _Mod} = create_test_table("ts_select", "time_field",
+     {Table, _Mod} = create_test_table("select", "time_field",
                                       true, false, true, true),
-     Res = ts_select("SELECT * FROM " ++ Table ++ " WHERE $time=1", {}, {}),
+     Res = select("SELECT * FROM " ++ Table ++ " WHERE $time=1", {}, {}),
      meck:unload(riak_kv_qry),
-     ?assertEqual(ts_select_result_non_empty(["ts"], [[1]]), Res).
+     ?assertEqual(select_result_non_empty(["ts"], [[1]]), Res).
 
 -endif. %%<< TEST

@@ -997,7 +997,7 @@
 %% This is equivalent to specifying the port using the wildcard.
 {mapping, "allowable_origin.$name", "riak_kv.allowable_origin.http", [
     {datatype, ip},
-    {default, ""},
+    {default, {}},
     {level, advanced}
 ]}.
 

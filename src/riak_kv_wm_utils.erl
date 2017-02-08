@@ -20,7 +20,7 @@
 
 %% @doc Common functions used by riak_kv_wm_* modules.
 -module(riak_kv_wm_utils).
--compile(export_all).
+
 %% webmachine resource exports
 -export([
          maybe_decode_uri/2,
@@ -343,7 +343,7 @@ is_valid_referer(RD) ->
 
 %% @doc Register allowable origins (for CORS), see riak_kv.allowable_origin
 %% w/i riak_kv.schema.
--spec register_allowable_origins(tuple()) -> ok.
+-spec register_allowable_origins(list()) -> ok.
 register_allowable_origins(Origins) ->
     maybe_create_allowable_origins_ets(),
     register_allowable_origins1(Origins).
@@ -396,9 +396,6 @@ allowable_origin(OriginTuple, RefererTuple) ->
 
 normalize_referer('*') -> {"*", "*", "*"};
 normalize_referer("*") -> normalize_referer('*');
-normalize_referer(BaseUrl) when is_list(BaseUrl) ->
-    [Scheme, Host|_T] = string:tokens(BaseUrl, "://"),
-    normalize_referer({list_to_atom(Scheme), Host});
 normalize_referer({Scheme, Host}) ->
     normalize_referer({Scheme, Host, "*"});
 normalize_referer({Scheme, "127.0.0.1", Port}) ->
@@ -646,22 +643,23 @@ allowable_origin_none_registered_test() ->
                  allowable_origin(allowable_origin_riak(), {http, "notlocalhost"})).
 
 allowable_origin_not_registered_test() ->
-    register_allowable_origins("http://basho.com"),
+    register_allowable_origins([http, [{"localhost"}]]),
     ?assertEqual(false,
                  allowable_origin(allowable_origin_riak(), {http, "notlocalhost"})).
 
 allowable_origin_single_registered_test() ->
-    register_allowable_origins("https://notlocalhost"),
+    register_allowable_origins([https, [{"notlocalhost"}]]),
     ?assertEqual(true,
                  allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
 
 allowable_origin_multi_registered_test() ->
-    register_allowable_origins("http://basho.com,https://notlocalhost"),
+    register_allowable_origins([http, [{"localhost"}],
+                                https, [{"notlocalhost"}]]),
     ?assertEqual(true,
                  allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
 
 allowable_origin_wildcard_registered_test() ->
-    register_allowable_origins("*"),
+    register_allowable_origins(['*']),
     ?assertEqual(true,
                  allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
 -endif.
