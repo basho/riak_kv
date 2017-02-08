@@ -94,20 +94,4 @@ get_nval(Bucket) ->
     proplists:get_value(n_val, BucketProps).
 
 process_keys(_Bucket, Keys, ReqId, ClientPid) ->
-    case use_ack_backpressure() of
-        true ->
-            Monitor = erlang:monitor(process, ClientPid),
-            ClientPid ! {ReqId, {self(), Monitor}, {keys, Keys}},
-            receive
-                {Monitor, ok} ->
-                    erlang:demonitor(Monitor, [flush]);
-                {'DOWN', Monitor, process, _Pid, _Reason} ->
-                    exit(self(), normal)
-            end;
-        false ->
-            ClientPid ! {ReqId, {keys, Keys}}
-    end.
-
--spec use_ack_backpressure() -> boolean().
-use_ack_backpressure() ->
-    riak_core_capability:get({riak_kv, listgroupkeys_backpressure}, false) == true.
+    ClientPid ! {ReqId, {keys, Keys}}.
