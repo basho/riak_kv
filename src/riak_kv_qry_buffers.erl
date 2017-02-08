@@ -608,12 +608,8 @@ sql_to_ddl(Table, CompiledSelect, CompiledOrderBy) ->
          local_key     = make_lk_from_orderby(CompiledOrderBy)}.
 
 make_qbuf_id(From, Select, OrderBy) ->
-    %% In order to emulate erlang:now/0 behaviour for generating
-    %% unique timestamps, we can use the fact that the call chains
-    %% eventually involving this function are serialized:
-    timer:sleep(1),
     list_to_binary(
-      fmt("~.36B", [erlang:phash2([From, Select, OrderBy, os:timestamp()])])).
+      fmt("~.36B", [erlang:phash2([From, Select, OrderBy, erlang:make_ref()])])).
 
 make_fields_from_select(#riak_sel_clause_v1{col_return_types = ColReturnTypes,
                                             col_names = ColNames}) ->
