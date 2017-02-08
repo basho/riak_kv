@@ -857,26 +857,12 @@ wait_for_listkeys(ReqId, Acc) ->
 
 %% @private
 wait_for_listgroupkeys(ReqId) ->
-    wait_for_listgroupkeys(ReqId, []).
-%% @private
-wait_for_listgroupkeys(ReqId, Acc) ->
     receive
-        {ReqId, done} ->
-            {ok, collate_list_group_keys(Acc)};
-        {ReqId, From, {keys, Res}} ->
-            _ = riak_kv_groupkeys_fsm:ack_keys(From),
-            wait_for_listgroupkeys(ReqId, [Res|Acc]);
-        {ReqId, {keys, Res}} ->
-            wait_for_listgroupkeys(ReqId, [Res|Acc]);
+        {ReqId, done, Keys} ->
+            {ok, Keys};
         {ReqId, {error, Error}} ->
             {error, Error}
     end.
-
-collate_list_group_keys(List) ->
-    Results = lists:flatten(List),
-    Keys = [{Key, Metadata} || {{_, Key}, {metadata, Metadata}} <- Results],
-    CommonPrefixes = [Prefix || {_, {common_prefix, Prefix}} <- Results],
-    [{common_prefixes, CommonPrefixes}, {metadatas, Keys}].
 
 %% @private
 wait_for_listbuckets(ReqId) ->
