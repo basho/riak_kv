@@ -613,7 +613,7 @@ make_qbuf_id(From, Select, OrderBy) ->
     %% eventually involving this function are serialized:
     timer:sleep(1),
     list_to_binary(
-      fmt("~s_~s_~s__~s", [From, join_fields(Select), join_fields(OrderBy), tstamp()])).
+      fmt("~.36B", [erlang:phash2([From, Select, OrderBy, os:timestamp()])])).
 
 make_fields_from_select(#riak_sel_clause_v1{col_return_types = ColReturnTypes,
                                             col_names = ColNames}) ->
@@ -633,30 +633,6 @@ get_lk_field_positions(?DDL{fields = Fields, local_key = #key_v1{ast = LKAST}}) 
     AsProplist =
         [{Name, Pos} || #riak_field_v1{name = Name, position = Pos} <- Fields],
     [proplists:get_value(Name, AsProplist) || ?SQL_PARAM{name = [Name]} <- LKAST].
-
-join_fields(#riak_sel_clause_v1{col_names = CC}) ->
-    join_fields(CC);
-join_fields(CC) ->
-    iolist_to_binary(
-      string:join(
-        lists:map(
-          fun({F, AscDesc, Nulls}) ->
-                  fmt("~s.~c~c", [F, qualifier_char(AscDesc), qualifier_char(Nulls)]);
-             (F) ->
-                  fmt("~s", [F])
-          end,
-          CC),
-        "+")).
-
-qualifier_char(asc)   -> $a;
-qualifier_char(desc)  -> $d;
-qualifier_char(nulls_first) -> $f;
-qualifier_char(nulls_last)  -> $l.
-
-
-tstamp() ->
-    {_, S, M} = os:timestamp(),
-    fmt("~10..0b~10..0b", [S, M]).
 
 
 %% data ops
