@@ -48,11 +48,21 @@ fold_keys(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
 to_group_params(BackendMod, PropList) ->
     #group_params{
        backend_mod=BackendMod,
-       prefix=proplists:get_value(prefix, PropList),
-       delimiter=proplists:get_value(delimiter, PropList),
-       start_after=proplists:get_value(start_after, PropList),
-       max_keys=proplists:get_value(max_keys, PropList)
+       prefix=value_or_default(prefix, PropList, undefined),
+       delimiter=value_or_default(delimiter, PropList, undefined),
+       start_after=value_or_default(start_after, PropList, undefined),
+       max_keys=value_or_default(max_keys, PropList, 1000)
       }.
+
+value_or_default(Key, PropList, Default)->
+    case proplists:get_value(Key, PropList) of
+        <<"">> ->
+            Default;
+        "" ->
+            Default;
+        Value ->
+            Value
+    end.
 
 backend_from(#group_params{backend_mod = BackendMod}) ->
     BackendMod.
@@ -106,6 +116,7 @@ enumerate(PrevEntry, Bucket, GroupParams, Itr, FoldFun, Acc) ->
                     Acc;
                 {ok, BinaryBKey, BinaryValue} ->
                     BKey = BackendMod:from_object_key(BinaryBKey),
+                    lager:info("BKey: ~p", [BKey]),
                     maybe_accumulate({BKey, BinaryValue}, PrevEntry, Bucket, GroupParams, FoldFun, Acc, Itr)
             catch Error ->
                     {error, {eleveldb_error, Error}}
@@ -117,7 +128,9 @@ start_pos(Bucket, GroupParams = #group_params{prefix=undefined, start_after=unde
 start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=undefined}) ->
     to_object_key(GroupParams, Bucket, Prefix);
 start_pos(Bucket, GroupParams = #group_params{prefix=undefined, start_after=StartAfter}) ->
-    to_object_key(GroupParams, Bucket, append_null_byte(StartAfter));
+    ObjectKey = to_object_key(GroupParams, Bucket, append_null_byte(StartAfter)),
+    lager:info("StartAfter: ~p~nObjectKey: ~p", [StartAfter, riak_kv_eleveldb_backend:from_object_key(ObjectKey)]),
+    ObjectKey;
 start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=StartAfter}) ->
     case StartAfter =< Prefix of
         true ->
@@ -128,22 +141,25 @@ start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=StartAf
 
 next_pos(undefined, Bucket, GroupParams) ->
     start_pos(Bucket, GroupParams);
-next_pos({_Bucket, PrevKey}, _Bucket, #group_params{prefix=Prefix, delimiter=Delimiter}) ->
+next_pos({Bucket, PrevKey}, _Bucket, GroupParams =  #group_params{prefix=Prefix}) ->
     case is_prefix(Prefix, PrevKey) of
         true ->
-            next_pos_after_key(PrevKey, Prefix, Delimiter);
+            next_pos_after_key(GroupParams, Bucket, PrevKey);
         _ ->
             npos
     end.
 
-next_pos_after_key(_Key, _Prefix = undefined, _Delimiter = undefined) ->
+next_pos_after_key(#group_params{prefix = undefined, delimiter = undefined}, _Bucket, _Key) ->
     next;
-next_pos_after_key(Key, Prefix, Delimiter) ->
+next_pos_after_key(GroupParams = #group_params{prefix = Prefix, delimiter = Delimiter}, Bucket, Key) ->
     case common_prefix(Key, Prefix, Delimiter) of
         undefined ->
             next;
         CommonPrefix ->
-            append_null_byte(CommonPrefix)
+            Seek = to_object_key(GroupParams, Bucket, append_null_byte(CommonPrefix)),
+            lager:info("@@@ Seek: ~p", [riak_kv_eleveldb_backend:from_object_key(Seek)]),
+            next
+            %% append_null_byte(CommonPrefix)
     end.
 
 is_prefix(B1, B2) when is_binary(B1), is_binary(B2) ->
@@ -215,7 +231,7 @@ common_prefix(Key, Prefix, Delimiter) ->
     case length(Parts) > 1 andalso lists:all(fun(X) -> X =/= <<>> end, Parts) of
         true ->
             CommonPrefix = hd(Parts),
-            <<CommonPrefix/binary, Delimiter/binary>>;
+            <<Prefix/binary, CommonPrefix/binary, Delimiter/binary>>;
         false ->
             undefined
     end.
@@ -246,7 +262,7 @@ common_prefix_test() ->
     Key = <<"foo/bar/baz">>,
     Prefix = <<"foo/">>,
     Delimiter = <<"/">>,
-    Expected = <<"bar/">>,
+    Expected = <<"foo/bar/">>,
     Result = common_prefix(Key, Prefix, Delimiter),
     ?assertEqual(Expected, Result).
 
@@ -294,7 +310,7 @@ common_prefix_with_multi_char_delimiter_test() ->
     Key = <<"foo::bar::baz">>,
     Prefix = <<"foo::">>,
     Delimiter = <<"::">>,
-    Expected = <<"bar::">>,
+    Expected = <<"foo::bar::">>,
     Result = common_prefix(Key, Prefix, Delimiter),
     ?assertEqual(Expected, Result).
 
@@ -302,7 +318,7 @@ common_prefix_with_emoji_delimiter_test() ->
     Key = <<"foo🤔bar🤔baz">>,
     Prefix = <<"foo🤔">>,
     Delimiter = <<"🤔">>,
-    Expected = <<"bar🤔">>,
+    Expected = <<"foo🤔bar🤔">>,
     Result = common_prefix(Key, Prefix, Delimiter),
     ?assertEqual(Expected, Result).
 
@@ -320,7 +336,7 @@ common_prefix_or_metadata_returns_common_prefix_test() ->
     BKey = {Bucket, Key},
     RObj = riak_object:new(Bucket, Key,<<"value">>),
     GroupParams = #group_params{prefix = <<"foo/">>, delimiter = <<"/">>},
-    ?assertMatch({common_prefix, <<"prefix/">>}, common_prefix_or_metadata(BKey, RObj, GroupParams)).
+    ?assertMatch({common_prefix, <<"foo/prefix/">>}, common_prefix_or_metadata(BKey, RObj, GroupParams)).
 
 common_prefix_or_metadata_with_undefined_delimiter_test() ->
     Bucket = {<<"bucket_type">>, <<"bucket">>},
@@ -361,7 +377,7 @@ next_pos_after_key_with_prefix_and_delimiter_test() ->
     ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
     ?assertEqual(next,
                  next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
-    ?assertEqual(append_null_byte(<<"bar/">>),
+    ?assertEqual(append_null_byte(<<"foo/bar/">>),
                  next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
 
 -endif.

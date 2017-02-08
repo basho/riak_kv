@@ -26,7 +26,6 @@
 
 %-include_lib("riak_kv_vnode.hrl").
 
--export([ack_keys/1]).
 -export([init/2,
          process_results/2,
          finish/2]).
@@ -34,15 +33,13 @@
 -type req_id() :: non_neg_integer().
 -type from() :: {raw, req_id(), pid()}.
 
--record(state, {from :: from()}).
+-record(state, {
+          from :: from(),
+          bucket :: riak_object:bucket(),
+          metadatas_acc = ordsets:new() :: ordsets:ordset(),
+          common_prefixes_acc = ordsets:new() :: ordsets:ordset()
+         }).
 
-
-%%
-%% public API
-%%
--spec ack_keys(From::{pid(), reference()}) -> term().
-ack_keys({Pid, Ref}) ->
-    Pid ! {Ref, ok}.
 
 %%
 %% riak_core_coverage_fsm callbacks
@@ -53,20 +50,18 @@ init(From, [Bucket, GroupParams, Timeout]) ->
     NVal = get_nval(Bucket),
     {
         Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-        #state{from=From}
+        #state{from=From, bucket=Bucket}
     }.
 
-process_results({From, Bucket, Keys},
-                StateData=#state{from={raw, ReqId, ClientPid}}) ->
-    process_keys(Bucket, Keys, ReqId, ClientPid),
+process_results({From, Bucket, Entries}, StateData) ->
+    NewState = process_entries(Bucket, Entries, StateData),
     _ = riak_kv_vnode:ack_keys(From),
-    {ok, StateData};
+    {ok, NewState};
 process_results({error, Reason}, _State) ->
     {error, Reason};
-process_results({Bucket, Keys},
-                StateData=#state{from={raw, ReqId, ClientPid}}) ->
-    process_keys(Bucket, Keys, ReqId, ClientPid),
-    {ok, StateData};
+process_results({Bucket, Entries}, StateData) ->
+    NewState = process_entries(Bucket, Entries, StateData),
+    {ok, NewState};
 process_results(done, StateData) ->
     {done, StateData}.
 
@@ -78,7 +73,7 @@ finish({error, _}=Error,
     {stop, normal, StateData};
 finish(clean,
        StateData=#state{from={raw, ReqId, ClientPid}}) ->
-    ClientPid ! {ReqId, done},
+    ClientPid ! {ReqId, done, collate_list_group_keys(StateData)},
     {stop, normal, StateData}.
 
 %%
@@ -93,5 +88,27 @@ get_nval(Bucket) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     proplists:get_value(n_val, BucketProps).
 
-process_keys(_Bucket, Keys, ReqId, ClientPid) ->
-    ClientPid ! {ReqId, {keys, Keys}}.
+
+process_entries(_Bucket, Entries, State) ->
+    lists:foldl(fun process_entry/2, State, Entries).
+
+%% By the time we get here we should only have results from TargetBucket; crash if we don't.
+process_entry({{TargetBucket, Key}, {metadata, Metadata}}, State = #state{bucket=TargetBucket}) ->
+    State#state{metadatas_acc = ordsets:add_element({Key, Metadata}, State#state.metadatas_acc)};
+process_entry({{TargetBucket, _}, {common_prefix, CommonPrefix}}, State = #state{bucket=TargetBucket})->
+    State#state{
+      common_prefixes_acc = ordsets:add_element(CommonPrefix, State#state.common_prefixes_acc)
+     }.
+
+collate_list_group_keys(#state{metadatas_acc = Metadatas, common_prefixes_acc = CommonPrefixes}) ->
+    [{common_prefixes, to_sorted_list(CommonPrefixes)},
+     {metadatas, to_sorted_list(fun compare_metadatas/2, Metadatas)}].
+
+compare_metadatas({KeyA, _}, {KeyB, _}) ->
+    KeyA =< KeyB.
+
+to_sorted_list(OrdSet) ->
+    lists:sort(ordsets:to_list(OrdSet)).
+
+to_sorted_list(Fun, OrdSet) ->
+    lists:sort(Fun, ordsets:to_list(OrdSet)).
