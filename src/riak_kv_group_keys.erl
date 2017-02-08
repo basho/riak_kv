@@ -204,6 +204,8 @@ common_prefix_or_metadata({_Bucket, Key} = BKey,
 
 common_prefix(_Key, _Prefix, undefined) ->
     undefined;
+common_prefix(_Key, _Prefix, <<>>) ->
+    undefined;
 common_prefix(Key, undefined, Delimiter) ->
     common_prefix(Key, <<>>, Delimiter);
 common_prefix(Key, Prefix, Delimiter) ->
