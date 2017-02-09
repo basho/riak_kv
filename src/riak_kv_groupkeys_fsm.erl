@@ -101,14 +101,5 @@ process_entry({{TargetBucket, _}, {common_prefix, CommonPrefix}}, State = #state
      }.
 
 collate_list_group_keys(#state{metadatas_acc = Metadatas, common_prefixes_acc = CommonPrefixes}) ->
-    [{common_prefixes, to_sorted_list(CommonPrefixes)},
-     {metadatas, to_sorted_list(fun compare_metadatas/2, Metadatas)}].
-
-compare_metadatas({KeyA, _}, {KeyB, _}) ->
-    KeyA =< KeyB.
-
-to_sorted_list(OrdSet) ->
-    lists:sort(ordsets:to_list(OrdSet)).
-
-to_sorted_list(Fun, OrdSet) ->
-    lists:sort(Fun, ordsets:to_list(OrdSet)).
+    [{common_prefixes, ordsets:to_list(CommonPrefixes)},
+     {metadatas, ordsets:to_list(Metadatas)}].
