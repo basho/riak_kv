@@ -141,6 +141,8 @@ start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=StartAf
 
 next_pos(undefined, Bucket, GroupParams) ->
     start_pos(Bucket, GroupParams);
+next_pos({Bucket, PrevKey}, _Bucket, GroupParams =  #group_params{prefix=undefined}) ->
+    next_pos_after_key(GroupParams, Bucket, PrevKey);
 next_pos({Bucket, PrevKey}, _Bucket, GroupParams =  #group_params{prefix=Prefix}) ->
     case is_prefix(Prefix, PrevKey) of
         true ->
