@@ -302,7 +302,13 @@ estimate_query_size(#state{total_query_data  = TotalQueryData,
   when QBufRef /= undefined ->
 
     %% query buffer-backed, has a LIMIT: consider the latter
-    EstLimitData = round(Limit * (TotalQueryData / TotalQueryRows)),
+    EstLimitData =
+        case TotalQueryRows of
+            0 ->
+                0;
+            _ ->
+                round(Limit * (TotalQueryData / TotalQueryRows))
+        end,
     IsLimitTooBig = EstLimitData > MaxQueryData,
 
     %% but also check the grand total, for the case when LIMIT is big
@@ -601,21 +607,32 @@ estimate_query_size_limit_applies_to_aggregating_queries_test() ->
       #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = group_by}},
              result            = BigData,
              max_query_data    = erlang:external_size(BigData) - 1,
-             sub_qrys          = lists:seq(1, 100)}).
+             sub_qrys          = lists:seq(1, 100)},
+     [passing, cancelled, cancelled]).
 
 estimate_query_size_limit_applies_to_regular_queries_test() ->
     check_states(
       #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows}},
              total_query_data  = 10,
              max_query_data    = 30,
-             sub_qrys          = lists:seq(1, 100)}).
+             sub_qrys          = lists:seq(1, 100)},
+     [passing, cancelled, cancelled]).
 
-check_states(State) ->
+estimate_query_size_with_empty_first_chunks_test() ->
+    check_states(
+      #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows}},
+             result            = [],
+             total_query_rows  = 0,
+             max_query_data    = 1000,
+             sub_qrys          = lists:seq(1, 100)},
+     [passing, passing, passing]).
+
+check_states(State, [Out1, Out2, Out3]) ->
     lists:foreach(
       fun({StateN, Outcome}) -> ok = check_states2(StateN, Outcome) end,
-      [{State#state{n_subqueries_done = 1}, passing},
-       {State#state{n_subqueries_done = 2}, cancelled},
-       {State#state{n_subqueries_done = 3}, cancelled}]).
+      [{State#state{n_subqueries_done = 1}, Out1},
+       {State#state{n_subqueries_done = 2}, Out2},
+       {State#state{n_subqueries_done = 3}, Out3}]).
 
 check_states2(State, passing) ->
     ?assertEqual(estimate_query_size(State), State);
