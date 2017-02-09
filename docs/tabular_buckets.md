@@ -2,11 +2,11 @@
 ## Abstract
 Riak TS is built upon Riak KV which is built upon Riak Core in so much as
 Riak Core was factored out of a monolithic Riak KV and in so much as Riak TS
-utilizes several function call paths of Riak KV but fundamentally differs
-as neither the table nor a record within a table is a Riak Object in the sense
-that consumers as well as developers of Riak KV have committed to memory, the
-rules to reason about to guarantee eventual consistency in an AP system. To
-create a coherent understanding of Riak TS Table and Record entities, we will
+utilizes several function call paths of Riak KV. However, Riak TS fundamentally
+differs as neither the table nor a record within a table is a Riak Object in the
+sense that consumers as well as developers of Riak KV have committed to memory,
+the rules to reason about to guarantee eventual consistency in an AP system.
+To create a coherent understanding of Riak TS Table and Record entities, we will
 explore the operations that act upon these entities with specific callouts to
 differences between the TS entities and Riak KV ~entities Bucket Type, Bucket,
 Key, and Object.
@@ -33,8 +33,8 @@ parses and transforms the SQL into a data-definition language (DDL) format of
 the table and requests Riak Core to store the DDL as a new bucket type property.
 
 To ensure the bucket type operation is consistent, the bucket type activation
-request is focused through the Riak Core Claimant. The Claimant orchestrates
-the activity of creating and activating the bucket type which culminates in the
+request is serialized through the Riak Core Claimant. The Claimant orchestrates
+the activity of creating and activating the bucket type which results in the
 plumtree broadcast of the bucket type metadata around the cluster.
 
 Since LevelDB and Riak KV are unaware of the Riak TS record format, translation
@@ -51,12 +51,12 @@ results in storing the beam in the ddl_ebin directory. The presence of these
 modules is used in determining the status of the table-specific compiled module
 on each node.
 
-While the SQL `CREATE TABLE <table_name> ...` operation could be labeled
-eventually consistent, like most Riak KV storage operations, this would put the
-burden upon the caller to retry on failure due to a "not yet active" state for
-subsequent queries. Such a lack of certainly consistent postcondition,
-especially for the high frequency of SQL `INSERT INTO <table_name> ...` or
-PB PUT of records for Riak TS workloads, would lead not only a less desireable
+While the SQL `CREATE TABLE <table_name> ...` operation could be implemented as
+an eventually consistent operation, like most Riak KV storage operations, this
+would put the burden upon the caller to retry on failure due to a "not yet
+active" state for subsequent queries. Such a lack of certainly consistent
+postcondition, especially for the high frequency of SQL `INSERT INTO <table_name> ...`
+or PB PUT of records for Riak TS workloads, would lead not only a less desireable
 user experience, but also a degradation in performance. To that end, the table
 create operation is consistent, not returning until the table is created on all
 active nodes in the cluster.
