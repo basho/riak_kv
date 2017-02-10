@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_groupkeys_fsm: list keys grouped by params, e.g. prefix
+%% riak_kv_group_keys_fsm: list keys grouped by params, e.g. prefix
 %%
 %% Copyright (c) 2017 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_kv_groupkeys_fsm).
+-module(riak_kv_group_keys_fsm).
 
 -behaviour(riak_core_coverage_fsm).
 
@@ -82,7 +82,7 @@ finish(clean,
 
 -spec req(binary(), term()) -> term().
 req(Bucket, GroupParams) ->
-    riak_kv_requests:new_listgroupkeys_request(Bucket, GroupParams).
+    riak_kv_requests:new_list_group_keys_request(Bucket, GroupParams).
 
 get_nval(Bucket) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),

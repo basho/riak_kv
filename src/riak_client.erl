@@ -31,7 +31,7 @@
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
--export([list_groupkeys/4]).
+-export([list_group_keys/4]).
 -export([filter_buckets/2]).
 -export([filter_keys/3,filter_keys/4]).
 -export([list_buckets/1,list_buckets/2,list_buckets/3, list_buckets/4]).
@@ -530,7 +530,7 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
 
 
 %% @doc TODO
-list_groupkeys(Bucket, GroupParams, Timeout0, {?MODULE, [Node, _ClientId]}) ->
+list_group_keys(Bucket, GroupParams, Timeout0, {?MODULE, [Node, _ClientId]}) ->
     Timeout =
         case Timeout0 of
             T when is_integer(T) -> T;
@@ -538,8 +538,8 @@ list_groupkeys(Bucket, GroupParams, Timeout0, {?MODULE, [Node, _ClientId]}) ->
         end,
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_groupkeys_fsm_sup:start_groupkeys_fsm(Node, [{raw, ReqId, Me}, [Bucket, GroupParams, Timeout]]),
-    wait_for_listgroupkeys(ReqId).
+    riak_kv_group_keys_fsm_sup:start_group_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, GroupParams, Timeout]]),
+    wait_for_list_group_keys(ReqId).
 
 stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT, THIS).
@@ -856,7 +856,7 @@ wait_for_listkeys(ReqId, Acc) ->
     end.
 
 %% @private
-wait_for_listgroupkeys(ReqId) ->
+wait_for_list_group_keys(ReqId) ->
     receive
         {ReqId, done, Keys} ->
             {ok, Keys};

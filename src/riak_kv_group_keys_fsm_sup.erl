@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_groupkeys_fsm_sup: supervise the riak_kv keys state machines.
+%% riak_kv_group_keys_fsm_sup: supervise the riak_kv keys state machines.
 %%
 %% Copyright (c) 2017 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -22,15 +22,15 @@
 
 %% @doc supervise the riak_kv keys state machines
 
--module(riak_kv_groupkeys_fsm_sup).
+-module(riak_kv_group_keys_fsm_sup).
 
 -behaviour(supervisor).
 
--export([start_groupkeys_fsm/2]).
+-export([start_group_keys_fsm/2]).
 -export([start_link/0]).
 -export([init/1]).
 
-start_groupkeys_fsm(Node, Args) ->
+start_group_keys_fsm(Node, Args) ->
     supervisor:start_child({?MODULE, Node}, Args).
 
 %% @spec start_link() -> ServerRet
@@ -43,7 +43,7 @@ start_link() ->
 init([]) ->
     KeysFsmSpec = {
         undefined,
-        {riak_core_coverage_fsm, start_link, [riak_kv_groupkeys_fsm]},
-        temporary, 5000, worker, [riak_kv_groupkeys_fsm]
+        {riak_core_coverage_fsm, start_link, [riak_kv_group_keys_fsm]},
+        temporary, 5000, worker, [riak_kv_group_keys_fsm]
     },
     {ok, {{simple_one_for_one, 10, 10}, [KeysFsmSpec]}}.
