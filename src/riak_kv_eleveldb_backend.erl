@@ -398,10 +398,9 @@ fold_keys(fold_keys, FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts, ref=Ref}
         false ->
             {ok, KeyFolder()}
     end;
-fold_keys(fold_groupkeys,
+fold_keys(fold_group_keys,
     FoldFun, Acc, Opts,
-    #state{fold_opts=FoldOpts, ref=DbRef}
-) ->
+    #state{fold_opts=FoldOpts, ref=DbRef}) ->
     riak_kv_group_keys:fold_keys(?MODULE, FoldFun, Acc, Opts, FoldOpts, DbRef).
 
 fold_indexes(FoldIndexFun, Acc, _Opts, #state{fold_opts=FoldOpts,

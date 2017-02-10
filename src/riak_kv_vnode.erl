@@ -846,7 +846,7 @@ handle_coverage_request(kv_listkeys_request, Req, FilterVNodes, Sender, State) -
     ItemFilter = riak_kv_requests:get_item_filter(Req),
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
-handle_coverage_request(kv_listgroupkeys_request, Req, FilterVNodes, Sender, State) ->
+handle_coverage_request(kv_list_group_keys_request, Req, FilterVNodes, Sender, State) ->
     Bucket = riak_kv_requests:get_bucket(Req),
     ResultFun = get_result_fun(Req, Bucket, Sender),
     Opts = [{bucket, Bucket}],
@@ -935,7 +935,7 @@ handle_coverage_groupkeyfold(
     Bucket, GroupParams, ResultFun,
     FilterVNodes, Sender, Opts, State
 ) ->
-    Opts1 = [{fold_keys_type, fold_groupkeys}, {group_params, GroupParams} | Opts],
+    Opts1 = [{fold_keys_type, fold_group_keys}, {group_params, GroupParams} | Opts],
     ItemFilter = none,
     FoldType = fold_keys,
     FoldFunType = objects,
