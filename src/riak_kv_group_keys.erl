@@ -177,14 +177,24 @@ maybe_accumulate({ignore, _BinaryValue}, _PrevEntry, _Bucket, _GroupParams, _Fol
     Acc;
 maybe_accumulate(PrevEntry, PrevEntry, _Bucket, _GroupParams, _FoldKeysFun, _Acc, _Itr) ->
     {error, did_not_skip_to_next_entry};
-maybe_accumulate({{Bucket, _Key}, _BinaryValue} = Entry, _PrevEntry, Bucket, #group_params{prefix=undefined}=GroupParams, FoldFun, Acc, Itr) ->
-    accumulate(Entry, Bucket, GroupParams, FoldFun, Acc, Itr);
+maybe_accumulate({{Bucket, _Key}, _BinaryValue} = Entry, _PrevEntry, Bucket, #group_params{prefix = undefined, max_keys = MaxKeys}=GroupParams, FoldFun, Acc, Itr) ->
+    case riak_kv_fold_buffer:size(Acc) =< MaxKeys of
+        true ->
+            lager:info("Arrived at MaxKeys of ~p: ", [MaxKeys]),
+            accumulate(Entry, Bucket, GroupParams, FoldFun, Acc, Itr);
+        false -> Acc
+    end;
 maybe_accumulate(_Entry, _PrevEntry, _Bucket, #group_params{prefix=undefined}=_GroupParams, _FoldFun, Acc, _Itr) ->
     Acc;
-maybe_accumulate({{Bucket, Key}, _BinaryValue} = Entry, _PrevEntry, Bucket, #group_params{prefix=Prefix}=GroupParams, FoldFun, Acc, Itr) ->
+maybe_accumulate({{Bucket, Key}, _BinaryValue} = Entry, _PrevEntry, Bucket, #group_params{prefix = Prefix, max_keys = MaxKeys}=GroupParams, FoldFun, Acc, Itr) ->
     case Prefix =/= undefined andalso is_prefix(Prefix, Key) of
         true ->
-            accumulate(Entry, Bucket, GroupParams, FoldFun, Acc, Itr);
+            case riak_kv_fold_buffer:size(Acc) =< MaxKeys of
+                true ->
+                    lager:info("Arrived at MaxKeys of ~p: ", [MaxKeys]),
+                    accumulate(Entry, Bucket, GroupParams, FoldFun, Acc, Itr);
+                false -> Acc
+            end;
         false ->
                                                 % done
             Acc
