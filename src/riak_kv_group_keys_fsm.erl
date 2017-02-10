@@ -36,10 +36,9 @@
 -record(state, {
           from :: from(),
           bucket :: riak_object:bucket(),
-          metadatas_acc = ordsets:new() :: ordsets:ordset(),
-          common_prefixes_acc = ordsets:new() :: ordsets:ordset()
+          entries_acc = ordsets:new() :: ordsets:ordset(any()),
+          group_params :: any()
          }).
-
 
 %%
 %% riak_core_coverage_fsm callbacks
@@ -50,7 +49,7 @@ init(From, [Bucket, GroupParams, Timeout]) ->
     NVal = get_nval(Bucket),
     {
         Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-        #state{from=From, bucket=Bucket}
+        #state{from=From, bucket=Bucket, group_params = GroupParams}
     }.
 
 process_results({From, Bucket, Entries}, StateData) ->
@@ -93,13 +92,19 @@ process_entries(_Bucket, Entries, State) ->
     lists:foldl(fun process_entry/2, State, Entries).
 
 %% By the time we get here we should only have results from TargetBucket; crash if we don't.
-process_entry({{TargetBucket, Key}, {metadata, Metadata}}, State = #state{bucket=TargetBucket}) ->
-    State#state{metadatas_acc = ordsets:add_element({Key, Metadata}, State#state.metadatas_acc)};
-process_entry({{TargetBucket, _}, {common_prefix, CommonPrefix}}, State = #state{bucket=TargetBucket})->
-    State#state{
-      common_prefixes_acc = ordsets:add_element(CommonPrefix, State#state.common_prefixes_acc)
-     }.
+process_entry({{TargetBucket, Key}, Entry}, State = #state{bucket=TargetBucket}) ->
+    State#state{entries_acc = ordsets:add_element({Key, Entry}, State#state.entries_acc)}.
 
-collate_list_group_keys(#state{metadatas_acc = Metadatas, common_prefixes_acc = CommonPrefixes}) ->
-    [{common_prefixes, ordsets:to_list(CommonPrefixes)},
-     {metadatas, ordsets:to_list(Metadatas)}].
+collate_list_group_keys(#state{entries_acc = Entries0}) ->
+    %% TODO: encapsulate GroupParams so we can extract the actual max keys in a reasonable way
+    MaxKeys = 1000,
+    Entries = ordsets:to_list(Entries0),
+    TruncatedEntries = lists:sublist(Entries, MaxKeys),
+    {CommonPrefixes, Metadatas} = lists:foldr(fun partition_entry/2, {[],[]}, TruncatedEntries),
+    [{common_prefixes, CommonPrefixes},
+     {metadatas, Metadatas}].
+
+partition_entry({_Key, {common_prefix, CommonPrefix}}, {CommonPrefixesAcc, MetadatasAcc}) ->
+    {[CommonPrefix|CommonPrefixesAcc], MetadatasAcc};
+partition_entry({Key, {metadata, Metadata}}, {CommonPrefixesAcc, MetadatasAcc}) ->
+    {CommonPrefixesAcc, [{Key, Metadata}|MetadatasAcc]}.
