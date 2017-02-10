@@ -55,7 +55,7 @@ to_group_params(BackendMod, PropList) ->
       }.
 
 value_or_default(Key, PropList, Default)->
-    case proplists:get_value(Key, PropList) of
+    case proplists:get_value(Key, PropList, "") of
         <<"">> ->
             Default;
         "" ->
@@ -158,10 +158,7 @@ next_pos_after_key(GroupParams = #group_params{prefix = Prefix, delimiter = Deli
         undefined ->
             next;
         CommonPrefix ->
-            Seek = to_object_key(GroupParams, Bucket, append_null_byte(CommonPrefix)),
-            lager:info("@@@ Seek: ~p", [riak_kv_eleveldb_backend:from_object_key(Seek)]),
-            next
-            %% append_null_byte(CommonPrefix)
+            to_object_key(GroupParams, Bucket, append_max_byte(CommonPrefix))
     end.
 
 is_prefix(B1, B2) when is_binary(B1), is_binary(B2) ->
@@ -254,11 +251,23 @@ extract_metadata({Bucket, Key} = _BKey,
 append_null_byte(Binary) when is_binary(Binary) ->
     <<Binary/binary, 0>>.
 
+%% 0xFF is the biggest byte for the purposes of sorting in LevelDB,
+%% used for seeking past all keys starting with the prefix.
+-spec append_max_byte(binary()) -> binary().
+append_max_byte(Binary) when is_binary(Binary) ->
+    <<Binary/binary, 16#FF>>.
+
 %% ====================
 %% TESTS
 %% ====================
 
 -ifdef(TEST).
+
+test_group_params(Prefix, Delimiter) ->
+    to_group_params(riak_kv_eleveldb_backend, [{prefix, Prefix}, {delimiter, Delimiter}]).
+
+expected_next_pos(Bucket, Key) ->
+    riak_kv_eleveldb_backend:to_object_key(Bucket, append_max_byte(Key)).
 
 common_prefix_test() ->
     Key = <<"foo/bar/baz">>,
@@ -349,37 +358,37 @@ common_prefix_or_metadata_with_undefined_delimiter_test() ->
     ?assertMatch({metadata, _Anything}, common_prefix_or_metadata(BKey, RObj, GroupParams)).
 
 next_pos_after_key_with_no_prefix_or_delimiter_test() ->
-    Prefix = undefined,
-    Delimiter = undefined,
-    ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
-    ?assertEqual(next, next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
-    ?assertEqual(next, next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
+    GroupParams = test_group_params(undefined, undefined),
+    Bucket = <<"bucket">>,
+    ?assertEqual(next, next_pos_after_key(GroupParams, Bucket, <<"foo">>)),
+    ?assertEqual(next, next_pos_after_key(GroupParams, Bucket, <<"foo/bar">>)),
+    ?assertEqual(next, next_pos_after_key(GroupParams, Bucket, <<"foo/bar/baz">>)).
 
 next_pos_after_key_with_delimiter_test() ->
-    Prefix = undefined,
-    Delimiter = <<"/">>,
-    ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
-    ?assertEqual(append_null_byte(<<"foo/">>),
-                 next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
-    ?assertEqual(append_null_byte(<<"foo/">>),
-                 next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
+    GroupParams = test_group_params(undefined, <<"/">>),
+    Bucket = <<"bucket">>,
+    ?assertEqual(next, next_pos_after_key(GroupParams, Bucket, <<"foo">>)),
+    ?assertEqual(expected_next_pos(Bucket, <<"foo/">>),
+                 next_pos_after_key(GroupParams, Bucket, <<"foo/bar">>)),
+    ?assertEqual(expected_next_pos(Bucket, <<"foo/">>),
+                 next_pos_after_key(GroupParams, Bucket, <<"foo/bar/baz">>)).
 
 next_pos_after_key_with_prefix_test() ->
-    Prefix = <<"foo/">>,
-    Delimiter = undefined,
-    ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
+    GroupParams = test_group_params(<<"foo/">>, undefined),
+    Bucket = <<"bucket">>,
+    ?assertEqual(next, next_pos_after_key(GroupParams, Bucket, <<"foo">>)),
     ?assertEqual(next,
-                 next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
+                 next_pos_after_key(GroupParams, Bucket, <<"foo/bar">>)),
     ?assertEqual(next,
-                 next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
+                 next_pos_after_key(GroupParams, Bucket, <<"foo/bar/baz">>)).
 
 next_pos_after_key_with_prefix_and_delimiter_test() ->
-    Prefix = <<"foo/">>,
-    Delimiter = <<"/">>,
-    ?assertEqual(next, next_pos_after_key(<<"foo">>, Prefix, Delimiter)),
+    GroupParams = test_group_params(<<"foo/">>, <<"/">>),
+    Bucket = <<"bucket">>,
+    ?assertEqual(next, next_pos_after_key(GroupParams, Bucket, <<"foo">>)),
     ?assertEqual(next,
-                 next_pos_after_key(<<"foo/bar">>, Prefix, Delimiter)),
-    ?assertEqual(append_null_byte(<<"foo/bar/">>),
-                 next_pos_after_key(<<"foo/bar/baz">>, Prefix, Delimiter)).
+                 next_pos_after_key(GroupParams, Bucket, <<"foo/bar">>)),
+    ?assertEqual(expected_next_pos(Bucket, <<"foo/bar/">>),
+                 next_pos_after_key(GroupParams, Bucket, <<"foo/bar/baz">>)).
 
 -endif.
