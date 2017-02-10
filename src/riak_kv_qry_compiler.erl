@@ -29,7 +29,7 @@
 -export([run_select/2, run_select/3]).
 
 -ifdef(TEST).
--compile(export_all).
+-include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -type compiled_select() :: fun((_,_) -> riak_pb_ts_codec:ldbvalue()).
@@ -253,16 +253,7 @@ my_mapfoldl(F, Accu0, [Hd|Tail]) ->
 my_mapfoldl(F, Accu, []) when is_function(F, 2) -> {[],Accu}.
 
 %%
-compile_select_clause(DDL, ?SQL_SELECT{group_by = GroupBy,
-                                       helper_mod = Mod,
-                                       'SELECT' = #riak_sel_clause_v1{clause = Sel}} = Q) ->
-    %% if the query groups by time e.g. `GROUP BY time(mytime, 10m)` then one
-    %% column called "time" is added as the first column, which is the first
-    %% millisecond of the group's timestamp. This needs to be done first so the
-    %% indexes used by the columns in the select clause are compiled correctly.
-    #riak_sel_clause_v1{
-        col_names = ColNames,
-        col_return_types = ColTypes1} = Sel1 = maybe_add_group_by_time_columns(Mod, GroupBy, #riak_sel_clause_v1{ }),
+compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{clause = Sel}} = Q) ->
     %% compile each select column and put all the calc types into a set, if
     %% any of the results are aggregate then aggregate is the calc type for the
     %% whole query
@@ -270,10 +261,10 @@ compile_select_clause(DDL, ?SQL_SELECT{group_by = GroupBy,
         fun(ColX, AccX) ->
             select_column_clause_folder(DDL, ColX, AccX)
         end,
-    Acc = {sets:new(), Sel1},
+    Acc = {sets:new(), #riak_sel_clause_v1{ }},
     %% iterate from the right so we can append to the head of lists
-    {ResultTypeSet, Sel2} = lists:foldl(CompileColFn, Acc, Sel),
-    {ColTypes2, Errors} = my_mapfoldl(
+    {ResultTypeSet, Sel1} = lists:foldl(CompileColFn, Acc, Sel),
+    {ColTypes, Errors} = my_mapfoldl(
         fun(ColASTX, Errors) ->
             infer_col_type(DDL, ColASTX, Errors)
         end, [], Sel),
@@ -281,45 +272,23 @@ compile_select_clause(DDL, ?SQL_SELECT{group_by = GroupBy,
     IsAggregate = sets:is_element(aggregate, ResultTypeSet),
     if
         IsGroupBy ->
-            Sel3 = Sel2#riak_sel_clause_v1{calc_type = group_by};
+            Sel2 = Sel1#riak_sel_clause_v1{calc_type = group_by};
         IsAggregate ->
-            Sel3 = Sel2#riak_sel_clause_v1{calc_type = aggregate};
+            Sel2 = Sel1#riak_sel_clause_v1{calc_type = aggregate};
         not IsAggregate ->
-            Sel3 = Sel2#riak_sel_clause_v1{
+            Sel2 = Sel1#riak_sel_clause_v1{
                    calc_type = rows,
                    initial_state = []}
     end,
     case Errors of
         [] ->
-            Sel4 = Sel3#riak_sel_clause_v1{
-                col_return_types = lists:flatten(ColTypes1++ColTypes2),
-                col_names = ColNames++get_col_names(DDL, Q)},
-            {ok, Sel4};
+            Sel3 = Sel2#riak_sel_clause_v1{
+                col_return_types = lists:flatten(ColTypes),
+                col_names = get_col_names(DDL, Q)},
+            {ok, Sel3};
         [_|_] ->
             {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
     end.
-
-%%
-maybe_add_group_by_time_columns(Mod,
-                                GroupBy,
-                                #riak_sel_clause_v1{
-                                    clause = Clause,
-                                    col_names = ColNames,
-                                    col_return_types = ReturnTypes,
-                                    initial_state = InitialState
-                                } = SelClause) ->
-    TimeFns = filter_group_by_time_fns(GroupBy),
-    FnsLen = length(TimeFns),
-    SelClause#riak_sel_clause_v1{
-        clause = [fun(_,Acc) -> Acc end || _ <- lists:seq(1, FnsLen)] ++ Clause,
-        col_names = lists:duplicate(FnsLen, <<"time">>) ++ ColNames,
-        col_return_types = lists:duplicate(FnsLen, timestamp) ++ ReturnTypes,
-        finalisers = [fun(Row,_) -> lists:nth(N, Row) end || N <- lists:seq(1, FnsLen)],
-        initial_state = [make_group_by_time_fn(Mod, TFn) || TFn <- TimeFns] ++ InitialState
-    }.
-
-filter_group_by_time_fns(GroupBy) ->
-    [TFn || TFn <- GroupBy, element(1,TFn) == time_fn].
 
 %%
 -spec get_col_names(?DDL{}, ?SQL_SELECT{}) -> [binary()].
@@ -443,6 +412,13 @@ compile_select_col_stateless(_, {Type, V}) when Type == varchar; Type == boolean
     fun(_,_) -> V end;
 compile_select_col_stateless(_, {return_state, N}) when is_integer(N) ->
     fun(Row,_) -> pull_from_row(N, Row) end;
+compile_select_col_stateless(DDL, {{sql_select_fn, 'TIME'}, Args1}) ->
+    [Argsx1,Argsx2] = [compile_select_col_stateless(DDL,Ax) || Ax <- Args1],
+    fun(Row,State) ->
+        A1 = Argsx1(Row,State),
+        A2 = Argsx2(Row,State),
+        riak_ql_quanta:quantum(A1,A2,ms)
+    end;
 compile_select_col_stateless(_, {finalise_aggregation, FnName, N}) ->
     fun(Row,_) ->
         ColValue = pull_from_row(N, Row),
@@ -476,6 +452,8 @@ infer_col_type(?DDL{ fields = Fields }, {identifier, ColName1}, Errors) ->
             {_, Type} = col_index_and_type_of(Fields, ColName2)
     end,
     {Type, Errors};
+infer_col_type(_, {{sql_select_fn, 'TIME'}, [_,_]}, Errors) ->
+    {timestamp, Errors};
 infer_col_type(DDL, {{window_agg_fn, FnName}, [FnArg1]}, Errors1) ->
     case infer_col_type(DDL, FnArg1, Errors1) of
         {error, _} = Error ->
@@ -514,8 +492,7 @@ extract_stateful_functions(Selection1, FinaliserLen) when is_integer(FinaliserLe
 %% extract stateful functions from the selection
 -spec extract_stateful_functions2(riak_ql_ddl:selection(), integer(),
                                   [riak_ql_ddl:selection_function()]) ->
-        {riak_ql_ddl:selection() | {finalise_aggregation, FnName::atom(), integer()},
-         [riak_ql_ddl:selection_function()]}.
+        {riak_ql_ddl:selection() | {finalise_aggregation, FnName::atom(), integer()}, [riak_ql_ddl:selection_function()]}.
 extract_stateful_functions2({Op, ArgA1, ArgB1}, FinaliserLen, Fns1) ->
     {ArgA2, Fns2} = extract_stateful_functions2(ArgA1, FinaliserLen, Fns1),
     {ArgB2, Fns3} = extract_stateful_functions2(ArgB1, FinaliserLen, Fns2),
@@ -526,6 +503,8 @@ extract_stateful_functions2({negate, Arg1}, FinaliserLen, Fns1) ->
 extract_stateful_functions2({Tag, _} = Node, _, Fns)
         when Tag == identifier; Tag == sint64; Tag == integer; Tag == float;
              Tag == binary;     Tag == varchar; Tag == boolean ->
+    {Node, Fns};
+extract_stateful_functions2({{sql_select_fn, _}, _} = Node, _, Fns) ->
     {Node, Fns};
 extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLen, Fns1) ->
     Fns2 = [Function | Fns1],
@@ -3135,16 +3114,33 @@ group_by_time_adds_a_column_test() ->
         "b sint64, "
         "PRIMARY KEY ((a), a))"),
     {ok, Q} = get_query(
-        "SELECT COUNT(*) FROM t
+        "SELECT time(a,1m), COUNT(*) FROM t
          WHERE a = 1
          GROUP BY time(a,1m);"),
     {ok,[?SQL_SELECT{'SELECT'=SelClause}]} = compile(DDL, Q),
     ?assertEqual(group_by, SelClause#riak_sel_clause_v1.calc_type),
-    ?assertEqual([<<"time">>, <<"COUNT(*)">>], SelClause#riak_sel_clause_v1.col_names),
+    ?assertEqual([<<"TIME(a, 60000)">>, <<"COUNT(*)">>], SelClause#riak_sel_clause_v1.col_names),
     ?assertEqual([timestamp,sint64], SelClause#riak_sel_clause_v1.col_return_types),
     %% these are funs so just check we have the right number
     ?assertMatch([_,_], SelClause#riak_sel_clause_v1.clause),
-    ?assertMatch([_,_], SelClause#riak_sel_clause_v1.finalisers).
+    ?assertMatch([_,_], SelClause#riak_sel_clause_v1.finalisers),
+    ?assertEqual([timestamp,sint64], SelClause#riak_sel_clause_v1.col_return_types).
+
+group_by_time_run_select_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((QUANTUM(a, 1, 's')), a))"),
+    Sel = testing_compile_row_select(
+        DDL,
+        "SELECT time(a, 1s), COUNT(*) FROM t "
+        "WHERE a > 1 AND a < 6 "
+        "GROUP BY time(a,1s);"),
+    #riak_sel_clause_v1{clause = SelectSpec} = Sel,
+    ?assertEqual(
+       [1000,1],
+       run_select(SelectSpec, [1001], [[],0])
+    ).
 
 find_filters_on_additional_local_key_fields_test() ->
     ?assertEqual(
