@@ -2642,7 +2642,7 @@ compile_query_with_function_type_error_1_test() ->
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-        {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].">>}},
+        {error,{invalid_query,<<"Function 'SUM' called with arguments of the wrong type [varchar].">>}},
         compile(get_standard_ddl(), Q)
     ).
 
@@ -2652,7 +2652,7 @@ compile_query_with_function_type_error_2_test() ->
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-        {error,{invalid_query,<<"\nFunction 'SUM' called with arguments of the wrong type [varchar].\n"
+        {error,{invalid_query,<<"Function 'SUM' called with arguments of the wrong type [varchar].\n"
                                 "Function 'AVG' called with arguments of the wrong type [varchar].">>}},
         compile(get_standard_ddl(), Q)
     ).
@@ -2663,7 +2663,7 @@ compile_query_with_function_type_error_3_test() ->
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
+        {error,{invalid_query,<<"Operator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q)
     ).
 
@@ -2673,7 +2673,7 @@ compile_query_with_arithmetic_type_error_1_test() ->
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
+        {error,{invalid_query,<<"Operator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q)
     ).
 
@@ -2683,7 +2683,7 @@ compile_query_with_arithmetic_type_error_2_test() ->
           "WHERE time > 5000 AND time < 10000"
           "AND user = 'user_1' AND location = 'derby'"),
     ?assertEqual(
-        {error,{invalid_query,<<"\nOperator '+' called with mismatched types [varchar vs sint64].">>}},
+        {error,{invalid_query,<<"Operator '+' called with mismatched types [varchar vs sint64].">>}},
         compile(get_standard_ddl(), Q)
     ).
 

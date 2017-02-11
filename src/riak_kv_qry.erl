@@ -337,8 +337,10 @@ maybe_await_query_results(_) ->
 %% Format the multiple syntax errors into a multiline error
 %% message.
 format_query_syntax_errors(Errors) ->
-    iolist_to_binary(
-        [["\n", riak_ql_ddl:syntax_error_to_msg(E)] || E <- Errors]).
+    <<"\n", Msg/binary>> =
+        iolist_to_binary(
+          [["\n", riak_ql_ddl:syntax_error_to_msg(E)] || E <- Errors]),
+    Msg.
 
 
 -spec empty_result() -> query_tabular_result().
