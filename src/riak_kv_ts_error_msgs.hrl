@@ -150,3 +150,8 @@
    iolist_to_binary(
      ["Invalid expression passed as parameter for inverse distribution function."])
 ).
+-define(
+   E_INVERSE_DIST_NOT_SUPPORTED,
+   iolist_to_binary(
+     ["Inverse distribution functions not supported by all nodes in this cluster."])
+).
