@@ -452,8 +452,22 @@ infer_col_type(?DDL{ fields = Fields }, {identifier, ColName1}, Errors) ->
             {_, Type} = col_index_and_type_of(Fields, ColName2)
     end,
     {Type, Errors};
-infer_col_type(_, {{sql_select_fn, 'TIME'}, [_,_]}, Errors) ->
-    {timestamp, Errors};
+infer_col_type(DDL, {{sql_select_fn, 'TIME'}, Args}, Errors1) ->
+    {ArgTypes,Errors2} =
+        lists:foldr(
+            fun(E, {Types, ErrorsX}) ->
+                case infer_col_type(DDL, E, ErrorsX) of
+                    {error,E}     -> {[error|Types],[E|ErrorsX]};
+                    {T, ErrorsX2} -> {[T|Types], ErrorsX2}
+                end
+            end, {[], Errors1}, Args),
+    case ArgTypes of
+        [timestamp,sint64] ->
+            {timestamp,Errors2};
+        _ ->
+            FnSigError = {argument_type_mismatch, 'TIME', ArgTypes},
+            {error,[FnSigError|Errors2]}
+    end;
 infer_col_type(DDL, {{window_agg_fn, FnName}, [FnArg1]}, Errors1) ->
     case infer_col_type(DDL, FnArg1, Errors1) of
         {error, _} = Error ->
@@ -3140,6 +3154,20 @@ group_by_time_run_select_test() ->
     ?assertEqual(
        [1000,1],
        run_select(SelectSpec, [1001], [[],0])
+    ).
+
+group_by_time_invalid_arg_types_returns_error_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((QUANTUM(a, 1, 's')), a))"),
+    {ok, Query} = get_query(
+        "SELECT time('lol', true), COUNT(*) FROM t "
+        "WHERE a > 1 AND a < 6 "
+        "GROUP BY time(a,1s);"),
+    ?assertMatch(
+       {error,{invalid_query,<<_/binary>>}},
+       compile(DDL,Query)
     ).
 
 find_filters_on_additional_local_key_fields_test() ->
