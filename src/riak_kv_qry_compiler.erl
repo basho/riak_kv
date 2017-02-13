@@ -115,14 +115,20 @@ occurs(F, FF) ->
 maybe_compile_group_by(_, {error,_} = E, _) ->
     E;
 maybe_compile_group_by(Mod, {ok, Sel3}, ?SQL_SELECT{ group_by = GroupBy } = Q1) ->
-    compile_group_by(Mod, GroupBy, [], Q1?SQL_SELECT{ 'SELECT' = Sel3 }).
+    %% a throw means an error occurred and the function returned early and is
+    %% an expected error e.g. column name typo.
+    try
+        compile_group_by(Mod, GroupBy, [], Q1?SQL_SELECT{ 'SELECT' = Sel3 })
+    catch
+        throw:Error -> Error
+    end.
 
 %%
 compile_group_by(_, [], Acc, Q) ->
     {ok, Q?SQL_SELECT{ group_by = lists:reverse(Acc) }};
 compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
         when is_binary(FieldName) ->
-    Pos = Mod:get_field_position([FieldName]),
+    Pos = get_group_by_field_position(Mod, FieldName),
     compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q);
 compile_group_by(Mod, [{time_fn,{_,FieldName},_} = GroupTimeFnAST|Tail], Acc, Q) when is_binary(FieldName) ->
     GroupTimeFn = make_group_by_time_fn(Mod, GroupTimeFnAST),
@@ -130,11 +136,27 @@ compile_group_by(Mod, [{time_fn,{_,FieldName},_} = GroupTimeFnAST|Tail], Acc, Q)
 
 -spec make_group_by_time_fn(module(), group_time_fn()) -> function().
 make_group_by_time_fn(Mod, {time_fn, {identifier,FieldName},{integer,GroupSize}}) ->
-    Pos = Mod:get_field_position([FieldName]),
+    Pos = get_group_by_field_position(Mod, FieldName),
     fun(Row) ->
         Time = lists:nth(Pos, Row),
         riak_ql_quanta:quantum(Time, GroupSize, 'ms')
     end.
+
+%% Get the position in the row for a table column, with `group by` specific
+%% errors if the column name does not exist in this table.
+get_group_by_field_position(Mod, FieldName) when is_binary(FieldName) ->
+    case Mod:get_field_position([FieldName]) of
+        undefined ->
+            throw(group_by_column_does_not_exist_error(Mod, FieldName));
+        Pos when is_integer(Pos) ->
+            Pos
+    end.
+
+group_by_column_does_not_exist_error(Mod, FieldName) ->
+    ?DDL{table = TableName} = Mod:get_ddl(),
+    Msg = iolist_to_binary(io_lib:format(
+        "Error in group by clause, column '~ts' does not exist in table table ~ts", [FieldName, TableName])),
+    {error, {invalid_query, Msg}}.
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -3156,7 +3178,7 @@ group_by_time_run_select_test() ->
        run_select(SelectSpec, [1001], [[],0])
     ).
 
-group_by_time_invalid_arg_types_returns_error_test() ->
+time_fn_in_select_clause_invalid_arg_types_returns_error_test() ->
     DDL = get_ddl(
         "CREATE TABLE t("
         "a TIMESTAMP NOT NULL, "
@@ -3165,6 +3187,34 @@ group_by_time_invalid_arg_types_returns_error_test() ->
         "SELECT time('lol', true), COUNT(*) FROM t "
         "WHERE a > 1 AND a < 6 "
         "GROUP BY time(a,1s);"),
+    ?assertMatch(
+       {error,{invalid_query,<<_/binary>>}},
+       compile(DDL,Query)
+    ).
+
+group_by_time_on_non_existing_column_returns_error_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((QUANTUM(a, 1, 's')), a))"),
+    {ok, Query} = get_query(
+        "SELECT time(a, 1s), COUNT(*) FROM t "
+        "WHERE a > 1 AND a < 6 "
+        "GROUP BY time(x,1s);"),
+    ?assertMatch(
+       {error,{invalid_query,<<_/binary>>}},
+       compile(DDL,Query)
+    ).
+
+group_by_on_non_existing_column_returns_error_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((QUANTUM(a, 1, 's')), a))"),
+    {ok, Query} = get_query(
+        "SELECT time(a, 1s), COUNT(*) FROM t "
+        "WHERE a > 1 AND a < 6 "
+        "GROUP BY x;"),
     ?assertMatch(
        {error,{invalid_query,<<_/binary>>}},
        compile(DDL,Query)
