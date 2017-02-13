@@ -19,7 +19,9 @@
 %% -------------------------------------------------------------------
 
 -module(riak_kv_group_keys).
--export([fold_keys/6]).
+-export([fold_keys/6,
+        to_group_params/1,
+        get_max_keys/1]).
 
 -record(group_params, {
           backend_mod :: module(),
@@ -35,8 +37,9 @@
 
 fold_keys(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
     Bucket = proplists:get_value(bucket, Opts),
-    GroupParams = to_group_params(BackendMod, proplists:get_value(group_params, Opts, [])),
-    ContentFolderFun = content_folder_fun(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc),
+    GroupParams = proplists:get_value(group_params, Opts),
+    GroupParams0 = GroupParams#group_params{backend_mod = BackendMod},
+    ContentFolderFun = content_folder_fun(Bucket, GroupParams0, DbRef, FoldOpts, FoldFun, Acc),
     Async = proplists:get_bool(async_fold, Opts),
     case Async of
         true ->
@@ -45,9 +48,8 @@ fold_keys(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
             {ok, ContentFolderFun()}
     end.
 
-to_group_params(BackendMod, PropList) ->
+to_group_params(PropList) ->
     #group_params{
-       backend_mod=BackendMod,
        prefix=value_or_default(prefix, PropList, undefined),
        delimiter=value_or_default(delimiter, PropList, undefined),
        start_after=value_or_default(start_after, PropList, undefined),
@@ -55,20 +57,25 @@ to_group_params(BackendMod, PropList) ->
       }.
 
 value_or_default(Key, PropList, Default)->
-    case proplists:get_value(Key, PropList, "") of
+    case proplists:get_value(Key, PropList) of
         <<"">> ->
             Default;
         "" ->
+            Default;
+        undefined ->
             Default;
         Value ->
             Value
     end.
 
-backend_from(#group_params{backend_mod = BackendMod}) ->
+get_backend(#group_params{backend_mod = BackendMod}) ->
     BackendMod.
 
+get_max_keys(#group_params{max_keys = MaxKeys}) ->
+    MaxKeys.
+
 content_folder_fun(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
-    BackendMod = backend_from(GroupParams),
+    BackendMod = get_backend(GroupParams),
     fun() ->
             FoldOpts1 = [{first_key, BackendMod:to_first_key({bucket, Bucket})} | FoldOpts],
             try iterator_open(DbRef, FoldOpts1) of
@@ -102,7 +109,7 @@ iterate(Bucket, GroupParams, Itr, FoldFun, Acc) ->
 
 enumerate(PrevEntry, Bucket, GroupParams, Itr, FoldFun, Acc) ->
     Pos = next_pos(PrevEntry, Bucket, GroupParams),
-    BackendMod = backend_from(GroupParams),
+    BackendMod = get_backend(GroupParams),
     case Pos of
         npos ->
             Acc;
@@ -167,7 +174,7 @@ is_prefix(_B1, _B2) ->
     false.
 
 to_object_key(GroupParams, Bucket, Key) ->
-    BackendMod = backend_from(GroupParams),
+    BackendMod = get_backend(GroupParams),
     BackendMod:to_object_key(Bucket, Key).
 
 maybe_accumulate({undefined, _BinaryValue}, _PrevEntry, _Bucket, _GroupParams, _FoldFun, Acc, _Itr) ->
