@@ -4358,4 +4358,28 @@ query_with_desc_last_local_key_column_no_quantum_test() ->
         [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
     ).
 
+validate_invdist_funcall_1_test() ->
+    ?assertEqual(
+       {ok, [0.3]},
+       validate_invdist_funcall('PERCENTILE', [{identifier, [<<"x">>]}, {float, 0.3}])).
+
+validate_invdist_funcall_2_test() ->
+    ?assertEqual(
+       {error,
+        {invalid_static_invdist_fn_param, <<"Invalid argument 2 in call to function PERCENTILE.">>}},
+       validate_invdist_funcall('PERCENTILE', [{identifier, [<<"x">>]}, {float, 1.3}])).
+
+validate_invdist_funcall_3_test() ->
+    ?assertEqual(
+       {error,
+        {invalid_expr_in_invdist_fun_arglist, <<"Invalid expression passed as parameter for inverse distribution function.">>}},
+       validate_invdist_funcall('PERCENTILE', [{identifier, [<<"x">>]}, {'+', {float, 1.3}, {boolean, true}}])).
+
+validate_invdist_funcall_4_test() ->
+    ?assertEqual(
+       {error,
+        {nonconst_expr_in_invdist_fun_arglist, <<"Non-const expression passed as parameter for inverse distribution function.">>}},
+       validate_invdist_funcall('PERCENTILE', [{identifier, [<<"x">>]}, {identifier, [<<"y">>]}])).
+
+
 -endif.
