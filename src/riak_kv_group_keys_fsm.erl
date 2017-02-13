@@ -93,16 +93,18 @@ get_nval(Bucket) ->
 process_entries(_Bucket, Entries, State) ->
     lists:foldl(fun process_entry/2, State, Entries).
 
-%% By the time we get here we should only have results from TargetBucket; crash if we don't.
-%% for sorting reasons, entries_acc stores both kinds of entry {InterleavingSortKey ...}
+%% In the heads: we should only have results from TargetBucket by now; crash if we don't.
+%% We are using an ordset to both ensure we have no duplicate Keys or CommonPrefixes, and to ensure
+%% the correct utf8 lexicographic sort-order. In the CommonPrefix case, we double the CommonPrefix
+%% so that the tuple-size doesn't interfere with the interleaving of Keys and CommonPrefixes in the
+%% sort order even though we throw it away later in partition entry.
 process_entry({{TargetBucket, Key}, Metadata = {metadata, _M}}, State = #state{bucket=TargetBucket}) ->
     State#state{entries_acc = ordsets:add_element({Key, Metadata}, State#state.entries_acc)};
 process_entry({{TargetBucket, _}, {common_prefix, CommonPrefix}}, State = #state{bucket=TargetBucket})->
-    State#state{entries_acc = ordsets:add_element({CommonPrefix}, State#state.entries_acc)}.
+    State#state{entries_acc = ordsets:add_element({CommonPrefix, CommonPrefix}, State#state.entries_acc)}.
 
-collate_list_group_keys(State0 = #state{entries_acc = Entries0}) ->
-    %% TODO: encapsulate GroupParams so we can extract the actual max keys in a reasonable way
-    MaxKeys = 1000,
+collate_list_group_keys(State0 = #state{entries_acc = Entries0, group_params = GroupParams}) ->
+    MaxKeys = riak_kv_group_keys:get_max_keys(GroupParams),
     Entries = ordsets:to_list(Entries0),
     TruncatedEntries = lists:sublist(Entries, MaxKeys),
     State = lists:foldr(fun partition_entry/2, State0, TruncatedEntries),
@@ -112,6 +114,6 @@ collate_list_group_keys(State0 = #state{entries_acc = Entries0}) ->
 partition_entry({Key, {metadata, Metadata}},
                 State = #state{metadatas_acc = MetadatasAcc}) ->
     State#state{metadatas_acc = [{Key, Metadata} | MetadatasAcc]};
-partition_entry({CommonPrefix},
+partition_entry({CommonPrefix, _CommonPrefix},
                 State = #state{common_prefixes_acc = CommonPrefixesAcc}) ->
     State#state{common_prefixes_acc = [CommonPrefix | CommonPrefixesAcc]}.
