@@ -841,14 +841,20 @@ handle_coverage(Req, FilterVNodes, Sender, State) ->
 
 handle_coverage_request(kv_listkeys_request, Req, FilterVNodes, Sender, State) ->
     Bucket = riak_kv_requests:get_bucket(Req),
-    ItemFilter = riak_kv_requests:get_item_filter(Req),
-    ResultFun = case riak_kv_requests:get_ack_backpressure(Req) of
-                    true  -> result_fun_ack(Bucket, Sender);
-                    false -> result_fun(Bucket, Sender)
-                end,
+    ResultFun = get_result_fun(Req, Bucket, Sender),
     Opts = [{bucket, Bucket}],
+    ItemFilter = riak_kv_requests:get_item_filter(Req),
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
+handle_coverage_request(kv_listgroupkeys_request, Req, FilterVNodes, Sender, State) ->
+    Bucket = riak_kv_requests:get_bucket(Req),
+    ResultFun = get_result_fun(Req, Bucket, Sender),
+    Opts = [{bucket, Bucket}],
+    GroupParams = riak_kv_requests:get_group_params(Req),
+    handle_coverage_groupkeyfold(
+        Bucket, GroupParams, ResultFun,
+        FilterVNodes, Sender, Opts, State
+    );
 handle_coverage_request(kv_listbuckets_request,
                         Req,
                         _FilterVNodes,
@@ -883,6 +889,12 @@ handle_coverage_request(kv_index_request, Req, FilterVNodes, Sender, State) ->
                 end,
     handle_coverage_index(Bucket, ItemFilter, Query, FilterVNodes, Sender, State, ResultFun).
 
+get_result_fun(Req, Bucket, Sender) ->
+    case riak_kv_requests:get_ack_backpressure(Req) of
+        true -> result_fun_ack(Bucket, Sender);
+        false -> result_fun(Bucket, Sender)
+    end.
+
 %% @doc Batch size for results is set to 2i max_results if that is less
 %% than the default size. Without this the vnode may send back to the FSM
 %% more items than could ever be sent back to the client.
@@ -907,23 +919,34 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             BufSize = buffer_size_for_index_query(Query, DefaultBufSz),
             Opts = [{index, Bucket, Query}, {bucket, Bucket}, {buffer_size, BufSize}],
             FoldType = fold_type_for_query(Query),
-            handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
+            handle_coverage_fold(FoldType, keys, Bucket, ItemFilter, ResultFun,
                                     FilterVNodes, Sender, Opts, State);
         false ->
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
 %% Convenience for handling both v3 and v4 coverage-based key fold operations
-handle_coverage_keyfold(Bucket, ItemFilter, Query,
-                      FilterVNodes, Sender, State,
-                      ResultFunFun) ->
-    handle_coverage_fold(fold_keys, Bucket, ItemFilter, Query,
-                            FilterVNodes, Sender, State, ResultFunFun).
+handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+                      FilterVNodes, Sender, Opts, State) ->
+    handle_coverage_fold(fold_keys, keys, Bucket, ItemFilter, ResultFun,
+                            FilterVNodes, Sender, Opts, State).
+
+handle_coverage_groupkeyfold(
+    Bucket, GroupParams, ResultFun,
+    FilterVNodes, Sender, Opts, State
+) ->
+    Opts1 = [{fold_keys_type, fold_groupkeys}, {group_params, GroupParams} | Opts],
+    ItemFilter = none,
+    FoldType = fold_keys,
+    FoldFunType = objects,
+    handle_coverage_fold(
+        FoldType, FoldFunType, Bucket, ItemFilter, ResultFun,
+        FilterVNodes, Sender, Opts1, State).
 
 %% Until a bit of a refactor can occur to better abstract
 %% index operations, allow the ModFun for folding to be declared
 %% to support index operations that can return objects
-handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
+handle_coverage_fold(FoldType, FoldFunType, Bucket, ItemFilter, ResultFun,
                         FilterVNodes, Sender, Opts0,
                         State=#state{async_folding=AsyncFolding,
                                      idx=Index,
@@ -937,7 +960,7 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = riak_kv_fold_buffer:new(BufferSize, ResultFun),
     Extras = fold_extras_keys(Index, Bucket),
-    FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
+    FoldFun = fold_fun(FoldFunType, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     Opts = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
@@ -1854,6 +1877,10 @@ fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
                 _ ->
                     Buffer
             end
+    end;
+fold_fun(objects, BufferMod, _Filter, undefined) ->
+    fun(Bucket, Key, Item, Buffer) ->
+        BufferMod:add({{Bucket, Key}, Item}, Buffer)
     end.
 
 %% @private

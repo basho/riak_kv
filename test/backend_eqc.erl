@@ -146,7 +146,7 @@ prop_backend(Backend, Volatile, Config, Cleanup) ->
 %%====================================================================
 
 bucket() ->
-    elements([<<"b1">>,<<"b2">>]).
+    elements([<<Seq>> || Seq <- lists:seq($a, $z)]).
 
 bucket(#qcst{backend=Backend}) ->
     try
