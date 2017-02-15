@@ -109,8 +109,9 @@ collate_list_group_keys(State0 = #state{entries_acc = Entries0, group_params = G
     TruncatedEntries = lists:sublist(Entries, MaxKeys),
     IsTruncated = length(Entries) > length(TruncatedEntries),
     State = lists:foldr(fun partition_entry/2, State0, TruncatedEntries),
-    [{common_prefixes, State#state.common_prefixes_acc},
-     {metadatas, State#state.metadatas_acc}, {is_truncated, IsTruncated}].
+    riak_kv_group_keys_response:new_response(State#state.metadatas_acc,
+                                             State#state.common_prefixes_acc,
+                                             IsTruncated).
 
 partition_entry({Key, {metadata, Metadata}},
                 State = #state{metadatas_acc = MetadatasAcc}) ->
