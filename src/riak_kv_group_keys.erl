@@ -20,16 +20,24 @@
 
 -module(riak_kv_group_keys).
 -export([fold_keys/6,
-        to_group_params/1,
-        get_max_keys/1]).
+         to_group_params/1,
+         get_prefix/1,
+         get_delimiter/1,
+         get_start_after/1,
+         get_max_keys/1,
+         get_continuation_token/1]).
+-export_type([group_params/0]).
 
 -record(group_params, {
           backend_mod :: module(),
           prefix :: binary(),
           delimiter :: binary(),
           start_after :: binary(),
-          max_keys :: pos_integer()
+          max_keys :: pos_integer(),
+          continuation_token :: binary()
          }).
+
+-opaque group_params() :: #group_params{}.
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -50,10 +58,11 @@ fold_keys(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
 
 to_group_params(PropList) ->
     #group_params{
-       prefix=value_or_default(prefix, PropList, undefined),
-       delimiter=value_or_default(delimiter, PropList, undefined),
-       start_after=value_or_default(start_after, PropList, undefined),
-       max_keys=value_or_default(max_keys, PropList, 1000)
+       prefix=to_binary(value_or_default(prefix, PropList, undefined)),
+       delimiter=to_binary(value_or_default(delimiter, PropList, undefined)),
+       start_after=to_binary(value_or_default(start_after, PropList, undefined)),
+       max_keys=to_integer(value_or_default(max_keys, PropList, 1000)),
+       continuation_token=to_binary(value_or_default(continuation_token, PropList, undefined))
       }.
 
 value_or_default(Key, PropList, Default)->
@@ -68,11 +77,39 @@ value_or_default(Key, PropList, Default)->
             Value
     end.
 
+to_binary(undefined) ->
+    undefined;
+to_binary(Param) when is_list(Param) ->
+    list_to_binary(Param);
+to_binary(Param) when is_binary(Param) ->
+    Param.
+
+to_integer(undefined) ->
+    undefined;
+to_integer(Param) when is_list(Param) ->
+    list_to_integer(Param);
+to_integer(Param) when is_binary(Param) ->
+    binary_to_integer(Param);
+to_integer(Param) when is_integer(Param) ->
+    Param.
+
 get_backend(#group_params{backend_mod = BackendMod}) ->
     BackendMod.
 
+get_prefix(#group_params{prefix = Prefix}) ->
+    Prefix.
+
+get_delimiter(#group_params{delimiter = Delimiter}) ->
+    Delimiter.
+
+get_start_after(#group_params{start_after = StartAfter}) ->
+    StartAfter.
+
 get_max_keys(#group_params{max_keys = MaxKeys}) ->
     MaxKeys.
+
+get_continuation_token(#group_params{continuation_token = ContinuationToken}) ->
+    ContinuationToken.
 
 content_folder_fun(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
     BackendMod = get_backend(GroupParams),
@@ -123,7 +160,6 @@ enumerate(PrevEntry, Bucket, GroupParams, Itr, FoldFun, Acc) ->
                     Acc;
                 {ok, BinaryBKey, BinaryValue} ->
                     BKey = BackendMod:from_object_key(BinaryBKey),
-                    lager:info("BKey: ~p", [BKey]),
                     maybe_accumulate({BKey, BinaryValue}, PrevEntry, Bucket, GroupParams, FoldFun, Acc, Itr)
             catch Error ->
                     {error, {eleveldb_error, Error}}
@@ -135,9 +171,7 @@ start_pos(Bucket, GroupParams = #group_params{prefix=undefined, start_after=unde
 start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=undefined}) ->
     to_object_key(GroupParams, Bucket, Prefix);
 start_pos(Bucket, GroupParams = #group_params{prefix=undefined, start_after=StartAfter}) ->
-    ObjectKey = to_object_key(GroupParams, Bucket, append_null_byte(StartAfter)),
-    lager:info("StartAfter: ~p~nObjectKey: ~p", [StartAfter, riak_kv_eleveldb_backend:from_object_key(ObjectKey)]),
-    ObjectKey;
+    to_object_key(GroupParams, Bucket, append_null_byte(StartAfter));
 start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=StartAfter}) ->
     case StartAfter =< Prefix of
         true ->
@@ -202,7 +236,6 @@ maybe_accumulate({{_DifferentBucket, _Key}, _BinaryValue}, _PrevEntry, _Bucket, 
 maybe_limit_accumulate(Entry, Bucket, #group_params{max_keys = MaxKeys}=GroupParams, FoldFun, Acc, Itr) ->
     case riak_kv_fold_buffer:size(Acc) =< MaxKeys of
         true ->
-            lager:info("Arrived at MaxKeys of ~p: ", [MaxKeys]),
             accumulate(Entry, Bucket, GroupParams, FoldFun, Acc, Itr);
         false -> Acc
     end.
