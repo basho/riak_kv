@@ -72,6 +72,8 @@
         {sloppy_quorum, boolean()} |
         %% The N value, default = value from bucket properties
         {n_val, pos_integer()} |
+        {counter_op, integer()} |
+        {crdt_op, #crdt_op{}} |
         %% Control server-side put failure retry, default = true.
         %% Some CRDTs and other client operations that cannot tolerate
         %% an automatic retry on the server side; those operations should

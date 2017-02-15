@@ -266,9 +266,8 @@ make_get_return_val(RObj, false = _WantsBinary, #state{op_get = Gets} = S) ->
     {ok, RObj, S#state{op_get = Gets + 1}}.
 
 %% @doc Store an object, yes, sir!
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
--spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
-                 {ok, state()}.
+-spec put(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()],
+          binary(), state()) -> {ok, state()}.
 put(_Bucket, _PKey, _IndexSpecs, _Val, #state{op_put = Puts} = S) ->
     {ok, S#state{op_put = Puts + 1}}.
 
@@ -286,8 +285,8 @@ put_object(Bucket, PKey, _IndexSpecs, RObj, #state{op_put = Puts} = S) ->
     {{ok, S#state{op_put = Puts + 1}}, EncodedVal}.
 
 %% @doc Delete an object, yes, sir!
--spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
-                    {ok, state()}.
+-spec delete(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()], state()) ->
+    {ok, state()}.
 delete(_Bucket, _Key, _IndexSpecs, #state{op_delete = Deletes} = S) ->
     {ok, S#state{op_delete = Deletes + 1}}.
 
