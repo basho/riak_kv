@@ -31,6 +31,7 @@
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
+-export([list_groupkeys/4]).
 -export([filter_buckets/2]).
 -export([filter_keys/3,filter_keys/4]).
 -export([list_buckets/1,list_buckets/2,list_buckets/3, list_buckets/4]).
@@ -521,8 +522,24 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
         end,
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout]]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, {filter, Filter}, Timeout]]),
     wait_for_listkeys(ReqId).
+
+
+
+
+
+%% @doc TODO
+list_groupkeys(Bucket, GroupParams, Timeout0, {?MODULE, [Node, _ClientId]}) ->
+    Timeout =
+        case Timeout0 of
+            T when is_integer(T) -> T;
+            _ -> ?DEFAULT_TIMEOUT*8
+        end,
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_groupkeys_fsm_sup:start_groupkeys_fsm(Node, [{raw, ReqId, Me}, [Bucket, GroupParams, Timeout]]),
+    wait_for_listgroupkeys(ReqId).
 
 stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT, THIS).
@@ -834,6 +851,23 @@ wait_for_listkeys(ReqId, Acc) ->
             _ = riak_kv_keys_fsm:ack_keys(From),
             wait_for_listkeys(ReqId, [Res|Acc]);
         {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId, [Res|Acc]);
+        {ReqId, {error, Error}} ->
+            {error, Error}
+    end.
+
+%% @private
+wait_for_listgroupkeys(ReqId) ->
+    wait_for_listgroupkeys(ReqId, []).
+%% @private
+wait_for_listgroupkeys(ReqId, Acc) ->
+    receive
+        {ReqId, done} ->
+            {ok, lists:flatten(Acc)};
+        {ReqId, From, {keys, Res}} ->
+            _ = riak_kv_groupkeys_fsm:ack_keys(From),
+            wait_for_listgroupkeys(ReqId, [Res|Acc]);
+        {ReqId, {keys, Res}} ->
+            wait_for_listgroupkeys(ReqId, [Res|Acc]);
         {ReqId, {error, Error}} ->
             {error, Error}
     end.
