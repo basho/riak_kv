@@ -49,4 +49,15 @@ handle_work({fold, FoldFun, FinishFun}, _Sender, State) ->
         throw:stop_fold     -> ok;
         throw:PrematureAcc  -> FinishFun(PrematureAcc)
     end,
+    {noreply, State};
+
+%% @doc Perform the asynchronous fold operation.
+handle_work({sweep, FoldFun, FinishFun}, Sender, State) ->
+    riak_core_vnode:reply(Sender, self()),
+    try
+        FinishFun(FoldFun())
+    catch
+        throw:receiver_down -> ok;
+        throw:{stop_sweep, PrematureAcc} -> FinishFun(PrematureAcc)
+    end,
     {noreply, State}.

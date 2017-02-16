@@ -222,10 +222,10 @@ get(Bucket, Key, #state{ref=Ref, key_vsn=KVers}=State) ->
 %% NOTE: The bitcask backend does not currently support
 %% secondary indexing and the_IndexSpecs parameter
 %% is ignored.
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
--spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
-                 {ok, state()} |
-                 {error, term(), state()}.
+-spec put(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()],
+          binary(), state()) ->
+    {ok, state()} |
+    {error, term(), state()}.
 put(Bucket, PrimaryKey, _IndexSpecs, Val,
     #state{ref=Ref, key_vsn=KeyVsn}=State) ->
     BitcaskKey = make_bk(KeyVsn, Bucket, PrimaryKey),
@@ -240,8 +240,8 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
 %% NOTE: The bitcask backend does not currently support
 %% secondary indexing and the_IndexSpecs parameter
 %% is ignored.
--spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
-                    {ok, state()}.
+-spec delete(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()], state()) ->
+    {ok, state()}.
 delete(Bucket, Key, _IndexSpecs,
        #state{ref=Ref, key_vsn=KeyVsn}=State) ->
     BitcaskKey = make_bk(KeyVsn, Bucket, Key),

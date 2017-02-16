@@ -1,27 +1,12 @@
 riak_core_pb.erl
 riak_kv_pipe_index.erl:164: Function queue_existing_pipe/4 has no local return
 riak_kv_pipe_listkeys.erl:159: Function queue_existing_pipe/3 has no local return
-riak_kv_put_fsm.erl:822: The pattern <[COP = {'counter_op', _Amt} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
-riak_kv_put_fsm.erl:825: The pattern <[COP = {'crdt_op', _Op} | T], Acc> can never match the type <[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()},...],[{'details' | 'dw' | 'n_val' | 'pw' | 'retry_put_coordinator_failure' | 'returnbody' | 'sloppy_quorum' | 'timeout' | 'update_last_modified' | 'w','false' | 'infinity' | 'true' | [any()] | non_neg_integer()}]>
 riak_kv_util.erl:304: The pattern 'error' can never match the type 'ok' | 'undefined'
-riak_kv_vnode.erl:974: The pattern Q = {'riak_kv_index_v3', _, _, _, _, _, _, _, _, RE, _} can never match the type {_,_}
 riak_kv_vnode.erl:984: The pattern <{'riak_kv_index_v3', _, _, _, _, _, _, _, _, _, N}, DefaultSize> can never match the type <{_,_},'undefined' | pos_integer()>
 riak_kv_vnode.erl:1284: The call riak_kv_vnode:raw_put(HOTarget::atom(),Key::{binary() | {binary(),binary()},binary()},Obj::{riak_object:riak_object(),_} | riak_object:riak_object()) will never return since it differs in the 1st argument from the success typing arguments: ({_,_},any(),any())
 riak_kv_vnode.erl:1327: Function raw_put/3 has no local return
 riak_kv_vnode.erl:1406: The pattern <{Idx, Node}, Key, Obj> can never match the type <atom(),{binary() | {binary(),binary()},binary()},{riak_object:riak_object(),_} | riak_object:riak_object()>
-riak_kv_vnode.erl:1367: Function do_backend_delete/3 has no local return
-riak_kv_vnode.erl:2051: Function delete_from_hashtree/3 has no local return
-riak_kv_vnode.erl:2055: The call riak_kv_index_hashtree:async_delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ({binary(),binary()} | [{binary(),binary()}],pid()) -> 'ok'
-riak_kv_vnode.erl:2058: The call riak_kv_index_hashtree:delete(Items::[{'object',{_,_}},...],Trees::'undefined' | pid()) breaks the contract ([{binary(),binary()}],pid()) -> 'ok'
-riak_kv_vnode.erl:2128: Function update_index_delete_stats/1 will never be called
-## Someone go the bright idea to stick `consistent` into a field that is typed as a `boolean` because the records weren't typed. Now that they are, it breaks.
-## The next two lines deal with that issue here.
-riak_kv_pb_object.erl:193: Record construction #rpbputreq{bucket::'undefined' | binary(),key::'undefined' | binary(),vclock::'undefined' | binary(),content::'undefined' | #rpbcontent{value::'undefined' | binary(),content_type::'undefined' | binary(),charset::'undefined' | binary(),content_encoding::'undefined' | binary(),vtag::'undefined' | binary(),links::[#rpblink{bucket::'undefined' | binary(),key::'undefined' | binary(),tag::'undefined' | binary()}],last_mod::'undefined' | non_neg_integer(),last_mod_usecs::'undefined' | non_neg_integer(),usermeta::[#rpbpair{key::'undefined' | binary(),value::'undefined' | binary()}],indexes::[#rpbpair{key::'undefined' | binary(),value::'undefined' | binary()}],deleted::'false' | 'true' | 'undefined' | 0 | 1},w::'undefined' | non_neg_integer(),dw::'undefined' | non_neg_integer(),return_body::'false' | 'true' | 'undefined' | 0 | 1,pw::'undefined' | non_neg_integer(),if_none_match::'consistent',return_head::'false' | 'true' | 'undefined' | 0 | 1,timeout::'undefined' | non_neg_integer(),asis::'false' | 'true' | 'undefined' | 0 | 1,sloppy_quorum::'false' | 'true' | 'undefined' | 0 | 1,n_val::'undefined' | non_neg_integer(),type::'undefined' | binary()} violates the declared type of field if_none_match::'false' | 'true' | 'undefined' | 0 | 1
-riak_kv_pb_object.erl:252: The pattern 'consistent' can never match the type 'false' | 'true' | 'undefined' | 0 | 1
-# Callback info not available
-Callback info about the riak_core_vnode_worker behaviour is not available
-Callback info about the riak_core_coverage_fsm behaviour is not available
-Callback info about the riak_kv_backend behaviour is not available
+riak_kv_vnode.erl:1441: Function do_backend_delete/4 has no local return
 Unknown functions:
   cluster_info:dump_all_connected/1
   cluster_info:dump_nodes/2

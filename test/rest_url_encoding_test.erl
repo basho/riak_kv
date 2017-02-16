@@ -28,10 +28,10 @@
 %%   RIAK_TEST_NODE="dev1@127.0.0.1"
 %%   RIAK_TEST_COOKIE="riak"
 %%   RIAK_EUNIT_NODE="eunit@127.0.0.1"
+-module(rest_url_encoding_test).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--module(rest_url_encoding_test).
 -compile(export_all).
 
 url_encoding_test_() ->
@@ -102,7 +102,7 @@ compat_encoding_case({URL, Node}) ->
 
     %% Retrieve link header and check that it is singly encoded, corresponding
     %% to a decoded internal link.
-    {ok, {_, Headers, _}} = 
+    {ok, {_, Headers, _}} =
         httpc:request(get, {URL ++ "/riak/rest_links/compat",
                             []}, [], []),
 
@@ -132,7 +132,7 @@ compat_encoding_case({URL, Node}) ->
     ?assert(string:str(LWalk2, "Location: /riak/rest1/%2540compat") /= 0),
 
     %% Test that link walk starting at encoded key works.
-    {ok, {_, _, EWalk}} = 
+    {ok, {_, _, EWalk}} =
         httpc:request(get, {URL ++ "/riak/rest1/%40compat/_,_,1",
                             []}, [], []),
     ?assert(string:str(EWalk, "Location: /riak/basic/obj") /= 0),
@@ -157,7 +157,7 @@ compat_encoding_case({URL, Node}) ->
                              "}"},
                       [], []),
     ?assertEqual("[[\"rest1\",\"%40compat\",\"tag\"]]", Map2),
-    
+
     %% Test 'X-Riak-URL-Encoding' header.
     httpc:request(put, {URL ++ "/riak/rest3/%40compat",
                         [{"X-Riak-URL-Encoding", "on"}],
@@ -205,7 +205,7 @@ sane_encoding_case({URL, Node}) ->
 
     %% Retrieve link header and check that it is singly encoded, corresponding
     %% to a decoded internal link.
-    {ok, {_, Headers, _}} = 
+    {ok, {_, Headers, _}} =
         httpc:request(get, {URL ++ "/riak/rest_links/sane",
                             []}, [], []),
 
@@ -233,7 +233,7 @@ sane_encoding_case({URL, Node}) ->
     ?assert(string:str(LWalk2, "Location: /riak/rest2/%2540sane") == 0),
 
     %% Test that link walk starting at encoded key works.
-    {ok, {_, _, EWalk}} = 
+    {ok, {_, _, EWalk}} =
         httpc:request(get, {URL ++ "/riak/rest2/%40sane/_,_,1",
                             []}, [], []),
     ?assert(string:str(EWalk, "Location: /riak/basic/obj") /= 0),

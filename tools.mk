@@ -27,6 +27,8 @@
 REBAR ?= ./rebar
 REVISION ?= $(shell git rev-parse --short HEAD)
 PROJECT ?= $(shell basename `find src -name "*.app.src"` .app.src)
+EUNIT_OPTS ?=
+CT_OPTS ?=
 
 .PHONY: compile-no-deps test docs xref dialyzer-run dialyzer-quick dialyzer \
 		cleanplt upload-docs
@@ -34,8 +36,13 @@ PROJECT ?= $(shell basename `find src -name "*.app.src"` .app.src)
 compile-no-deps:
 	${REBAR} compile skip_deps=true
 
-test: compile
-	${REBAR} eunit skip_deps=true
+test: ct eunit
+
+eunit: compile
+	${REBAR} ${EUNIT_OPTS} eunit skip_deps=true
+
+ct: compile
+	${REBAR} ${CT_OPTS} ct skip_deps=true
 
 upload-docs: docs
 	@if [ -z "${BUCKET}" -o -z "${PROJECT}" -o -z "${REVISION}" ]; then \
@@ -122,7 +129,7 @@ dialyzer-run:
 		| grep -F -f dialyzer.ignore-warnings.tmp -v \
 		| sed -E 's/^[[:space:]]*[0-9]+[[:space:]]*//' \
 		| sed -E 's/([]\^:+?|()*.$${}\[])/\\\1/g' \
-		| sed -E 's/(\\\.erl\\\:)/\1\\d+:/g' \
+		| sed -E 's/(\\\.erl\\\:)/\1[[:digit:]]+:/g' \
 		| sed -E 's/^(.*)$$/^[[:space:]]*\1$$/g' \
 		> dialyzer_unhandled_warnings ; \
 		rm dialyzer.ignore-warnings.tmp; \

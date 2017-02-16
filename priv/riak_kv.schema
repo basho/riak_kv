@@ -632,6 +632,95 @@
   hidden
 ]}.
 
+%% @doc Limit how many sweeps can happen concurrently.
+{mapping, "sweeper.concurrency_limit", "riak_kv.sweep_concurrency", [
+  {default, 1},
+  {datatype, integer},
+  hidden
+]}.
+
+
+%% @doc Lets you specify when during the day sweeps are
+%% allowed to be triggered. Valid options are:
+%%
+%% * `always` (default) No restrictions
+%% * `never` Sweeps will never be attempted
+%% * `window` Hours during which sweeps is permitted, where
+%%   `riak_kv.sweep.window.start` and `riak_kv.sweep.window.end` are
+%%   integers between 0 and 23.
+%%
+%% If sweeping has a significant impact on performance of your cluster,
+%% or your cluster has quiet periods in which little storage activity
+%% occurs, you may want to change this setting from the default.
+{mapping, "riak_kv.sweep.policy", "riak_kv.sweep_window", [
+  {default, always},
+  {datatype, {enum, [always, never, window]}},
+  hidden
+]}.
+
+%% @see riak_kv.sweep.policy
+{mapping, "riak_kv.sweep.window.start", "riak_kv.sweep_window", [
+  {default, 0},
+  {datatype, integer},
+  hidden
+]}.
+
+%% @see riak_kv.sweep.policy
+{mapping, "riak_kv.sweep.window.end", "riak_kv.sweep_window", [
+  {default, 23},
+  {datatype, integer},
+  hidden
+]}.
+
+{translation,
+ "riak_kv.sweep_window",
+ fun(Conf) ->
+  Setting = cuttlefish:conf_get("riak_kv.sweep.policy", Conf),
+    case Setting of
+      always -> always;
+      never -> never;
+      window ->
+        Start = cuttlefish:conf_get("riak_kv.sweep.window.start", Conf, undefined),
+        End = cuttlefish:conf_get("riak_kv.sweep.window.end", Conf, undefined),
+        {Start, End};
+      _Default -> always
+    end
+ end}.
+
+{mapping, "tombstone.grace_period", "riak_kv.tombstone_grace_period", [
+  {default, disabled},
+  {datatype, [{duration, s}, {atom, disabled}]},
+  {validators, ["grace_period"]},
+  hidden
+]}.
+
+{validator, "grace_period", "grace period must be between 1h and 1w (or disabled)",
+ fun(Value) ->
+    Value == disabled orelse (is_integer(Value) andalso Value >= 1 * 3600 andalso Value =< 7 * 24 * 3600)
+ end}.
+
+%% @doc Time between sweeps for reap tombstone.
+%% tombstone.grace_period needs to be defined for these to run
+{mapping, "tombstone.sweep_interval", "riak_kv.reap_sweep_interval", [
+   {default, "1d"},
+   {datatype, {duration, s}},
+   {validators, ["minimum_sweep_interval"]},
+   hidden
+]}.
+
+%% @doc Time between sweeps for object ttl
+{mapping, "obj_ttl.sweep_interval", "riak_kv.obj_ttl_sweep_interval", [
+   {default, off},
+   {datatype, [{duration, s}, flag]},
+   {validators, ["minimum_sweep_interval"]},
+   hidden
+]}.
+
+{validator, "minimum_sweep_interval", "sweep interval can't be shorter then 6h",
+ fun(Value) ->
+    Value == false orelse (is_integer(Value) andalso Value >= 6 * 3600)
+ end}.
+
 %% @doc Whether to allow list buckets.
 {mapping, "cluster.job.riak_kv.list_buckets", "riak_core.job_accept_class", [
     merge,

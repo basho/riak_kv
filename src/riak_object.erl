@@ -29,7 +29,7 @@
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
 
--export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
+-export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0, index_value/0]).
 
 -type key() :: binary().
 -type bucket() :: binary() | {binary(), binary()}.
