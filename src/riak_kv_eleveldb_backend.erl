@@ -178,8 +178,7 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
     end.
 
 %% @doc Insert an object into the eleveldb backend.
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
--spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+-spec put(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref, write_opts=WriteOpts}=State) ->
@@ -239,7 +238,7 @@ index_deletes(Bucket, PrimaryKey, Field, Value) ->
     [{delete, IndexKey}].
 
 %% @doc Delete an object from the eleveldb backend
--spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
+-spec delete(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()], state()) ->
                     {ok, state()} |
                     {error, term(), state()}.
 delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref, write_opts=WriteOpts}=State) ->

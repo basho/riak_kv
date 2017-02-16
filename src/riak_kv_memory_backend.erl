@@ -203,9 +203,8 @@ get(Bucket, Key, State=#state{data_ref=DataRef,
     end.
 
 %% @doc Insert an object into the memory backend.
--type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
--spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
-                 {ok, state()}.
+-spec put(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()],
+          binary(), state()) -> {ok, state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                                                       index_ref=IndexRef,
                                                       max_memory=MaxMemory,
@@ -253,7 +252,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, State=#state{data_ref=DataRef,
                      put_obj_size=Size}}.
 
 %% @doc Delete an object from the memory backend
--spec delete(riak_object:bucket(), riak_object:key(), [index_spec()], state()) ->
+-spec delete(riak_object:bucket(), riak_object:key(), [riak_kv_backend:index_spec()], state()) ->
                     {ok, state()}.
 delete(Bucket, Key, IndexSpecs, State=#state{data_ref=DataRef,
                                              index_ref=IndexRef,

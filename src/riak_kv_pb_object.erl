@@ -68,6 +68,9 @@
 -record(state, {client,    % local client
                 req,       % current request (for multi-message requests like list keys)
                 req_ctx,   % context to go along with request (partial results, request ids etc)
+                %% this flag may be temporarily set during executions of process/2,
+                %% in order to mark a particular put req as consistent:
+                consistent = false :: boolean(),
                 client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
 
 %% @doc init/0 callback. Returns the service internal start
@@ -189,9 +192,15 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
              end,
     case Result of
         consistent ->
+            %% NB This is a minor hack: we set if_not_modified to
+            %% undefined so that we'll fall down into the next clause
+            %% of process/2 when we recurse, but the fact that we're
+            %% setting #state.consistent to true means we *will* ultimately
+            %% set if_not_modified to true in the put request that we
+            %% submit to Riak.
             process(Req#rpbputreq{if_not_modified=undefined,
-                                  if_none_match=consistent},
-                    State);
+                                  if_none_match=undefined},
+                    State#state{consistent = true});
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
         {ok, O} when NotMod ->
@@ -216,9 +225,8 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
 process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
                    return_head=ReturnHead, timeout=Timeout, asis=AsIs,
-                   n_val=N_val, sloppy_quorum=SloppyQuorum,
-                   if_none_match=NoneMatch},
-        #state{client=C} = State) ->
+                   n_val=N_val, sloppy_quorum=SloppyQuorum},
+        #state{client=C, consistent=Consistent} = State) ->
 
     case K of
         undefined ->
@@ -248,10 +256,10 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                           _ -> []
                       end
               end,
-    Options2 = case NoneMatch of
-                   consistent ->
+    Options2 = case Consistent of
+                   true ->
                        [{if_none_match, true}|Options];
-                   _ ->
+                   false ->
                        Options
                end,
     case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW}, 
