@@ -166,16 +166,37 @@ enumerate(PrevEntry, Bucket, GroupParams, Itr, FoldFun, Acc) ->
             end
     end.
 
-start_pos(Bucket, GroupParams = #group_params{prefix=undefined, start_after=undefined}) ->
-    to_object_key(GroupParams, Bucket, <<"">>);
-start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=undefined}) ->
-    to_object_key(GroupParams, Bucket, Prefix);
-start_pos(Bucket, GroupParams = #group_params{prefix=undefined, start_after=StartAfter}) ->
-    to_object_key(GroupParams, Bucket, append_null_byte(StartAfter));
-start_pos(Bucket, GroupParams = #group_params{prefix=Prefix, start_after=StartAfter}) ->
-    case StartAfter =< Prefix of
+start_pos(Bucket,
+          GroupParams = #group_params{prefix=Prefix,
+                                      start_after=StartAfter,
+                                      continuation_token=ContinuationToken}) ->
+    case start_key(Prefix, StartAfter, ContinuationToken) of
+        npos ->
+            npos;
+        Key ->
+            to_object_key(GroupParams, Bucket, Key)
+    end.
+
+start_key(Prefix, StartAfter, ContinuationToken) ->
+    case riak_kv_continuation:decode_token(ContinuationToken) of
+        undefined ->
+            start_key(Prefix, StartAfter);
+        Token ->
+            start_key(Prefix, Token)
+    end.
+
+-spec start_key(Prefix :: binary() | undefined, StartKey :: binary() | undefined) ->
+    binary() | npos.
+start_key(undefined, undefined) ->
+    <<"">>;
+start_key(Prefix, undefined) ->
+    Prefix;
+start_key(undefined, StartKey) ->
+    append_null_byte(StartKey);
+start_key(Prefix, StartKey) ->
+    case StartKey =< Prefix of
         true ->
-            to_object_key(GroupParams, Bucket, Prefix);
+            Prefix;
         _ ->
             npos
     end.
@@ -312,7 +333,8 @@ append_max_byte(Binary) when is_binary(Binary) ->
 -ifdef(TEST).
 
 test_group_params(Prefix, Delimiter) ->
-    to_group_params(riak_kv_eleveldb_backend, [{prefix, Prefix}, {delimiter, Delimiter}]).
+    Result = to_group_params([{prefix, Prefix}, {delimiter, Delimiter}]),
+    Result#group_params{backend_mod = riak_kv_eleveldb_backend}.
 
 expected_next_pos(Bucket, Key) ->
     riak_kv_eleveldb_backend:to_object_key(Bucket, append_max_byte(Key)).

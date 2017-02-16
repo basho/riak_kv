@@ -107,11 +107,13 @@ collate_list_group_keys(State0 = #state{entries_acc = Entries0, group_params = G
     MaxKeys = riak_kv_group_keys:get_max_keys(GroupParams),
     Entries = ordsets:to_list(Entries0),
     TruncatedEntries = lists:sublist(Entries, MaxKeys),
-    IsTruncated = length(Entries) > length(TruncatedEntries),
+    NextContinuationToken = riak_kv_continuation:make_token(Entries,
+                                                            MaxKeys,
+                                                            fun({Key, _}) -> Key end),
     State = lists:foldr(fun partition_entry/2, State0, TruncatedEntries),
     riak_kv_group_keys_response:new_response(State#state.metadatas_acc,
                                              State#state.common_prefixes_acc,
-                                             IsTruncated).
+                                             NextContinuationToken).
 
 partition_entry({Key, {metadata, Metadata}},
                 State = #state{metadatas_acc = MetadatasAcc}) ->

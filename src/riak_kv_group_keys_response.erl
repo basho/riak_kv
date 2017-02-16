@@ -20,10 +20,12 @@
 
 -module(riak_kv_group_keys_response).
 
--export([new_response/3,
+-export([new_response/2,
+         new_response/3,
          get_metadatas/1,
          get_common_prefixes/1,
-         is_truncated/1
+         is_truncated/1,
+         get_next_continuation_token/1
         ]).
 
 -export_type([response/0]).
@@ -31,18 +33,27 @@
 -record(response, {
           metadatas :: list(),
           common_prefixes :: list(binary()),
-          is_truncated :: boolean()
+          is_truncated :: boolean(),
+          next_continuation_token :: binary()
          }).
 
 -opaque response() :: #response{}.
 
--spec new_response(Metadatas::list(), CommonPrefixes::list(binary()), IsTruncated::boolean) ->
+-spec new_response(Metadatas::list(), CommonPrefixes::list(binary())) ->
     response().
-new_response(Metadatas, CommonPrefixes, IsTruncated) ->
+new_response(Metadatas, CommonPrefixes) ->
+    new_response(Metadatas, CommonPrefixes, undefined).
+
+-spec new_response(Metadatas::list(),
+                   CommonPrefixes::list(binary()),
+                   NextContinuationToken::binary()) ->
+    response().
+new_response(Metadatas, CommonPrefixes, NextContinuationToken) ->
     #response {
        metadatas = Metadatas,
        common_prefixes = CommonPrefixes,
-       is_truncated = IsTruncated
+       next_continuation_token = NextContinuationToken,
+       is_truncated = NextContinuationToken /= undefined
       }.
 
 -spec get_metadatas(response()) -> list().
@@ -50,6 +61,10 @@ get_metadatas(#response{metadatas = Metadatas}) -> Metadatas.
 
 -spec get_common_prefixes(response()) -> list().
 get_common_prefixes(#response{common_prefixes = CommonPrefixes}) -> CommonPrefixes.
+
+-spec get_next_continuation_token(response()) -> binary().
+get_next_continuation_token(#response{next_continuation_token = NextContinuationToken}) ->
+    NextContinuationToken.
 
 -spec is_truncated(response()) -> boolean().
 is_truncated(#response{is_truncated = IsTruncated}) -> IsTruncated.
