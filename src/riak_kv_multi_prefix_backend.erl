@@ -89,11 +89,7 @@
          is_empty/1,
          data_size/1,
          status/1,
-         callback/3,
-         fix_index/3,
-         set_legacy_indexes/2,
-         mark_indexes_fixed/2,
-         fixed_index_status/1]).
+         callback/3]).
 
 -ifdef(TEST).
 -ifdef(TEST_IN_RIAK_KV).
@@ -102,7 +98,7 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, index_reformat, iterator_refresh]).
+-define(CAPABILITIES, [async_fold, iterator_refresh]).
 
 -record (state, {backends :: [{atom(), atom(), term()}],
                  bprefix_list :: [{binary(), atom()}],
@@ -393,90 +389,6 @@ callback(Ref, Msg, #state{backends=Backends}=State) ->
     _ = [Mod:callback(Ref, Msg, ModState) || {_N, Mod, ModState} <- Backends],
     {ok, State}.
 
-set_legacy_indexes(State=#state{backends=Backends}, WriteLegacy) ->
-    NewBackends = [{I, Mod, maybe_set_legacy_indexes(Mod, ModState, WriteLegacy)} ||
-                      {I, Mod, ModState} <- Backends],
-    State#state{backends=NewBackends}.
-
-maybe_set_legacy_indexes(Mod, ModState, WriteLegacy) ->
-    case backend_can_index_reformat(Mod, ModState) of
-        true -> Mod:set_legacy_indexes(ModState, WriteLegacy);
-        false -> ModState
-    end.
-
-mark_indexes_fixed(State=#state{backends=Backends}, ForUpgrade) ->
-    NewBackends = mark_indexes_fixed(Backends, [], ForUpgrade),
-    {ok, State#state{backends=NewBackends}}.
-
-mark_indexes_fixed([], NewBackends, _) ->
-    lists:reverse(NewBackends);
-mark_indexes_fixed([{I, Mod, ModState} | Backends], NewBackends, ForUpgrade) ->
-    Res = maybe_mark_indexes_fixed(Mod, ModState, ForUpgrade),
-    case Res of
-        {error, Reason} ->
-            {error, Reason};
-        {ok, NewModState} ->
-            mark_indexes_fixed(Backends, [{I, Mod, NewModState} | NewBackends], ForUpgrade)
-    end.
-
-maybe_mark_indexes_fixed(Mod, ModState, ForUpgrade) ->
-    case backend_can_index_reformat(Mod, ModState) of
-        true -> Mod:mark_indexes_fixed(ModState, ForUpgrade);
-        false -> {ok, ModState}
-    end.
-
-fix_index(BKeys, ForUpgrade, State) ->
-    % Group keys per bucket
-    PerBucket = lists:foldl(fun(BK={B,_},D) -> dict:append(B,BK,D) end, dict:new(), BKeys),
-    Result =
-        dict:fold(
-            fun(Bucket, StorageKey, Acc = {Success, Ignore, Errors}) ->
-                {_, Mod,  ModState} = Backend = get_backend(Bucket, State),
-                case backend_can_index_reformat(Mod, ModState) of
-                    true ->
-                            {S, I, E} = backend_fix_index(Backend, Bucket,
-                                                          StorageKey, ForUpgrade),
-                            {Success + S, Ignore + I, Errors + E};
-                    false ->
-                            Acc
-                end
-            end, {0, 0, 0}, PerBucket),
-    {reply, Result, State}.
-
-backend_fix_index({_, Mod, ModState}, Bucket, StorageKey, ForUpgrade) ->
-    case Mod:fix_index(StorageKey, ForUpgrade, ModState) of
-        {reply, Reply, _UpModState} ->
-            Reply;
-        {error, Reason} ->
-           _ = lager:error("Failed to fix index for bucket ~p, key ~p, backend ~p: ~p",
-                       [Bucket, StorageKey, Mod, Reason]),
-            {0, 0, length(StorageKey)}
-    end.
-
--spec fixed_index_status(state()) -> boolean().
-fixed_index_status(#state{backends=Backends}) ->
-    lists:foldl(fun({_N, Mod, ModState}, Acc) ->
-                        Status = Mod:status(ModState),
-                        case fixed_index_status(Mod, ModState, Status) of
-                            undefined -> Acc;
-                            Res ->
-                                case Acc of
-                                    undefined -> Res;
-                                    _ -> Res andalso Acc
-                                end
-                        end
-                end,
-                undefined,
-                Backends).
-
-fixed_index_status(Mod, ModState, Status) ->
-    case backend_can_index_reformat(Mod, ModState) of
-        true -> proplists:get_value(fixed_indexes, Status);
-        false -> undefined
-    end.
-
-
-
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
@@ -565,23 +477,7 @@ backend_fold_fun(ModFun, FoldFun, Opts, AsyncFold) ->
             %% if it supports asynchronous folding.
             {ok, ModCaps} = Module:capabilities(SubState),
             DoAsync = AsyncFold andalso lists:member(async_fold, ModCaps),
-            Indexes = lists:keyfind(index, 1, Opts),
-            case Indexes of
-                {index, incorrect_format, _ForUpgrade} ->
-                    case lists:member(index_reformat, ModCaps) of
-                        true -> backend_fold_fun(Module, ModFun, SubState, FoldFun,
-                                                 Opts, {Acc, WorkList}, DoAsync);
-                        false -> {Acc, WorkList}
-                    end;
-                _ ->
-                    backend_fold_fun(Module,
-                                     ModFun,
-                                     SubState,
-                                     FoldFun,
-                                     Opts,
-                                     {Acc, WorkList},
-                                     DoAsync)
-            end
+            backend_fold_fun(Module, ModFun, SubState, FoldFun, Opts, {Acc, WorkList}, DoAsync)
     end.
 
 backend_fold_fun(Module, ModFun, SubState, FoldFun, Opts, {Acc, WorkList}, true) ->
@@ -653,11 +549,6 @@ match_bucket_prefix(Bucket, [{Prefix, Name}|BPrefixList]) ->
         _ ->
             match_bucket_prefix(Bucket, BPrefixList)
     end.
-
-
-backend_can_index_reformat(Mod, ModState) ->
-    {ok, Caps} = Mod:capabilities(ModState),
-    lists:member(index_reformat, Caps).
 
 %% ===================================================================
 %% EUnit tests
