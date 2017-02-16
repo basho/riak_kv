@@ -149,6 +149,7 @@
 -type state() :: #state{}.
 -type vnodeid() :: binary().
 -type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
+-type hashtree_action() :: delete | tombstone | update.
 
 
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
@@ -1424,7 +1425,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
 
 -spec do_backend_delete(
     {riak_core_bucket:bucket(), riak_object:key()},
-    riak_object:riak_object(), #state{}
+    riak_object:riak_object(), hashtree_action(), #state{}
 ) -> #state{}.
 do_backend_delete(BKey, RObj, HashtreeAction,  
     State = #state{
