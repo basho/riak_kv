@@ -126,7 +126,8 @@ compile_order_by(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = CalcType
     {error, {inverdist_function_with_groupby_or_aggregate_function,
              ?E_CANNOT_HAVE_GROUPING_OR_AGGREGATION_WITH_INVERSE_DIST_FUNCTION}};
 
-compile_order_by(?SQL_SELECT{'SELECT' = Select} = Q,
+compile_order_by(?SQL_SELECT{'SELECT' = Select,
+                             'WHERE'  = [Where]} = Q,
                  InvDistFuns)
   when InvDistFuns /= [] ->
     %% Offset is now a computable thing
@@ -141,11 +142,17 @@ compile_order_by(?SQL_SELECT{'SELECT' = Select} = Q,
                     %% Select has one compiled column per PERCENTILE call, but
                     %% only one makes sense
                     {SubstituteColName, _, _} = hd(CompiledOrderBys),
+                    %% add a WHERE $that_column is not null because
+                    %% inverse distribution functions want nulls
+                    %% discarded
+                    ExtendedWhere = {and_, {is_not_null, {identifier, SubstituteColName}},
+                                     Where},
                     SingleColumnSelect = make_single_column_select(Select, SubstituteColName),
                     {ok, Q?SQL_SELECT{'SELECT'   = SingleColumnSelect,
                                       'ORDER BY' = CompiledOrderBys,
                                       'OFFSET'   = CompiledOffsets,
-                                      'LIMIT'    = CompiledLimits}};
+                                      'LIMIT'    = CompiledLimits,
+                                      'WHERE'    = [ExtendedWhere]}};
                 ER ->
                     ER
             end;
@@ -232,10 +239,9 @@ compile_inverdist_funcalls_to_orderby(InvDistFuns) ->
 compile_invdist_funcall({FnName, ThisColumn, Args}) ->
     {_OrderBy = {ThisColumn, asc, nulls_last},
      _Limit   = 1,
-     _Offset  = fun(TotalRows) ->
-                        erlang:apply(riak_ql_inverse_distrib_fns,
-                                     FnName,
-                                     [TotalRows | Args])
+     _Offset  = fun(TotalRows, ValueAtF) ->
+                        riak_ql_inverse_distrib_fns:FnName(
+                          Args, TotalRows, ValueAtF)
                 end}.
 
 make_single_column_select(#riak_sel_clause_v1{col_return_types = [ColReturnType1|_],
@@ -612,8 +618,12 @@ evaluate_const_args(Args) ->
       {ok, []},
       Args).
 
+evaluate_const_expr({Type, _})
+  when Type == varchar; Type == boolean; Type == binary  ->
+    {ok, {invalid_expr_in_invdist_fun_arglist,
+          ?E_INVERSE_DIST_FUN_INVAL_EXPR}};
 evaluate_const_expr({Type, _} = Arg)
-  when Type == varchar; Type == boolean; Type == binary; Type == integer; Type == float ->
+  when Type == integer; Type == float ->
     {ok, Arg};
 evaluate_const_expr({negate, Expr}) ->
     case evaluate_const_expr(Expr) of
@@ -626,7 +636,8 @@ evaluate_const_expr({Op, Expr1, Expr2}) ->
     case {evaluate_const_expr(Expr1),
           evaluate_const_expr(Expr2)} of
         {{ok, A1}, {ok, A2}} ->
-            apply_op(Op, A1, A2);
+            Res = apply_op(Op, A1, A2),
+            Res;
         {{error, _} = ER, _} ->
             ER;
         {_, ER} ->
@@ -647,11 +658,11 @@ apply_op(Op, {T1, E1}, {T2, E2})
                      ?E_INVERSE_DIST_FUN_INVAL_EXPR}}
     end.
 
-infer_type('/', _, _) -> double;
+infer_type('/', _, _) -> float;
 infer_type(_, T1, T2) -> numeric_promote(T1, T2).
 
-numeric_promote(sint64, sint64) -> sint64;
-numeric_promote(_, _) -> double.
+numeric_promote(integer, integer) -> integer;
+numeric_promote(_, _) -> float.
 
 
 %% Returns a one arity fun which is stateless for example pulling a field from a

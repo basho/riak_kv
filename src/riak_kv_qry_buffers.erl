@@ -567,17 +567,19 @@ do_fetch_limit(QBufRef,
               orig_qry      = OrigQry,
               ddl           = ?DDL{fields = QBufFields,
                                    table = Table}} ->
-            %% evaluate any functions to integers
-            {FetchFor, EffectiveOffsets} =
-                maybe_compute_offsets(OffsetSpec, TotalRecords),
-            EffectiveLimits =
-                maybe_supply_limits(LimitSpec),
-            %% fetch from inmem buffer or backend; possibly take
-            %% multiple passes to assemble values in a single row for
-            %% PERCENTILE(x, 0.2), PERCENTILE(x, 0.8)
+            %% fetch from inmem buffer or backend. Optimise for
+            %% fetching a batch of specs in one go, to allow
+            %% iterator-based ldb backend to efficiently fetch cells
+            %% at two or more position
+            SpecificFetchFun =
+                fun(SpecList) -> static_fetcher({InmemBuffer, LdbRef}, SpecList) end,
+            %% possibly take multiple passes to assemble values in a
+            %% single row for PERCENTILE(x, 0.2), PERCENTILE(x, 0.8)
             Rows =
-                fetch_rows_from_backend(
-                  FetchFor, {InmemBuffer, LdbRef}, lists:zip(EffectiveOffsets, EffectiveLimits)),
+                fetch_rows(SpecificFetchFun,
+                           lists:zip(maybe_supply_offset(OffsetSpec),
+                                     maybe_supply_limits(LimitSpec)),
+                           TotalRecords),
             lager:debug("fetched ~p rows from ~p for ~p", [length(Rows), Table, OrigQry]),
             ColNames = [Name || #riak_field_v1{name = Name} <- QBufFields],
             ColTypes = [Type || #riak_field_v1{type = Type} <- QBufFields],
@@ -585,53 +587,33 @@ do_fetch_limit(QBufRef,
             {reply, {ok, {ColNames, ColTypes, Rows}}, State9}
     end.
 
-maybe_compute_offsets([], _TotalRecords) ->
-    {regular_select, [0]};
-maybe_compute_offsets([Offset], _TotalRecords) when is_integer(Offset) ->
-    {regular_select, [Offset]};
-maybe_compute_offsets(InvDistFuns, TotalRecords) ->
-    {simulated_for_invdist_function, [Fun(TotalRecords) || Fun <- InvDistFuns]}.
+maybe_supply_offset([]) -> [0];
+maybe_supply_offset(Thing) -> Thing.
 
 maybe_supply_limits([]) -> [unlimited];
-maybe_supply_limits(List) when is_list(List) -> List.
+maybe_supply_limits(Thing) -> Thing.
+
+static_fetcher({InmemBuffer, undefined}, [{Offset, unlimited}]) ->
+    lists:nthtail(Offset, InmemBuffer);
+static_fetcher({InmemBuffer, undefined}, [{Offset, Limit}]) ->
+    lists:sublist(InmemBuffer, 1+Offset, Limit);
+static_fetcher({InmemBuffer, undefined}, Specs) ->
+    [lists:nth(1+Off, InmemBuffer) || {Off, _Lim = 1} <- Specs];
+
+static_fetcher({_InmemBuffer, LdbRef}, Specs) ->
+    {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Specs),
+    LdbRows.
 
 
-
-%% real ORDER BY: always a single-element list, yielding a set of rows
-%% straight from temp table
-%%
-fetch_rows_from_backend(regular_select, {InmemBuffer, undefined}, OffLimPairs) ->
-    [{Offset, Limit}] = OffLimPairs,
-    case Limit of
-        unlimited ->
-            lists:nthtail(Offset, InmemBuffer);
-        Limit ->
-            lists:sublist(InmemBuffer, Offset + 1, Limit)
-    end;
-fetch_rows_from_backend(regular_select, {_InmemBuffer, LdbRef}, OffLimPairs) ->
-    [{Offset, Limit}] = OffLimPairs,
-    {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Offset, Limit),
-    LdbRows;
-%%
-%% simulated ORDER BY: maybe multiple fetches, one for each
-%% PERCENTILE(x, Pc) in query, concatenated to yield a single row
-%%
-fetch_rows_from_backend(simulated_for_invdist_function, {Buffer, undefined}, OffLimPairs) ->
-    assemble_row_from_cells(
-      [lists:nth(Off, Buffer) || {Off, _Lim = 1} <- OffLimPairs]);
-fetch_rows_from_backend(simulated_for_invdist_function, {_Buffer, LdbRef}, OffLimPairs) ->
-    assemble_row_from_cells(
-      [begin
-           {ok, [Cell]} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Off - 1, Lim),
-           Cell
-       end || {Off, Lim} <- OffLimPairs]).
-
-assemble_row_from_cells(Cells) ->
-    [  %% result set of one row
-       %% consisting cells, each retrieved at a certain position, as computed
-       %%  per Pc in PERCENTILE(x, Pc), for each entry of PERCENTILE in the query
-       lists:append(
-         Cells)
+%% straight fetch of one or more rows, per explicit LIMIT and OFFSET
+fetch_rows(StaticFetcher, [{Offset, _Limit}] = SingleSpecForOrderBy, _TotalRecords)
+  when is_integer(Offset) ->
+    StaticFetcher(SingleSpecForOrderBy);
+%% maybe multiple fetches, one for each PERCENTILE(x, Pc) in query,
+%% concatenated to yield a single row
+fetch_rows(StaticFetcher, Specs, TotalRecords) ->
+    [
+     [OffsetFun(TotalRecords, StaticFetcher) || {OffsetFun, 1} <- Specs]
     ].
 
 do_get_qbuf_expiry(QBufRef, #state{qbufs = QBufs} = State) ->
