@@ -58,27 +58,43 @@
               sorter/0]).
 -export_type([where_props/0]).
 
--define(MAX_QUERY_QUANTA, 1000).  %% cap the number of subqueries the compiler will emit
+-define(MAX_QUERY_QUANTA, 1000).
+%% cap the number of subqueries the compiler will emit
 %% Note that when such a query begins to be actually executed, the
 %% chunks will need to be really small, for the result to be within
 %% max query size.
 
--spec compile(?DDL{}, ?SQL_SELECT{}) ->
+compile(DDL, Query) ->
+    compile(DDL, Query, options()).
+
+-spec compile(?DDL{}, ?SQL_SELECT{}, Options::list()) ->
     {ok, [?SQL_SELECT{}]} | {error, any()}.
-compile(?DDL{}, ?SQL_SELECT{is_executable = true}) ->
+compile(?DDL{}, ?SQL_SELECT{is_executable = true}, _) ->
     {error, 'query is already compiled'};
-compile(?DDL{table = T} = DDL,
-        ?SQL_SELECT{is_executable = false} = Q1) ->
+compile(?DDL{table = T} = DDL, ?SQL_SELECT{is_executable = false} = Q1, Options) ->
     Mod = riak_ql_ddl:make_module_name(T),
     case compile_order_by(
            maybe_compile_group_by(
              Mod, compile_select_clause(DDL, Q1), Q1)) of
         {ok, Q2} ->
-            compile_where_clause(DDL, Q2);
+            compile_where_clause(DDL, Q2, Options);
         {error, _} = Error ->
             Error
     end.
 
+%% create a proplist of options for query compilation e.g. configured or
+%% transient values.
+options() ->
+    [
+        %% this is stored in the options so that multiple calls to `now()` in a
+        %% single query share the same value
+        {now_milliseconds, now_milliseconds()}
+        %% TODO include max quanta
+    ].
+
+now_milliseconds() ->
+  {Mega, Sec, Micro} = os:timestamp(),
+  (Mega*1000000 + Sec)*1000 + round(Micro/1000).
 
 -spec compile_order_by({ok, ?SQL_SELECT{}} | {error, any()}) ->
                               {ok, ?SQL_SELECT{}} | {error, any()}.
@@ -160,14 +176,15 @@ group_by_column_does_not_exist_error(Mod, FieldName) ->
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
 %% write that up in time
--spec compile_where_clause(?DDL{}, ?SQL_SELECT{}) ->
+-spec compile_where_clause(?DDL{}, ?SQL_SELECT{}, list()) ->
                                   {ok, [?SQL_SELECT{}]} | {error, term()}.
 compile_where_clause(?DDL{} = DDL,
                      ?SQL_SELECT{helper_mod = Mod,
                                  is_executable = false,
                                  'WHERE'       = W1,
-                                 cover_context = Cover} = Q) ->
-    {W2,_} = resolve_expressions(Mod, W1),
+                                 cover_context = Cover} = Q,
+                     Options) ->
+    {W2,_} = resolve_expressions(Mod, Options, W1),
     case {compile_where(DDL, lists:flatten([W2])), unwrap_cover(Cover)} of
         {{error, E}, _} ->
             {error, E};
@@ -1162,16 +1179,16 @@ modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
 
-resolve_expressions(Mod, WhereAST) ->
+resolve_expressions(Mod, Options, WhereAST) ->
     Acc = acc, %% not used
     riak_ql_ddl:mapfold_where_tree(
         fun (_, Op, Acc_x) when Op == and_; Op == or_ ->
                 {ok, Acc_x};
             (_, Filter, Acc_x) ->
-                {resolve_expressions_folder(Mod, Filter), Acc_x}
+                {resolve_expressions_folder(Mod, Options, Filter), Acc_x}
         end, Acc, WhereAST).
 
-resolve_expressions_folder(_Mod, {ExpOp,{_,A},{_,B}}) when ExpOp == '+'; ExpOp == '*';
+resolve_expressions_folder(_, _, {ExpOp,{_,A},{_,B}}) when ExpOp == '+'; ExpOp == '*';
                                                            ExpOp == '-'; ExpOp == '/' ->
     Value =
         case ExpOp of
@@ -1181,10 +1198,13 @@ resolve_expressions_folder(_Mod, {ExpOp,{_,A},{_,B}}) when ExpOp == '+'; ExpOp =
             '/' -> riak_ql_window_agg_fns:divide(A,B)
         end,
     {calculated, Value};
-resolve_expressions_folder(Mod, {ExpOp,FieldName,{calculated,V1}}) when is_binary(FieldName) ->
+resolve_expressions_folder(_, Options, {{sql_select_fn,'NOW'}, []}) ->
+    {_, Now} = lists:keyfind(now_milliseconds, 1, Options),
+    {timestamp, Now};
+resolve_expressions_folder(Mod, _, {ExpOp,FieldName,{calculated,V1}}) when is_binary(FieldName) ->
     V2 = cast_value_to_ast(Mod:get_field_type([FieldName]),V1),
     {ExpOp,FieldName,V2};
-resolve_expressions_folder(_, AST) ->
+resolve_expressions_folder(_, _, AST) ->
     AST.
 
 cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_integer(V) -> {T, V};
@@ -4382,6 +4402,80 @@ select_with_arithmetic_on_identifier_throws_an_error_literal_on_lhs_test() ->
         is_query_valid(DDL, Q)
     ).
 
-
+%%
+%% Test macro for assertions on now and arithmetic, shouldn't be
+%% extended for other uses
+%%
+-define(assertQueryCompilesToFilter(Options,QuerySQL,Filter),
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "c TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(QuerySQL),
+    {ok, SubQueries} = compile(DDL, Q, Options),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4000}]},
+          {filter,  Filter},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    )).
+now_function_in_where_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,1979}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now()",
+        {'>',{field,<<"c">>,timestamp},{const,1979}}
+    ).
+now_function_in_where_with_addition_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,1979}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now()+1",
+        {'>',{field,<<"c">>,timestamp},{const,1980}}
+    ).
+now_function_in_range_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now() AND c < now()",
+        {and_,{'>',{field,<<"c">>,timestamp},{const,10000}},{'<',{field,<<"c">>,timestamp},{const,10000}}}
+    ).
+now_function_in_range_with_addition_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now() AND c < now()+1s",
+        {and_,{'>',{field,<<"c">>,timestamp},{const,10000}},{'<',{field,<<"c">>,timestamp},{const,11000}}}
+    ).
+now_function_in_range_with_subtraction_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now() AND c < now() - 1s",
+        {and_,{'>',{field,<<"c">>,timestamp},{const,10000}},{'<',{field,<<"c">>,timestamp},{const,9000}}}
+    ).
+now_function_in_range_with_multiplication_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now() AND c < now() * 2",
+        {and_,{'>',{field,<<"c">>,timestamp},{const,10000}},{'<',{field,<<"c">>,timestamp},{const,20000}}}
+    ).
+now_function_in_range_with_division_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now() AND c < now() / 2",
+        {and_,{'>',{field,<<"c">>,timestamp},{const,10000}},{'<',{field,<<"c">>,timestamp},{const,5000}}}
+    ).
+now_function_in_range_with_division_to_decimal_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now() AND c < now() / 3",
+        {and_,{'>',{field,<<"c">>,timestamp},{const,10000}},{'<',{field,<<"c">>,timestamp},{const,3333}}}
+    ).
+now_function_equals_value_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c = now()",
+        {'=',{field,<<"c">>,timestamp},{const,10000}}
+    ).
 
 -endif.
