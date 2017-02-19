@@ -479,7 +479,7 @@ init([Index]) ->
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
-            DoAsyncPut =  case app_helper:get_env(riak_kv, allow_async_put, true) of
+            DoAsyncPut =  case app_helper:get_env(riak_kv, allow_async_put, false) of
                 true ->
                     erlang:function_exported(Mod, async_put, 5);
                 _ ->
@@ -861,7 +861,7 @@ handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
     StartTS = os:timestamp(),
     Context = {w1c_async_put, Sender, ReplicaType, Bucket, Key, EncodedVal, StartTS},
     %% NOTE: sync_put is TS-only, async_put is KV default
-    case Mod:sync_put(Context, Bucket, Key, EncodedVal, ModState) of
+    case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
@@ -877,7 +877,7 @@ handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false}) 
     ModState = State#state.modstate,
     Idx = State#state.idx,
     StartTS = os:timestamp(),
-    case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
+    case Mod:sync_put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
             update_hashtree(Bucket, Key, EncodedVal, State),
             ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
