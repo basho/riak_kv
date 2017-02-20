@@ -179,20 +179,24 @@ group_by_column_does_not_exist_error(Mod, FieldName) ->
 -spec compile_where_clause(?DDL{}, ?SQL_SELECT{}, list()) ->
                                   {ok, [?SQL_SELECT{}]} | {error, term()}.
 compile_where_clause(?DDL{} = DDL,
-                     ?SQL_SELECT{helper_mod = Mod,
+                     ?SQL_SELECT{helper_mod    = Mod,
                                  is_executable = false,
                                  'WHERE'       = W1,
                                  cover_context = Cover} = Q,
                      Options) ->
-    {W2,_} = resolve_expressions(Mod, Options, W1),
-    case {compile_where(DDL, lists:flatten([W2])), unwrap_cover(Cover)} of
-        {{error, E}, _} ->
-            {error, E};
-        {_, {error, E}} ->
-            {error, E};
-        {NewW, {ok, {RealCover, WhereModifications}}} ->
-            expand_query(DDL, Q?SQL_SELECT{cover_context = RealCover},
-                         update_where_for_cover(NewW, WhereModifications))
+    try
+        {W2,_} = resolve_expressions(Mod, Options, W1),
+        case {check_if_timeseries(DDL, lists:flatten([W2])), unwrap_cover(Cover)} of
+            {{error, E}, _} ->
+                {error, E};
+            {_, {error, E}} ->
+                {error, E};
+            {{true, W3}, {ok, {RealCover, WhereModifications}}} ->
+                expand_query(DDL, Q?SQL_SELECT{cover_context = RealCover},
+                             update_where_for_cover(W3, WhereModifications))
+        end
+    catch
+        throw:Error when element(1,Error) == error -> Error
     end.
 
 %% now break out the query on quantum boundaries
@@ -801,18 +805,6 @@ swap(Where, QField, Key, Val) ->
     NewFields = lists:keyreplace(QField, 1, Fields, {QField, timestamp, Val}),
     _NewWhere = lists:keyreplace(Key, 1, Where, {Key, NewFields}).
 
-%% going forward the compilation and restructuring of the queries will be a big piece of work
-%% for the moment we just brute force assert that the query is a timeseries SQL request
-%% and go with that
-compile_where(DDL, Where) ->
-    try
-        case check_if_timeseries(DDL, Where) of
-            {error, E}   -> {error, E};
-            {true, NewW} -> NewW
-        end
-    catch throw:V -> V
-    end.
-
 %%
 quantum_field_name(DDL) ->
     case find_quantum_fields(DDL) of
@@ -1198,7 +1190,8 @@ resolve_expressions_folder(_, _, {ExpOp,{_,A},{_,B}}) when ExpOp == '+'; ExpOp =
             '/' -> riak_ql_window_agg_fns:divide(A,B)
         end,
     {calculated, Value};
-resolve_expressions_folder(_, Options, {{sql_select_fn,'NOW'}, []}) ->
+resolve_expressions_folder(_, Options, {{sql_select_fn,'NOW'}, Args}) ->
+    ok = validate_where_fn_arity('NOW', Args),
     {_, Now} = lists:keyfind(now_milliseconds, 1, Options),
     {timestamp, Now};
 resolve_expressions_folder(Mod, _, {ExpOp,FieldName,{calculated,V1}}) when is_binary(FieldName) ->
@@ -1206,6 +1199,24 @@ resolve_expressions_folder(Mod, _, {ExpOp,FieldName,{calculated,V1}}) when is_bi
     {ExpOp,FieldName,V2};
 resolve_expressions_folder(_, _, AST) ->
     AST.
+
+validate_where_fn_arity(FnName, Args) ->
+    ExpectedArity = where_fn_arity(FnName),
+    ActualArity = length(Args),
+    case ExpectedArity == length(Args) of
+        true ->
+            ok;
+        false ->
+            Msg = format_binary(
+                "Function ~p has arity of ~p but was called with ~p arguments.",
+                [FnName, ExpectedArity, ActualArity]),
+            throw({error,{invalid_query,  Msg}})
+    end.
+
+where_fn_arity('NOW') -> 0.
+
+format_binary(Fmt, Args) ->
+    iolist_to_binary(io_lib:format(Fmt, Args)).
 
 cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_integer(V) -> {T, V};
 cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_float(V)   -> {T, erlang:round(V)};
@@ -4476,6 +4487,20 @@ now_function_equals_value_test() ->
         [{now_milliseconds,10000}],
         "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c = now()",
         {'=',{field,<<"c">>,timestamp},{const,10000}}
+    ).
+%%
+
+now_function_invalid_arity_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((a), a))"),
+    {ok, Query} = get_query(
+        "SELECT * FROM t "
+        "WHERE a = now(1)"),
+    ?assertMatch(
+       {error,{invalid_query,<<_/binary>>}},
+       compile(DDL,Query)
     ).
 
 -endif.
