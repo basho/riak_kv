@@ -154,9 +154,7 @@ get_group_by_field_position(Mod, FieldName) when is_binary(FieldName) ->
 
 group_by_column_does_not_exist_error(Mod, FieldName) ->
     ?DDL{table = TableName} = Mod:get_ddl(),
-    Msg = iolist_to_binary(io_lib:format(
-        "Error in group by clause, column '~ts' does not exist in table table ~ts", [FieldName, TableName])),
-    {error, {invalid_query, Msg}}.
+    {error, {invalid_query, ?E_MISSING_COL_IN_GROUP_BY(FieldName, TableName)}}.
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
