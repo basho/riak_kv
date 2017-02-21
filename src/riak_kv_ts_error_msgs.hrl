@@ -112,5 +112,5 @@
 -define(
     E_MISSING_COL_IN_GROUP_BY(FieldName, TableName),
     iolist_to_binary(io_lib:format(
-        "Error in group by clause, column '~ts' does not exist in table table ~ts", [FieldName, TableName]))
+        "Error in group by clause, column '~ts' does not exist in table ~ts", [FieldName, TableName]))
 ).
