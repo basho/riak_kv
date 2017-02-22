@@ -59,7 +59,7 @@
          module :: atom(),          %% module where the sweep call back lives.
          fun_type :: riak_kv_sweeper:fun_type(), %% delete_fun | modify_fun | observe_fun
          sweep_fun :: fun(),        %%
-         run_interval :: integer() | fun(), %% Defines how often participant wants to run.
+         run_interval :: riak_kv_sweeper:run_interval(), %% How often participant wants to run
          acc :: any(),
          options = [] :: list(),    %% optional values that will be added during sweep
          errors = 0 :: integer(),

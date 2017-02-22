@@ -79,7 +79,7 @@
                   | 'modify_fun'
                   | 'observe_fun'.
 
--type run_interval_fun() :: fun(() -> non_neg_integer()).
+-type run_interval_fun() :: fun(() -> disabled | non_neg_integer()).
 
 -type run_interval() :: non_neg_integer() | run_interval_fun().
 
