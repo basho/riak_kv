@@ -39,10 +39,6 @@
 
 -opaque group_params() :: #group_params{}.
 
--ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
 fold_keys(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
     Bucket = proplists:get_value(bucket, Opts),
     GroupParams = proplists:get_value(group_params, Opts),
@@ -177,6 +173,10 @@ start_pos(Bucket,
             to_object_key(GroupParams, Bucket, Key)
     end.
 
+-spec start_key(Prefix :: binary() | undefined,
+                StartAfter :: binary() | undefined,
+                ContinuationToken :: riak_kv_continuation:token() | undefined) ->
+    binary().
 start_key(Prefix, StartAfter, ContinuationToken) ->
     case riak_kv_continuation:decode_token(ContinuationToken) of
         undefined ->
@@ -185,21 +185,18 @@ start_key(Prefix, StartAfter, ContinuationToken) ->
             start_key(Prefix, Token)
     end.
 
--spec start_key(Prefix :: binary() | undefined, StartKey :: binary() | undefined) ->
-    binary() | npos.
+-spec start_key(Prefix :: binary() | undefined, StartAfter :: binary() | undefined) ->
+    binary().
 start_key(undefined, undefined) ->
     <<"">>;
 start_key(Prefix, undefined) ->
     Prefix;
-start_key(undefined, StartKey) ->
-    append_null_byte(StartKey);
-start_key(Prefix, StartKey) ->
-    case StartKey =< Prefix of
-        true ->
-            Prefix;
-        _ ->
-            npos
-    end.
+start_key(undefined, StartAfter) ->
+    append_max_byte(StartAfter);
+start_key(Prefix, StartAfter) when Prefix > StartAfter ->
+    Prefix;
+start_key(Prefix, StartAfter) when Prefix =< StartAfter ->
+    append_max_byte(StartAfter).
 
 next_pos(undefined, Bucket, GroupParams) ->
     start_pos(Bucket, GroupParams);
@@ -316,10 +313,6 @@ extract_metadata({Bucket, Key} = _BKey,
             {error, riak_object_has_siblings}
     end.
 
--spec append_null_byte(binary()) -> binary().
-append_null_byte(Binary) when is_binary(Binary) ->
-    <<Binary/binary, 0>>.
-
 %% 0xFF is the biggest byte for the purposes of sorting in LevelDB,
 %% used for seeking past all keys starting with the prefix.
 -spec append_max_byte(binary()) -> binary().
@@ -331,6 +324,8 @@ append_max_byte(Binary) when is_binary(Binary) ->
 %% ====================
 
 -ifdef(TEST).
+
+-include_lib("eunit/include/eunit.hrl").
 
 test_group_params(Prefix, Delimiter) ->
     Result = to_group_params([{prefix, Prefix}, {delimiter, Delimiter}]),
@@ -426,6 +421,60 @@ common_prefix_or_metadata_with_undefined_delimiter_test() ->
     RObj = riak_object:new(Bucket, Key,<<"value">>),
     GroupParams = #group_params{prefix = <<"foo/">>},
     ?assertMatch({metadata, _Anything}, common_prefix_or_metadata(BKey, RObj, GroupParams)).
+
+start_key_test() ->
+    Prefix = undefined,
+    StartAfter = undefined,
+    ContinuationToken = undefined,
+    ?assertEqual(<<"">>, start_key(Prefix, StartAfter, ContinuationToken)).
+
+start_key_with_prefix_test() ->
+    Prefix = <<"foo/bar/baz">>,
+    StartAfter = undefined,
+    ContinuationToken = undefined,
+    ?assertEqual(<<"foo/bar/baz">>, start_key(Prefix, StartAfter, ContinuationToken)).
+
+start_key_with_start_after_test() ->
+    Prefix = undefined,
+    StartAfter = <<"foo/bar/baz">>,
+    ContinuationToken = undefined,
+    ?assertEqual(append_max_byte(<<"foo/bar/baz">>), start_key(Prefix, StartAfter, ContinuationToken)).
+
+start_key_with_prefix_and_start_after_test() ->
+    Prefix = <<"foo/bar/">>,
+    StartAfter = <<"foo/bar/baz">>,
+    ContinuationToken = undefined,
+    ?assertEqual(append_max_byte(<<"foo/bar/baz">>), start_key(Prefix, StartAfter, ContinuationToken)).
+
+start_key_with_continuation_test() ->
+    Prefix = undefined,
+    StartAfter = undefined,
+    ContinuationToken = riak_kv_continuation:make_token(<<"foo/bar/baz">>),
+    ?assertEqual(append_max_byte(<<"foo/bar/baz">>), start_key(Prefix, StartAfter, ContinuationToken)).
+
+start_key_with_start_after_and_continuation_test() ->
+    Prefix = undefined,
+    StartAfter = <<"should/be/ignored">>,
+    ContinuationToken = riak_kv_continuation:make_token(<<"should/be/used">>),
+    ?assertEqual(append_max_byte(<<"should/be/used">>), start_key(Prefix, StartAfter, ContinuationToken)).
+
+start_key_with_prefix_less_than_continuation_test() ->
+    Prefix = <<"foo/">>,
+    StartAfter = undefined,
+    ContinuationToken = riak_kv_continuation:make_token(<<"foo/bar/baz">>),
+    ?assertEqual(append_max_byte(<<"foo/bar/baz">>), start_key(Prefix, StartAfter, ContinuationToken)).
+
+start_key_with_prefix_equal_to_continuation_test() ->
+    Prefix = <<"foo/bar/">>,
+    StartAfter = undefined,
+    ContinuationToken = riak_kv_continuation:make_token(<<"foo/bar/">>),
+    ?assertEqual(append_max_byte(<<"foo/bar/">>), start_key(Prefix, StartAfter, ContinuationToken)).
+
+start_key_with_prefix_greater_than_continuation_test() ->
+    Prefix = <<"foo/">>,
+    StartAfter = undefined,
+    ContinuationToken = riak_kv_continuation:make_token(<<"bar/baz">>),
+    ?assertEqual(Prefix, start_key(Prefix, StartAfter, ContinuationToken)).
 
 next_pos_after_key_with_no_prefix_or_delimiter_test() ->
     GroupParams = test_group_params(undefined, undefined),
