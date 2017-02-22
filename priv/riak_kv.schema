@@ -710,15 +710,15 @@
 
 %% @doc Time between sweeps for object ttl
 {mapping, "obj_ttl.sweep_interval", "riak_kv.obj_ttl_sweep_interval", [
-   {default, off},
-   {datatype, [{duration, s}, flag]},
+   {default, disabled},
+   {datatype, [{duration, s}, {atom, disabled}]},
    {validators, ["minimum_sweep_interval"]},
    hidden
 ]}.
 
 {validator, "minimum_sweep_interval", "sweep interval can't be shorter then 6h",
  fun(Value) ->
-    Value == false orelse (is_integer(Value) andalso Value >= 6 * 3600)
+    Value == disabled orelse (is_integer(Value) andalso Value >= 6 * 3600)
  end}.
 
 %% @doc Whether to allow list buckets.
