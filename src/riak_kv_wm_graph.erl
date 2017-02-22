@@ -120,9 +120,6 @@ query_result(<<"SHOW TAG VALUES ", TableNRest/binary>>, RD, Ctx) ->
             show_tag_values(Table, Field, RD, Ctx)
     end;
 query_result(Query = <<"SELECT ", _T/binary>>, RD, Ctx) ->
-    %% TODO: test/fix GROUP BY ___ fill(null)
-    %%  time($interval)
-    %%  tag(host) ... each field, likely remove tag() aspect from FE
     %% TODO: ensure values in WHERE filter are in the field type, type coercion
     select(Query, RD, Ctx);
 query_result(<<"INSERT TAG VALUES ", TableNRest/binary>>, RD, Ctx) ->
@@ -429,7 +426,7 @@ maybe_create_tag_values_table1(_TableExists, TagValuesTable, RD, Ctx) ->
 
 show_tag_values(Table, Column, RD, Ctx) ->
     Query1 = "SELECT v FROM " ++ tag_values_table_name(Table, Column) ++
-             " WHERE z = 1",
+             " WHERE z = 1 AND a = true",
     {ok, {FieldNames, _FieldTypes, Rows}} = ts_query(Query1, RD, Ctx),
     iolist_to_binary(mochijson2:encode(
         {struct, [{results, [
@@ -460,18 +457,7 @@ update_tag_values(Table, Column, Values, Active, RD, Ctx) ->
              "(z, a, v) VALUES " ++
              ValuesS,
     {ok, {[], [], []}} = ts_query(Query1, RD, Ctx),
-    iolist_to_binary(mochijson2:encode(
-        {struct, [{results, [
-                    {struct, [{series, [
-                        {struct, [{name, <<"i">>},
-                                  {columns, <<"v">>},
-                                  {values, Values}
-                                 ]}
-                                       ]}
-                             ]}
-                            ]}
-                 ]}
-                      )).
+    show_tag_values(Table, Column, RD, Ctx).
 
 lex_parse(Query) ->
     catch riak_ql_parser:parse(

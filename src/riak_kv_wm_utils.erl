@@ -395,9 +395,6 @@ allowable_origin(OriginTuple, RefererTuple) ->
     end.
 
 normalize_referer('*') -> {"*", "*", "*"};
-normalize_referer("*") -> normalize_referer('*');
-normalize_referer({Scheme, Host}) ->
-    normalize_referer({Scheme, Host, "*"});
 normalize_referer({Scheme, "127.0.0.1", Port}) ->
     {Scheme, "localhost", Port};
 normalize_referer(RefererTuple) ->
@@ -640,26 +637,26 @@ allowable_origin_riak() -> {http, "localhost"}.
 allowable_origin_none_registered_test() ->
     register_allowable_origins(""),
     ?assertEqual(false,
-                 allowable_origin(allowable_origin_riak(), {http, "notlocalhost"})).
+                 allowable_origin(allowable_origin_riak(), {http, "notlocalhost", "*"})).
 
 allowable_origin_not_registered_test() ->
     register_allowable_origins([http, [{"localhost"}]]),
     ?assertEqual(false,
-                 allowable_origin(allowable_origin_riak(), {http, "notlocalhost"})).
+                 allowable_origin(allowable_origin_riak(), {http, "notlocalhost", "*"})).
 
 allowable_origin_single_registered_test() ->
     register_allowable_origins([https, [{"notlocalhost"}]]),
     ?assertEqual(true,
-                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
+                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost", "*"})).
 
 allowable_origin_multi_registered_test() ->
     register_allowable_origins([http, [{"localhost"}],
                                 https, [{"notlocalhost"}]]),
     ?assertEqual(true,
-                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
+                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost", "*"})).
 
 allowable_origin_wildcard_registered_test() ->
     register_allowable_origins(['*']),
     ?assertEqual(true,
-                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost"})).
+                 allowable_origin(allowable_origin_riak(), {https, "notlocalhost", "*"})).
 -endif.
