@@ -29,6 +29,7 @@
 -export([start_delete/2]).
 -export([start_link/0]).
 -export([init/1]).
+%% Exported for testing/debugging only:
 -export([maybe_add_sweep_participant/0]).
 
 start_delete(Node, Args) ->
@@ -55,10 +56,10 @@ maybe_add_sweep_participant() ->
 
 maybe_add_obj_ttl_sweep_participant() ->
     RunIntervalFun =
-        fun() -> app_helper:get_env(riak_kv, obj_ttl_sweep_interval, false) end,
+        fun() -> app_helper:get_env(riak_kv, obj_ttl_sweep_interval, disabled) end,
     case RunIntervalFun() of
-        false ->
-            false;
+        disabled ->
+            do_nothing;
         _ ->
             add_obj_ttl_sweep_participant(RunIntervalFun)
     end.
@@ -72,7 +73,7 @@ add_obj_ttl_sweep_participant(RunInterval) ->
 
 maybe_add_reap_sweep_participant() ->
     RunIntervalFun =
-        fun() -> app_helper:get_env(riak_kv, reap_sweep_interval, undefined) end,
+        fun() -> app_helper:get_env(riak_kv, reap_sweep_interval, disabled) end,
     case app_helper:get_env(riak_kv, tombstone_grace_period, disabled) of
         disabled ->
             do_nothing;
