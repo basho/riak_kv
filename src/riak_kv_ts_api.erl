@@ -33,7 +33,7 @@
          alter_table/3,
          put_data/2, put_data/3,
          get_data/2, get_data/3, get_data/4,
-         delete_data/2, delete_data/3, delete_data/4, delete_data/5,
+         delete_data/2, delete_data/3, delete_data/4,
          query/2,
          compile_to_per_quantum_queries/2  %% coverage
          %% To reassemble the broken-up queries into coverage entries
@@ -452,22 +452,16 @@ get_data(Key, Table, Mod0, Options) ->
 -spec delete_data([any()], riak_object:bucket()) ->
                          ok | {error, term()}.
 delete_data(Key, Table) ->
-    delete_data(Key, Table, undefined, [], undefined).
+    delete_data(Key, Table, undefined, []).
 
 -spec delete_data([any()], riak_object:bucket(), module()) ->
                          ok | {error, term()}.
 delete_data(Key, Table, Mod) ->
-    delete_data(Key, Table, Mod, [], undefined).
+    delete_data(Key, Table, Mod, []).
 
 -spec delete_data([any()], riak_object:bucket(), module(), proplists:proplist()) ->
                          ok | {error, term()}.
-delete_data(Key, Table, Mod, Options) ->
-    delete_data(Key, Table, Mod, Options, undefined).
-
--spec delete_data([any()], riak_object:bucket(), module(), proplists:proplist(),
-                  undefined | vclock:vclock()) ->
-                         ok | {error, term()}.
-delete_data(Key, Table, Mod0, Options0, VClock0) ->
+delete_data(Key, Table, Mod0, Options0) ->
     Mod =
         case Mod0 of
             undefined ->
@@ -484,26 +478,13 @@ delete_data(Key, Table, Mod0, Options0, VClock0) ->
     %% prevents the tombstone removal.
     Options = lists:keystore(dw, 1, Options0, {dw, all}),
     DDL = Mod:get_ddl(),
-    VClock =
-        case VClock0 of
-            undefined ->
-                %% this will trigger a get in riak_kv_delete:delete to
-                %% retrieve the actual vclock
-                undefined;
-            VClock0 ->
-                %% else, clients may have it already (e.g., from an
-                %% earlier riak_object:get), which will short-circuit
-                %% to avoid a separate get
-                riak_object:decode_vclock(VClock0)
-        end,
     case riak_ql_ddl:lk_to_pk(Key, Mod, DDL) of
         {ok, PK} ->
             try Mod:revert_ordering_on_local_key(list_to_tuple(Key)) of
                 LK ->
-                    riak_client:delete_vclock(
+                    riak_client:write_once_delete(
                       riak_kv_ts_util:table_to_bucket(Table),
                       {list_to_tuple(PK), list_to_tuple(LK)},
-                      VClock,
                       Options,
                       {riak_client, [node(), undefined]})
             catch

@@ -28,6 +28,7 @@
 -export([get/3,get/4,get/5]).
 -export([put/2,put/3,put/4,put/5,put/6]).
 -export([delete/3,delete/4,delete/5]).
+-export([write_once_delete/4]).
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4,stream_list_keys/5]).
@@ -398,20 +399,45 @@ delete(Bucket,Key,Options,Timeout,{?MODULE, [Node, _ClientId]}=THIS) when is_lis
         true ->
             consistent_delete(Bucket, Key, Options, Timeout, THIS);
         false ->
-            normal_delete(Bucket, Key, Options, Timeout, THIS);
+            maybe_normal_delete(Bucket, Key, Options, Timeout, THIS);
         {error,_}=Err ->
             Err
     end;
 delete(Bucket,Key,RW,Timeout,{?MODULE, [_Node, _ClientId]}=THIS) ->
     delete(Bucket,Key,[{rw, RW}], Timeout, THIS).
 
+%% If this is a write-once bucket, delete without read-before-delete
+%% (write_once_delete).  Else do a normal delete.
+
+maybe_normal_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]}) ->
+    case write_once(Node, Bucket) of
+        true ->
+	    write_once_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]});
+        false ->
+	    normal_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]});
+        {error,_}=Err ->
+            Err
+    end.
+
+%% This version is exported, since it is called directly from
+%% riak_kv_ts_api:delete_data/4
+
+write_once_delete(Bucket, Key, Options, {?MODULE, [Node, ClientId]}) ->
+    write_once_delete(Bucket, Key, Options, ?DEFAULT_TIMEOUT, {?MODULE, [Node, ClientId]}).
+
+%% Write-once get path ignores vclocks.  We pass in an empty vclock
+%% (vclock:fresh()) so that no read-before-delete is triggered in
+%% riak_kv_delete:delete/8
+
+write_once_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]}) ->
+    normal_delete_vclock(Bucket, Key, vclock:fresh(), Options, Timeout, {?MODULE, [Node, ClientId]}).
+
+%% Normal path uses vclocks to resolve object merges.  We pass in
+%% undefined to ensure that read-before-delete is triggered in
+%% riak_kv_delete:delete/8
+
 normal_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]}) ->
-    Me = self(),
-    ReqId = mk_reqid(),
-    riak_kv_delete_sup:start_delete(Node, [ReqId, Bucket, Key, Options, Timeout,
-                                           Me, ClientId]),
-    RTimeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, erlang:min(Timeout, RTimeout)).
+    normal_delete_vclock(Bucket, Key, undefined, Options, Timeout, {?MODULE, [Node, ClientId]}).
 
 consistent_delete(Bucket, Key, Options, _Timeout, {?MODULE, [Node, _ClientId]}) ->
     BKey = {Bucket, Key},
