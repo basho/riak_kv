@@ -129,7 +129,7 @@ handle_info({{SubQId, QId}, {error, Reason} = Error},
                    result = IndexedChunks}) ->
     lager:warning("Error ~p while collecting on QId ~p (~p);"
                   " dropping ~b chunks of data accumulated so far",
-                  [Reason, QId, SubQId, length(IndexedChunks)]),
+                  [Reason, QId, SubQId, IndexedChunks]),
     ReceiverPid ! Error,
     pop_next_query(),
     {noreply, new_state()};
@@ -422,7 +422,7 @@ run_select_on_group_row(Query, SelClause, Row, QueryResult1) ->
     Aggregate1 =
         case dict:find(Key, Dict1) of
             error ->
-                InitialGroupState;
+                prepare_group_by_initial_state(Row, InitialGroupState);
             {ok, AggregateX} ->
                 AggregateX
         end,
@@ -430,10 +430,25 @@ run_select_on_group_row(Query, SelClause, Row, QueryResult1) ->
     Dict2 = dict:store(Key, Aggregate2, Dict1),
     {group_by, InitialGroupState, Dict2}.
 
+prepare_group_by_initial_state(Row, InitialState) ->
+    [prepare_group_by_initial_state2(Row, Col) || Col <- InitialState].
+
+prepare_group_by_initial_state2(Row, InitFn) when is_function(InitFn) ->
+    InitFn(Row);
+prepare_group_by_initial_state2(_, InitVal) ->
+    InitVal.
+
 %%
 select_group(Query, Row) ->
     GroupByFields = sql_select_group_by(Query),
-    [lists:nth(N, Row) || {N,_} <- GroupByFields].
+    select_group2(GroupByFields, Row).
+
+select_group2([], _) ->
+    [];
+select_group2([{N,_}|Tail], Row) when is_integer(N) ->
+    [lists:nth(N, Row)|select_group2(Tail, Row)];
+select_group2([{GroupByTimeFn,_}|Tail], Row) when is_function(GroupByTimeFn) ->
+    [GroupByTimeFn(Row)|select_group2(Tail, Row)].
 
 %% Run the selection clause on results that accumulate rows
 run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, undefined) ->
