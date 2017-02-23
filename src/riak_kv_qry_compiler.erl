@@ -572,17 +572,11 @@ compile_select_col(DDL, Select) ->
 %% possible other such columns and converted to the actual function in
 %% `compile_order_by`.
 prepare_invdist_funcall(FnName, [{identifier, [ColumnArg]}|_] = Args) ->
-    case riak_core_capability:get({riak_kv, inverse_distrib_functions_supported}) of
-        true ->
-            case validate_invdist_funcall(FnName, Args) of
-                {ok, OtherArgsBare} ->
-                    {ok, {FnName, ColumnArg, OtherArgsBare}};
-                ER ->
-                    ER
-            end;
-        _ ->
-            {error, {not_supported_by_cluster,
-                     ?E_INVERSE_DIST_NOT_SUPPORTED}}
+    case validate_invdist_funcall(FnName, Args) of
+        {ok, OtherArgsBare} ->
+            {ok, {FnName, ColumnArg, OtherArgsBare}};
+        ER ->
+            ER
     end;
 prepare_invdist_funcall(FnName, _Args) ->
     {error, {missing_invdist_fn_column_arg,

@@ -225,10 +225,6 @@ start(_Type, _StartArgs) ->
                                           [true, false],
                                           false),
 
-            riak_core_capability:register({riak_kv, inverse_distrib_functions_supported},
-                                          [true, false],
-                                          false),
-
             riak_kv_compile_tab:populate_v3_table(),
             riak_kv_ts_newtype:recompile_ddl(),
             riak_kv_ts_newtype:verify_helper_modules(),
