@@ -4366,25 +4366,52 @@ query_with_desc_last_local_key_column_no_quantum_test() ->
 validate_invdist_funcall_1_test() ->
     ?assertEqual(
        {ok, [0.3]},
-       validate_invdist_funcall('PERCENTILE', [{identifier, [<<"x">>]}, {float, 0.3}])).
+       validate_invdist_funcall('PERCENTILE_DISC', [{identifier, [<<"x">>]}, {float, 0.3}])).
 
 validate_invdist_funcall_2_test() ->
     ?assertEqual(
        {error,
         {invalid_static_invdist_fn_param, <<"Invalid argument 2 in call to function PERCENTILE.">>}},
-       validate_invdist_funcall('PERCENTILE', [{identifier, [<<"x">>]}, {float, 1.3}])).
+       validate_invdist_funcall('PERCENTILE_DISC', [{identifier, [<<"x">>]}, {float, 1.3}])).
 
 validate_invdist_funcall_3_test() ->
     ?assertEqual(
        {error,
         {invalid_expr_in_invdist_fun_arglist, <<"Invalid expression passed as parameter for inverse distribution function.">>}},
-       validate_invdist_funcall('PERCENTILE', [{identifier, [<<"x">>]}, {'+', {float, 1.3}, {boolean, true}}])).
+       validate_invdist_funcall('PERCENTILE_DISC', [{identifier, [<<"x">>]}, {'+', {float, 1.3}, {boolean, true}}])).
 
 validate_invdist_funcall_4_test() ->
     ?assertEqual(
        {error,
         {nonconst_expr_in_invdist_fun_arglist, <<"Non-const expression passed as parameter for inverse distribution function.">>}},
-       validate_invdist_funcall('PERCENTILE', [{identifier, [<<"x">>]}, {identifier, [<<"y">>]}])).
+       validate_invdist_funcall('PERCENTILE_DISC', [{identifier, [<<"x">>]}, {identifier, [<<"y">>]}])).
 
+compile_invdist_good_test() ->
+    DDL = get_ddl(
+        "create table t ("
+        "b timestamp not null,"
+        "x sint64,"
+        "primary key ((quantum(b, 10, s)), b));"
+    ),
+    {ok, Rec} = get_query(
+                  "select percentile_disc(x, 0.11) from t where b > 1 and b < 21"),
+    {ok, [SQL = ?SQL_SELECT{'SELECT' = Select,
+                            'OFFSET' = Offset}|_]} = compile(DDL, Rec),
+    ?assertMatch(
+       ?SQL_SELECT{'ORDER BY' = [{<<"x">>, asc, nulls_last}],
+                   'LIMIT'    = [1]},
+       SQL
+      ),
+    ?assertMatch(
+       #riak_sel_clause_v1{col_names = [<<"x">>]},
+       Select
+      ),
+    {_OrderBy = {<<"x">>, asc, nulls_last},
+     _Limit = 1,
+     _Offset} = compile_invdist_funcall({'PERCENTILE_DISC', <<"x">>, [0.11]}),
+    ?assertEqual(
+       [_Offset],
+       Offset
+      ).
 
 -endif.
