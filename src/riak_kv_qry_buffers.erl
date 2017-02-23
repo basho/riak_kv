@@ -63,7 +63,10 @@
 
          %% utility functions
          limit_to_scalar/1,
-         offset_to_scalar/1
+         offset_to_scalar/1,
+
+         %% needed to survive reinit
+         schedule_tick/0
         ]).
 
 -type qbuf_ref() :: binary().
@@ -169,8 +172,13 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
           %% State; can be overridden)
           expire_msec :: non_neg_integer(),
 
-          %% leveldb handle for the temp storage
-          ldb_ref :: eleveldb:db_ref(),
+          %% leveldb handle for the temp storage (undefined initially, until created by ldb_setup_fun)
+          ldb_ref :: eleveldb:db_ref() | undefined,
+          %% a function to obtain ldb handle (deferred, possibly never called, eleveldb:open)
+          ldb_setup_fun :: fun(() -> {ok, eleveldb:db_ref()} | {error, term()}),
+
+          %% in-memory buffer for small fish
+          inmem_buffer = [] :: [{binary(), binary()}],
 
           %% received chunks count so far
           chunks_got = 0 :: integer(),
@@ -178,7 +186,7 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
           chunks_need :: integer(),
 
           %% flipped to true when chunks_need == chunks_got
-          is_ready = false :: boolean(),
+          all_chunks_received = false :: boolean(),
 
           %% total records stored (when complete)
           total_records = 0 :: non_neg_integer(),
@@ -211,6 +219,8 @@ offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
           soft_watermark :: non_neg_integer(),
           %% drop some tables now
           hard_watermark :: non_neg_integer(),
+          %% process heap size limit before forcing dumping in-mem buffer to ldb
+          inmem_max :: non_neg_integer(),
           %% drop incomplete query buffer after this long since last add_chunk
           incomplete_qbuf_release_msec :: non_neg_integer(),
           %% drop complete query buffers after this long since serving last query
@@ -230,12 +240,14 @@ start_link(Args) ->
 -spec init([string() | integer()]) -> {ok, #state{}}.
 init([RootPath, MaxRetSize,
       SoftWatermark, HardWatermark,
+      InmemMax,
       QBufExpireMsec, IncompleteQBufReleaseMsec]) ->
     spawn(fun() -> prepare_qbuf_dir(RootPath) end),
     State =
         #state{status                       = init_in_progress,
                root_path                    = RootPath,
                max_query_data_size          = MaxRetSize,
+               inmem_max                    = InmemMax,
                soft_watermark               = SoftWatermark,
                hard_watermark               = HardWatermark,
                qbuf_expire_msec             = QBufExpireMsec,
@@ -359,25 +371,22 @@ do_get_or_create_qbuf(SQL = ?SQL_SELECT{'FROM' = OrigTable},
                     DDL = ?DDL{table = Table} =
                         sql_to_ddl(OrigTable, CompiledSelect, CompiledOrderBy),
                     lager:debug("creating new query buffer ~p (ref ~p) for ~p", [Table, QBufRef, SQL]),
-                    case riak_kv_qry_buffers_ldb:new_table(Table, RootPath) of
-                        {ok, LdbRef} ->
-                            QBuf = #qbuf{orig_qry      = SQL,
-                                         ddl           = DDL,
-                                         mother_table  = riak_kv_ts_util:queried_table(SQL),
-                                         chunks_need   = NSubqueries,
-                                         ldb_ref       = LdbRef,
-                                         expire_msec   = proplists:get_value(
-                                                           expiry_msec, Options, DefaultQBufExpireMsec),
-                                         last_accessed = os:timestamp(),
-                                         options       = Options,
-                                         key_field_positions = get_lk_field_positions(DDL)},
-                            QBufs = QBufs0 ++ [{QBufRef, QBuf}],
-                            State = State0#state{qbufs = QBufs,
-                                                 total_size = compute_total_qbuf_size(QBufs)},
-                            {reply, {ok, {new, QBufRef}}, State};
-                        {error, Reason} ->
-                            {reply, {error, Reason}, State0}
-                    end
+                    DelayedLdbCreateF = fun() -> riak_kv_qry_buffers_ldb:new_table(Table, RootPath) end,
+                    QBuf = #qbuf{orig_qry      = SQL,
+                                 ddl           = DDL,
+                                 mother_table  = riak_kv_ts_util:queried_table(SQL),
+                                 chunks_need   = NSubqueries,
+                                 ldb_ref       = undefined,
+                                 ldb_setup_fun = DelayedLdbCreateF,
+                                 expire_msec   = proplists:get_value(
+                                                   expiry_msec, Options, DefaultQBufExpireMsec),
+                                 last_accessed = os:timestamp(),
+                                 options       = Options,
+                                 key_field_positions = get_lk_field_positions(DDL)},
+                    QBufs = QBufs0 ++ [{QBufRef, QBuf}],
+                    State = State0#state{qbufs = QBufs,
+                                         total_size = compute_total_qbuf_size(QBufs)},
+                    {reply, {ok, {new, QBufRef}}, State}
             end
     end.
 
@@ -387,8 +396,8 @@ do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{is_ready = false} ->
-            {reply, {error, qbuf_not_ready}, State0};
+        #qbuf{ldb_ref = undefined} ->
+            {reply, ok, State0#state{qbufs = lists:keydelete(QBufRef, 1, QBufs0)}};
         #qbuf{ldb_ref = LdbRef,
               ddl = ?DDL{table = Table}} ->
             ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
@@ -396,18 +405,19 @@ do_delete_qbuf(QBufRef, #state{qbufs = QBufs0,
     end.
 
 
-do_batch_put(QBufRef, Data, #state{qbufs          = QBufs0,
-                                   total_size     = TotalSize0,
+do_batch_put(QBufRef, Data, #state{qbufs      = QBufs0,
+                                   total_size = TotalSize0,
+                                   inmem_max  = InmemMax,
                                    hard_watermark = HardWatermark} = State0) ->
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{is_ready = true} ->
+        #qbuf{all_chunks_received = true} ->
             {reply, {error, qbuf_already_finished}, State0};
         QBuf0 ->
-            case maybe_add_chunk(
-                   QBuf0, Data, TotalSize0, HardWatermark) of
-                {ok, #qbuf{is_ready = IsReady,
+            case add_chunk(
+                   QBuf0, Data, TotalSize0, HardWatermark, InmemMax) of
+                {ok, #qbuf{all_chunks_received = IsReady,
                            ready_waiting_notifier = SelfNotifierFun} = QBuf} ->
                     State9 = State0#state{total_size = TotalSize0 + QBuf#qbuf.size,
                                           qbufs = lists:keyreplace(
@@ -420,48 +430,111 @@ do_batch_put(QBufRef, Data, #state{qbufs          = QBufs0,
             end
     end.
 
--spec maybe_add_chunk(#qbuf{}, [data_row()],
-                      non_neg_integer(), non_neg_integer()) ->
-                             {ok, #qbuf{}, non_neg_integer()} | {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
-maybe_add_chunk(#qbuf{ldb_ref       = LdbRef,
-                      orig_qry      = ?SQL_SELECT{'ORDER BY' = OrderBy},
-                      chunks_got    = ChunksGot0,
-                      chunks_need   = ChunksNeed,
-                      size          = Size,
-                      total_records = TotalRecords0,
-                      key_field_positions = KeyFieldPositions} = QBuf0,
-                Data,
-                TotalSize, HardWatermark) ->
+-spec add_chunk(#qbuf{}, [data_row()],
+                non_neg_integer(), non_neg_integer(), non_neg_integer()) ->
+                       {ok, #qbuf{}, non_neg_integer()} | {error, total_qbuf_size_limit_reached | riak_kv_qry_buffers_ldb:errors()}.
+add_chunk(#qbuf{inmem_buffer  = InmemBuffer0,
+                orig_qry      = ?SQL_SELECT{'ORDER BY' = OrderBy},
+                chunks_got    = ChunksGot0,
+                chunks_need   = ChunksNeed,
+                size          = Size,
+                total_records = TotalRecords0,
+                key_field_positions = KeyFieldPositions} = QBuf0,
+          Data,
+          TotalSize, HardWatermark, InmemMax) ->
     ChunkSize = compute_chunk_size(Data),
     case TotalSize + ChunkSize > HardWatermark of
         true ->
             {error, total_qbuf_size_limit_reached};
         false ->
-            %% ChunkId will be used to construct a new and unique key
-            %% for each record. Ideally, this should be the serial
-            %% number of the subquery.
+            %% update stats/counters: ChunkId will be used to
+            %% construct a new and unique key for each record (because
+            %% there may be multiple records with the same key
+            %% constructed from columns BY which to ORDER).  This is
+            %% not the subquery id, but it's ok as long as we have the
+            %% new key as the first element in the tuple representing
+            %% the constructed key. See enkey/4.
             ChunkId = ChunksGot0,
             ChunksGot = ChunksGot0 + 1,
-            lager:debug("adding chunk ~b of ~b", [ChunksGot, ChunksNeed]),
+            AllChunksReceived = (ChunksNeed == ChunksGot),
+
+            %% construct keys for new data
             OrdByFieldQualifiers = lists:map(fun get_ordby_field_qualifiers/1, OrderBy),
-            case riak_kv_qry_buffers_ldb:add_rows(LdbRef, Data, ChunkId,
-                                                  KeyFieldPositions,
-                                                  OrdByFieldQualifiers) of
-                ok ->
-                    IsReady = (ChunksNeed == ChunksGot),
-                    QBuf = QBuf0#qbuf{size          = Size + ChunkSize,
-                                      chunks_got    = ChunksGot,
-                                      total_records = TotalRecords0 + length(Data),
-                                      is_ready      = IsReady,
-                                      last_accessed = os:timestamp()},
-                    {ok, QBuf};
+            KeyedData = enkey(Data, KeyFieldPositions, OrdByFieldQualifiers, ChunkId),
+
+            QBuf1 = QBuf0#qbuf{size          = Size + ChunkSize,
+                               chunks_got    = ChunksGot,
+                               total_records = TotalRecords0 + length(Data),
+                               last_accessed = os:timestamp(),
+                               all_chunks_received = AllChunksReceived},
+            lager:debug("adding chunk ~b of ~b to ldb", [ChunksGot, ChunksNeed]),
+            store_chunk(
+              QBuf1,
+              %% both the existing accumulated chunks as well as the
+              %% newly added chunk are already sorted, so perhaps a
+              %% more intelligent way would be to insert the new chunk
+              %% at the right place.
+              lists:append(InmemBuffer0, KeyedData),
+              can_afford_inmem(InmemMax),
+              AllChunksReceived)
+    end.
+
+store_chunk(#qbuf{ldb_ref = LdbRef,
+                  ldb_setup_fun = DelayedCreateFun} = QBuf0,
+            Data, CanAffordInMem, AllChunksReceived) ->
+    EleveldbPutF =
+        fun(Ref) ->
+                case riak_kv_qry_buffers_ldb:add_rows(Ref, Data) of
+                    ok ->
+                        QBuf = QBuf0#qbuf{inmem_buffer = [],
+                                          ldb_ref      = Ref},
+                        {ok, QBuf};
+                    {error, _} = ErrorReason ->
+                        ErrorReason
+                end
+        end,
+
+    IsBackendOpened = (LdbRef /= undefined),
+    case (IsBackendOpened orelse not CanAffordInMem) of
+        false ->
+            %% we have not switched to writing to ldb yet, and we
+            %% don't need to: keep accumulating data in memory
+            InmemBuffer = lists:sort(Data),
+            QBuf = QBuf0#qbuf{inmem_buffer = maybe_only_rows(InmemBuffer, AllChunksReceived)},
+            {ok, QBuf};
+        true when IsBackendOpened ->
+            %% already writing to ldb: keep doing so, irrespective of
+            %% memory availability
+            EleveldbPutF(LdbRef);
+        true ->
+            %% this is when we switch to writing to ldb; don't forget
+            %% to open the temp table
+            case DelayedCreateFun() of
+                {ok, RealLdbRef} ->  %% now it's a real ref
+                    EleveldbPutF(RealLdbRef);
                 {error, _} = ErrorReason ->
                     ErrorReason
             end
     end.
 
+can_afford_inmem(Threshold) ->
+    PInfo = process_info(self(), [heap_size, stack_size]),
+    HeapSize = proplists:get_value(heap_size, PInfo),
+    StackSize = proplists:get_value(stack_size, PInfo),
+    Allocated = HeapSize - StackSize,
+    Allocated < Threshold.
+
 get_ordby_field_qualifiers({_, AscDesc, Nulls}) ->
     {AscDesc, Nulls}.
+
+maybe_only_rows(KeyedRows, _StripKeysUsedForSorting = false) ->
+    %% while collecting chunks, we keep keyed data
+    KeyedRows;
+maybe_only_rows(KeyedRows, _StripKeysUsedForSorting = true) ->
+    %% once collected, we discard the artificial keys; pure records
+    %% remain, in the order and form the client expects
+    {_Keys, Rows} = lists:unzip(KeyedRows),
+    Rows.
 
 
 maybe_inform_waiting_process(true, SelfNotifierFun, QBufRef) when is_function(SelfNotifierFun) ->
@@ -474,7 +547,7 @@ do_set_ready_waiting_process(QBufRef, SelfNotifierFun, #state{qbufs = QBufs0} = 
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{is_ready = true} ->
+        #qbuf{all_chunks_received = true} ->
             %% qbuf is already ready: don't wait for the next
             %% batch_put to turn round and notify the process (because
             %% there will be no more batch puts)
@@ -499,22 +572,32 @@ do_fetch_limit(QBufRef,
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
-        #qbuf{is_ready = false} ->
+        #qbuf{all_chunks_received = false} ->
             {reply, {error, qbuf_not_ready}, State0};
-        #qbuf{ldb_ref = LdbRef,
-              orig_qry = OrigQry,
-              ddl = ?DDL{fields = QBufFields,
-                         table = Table}} ->
-            case riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Offset, Limit) of
-                {ok, Rows} ->
-                    lager:debug("fetched ~p rows from ~p for ~p", [length(Rows), Table, OrigQry]),
-                    ColNames = [Name || #riak_field_v1{name = Name} <- QBufFields],
-                    ColTypes = [Type || #riak_field_v1{type = Type} <- QBufFields],
-                    State9 = touch_qbuf(QBufRef, State0),
-                    {reply, {ok, {ColNames, ColTypes, Rows}}, State9}
-                %% {error, Reason} ->
-                %%     {reply, {error, Reason}, State0}
-            end
+        #qbuf{inmem_buffer = InmemBuffer,
+              ldb_ref      = LdbRef,
+              orig_qry     = OrigQry,
+              ddl          = ?DDL{fields = QBufFields,
+                                  table = Table}} ->
+            AllDataInMem = (LdbRef == undefined),
+            Rows =
+                case AllDataInMem of
+                    true ->
+                        case Limit of
+                            unlimited ->
+                                lists:nthtail(Offset, InmemBuffer);
+                            Limit ->
+                                lists:sublist(InmemBuffer, Offset + 1, Limit)
+                        end;
+                    false ->
+                        {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Offset, Limit),
+                        LdbRows
+                end,
+            lager:debug("fetched ~p rows from ~p for ~p", [length(Rows), Table, OrigQry]),
+            ColNames = [Name || #riak_field_v1{name = Name} <- QBufFields],
+            ColTypes = [Type || #riak_field_v1{type = Type} <- QBufFields],
+            State9 = touch_qbuf(QBufRef, State0),
+            {reply, {ok, {ColNames, ColTypes, Rows}}, State9}
     end.
 
 do_get_qbuf_expiry(QBufRef, #state{qbufs = QBufs} = State) ->
@@ -551,7 +634,7 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
     Now = os:timestamp(),
     QBufs9 =
         lists:filter(
-          fun({_QBufRef, #qbuf{is_ready = true,
+          fun({_QBufRef, #qbuf{all_chunks_received = true,
                                ldb_ref = LdbRef,
                                ddl = ?DDL{table = Table},
                                expire_msec = ExpireMsec,  %% qbuf-specific, possibly overriden
@@ -565,7 +648,7 @@ do_reap_expired_qbufs(#state{qbufs = QBufs0,
                       false ->
                           true
                   end;
-             ({_QBufRef, #qbuf{is_ready = false,
+             ({_QBufRef, #qbuf{all_chunks_received = false,
                                ldb_ref = LdbRef,
                                ddl = ?DDL{table = Table},
                                last_accessed = LastAccessed}}) ->
@@ -660,6 +743,57 @@ tstamp() ->
 
 
 %% data ops
+
+-spec enkey([data_row()],
+            KeyFieldPositions::[non_neg_integer()],
+            OrdByFieldQualifiers::[{asc|desc, nulls_first|nulls_last}],
+            ChunkId::non_neg_integer()) ->
+                   [{{KeyOrd::riak_pb_ts_codec:ldbvalue(),
+                      ChunkId::non_neg_integer(),
+                      Idx::non_neg_integer()},
+                     data_row()}].
+enkey(Rows, KeyFieldPositions, OrdByFieldQualifiers, ChunkId)
+  when is_list(KeyFieldPositions) ->
+    %% 0. The new key is composed from fields appearing in the ORDER
+    %%    BY clause, and may therefore not work out to be unique. We
+    %%    now index the rows in the chunk to preserve the original
+    %%    order (because imposing any other order is even worse)
+    RowsIndexed = lists:zip(Rows, lists:seq(1, length(Rows))),
+    [begin
+         %% a. Form a new key from ORDER BY fields
+         KeyRaw = [lists:nth(Pos, Row) || Pos <- KeyFieldPositions],
+         %% b. Negate values in columns marked as DESC in ORDER BY clause
+         KeyOrd = [make_sorted_keys(F, AscDesc, Nulls)
+                   || {F, {AscDesc, Nulls}} <- lists:zip(KeyRaw, OrdByFieldQualifiers)],
+         %% c. Combine with chunk id and row idx to ensure uniqueness, and encode.
+         %%    Make sure the key proper goes first: ChunkId is a thing
+         %%    internal to query buffer, is incrementally increasing,
+         %%    whereas the chunk it refers to may certainly not be
+         %%    increasing because of out-of-order arrivals from the
+         %%    vnodes.
+         Key = {KeyOrd, ChunkId, Idx},
+         %% d. Encode the record (don't bother constructing a
+         %%    riak_object with metadata, vclocks):
+         {Key, Row}
+     end || {Row, Idx} <- RowsIndexed].
+
+make_sorted_keys([], desc, nulls_first) ->
+    <<>>;  %% sorts before entupled value
+make_sorted_keys([], asc,  nulls_last) ->
+    <<>>;  %% sorts after entupled value
+make_sorted_keys([], asc,  nulls_first) ->
+    0;
+make_sorted_keys([], desc, nulls_last) ->
+    0;
+make_sorted_keys(F, asc, _) ->
+    {F};
+make_sorted_keys(F, desc, _) when is_number(F) ->
+    {-F};
+make_sorted_keys(F, desc, _) when is_binary(F) ->
+    {[<<bnot X>> || <<X>> <= F]};
+make_sorted_keys(F, desc, _) when is_boolean(F) ->
+    {not F}.
+
 compute_chunk_size(Data) ->
     erlang:external_size(Data).
 
@@ -688,9 +822,12 @@ touch_qbuf(QBufRef, State0 = #state{qbufs = QBufs0}) ->
     State0#state{qbufs = lists:keyreplace(
                            QBufRef, 1, QBufs0, {QBufRef, QBuf9})}.
 
-kill_ldb(RootPath, Table, LdbRef) ->
+kill_ldb(RootPath, Table, LdbRef) when LdbRef /= undefined ->
     ok = riak_kv_qry_buffers_ldb:delete_table(Table, LdbRef, RootPath),
+    ok;
+kill_ldb(_RootPath, _Table, _DelayedAndNeverCalledFun) ->
     ok.
+
 
 
 compute_total_qbuf_size(QBufs) ->
