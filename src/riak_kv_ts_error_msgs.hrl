@@ -150,3 +150,8 @@
    iolist_to_binary(
      ["Invalid expression passed as parameter for inverse distribution function."])
 ).
+-define(
+   E_MISSING_COL_IN_GROUP_BY(FieldName, TableName),
+   iolist_to_binary(
+     ["Error in group by clause, column '", FieldName, "' does not exist in table ", TableName, "."])
+).

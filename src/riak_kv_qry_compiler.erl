@@ -29,7 +29,7 @@
 -export([run_select/2, run_select/3]).
 
 -ifdef(TEST).
--compile(export_all).
+-include_lib("eunit/include/eunit.hrl").
 -endif.
 
 -type compiled_select() :: fun((_,_) -> riak_pb_ts_codec:ldbvalue()).
@@ -257,19 +257,51 @@ make_single_column_select(#riak_sel_clause_v1{col_return_types = [ColReturnType1
 
 %%
 maybe_compile_group_by(Mod, Sel3, ?SQL_SELECT{ group_by = GroupBy } = Q1) ->
-    compile_group_by(Mod, GroupBy, [], Q1?SQL_SELECT{ 'SELECT' = Sel3 }).
+    %% a throw means an error occurred and the function returned early and is
+    %% an expected error e.g. column name typo.
+    try
+        compile_group_by(Mod, GroupBy, [], Q1?SQL_SELECT{ 'SELECT' = Sel3 })
+    catch
+        throw:Error -> Error
+    end.
 
 %%
 compile_group_by(_, [], Acc, Q) ->
     {ok, Q?SQL_SELECT{ group_by = lists:reverse(Acc) }};
 compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
-        when is_binary(FieldName) ->
+  when is_binary(FieldName) ->
     case Mod:get_field_position([FieldName]) of
         undefined ->
             {error, {unknown_column, FieldName}};
         Pos ->
             compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q)
+    end;
+compile_group_by(Mod, [{time_fn,{_,FieldName},_} = GroupTimeFnAST|Tail], Acc, Q)
+  when is_binary(FieldName) ->
+    GroupTimeFn = make_group_by_time_fn(Mod, GroupTimeFnAST),
+    compile_group_by(Mod, Tail, [{GroupTimeFn,FieldName}|Acc], Q).
+
+-spec make_group_by_time_fn(module(), group_time_fn()) -> function().
+make_group_by_time_fn(Mod, {time_fn, {identifier, FieldName}, {integer, GroupSize}}) ->
+    Pos = get_group_by_field_position(Mod, FieldName),
+    fun(Row) ->
+        Time = lists:nth(Pos, Row),
+        riak_ql_quanta:quantum(Time, GroupSize, 'ms')
     end.
+
+%% Get the position in the row for a table column, with `group by` specific
+%% errors if the column name does not exist in this table.
+get_group_by_field_position(Mod, FieldName) when is_binary(FieldName) ->
+    case Mod:get_field_position([FieldName]) of
+        undefined ->
+            throw(group_by_column_does_not_exist_error(Mod, FieldName));
+        Pos when is_integer(Pos) ->
+            Pos
+    end.
+
+group_by_column_does_not_exist_error(Mod, FieldName) ->
+    ?DDL{table = TableName} = Mod:get_ddl(),
+    {error, {invalid_query, ?E_MISSING_COL_IN_GROUP_BY(FieldName, TableName)}}.
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -671,6 +703,13 @@ compile_select_col_stateless(_, {Type, V}) when Type == varchar; Type == boolean
     fun(_,_) -> V end;
 compile_select_col_stateless(_, {return_state, N}) when is_integer(N) ->
     fun(Row,_) -> pull_from_row(N, Row) end;
+compile_select_col_stateless(DDL, {{sql_select_fn, 'TIME'}, Args1}) ->
+    [Argsx1,Argsx2] = [compile_select_col_stateless(DDL,Ax) || Ax <- Args1],
+    fun(Row,State) ->
+        A1 = Argsx1(Row,State),
+        A2 = Argsx2(Row,State),
+        riak_ql_quanta:quantum(A1,A2,ms)
+    end;
 compile_select_col_stateless(_, {finalise_aggregation, FnName, N}) ->
     fun(Row,_) ->
         ColValue = pull_from_row(N, Row),
@@ -685,8 +724,8 @@ compile_select_col_stateless(DDL, {Op, A, B}) ->
     compile_select_col_stateless2(Op, Arg_a, Arg_b).
 
 %%
--spec infer_col_type(?DDL{}, riak_ql_ddl:selection(), Errors1::[any()]) ->
-        {Type::riak_ql_ddl:external_field_type() | error, Errors2::[any()]}.
+-spec infer_col_type(?DDL{}, riak_ql_ddl:selection(), Errors::[any()]) ->
+        {riak_ql_ddl:external_field_type() | error, any()}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
     {Type, Errors};
@@ -709,6 +748,7 @@ infer_col_type(?DDL{ fields = Fields }, {identifier, ColName1}, Errors) ->
                     {Type, Errors}
             end
     end;
+
 infer_col_type(DDL, {{FnClass, FnName}, FnArgs}, Errors0)
   when FnClass == window_agg_fn;
        FnClass == inverse_distrib_fn ->
@@ -729,6 +769,22 @@ infer_col_type(DDL, {{FnClass, FnName}, FnArgs}, Errors0)
             Error;
         {ArgTypes, Errors} ->
             infer_col_function_type(FnClass, FnName, ArgTypes, Errors)
+    end;
+infer_col_type(DDL, {{sql_select_fn, 'TIME'}, Args}, Errors1) ->
+    {ArgTypes, Errors2} =
+        lists:foldr(
+            fun(E, {Types, ErrorsX}) ->
+                case infer_col_type(DDL, E, ErrorsX) of
+                    {error, E}    -> {[error|Types], [E|ErrorsX]};
+                    {T, ErrorsX2} -> {[T|Types], ErrorsX2}
+                end
+            end, {[], Errors1}, Args),
+    case ArgTypes of
+        [timestamp, sint64] ->
+            {timestamp, Errors2};
+        _ ->
+            FnSigError = {argument_type_mismatch, 'TIME', ArgTypes},
+            {error, [FnSigError|Errors2]}
     end;
 
 infer_col_type(DDL, {Op, A, B}, Errors1) when Op == '/'; Op == '+'; Op == '-'; Op == '*' ->
@@ -768,8 +824,7 @@ extract_stateful_functions(Selection1, FinaliserLen) when is_integer(FinaliserLe
 %% extract stateful functions from the selection
 -spec extract_stateful_functions2(riak_ql_ddl:selection(), integer(),
                                   [riak_ql_ddl:selection_function()]) ->
-        {riak_ql_ddl:selection() | {finalise_aggregation, FnName::atom(), integer()},
-         [riak_ql_ddl:selection_function()]}.
+        {riak_ql_ddl:selection() | {finalise_aggregation, FnName::atom(), integer()}, [riak_ql_ddl:selection_function()]}.
 extract_stateful_functions2({Op, ArgA1, ArgB1}, FinaliserLen, Fns1) ->
     {ArgA2, Fns2} = extract_stateful_functions2(ArgA1, FinaliserLen, Fns1),
     {ArgB2, Fns3} = extract_stateful_functions2(ArgB1, FinaliserLen, Fns2),
@@ -781,7 +836,9 @@ extract_stateful_functions2({Tag, _} = Node, _, Fns)
         when Tag == identifier; Tag == sint64; Tag == integer; Tag == float;
              Tag == binary;     Tag == varchar; Tag == boolean ->
     {Node, Fns};
-extract_stateful_functions2({{inverse_distrib_fn, _FnName}, _} = Node, _, Fns) ->
+extract_stateful_functions2({{FnClass, _FnName}, _} = Node, _, Fns)
+  when FnClass == inverse_distrib_fn;
+       FnClass == sql_select_fn ->
     {Node, Fns};
 extract_stateful_functions2({{window_agg_fn, FnName}, _} = Function, FinaliserLen, Fns1) ->
     Fns2 = [Function | Fns1],
@@ -3381,6 +3438,83 @@ query_desc_order_on_quantum_at_quantum_across_quanta_test() ->
              {end_inclusive,true}]
         ],
         SubQueryWheres
+    ).
+
+group_by_time_adds_a_column_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "b sint64, "
+        "PRIMARY KEY ((a), a))"),
+    {ok, Q} = get_query(
+        "SELECT time(a,1m), COUNT(*) FROM t
+         WHERE a = 1
+         GROUP BY time(a,1m);"),
+    {ok,[?SQL_SELECT{'SELECT'=SelClause}]} = compile(DDL, Q),
+    ?assertEqual(group_by, SelClause#riak_sel_clause_v1.calc_type),
+    ?assertEqual([<<"TIME(a, 60000)">>, <<"COUNT(*)">>], SelClause#riak_sel_clause_v1.col_names),
+    ?assertEqual([timestamp,sint64], SelClause#riak_sel_clause_v1.col_return_types),
+    %% these are funs so just check we have the right number
+    ?assertMatch([_,_], SelClause#riak_sel_clause_v1.clause),
+    ?assertMatch([_,_], SelClause#riak_sel_clause_v1.finalisers),
+    ?assertEqual([timestamp,sint64], SelClause#riak_sel_clause_v1.col_return_types).
+
+group_by_time_run_select_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((QUANTUM(a, 1, 's')), a))"),
+    Sel = testing_compile_row_select(
+        DDL,
+        "SELECT time(a, 1s), COUNT(*) FROM t "
+        "WHERE a > 1 AND a < 6 "
+        "GROUP BY time(a,1s);"),
+    #riak_sel_clause_v1{clause = SelectSpec} = Sel,
+    ?assertEqual(
+       [1000,1],
+       run_select(SelectSpec, [1001], [[],0])
+    ).
+
+time_fn_in_select_clause_invalid_arg_types_returns_error_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((QUANTUM(a, 1, 's')), a))"),
+    {ok, Query} = get_query(
+        "SELECT time('lol', true), COUNT(*) FROM t "
+        "WHERE a > 1 AND a < 6 "
+        "GROUP BY time(a,1s);"),
+    ?assertMatch(
+       {error,{invalid_query,<<_/binary>>}},
+       compile(DDL,Query)
+    ).
+
+group_by_time_on_non_existing_column_returns_error_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((QUANTUM(a, 1, 's')), a))"),
+    {ok, Query} = get_query(
+        "SELECT time(a, 1s), COUNT(*) FROM t "
+        "WHERE a > 1 AND a < 6 "
+        "GROUP BY time(x,1s);"),
+    ?assertMatch(
+       {error,{invalid_query,<<_/binary>>}},
+       compile(DDL,Query)
+    ).
+
+group_by_on_non_existing_column_returns_error_test() ->
+    DDL = get_ddl(
+        "CREATE TABLE t("
+        "a TIMESTAMP NOT NULL, "
+        "PRIMARY KEY ((QUANTUM(a, 1, 's')), a))"),
+    {ok, Query} = get_query(
+        "SELECT time(a, 1s), COUNT(*) FROM t "
+        "WHERE a > 1 AND a < 6 "
+        "GROUP BY x;"),
+    ?assertMatch(
+       {error,{invalid_query,<<_/binary>>}},
+       compile(DDL,Query)
     ).
 
 find_filters_on_additional_local_key_fields_test() ->
