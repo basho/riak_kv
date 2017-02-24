@@ -1,0 +1,128 @@
+msc {
+    width=1800;
+    C [label="client"],
+    KVA [label="riak_kv_ts_api"],
+    CBT [label="riak_core_bucket_type"],
+    CC [label="riak_core_claimant"],
+    CM [label="riak_core_metadata"],
+    CMM [label="riak_core_metadata_manager"],
+    KVML [label="riak_kv_metadata_store_listener"],
+    KVNT [label="riak_kv_ts_newtype"];
+
+    C -> KVA [label="create table"];
+    KVA -> CBT [label="create"];
+    CBT -> CC [label="create_bucket_type"];
+    CC -> CC [label="claimant"];
+    CC -> CC [label="create_bucket_type"];
+    CC -> CC [label="get_bucket_type"];
+    CC -> CM [label="get"];
+    --- [label="bucket DNE"];
+    CC <- CM [label="<- get, undefined"];
+    CM <- CC [label="<- get_bucket_type, undefined"];
+    --- [label="create bucket type"];
+    CC -> CM [label="put"];
+    CM -> CMM [label="put"];
+    CMM -> KVML [label="metadata_stored"];
+    KVML -> KVNT [label="new_type"];
+    KVNT -> KVNT [label="! new_type"];
+    --- [label="ASYNC 1"];
+    KVML <- KVNT [label="<- new_type, ok"];
+    CM <- CMM [label="<- put, metadata"];
+    --- [label="interleaved 1"];
+    KVNT -> KVNT [label="handle_cast new_type"];
+    KVNT -> CM [label="get"];
+    CM -> CM [label="broadcast"];
+    --- [label="ASYNC 2"];
+    CC <- CM [label="<- put, ok"];
+    CBT <- CC [label="<- create_bucket_type, ok"];
+    KVA <- CBT [label="<-create, ok"];
+    KVA -> KVA [label="wait_until_active_and_supported"];
+    --- [label="SYNC POINT"];
+    /* this is why the PR is necessary */
+
+    /* for fullness sake, the following is the flow that we're awaiting */
+    ... [label="broadcast handling"];
+    KVA -> CBT [label="activate_bucket_type"];
+    CBT -> CC [label="activate_bucket_type"];
+    CC -> CC [label="claimant"];
+    CC -> CM [label="get"];
+
+    --- [label="interleaved 2"];
+    KVNT -> KVNT [label="do_new_type"];
+
+    CM -> CMM [label="get"];
+    CC <- CM [label="<- get, metadata"];
+
+    CC -> CC [label="maybe_filter_inactive_type"];
+    CC <- CC [label="<- maybe_filter_inactive_type, metadata"];
+    CC <- CC [label="<- get_bucket_type, metadata"];
+
+    CC -> CC [label="get_type_status"];
+    CC -> CC [label="type_active"];
+    CC <- CC [label="<- type_active, false"];
+
+    CC -> CC [label="get_remote_ddl_compiled_status"];
+ 
+    --- [label="RPC get_remote_ddl_compiled_status"];
+    KVML -> KVML [label="handle_call is_type_compiled"];
+    KVML -> KVNT [label="is_compiled"];
+    KVNT -> KVNT [label="beam_exists"];
+    KVNT <- KVNT [label="<- beam_exists, false"];
+    KVML <- KVNT [label="<- is_compiled, false"];
+
+    --- [label="resume interleaved 2"];
+    CC -> CM [label="get"];
+    CC <- CM [label="<- get, metadata"];
+    CC <- CC [label="<- get_type_status, metadata"];
+    CC -> CC [label="is_type_ready"];
+    CC <- CC [label="<- is_type_ready, created"];
+    CC -> CC [label="maybe_activate_type"];
+    CC <- CC [label="<- maybe_activate_type, not_ready"];
+
+    --- [label="more interleaving"];
+    KVNT -> KVNT [label="compile_to_ast"];
+    KVNT <- KVNT [label="compile_to_ast, beam info"];
+    KVNT -> KVNT [label="store_module"];
+    KVNT <- KVNT [label="<- store_module, ok"];
+    KVNT <- KVNT [label="<- do_new_type, ok"];
+    KVNT <- KVNT [label="<- ! new_type, ok"];
+    --- [label="compiled"];
+
+    KVA -> CBT [label="activate"];
+    CBT -> CC [label="activate_bucket_type"];
+    CC -> CC [label="claimant"];
+    CC -> CC [label="get_bucket_type"];
+    CC -> CM [label="get"];
+    CM -> CMM [label="get"];
+    CM <- CMM [label="<- get, metadata"];
+    CC <- CM [label="<- get, metadata"];
+    CC -> CC [label="maybe_filter_inactive_type"];
+    CC <- CC [label="<- maybe_filter_inactive_type, metadata"];
+    CC <- CC [label="<- get_bucket_type, metadata"];
+    CC <- CC [label="<- get_type_status, table, metadata"];
+    CC -> CC [label="type_active"];
+    CC <- CC [label="<- type_active, false"];
+    CC -> CC [label="get_remote_ddl_compiled_status"];
+    --- [label="RPC get_remote_ddl_compiled_status"];
+    CC -> KVML [label="is_type_compiled"];
+    KVML -> KVNT [label="is_compiled"];
+    KVNT -> KVNT [label="beam_exists"];
+    KVNT <- KVNT [label="<- beam_exists, true"];
+    CC <- KVML [label="<- get_remote_ddl_compiled_status, true"];
+    CC <- CC [label="<- get_type_status, metadata"];
+    CC <- CC [label="<- is_type_ready, metadata, true"];
+    CC <- CC [label="<- get_type_status, ready"];
+    
+    --- [label="eliding metadata put, triggers metadata_stored, but should be idempotent"];
+    KVNT -> KVNT [label="handle_cast new_type"];
+    KVNT -> KVNT [label="do_maybe_new_type"];
+    KVNT -> KVNT [label="maybe_new_type"];
+
+    CC -> CM [label="broadcast"];
+
+    CC <- CC [label="<- activate_bucket_type, ok"];
+    CBT <- CC [label="<- activate, ok"];
+
+    KVNT -> KVNT [label="<- maybe_new_type, duplicate"];
+    KVNT -> KVNT [label="<- do_maybe_new_type, ok"];
+}
