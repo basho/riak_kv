@@ -272,7 +272,7 @@ compile_group_by(Mod, [{identifier,FieldName}|Tail], Acc, Q)
   when is_binary(FieldName) ->
     case Mod:get_field_position([FieldName]) of
         undefined ->
-            {error, {unknown_column, FieldName}};
+            group_by_column_does_not_exist_error(Mod, FieldName);
         Pos ->
             compile_group_by(Mod, Tail, [{Pos,FieldName}|Acc], Q)
     end;
@@ -3513,7 +3513,7 @@ group_by_on_non_existing_column_returns_error_test() ->
         "WHERE a > 1 AND a < 6 "
         "GROUP BY x;"),
     ?assertMatch(
-       {error,{invalid_query,<<_/binary>>}},
+       {error, {invalid_query, <<_/binary>>}},
        compile(DDL,Query)
     ).
 
