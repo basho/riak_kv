@@ -4502,7 +4502,7 @@ validate_invdist_funcall_1_test() ->
 validate_invdist_funcall_2_test() ->
     ?assertEqual(
        {error,
-        {invalid_static_invdist_fn_param, <<"Invalid argument 2 in call to function PERCENTILE.">>}},
+        {invalid_static_invdist_fn_param, <<"Invalid argument 2 in call to function PERCENTILE_DISC.">>}},
        validate_invdist_funcall('PERCENTILE_DISC', [{identifier, [<<"x">>]}, {float, 1.3}])).
 
 validate_invdist_funcall_3_test() ->
