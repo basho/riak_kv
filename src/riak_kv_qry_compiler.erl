@@ -4383,7 +4383,7 @@ validate_invdist_funcall_4_test() ->
         {nonconst_expr_in_invdist_fun_arglist, <<"Non-const expression passed as parameter for inverse distribution function.">>}},
        validate_invdist_funcall('PERCENTILE_DISC', [{identifier, [<<"x">>]}, {identifier, [<<"y">>]}])).
 
-compile_invdist_good_test() ->
+compile_invdist_full_test() ->
     DDL = get_ddl(
         "create table t ("
         "b timestamp not null,"
@@ -4410,5 +4410,15 @@ compile_invdist_good_test() ->
        [_Offset],
        Offset
       ).
+
+compile_invdist_partial_test() ->
+    {ok, Rec} = get_query(
+        "select percentile_disc(mysint, 0.1) from mytab"),
+    {ok, _Select, [{ok, Spec}]} = compile_select_clause(get_sel_ddl(), Rec),
+    ?assertMatch(
+        {'PERCENTILE_DISC', <<"mysint">>, [0.1]},
+        Spec
+      ).
+
 
 -endif.
