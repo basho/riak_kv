@@ -100,9 +100,10 @@ compile_order_by(?SQL_SELECT{'ORDER BY' = OrderBy,
                              'LIMIT'    = Limit,
                              'SELECT' = #riak_sel_clause_v1{calc_type = CalcType}},
                  _InvDistFuns)
-  when (length(Limit) > 0 orelse
-        length(Offset) > 0 orelse
-        length(OrderBy) > 0) andalso CalcType /= rows ->
+  when (Limit /= [] orelse
+        Offset /= [] orelse
+        OrderBy /= [])
+       andalso (CalcType /= rows) ->
     {error, {order_by_with_aggregate_calc_type, ?E_ORDER_BY_WITH_AGGREGATE_CALC_TYPE}};
 
 %% inverdist functions of arg x will simulate 'ORDER BY' = [{x, asc,
@@ -112,17 +113,17 @@ compile_order_by(?SQL_SELECT{'ORDER BY' = OrderBy,
                              'OFFSET'   = Offset,
                              'LIMIT'    = Limit},
                  InvDistFuns)
-  when (length(Limit) > 0 orelse
-        length(Offset) > 0 orelse
-        length(OrderBy) > 0) andalso
-       length(InvDistFuns) > 0 ->
+  when (Limit /= [] orelse
+        Offset /= [] orelse
+        OrderBy /= [])
+       andalso (InvDistFuns /= []) ->
     {error, {inverdist_function_with_orderby,
              ?E_CANNOT_HAVE_ORDERBY_WITH_INVERSE_DIST_FUNCTION}};
 
 compile_order_by(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = CalcType}},
                  InvDistFuns)
-  when CalcType /= rows,
-       length(InvDistFuns) > 0 ->
+  when (InvDistFuns /= [])
+       andalso (CalcType /= rows) ->
     {error, {inverdist_function_with_groupby_or_aggregate_function,
              ?E_CANNOT_HAVE_GROUPING_OR_AGGREGATION_WITH_INVERSE_DIST_FUNCTION}};
 
@@ -408,24 +409,20 @@ compile_select_clause(DDL, ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{ clause = 
 
             IsGroupBy = (Q?SQL_SELECT.group_by /= []),
             IsAggregate = sets:is_element(aggregate, ResultTypeSet),
-            if
-                IsGroupBy ->
-                    Sel2 = Sel1#riak_sel_clause_v1{
-                             calc_type = group_by,
-                             col_names = get_col_names(DDL, Q) };
-                IsAggregate ->
-                    Sel2 = Sel1#riak_sel_clause_v1{
-                             calc_type = aggregate,
-                             col_names = get_col_names(DDL, Q) };
-                not IsAggregate ->
-                    Sel2 = Sel1#riak_sel_clause_v1{
-                             calc_type = rows,
-                             initial_state = [],
-                             col_names = get_col_names(DDL, Q) }
-            end,
-            {ok, Sel2#riak_sel_clause_v1{
-                   col_names = get_col_names(DDL, Q),
-                   col_return_types = lists:flatten(ColTypes) },
+            Sel2 =
+                if IsGroupBy ->
+                        Sel1#riak_sel_clause_v1{calc_type = group_by,
+                                                col_names = get_col_names(DDL, Q)};
+                   IsAggregate ->
+                        Sel1#riak_sel_clause_v1{calc_type = aggregate,
+                                                col_names = get_col_names(DDL, Q)};
+                   not IsAggregate ->
+                        Sel1#riak_sel_clause_v1{calc_type = rows,
+                                                initial_state = [],
+                                                col_names = get_col_names(DDL, Q)}
+                end,
+            {ok, Sel2#riak_sel_clause_v1{col_names = get_col_names(DDL, Q),
+                                         col_return_types = lists:flatten(ColTypes) },
              InvDistFuns1};
         [_|_] ->
             {error, {invalid_query, riak_kv_qry:format_query_syntax_errors(lists:reverse(Errors))}}
@@ -728,8 +725,8 @@ infer_col_type(DDL, {{FnClass, FnName}, FnArgs}, Errors0)
           end,
           {[], Errors0}, FnArgs),
     case MaybeArgTypes of
-        {error, _} = Errors ->
-            Errors;
+        {error, _} = Error ->
+            Error;
         {ArgTypes, Errors} ->
             infer_col_function_type(FnClass, FnName, ArgTypes, Errors)
     end;

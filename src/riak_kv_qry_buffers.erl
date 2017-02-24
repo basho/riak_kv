@@ -588,10 +588,10 @@ do_fetch_limit(QBufRef,
     end.
 
 maybe_supply_offset([]) -> [0];
-maybe_supply_offset(Thing) -> Thing.
+maybe_supply_offset(Specs) -> Specs.
 
 maybe_supply_limits([]) -> [unlimited];
-maybe_supply_limits(Thing) -> Thing.
+maybe_supply_limits(Specs) -> Specs.
 
 static_fetcher({InmemBuffer, undefined}, [{Offset, unlimited}]) ->
     lists:nthtail(Offset, InmemBuffer);
