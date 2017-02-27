@@ -4380,6 +4380,34 @@ select_with_arithmetic_on_identifier_throws_an_error_literal_on_lhs_test() ->
         is_query_valid(DDL, Q)
     ).
 
+select_on_unknown_column_throws_an_error_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE x = 10"),
+    ?assertEqual(
+        {false,[{unexpected_where_field,<<"x">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
+select_with_arithmetic_on_unknown_column_throws_an_error_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE x = 10 + 1"),
+    ?assertEqual(
+        {false,[{unexpected_where_field,<<"x">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
 %%
 %% Test macro for assertions on now and arithmetic, shouldn't be
 %% extended for other uses
