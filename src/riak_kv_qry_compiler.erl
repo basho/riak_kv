@@ -4545,7 +4545,7 @@ validate_invdist_funcall_3_test() ->
 validate_invdist_funcall_4_test() ->
     ?assertEqual(
        {error,
-        {nonconst_expr_in_invdist_fun_arglist, <<"Non-const expression passed as parameter for inverse distribution function.">>}},
+        {nonconst_expr_in_invdist_fun_arglist, <<"Inverse distribution functions (PERCENTILE_*, MODE) must have a static const expression for its parameters.">>}},
        validate_invdist_funcall('PERCENTILE_DISC', [{identifier, [<<"x">>]}, {identifier, [<<"y">>]}])).
 
 compile_invdist_full_test() ->
