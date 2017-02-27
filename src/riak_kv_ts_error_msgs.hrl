@@ -111,11 +111,11 @@
 
 -define(
    E_CANNOT_HAVE_ORDERBY_WITH_INVERSE_DIST_FUNCTION,
-   <<"Inverse distribution functions cannot be used with any of ORDER BY, LIMIT or OFFSET clauses.">>
+   <<"Inverse distribution functions (PERCENTILE_*, MODE) cannot be used with any of ORDER BY, LIMIT or OFFSET clauses.">>
 ).
 -define(
    E_CANNOT_HAVE_GROUPING_OR_AGGREGATION_WITH_INVERSE_DIST_FUNCTION,
-   <<"Inverse distribution functions cannot be used with GROUP BY clause or aggregating window functions.">>
+   <<"Inverse distribution functions (PERCENTILE_*, MODE) cannot be used with GROUP BY clause or other aggregating window functions.">>
 ).
 -define(
    E_INVERSE_DIST_FUN_MISSING_COLUMN_ARG(FName),
@@ -129,11 +129,11 @@
 ).
 -define(
    E_INVERSE_DIST_FUN_MULTIPLE_COLUMN_ARG,
-   <<"Multiple inverse distribution functions must all have the same column argument.">>
+   <<"Multiple inverse distribution functions (PERCENTILE_*, MODE) must all have the same column argument.">>
 ).
 -define(
    E_INVERSE_DIST_FUN_WITH_OTHER_COLUMN,
-   <<"Inverse distribution functions cannot be used with other columns in SELECT clause.">>
+   <<"Inverse distribution functions (PERCENTILE_*, MODE) cannot be used with other columns in SELECT clause.">>
 ).
 -define(
    E_INVERSE_DIST_FUN_BAD_PARAMETER(FnName, Pos),
@@ -143,7 +143,7 @@
 -define(
    E_INVERSE_DIST_FUN_NONCONST_ARG,
    iolist_to_binary(
-     ["Non-const expression passed as parameter for inverse distribution function."])
+     ["Inverse distribution functions (PERCENTILE_*, MODE) must have a static const expression for its parameters."])
 ).
 -define(
    E_INVERSE_DIST_FUN_INVAL_EXPR,
