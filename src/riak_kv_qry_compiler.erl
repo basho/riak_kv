@@ -67,7 +67,6 @@
 %% chunks will need to be really small, for the result to be within
 %% max query size.
 
-
 -spec compile(?DDL{}, ?SQL_SELECT{}) ->
     {ok, [?SQL_SELECT{}]} | {error, any()}.
 compile(?DDL{}, ?SQL_SELECT{is_executable = true}) ->
@@ -309,10 +308,12 @@ group_by_column_does_not_exist_error(Mod, FieldName) ->
 -spec compile_where_clause(?DDL{}, ?SQL_SELECT{}) ->
                                   {ok, [?SQL_SELECT{}]} | {error, term()}.
 compile_where_clause(?DDL{} = DDL,
-                     ?SQL_SELECT{is_executable = false,
-                                 'WHERE'       = W,
+                     ?SQL_SELECT{helper_mod = Mod,
+                                 is_executable = false,
+                                 'WHERE'       = W1,
                                  cover_context = Cover} = Q) ->
-    case {compile_where(DDL, W), unwrap_cover(Cover)} of
+    {W2,_} = resolve_expressions(Mod, W1),
+    case {compile_where(DDL, lists:flatten([W2])), unwrap_cover(Cover)} of
         {{error, E}, _} ->
             {error, E};
         {_, {error, E}} ->
@@ -1457,6 +1458,36 @@ update_where_for_cover(Props, Field, {{StartVal, StartInclusive},
 modify_where_key(TupleList, Field, NewVal) ->
     {Field, FieldType, _OldVal} = lists:keyfind(Field, 1, TupleList),
     lists:keyreplace(Field, 1, TupleList, {Field, FieldType, NewVal}).
+
+resolve_expressions(Mod, WhereAST) ->
+    Acc = acc, %% not used
+    riak_ql_ddl:mapfold_where_tree(
+        fun (_, Op, Acc_x) when Op == and_; Op == or_ ->
+                {ok, Acc_x};
+            (_, Filter, Acc_x) ->
+                {resolve_expressions_folder(Mod, Filter), Acc_x}
+        end, Acc, WhereAST).
+
+resolve_expressions_folder(_Mod, {ExpOp,{_,A},{_,B}}) when ExpOp == '+'; ExpOp == '*';
+                                                           ExpOp == '-'; ExpOp == '/' ->
+    Value =
+        case ExpOp of
+            '+' -> riak_ql_window_agg_fns:add(A,B);
+            '*' -> riak_ql_window_agg_fns:multiply(A,B);
+            '-' -> riak_ql_window_agg_fns:subtract(A,B);
+            '/' -> riak_ql_window_agg_fns:divide(A,B)
+        end,
+    {calculated, Value};
+resolve_expressions_folder(Mod, {ExpOp,FieldName,{calculated,V1}}) when is_binary(FieldName) ->
+    V2 = cast_value_to_ast(Mod:get_field_type([FieldName]),V1),
+    {ExpOp,FieldName,V2};
+resolve_expressions_folder(_, AST) ->
+    AST.
+
+cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_integer(V) -> {T, V};
+cast_value_to_ast(T, V) when (T == integer orelse T == timestamp), is_float(V)   -> {T, erlang:round(V)};
+cast_value_to_ast(double, V) when is_integer(V) -> {double, float(V)};
+cast_value_to_ast(double, V) when is_float(V)   -> {double, V}.
 
 -record(filtercheck, {name,'=','>','>=','<','<='}).
 
@@ -4555,4 +4586,238 @@ compile_invdist_partial_test() ->
       ).
 
 
+query_with_arithmetic_in_where_clause_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 + 1s"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_expresson_on_lhs_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND 4000 + 1s = b"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,5000}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_add_double_to_integer_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 + 2.4"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4002}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4002}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_multiple_additions_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 + 2.4 + 7"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4009}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4009}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_operator_precedence_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 1+3*2/4 - 0.5"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp, round(1+3*2/4-0.5)}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp, round(1+3*2/4-0.5)}]},
+          {filter,[]},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+cast_integer_expression_to_double_column_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a TIMESTAMP NOT NULL,"
+        "b DOUBLE NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+          "SELECT * FROM table1 WHERE a = 10 AND b = 1+5"),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,timestamp,10}]},
+          {endkey,  [{<<"a">>,timestamp,10}]},
+          {filter, {'=',{field,<<"b">>,double},{const,6.0}}},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    ).
+
+query_with_arithmetic_in_where_clause_operator_precedence_queries_equal_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, QA} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 2+3*4"),
+    {ok, QB} = get_query(
+          "SELECT * FROM table1 WHERE a = 'hi' AND b = 3*4+2"),
+    {ok, SubQueriesA} = compile(DDL, QA),
+    {ok, SubQueriesB} = compile(DDL, QB),
+    ?assertEqual(
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueriesA],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueriesB]
+    ).
+
+select_with_arithmetic_on_identifier_throws_an_error_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE a+1 = 10"),
+    ?assertEqual(
+        {false,[{arithmetic_on_identifier,<<"a">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
+select_with_arithmetic_on_identifier_throws_an_error_literal_on_lhs_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE 10 = a+1"),
+    ?assertEqual(
+        {false,[{arithmetic_on_identifier,<<"a">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
+select_on_unknown_column_throws_an_error_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE x = 10"),
+    ?assertEqual(
+        {false,[{unexpected_where_field,<<"x">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
+select_with_arithmetic_on_unknown_column_throws_an_error_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE x = 10 + 1"),
+    ?assertEqual(
+        {false,[{unexpected_where_field,<<"x">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
+%%
+%% Test macro for assertions on now and arithmetic, shouldn't be
+%% extended for other uses
+%%
+-define(assertQueryCompilesToFilter(QuerySQL,Filter),
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a VARCHAR NOT NULL,"
+        "b TIMESTAMP NOT NULL,"
+        "c TIMESTAMP NOT NULL,"
+        "PRIMARY KEY ((a, b), a, b));"
+    ),
+    {ok, Q} = get_query(QuerySQL),
+    {ok, SubQueries} = compile(DDL, Q),
+    ?assertEqual(
+        [[{startkey,[{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4000}]},
+          {endkey,  [{<<"a">>,varchar,<<"hi">>},{<<"b">>,timestamp,4000}]},
+          {filter,  Filter},
+          {end_inclusive, true}]],
+        [W || ?SQL_SELECT{'WHERE' = W} <- SubQueries]
+    )).
+arithmetic_gt_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > 999 + 1",
+        {'>',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_gte_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c >= 999 + 1",
+        {'>=',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_not_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c != 999 + 1",
+        {'!=',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_lt_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c < 999 + 1",
+        {'<',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_lte_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c <= 999 + 1",
+        {'<=',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+
+arithmetic_multiplication_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c <= 100 * (1+9)",
+        {'<=',{field,<<"c">>,timestamp},{const,1000}}
+    ).
 -endif.
