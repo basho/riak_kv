@@ -87,24 +87,41 @@ add_rows(LdbRef, Rows) ->
 -spec fetch_rows(eleveldb:db_ref(), [{Offset::non_neg_integer(),
                                       Limit::unlimited|pos_integer()}]) ->
                         {ok, [riak_kv_qry_buffers:data_row()]} | {error, term()}.
+%% Given a list of {Offset, Limit} pairs, seek to Offset position and collect Limit
+%% records, concatenating the results.  This cumbersome solution is to allow callers to
+%% fetch many disjoint spans in one go (currently utilised by
+%% riak_ql_inverse_distrib_fns:'PERCENTILE_CONT').
+%%
+%% The underlying consideration is to minimize the number of seeks from start, which are
+%% (a) unnecessary on the ldb instance not receiving any writes and (b) just adding to the
+%% latency when we need to fetch a couple of records at positions near end of a large
+%% buffer.
+%%
+%% The function signature could be reverted to the simpler, more maintainable
+%% `fetch_rows(LdbRef, Offset) -> {ok, riak_kv_qry_buffers:data_row()}` if we had some
+%% sort of iterators cache ([{Pos, Iter}]) kept in a a persistent manner (in a process dict?).
+%%
+%% Currently, the limitation only applies to function 'MODE', which needs to examine every
+%% record.   In a future implementation of reusable query buffers it will re-emerge.
 fetch_rows(LdbRef, SortedSpecs) ->
     FetchLimitFn =
         fun(_KV, {[{Off, _Lim}|_] = CurSegment, Pos, Acc}) when Pos < Off ->
+                %% still seeking to Off: increment Pos and skip to
+                %% next record
                 {CurSegment, Pos + 1, Acc};
 
-           ({_K, V}, {[{Off, Lim}|RestSegment] = CurSegment, Pos, Acc})
+           ({_K, V}, {[{Off, Lim}|_RestSegment] = CurSegment, Pos, Acc})
+              when Lim == unlimited orelse Pos + 1 < Off + Lim ->
+                %% this and the next record are within the segment we are fetching from
+                {CurSegment, Pos + 1, [V | Acc]};
+
+           ({_K, V}, {[{Off, Lim}|RestSegment] = _CurSegment, Pos, Acc})
               when Lim == unlimited orelse Pos < Off + Lim ->
-                NextSegment =
-                    if Lim == unlimited ->
-                            CurSegment;
-                       Pos + 1 < Off + Lim ->
-                            CurSegment;
-                       el/=se ->
-                            RestSegment
-                    end,
-                {NextSegment, Pos + 1, [V | Acc]};
+                %% this record is the last in the current segment: take next segment
+                {RestSegment, Pos + 1, [V | Acc]};
 
            (_KV, {[], _Pos, Acc}) ->
+                %% all segments processed: goto out
                 throw({break, Acc})
         end,
     {ok, Fetched} =
