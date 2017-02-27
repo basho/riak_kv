@@ -108,3 +108,9 @@
      "Where clause when a range is not specified, but more than one was ",
      "specified.">>
 ).
+
+-define(
+    E_MISSING_COL_IN_GROUP_BY(FieldName, TableName),
+    iolist_to_binary(io_lib:format(
+        "Error in group by clause, column '~ts' does not exist in table ~ts", [FieldName, TableName]))
+).

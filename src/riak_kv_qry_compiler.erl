@@ -168,9 +168,7 @@ get_group_by_field_position(Mod, FieldName) when is_binary(FieldName) ->
 
 group_by_column_does_not_exist_error(Mod, FieldName) ->
     ?DDL{table = TableName} = Mod:get_ddl(),
-    Msg = iolist_to_binary(io_lib:format(
-        "Error in group by clause, column '~ts' does not exist in table table ~ts", [FieldName, TableName])),
-    {error, {invalid_query, Msg}}.
+    {error, {invalid_query, ?E_MISSING_COL_IN_GROUP_BY(FieldName, TableName)}}.
 
 %% adding the local key here is a bodge
 %% should be a helper fun in the generated DDL module but I couldn't
@@ -480,8 +478,8 @@ compile_select_col_stateless(DDL, Options, {Op, A, B}) ->
     compile_select_col_stateless2(Op, Arg_a, Arg_b).
 
 %%
--spec infer_col_type(?DDL{}, riak_ql_ddl:selection(), Errors1::[any()]) ->
-        {Type::riak_ql_ddl:external_field_type() | error, Errors2::[any()]}.
+-spec infer_col_type(?DDL{}, riak_ql_ddl:selection(), Errors::[any()]) ->
+        {riak_ql_ddl:external_field_type() | error, any()}.
 infer_col_type(_, {Type, _}, Errors) when Type == sint64; Type == varchar;
                                           Type == boolean; Type == double ->
     {Type, Errors};
