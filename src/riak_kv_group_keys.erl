@@ -25,7 +25,12 @@
          get_delimiter/1,
          get_start_after/1,
          get_max_keys/1,
-         get_continuation_token/1]).
+         get_continuation_token/1,
+         set_prefix/2,
+         set_delimiter/2,
+         set_start_after/2,
+         set_max_keys/2,
+         set_continuation_token/2]).
 -export_type([group_params/0]).
 
 -record(group_params, {
@@ -106,6 +111,27 @@ get_max_keys(#group_params{max_keys = MaxKeys}) ->
 
 get_continuation_token(#group_params{continuation_token = ContinuationToken}) ->
     ContinuationToken.
+
+-spec set_prefix(group_params(), Prefix::binary()) -> group_params().
+set_prefix(GroupParams, Prefix) ->
+    GroupParams#group_params{prefix = Prefix}.
+
+-spec set_delimiter(group_params(), Delimiter::binary()) -> group_params().
+set_delimiter(GroupParams, Delimiter) ->
+    GroupParams#group_params{delimiter = Delimiter}.
+
+-spec set_start_after(group_params(), StartAfter::binary()) -> group_params().
+set_start_after(GroupParams, StartAfter) ->
+    GroupParams#group_params{start_after = StartAfter}.
+
+-spec set_max_keys(group_params(), MaxKeys::pos_integer()) -> group_params().
+set_max_keys(GroupParams, MaxKeys) ->
+    GroupParams#group_params{max_keys = MaxKeys}.
+
+-spec set_continuation_token(group_params(), ContinuationToken::binary()) ->
+    group_params().
+set_continuation_token(GroupParams, ContinuationToken) ->
+    GroupParams#group_params{continuation_token = ContinuationToken}.
 
 content_folder_fun(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
     BackendMod = get_backend(GroupParams),
@@ -325,6 +351,7 @@ append_max_byte(Binary) when is_binary(Binary) ->
 
 -ifdef(TEST).
 
+-compile(export_all).
 -include_lib("eunit/include/eunit.hrl").
 
 test_group_params(Prefix, Delimiter) ->
