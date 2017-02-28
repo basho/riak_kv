@@ -4461,6 +4461,12 @@ now_function_in_range_with_addition_test() ->
         "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now() AND c < now()+1s",
         {and_,{'>',{field,<<"c">>,timestamp},{const,10000}},{'<',{field,<<"c">>,timestamp},{const,11000}}}
     ).
+now_function_in_range_with_addition_and_multiplication_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > now() AND c < now()+1*2",
+        {and_,{'>',{field,<<"c">>,timestamp},{const,10000}},{'<',{field,<<"c">>,timestamp},{const,10002}}}
+    ).
 now_function_in_range_with_subtraction_test() ->
     ?assertQueryCompilesToFilter(
         [{now_milliseconds,10000}],
