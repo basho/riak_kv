@@ -4491,7 +4491,42 @@ now_function_equals_value_test() ->
         "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c = now()",
         {'=',{field,<<"c">>,timestamp},{const,10000}}
     ).
-%%
+arithmetic_multiplication_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c <= 100 * (1+9)",
+        {'<=',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_gt_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c > 999 + 1",
+        {'>',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_gte_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c >= 999 + 1",
+        {'>=',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_not_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c != 999 + 1",
+        {'!=',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_lt_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c < 999 + 1",
+        {'<',{field,<<"c">>,timestamp},{const,1000}}
+    ).
+arithmetic_lte_filter_test() ->
+    ?assertQueryCompilesToFilter(
+        [{now_milliseconds,10000}],
+        "SELECT * FROM table1 WHERE a = 'hi' AND b = 4000 AND c <= 999 + 1",
+        {'<=',{field,<<"c">>,timestamp},{const,1000}}
+    ).
 
 now_function_invalid_arity_test() ->
     DDL = get_ddl(
@@ -4519,6 +4554,34 @@ now_function_in_select_clause_test() ->
     ?assertEqual(
        [Now],
        run_select(SelectSpec, [1001], Initial)
+    ).
+
+select_on_unknown_column_throws_an_error_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE x = 10"),
+    ?assertEqual(
+        {false,[{unexpected_where_field,<<"x">>}]},
+        is_query_valid(DDL, Q)
+    ).
+
+select_with_arithmetic_on_unknown_column_throws_an_error_test() ->
+    DDL = get_ddl(
+        "CREATE table table1 ("
+        "a SINT64 NOT NULL,"
+        "PRIMARY KEY ((a), a));"
+    ),
+    {ok, Q} = get_query(
+        "SELECT * FROM table1 "
+        "WHERE x = 10 + 1"),
+    ?assertEqual(
+        {false,[{unexpected_where_field,<<"x">>}]},
+        is_query_valid(DDL, Q)
     ).
 
 -endif.
