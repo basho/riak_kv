@@ -30,7 +30,7 @@
          decode_token/1]).
 -export_type([token/0]).
 
--opaque token() :: binary().
+-type token() :: binary() | undefined.
 
 %% @doc Make a continuation token for the given `Term'.
 -spec make_token(term()) -> token().
@@ -45,7 +45,7 @@ make_token(Term) ->
 %% For greater control over the value used to make the continuation token, see
 %% `make_token/3', which allows for passing a function to transform the value
 %% used to make the token.
--spec make_token(Results::list(), MaxResults::non_neg_integer()) -> token() | undefined.
+-spec make_token(Results::list(), MaxResults::non_neg_integer()) -> token().
 make_token(Results, MaxResults) when is_list(Results),
                                      is_integer(MaxResults),
                                      MaxResults >= 0 ->
@@ -57,7 +57,7 @@ make_token(Results, MaxResults) when is_list(Results),
 %% after first being passed to the given `Fun' to allow for transforming the
 %% value. If not, `undefined' is returned.
 -spec make_token(Results::list(), MaxResults::non_neg_integer(), fun((any()) -> any())) ->
-    token() | undefined.
+    token().
 make_token(_Results, 0, _Fun) ->
     undefined;
 make_token(Results, MaxResults, Fun) when is_list(Results),
@@ -73,7 +73,7 @@ make_token(Results, MaxResults, Fun) when is_list(Results),
 
 %% @doc Decode the given continuation `Token' and return the original Erlang
 %% term that was used to generate the continuation.
--spec decode_token(token() | undefined) -> term().
+-spec decode_token(token()) -> term().
 decode_token(undefined) ->
     undefined;
 decode_token(Token) ->
