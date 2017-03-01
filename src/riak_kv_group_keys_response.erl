@@ -34,7 +34,7 @@
           metadatas :: list(),
           common_prefixes :: list(binary()),
           is_truncated :: boolean(),
-          next_continuation_token :: binary()
+          next_continuation_token :: riak_kv_continuation:token()
          }).
 
 -opaque response() :: #response{}.
@@ -46,7 +46,7 @@ new_response(Metadatas, CommonPrefixes) ->
 
 -spec new_response(Metadatas::list(),
                    CommonPrefixes::list(binary()),
-                   NextContinuationToken::binary()) ->
+                   NextContinuationToken::riak_kv_continuation:token()) ->
     response().
 new_response(Metadatas, CommonPrefixes, NextContinuationToken) ->
     #response {
@@ -62,7 +62,7 @@ get_metadatas(#response{metadatas = Metadatas}) -> Metadatas.
 -spec get_common_prefixes(response()) -> list().
 get_common_prefixes(#response{common_prefixes = CommonPrefixes}) -> CommonPrefixes.
 
--spec get_next_continuation_token(response()) -> binary().
+-spec get_next_continuation_token(response()) -> riak_kv_continuation:token().
 get_next_continuation_token(#response{next_continuation_token = NextContinuationToken}) ->
     NextContinuationToken.
 

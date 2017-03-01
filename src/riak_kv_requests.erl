@@ -213,10 +213,10 @@ new_w1c_put_request(BKey, EncodedObj, ReplicaType) ->
     #riak_kv_w1c_put_req_v1{bkey = BKey, encoded_obj = EncodedObj, type = ReplicaType}.
 
 -spec new_listkeys_request(bucket(), item_filter(), UseAckBackpressure::boolean()) -> listkeys_request().
-new_listkeys_request(Bucket, {filter, ItemFilter}, true) ->
+new_listkeys_request(Bucket, ItemFilter, true) ->
     #riak_kv_listkeys_req_v4{bucket=Bucket,
                              item_filter=ItemFilter};
-new_listkeys_request(Bucket, {filter, ItemFilter}, false) ->
+new_listkeys_request(Bucket, ItemFilter, false) ->
     #riak_kv_listkeys_req_v3{bucket=Bucket,
                              item_filter=ItemFilter}.
 

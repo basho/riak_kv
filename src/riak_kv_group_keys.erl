@@ -133,17 +133,28 @@ set_max_keys(GroupParams, MaxKeys) ->
 set_continuation_token(GroupParams, ContinuationToken) ->
     GroupParams#group_params{continuation_token = ContinuationToken}.
 
+%% NOTE: This  type spec with `fun(() -> no_return())' as the return type is
+%% necessary to avoid a Dialyzer warning.
+-spec content_folder_fun(any(), group_params(), any(), any(), any(), any()) ->
+    fun(() -> no_return()).
 content_folder_fun(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
-    BackendMod = get_backend(GroupParams),
     fun() ->
-            FoldOpts1 = [{first_key, BackendMod:to_first_key({bucket, Bucket})} | FoldOpts],
-            try iterator_open(DbRef, FoldOpts1) of
-                {ok, Itr} ->
-                    iterate(Bucket, GroupParams, Itr, FoldFun, Acc)
-            catch Error ->
-                    lager:debug("Could not open iterator: ~p", [Error]),
-                    throw(Error)
-            end
+            content_folder(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc)
+    end.
+
+%% NOTE: This  type spec with `no_return()' as the return type is necessary to
+%% avoid a Dialyzer warning.
+-spec content_folder(any(), group_params(), any(), any(), any(), any()) ->
+    no_return().
+content_folder(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
+    BackendMod = get_backend(GroupParams),
+    FoldOpts1 = [{first_key, BackendMod:to_first_key({bucket, Bucket})} | FoldOpts],
+    try iterator_open(DbRef, FoldOpts1) of
+        {ok, Itr} ->
+            iterate(Bucket, GroupParams, Itr, FoldFun, Acc)
+    catch Error ->
+              lager:debug("Could not open iterator: ~p", [Error]),
+              throw(Error)
     end.
 
 iterator_open(DbRef, FoldOpts) ->
@@ -192,12 +203,8 @@ start_pos(Bucket,
           GroupParams = #group_params{prefix=Prefix,
                                       start_after=StartAfter,
                                       continuation_token=ContinuationToken}) ->
-    case start_key(Prefix, StartAfter, ContinuationToken) of
-        npos ->
-            npos;
-        Key ->
-            to_object_key(GroupParams, Bucket, Key)
-    end.
+    StartKey = start_key(Prefix, StartAfter, ContinuationToken),
+    to_object_key(GroupParams, Bucket, StartKey).
 
 -spec start_key(Prefix :: binary() | undefined,
                 StartAfter :: binary() | undefined,
