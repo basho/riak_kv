@@ -788,9 +788,12 @@ handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
     Context = {w1c_async_put, Sender, ReplicaType, Bucket, Key, EncodedVal, StartTS},
     case Mod:async_put(Context, Bucket, Key, EncodedVal, ModState) of
         {ok, UpModState} ->
-            {noreply, State#state{modstate=UpModState}};
+            w1c_async_put_complete(Bucket, Key, EncodedVal, StartTS, State),
+            {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=ReplicaType}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
-            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=ReplicaType}, State#state{modstate=UpModState}}
+            {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=ReplicaType}, State#state{modstate=UpModState}};
+        {Context, UpModState} ->
+            {noreply, State#state{modstate=UpModState}}
     end;
 handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false, update_hook=UpdateHook}) ->
     {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),
@@ -1129,12 +1132,16 @@ terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) 
     riak_kv_stat:unregister_vnode_stats(Idx),
     ok.
 
-handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
-            State=#state{idx=Idx, update_hook=UpdateHook}) ->
+w1c_async_put_complete(Bucket, Key, EncodedVal, StartTS,
+                       State=#state{idx=Idx, update_hook=UpdateHook}) ->
     update_hashtree(Bucket, Key, EncodedVal, State),
     update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
+    update_vnode_stats(vnode_put, Idx, StartTS).
+
+handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
+            State) ->
+    w1c_async_put_complete(Bucket, Key, EncodedVal, StartTS, State),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
-    update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
 
 handle_info({set_concurrency_limit, Lock, Limit}, State) ->
