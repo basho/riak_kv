@@ -697,7 +697,7 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
 check_remote_upgraded(State) ->
     VersionFun = fun() -> [riak_kv_entropy_manager:get_version(), riak_kv_entropy_manager:get_pending_version()] end,
     {Results, _Failures} = riak_core_util:rpc_every_member(erlang, apply, [VersionFun, []], 10000),
-    case lists:any(fun maybe_check_remote_upgraded/1, Results) of
+    case lists:any(fun maybe_check_remote_upgraded/1, lists:flatten(Results)) of
         true ->
             lager:notice("Starting AAE hashtree upgrade"),
             State#state{pending_version=0};
