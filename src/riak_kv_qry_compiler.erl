@@ -26,6 +26,10 @@
 -export([finalise_aggregate/2]).
 -export([run_select/2, run_select/3]).
 
+%% Exporting this local function to work around an obscure dialyzer
+%% issue.  See details in a comment near this function head.
+-export([compile_order_by/2]).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -146,6 +150,12 @@ compile_order_by(?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = CalcType
     {error, {inverdist_function_with_groupby_or_aggregate_function,
              ?E_CANNOT_HAVE_GROUPING_OR_AGGREGATION_WITH_INVERSE_DIST_FUNCTION}};
 
+%% This is a local function. It is exported because otherwise dialyzer
+%% believes all calls to this function are made with its second arg,
+%% InvDistFuns = []. As tests pass (specifically, those involving
+%% queries with multiple calls to percentile functions, this is not
+%% true.  The supplier of InvDistFuns is compile_select_clause, where
+%% it generates InvDistFuns in a foldl.
 compile_order_by(?SQL_SELECT{'SELECT' = Select,
                              'WHERE'  = [Where]} = Q,
                  InvDistFuns = [_|_]) ->
