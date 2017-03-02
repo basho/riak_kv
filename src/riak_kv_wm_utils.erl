@@ -335,8 +335,6 @@ is_valid_referer(RD) ->
         {invalid, Url} ->
             lager:debug("WM unparsable referer: ~s\n", [Url]),
             false;
-        OriginTuple ->
-            true;
         RefererTuple ->
             allowable_origin(OriginTuple, RefererTuple)
     end.
@@ -377,6 +375,8 @@ maybe_create_allowable_origins_ets() ->
             ok
     end.
 
+allowable_origin(OriginTuple, OriginTuple)  ->
+    true;
 allowable_origin(OriginTuple, RefererTuple) ->
     RefererTuple1 = {Scheme, Host, Port} = normalize_referer(RefererTuple),
     case allowable_origins_table_exists() andalso
