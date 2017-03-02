@@ -526,19 +526,21 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
     wait_for_listkeys(ReqId).
 
 
-
-
-
 %% @doc TODO
-list_group_keys(Bucket, GroupParams, Timeout0, {?MODULE, [Node, _ClientId]}) ->
-    Timeout =
-        case Timeout0 of
-            T when is_integer(T) -> T;
-            _ -> ?DEFAULT_TIMEOUT*8
-        end,
+-spec list_group_keys(Bucket::riak_object:bucket(),
+                      GroupParams::riak_kv_group_keys:group_params(),
+                      TimeoutMillisecs::pos_integer(),
+                      riak_client()) ->
+    {ok, riak_kv_group_keys_response:response()} |
+    {error, timeout} |
+    {error, Err :: term()}.
+list_group_keys(Bucket, GroupParams, TimeoutMillisecs, {?MODULE, [Node, _ClientId]})
+  when is_integer(TimeoutMillisecs), TimeoutMillisecs > 0 ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_group_keys_fsm_sup:start_group_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, GroupParams, Timeout]]),
+    riak_kv_group_keys_fsm_sup:start_group_keys_fsm(
+      Node,
+      [{raw, ReqId, Me}, [Bucket, GroupParams, TimeoutMillisecs]]),
     wait_for_list_group_keys(ReqId).
 
 stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
