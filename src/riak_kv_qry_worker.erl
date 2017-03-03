@@ -129,7 +129,7 @@ handle_info({{SubQId, QId}, {error, Reason} = Error},
                    result = IndexedChunks}) ->
     lager:warning("Error ~p while collecting on QId ~p (~p);"
                   " dropping ~b chunks of data accumulated so far",
-                  [Reason, QId, SubQId, length(IndexedChunks)]),
+                  [Reason, QId, SubQId, IndexedChunks]),
     ReceiverPid ! Error,
     pop_next_query(),
     {noreply, new_state()};
@@ -260,9 +260,38 @@ throttling_spawn_index_fsms(State) ->
 
 
 estimate_query_size(#state{n_subqueries_done = NSubqueriesDone} = State)
-  when NSubqueriesDone < 2  ->
+  when NSubqueriesDone < 2 ->
+    %% If not enough chunks are received, defer checks
     State;
-
+estimate_query_size(#state{sub_qrys = []} = State) ->
+    %% If all chunks are here (no more left in sub_qrys), consider it
+    %% is safe to proceed.
+    State;
+estimate_query_size(#state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = aggregate}}} =
+                        State) ->
+    %% Aggregation alone does not increase the size of result (there
+    %% is only one row returned)
+    State;
+estimate_query_size(#state{n_subqueries_done = NSubqueriesDone,
+                           max_query_data    = MaxQueryData,
+                           sub_qrys          = SubQrys,
+                           result            = Result,
+                           qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = group_by}} =
+                               OrigQry} = State) ->
+    %% Grouping queries will grow its result set to the number of
+    %% unique values in the selection.  In the extreme case of
+    %% grouping by a column of all-unique values, its size will be the
+    %% size of the entire selection.
+    CurrentTotalSize = erlang:external_size(Result),
+    BytesPerChunk = CurrentTotalSize / NSubqueriesDone,
+    ProjectedGrandTotal = round(CurrentTotalSize + (BytesPerChunk * length(SubQrys))),
+    if ProjectedGrandTotal > MaxQueryData ->
+            lager:info("Cancelling aggregating query because projected result size exceeds limit (~b > ~b, subqueries ~b of ~b done, query ~p)",
+                       [ProjectedGrandTotal, MaxQueryData, NSubqueriesDone, length(SubQrys), OrigQry]),
+            cancel_error_query(select_result_too_big, State);
+       el/=se ->
+            State
+    end;
 estimate_query_size(#state{total_query_data  = TotalQueryData,
                            total_query_rows  = TotalQueryRows,
                            n_subqueries_done = NSubqueriesDone,
@@ -393,7 +422,7 @@ run_select_on_group_row(Query, SelClause, Row, QueryResult1) ->
     Aggregate1 =
         case dict:find(Key, Dict1) of
             error ->
-                InitialGroupState;
+                prepare_group_by_initial_state(Row, InitialGroupState);
             {ok, AggregateX} ->
                 AggregateX
         end,
@@ -401,10 +430,25 @@ run_select_on_group_row(Query, SelClause, Row, QueryResult1) ->
     Dict2 = dict:store(Key, Aggregate2, Dict1),
     {group_by, InitialGroupState, Dict2}.
 
+prepare_group_by_initial_state(Row, InitialState) ->
+    [prepare_group_by_initial_state2(Row, Col) || Col <- InitialState].
+
+prepare_group_by_initial_state2(Row, InitFn) when is_function(InitFn) ->
+    InitFn(Row);
+prepare_group_by_initial_state2(_, InitVal) ->
+    InitVal.
+
 %%
 select_group(Query, Row) ->
     GroupByFields = sql_select_group_by(Query),
-    [lists:nth(N, Row) || {N,_} <- GroupByFields].
+    select_group2(GroupByFields, Row).
+
+select_group2([], _) ->
+    [];
+select_group2([{N,_}|Tail], Row) when is_integer(N) ->
+    [lists:nth(N, Row)|select_group2(Tail, Row)];
+select_group2([{GroupByTimeFn,_}|Tail], Row) when is_function(GroupByTimeFn) ->
+    [GroupByTimeFn(Row)|select_group2(Tail, Row)].
 
 %% Run the selection clause on results that accumulate rows
 run_select_on_rows_chunk(SubQId, SelClause, DecodedChunk, QueryResult1, undefined) ->
@@ -565,5 +609,38 @@ prepare_final_results_test() ->
                     },
                 result = [{1, Rows}]})
     ).
+
+estimate_query_size_limit_applies_to_aggregating_queries_test() ->
+    BigData = [<<"BIGFATDATA">>],
+    check_states(
+      #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = group_by}},
+             result            = BigData,
+             max_query_data    = erlang:external_size(BigData) - 1,
+             sub_qrys          = lists:seq(1, 100)}).
+
+estimate_query_size_limit_applies_to_regular_queries_test() ->
+    check_states(
+      #state{qry = ?SQL_SELECT{'SELECT' = #riak_sel_clause_v1{calc_type = rows}},
+             total_query_data  = 10,
+             max_query_data    = 30,
+             sub_qrys          = lists:seq(1, 100)}).
+
+check_states(State) ->
+    lists:foreach(
+      fun({StateN, Outcome}) -> ok = check_states2(StateN, Outcome) end,
+      [{State#state{n_subqueries_done = 1}, passing},
+       {State#state{n_subqueries_done = 2}, cancelled},
+       {State#state{n_subqueries_done = 3}, cancelled}]).
+
+check_states2(State, passing) ->
+    ?assertEqual(estimate_query_size(State), State);
+check_states2(State, cancelled) ->
+    ?assertEqual(estimate_query_size(State#state{receiver_pid = self()}), new_state()),
+    receive
+        {error, select_result_too_big} ->
+            ok
+    after 1000 ->
+            didnt_receive_select_result_too_big_error
+    end.
 
 -endif.

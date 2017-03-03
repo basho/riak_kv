@@ -107,6 +107,16 @@ decode_query(#tsinterpolation{base = BaseQuery}, Options) ->
         {ok, {DDL = ?DDL{}, WithProperties}} ->
             %% CREATE TABLE, so don't check if the table exists
             {ok, {ddl, {DDL, WithProperties}}};
+        {ok, {alter_table, Table, Changes, WithProperties}} ->
+            case is_table_query_ready(alter_table, Table) of
+                true ->
+                    %% The redundant `alter_table' atom here allows
+                    %% query permissions to be determined without
+                    %% changing more of the call path
+                    {ok, {alter_table, {alter_table, Table, Changes, WithProperties}}};
+                _ ->
+                    {error, make_table_not_activated_resp(Table)}
+            end;
         {ok, [{type, QryType}|SQL]} ->
             Table = extract_table_name(SQL),
             case is_table_query_ready(QryType, Table) of
@@ -165,12 +175,16 @@ process(M = #tscoveragereq{table = Table}, State) ->
 
 %% The following heads of `process' are all, in terms of protobuffer
 %% structures, a `#tsqueryreq{}', subdivided per query type (CREATE
-%% TABLE, SELECT, DESCRIBE, INSERT, SHOW TABLES). The first argument will
+%% TABLE, ALTER TABLE, SELECT, DESCRIBE, INSERT, SHOW TABLES). The first argument will
 %% be the specific SQL converted from the original `#tsqueryreq{}' in
 %% `riak_kv_pb_ts:decode' via `decode_query_common').
 process({DDL = ?DDL{}, WithProperties}, State) ->
     %% the only one that doesn't require an activated table
     create_table({DDL, WithProperties}, State);
+
+process({alter_table, Table, Changes, WithProperties}, State) ->
+    check_table_and_call(Table, fun alter_table/4,
+                         {Changes, WithProperties}, State);
 
 process(M = ?SQL_SELECT{'FROM' = Table}, State) ->
     check_table_and_call(Table, fun sub_tsqueryreq/4, M, State);
@@ -249,6 +263,12 @@ decode_keys_for_streaming(Mod, [K1|Tail]) ->
                           {reply, tsqueryresp | #rpberrorresp{}, #state{}}.
 create_table({?DDL{} = DDL1, WithProps}, State) ->
     case riak_kv_ts_api:create_table(?MODULE, DDL1, WithProps) of
+        ok -> {reply, tsqueryresp, State};
+        {error, Reason} -> {reply, Reason, State}
+    end.
+
+alter_table(_Mod, ?DDL{table=Table}, {_Changes, BucketProperties}, State) ->
+    case riak_kv_ts_api:alter_table(?MODULE, Table, BucketProperties) of
         ok -> {reply, tsqueryresp, State};
         {error, Reason} -> {reply, Reason, State}
     end.
