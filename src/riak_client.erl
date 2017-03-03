@@ -420,30 +420,31 @@ maybe_normal_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]}) 
     end.
 
 %% This version is exported, since it is called directly from
-%% riak_kv_ts_api:delete_data/4
+%% riak_kv_ts_api:delete_data/4.  It simply calls the internal version
+%% with the default timeout.
 
 write_once_delete(Bucket, Key, Options, {?MODULE, [Node, ClientId]}) ->
     write_once_delete(Bucket, Key, Options, ?DEFAULT_TIMEOUT, {?MODULE, [Node, ClientId]}).
 
-%% Write-once get path ignores vclock ancestry, instead comparing the
-%% vclock timestamps when merging write-once objects.
+%% The write-once get path ignores vclock ancestry, instead comparing
+%% just the vclock timestamps when merging write-once objects.
 %%
 %% We therefore pass in a write-once vclock initialized with a
-%% timestamp, as vclock:fresh(<<0:8>>, 1) (see
-%% riak_kv_w1c_worker:w1c_vclock/1) so that:
+%% timestamp (riak_object:new_w1c_vclock/0), so that:
 %%
 %% 1) No read-before-delete is triggered in riak_kv_delete:delete/8
-%% (because vlock is not undefined), and
+%% (because vclock is initialized, and not undefined), and
 %%
-%% 2) so that riak_object:merge_write_once/2 does the correct thing
-%% (compares vclock timestamps stored under Node <<0:8>>)
+%% 2) riak_object:merge_write_once/2 does the correct thing (has a
+%% real vclock time to compare when implementing time-based LWW logic)
 
 write_once_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]}) ->
-    normal_delete_vclock(Bucket, Key, vclock:fresh(<<0:8>>, 1), Options, Timeout, {?MODULE, [Node, ClientId]}).
+    normal_delete_vclock(Bucket, Key, riak_object:new_w1c_vclock(), Options, Timeout, {?MODULE, [Node, ClientId]}).
 
 %% Normal path uses vclocks to resolve object merges.  We pass in
 %% undefined to ensure that read-before-delete is triggered in
-%% riak_kv_delete:delete/8
+%% riak_kv_delete:delete/8, causing the actual object vclock to be
+%% retrieved prior to writing tombstones
 
 normal_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]}) ->
     normal_delete_vclock(Bucket, Key, undefined, Options, Timeout, {?MODULE, [Node, ClientId]}).
