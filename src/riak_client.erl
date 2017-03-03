@@ -425,12 +425,21 @@ maybe_normal_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]}) 
 write_once_delete(Bucket, Key, Options, {?MODULE, [Node, ClientId]}) ->
     write_once_delete(Bucket, Key, Options, ?DEFAULT_TIMEOUT, {?MODULE, [Node, ClientId]}).
 
-%% Write-once get path ignores vclocks.  We pass in an empty vclock
-%% (vclock:fresh()) so that no read-before-delete is triggered in
-%% riak_kv_delete:delete/8
+%% Write-once get path ignores vclock ancestry, instead comparing the
+%% vclock timestamps when merging write-once objects.
+%%
+%% We therefore pass in a write-once vclock initialized with a
+%% timestamp, as vclock:fresh(<<0:8>>, 1) (see
+%% riak_kv_w1c_worker:w1c_vclock/1) so that:
+%%
+%% 1) No read-before-delete is triggered in riak_kv_delete:delete/8
+%% (because vlock is not undefined), and
+%%
+%% 2) so that riak_object:merge_write_once/2 does the correct thing
+%% (compares vclock timestamps stored under Node <<0:8>>)
 
 write_once_delete(Bucket, Key, Options, Timeout, {?MODULE, [Node, ClientId]}) ->
-    normal_delete_vclock(Bucket, Key, vclock:fresh(), Options, Timeout, {?MODULE, [Node, ClientId]}).
+    normal_delete_vclock(Bucket, Key, vclock:fresh(<<0:8>>, 1), Options, Timeout, {?MODULE, [Node, ClientId]}).
 
 %% Normal path uses vclocks to resolve object merges.  We pass in
 %% undefined to ensure that read-before-delete is triggered in
