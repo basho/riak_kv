@@ -43,6 +43,7 @@
          get_version/0,
          get_partition_version/1,
          get_pending_version/0,
+         get_upgraded/0,
          get_trees_version/0]).
 -export([all_pairwise_exchanges/2]).
 -export([throttle/0,
@@ -241,7 +242,21 @@ get_partition_version(Index) ->
 
 -spec get_pending_version() -> version().
 get_pending_version() ->
-    gen_server:call(?MODULE, get_pending_version, infinity).
+    case ets:lookup(?ETS, pending_version) of
+        [] ->
+            legacy;
+        [{pending_version, Version}] ->
+            Version
+    end.
+
+-spec get_upgraded() -> boolean.
+get_upgraded() ->
+    case {get_version(), get_pending_version()} of
+        {legacy, legacy} ->
+            false;
+        _ ->
+            true
+    end.
 
 %% For testing to quickly verify tree versions match up with manager version
 -spec get_trees_version() -> [{index(), version()}].
@@ -333,10 +348,6 @@ handle_call(disable, _From, State) ->
     application:set_env(riak_kv, anti_entropy, {off, Opts}),
     _ = [riak_kv_index_hashtree:stop(T) || {_,T} <- State#state.trees],
     {reply, ok, State};
-handle_call(get_version, _From, State=#state{version=Version}) ->
-    {reply, Version, State};
-handle_call(get_pending_version, _From, State=#state{pending_version=Version}) ->
-    {reply, Version, State};
 handle_call(get_trees_version, _From, State=#state{trees=Trees}) ->
     VTrees = [{Idx, riak_kv_index_hashtree:get_version(Pid)} || {Idx, Pid} <- Trees],
     {reply, VTrees, State};
@@ -678,51 +689,58 @@ maybe_start_upgrade(_Ring, State) ->
     State.
 
 -spec maybe_upgrade(state()) -> state().
+maybe_upgrade(State=#state{trees_version = []}) ->
+    %% No hashtrees have registered with the manager, skip upgrade check
+    State;
 maybe_upgrade(State=#state{trees_version = VTrees}) ->
     case [Idx || {Idx, legacy} <- VTrees] of
         %% Upgrade is done already, set version in state
         [] ->
             ets:insert(?ETS, {version, 0}),
             State#state{version=0};
-        %% No trees have been upgraded, check version and pending_version
+        %% No trees have been upgraded, check version
         %% on other nodes to see if we should immediately start upgrade.
         %% Otherwise wait for all local and remote exchanges to complete.
         Trees when length(Trees) == length(VTrees) ->
             check_remote_upgraded(State);
         %% Upgrade already started, set pending_version
         _ ->
+            lager:notice("Hashtree upgrade already in-process, setting pending_version to 0"),
+            ets:insert(?ETS, {pending_version, 0}),
             State#state{pending_version=0}
     end.
 
 check_remote_upgraded(State) ->
-    VersionFun = fun() -> [riak_kv_entropy_manager:get_version(), riak_kv_entropy_manager:get_pending_version()] end,
-    {Results, _Failures} = riak_core_util:rpc_every_member(erlang, apply, [VersionFun, []], 10000),
-    case lists:any(fun maybe_check_remote_upgraded/1, lists:flatten(Results)) of
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    Nodes = riak_core_ring:all_members(Ring),
+    case lists:any(fun do_check_remote_upgraded/1, Nodes) of
         true ->
             lager:notice("Starting AAE hashtree upgrade"),
+            ets:insert(?ETS, {pending_version, 0}),
             State#state{pending_version=0};
         _ ->
-            check_exchanges_and_upgrade(State)
+            check_exchanges_and_upgrade(State, Nodes)
     end.
 
-maybe_check_remote_upgraded(Result) ->
-    case Result of
-        Version when is_integer(Version) ->
-            true;
+do_check_remote_upgraded(Node) ->
+    case riak_core_util:safe_rpc(Node, riak_kv_entropy_manager, get_upgraded, [], 10000) of
+        Result when is_boolean(Result) ->
+            Result;
+        {badrpc, _Reason} ->
+            false;
         _ ->
             false
     end.
 
--spec check_exchanges_and_upgrade(state()) -> state().
-check_exchanges_and_upgrade(State) ->
+-spec check_exchanges_and_upgrade(state(), list()) -> state().
+check_exchanges_and_upgrade(State, Nodes) ->
     case riak_kv_entropy_info:all_sibling_exchanges_complete() of
         true ->
             %% Now check nodes who havent reported success in the ETS table
-            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-            Nodes = riak_core_ring:all_members(Ring),
             case check_all_remote_exchanges_complete(Nodes) of
                 true ->
                     lager:notice("Starting AAE hashtree upgrade"),
+                    ets:insert(?ETS, {pending_version, 0}),
                     State#state{pending_version=0};
                 _ ->
                     State
@@ -748,7 +766,7 @@ maybe_check_and_record_remote_exchange(Node) ->
 
 -spec check_remote_exchange(node()) -> boolean().
 check_remote_exchange(Node) ->
-    case rpc:call(Node, riak_kv_entropy_info, all_sibling_exchanges_complete, [], 10000) of
+    case riak_core_util:safe_rpc(Node, riak_kv_entropy_info, all_sibling_exchanges_complete, [], 10000) of
         Result when is_boolean(Result) ->
             Result;
         {badrpc, _Reason} ->
@@ -774,6 +792,7 @@ check_upgrade(State=#state{pending_version=PendingVersion,trees_version=VTrees})
                 Trees when length(Trees) == length(VTrees) ->
                     lager:notice("Local AAE hashtrees have completed upgrade to version: ~p",[PendingVersion]),
                     ets:insert(?ETS, {version, PendingVersion}),
+                    ets:insert(?ETS, {pending_version, legacy}),
                     State#state{version=PendingVersion, pending_version=legacy};
                 _Trees ->
                     State
