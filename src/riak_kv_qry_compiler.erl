@@ -215,7 +215,7 @@ check_invdist_funs_consistent_with_select(CompiledOrderBys,
                %% we allow multiple PERCENTILE calls in a single SELECT,
                %% but they all must have the same column argument
                case lists:usort(CompiledOrderBys) of
-                   [_SameColumndOrderBy] ->
+                   [_SameColumnOrderBy] ->
                        ok;
                    _Multiple ->
                        {error, {multiple_invdist_funs_with_different_column_args,
@@ -248,16 +248,10 @@ occurs(F, FF) ->
 %% convert successfully validated invdist funcalls (a list of them,
 %% to allow for percentile(x, 0.42), percentile(y, 0.24)) into a list
 %% of ORDER BYs, LIMITs and OFFSETs; or report validation errors if any.
-compile_inverdist_funcalls_to_orderby(InvDistFuns) ->
-    lists:foldl(
-      fun({ok, FC}, {AccSpecs, AccErrors}) ->
-              CompiledSpec = compile_invdist_funcall(FC),
-              {AccSpecs ++ [CompiledSpec], AccErrors};
-         ({error, Reason}, {AccSpecs, AccErrors}) ->
-              {AccSpecs, AccErrors ++ [Reason]}
-      end,
-      {[], []},
-      InvDistFuns).
+compile_inverdist_funcalls_to_orderby(PrecompiledSpecs) ->
+    Specs = [compile_invdist_funcall(FC) || {ok, FC} <- PrecompiledSpecs],
+    Errors = [Reason || {error, Reason} <- PrecompiledSpecs],
+    {Specs, Errors}.
 
 compile_invdist_funcall({FnName, ThisColumn, Args}) ->
     {_OrderBy = {ThisColumn, asc, nulls_last},
