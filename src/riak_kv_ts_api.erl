@@ -30,6 +30,7 @@
          api_call_to_perm/1,
          api_calls/0,
          create_table/3,
+         alter_table/3,
          put_data/2, put_data/3,
          get_data/2, get_data/3, get_data/4,
          delete_data/2, delete_data/3, delete_data/4, delete_data/5,
@@ -58,11 +59,12 @@
 -define(TABLE_ACTIVATE_WAIT_RETRY_DELAY, 100).
 
 %% external API calls enumerated
--type query_api_call() :: create_table | query_select | describe_table | query_insert | query_explain | show_tables | query_delete.
+-type query_api_call() :: alter_table | create_table | query_select | describe_table | query_insert | query_explain | show_tables | query_delete.
 -type api_call() :: get | put | delete | list_keys | coverage | query_api_call().
 -export_type([query_api_call/0, api_call/0]).
 
 -spec api_call_from_sql_type(riak_kv_qry:query_type()) -> query_api_call().
+api_call_from_sql_type(alter_table)       -> alter_table;
 api_call_from_sql_type(ddl)               -> create_table;
 api_call_from_sql_type(select)            -> query_select;
 api_call_from_sql_type(describe)          -> describe_table;
@@ -83,6 +85,8 @@ api_call_to_perm(list_keys) ->
     "riak_ts.list_keys";
 api_call_to_perm(coverage) ->
     "riak_ts.coverage";
+api_call_to_perm(alter_table) ->
+    "riak_ts.create_table";
 api_call_to_perm(create_table) ->
     "riak_ts.create_table";
 api_call_to_perm(query_select) ->
@@ -105,19 +109,12 @@ api_call_to_perm(show_tables) ->
 %%
 -spec api_calls() -> [api_call()].
 api_calls() ->
-    [create_table, query_select, describe_table, query_insert,
+    [alter_table, create_table, query_select, describe_table, query_insert,
      show_tables, show_create_table, get, put, delete, list_keys, coverage].
 
 
--spec create_table(module(), ?DDL{}, proplists:proplist()) -> ok|{error,term()}.
-create_table(SvcMod, ?DDL{table = Table}=DDL1, WithProps) ->
-    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
-    DDL2 = convert_ddl_to_cluster_supported_version(DDLRecCap, DDL1),
-    CompilerVersion = riak_ql_ddl_compiler:get_compiler_version(),
-    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL2,
-                                                                 CompilerVersion,
-                                                                 WithProps),
-    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Props1] of
+apply_bucket_properties(SvcMod, Properties, Table, Fun) ->
+    case catch [riak_kv_wm_utils:erlify_bucket_prop(P) || P <- Properties] of
         {bad_linkfun_modfun, {M, F}} ->
             {error, SvcMod:make_table_create_fail_resp(Table,
                                                        flat_format(
@@ -130,9 +127,24 @@ create_table(SvcMod, ?DDL{table = Table}=DDL1, WithProps) ->
             {error, SvcMod:make_table_create_fail_resp(Table,
                                                        flat_format(
                                                          "Invalid chash mod or fun in bucket type properties: ~p:~p\n", [M, F]))};
-        Props2 ->
-            create_table1(SvcMod, Table, Props2, DDL2, DDLRecCap, ?TABLE_ACTIVATE_WAIT)
+        Props ->
+            Fun(Props)
     end.
+
+-spec create_table(module(), ?DDL{}, proplists:proplist()) -> ok|{error,term()}.
+create_table(SvcMod, ?DDL{table = Table}=DDL1, WithProps) ->
+    DDLRecCap = riak_core_capability:get({riak_kv, riak_ql_ddl_rec_version}),
+    DDL2 = convert_ddl_to_cluster_supported_version(DDLRecCap, DDL1),
+    CompilerVersion = riak_ql_ddl_compiler:get_compiler_version(),
+    {ok, Props1} = riak_kv_ts_util:apply_timeseries_bucket_props(DDL2,
+                                                                 CompilerVersion,
+                                                                 WithProps),
+
+    ApplyProps =
+        fun(Props) ->
+                create_table1(SvcMod, Table, Props, DDL2, DDLRecCap, ?TABLE_ACTIVATE_WAIT)
+        end,
+    apply_bucket_properties(SvcMod, Props1, Table, ApplyProps).
 
 create_table1(SvcMod, Table, Props, DDL, DDLRecCap, Seconds) ->
     case riak_core_bucket_type:create(Table, Props) of
@@ -142,6 +154,18 @@ create_table1(SvcMod, Table, Props, DDL, DDLRecCap, Seconds) ->
             wait_until_active_and_supported(SvcMod, Table, DDL, DDLRecCap, Milliseconds, WaitMilliseonds);
         {error, Reason} -> {error, SvcMod:make_table_create_fail_resp(Table, Reason)}
     end.
+
+-spec alter_table(module(), binary(), proplists:proplist()) ->
+                         'ok'|{error,term()}.
+alter_table(SvcMod, Table, BucketProperties) ->
+    ApplyProps =
+        fun(Props) ->
+                %% Automatically gives us the `ok' and `{error,
+                %% Reason}' tuples we want
+                riak_core_bucket_type:update(Table, Props)
+        end,
+    apply_bucket_properties(SvcMod, BucketProperties, Table, ApplyProps).
+
 
 wait_until_supported(SvcMod, Table, _DDL, _DDLRecCap, _Milliseconds=0, _WaitMilliseconds) ->
     {error, SvcMod:make_table_activate_error_timeout_resp(Table)};

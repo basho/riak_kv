@@ -197,8 +197,8 @@ replace_ast_timestamps(Mod, {Op, Item1, Item2}) when is_tuple(Item1) andalso is_
     {Op, replace_ast_timestamps(Mod, Item1), replace_ast_timestamps(Mod, Item2)};
 replace_ast_timestamps(Mod, {Op, FieldName, {binary, Value}}) ->
     {Op, FieldName, maybe_convert_to_epoch(catch Mod:get_field_type([FieldName]), Value, Op)};
-replace_ast_timestamps(_Mod, {Op, Item1, Item2}) ->
-    {Op, Item1, Item2}.
+replace_ast_timestamps(_Mod, AST) ->
+    AST.
 
 do_epoch(String, CompleteFun, PostCompleteFun, Exponent) ->
     Normal = timestamp_to_normalized(String),
@@ -298,6 +298,7 @@ table_to_bucket(Table) when is_binary(Table) ->
 -spec queried_table(riak_kv_qry:sql_query_type_record() | ?DDL{}) -> binary().
 %% Extract table name from various sql records.
 queried_table(?DDL{table = Table}) -> Table;
+queried_table({alter_table, Table, _, _}) -> Table;
 queried_table(#riak_sql_describe_v1{'DESCRIBE' = Table}) -> Table;
 queried_table(?SQL_SELECT{'FROM' = Table})               -> Table;
 queried_table(#riak_sql_insert_v1{'INSERT' = Table})     -> Table;
