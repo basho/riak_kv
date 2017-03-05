@@ -62,10 +62,6 @@
          set_qbuf_expiry/2,
          set_ready_waiting_process/2,  %% notify a process when all chunks are here
 
-         %% utility functions
-         limit_to_scalar/1,
-         offset_to_scalar/1,
-
          %% needed to survive reinit
          schedule_tick/0
         ]).
@@ -144,7 +140,7 @@ set_ready_waiting_process(QBufRef, SelfNotifierFun) ->
 kill_all_qbufs() ->
     gen_server:call(?SERVER, kill_all_qbufs).
 
--spec fetch_limit(qbuf_ref(), unlimited | pos_integer(), non_neg_integer()) ->
+-spec fetch_limit(qbuf_ref(), [riak_kv_qry_compiler:limit()], [riak_kv_qry_compiler:offset()]) ->
                     {ok, riak_kv_qry:query_tabular_result()} |
                     {error, bad_qbuf_ref|bad_sql|qbuf_not_ready}.
 %% @doc Emulate SELECT.
@@ -182,15 +178,6 @@ get_max_query_data_size() ->
 %% @doc Get the max query buffer size
 set_max_query_data_size(Value) ->
     gen_server:call(?SERVER, {set_max_query_data_size, Value}).
-
-
-%% Utility functions that don't need or use the gen_server
-
-limit_to_scalar([]) -> unlimited;
-limit_to_scalar([A]) when is_integer(A) -> A.
-
-offset_to_scalar([]) -> 0;
-offset_to_scalar([A]) when is_integer(A), A >= 0 -> A.
 
 
 -record(qbuf, {
@@ -607,39 +594,67 @@ do_kill_all_qbufs(State0) ->
 
 
 do_fetch_limit(QBufRef,
-               Limit, Offset,
+               LimitSpec, OffsetSpec,
                #state{qbufs = QBufs0} = State0) ->
     case get_qbuf_record(QBufRef, QBufs0) of
         false ->
             {reply, {error, bad_qbuf_ref}, State0};
         #qbuf{status = collecting_chunks} ->
             {reply, {error, qbuf_not_ready}, State0};
-        #qbuf{inmem_buffer = InmemBuffer,
-              ldb_ref      = LdbRef,
-              orig_qry     = OrigQry,
-              ddl          = ?DDL{fields = QBufFields,
-                                  table = Table}} ->
-            AllDataInMem = (LdbRef == undefined),
+        #qbuf{inmem_buffer  = InmemBuffer,
+              total_records = TotalRecords,
+              ldb_ref       = LdbRef,
+              orig_qry      = OrigQry,
+              ddl           = ?DDL{fields = QBufFields,
+                                   table = Table}} ->
+            %% fetch from inmem buffer or backend. Optimise for
+            %% fetching a batch of specs in one go, to allow
+            %% iterator-based ldb backend to efficiently fetch cells
+            %% at two or more position
+            SpecificFetchFun =
+                fun(SpecList) -> static_fetcher({InmemBuffer, LdbRef}, SpecList) end,
+            %% possibly take multiple passes to assemble values in a
+            %% single row for PERCENTILE(x, 0.2), PERCENTILE(x, 0.8)
             Rows =
-                case AllDataInMem of
-                    true ->
-                        case Limit of
-                            unlimited ->
-                                lists:nthtail(Offset, InmemBuffer);
-                            Limit ->
-                                lists:sublist(InmemBuffer, Offset + 1, Limit)
-                        end;
-                    false ->
-                        {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(
-                                          LdbRef, QBufRef, Offset, Limit),
-                        LdbRows
-                end,
+                fetch_rows(SpecificFetchFun,
+                           lists:zip(maybe_supply_offset(OffsetSpec),
+                                     maybe_supply_limits(LimitSpec)),
+                           TotalRecords),
             lager:debug("fetched ~p rows from ~p for ~p", [length(Rows), Table, OrigQry]),
             ColNames = [Name || #riak_field_v1{name = Name} <- QBufFields],
             ColTypes = [Type || #riak_field_v1{type = Type} <- QBufFields],
             State9 = touch_qbuf(QBufRef, State0),
             {reply, {ok, {ColNames, ColTypes, Rows}}, State9}
     end.
+
+maybe_supply_offset([]) -> [0];
+maybe_supply_offset(Specs) -> Specs.
+
+maybe_supply_limits([]) -> [unlimited];
+maybe_supply_limits(Specs) -> Specs.
+
+static_fetcher({InmemBuffer, undefined}, [{Offset, unlimited}]) ->
+    lists:nthtail(Offset, InmemBuffer);
+static_fetcher({InmemBuffer, undefined}, [{Offset, Limit}]) ->
+    lists:sublist(InmemBuffer, 1+Offset, Limit);
+static_fetcher({InmemBuffer, undefined}, Specs) ->
+    [lists:nth(1+Off, InmemBuffer) || {Off, _Lim = 1} <- Specs];
+
+static_fetcher({_InmemBuffer, LdbRef}, Specs) ->
+    {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Specs),
+    LdbRows.
+
+
+%% straight fetch of one or more rows, per explicit LIMIT and OFFSET
+fetch_rows(StaticFetcher, [{Offset, _Limit}] = SingleSpecForOrderBy, _TotalRecords)
+  when is_integer(Offset) ->
+    StaticFetcher(SingleSpecForOrderBy);
+%% maybe multiple fetches, one for each PERCENTILE(x, Pc) in query,
+%% concatenated to yield a single row
+fetch_rows(StaticFetcher, Specs, TotalRecords) ->
+    [
+     [OffsetFun(TotalRecords, StaticFetcher) || {OffsetFun, 1} <- Specs]
+    ].
 
 do_get_qbuf_expiry(QBufRef, #state{qbufs = QBufs} = State) ->
     case get_qbuf_record(QBufRef, QBufs) of

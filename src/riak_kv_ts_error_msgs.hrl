@@ -110,7 +110,48 @@
 ).
 
 -define(
-    E_MISSING_COL_IN_GROUP_BY(FieldName, TableName),
-    iolist_to_binary(io_lib:format(
-        "Error in group by clause, column '~ts' does not exist in table ~ts", [FieldName, TableName]))
+   E_CANNOT_HAVE_ORDERBY_WITH_INVERSE_DIST_FUNCTION,
+   <<"Inverse distribution functions (PERCENTILE_*, MODE) cannot be used with any of ORDER BY, LIMIT or OFFSET clauses.">>
+).
+-define(
+   E_CANNOT_HAVE_GROUPING_OR_AGGREGATION_WITH_INVERSE_DIST_FUNCTION,
+   <<"Inverse distribution functions (PERCENTILE_*, MODE) cannot be used with GROUP BY clause or other aggregating window functions.">>
+).
+-define(
+   E_INVERSE_DIST_FUN_MISSING_COLUMN_ARG(FName),
+   iolist_to_binary(
+     ["Inverse distribution function ", atom_to_list(FName), " missing column argument."])
+).
+-define(
+   E_INVERSE_DIST_FUN_INVAL_COLUMN_ARG(FName, Column),
+   iolist_to_binary(
+     ["Invalid column argument (", Column, ") in call to inverse distribution function ", atom_to_list(FName), "."])
+).
+-define(
+   E_INVERSE_DIST_FUN_MULTIPLE_COLUMN_ARG,
+   <<"Multiple inverse distribution functions (PERCENTILE_*, MODE) must all have the same column argument.">>
+).
+-define(
+   E_INVERSE_DIST_FUN_WITH_OTHER_COLUMN,
+   <<"Inverse distribution functions (PERCENTILE_*, MODE) cannot be used with other columns in SELECT clause.">>
+).
+-define(
+   E_INVERSE_DIST_FUN_BAD_PARAMETER(FnName, Pos),
+   iolist_to_binary(
+     ["Invalid argument ", integer_to_list(Pos), " in call to function ", atom_to_list(FnName), "."])
+).
+-define(
+   E_INVERSE_DIST_FUN_NONCONST_ARG,
+   iolist_to_binary(
+     ["Inverse distribution functions (PERCENTILE_*, MODE) must have a static const expression for its parameters."])
+).
+-define(
+   E_INVERSE_DIST_FUN_INVAL_EXPR,
+   iolist_to_binary(
+     ["Invalid expression passed as parameter for inverse distribution function."])
+).
+-define(
+   E_MISSING_COL_IN_GROUP_BY(FieldName, TableName),
+   iolist_to_binary(
+     ["Error in group by clause, column '", FieldName, "' does not exist in table ", TableName, "."])
 ).
