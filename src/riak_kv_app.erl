@@ -249,8 +249,8 @@ start(_Type, _StartArgs) ->
             ok = riak_api_pb_service:register(?SERVICES),
 
             %% register allowable origins (CORS)
-            AllowableOrigins = to_list(
-                                 app_helper:get_env(riak_kv, allowable_origin, {})),
+            AllowableOrigins = app_helper:get_env(riak_api, cors_allowable_origins,
+                                                 [{all,[]},{http,[]},{https,[]}]),
             riak_kv_wm_utils:register_allowable_origins(AllowableOrigins),
 
             %% Add routes to webmachine
@@ -260,9 +260,6 @@ start(_Type, _StartArgs) ->
         {error, Reason} ->
             {error, Reason}
     end.
-
-to_list(L) when is_list(L) -> L;
-to_list(T) -> tuple_to_list(T).
 
 %% @doc Prepare to stop - called before the supervisor tree is shutdown
 prep_stop(_State) ->

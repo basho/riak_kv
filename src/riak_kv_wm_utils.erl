@@ -341,20 +341,23 @@ is_valid_referer(RD) ->
 
 %% @doc Register allowable origins (for CORS), see riak_kv.allowable_origin
 %% w/i riak_kv.schema.
--spec register_allowable_origins(list()) -> ok.
+-spec register_allowable_origins([{atom(), [boolean()|{string(), integer()}]}]) -> ok.
 register_allowable_origins(Origins) ->
     maybe_create_allowable_origins_ets(),
+    lager:info("Registering CORS Origins: ~p~n", [Origins]),
     register_allowable_origins1(Origins).
 
 register_allowable_origins1([]) -> ok;
-register_allowable_origins1([Origin = '*'|_T]) ->
-    Origin1 = normalize_referer(Origin),
+register_allowable_origins1([{all, [true]}|_T]) ->
+    AllOrigins = normalize_referer('*'),
     %% wrap the origin for full match on ets lookup
-    ets:insert(?ALLOWABLE_ORIGINS_TABLE, {Origin1});
-register_allowable_origins1([http, HttpOrigins|T]) ->
+    ets:insert(?ALLOWABLE_ORIGINS_TABLE, {AllOrigins});
+register_allowable_origins1([{all, _}|T]) ->
+    register_allowable_origins1(T);
+register_allowable_origins1([{http, HttpOrigins}|T]) ->
     register_allowable_origins2(http, HttpOrigins),
     register_allowable_origins1(T);
-register_allowable_origins1([https, HttpOrigins|T]) ->
+register_allowable_origins1([{https, HttpOrigins}|T]) ->
     register_allowable_origins2(https, HttpOrigins),
     register_allowable_origins1(T).
 
@@ -640,23 +643,23 @@ allowable_origin_none_registered_test() ->
                  allowable_origin(allowable_origin_riak(), {http, "notlocalhost", "*"})).
 
 allowable_origin_not_registered_test() ->
-    register_allowable_origins([http, [{"localhost"}]]),
+    register_allowable_origins([{http, [{"localhost"}]}]),
     ?assertEqual(false,
                  allowable_origin(allowable_origin_riak(), {http, "notlocalhost", "*"})).
 
 allowable_origin_single_registered_test() ->
-    register_allowable_origins([https, [{"notlocalhost"}]]),
+    register_allowable_origins([{https, [{"notlocalhost"}]}]),
     ?assertEqual(true,
                  allowable_origin(allowable_origin_riak(), {https, "notlocalhost", "*"})).
 
 allowable_origin_multi_registered_test() ->
-    register_allowable_origins([http, [{"localhost"}],
-                                https, [{"notlocalhost"}]]),
+    register_allowable_origins([{http, [{"localhost"}]},
+                                 {https, [{"notlocalhost"}]}]),
     ?assertEqual(true,
                  allowable_origin(allowable_origin_riak(), {https, "notlocalhost", "*"})).
 
 allowable_origin_wildcard_registered_test() ->
-    register_allowable_origins(['*']),
+    register_allowable_origins([{all, [true]}]),
     ?assertEqual(true,
                  allowable_origin(allowable_origin_riak(), {https, "notlocalhost", "*"})).
 -endif.

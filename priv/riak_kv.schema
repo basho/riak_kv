@@ -968,44 +968,48 @@
      (_) -> false
   end}.
 
-%% @doc Register allowable origins (for CORS), specified as a list of ip
-%% ({host} or {host, port} tuple) under a scheme, i.e.
+%% @doc listener.$scheme.cors_allowable_origin.$origin is an IP address and TCP
+%% port that is allowed access to resources via Cross-Origin Resource Sharing
+%% (CORS).
 %%
-%% {riak_kv, [
-%%   {allowable_origin, {
-%%      http, [
-%%          {"127.0.0.1", 3000},
-%%          {"10.10.1.240"}
-%%      ],
-%%      https, [
-%%          {"127.0.0.1", 4430}
-%%      ]
-%%   }}
-%% ]}
-%%
-%% The resulting allowable origins are "http://127.0.0.1:300",
-%% "http://10.10.1.240:*", "https://127.0.0.1:4430".
-%%
-%% The special case of "Allow All" is achieved by specifying the scheme as '*'
-%% (wildcard), i.e.
-%%
-%% {riak_kv, [
-%%   {allowable_origin, { '*' } }
-%% ]}
-%%
-%% If port is not specified, all ports for the host are to be considered allowed.
-%% This is equivalent to specifying the port using the wildcard.
-{mapping, "allowable_origin.$name", "riak_kv.allowable_origin.http", [
-    {datatype, ip},
-    {default, {}},
-    {level, advanced}
+%% Allowable schemes include http and https, and all where the wildcard (all)
+%% is used to allow all origins to share resources with Riak.
+{mapping, "listener.$scheme.cors_allowable_origin.$origin", "riak_api.cors_allowable_origins",
+[
+ {datatype, [ip, flag]}
 ]}.
 
 {translation,
- "riak_kv.allowable_origin",
+ "riak_api.cors_allowable_origins",
  fun(Conf) ->
-         HTTP = cuttlefish_variable:filter_by_prefix("allowable_origin", Conf),
-         [IP || {_, IP} <- HTTP]
+         %% validate, not the value, but the scheme portion
+         Listeners = cuttlefish_variable:filter_by_prefix("listener.", Conf),
+         InvalidSchemes = lists:filtermap(
+                            fun ({["listener", "http", "cors_allowable_origin"|_T], _V}) ->
+                                    false;
+                                ({["listener", "https", "cors_allowable_origin"|_T], _V}) ->
+                                    false;
+                                ({["listener", "all", "cors_allowable_origin"|_T], _V}) ->
+                                    false;
+                                ({["listener", Scheme, "cors_allowable_origin"|_T], _V}) ->
+                                    {true, Scheme};
+                                (_) -> false
+                     end, Listeners),
+
+         case length(InvalidSchemes) of
+             0 -> ok;
+             _ -> throw({invalid, "An invalid CORS scheme was specified, " ++
+                                  "valid values include: https, http, and all."})
+         end,
+
+         %% apply
+         ApplySchemes = ["all", "https", "http"],
+         IPF = fun(Scheme) ->
+                       Prefix = "listener." ++ Scheme ++ ".cors_allowable_origin",
+                       IPs = cuttlefish_variable:filter_by_prefix(Prefix, Conf),
+                       {list_to_atom(Scheme), [IP || {_, IP} <- IPs]}
+               end,
+         [IPF(Scheme) || Scheme <- ApplySchemes]
  end
 }.
 
