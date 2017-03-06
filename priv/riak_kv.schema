@@ -968,48 +968,76 @@
      (_) -> false
   end}.
 
-%% @doc listener.$scheme.cors_allowable_origin.$origin is an IP address and TCP
+%% @doc listener.http.cors_allowable_origin.$origin is an IP address and TCP
 %% port that is allowed access to resources via Cross-Origin Resource Sharing
 %% (CORS).
 %%
 %% Allowable schemes include http and https, and all where the wildcard (all)
 %% is used to allow all origins to share resources with Riak.
-{mapping, "listener.$scheme.cors_allowable_origin.$origin", "riak_api.cors_allowable_origins",
+%%
+%% For example:
+%% listener.http.cors_allowable_origin.grafana = 0.0.0.0:3000
+%%
+%% allows access to an HTTP service named grafana for localhost on port 3000.
+{mapping, "listener.http.cors_allowable_origin.$origin", "riak_api.cors_allowable_origins",
 [
- {datatype, [ip, flag]}
+ {datatype, ip}
+]}.
+
+%% @doc listener.https.cors_allowable_origin.$origin is an IP address and TCP
+%% port that is allowed access to resources via Cross-Origin Resource Sharing
+%% (CORS).
+%%
+%% Allowable schemes include http and https, and all where the wildcard (all)
+%% is used to allow all origins to share resources with Riak.
+%%
+%% For example:
+%% listener.https.cors_allowable_origin.grafana = 0.0.0.0:4000
+%%
+%% allows access to an HTTPS service named grafana for localhost on port 4000.
+{mapping, "listener.https.cors_allowable_origin.$origin", "riak_api.cors_allowable_origins",
+[
+ {datatype, ip}
+]}.
+
+%% @doc listener.all.cors_allowable_origin is a flag to allow access to
+%% resources via Cross-Origin Resource Sharing (CORS) for all (http and https)
+%% protocol schemes.
+%%
+%% Allowable schemes include http and https, and all where the wildcard (all)
+%% is used to allow all origins to share resources with Riak.
+%%
+%% For example:
+%% listener.all.cors_allowable_origin = on
+%%
+%% allows access to all HTTP and HTTPS services
+{mapping, "listener.all.cors_allowable_origin", "riak_api.cors_allowable_origins",
+[
+ {datatype, flag}
 ]}.
 
 {translation,
  "riak_api.cors_allowable_origins",
  fun(Conf) ->
-         %% validate, not the value, but the scheme portion
-         Listeners = cuttlefish_variable:filter_by_prefix("listener.", Conf),
-         InvalidSchemes = lists:filtermap(
-                            fun ({["listener", "http", "cors_allowable_origin"|_T], _V}) ->
-                                    false;
-                                ({["listener", "https", "cors_allowable_origin"|_T], _V}) ->
-                                    false;
-                                ({["listener", "all", "cors_allowable_origin"|_T], _V}) ->
-                                    false;
-                                ({["listener", Scheme, "cors_allowable_origin"|_T], _V}) ->
-                                    {true, Scheme};
-                                (_) -> false
-                     end, Listeners),
+   %% apply
+   %% all first
+   Alls = cuttlefish_variable:filter_by_prefix("listener.all.cors_allowable_origin", Conf),
+   AllF = fun(All) ->
+                   {all, [Flag || {_, Flag} <- Alls]}
+           end,
+   AllL = [AllF(All) || All <- Alls],
 
-         case length(InvalidSchemes) of
-             0 -> ok;
-             _ -> throw({invalid, "An invalid CORS scheme was specified, " ++
-                                  "valid values include: https, http, and all."})
-         end,
-
-         %% apply
-         ApplySchemes = ["all", "https", "http"],
-         IPF = fun(Scheme) ->
-                       Prefix = "listener." ++ Scheme ++ ".cors_allowable_origin",
-                       IPs = cuttlefish_variable:filter_by_prefix(Prefix, Conf),
-                       {list_to_atom(Scheme), [IP || {_, IP} <- IPs]}
-               end,
-         [IPF(Scheme) || Scheme <- ApplySchemes]
+   case AllL of
+       [{all, [true]}] -> AllL ++ [{http, []}, {https, []}];
+       _ ->
+           %% http|https
+           ApplySchemes = ["https", "http"],
+           IPF = fun(Scheme) ->
+                         Prefix = "listener." ++ Scheme ++ ".cors_allowable_origin",
+                         IPs = cuttlefish_variable:filter_by_prefix(Prefix, Conf),
+                         {list_to_atom(Scheme), [IP || {_, IP} <- IPs]}
+                 end,
+           [{all, [false]}] ++ [IPF(Scheme) || Scheme <- ApplySchemes]
+   end
  end
 }.
-
