@@ -87,7 +87,7 @@
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
 -export([hash/1, hash/2, approximate_size/2]).
--export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
+-export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1, new_w1c_vclock/0]).
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
 -export([get_update_metadata/1, get_update_value/1, get_contents/1]).
@@ -1252,6 +1252,19 @@ decode_vclock(Method, VClock) ->
         _           -> lager:error("Bad vclock encoding method ~p", [Method]),
                        throw(bad_vclock_encoding_method)
     end.
+
+%% An exported method to return a fresh vclock suitable for use on the
+%% write-once path, per the logic in riak_object:merge_write_once/2.
+%%
+%% That logic uses a lookup on Node <<0:8>> to retrieve the vclock
+%% timestamp (ignoring the associated counter).
+%%
+%% Here we initialize a new vclock with a timestamp stored in a
+%% <<0:8>>-tagged tuple.
+
+-spec new_w1c_vclock() -> vclock:vclock().
+new_w1c_vclock() ->
+    vclock:fresh(<<0:8>>, 1).
 
 -ifdef(TEST).
 

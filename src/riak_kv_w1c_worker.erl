@@ -215,7 +215,7 @@ ts_batch_put_encoded([{{Bucket, _LK}, _RObj0}|_Rest]=RObjs, DocIdx) ->
 
 
 w1c_vclock(RObj) ->
-    RObj2 = riak_object:set_vclock(RObj, vclock:fresh(<<0:8>>, 1)),
+    RObj2 = riak_object:set_vclock(RObj, riak_object:new_w1c_vclock()),
     RObj3 = riak_object:update_last_modified(RObj2),
     riak_object:apply_updates(RObj3).
 
