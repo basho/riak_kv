@@ -1512,7 +1512,7 @@ prepare_put_new_object(#state{idx =Idx} = State,
                      false ->
                          []
                  end,
-    {EpochId, State2} = new_key_epoch(State),
+    {EpochId, State2} = maybe_new_key_epoch(Coord, State, undefined, RObj),
     RObj2 = maybe_update_vclock(Coord, RObj, EpochId, StartTime),
     RObj3 = maybe_do_crdt_update(Coord, CRDTOp, EpochId, RObj2),
     determine_put_result(RObj3, no_old_object, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
@@ -2598,47 +2598,40 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
 %% 2. local found, but never acted on this key before (or don't remember it!)
 %% 3. local found, local acted, but incoming has greater count or actor epoch
 %%    This one is tricky, since it indicates some byzantine failure somewhere.
--spec maybe_new_key_epoch(boolean(), #state{},
-                          riak_object:riak_object(),
-                          riak_object:riak_object()) ->
-                                 {binary(), #state{}}.
-maybe_new_key_epoch(false, State, _, _) ->
-    %% Never add a new key epoch when not coordinating
-    %% @TODO (rdb) need to mark actor as dirty though.
-    {State#state.vnodeid, State};
-maybe_new_key_epoch(true, State=#state{counter=#counter_state{use=false}, vnodeid=VId}, _, _) ->
+-spec maybe_new_key_epoch(Coord::boolean(), State::#state{},
+                          LocalObject::riak_object:riak_object(),
+                          IncomingObject::riak_object:riak_object()) ->
+                                 {ActorId:: binary(), #state{}}.
+maybe_new_key_epoch(_Coord, State=#state{counter=#counter_state{use=false}, vnodeid=VId}, _, _) ->
     %% Per-Key-Epochs is off, use the base vnodeid
     {VId, State};
-maybe_new_key_epoch(true, State, LocalObj, IncomingObj) ->
+maybe_new_key_epoch(_Coord=true, State, undefined, _IncomingObj) ->
+    %% Coordinating, and local not found always means new key epoch
+    new_key_epoch(State);
+maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
+    %% Either coordinating and local found, or not coordinating with
+    %% local found or not found.
     #state{vnodeid=VId} = State,
-    %% @TODO (rdb) maybe optimise since highly likey both objects
-    %% share the majority of actors, maybe a single umerged list of
-    %% actors, somehow tagged by local | incoming?
-    case highest_actor(VId, LocalObj) of
-        {undefined, 0, 0} -> %% Not present locally
-            %% Never acted on this object before, new epoch.
-            new_key_epoch(State);
-        {LocalId, LocalEpoch, LocalCntr} -> %% Present locally
-            case highest_actor(VId, IncomingObj) of
-                {_InId, InEpoch, InCntr} when InEpoch > LocalEpoch;
-                                              InCntr > LocalCntr ->
-                    %% In coming actor-epoch or counter greater than
-                    %% local, some byzantine failure, new epoch.
-                    B = riak_object:bucket(LocalObj),
-                    K = riak_object:key(LocalObj),
+    {LocalId, LocalEpoch, LocalCntr} = highest_actor(VId, LocalObj),
+    case highest_actor(VId, IncomingObj) of
+        {_InId, InEpoch, InCntr} when InEpoch > LocalEpoch;
+                                      InCntr > LocalCntr ->
+            %% In coming actor-epoch or counter greater than
+            %% local, some byzantine failure, new epoch.
+            B = riak_object:bucket(IncomingObj),
+            K = riak_object:key(IncomingObj),
 
-                    lager:warning("Inbound clock entry for ~p in ~p/~p greater than local." ++
-                                      "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
-                                  [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]),
-                    new_key_epoch(State);
-                _ ->
-                    %% just use local id
-                    %% Return the highest local epoch ID for this
-                    %% key. This may be the pre-epoch ID (i.e. no
-                    %% epoch), which is good, no reason to force a new
-                    %% epoch on all old keys.
-                    {LocalId, State}
-            end
+            lager:warning("Inbound clock entry for ~p in ~p/~p greater than local." ++
+                              "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
+                          [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]),
+            new_key_epoch(State);
+        _ ->
+            %% just use local id
+            %% Return the highest local epoch ID for this
+            %% key. This may be the pre-epoch ID (i.e. no
+            %% epoch), which is good, no reason to force a new
+            %% epoch on all old keys.
+            {LocalId, State}
     end.
 
 %% @private generate an epoch actor, and update the vnode state.
@@ -2656,17 +2649,19 @@ key_epoch_actor(ActorBin, Cntr) ->
     <<ActorBin/binary, Cntr:32/integer>>.
 
 %% @private highest actor is the latest/greatest epoch actor for a
-%% key. It is the actor we want to increment for the current event,
-%% given that we are not starting a new epoch for the key.  Must work
-%% with non-epochal and epochal actors.  The return tuple is
-%% `{ActorId, Epoch, Counter}' where `ActorId' is the highest ID
-%% starting with `ActorBase' that has acted on this key, undefined if
-%% never acted before. `KeyEpoch' is the highest epoch for the
-%% `ActorBase'. `Counter' is the greatest event seen by the `VnodeId'.
+%% key. It is the actor we want to increment for a new event, if we
+%% are not starting a new epoch for the key.  Must work with
+%% non-epochal and epochal actors.  The return tuple is `{ActorId,
+%% Epoch, Counter}' where `ActorId' is the highest ID starting with
+%% `ActorBase' that has acted on this key. `KeyEpoch' is the highest
+%% epoch for the `ActorBase'. `Counter' is the greatest event seen by
+%% the `VnodeId'.
 -spec highest_actor(binary(), riak_object:riak_object()) ->
-    {ActorId :: binary() | undefined,
+    {ActorId :: binary(),
      KeyEpoch :: non_neg_integer(),
      Counter :: non_neg_integer()}.
+highest_actor(ActorBase, undefined) ->
+    {ActorBase, 0, 0};
 highest_actor(ActorBase, Obj) ->
     ActorSize = size(ActorBase),
     Actors = riak_object:all_actors(Obj),
@@ -2688,7 +2683,7 @@ highest_actor(ActorBase, Obj) ->
                                              _ ->  {HighestActor, HighestEpoch}
                                          end
                                  end,
-                                 {undefined, 0},
+                                 {ActorBase, 0},
                                  Actors),
     %% get the greatest event for the highest/latest actor
     {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
