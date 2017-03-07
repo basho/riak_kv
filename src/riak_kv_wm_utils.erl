@@ -398,7 +398,7 @@ allowable_origin(OriginTuple, RefererTuple) ->
     end.
 
 normalize_referer('*') -> {"*", "*", "*"};
-normalize_referer({Scheme, "127.0.0.1", Port}) ->
+normalize_referer({Scheme, "127." ++ _InsignificantBits, Port}) ->
     {Scheme, "localhost", Port};
 normalize_referer(RefererTuple) ->
     RefererTuple.
