@@ -612,7 +612,7 @@ do_fetch_limit(QBufRef,
             %% iterator-based ldb backend to efficiently fetch cells
             %% at two or more position
             SpecificFetchFun =
-                fun(SpecList) -> static_fetcher({InmemBuffer, LdbRef}, SpecList) end,
+                fun(SpecList) -> static_fetcher({InmemBuffer, LdbRef}, QBufRef, SpecList) end,
             %% possibly take multiple passes to assemble values in a
             %% single row for PERCENTILE(x, 0.2), PERCENTILE(x, 0.8)
             Rows =
@@ -633,15 +633,15 @@ maybe_supply_offset(Specs) -> Specs.
 maybe_supply_limits([]) -> [unlimited];
 maybe_supply_limits(Specs) -> Specs.
 
-static_fetcher({InmemBuffer, undefined}, [{Offset, unlimited}]) ->
+static_fetcher({InmemBuffer, undefined}, _QBufRef, [{Offset, unlimited}]) ->
     lists:nthtail(Offset, InmemBuffer);
-static_fetcher({InmemBuffer, undefined}, [{Offset, Limit}]) ->
+static_fetcher({InmemBuffer, undefined}, _QBufRef, [{Offset, Limit}]) ->
     lists:sublist(InmemBuffer, 1+Offset, Limit);
-static_fetcher({InmemBuffer, undefined}, Specs) ->
+static_fetcher({InmemBuffer, undefined}, _QBufRef, Specs) ->
     [lists:nth(1+Off, InmemBuffer) || {Off, _Lim = 1} <- Specs];
 
-static_fetcher({_InmemBuffer, LdbRef}, Specs) ->
-    {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, Specs),
+static_fetcher({_InmemBuffer, LdbRef}, QBufRef, Specs) ->
+    {ok, LdbRows} = riak_kv_qry_buffers_ldb:fetch_rows(LdbRef, QBufRef, Specs),
     LdbRows.
 
 

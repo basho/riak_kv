@@ -29,7 +29,7 @@
          close/1,
          destroy/1,
          add_rows/3,
-         fetch_rows/4]).
+         fetch_rows/3]).
 
 -define(EXPIRING_BUCKET_TYPE, <<"expire-me">>).
 
@@ -104,8 +104,9 @@ key_prefix(Bucket, Key) ->
 
 
 
--spec fetch_rows(eleveldb:db_ref(), [{Offset::non_neg_integer(),
-                                      Limit::unlimited|pos_integer()}]) ->
+-spec fetch_rows(eleveldb:db_ref(), binary(),
+                 [{Offset::non_neg_integer(),
+                   Limit::unlimited|pos_integer()}]) ->
                         {ok, [riak_kv_qry_buffers:data_row()]} | {error, term()}.
 %% Given a list of {Offset, Limit} pairs, seek to Offset position and collect Limit
 %% records, concatenating the results.  This cumbersome solution is to allow callers to
@@ -123,7 +124,7 @@ key_prefix(Bucket, Key) ->
 %%
 %% Currently, the limitation only applies to function 'MODE', which needs to examine every
 %% record.   In a future implementation of reusable query buffers it will re-emerge.
-fetch_rows(LdbRef, SortedSpecs) ->
+fetch_rows(LdbRef, Bucket, SortedSpecs) ->
     FetchLimitFn =
         fun(_KV, {[{Off, _Lim}|_] = CurSegment, Pos, Acc}) when Pos < Off ->
                 %% still seeking to Off: increment Pos and skip to
@@ -151,7 +152,7 @@ fetch_rows(LdbRef, SortedSpecs) ->
               [{fold_method, streaming},
                {start_key, key_prefix(Bucket, 0)},
                {end_key, key_prefix(Bucket, <<>>)}]) of
-            {_, _, _N, Acc} ->
+            {_, _N, Acc} ->
                 {ok, Acc}
         catch
             {break, Acc} ->
