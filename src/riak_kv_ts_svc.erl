@@ -346,7 +346,6 @@ sub_tsgetreq(Mod, _DDL, #tsgetreq{table = Table,
 
 sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
                                   key    = PbCompoundKey,
-                                  vclock  = VClock,
                                   timeout  = Timeout},
              State) ->
     Options =
@@ -356,7 +355,7 @@ sub_tsdelreq(Mod, _DDL, #tsdelreq{table = Table,
     CompoundKey = riak_pb_ts_codec:decode_cells(PbCompoundKey),
     Mod = riak_ql_ddl:make_module_name(Table),
     case riak_kv_ts_api:delete_data(
-           CompoundKey, Table, Mod, Options, VClock) of
+           CompoundKey, Table, Mod, Options) of
         ok ->
             {reply, tsdelresp, State};
         {error, no_type} ->
