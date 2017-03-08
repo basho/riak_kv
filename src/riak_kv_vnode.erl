@@ -2613,9 +2613,12 @@ maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
     %% local found or not found.
     #state{vnodeid=VId} = State,
     {LocalId, LocalEpoch, LocalCntr} = highest_actor(VId, LocalObj),
-    case highest_actor(VId, IncomingObj) of
-        {_InId, InEpoch, InCntr} when InEpoch > LocalEpoch;
-                                      InCntr > LocalCntr ->
+    {_InId, InEpoch, InCntr} = highest_actor(VId, IncomingObj),
+
+    %%TODO(rdb) :: what about this orelse branch?? It's confusing
+    %%enough that at least document/comment it!
+
+    if InEpoch > LocalEpoch orelse InCntr > LocalCntr ->
             %% In coming actor-epoch or counter greater than
             %% local, some byzantine failure, new epoch.
             B = riak_object:bucket(IncomingObj),
@@ -2625,7 +2628,7 @@ maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
                               "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
                           [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]),
             new_key_epoch(State);
-        _ ->
+       ?ELSE ->
             %% just use local id
             %% Return the highest local epoch ID for this
             %% key. This may be the pre-epoch ID (i.e. no
