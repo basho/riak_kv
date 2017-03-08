@@ -522,7 +522,7 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
         end,
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, {filter, Filter}, Timeout]]),
+    riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout]]),
     wait_for_listkeys(ReqId).
 
 
