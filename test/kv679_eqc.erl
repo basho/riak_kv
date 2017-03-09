@@ -117,7 +117,7 @@ put_args(#state{replicas=Replicas, last_get=LastGet}) ->
 %% @doc PUT a value into "riak", maybe without a preceding get (bad
 %% client, blind put, it happens!)
 put(Replica, Key, Value, LastGet, UseLastGet) ->
-    [#replica{id=Replica, data=RepData}=Rep] = ets:lookup(?MODULE, Replica),
+    [#replica{id=Replica, data=RepData, epoch=RepEpoch}=Rep] = ets:lookup(?MODULE, Replica),
     [#replica{id= ?P1, data=Data, epoch=Epoch}=Coord] = ets:lookup(?MODULE, ?P1),
 
     %% here we just pretend to be riak. We read the local value for
@@ -131,11 +131,11 @@ put(Replica, Key, Value, LastGet, UseLastGet) ->
 
     Data2 = orddict:store(Key, Res, Data),
 
-    RepRes = replica_put(Replica, orddict:find(Key, RepData), Res),
+    {RepEpoch2, RepRes} = replica_put(Replica, RepEpoch, orddict:find(Key, RepData), Res),
     RepData2 = orddict:store(Key, RepRes, RepData),
 
     ets:insert(?MODULE, Coord#replica{data=Data2, epoch=Epoch2}),
-    ets:insert(?MODULE, Rep#replica{data=RepData2}),
+    ets:insert(?MODULE, Rep#replica{data=RepData2, epoch=RepEpoch2}),
     {Key, Value, Dot, PutCtx}.
 
 %% @doc put_next - Add the `{K, V, Ctx, Dot}' to the `values' list so we
@@ -209,15 +209,15 @@ replicate_pre(#state{values=Values}) ->
 %% `To' and store on `To'
 replicate(Key, From, To) ->
     [#replica{id=From, data=FromData}] = ets:lookup(?MODULE, From),
-    [#replica{id= To, data=ToData}=ToRep] = ets:lookup(?MODULE, To),
+    [#replica{id= To, data=ToData, epoch=ToEpoch}=ToRep] = ets:lookup(?MODULE, To),
 
     case orddict:find(Key, FromData) of
         error ->
             ok;
         {ok, Value} ->
-            ToRes= replica_put(To, orddict:find(Key, ToData), Value),
+            {ToEpoch2, ToRes}= replica_put(To, ToEpoch, orddict:find(Key, ToData), Value),
             ToData2 = orddict:store(Key, ToRes, ToData),
-            ets:insert(?MODULE, ToRep#replica{data=ToData2}),
+            ets:insert(?MODULE, ToRep#replica{data=ToData2, epoch=ToEpoch2}),
             ok
     end.
 
@@ -404,10 +404,22 @@ coord_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
 %% this is a cut down and (vastly!) simplified version of what riak
 %% does when receiving a non-coorindating (replica, handoff, mdc, read
 %% repair etc) put (without any of the Epoch stuff for now!)
-replica_put(_VId, error, IncomingObject) ->
-    IncomingObject;
-replica_put(_Vid, {ok, LocalObj}, IncomingObject) ->
-    riak_object:syntactic_merge(LocalObj, IncomingObject).
+replica_put(VId, Epoch, error, IncomingObj) ->
+    %% NOTE we _may_ update the vclock here!
+    case  highest_epoch(VId, IncomingObj) of
+        0 ->
+            %% In this model all actors have epochs of at least 1, in
+            %% this case no epoch means no actor, so nowt funny here
+            {Epoch, IncomingObj};
+        _N ->
+            %% wut? Locally there is no object, but remotely there is
+            %% an object with this actor in, that's broken
+            E2 = Epoch + 1,
+            Actor = epoch_actor(VId, E2),
+            {E2, riak_object:new_actor_epoch(IncomingObj, Actor)}
+    end;
+replica_put(_Vid, E, {ok, LocalObj}, IncomingObject) ->
+    {E, riak_object:syntactic_merge(LocalObj, IncomingObject)}.
 
 %% like vclock:timestamp() but monotinically increasing
 timestamp() ->
