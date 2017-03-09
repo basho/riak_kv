@@ -44,6 +44,7 @@
 
 -record(replica, {
           id, %% The replica ID
+          epoch=0,
           data=orddict:new() %% just use an orddict for now
          }).
 
@@ -117,7 +118,7 @@ put_args(#state{replicas=Replicas, last_get=LastGet}) ->
 %% client, blind put, it happens!)
 put(Replica, Key, Value, LastGet, UseLastGet) ->
     [#replica{id=Replica, data=RepData}=Rep] = ets:lookup(?MODULE, Replica),
-    [#replica{id= ?P1, data=Data}=Coord] = ets:lookup(?MODULE, ?P1),
+    [#replica{id= ?P1, data=Data, epoch=Epoch}=Coord] = ets:lookup(?MODULE, ?P1),
 
     %% here we just pretend to be riak. We read the local value for
     %% key, and we do what riak does with the incoming contextless
@@ -126,15 +127,14 @@ put(Replica, Key, Value, LastGet, UseLastGet) ->
     PutObj = generate_put_obj(Key, Value, LastGet, UseLastGet),
     PutCtx = riak_object:vclock(PutObj),
 
-    Res = coord_put(?P1, orddict:find(Key, Data), PutObj),
-    {ok, Dot} = vclock:get_dot(?P1, riak_object:vclock(Res)),
+    {Epoch2, Res, Dot} = coord_put(?P1, Epoch, orddict:find(Key, Data), PutObj),
 
     Data2 = orddict:store(Key, Res, Data),
 
     RepRes = replica_put(Replica, orddict:find(Key, RepData), Res),
     RepData2 = orddict:store(Key, RepRes, RepData),
 
-    ets:insert(?MODULE, Coord#replica{data=Data2}),
+    ets:insert(?MODULE, Coord#replica{data=Data2, epoch=Epoch2}),
     ets:insert(?MODULE, Rep#replica{data=RepData2}),
     {Key, Value, Dot, PutCtx}.
 
@@ -387,12 +387,19 @@ new_object(K, V) ->
 %% this is a cut down and (vastly!) simplified version of what riak
 %% does when coordinating a put (without any of the Epoch stuff for
 %% now!)
-coord_put(VId, error, IncomingObject) ->
+coord_put(VId, Epoch, _LocalObj=error, IncomingObject) ->
     StartTime = timestamp(),
-    riak_object:increment_vclock(IncomingObject, VId, StartTime);
-coord_put(VId, {ok, LocalObj}, IncomingObject) ->
+    Epoch2 = Epoch +1,
+    EpochActor = epoch_actor(VId, Epoch2),
+    Obj = riak_object:increment_vclock(IncomingObject, EpochActor, StartTime),
+    {ok, Dot} = vclock:get_dot(EpochActor, riak_object:vclock(Obj)),
+    {Epoch2, Obj, Dot};
+coord_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
     StartTime = timestamp(),
-    riak_object:update(false, LocalObj, IncomingObject, VId, StartTime).
+    {Epoch2, Actor} = maybe_new_epoch_actor(VId, Epoch, LocalObj, IncomingObject),
+    Obj = riak_object:update(false, LocalObj, IncomingObject, Actor, StartTime),
+    {ok, Dot} = vclock:get_dot(Actor, riak_object:vclock(Obj)),
+    {Epoch2, Obj, Dot}.
 
 %% this is a cut down and (vastly!) simplified version of what riak
 %% does when receiving a non-coorindating (replica, handoff, mdc, read
@@ -406,5 +413,35 @@ replica_put(_Vid, {ok, LocalObj}, IncomingObject) ->
 timestamp() ->
     {A, B, C} = erlang:now(),
     A+B+C.
+
+%% copied from riak_kv_vnode, for shame
+maybe_new_epoch_actor(Base, Epoch, LocalObj, IncomingObj) ->
+    HighestLocalActorEpoch = highest_epoch(Base, LocalObj),
+    HighestIncomingActorEpoch = highest_epoch(Base, IncomingObj),
+    HighestEpoch = max(HighestIncomingActorEpoch, HighestLocalActorEpoch),
+    LocalCntr = riak_object:actor_counter({Base, HighestEpoch}, LocalObj),
+    InCntr = riak_object:actor_counter({Base, HighestEpoch}, IncomingObj),
+    if (HighestLocalActorEpoch < HighestEpoch)
+       orelse
+       (LocalCntr < InCntr)
+       ->
+            E2 = Epoch+1,
+            {E2, epoch_actor(Base, E2)};
+       true ->
+            %% reuse the actor, since local is highest
+            {Epoch, epoch_actor(Base, HighestEpoch)}
+    end.
+
+highest_epoch(Base, Obj) ->
+    case proplists:get_all_values(Base, riak_object:all_actors(Obj)) of
+        [] ->
+            0;
+        L ->
+            lists:max(L)
+    end.
+
+%% simpler than riak, 'cos we can use terms
+epoch_actor(VId, Epoch) ->
+    {VId, Epoch}.
 
 -endif.
