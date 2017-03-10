@@ -249,7 +249,7 @@ get_pending_version() ->
             Version
     end.
 
--spec get_upgraded() -> boolean.
+-spec get_upgraded() -> boolean().
 get_upgraded() ->
     case {get_version(), get_pending_version()} of
         {legacy, legacy} ->
