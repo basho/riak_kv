@@ -171,6 +171,8 @@ replace_time_field1(undefined, _QParts, Query) ->
 replace_time_field1(TimeField, QParts, _Query) ->
     %% replace time template variable w/ time field.
     QParts1 = [case QPart of
+                   %% replace only also first argument to GROUP BY time function
+                   "time($time" ++ T -> "time(" ++ TimeField ++ T;
                    "$time" ++ T -> TimeField ++ T;
                    P -> P
                end || QPart <- QParts],
