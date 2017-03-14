@@ -159,8 +159,6 @@ series_results([{ok, {FieldNames, Rows}}|T], I, Acc) ->
     series_results(T, I + 1, [Series|Acc]).
 
 replace_time_field(Query, RD, Ctx) ->
-    %% if the first field in the query is not the time field, prepend the time
-    %% field as the first field in the query.
     QParts = string:tokens(Query, " "),
     Table = table_from_query(QParts),
     TimeField = ts_get_time_field(Table, RD, Ctx),
@@ -176,7 +174,7 @@ replace_time_field1(TimeField, QParts, _Query) ->
                    "$time" ++ T -> TimeField ++ T;
                    P -> P
                end || QPart <- QParts],
-    string:join([hd(QParts1)] ++ [TimeField ++ ","] ++ tl(QParts1), " ").
+    string:join(QParts1, " ").
 
 table_from_query([]) ->
     undefined;
