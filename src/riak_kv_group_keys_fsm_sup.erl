@@ -31,7 +31,14 @@
 -export([init/1]).
 
 start_group_keys_fsm(Node, Args) ->
-    supervisor:start_child({?MODULE, Node}, Args).
+    case supervisor:start_child({?MODULE, Node}, Args) of
+        {ok, Pid} ->
+            ok = riak_kv_stat:update({list_group_keys_create, Pid}),
+            {ok, Pid};
+        Error ->
+            ok = riak_kv_stat:update(list_group_keys_create_error),
+            Error
+    end.
 
 %% @spec start_link() -> ServerRet
 %% @doc API for starting the supervisor.

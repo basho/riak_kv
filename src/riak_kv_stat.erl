@@ -129,7 +129,11 @@ init([]) ->
     register_stats(),
     Me = self(),
     State = #state{monitors = [{index, spawn_link(?MODULE, monitor_loop, [index])},
-                               {list, spawn_link(?MODULE, monitor_loop, [list])}],
+                               {list, spawn_link(?MODULE, monitor_loop, [list])},
+                               {list_group_keys, spawn_link(?MODULE,
+                                                            monitor_loop,
+                                                            [list_group_keys])}
+                              ],
                    repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
 
@@ -283,6 +287,13 @@ do_update({list_create, Pid}) ->
     ok;
 do_update(list_create_error) ->
     exometer:update([?PFX, ?APP, list, fsm, create, error], 1);
+do_update({list_group_keys_create, Pid}) ->
+    ok = exometer:update([?PFX, ?APP, list_group_keys, fsm, create], 1),
+    ok = exometer:update([?PFX, ?APP, list_group_keys, fsm, active], 1),
+    add_monitor(list_group_keys, Pid),
+    ok;
+do_update(list_group_keys_create_error) ->
+    exometer:update([?PFX, ?APP, list_group_keys, fsm, create, error], 1);
 do_update({fsm_destroy, Type}) ->
     exometer:update([?PFX, ?APP, Type, fsm, active], -1);
 do_update({Type, actor_count, Count}) ->
@@ -655,6 +666,12 @@ stats() ->
      {[list, fsm, create, error], spiral, [], [{one  , list_fsm_create_error},
                                                {count, list_fsm_create_error_total}]},
      {[list, fsm, active], counter, [], [{value, list_fsm_active}]},
+
+     {[list_group_keys, fsm, create], spiral, [], [{one  , list_group_keys_fsm_create},
+					{count, list_group_keys_fsm_create_total}]},
+     {[list_group_keys, fsm, create, error], spiral, [], [{one  , list_group_keys_fsm_create_error},
+                                               {count, list_group_keys_fsm_create_error_total}]},
+     {[list_group_keys, fsm, active], counter, [], [{value, list_group_keys_fsm_active}]},
 
      %% misc stats
      {mapper_count, counter, [], [{value, executing_mappers}]},
