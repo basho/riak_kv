@@ -298,6 +298,12 @@ gen_val() ->
 gen_coord() ->
     frequency([{5, ?P1}, {5, elements(?REPLICAS)}]).
 
+gen_pl() ->
+    gen_pl(elements(?REPLICAS)).
+
+gen_pl(Replica) ->
+    ?LET(R2, ?SUCHTHAT(X, elements(?REPLICAS), X /= Replica), {Replica, R2}).
+
 %% Helper functions
 
 set_up_replicas() ->
@@ -389,8 +395,7 @@ new_object(K, V) ->
     riak_object:new(?BUCKET, K, V).
 
 %% this is a cut down and (vastly!) simplified version of what riak
-%% does when coordinating a put (without any of the Epoch stuff for
-%% now!)
+%% does when coordinating a put
 coord_put(VId, Epoch, _LocalObj=error, IncomingObject) ->
     StartTime = timestamp(),
     Epoch2 = Epoch +1,
@@ -400,7 +405,13 @@ coord_put(VId, Epoch, _LocalObj=error, IncomingObject) ->
     {Epoch2, Obj, Dot};
 coord_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
     StartTime = timestamp(),
-    {Epoch2, Actor} = maybe_new_epoch_actor(VId, Epoch, LocalObj, IncomingObject),
+    {Epoch2, Actor} = case highest_epoch(VId, LocalObj) of
+                          0 -> %% i.e. never acted on local
+                              {_A2, E2}=A = epoch_actor(VId, Epoch+1),
+                              {E2, A};
+                          Acted when is_integer(Acted) ->
+                              maybe_new_epoch_actor(VId, Epoch, LocalObj, IncomingObject)
+                      end,
     Obj = riak_object:update(false, LocalObj, IncomingObject, Actor, StartTime),
     {ok, Dot} = vclock:get_dot(Actor, riak_object:vclock(Obj)),
     {Epoch2, Obj, Dot}.
@@ -410,7 +421,7 @@ coord_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
 %% repair etc) put
 replica_put(VId, Epoch, error, IncomingObj) ->
     %% NOTE we _may_ update the vclock here!
-    case  highest_epoch(VId, IncomingObj) of
+    case highest_epoch(VId, IncomingObj) of
         0 ->
             %% In this model all actors have epochs of at least 1, in
             %% this case no epoch means no actor, so nowt funny here
@@ -422,8 +433,17 @@ replica_put(VId, Epoch, error, IncomingObj) ->
             Actor = epoch_actor(VId, E2),
             {E2, riak_object:new_actor_epoch(IncomingObj, Actor)}
     end;
-replica_put(_Vid, E, {ok, LocalObj}, IncomingObject) ->
-    {E, riak_object:syntactic_merge(LocalObj, IncomingObject)}.
+replica_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
+    %% {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}.
+    case maybe_new_epoch_actor(VId, Epoch, LocalObj, IncomingObject) of
+        {N, A} when N > Epoch ->  %% i.e. a new epoch is needed
+            %% locally there is no entry for VId but the incoming
+            %% object has an entry
+            O2 = riak_object:syntactic_merge(LocalObj, IncomingObject),
+            {N, riak_object:new_actor_epoch(O2, A)};
+        {Epoch, _A} ->
+            {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}
+    end.
 
 %% like vclock:timestamp() but monotinically increasing
 timestamp() ->
