@@ -702,8 +702,8 @@
 %% @doc Time between sweeps for reap tombstone.
 %% tombstone.grace_period needs to be defined for these to run
 {mapping, "tombstone.sweep_interval", "riak_kv.reap_sweep_interval", [
-   {default, "1d"},
-   {datatype, {duration, s}},
+   {default, disabled},
+   {datatype, [{duration, s}, {atom, disabled}]},
    {validators, ["minimum_sweep_interval"]},
    hidden
 ]}.
