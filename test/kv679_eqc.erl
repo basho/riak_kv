@@ -107,6 +107,7 @@ invariant(_S) ->
 
 put_args(#state{replicas=Replicas, last_get=LastGet}) ->
     [
+     gen_coord(),
      elements(Replicas), %% Replica
      growingelements(?KEYS), %% key
      gen_val(), %% new value
@@ -116,9 +117,9 @@ put_args(#state{replicas=Replicas, last_get=LastGet}) ->
 
 %% @doc PUT a value into "riak", maybe without a preceding get (bad
 %% client, blind put, it happens!)
-put(Replica, Key, Value, LastGet, UseLastGet) ->
+put(CoordId, Replica, Key, Value, LastGet, UseLastGet) ->
     [#replica{id=Replica, data=RepData, epoch=RepEpoch}=Rep] = ets:lookup(?MODULE, Replica),
-    [#replica{id= ?P1, data=Data, epoch=Epoch}=Coord] = ets:lookup(?MODULE, ?P1),
+    [#replica{id= CoordId, data=Data, epoch=Epoch}=Coord] = ets:lookup(?MODULE, CoordId),
 
     %% here we just pretend to be riak. We read the local value for
     %% key, and we do what riak does with the incoming contextless
@@ -127,7 +128,7 @@ put(Replica, Key, Value, LastGet, UseLastGet) ->
     PutObj = generate_put_obj(Key, Value, LastGet, UseLastGet),
     PutCtx = riak_object:vclock(PutObj),
 
-    {Epoch2, Res, Dot} = coord_put(?P1, Epoch, orddict:find(Key, Data), PutObj),
+    {Epoch2, Res, Dot} = coord_put(CoordId, Epoch, orddict:find(Key, Data), PutObj),
 
     Data2 = orddict:store(Key, Res, Data),
 
@@ -144,7 +145,7 @@ put(Replica, Key, Value, LastGet, UseLastGet) ->
 -spec put_next(S :: eqc_statem:symbolic_state(),
                V :: eqc_statem:var(),
                Args :: [term()]) -> eqc_statem:symbolic_state().
-put_next(S=#state{values=Values}, Val, [_Replica, _Key, _Value, _LastGet, _UseLastGet]) ->
+put_next(S=#state{values=Values}, Val, [_Coord, _Replica, _Key, _Value, _LastGet, _UseLastGet]) ->
     S#state{values=[Val | Values]}.
 
 %% %% @doc add_post - Postcondition for put
@@ -294,6 +295,9 @@ gen_val() ->
     %% just want unique value per put
     timestamp().
 
+gen_coord() ->
+    frequency([{5, ?P1}, {5, elements(?REPLICAS)}]).
+
 %% Helper functions
 
 set_up_replicas() ->
@@ -403,7 +407,7 @@ coord_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
 
 %% this is a cut down and (vastly!) simplified version of what riak
 %% does when receiving a non-coorindating (replica, handoff, mdc, read
-%% repair etc) put (without any of the Epoch stuff for now!)
+%% repair etc) put
 replica_put(VId, Epoch, error, IncomingObj) ->
     %% NOTE we _may_ update the vclock here!
     case  highest_epoch(VId, IncomingObj) of
