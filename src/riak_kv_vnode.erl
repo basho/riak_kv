@@ -1512,8 +1512,7 @@ prepare_put_new_object(#state{idx =Idx} = State,
                      false ->
                          []
                  end,
-    {EpochId, State2} = maybe_new_key_epoch(Coord, State, undefined, RObj),
-    RObj2 = maybe_update_vclock(Coord, RObj, EpochId, StartTime),
+    {EpochId, State2, RObj2} = maybe_update_vclock(Coord, RObj, State, StartTime),
     RObj3 = maybe_do_crdt_update(Coord, CRDTOp, EpochId, RObj2),
     determine_put_result(RObj3, no_old_object, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
 
@@ -1545,13 +1544,21 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
     RequiresGet.
 
 %% @Doc in the case that this a co-ordinating put, prepare the object.
-%% NOTE the `VId' is a new epoch actor for this object
-maybe_update_vclock(_Coord=true, RObj, VId, StartTime) ->
-    riak_object:increment_vclock(RObj, VId, StartTime);
-maybe_update_vclock(_Coord=false, RObj, _VId, _StartTime) ->
-    %% @TODO Not coordindating, not found local, is there an entry for
-    %% us in the clock? If so, mark as dirty
-    RObj.
+%% NOTE: this is called _only_ when the local object is `notfound'
+-spec maybe_update_vclock(Coord::boolean(),
+                          IncomingObject:: riak_object:riak_object(),
+                          #state{},
+                          StartTime::term()) ->
+                                 {EpochId :: binary(),
+                                  #state{},
+                                  Object::riak_object:object()}.
+maybe_update_vclock(_Coord=true, RObj, State, StartTime) ->
+    {EpochId, State2} = maybe_new_key_epoch(true, State, undefined, RObj),
+    {EpochId, State2, riak_object:increment_vclock(RObj, EpochId, StartTime)};
+maybe_update_vclock(_Coord=false, RObj, State, _StartTime) ->
+    %% @see maybe_new_actor_epoch/2 for details as to why the vclock
+    %% may be updated on a non-coordinating put2
+    maybe_new_actor_epoch(RObj, State).
 
 maybe_do_crdt_update(_Coord = _, undefined, _VId, RObj) ->
     RObj;
@@ -1681,19 +1688,11 @@ select_newest_content(Mult) ->
 
 %% @private
 put_merge(false, true, _CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=true
-    %% @TODO Do we need to mark the clock dirty here? I think so
-    %% @TODO Check the clock of the incoming object, if it is more advanced
-    %% for our actor than we are then something is amiss, and we need
-    %% to mark the actor as dirty for this key
     {newobj, UpdObj};
 put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=false
     %% a downstream merge, or replication of a coordinated PUT
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
-    %%
-    %% @TODO Check the clock of the incoming object, if it is more advanced
-    %% for our actor than we are then something is amiss, and we need
-    %% to mark the actor as dirty for this key
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
     case riak_object:equal(ResObj, CurObj) of
         true ->
@@ -1702,8 +1701,6 @@ put_merge(false, false, CurObj, UpdObj, _VId, _StartTime) -> % coord=false, LWW=
             {newobj, ResObj}
     end;
 put_merge(true, LWW, CurObj, UpdObj, VId, StartTime) ->
-    %% @TODO If the current object has a dirty clock, we need to start
-    %% a new per key epoch and mark clock as clean.
     {newobj, riak_object:update(LWW, CurObj, UpdObj, VId, StartTime)}.
 
 %% @private
@@ -2069,13 +2066,14 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                 false ->
                     IndexSpecs = []
             end,
-            case encode_and_put(DiffObj, Mod, Bucket, Key,
+            DiffObj2 = maybe_new_actor_epoch(DiffObj, StateData),
+            case encode_and_put(DiffObj2, Mod, Bucket, Key,
                                 IndexSpecs, ModState, no_max_check) of
                 {{ok, _UpdModState} = InnerRes, _EncodedVal} ->
-                    update_hashtree(Bucket, Key, DiffObj, StateData),
+                    update_hashtree(Bucket, Key, DiffObj2, StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
-                    update(UpdateHook, {DiffObj, no_old_object}, handoff, Idx),
+                    update(UpdateHook, {DiffObj2, no_old_object}, handoff, Idx),
                     InnerRes;
                 {InnerRes, _Val} ->
                     InnerRes
@@ -2589,6 +2587,34 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
             Default
     end.
 
+%% @private if for _whatever_ reason, a local read of an object
+%% returns `notfound' and the incoming object contains this vnode's
+%% actor ID in a vclock entry, we need to add a new epoch actor entry
+%% to the vclock, so that the next time this actor coordinates a put
+%% on the object it creates a frontier event. NOTE that we only have
+%% to do this on non-coordinating local notfound puts (so replication,
+%% read repair, handoff etc) The coordinating path is a little
+%% different (see maybe_new_key_epoch/4) This function is called only
+%% when the local read returns `notfound'
+-spec maybe_new_actor_epoch(IncomingObject::riak_object:riak_object(), State::#state{}) ->
+                                   {EpochId :: binary(),
+                                    Object::riak_object:riak_object(),
+                                    State::#state{}}.
+maybe_new_actor_epoch(IncomingObject, State=#state{counter=#counter_state{use=false}, vnodeid=VId}) ->
+    %% why would you risk this??
+    {VId, State, IncomingObject};
+maybe_new_actor_epoch(IncomingObject, State=#state{vnodeid=VId}) ->
+    case highest_actor(VId, IncomingObject) of
+        {VId, 0, 0} ->
+            %% This actor has not acted on this object
+            {VId, State, IncomingObject};
+        {_InId, InEpoch, InCntr} ->
+            log_key_amnesia(VId, IncomingObject, InEpoch, InCntr),
+            {EpochActor, State2} = new_key_epoch(State),
+            Obj2 = riak_object:new_actor_epoch(IncomingObject, EpochActor),
+            {EpochActor, State2, Obj2}
+    end.
+
 %% @private to keep put_merge/6 side effect free (as it is exported
 %% for testing) introspect the state and local/incoming objects and
 %% return the actor ID for a put, and possibly updated state. NOTE
@@ -2610,23 +2636,15 @@ maybe_new_key_epoch(_Coord=true, State, undefined, _IncomingObj) ->
     new_key_epoch(State);
 maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
     %% Either coordinating and local found, or not coordinating with
-    %% local found or not found.
+    %% local found. If local notfound then maybe_new_actor_epoch will
+    %% be called instead.
     #state{vnodeid=VId} = State,
     {LocalId, LocalEpoch, LocalCntr} = highest_actor(VId, LocalObj),
     {_InId, InEpoch, InCntr} = highest_actor(VId, IncomingObj),
 
-    %%TODO(rdb) :: what about this orelse branch?? It's confusing
-    %%enough that at least document/comment it!
-
-    if InEpoch > LocalEpoch orelse InCntr > LocalCntr ->
-            %% In coming actor-epoch or counter greater than
-            %% local, some byzantine failure, new epoch.
-            B = riak_object:bucket(IncomingObj),
-            K = riak_object:key(IncomingObj),
-
-            lager:warning("Inbound clock entry for ~p in ~p/~p greater than local." ++
-                              "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
-                          [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]),
+    if InEpoch >= LocalEpoch andalso InCntr > LocalCntr ->
+            %% some local amnesia, new epoch.
+            log_key_amnesia(VId, IncomingObj, InEpoch, InCntr, LocalEpoch, LocalCntr),
             new_key_epoch(State);
        ?ELSE ->
             %% just use local id
@@ -2636,6 +2654,23 @@ maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
             %% epoch on all old keys.
             {LocalId, State}
     end.
+
+%% @private @see maybe_new_key_epoch, maybe_new_actor_epoch
+-spec log_key_amnesia(Actor::binary(), Obj::riak_object:riak_object(),
+                       InEpoch::non_neg_integer(), InCntr::non_neg_integer()) ->
+                              ok.
+log_key_amnesia(VId, Obj, InEpoch, InCntr) ->
+    log_key_amnesia(VId, Obj, InEpoch, InCntr, 0, 0).
+
+log_key_amnesia(VId, Obj, InEpoch, InCntr, LocalEpoch, LocalCntr) ->
+    B = riak_object:bucket(Obj),
+    K = riak_object:key(Obj),
+
+    lager:warning("Inbound clock entry for ~p in ~p/~p greater than local." ++
+                      "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
+                  [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]).
+
+
 
 %% @private generate an epoch actor, and update the vnode state.
 -spec new_key_epoch(#state{}) -> {EpochActor :: binary(), #state{}}.
