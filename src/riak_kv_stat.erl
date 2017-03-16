@@ -294,6 +294,10 @@ do_update({list_group_keys_create, Pid}) ->
     ok;
 do_update(list_group_keys_create_error) ->
     exometer:update([?PFX, ?APP, list_group_keys, fsm, create, error], 1);
+do_update({list_group_keys_fsm_finish_count, Count}) ->
+    exometer:update([?PFX, ?APP, list_group_keys, fsm, finish, count], Count);
+do_update(list_group_keys_fsm_finish_error) ->
+    exometer:update([?PFX, ?APP, list_group_keys, fsm, finish, error], 1);
 do_update({fsm_destroy, Type}) ->
     exometer:update([?PFX, ?APP, Type, fsm, active], -1);
 do_update({Type, actor_count, Count}) ->
@@ -667,11 +671,23 @@ stats() ->
                                                {count, list_fsm_create_error_total}]},
      {[list, fsm, active], counter, [], [{value, list_fsm_active}]},
 
-     {[list_group_keys, fsm, create], spiral, [], [{one  , list_group_keys_fsm_create},
-					{count, list_group_keys_fsm_create_total}]},
-     {[list_group_keys, fsm, create, error], spiral, [], [{one  , list_group_keys_fsm_create_error},
-                                               {count, list_group_keys_fsm_create_error_total}]},
-     {[list_group_keys, fsm, active], counter, [], [{value, list_group_keys_fsm_active}]},
+     {[list_group_keys, fsm, create],
+      spiral, [], [{one  , list_group_keys_fsm_create},
+                   {count, list_group_keys_fsm_create_total}]},
+     {[list_group_keys, fsm, create, error],
+      spiral, [], [{one  , list_group_keys_fsm_create_error},
+                   {count, list_group_keys_fsm_create_error_total}]},
+     {[list_group_keys, fsm, active],
+      counter, [], [{value, list_group_keys_fsm_active}]},
+
+     {[list_group_keys, fsm, finish, count],
+      histogram, [], [{mean, list_group_keys_count_mean},
+                      {median, list_group_keys_count_median},
+                      {95, list_group_keys_count_95},
+                      {99, list_group_keys_count_99},
+                      {max, list_group_keys_count_max}]},
+     {[list_group_keys, fsm, finish, error],
+      counter, [], [{value, list_group_keys_fsm_finish_error}]},
 
      %% misc stats
      {mapper_count, counter, [], [{value, executing_mappers}]},
