@@ -270,7 +270,6 @@ delete(Bucket, PrimaryKey, IndexSpecs, #state{ref=Ref, write_opts=WriteOpts}=Sta
                    any(),
                    [],
                    state()) -> {ok, any()} | {async, fun()}.
-%% TODO: What fold opts are really supported here?
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{fold_opts=FoldOpts,
                                                ref=DbRef}) ->
     Async = proplists:get_bool(async_fold, Opts),

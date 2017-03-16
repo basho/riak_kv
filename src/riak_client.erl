@@ -526,7 +526,14 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
     wait_for_listkeys(ReqId).
 
 
-%% @doc TODO
+%% @doc <p>List keys and metadata for the given `Bucket', grouping results into common prefixes if
+%% applicable. Results are paginiated if there are more results than the maximum number of results
+%% specified in the `max_keys' field of `GroupParams'. If there are more results then the response
+%% will include a `next_continuation_token' that can be used to retrieve the next page of results
+%% by setting the `continuation_token' field of `GroupParams' to this value.</p>
+%% <p>Use the `prefix' field of `GroupParams' to limit the response to keys falling under a given
+%% prefix. Use the `delimiter' field of `GroupParams' to group keys containing the given delimiter
+%% into common prefixes.</p>
 -spec list_group_keys(Bucket::riak_object:bucket(),
                       GroupParams::riak_kv_group_keys:group_params(),
                       TimeoutMillisecs::pos_integer(),
