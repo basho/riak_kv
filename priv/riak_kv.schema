@@ -646,27 +646,27 @@
 %% * `always` (default) No restrictions
 %% * `never` Sweeps will never be attempted
 %% * `window` Hours during which sweeps is permitted, where
-%%   `riak_kv.sweep.window.start` and `riak_kv.sweep.window.end` are
+%%   `sweeper.window.start` and `sweeper.window.end` are
 %%   integers between 0 and 23.
 %%
 %% If sweeping has a significant impact on performance of your cluster,
 %% or your cluster has quiet periods in which little storage activity
 %% occurs, you may want to change this setting from the default.
-{mapping, "riak_kv.sweep.policy", "riak_kv.sweep_window", [
+{mapping, "sweeper.policy", "riak_kv.sweep_window", [
   {default, always},
   {datatype, {enum, [always, never, window]}},
   hidden
 ]}.
 
-%% @see riak_kv.sweep.policy
-{mapping, "riak_kv.sweep.window.start", "riak_kv.sweep_window", [
+%% @see sweeper.policy
+{mapping, "sweeper.window.start", "riak_kv.sweep_window", [
   {default, 0},
   {datatype, integer},
   hidden
 ]}.
 
-%% @see riak_kv.sweep.policy
-{mapping, "riak_kv.sweep.window.end", "riak_kv.sweep_window", [
+%% @see sweeper.policy
+{mapping, "sweeper.window.end", "riak_kv.sweep_window", [
   {default, 23},
   {datatype, integer},
   hidden
@@ -675,13 +675,13 @@
 {translation,
  "riak_kv.sweep_window",
  fun(Conf) ->
-  Setting = cuttlefish:conf_get("riak_kv.sweep.policy", Conf),
+  Setting = cuttlefish:conf_get("sweeper.policy", Conf),
     case Setting of
       always -> always;
       never -> never;
       window ->
-        Start = cuttlefish:conf_get("riak_kv.sweep.window.start", Conf, undefined),
-        End = cuttlefish:conf_get("riak_kv.sweep.window.end", Conf, undefined),
+        Start = cuttlefish:conf_get("sweeper.window.start", Conf, undefined),
+        End = cuttlefish:conf_get("sweeper.window.end", Conf, undefined),
         {Start, End};
       _Default -> always
     end
