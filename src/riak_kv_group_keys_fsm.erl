@@ -68,13 +68,18 @@ process_results(done, StateData) ->
 
 finish({error, _}=Error,
        StateData=#state{from={raw, ReqId, ClientPid}}) ->
+    riak_kv_stat:update(list_group_keys_fsm_finish_error),
     %% Notify the requesting client that an error
     %% occurred or the timeout has elapsed.
     ClientPid ! {ReqId, Error},
     {stop, normal, StateData};
 finish(clean,
        StateData=#state{from={raw, ReqId, ClientPid}}) ->
-    ClientPid ! {ReqId, done, collate_list_group_keys(StateData)},
+    Response = collate_list_group_keys(StateData),
+    riak_kv_stat:update({list_group_keys_fsm_finish_count,
+                         length(riak_kv_group_keys_response:get_metadatas(Response)) +
+                         length(riak_kv_group_keys_response:get_common_prefixes(Response))}),
+    ClientPid ! {ReqId, done, Response},
     {stop, normal, StateData}.
 
 %%
