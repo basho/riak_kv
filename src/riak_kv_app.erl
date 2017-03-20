@@ -248,6 +248,11 @@ start(_Type, _StartArgs) ->
 
             ok = riak_api_pb_service:register(?SERVICES),
 
+            %% register allowable origins (CORS)
+            AllowableOrigins = app_helper:get_env(riak_api, cors_allowable_origins,
+                                                 [{all,[]},{http,[]},{https,[]}]),
+            riak_kv_wm_utils:register_allowable_origins(AllowableOrigins),
+
             %% Add routes to webmachine
             [ webmachine_router:add_route(R)
               || R <- lists:reverse(riak_kv_web:dispatch_table()) ],

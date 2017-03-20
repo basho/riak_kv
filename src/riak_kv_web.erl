@@ -130,7 +130,8 @@ raw_dispatch(Name) ->
        %% the different versions inside the same resource handler module.
        [{["ts", api_version, "tables", table, "list_keys"], riak_kv_wm_timeseries_listkeys, Props},
         {["ts", api_version, "tables", table, "keys", '*'], riak_kv_wm_timeseries, Props},
-        {["ts", api_version, "query"], riak_kv_wm_timeseries_query, Props}
+        {["ts", api_version, "query"], riak_kv_wm_timeseries_query, Props},
+        {["ts", api_version, "graph"], riak_kv_wm_graph, Props}
        ] || {_Prefix, Props} <- Props2]).
 
 is_post(Req) ->
