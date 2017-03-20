@@ -75,15 +75,25 @@ run() ->
     run(?NUMTESTS).
 
 run(Count) ->
-    eqc:quickcheck(eqc:numtests(Count, prop_merge())).
+    setup(),
+    try
+        eqc:quickcheck(eqc:numtests(Count, prop_merge()))
+    after
+        teardown()
+    end.
 
 check() ->
     eqc:check(prop_merge()).
 
 check(File) ->
-    {ok, Bytes} = file:read_file(File),
-    CE = binary_to_term(Bytes),
-    eqc:check(prop_merge(), CE).
+    setup(),
+    try
+        {ok, Bytes} = file:read_file(File),
+        CE = binary_to_term(Bytes),
+        eqc:check(prop_merge(), CE)
+    after
+        teardown()
+    end.
 
 setup() ->
     meck:new(riak_core_bucket),
@@ -433,17 +443,17 @@ replica_put(VId, Epoch, error, IncomingObj) ->
             Actor = epoch_actor(VId, E2),
             {E2, riak_object:new_actor_epoch(IncomingObj, Actor)}
     end;
-replica_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
-    %% {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}.
-    case maybe_new_epoch_actor(VId, Epoch, LocalObj, IncomingObject) of
-        {N, A} when N > Epoch ->  %% i.e. a new epoch is needed
-            %% locally there is no entry for VId but the incoming
-            %% object has an entry
-            O2 = riak_object:syntactic_merge(LocalObj, IncomingObject),
-            {N, riak_object:new_actor_epoch(O2, A)};
-        {Epoch, _A} ->
-            {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}
-    end.
+replica_put(_VId, Epoch, {ok, LocalObj}, IncomingObject) ->
+    {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}.
+    %% case maybe_new_epoch_actor(VId, Epoch, LocalObj, IncomingObject) of
+    %%     {N, A} when N > Epoch ->  %% i.e. a new epoch is needed
+    %%         %% locally there is no entry for VId but the incoming
+    %%         %% object has an entry
+    %%         O2 = riak_object:syntactic_merge(LocalObj, IncomingObject),
+    %%         {N, riak_object:new_actor_epoch(O2, A)};
+    %%     {Epoch, _A} ->
+    %%         {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}
+    %% end.
 
 %% like vclock:timestamp() but monotinically increasing
 timestamp() ->
