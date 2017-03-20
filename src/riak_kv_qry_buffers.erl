@@ -511,7 +511,7 @@ can_afford_inmem(Threshold) ->
     PInfo = process_info(self(), [heap_size, stack_size]),
     HeapSize = proplists:get_value(heap_size, PInfo),
     StackSize = proplists:get_value(stack_size, PInfo),
-    Allocated = HeapSize - StackSize,
+    Allocated = (HeapSize - StackSize) * erlang:system_info(wordsize),
     Allocated < Threshold.
 
 get_ordby_field_qualifiers({_, AscDesc, Nulls}) ->
