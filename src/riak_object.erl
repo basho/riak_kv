@@ -551,6 +551,7 @@ get_dot(Dict) ->
             undefined
     end.
 
+%% @private used by get_dotted_values to re-use get_dot/1
 get_vc_dot(Dict) ->
     case get_dot(Dict) of
         {ok, {Dot, _PDot}} ->
