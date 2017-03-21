@@ -1552,12 +1552,12 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
                                  {EpochId :: binary(),
                                   #state{},
                                   Object::riak_object:object()}.
-maybe_update_vclock(_Coord=true, RObj, State, StartTime) ->
-    {_IsNewEpoch, EpochId, State2} = maybe_new_key_epoch(true, State, undefined, RObj),
+maybe_update_vclock(Coord=true, RObj, State, StartTime) ->
+    {_IsNewEpoch, EpochId, State2} = maybe_new_key_epoch(Coord, State, undefined, RObj),
     {EpochId, State2, riak_object:increment_vclock(RObj, EpochId, StartTime)};
 maybe_update_vclock(_Coord=false, RObj, State, _StartTime) ->
     %% @see maybe_new_actor_epoch/2 for details as to why the vclock
-    %% may be updated on a non-coordinating put2
+    %% may be updated on a non-coordinating put
     maybe_new_actor_epoch(RObj, State).
 
 maybe_do_crdt_update(_Coord = _, undefined, _VId, RObj) ->
@@ -2595,11 +2595,12 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
 %% returns `notfound' and the incoming object contains this vnode's
 %% actor ID in a vclock entry, we need to add a new epoch actor entry
 %% to the vclock, so that the next time this actor coordinates a put
-%% on the object it creates a frontier event. NOTE that we only have
-%% to do this on non-coordinating local notfound puts (so replication,
-%% read repair, handoff etc) The coordinating path is a little
-%% different (see maybe_new_key_epoch/4) This function is called only
-%% when the local read returns `notfound'
+%% on the object it creates a frontier event. NOTE that we only use
+%% function this on non-coordinating local notfound puts (so
+%% replication, read repair, handoff etc) The coordinating path is a
+%% little different (see maybe_new_key_epoch/4) This function is
+%% called only when the local read returns `notfound', hence only a an
+%% `IncomingObject' argument.
 -spec maybe_new_actor_epoch(IncomingObject::riak_object:riak_object(), State::#state{}) ->
                                    {EpochId :: binary(),
                                     Object::riak_object:riak_object(),
@@ -2646,7 +2647,7 @@ maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
     {LocalId, LocalEpoch, LocalCntr} = highest_actor(VId, LocalObj),
     {_InId, InEpoch, InCntr} = highest_actor(VId, IncomingObj),
 
-    case in_greater(InEpoch, LocalEpoch, InCntr, LocalCntr) of
+    case is_local_amnesia(InEpoch, LocalEpoch, InCntr, LocalCntr) of
         true ->
             %% some local amnesia, new epoch.
             log_key_amnesia(VId, IncomingObj, InEpoch, InCntr, LocalEpoch, LocalCntr),
@@ -2660,17 +2661,19 @@ maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
             {false, LocalId, State}
     end.
 
-in_greater(InEpoch, LocalEpoch, _InCnt, _LocalCnt) when InEpoch > LocalEpoch ->
+%% @private detects local amnesis by comparing incoming VV actor entry
+%% epoch and counter with local value. returns true if the incoming
+%% entry is greate than the local one.
+-spec is_local_amnesia(non_neg_integer(), non_neg_integer(),
+                       non_neg_integer(), non_neg_integer()) -> boolean().
+is_local_amnesia(InEpoch, LocalEpoch, _InCnt, _LocalCnt) when InEpoch > LocalEpoch ->
     true;
-in_greater(Epoch, Epoch, InCnt, LocalCnt) when InCnt > LocalCnt ->
+is_local_amnesia(Epoch, Epoch, InCnt, LocalCnt) when InCnt > LocalCnt ->
     true;
-in_greater(_, _, _, _) ->
+is_local_amnesia(_, _, _, _) ->
     %% local epoch is greater, or epochs equal and local not smaller
     %% than incoming
     false.
-
-
-
 
 %% @private @see maybe_new_key_epoch, maybe_new_actor_epoch
 -spec log_key_amnesia(Actor::binary(), Obj::riak_object:riak_object(),
@@ -2686,8 +2689,6 @@ log_key_amnesia(VId, Obj, InEpoch, InCntr, LocalEpoch, LocalCntr) ->
     lager:warning("Inbound clock entry for ~p in ~p/~p greater than local." ++
                       "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
                   [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]).
-
-
 
 %% @private generate an epoch actor, and update the vnode state.
 -spec new_key_epoch(#state{}) -> {NewEpoch::boolean(), EpochActor :: binary(), #state{}}.
