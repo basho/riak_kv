@@ -282,6 +282,8 @@ field_to_json_compat({Header, Value}, Mod) ->
 
 value_to_json_compat({blob, Value}) ->
     base64:encode(Value);
+value_to_json_compat({_, []}) ->
+    null;
 value_to_json_compat({_, Value}) ->
     Value.
 
