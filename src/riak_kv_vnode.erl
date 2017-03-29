@@ -937,7 +937,7 @@ handle_coverage_groupkeyfold(
 ) ->
     Opts1 = [{fold_keys_type, fold_group_keys}, {group_params, GroupParams} | Opts],
     ItemFilter = none,
-    FoldType = fold_keys,
+    FoldType = grouped_fold,
     FoldFunType = objects,
     handle_coverage_fold(
         FoldType, FoldFunType, Bucket, ItemFilter, ResultFun,

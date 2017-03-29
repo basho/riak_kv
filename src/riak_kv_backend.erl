@@ -36,6 +36,7 @@
 -export_type([fold_buckets_fun/0,
               fold_keys_fun/0,
               fold_objects_fun/0,
+              fold_opts/0,
               index_spec/0]).
 
 %% These are just here to make the callback specs more succinct and readable
