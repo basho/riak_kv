@@ -44,6 +44,8 @@
 
 -opaque group_params() :: #group_params{}.
 
+-spec fold_keys(module(), riak_kv_backend:fold_objects_fun(), riak_kv_fold_buffer:buffer(), proplists:proplist(), riak_kv_backend:fold_opts(), any()) ->
+    {ok, any()} | {async, fun()}.
 fold_keys(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
     Bucket = proplists:get_value(bucket, Opts),
     GroupParams = proplists:get_value(group_params, Opts),
@@ -135,8 +137,8 @@ set_continuation_token(GroupParams, ContinuationToken) ->
 
 %% NOTE: This  type spec with `fun(() -> no_return())' as the return type is
 %% necessary to avoid a Dialyzer warning.
--spec content_folder_fun(any(), group_params(), any(), any(), any(), any()) ->
-    fun(() -> no_return()).
+%%-spec content_folder_fun(any(), group_params(), any(), any(), any(), any()) ->
+%%    fun(() -> no_return()).
 content_folder_fun(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
     fun() ->
             content_folder(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc)
@@ -144,8 +146,8 @@ content_folder_fun(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
 
 %% NOTE: This  type spec with `no_return()' as the return type is necessary to
 %% avoid a Dialyzer warning.
--spec content_folder(any(), group_params(), any(), any(), any(), any()) ->
-    no_return().
+%%-spec content_folder(any(), group_params(), any(), any(), any(), any()) ->
+%%    no_return().
 content_folder(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
     BackendMod = get_backend(GroupParams),
     FoldOpts1 = [{first_key, BackendMod:to_first_key({bucket, Bucket})} | FoldOpts],
@@ -181,7 +183,7 @@ enumerate(PrevEntry, Bucket, GroupParams, Itr, FoldFun, Acc) ->
     Pos = next_pos(PrevEntry, Bucket, GroupParams),
     BackendMod = get_backend(GroupParams),
     case Pos of
-        npos ->
+        iteration_complete ->
             Acc;
         _ ->
             try iterator_move(Itr, Pos) of
@@ -240,7 +242,7 @@ next_pos({Bucket, PrevKey}, _Bucket, GroupParams =  #group_params{prefix=Prefix}
         true ->
             next_pos_after_key(GroupParams, Bucket, PrevKey);
         _ ->
-            npos
+            iteration_complete
     end.
 
 next_pos_after_key(#group_params{prefix = undefined, delimiter = undefined}, _Bucket, _Key) ->
@@ -303,7 +305,7 @@ accumulate({{TargetBucket, Key}=BKey, BinaryValue},
                  PrefixOrMeta = common_prefix_or_metadata(BKey, BinaryValue, GroupParams),
                  FoldFun(TargetBucket, Key, PrefixOrMeta, Acc)
              catch Error ->
-                     FoldFun(TargetBucket, Key, {error, Error}, Acc)
+                 FoldFun(TargetBucket, Key, {error, Error}, Acc)
              end,
     enumerate(BKey, TargetBucket, GroupParams, Itr, FoldFun, NewAcc).
 
