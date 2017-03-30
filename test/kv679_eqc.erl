@@ -32,9 +32,6 @@
 -define(REPLICAS, [p2, p3, f1, f2, f3]).
 
 -record(state, {
-          pfhead=?P1,
-          %% Actor Ids for replicas in the system
-          replicas= ?REPLICAS,
           %% grow list of values put with their contexts, to decide
           %% what values should be left at the end
           values=[],
@@ -60,13 +57,9 @@
 
 eqc_test_() ->
     {setup,
-     fun() ->
-             meck:new(riak_core_bucket),
-             meck:expect(riak_core_bucket, get_bucket,
-                         fun(_Bucket) -> [dvv_enabled] end)
-     end,
+     fun setup/0,
      fun(_) ->
-             meck:unload(riak_core_bucket)
+             teardown()
      end,
      {timeout, 120, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_merge()))))}
     }.
@@ -115,10 +108,9 @@ invariant(_S) ->
 
 %% ------ Grouped operator: put
 
-put_args(#state{replicas=Replicas, last_get=LastGet}) ->
+put_args(#state{last_get=LastGet}) ->
     [
-     gen_coord(),
-     elements(Replicas), %% Replica
+     gen_pl(),
      growingelements(?KEYS), %% key
      gen_val(), %% new value
      LastGet, %% result of last get operation
@@ -127,7 +119,7 @@ put_args(#state{replicas=Replicas, last_get=LastGet}) ->
 
 %% @doc PUT a value into "riak", maybe without a preceding get (bad
 %% client, blind put, it happens!)
-put(CoordId, Replica, Key, Value, LastGet, UseLastGet) ->
+put({CoordId, Replica}, Key, Value, LastGet, UseLastGet) ->
     [#replica{id=Replica, data=RepData, epoch=RepEpoch}=Rep] = ets:lookup(?MODULE, Replica),
     [#replica{id= CoordId, data=Data, epoch=Epoch}=Coord] = ets:lookup(?MODULE, CoordId),
 
@@ -155,7 +147,7 @@ put(CoordId, Replica, Key, Value, LastGet, UseLastGet) ->
 -spec put_next(S :: eqc_statem:symbolic_state(),
                V :: eqc_statem:var(),
                Args :: [term()]) -> eqc_statem:symbolic_state().
-put_next(S=#state{values=Values}, Val, [_Coord, _Replica, _Key, _Value, _LastGet, _UseLastGet]) ->
+put_next(S=#state{values=Values}, Val, [{_Coord, _Replica}, _Key, _Value, _LastGet, _UseLastGet]) ->
     S#state{values=[Val | Values]}.
 
 %% %% @doc add_post - Postcondition for put
@@ -172,8 +164,8 @@ put_next(S=#state{values=Values}, Val, [_Coord, _Replica, _Key, _Value, _LastGet
 %%     true.
 
 %% ------ Grouped operator: get
-get_args(#state{pfhead=PFHead,replicas=Replicas}) ->
-    [elements([PFHead] ++ Replicas),
+get_args(_=#state{}) ->
+    [elements([?P1] ++ ?REPLICAS),
      elements(?KEYS)].
 
 %% @doc get_pre - only get if there are some values put
@@ -204,11 +196,11 @@ get_next(S, Val, [_Replica, _Key]) ->
 
 %% @doc replicate_args - Choose source and target for
 %% replication.
-replicate_args(#state{replicas=Replicas}) ->
+replicate_args(_=#state{}) ->
     [
      elements(?KEYS),
-     elements([?P1] ++ Replicas),
-     elements([?P1] ++ Replicas)
+     elements([?P1] ++ ?REPLICAS),
+     elements([?P1] ++ ?REPLICAS)
     ].
 
 %% @doc replicate_pre - only replicate if there are some values put
@@ -309,10 +301,10 @@ gen_coord() ->
     frequency([{5, ?P1}, {5, elements(?REPLICAS)}]).
 
 gen_pl() ->
-    gen_pl(elements(?REPLICAS)).
+    ?LET(Replica, elements(?REPLICAS ++ [?P1]), ?LET(Coord, ?SUCHTHAT(X, gen_coord(), X /= Replica), {Coord, Replica})).
 
 gen_pl(Replica) ->
-    ?LET(R2, ?SUCHTHAT(X, elements(?REPLICAS), X /= Replica), {Replica, R2}).
+    ?LET(Coord, ?SUCHTHAT(X, gen_coord(), X /= Replica), {Coord, Replica}).
 
 %% Helper functions
 
@@ -443,22 +435,21 @@ replica_put(VId, Epoch, error, IncomingObj) ->
             Actor = epoch_actor(VId, E2),
             {E2, riak_object:new_actor_epoch(IncomingObj, Actor)}
     end;
-replica_put(_VId, Epoch, {ok, LocalObj}, IncomingObject) ->
-    {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}.
-    %% case maybe_new_epoch_actor(VId, Epoch, LocalObj, IncomingObject) of
-    %%     {N, A} when N > Epoch ->  %% i.e. a new epoch is needed
-    %%         %% locally there is no entry for VId but the incoming
-    %%         %% object has an entry
-    %%         O2 = riak_object:syntactic_merge(LocalObj, IncomingObject),
-    %%         {N, riak_object:new_actor_epoch(O2, A)};
-    %%     {Epoch, _A} ->
-    %%         {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}
-    %% end.
+replica_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
+    case maybe_new_epoch_actor(VId, Epoch, LocalObj, IncomingObject) of
+        {N, A} when N > Epoch ->  %% i.e. a new epoch is needed
+            %% locally there is no entry for VId but the incoming
+            %% object has an entry
+            O2 = riak_object:syntactic_merge(LocalObj, IncomingObject),
+            {N, riak_object:new_actor_epoch(O2, A)};
+        {Epoch, _A} ->
+            {Epoch, riak_object:syntactic_merge(LocalObj, IncomingObject)}
+    end.
 
 %% like vclock:timestamp() but monotinically increasing
 timestamp() ->
     {A, B, C} = erlang:now(),
-    A+B+C.
+    (A*1000000 + B)*1000000 + C.
 
 %% copied from riak_kv_vnode, for shame
 maybe_new_epoch_actor(Base, Epoch, LocalObj, IncomingObj) ->
