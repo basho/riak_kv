@@ -2603,8 +2603,8 @@ non_neg_env(App, EnvVar, Default) when is_integer(Default),
 %% `IncomingObject' argument.
 -spec maybe_new_actor_epoch(IncomingObject::riak_object:riak_object(), State::#state{}) ->
                                    {EpochId :: binary(),
-                                    Object::riak_object:riak_object(),
-                                    State::#state{}}.
+                                    State::#state{},
+                                    Object::riak_object:riak_object()}.
 maybe_new_actor_epoch(IncomingObject, State=#state{counter=#counter_state{use=false}, vnodeid=VId}) ->
     %% why would you risk this??
     {VId, State, IncomingObject};
@@ -2630,7 +2630,7 @@ maybe_new_actor_epoch(IncomingObject, State=#state{vnodeid=VId}) ->
 %% 3. local found, local acted, but incoming has greater count or actor epoch
 %%    This one is tricky, since it indicates some byzantine failure somewhere.
 -spec maybe_new_key_epoch(Coord::boolean(), State::#state{},
-                          LocalObject::riak_object:riak_object(),
+                          LocalObject::riak_object:riak_object() | undefined,
                           IncomingObject::riak_object:riak_object()) ->
                                  {NewEpoch::boolean(), ActorId:: binary(), #state{}}.
 maybe_new_key_epoch(_Coord, State=#state{counter=#counter_state{use=false}, vnodeid=VId}, _, _) ->
