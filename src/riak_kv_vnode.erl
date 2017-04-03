@@ -1694,9 +1694,10 @@ put_merge(false, false, CurObj, UpdObj, {NewEpoch, VId}, _StartTime) -> % coord=
     %% Merge the value received with local replica value
     %% and store the value IFF it is different to what we already have
     ResObj = riak_object:syntactic_merge(CurObj, UpdObj),
-    if NewEpoch ->
+    case NewEpoch of
+        true ->
             {newobj, riak_object:new_actor_epoch(ResObj, VId)};
-       ?ELSE ->
+        false ->
             case riak_object:equal(ResObj, CurObj) of
                 true ->
                     {oldobj, CurObj};
@@ -2615,7 +2616,7 @@ maybe_new_actor_epoch(IncomingObject, State=#state{vnodeid=VId}) ->
             {VId, State, IncomingObject};
         {_InId, InEpoch, InCntr} ->
             log_key_amnesia(VId, IncomingObject, InEpoch, InCntr),
-            {_IsNewEpoch, EpochActor, State2} = new_key_epoch(State),
+            {EpochActor, State2} = new_key_epoch(State),
             Obj2 = riak_object:new_actor_epoch(IncomingObject, EpochActor),
             {EpochActor, State2, Obj2}
     end.
@@ -2638,7 +2639,8 @@ maybe_new_key_epoch(_Coord, State=#state{counter=#counter_state{use=false}, vnod
     {false, VId, State};
 maybe_new_key_epoch(_Coord=true, State, undefined, _IncomingObj) ->
     %% Coordinating, and local not found always means new key epoch
-    new_key_epoch(State);
+    {ActorId, State2} = new_key_epoch(State),
+    {true, ActorId, State2};
 maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
     %% Either coordinating and local found, or not coordinating with
     %% local found. If local notfound then maybe_new_actor_epoch will
@@ -2651,7 +2653,8 @@ maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
         true ->
             %% some local amnesia, new epoch.
             log_key_amnesia(VId, IncomingObj, InEpoch, InCntr, LocalEpoch, LocalCntr),
-            new_key_epoch(State);
+            {ActorId, State2} = new_key_epoch(State),
+            {true, ActorId, State2};
         false ->
             %% just use local id
             %% Return the highest local epoch ID for this
@@ -2691,13 +2694,11 @@ log_key_amnesia(VId, Obj, InEpoch, InCntr, LocalEpoch, LocalCntr) ->
                   [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]).
 
 %% @private generate an epoch actor, and update the vnode state.
--spec new_key_epoch(#state{}) -> {NewEpoch::boolean(), EpochActor :: binary(), #state{}}.
-new_key_epoch(State=#state{vnodeid=VId, counter=#counter_state{use=false}}) ->
-    {false, VId, State};
-new_key_epoch(State) ->
+-spec new_key_epoch(#state{}) -> {EpochActor :: binary(), #state{}}.
+new_key_epoch(State=#state{counter=#counter_state{use=true}}) ->
     NewState=#state{counter=#counter_state{cnt=Cntr}, vnodeid=VId} = update_counter(State),
     EpochId = key_epoch_actor(VId, Cntr),
-    {true, EpochId, NewState}.
+    {EpochId, NewState}.
 
 %% @private generate a new epoch ID for a key
 -spec key_epoch_actor(vnodeid(), pos_integer()) -> binary().
