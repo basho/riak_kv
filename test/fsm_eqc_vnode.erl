@@ -284,5 +284,9 @@ put_merge(CurObj, UpdObj, Options) ->
     Coord = proplists:get_value(coord, Options, false),
     VnodeId = <<1, 1, 1, 1, 1, 1, 1, 1>>,
     Ts = vclock:timestamp(),
-    {_, ResObj} = riak_kv_vnode:put_merge(Coord, false, CurObj, UpdObj, VnodeId, Ts),
+    %% Since the local vnode never forgets, and never deletes, and
+    %% doesn't support epochs in this test, it is safe to set
+    %% IsNewEpoch to false
+    IsNewEpoch = false,
+    {_, ResObj} = riak_kv_vnode:put_merge(Coord, false, CurObj, UpdObj, {IsNewEpoch, VnodeId}, Ts),
     ResObj.
