@@ -1551,7 +1551,7 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
                           StartTime::term()) ->
                                  {EpochId :: binary(),
                                   #state{},
-                                  Object::riak_object:object()}.
+                                  Object::riak_object:riak_object()}.
 maybe_update_vclock(Coord=true, RObj, State, StartTime) ->
     {_IsNewEpoch, EpochId, State2} = maybe_new_key_epoch(Coord, State, undefined, RObj),
     {EpochId, State2, riak_object:increment_vclock(RObj, EpochId, StartTime)};
