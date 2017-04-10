@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_kv_group_keys_response).
+-module(riak_kv_group_list_response).
 
 -export([new_response/2,
          new_response/3,

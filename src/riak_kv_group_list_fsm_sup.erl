@@ -22,21 +22,21 @@
 
 %% @doc supervise the riak_kv keys state machines
 
--module(riak_kv_group_keys_fsm_sup).
+-module(riak_kv_group_list_fsm_sup).
 
 -behaviour(supervisor).
 
--export([start_group_keys_fsm/2]).
+-export([start_group_list_fsm/2]).
 -export([start_link/0]).
 -export([init/1]).
 
-start_group_keys_fsm(Node, Args) ->
+start_group_list_fsm(Node, Args) ->
     case supervisor:start_child({?MODULE, Node}, Args) of
         {ok, Pid} ->
-            ok = riak_kv_stat:update({list_group_keys_create, Pid}),
+            ok = riak_kv_stat:update({list_group_create, Pid}),
             {ok, Pid};
         Error ->
-            ok = riak_kv_stat:update(list_group_keys_create_error),
+            ok = riak_kv_stat:update(list_group_create_error),
             Error
     end.
 
@@ -50,7 +50,7 @@ start_link() ->
 init([]) ->
     KeysFsmSpec = {
         undefined,
-        {riak_core_coverage_fsm, start_link, [riak_kv_group_keys_fsm]},
-        temporary, 5000, worker, [riak_kv_group_keys_fsm]
+        {riak_core_coverage_fsm, start_link, [riak_kv_group_list_fsm]},
+        temporary, 5000, worker, [riak_kv_group_list_fsm]
     },
     {ok, {{simple_one_for_one, 10, 10}, [KeysFsmSpec]}}.
