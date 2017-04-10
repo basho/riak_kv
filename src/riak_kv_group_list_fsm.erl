@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_kv_group_keys_fsm).
+-module(riak_kv_group_list_fsm).
 
 -behaviour(riak_core_coverage_fsm).
 
@@ -68,17 +68,17 @@ process_results(done, StateData) ->
 
 finish({error, _}=Error,
        StateData=#state{from={raw, ReqId, ClientPid}}) ->
-    riak_kv_stat:update(list_group_keys_fsm_finish_error),
+    riak_kv_stat:update(list_group_fsm_finish_error),
     %% Notify the requesting client that an error
     %% occurred or the timeout has elapsed.
     ClientPid ! {ReqId, Error},
     {stop, normal, StateData};
 finish(clean,
        StateData=#state{from={raw, ReqId, ClientPid}}) ->
-    Response = collate_list_group_keys(StateData),
-    riak_kv_stat:update({list_group_keys_fsm_finish_count,
-                         length(riak_kv_group_keys_response:get_metadatas(Response)) +
-                         length(riak_kv_group_keys_response:get_common_prefixes(Response))}),
+    Response = collate_list_group_results(StateData),
+    riak_kv_stat:update({list_group_fsm_finish_count,
+                         length(riak_kv_group_list_response:get_metadatas(Response)) +
+                         length(riak_kv_group_list_response:get_common_prefixes(Response))}),
     ClientPid ! {ReqId, done, Response},
     {stop, normal, StateData}.
 
@@ -88,7 +88,7 @@ finish(clean,
 
 -spec req(binary(), term()) -> term().
 req(Bucket, GroupParams) ->
-    riak_kv_requests:new_list_group_keys_request(Bucket, GroupParams).
+    riak_kv_requests:new_list_group_request(Bucket, GroupParams).
 
 get_nval(Bucket) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -108,15 +108,15 @@ process_entry({{TargetBucket, Key}, Metadata = {metadata, _M}}, State = #state{b
 process_entry({{TargetBucket, _}, {common_prefix, CommonPrefix}}, State = #state{bucket=TargetBucket})->
     State#state{entries_acc = ordsets:add_element({CommonPrefix, CommonPrefix}, State#state.entries_acc)}.
 
-collate_list_group_keys(State0 = #state{entries_acc = Entries0, group_params = GroupParams}) ->
-    MaxKeys = riak_kv_group_keys:get_max_keys(GroupParams),
+collate_list_group_results(State0 = #state{entries_acc = Entries0, group_params = GroupParams}) ->
+    MaxKeys = riak_kv_group_list:get_max_keys(GroupParams),
     Entries = ordsets:to_list(Entries0),
     TruncatedEntries = lists:sublist(Entries, MaxKeys),
     NextContinuationToken = riak_kv_continuation:make_token(Entries,
                                                             MaxKeys,
                                                             fun({Key, _}) -> Key end),
     State = lists:foldr(fun partition_entry/2, State0, TruncatedEntries),
-    riak_kv_group_keys_response:new_response(State#state.metadatas_acc,
+    riak_kv_group_list_response:new_response(State#state.metadatas_acc,
                                              State#state.common_prefixes_acc,
                                              NextContinuationToken).
 

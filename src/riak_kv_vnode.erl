@@ -846,7 +846,7 @@ handle_coverage_request(kv_listkeys_request, Req, FilterVNodes, Sender, State) -
     ItemFilter = riak_kv_requests:get_item_filter(Req),
     handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                             FilterVNodes, Sender, Opts, State);
-handle_coverage_request(kv_list_group_keys_request, Req, FilterVNodes, Sender, State) ->
+handle_coverage_request(kv_list_group_request, Req, FilterVNodes, Sender, State) ->
     Bucket = riak_kv_requests:get_bucket(Req),
     ResultFun = get_result_fun(Req, Bucket, Sender),
     Opts = [{bucket, Bucket}],

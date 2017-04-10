@@ -18,8 +18,8 @@
 %%
 %% -------------------------------------------------------------------
 
--module(riak_kv_group_keys).
--export([fold_keys/6,
+-module(riak_kv_group_list).
+-export([fold_objects/6,
          to_group_params/1,
          get_prefix/1,
          get_delimiter/1,
@@ -44,19 +44,18 @@
 
 -opaque group_params() :: #group_params{}.
 
--spec fold_keys(module(), riak_kv_backend:fold_objects_fun(), riak_kv_fold_buffer:buffer(), proplists:proplist(), riak_kv_backend:fold_opts(), any()) ->
+-spec fold_objects(module(), riak_kv_backend:fold_objects_fun(), riak_kv_fold_buffer:buffer(), proplists:proplist(), riak_kv_backend:fold_opts(), any()) ->
     {ok, any()} | {async, fun()}.
-fold_keys(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
+fold_objects(BackendMod, FoldFun, Acc, Opts, FoldOpts, DbRef) ->
     Bucket = proplists:get_value(bucket, Opts),
     GroupParams = proplists:get_value(group_params, Opts),
     GroupParams0 = GroupParams#group_params{backend_mod = BackendMod},
-    ContentFolderFun = content_folder_fun(Bucket, GroupParams0, DbRef, FoldOpts, FoldFun, Acc),
     Async = proplists:get_bool(async_fold, Opts),
     case Async of
         true ->
-            {async, ContentFolderFun};
+            {async, content_folder_fun(Bucket, GroupParams0, DbRef, FoldOpts, FoldFun, Acc)};
         false ->
-            {ok, ContentFolderFun()}
+            {ok, content_folder(Bucket, GroupParams0, DbRef, FoldOpts, FoldFun, Acc)}
     end.
 
 to_group_params(PropList) ->
@@ -135,42 +134,38 @@ set_max_keys(GroupParams, MaxKeys) ->
 set_continuation_token(GroupParams, ContinuationToken) ->
     GroupParams#group_params{continuation_token = ContinuationToken}.
 
-%% NOTE: This  type spec with `fun(() -> no_return())' as the return type is
-%% necessary to avoid a Dialyzer warning.
-%%-spec content_folder_fun(any(), group_params(), any(), any(), any(), any()) ->
-%%    fun(() -> no_return()).
+-spec content_folder_fun(riak_core_bucket:bucket(), group_params(), any(), list(), riak_kv_backend:fold_objects_fun(), riak_kv_fold_buffer:buffer()) ->
+    fun(() -> any()).
 content_folder_fun(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
     fun() ->
-            content_folder(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc)
+        content_folder(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc)
     end.
 
-%% NOTE: This  type spec with `no_return()' as the return type is necessary to
-%% avoid a Dialyzer warning.
-%%-spec content_folder(any(), group_params(), any(), any(), any(), any()) ->
-%%    no_return().
-content_folder(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) ->
+-spec content_folder(riak_core_bucket:bucket(), group_params(), eleveldb:db_ref(), list(), riak_kv_backend:fold_objects_fun(), riak_kv_fold_buffer:buffer()) ->
+    riak_kv_fold_buffer:buffer().
+content_folder(Bucket, GroupParams, DbRef, FoldOpts, FoldFun, Acc) when is_function(FoldFun, 4) ->
     BackendMod = get_backend(GroupParams),
     FoldOpts1 = [{first_key, BackendMod:to_first_key({bucket, Bucket})} | FoldOpts],
-    try iterator_open(DbRef, FoldOpts1) of
+    try iterator_open(BackendMod, DbRef, FoldOpts1) of
         {ok, Itr} ->
             iterate(Bucket, GroupParams, Itr, FoldFun, Acc)
     catch Error ->
-              lager:debug("Could not open iterator: ~p", [Error]),
-              throw(Error)
+        lager:debug("Could not open iterator: ~p", [Error]),
+        throw(Error)
     end.
 
-iterator_open(DbRef, FoldOpts) ->
-    eleveldb:iterator(DbRef, FoldOpts).
+iterator_open(BackendMod, DbRef, FoldOpts) ->
+    BackendMod:iterator_open(DbRef, FoldOpts).
 
-iterator_close(Itr) ->
-    eleveldb:iterator_close(Itr).
+iterator_close(BackendMod, Itr) ->
+    BackendMod:iterator_close(Itr).
 
-iterator_move(Itr, Pos) ->
-    eleveldb:iterator_move(Itr, Pos).
+iterator_move(BackendMod, Itr, Pos) ->
+    BackendMod:iterator_move(Itr, Pos).
 
 iterate(Bucket, GroupParams, Itr, FoldFun, Acc) ->
     Outcome = enumerate(undefined, Bucket, GroupParams, Itr, FoldFun, Acc),
-    iterator_close(Itr),
+    iterator_close(get_backend(GroupParams), Itr),
     case Outcome of
         {error, _Err} = Error ->
             throw(Error);
@@ -181,12 +176,12 @@ iterate(Bucket, GroupParams, Itr, FoldFun, Acc) ->
 
 enumerate(PrevEntry, Bucket, GroupParams, Itr, FoldFun, Acc) ->
     Pos = next_pos(PrevEntry, Bucket, GroupParams),
-    BackendMod = get_backend(GroupParams),
     case Pos of
         iteration_complete ->
             Acc;
         _ ->
-            try iterator_move(Itr, Pos) of
+            BackendMod = get_backend(GroupParams),
+            try iterator_move(BackendMod, Itr, Pos) of
                 {error, invalid_iterator} ->
                     lager:debug( "invalid_iterator.  reached end.", []),
                     Acc;
@@ -194,6 +189,7 @@ enumerate(PrevEntry, Bucket, GroupParams, Itr, FoldFun, Acc) ->
                     lager:debug( "iterator_closed.", []),
                     Acc;
                 {ok, BinaryBKey, BinaryValue} ->
+                    BackendMod = BackendMod,
                     BKey = BackendMod:from_object_key(BinaryBKey),
                     maybe_accumulate({BKey, BinaryValue}, PrevEntry, Bucket, GroupParams, FoldFun, Acc, Itr)
             catch Error ->

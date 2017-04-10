@@ -31,7 +31,7 @@
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
--export([list_group_keys/4]).
+-export([list_group/4]).
 -export([filter_buckets/2]).
 -export([filter_keys/3,filter_keys/4]).
 -export([list_buckets/1,list_buckets/2,list_buckets/3, list_buckets/4]).
@@ -534,21 +534,21 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
 %% <p>Use the `prefix' field of `GroupParams' to limit the response to keys falling under a given
 %% prefix. Use the `delimiter' field of `GroupParams' to group keys containing the given delimiter
 %% into common prefixes.</p>
--spec list_group_keys(Bucket::riak_object:bucket(),
-                      GroupParams::riak_kv_group_keys:group_params(),
-                      TimeoutMillisecs::pos_integer(),
-                      riak_client()) ->
-    {ok, riak_kv_group_keys_response:response()} |
+-spec list_group(Bucket::riak_object:bucket(),
+                 GroupParams::riak_kv_group_list:group_params(),
+                 TimeoutMillisecs::pos_integer(),
+                 riak_client()) ->
+    {ok, riak_kv_group_list_response:response()} |
     {error, timeout} |
     {error, Err :: term()}.
-list_group_keys(Bucket, GroupParams, TimeoutMillisecs, {?MODULE, [Node, _ClientId]})
+list_group(Bucket, GroupParams, TimeoutMillisecs, {?MODULE, [Node, _ClientId]})
   when is_integer(TimeoutMillisecs), TimeoutMillisecs > 0 ->
     Me = self(),
     ReqId = mk_reqid(),
-    riak_kv_group_keys_fsm_sup:start_group_keys_fsm(
+    riak_kv_group_list_fsm_sup:start_group_list_fsm(
       Node,
       [{raw, ReqId, Me}, [Bucket, GroupParams, TimeoutMillisecs]]),
-    wait_for_list_group_keys(ReqId).
+    wait_for_list_group(ReqId).
 
 stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT, THIS).
@@ -865,7 +865,7 @@ wait_for_listkeys(ReqId, Acc) ->
     end.
 
 %% @private
-wait_for_list_group_keys(ReqId) ->
+wait_for_list_group(ReqId) ->
     receive
         {ReqId, done, Keys} ->
             {ok, Keys};
