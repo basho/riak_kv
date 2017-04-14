@@ -26,6 +26,7 @@
          new_get_request/2,
          new_w1c_put_request/3,
          new_listkeys_request/3,
+         new_list_group_request/2,
          new_listbuckets_request/1,
          new_index_request/4,
          new_vnode_status_request/0,
@@ -37,6 +38,7 @@
          get_bucket_keys/1,
          get_bucket/1,
          get_item_filter/1,
+         get_group_params/1,
          get_ack_backpressure/1,
          get_query/1,
          get_object/1,
@@ -53,6 +55,7 @@
               get_request/0,
               w1c_put_request/0,
               listkeys_request/0,
+              list_group_request/0,
               listbuckets_request/0,
               index_request/0,
               vnode_status_request/0,
@@ -71,6 +74,7 @@
 -type encoded_obj() :: binary().
 -type bucket() :: riak_core_bucket:bucket().
 -type item_filter() :: function().
+-type group_params() :: proplists:proplist().
 -type coverage_filter() :: riak_kv_coverage_filter:filter().
 -type query() :: riak_index:query_def().
 
@@ -100,6 +104,10 @@
 -record(riak_kv_listkeys_req_v4, {
           bucket :: bucket(),
           item_filter :: item_filter()}).
+
+-record(riak_kv_list_group_req_v1, {
+    bucket :: bucket(),
+    group_params:: group_params()}).
 
 -record(riak_kv_listbuckets_req_v1, {
           item_filter :: item_filter()}).
@@ -135,6 +143,7 @@
 -opaque w1c_put_request() :: #riak_kv_w1c_put_req_v1{}.
 -opaque listbuckets_request() :: #riak_kv_listbuckets_req_v1{}.
 -opaque listkeys_request() :: #riak_kv_listkeys_req_v3{} | #riak_kv_listkeys_req_v4{}.
+-opaque list_group_request() :: #riak_kv_list_group_req_v1{}.
 -opaque index_request() :: #riak_kv_index_req_v1{} | #riak_kv_index_req_v2{}.
 -opaque vnode_status_request() :: #riak_kv_vnode_status_req_v1{}.
 -opaque delete_request() :: #riak_kv_delete_req_v1{}.
@@ -146,6 +155,7 @@
                  | get_request()
                  | w1c_put_request()
                  | listkeys_request()
+                 | list_group_request()
                  | listbuckets_request()
                  | index_request()
                  | vnode_status_request()
@@ -157,6 +167,7 @@
                       | kv_get_request
                       | kv_w1c_put_request
                       | kv_listkeys_request
+                      | kv_list_group_request
                       | kv_listbuckets_request
                       | kv_index_request
                       | kv_vnode_status_request
@@ -166,19 +177,20 @@
                       | unknown.
 
 -spec request_type(request()) -> request_type().
-request_type(#riak_kv_put_req_v1{}) -> kv_put_request;
-request_type(#riak_kv_get_req_v1{}) -> kv_get_request;
-request_type(#riak_kv_w1c_put_req_v1{}) -> kv_w1c_put_request;
-request_type(#riak_kv_listkeys_req_v3{})-> kv_listkeys_request;
-request_type(#riak_kv_listkeys_req_v4{})-> kv_listkeys_request;
-request_type(#riak_kv_listbuckets_req_v1{})-> kv_listbuckets_request;
-request_type(#riak_kv_index_req_v1{})-> kv_index_request;
-request_type(#riak_kv_index_req_v2{})-> kv_index_request;
-request_type(#riak_kv_vnode_status_req_v1{})-> kv_vnode_status_request;
-request_type(#riak_kv_delete_req_v1{})-> kv_delete_request;
-request_type(#riak_kv_map_req_v1{})-> kv_map_request;
-request_type(#riak_kv_vclock_req_v1{})-> kv_vclock_request;
-request_type(_) -> unknown.
+request_type(#riak_kv_put_req_v1{})          -> kv_put_request;
+request_type(#riak_kv_get_req_v1{})          -> kv_get_request;
+request_type(#riak_kv_w1c_put_req_v1{})      -> kv_w1c_put_request;
+request_type(#riak_kv_listkeys_req_v3{})     -> kv_listkeys_request;
+request_type(#riak_kv_listkeys_req_v4{})     -> kv_listkeys_request;
+request_type(#riak_kv_list_group_req_v1{})   -> kv_list_group_request;
+request_type(#riak_kv_listbuckets_req_v1{})  -> kv_listbuckets_request;
+request_type(#riak_kv_index_req_v1{})        -> kv_index_request;
+request_type(#riak_kv_index_req_v2{})        -> kv_index_request;
+request_type(#riak_kv_vnode_status_req_v1{}) -> kv_vnode_status_request;
+request_type(#riak_kv_delete_req_v1{})       -> kv_delete_request;
+request_type(#riak_kv_map_req_v1{})          -> kv_map_request;
+request_type(#riak_kv_vclock_req_v1{})       -> kv_vclock_request;
+request_type(_)                              -> unknown.
 
 -spec new_put_request(bucket_key(),
                       object(),
@@ -207,6 +219,12 @@ new_listkeys_request(Bucket, ItemFilter, true) ->
 new_listkeys_request(Bucket, ItemFilter, false) ->
     #riak_kv_listkeys_req_v3{bucket=Bucket,
                              item_filter=ItemFilter}.
+
+new_list_group_request(Bucket, GroupParams) ->
+    #riak_kv_list_group_req_v1{
+        bucket=Bucket,
+        group_params=GroupParams
+    }.
 
 -spec new_listbuckets_request(item_filter()) -> listbuckets_request().
 new_listbuckets_request(ItemFilter) ->
@@ -264,6 +282,8 @@ get_bucket(#riak_kv_listkeys_req_v3{bucket = Bucket}) ->
     Bucket;
 get_bucket(#riak_kv_listkeys_req_v4{bucket = Bucket}) ->
     Bucket;
+get_bucket(#riak_kv_list_group_req_v1{bucket = Bucket}) ->
+    Bucket;
 get_bucket(#riak_kv_index_req_v1{bucket = Bucket}) ->
     Bucket;
 get_bucket(#riak_kv_index_req_v2{bucket = Bucket}) ->
@@ -282,10 +302,18 @@ get_item_filter(#riak_kv_index_req_v1{item_filter = ItemFilter}) ->
 get_item_filter(#riak_kv_index_req_v2{item_filter = ItemFilter}) ->
     ItemFilter.
 
--spec get_ack_backpressure(listkeys_request()) -> UseAckBackpressure::boolean().
+-spec get_group_params(request()) -> group_params().
+get_group_params(#riak_kv_list_group_req_v1{
+    group_params = GroupParams}) ->
+    GroupParams.
+
+-spec get_ack_backpressure(listkeys_request() | list_group_request()) ->
+    UseAckBackpressure::boolean().
 get_ack_backpressure(#riak_kv_listkeys_req_v3{}) ->
     false;
 get_ack_backpressure(#riak_kv_listkeys_req_v4{}) ->
+    true;
+get_ack_backpressure(#riak_kv_list_group_req_v1{}) ->
     true;
 get_ack_backpressure(#riak_kv_index_req_v1{}) ->
     false;

@@ -31,6 +31,7 @@
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
+-export([list_group/4]).
 -export([filter_buckets/2]).
 -export([filter_keys/3,filter_keys/4]).
 -export([list_buckets/1,list_buckets/2,list_buckets/3, list_buckets/4]).
@@ -524,6 +525,31 @@ list_keys(Bucket, Filter, Timeout0, {?MODULE, [Node, _ClientId]}) ->
     riak_kv_keys_fsm_sup:start_keys_fsm(Node, [{raw, ReqId, Me}, [Bucket, Filter, Timeout]]),
     wait_for_listkeys(ReqId).
 
+
+%% @doc <p>List keys and metadata for the given `Bucket', grouping results into common prefixes if
+%% applicable. Results are paginiated if there are more results than the maximum number of results
+%% specified in the `max_keys' field of `GroupParams'. If there are more results then the response
+%% will include a `next_continuation_token' that can be used to retrieve the next page of results
+%% by setting the `continuation_token' field of `GroupParams' to this value.</p>
+%% <p>Use the `prefix' field of `GroupParams' to limit the response to keys falling under a given
+%% prefix. Use the `delimiter' field of `GroupParams' to group keys containing the given delimiter
+%% into common prefixes.</p>
+-spec list_group(Bucket::riak_object:bucket(),
+                 GroupParams::riak_kv_group_list:group_params(),
+                 TimeoutMillisecs::pos_integer(),
+                 riak_client()) ->
+    {ok, riak_kv_group_list_response:response()} |
+    {error, timeout} |
+    {error, Err :: term()}.
+list_group(Bucket, GroupParams, TimeoutMillisecs, {?MODULE, [Node, _ClientId]})
+  when is_integer(TimeoutMillisecs), TimeoutMillisecs > 0 ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_group_list_fsm_sup:start_group_list_fsm(
+      Node,
+      [{raw, ReqId, Me}, [Bucket, GroupParams, TimeoutMillisecs]]),
+    wait_for_list_group(ReqId).
+
 stream_list_keys(Bucket, {?MODULE, [_Node, _ClientId]}=THIS) ->
     stream_list_keys(Bucket, ?DEFAULT_TIMEOUT, THIS).
 
@@ -834,6 +860,15 @@ wait_for_listkeys(ReqId, Acc) ->
             _ = riak_kv_keys_fsm:ack_keys(From),
             wait_for_listkeys(ReqId, [Res|Acc]);
         {ReqId,{keys,Res}} -> wait_for_listkeys(ReqId, [Res|Acc]);
+        {ReqId, {error, Error}} ->
+            {error, Error}
+    end.
+
+%% @private
+wait_for_list_group(ReqId) ->
+    receive
+        {ReqId, done, Keys} ->
+            {ok, Keys};
         {ReqId, {error, Error}} ->
             {error, Error}
     end.

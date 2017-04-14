@@ -129,7 +129,11 @@ init([]) ->
     register_stats(),
     Me = self(),
     State = #state{monitors = [{index, spawn_link(?MODULE, monitor_loop, [index])},
-                               {list, spawn_link(?MODULE, monitor_loop, [list])}],
+                               {list, spawn_link(?MODULE, monitor_loop, [list])},
+                               {list_group, spawn_link(?MODULE,
+                                                            monitor_loop,
+                                                            [list_group])}
+                              ],
                    repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
 
@@ -283,6 +287,17 @@ do_update({list_create, Pid}) ->
     ok;
 do_update(list_create_error) ->
     exometer:update([?PFX, ?APP, list, fsm, create, error], 1);
+do_update({list_group_create, Pid}) ->
+    ok = exometer:update([?PFX, ?APP, list_group, fsm, create], 1),
+    ok = exometer:update([?PFX, ?APP, list_group, fsm, active], 1),
+    add_monitor(list_group, Pid),
+    ok;
+do_update(list_group_create_error) ->
+    exometer:update([?PFX, ?APP, list_group, fsm, create, error], 1);
+do_update({list_group_fsm_finish_count, Count}) ->
+    exometer:update([?PFX, ?APP, list_group, fsm, finish, count], Count);
+do_update(list_group_fsm_finish_error) ->
+    exometer:update([?PFX, ?APP, list_group, fsm, finish, error], 1);
 do_update({fsm_destroy, Type}) ->
     exometer:update([?PFX, ?APP, Type, fsm, active], -1);
 do_update({Type, actor_count, Count}) ->
@@ -655,6 +670,24 @@ stats() ->
      {[list, fsm, create, error], spiral, [], [{one  , list_fsm_create_error},
                                                {count, list_fsm_create_error_total}]},
      {[list, fsm, active], counter, [], [{value, list_fsm_active}]},
+
+     {[list_group, fsm, create],
+      spiral, [], [{one  , list_group_fsm_create},
+                   {count, list_group_fsm_create_total}]},
+     {[list_group, fsm, create, error],
+      spiral, [], [{one  , list_group_fsm_create_error},
+                   {count, list_group_fsm_create_error_total}]},
+     {[list_group, fsm, active],
+      counter, [], [{value, list_group_fsm_active}]},
+
+     {[list_group, fsm, finish, count],
+      histogram, [], [{mean, list_group_count_mean},
+                      {median, list_group_count_median},
+                      {95, list_group_count_95},
+                      {99, list_group_count_99},
+                      {max, list_group_count_max}]},
+     {[list_group, fsm, finish, error],
+      counter, [], [{value, list_group_keys_finish_error}]},
 
      %% misc stats
      {mapper_count, counter, [], [{value, executing_mappers}]},
