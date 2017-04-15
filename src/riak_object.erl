@@ -73,6 +73,7 @@
 -type binary_version() :: v0 | v1.
 
 -define(MAX_KEY_SIZE, 65536).
+-define(MAX_BUCKET_SIZE, 65536).
 
 -define(LASTMOD_LEN, 29). %% static length of rfc1123_date() type. Hard-coded in Erlang.
 -define(V1_VERS, 1).
@@ -125,10 +126,12 @@ new(B, K, V, MD) when is_binary(B), is_binary(K) ->
 
 %% internal version after all validation has been done
 new_int(B, K, V, MD) ->
-    case size(K) > ?MAX_KEY_SIZE of
-        true ->
+    case {size(B) > ?MAX_BUCKET_SIZE, size(K) > ?MAX_KEY_SIZE} of
+        {true, _} ->
+            throw({error,bucket_too_large});
+        {_, true} ->
             throw({error,key_too_large});
-        false ->
+        {false, false} ->
             case MD of
                 no_initial_metadata ->
                     Contents = [#r_content{metadata=dict:new(), value=V}],
@@ -1430,6 +1433,14 @@ inequality_updatecontents_test() ->
     false = riak_object:equal(O3, riak_object:update_metadata(O2, MD3)),
     O5 = riak_object:update_value(O1, "value1"),
     false = riak_object:equal(O5, riak_object:update_value(O2, "value2")).
+
+largebucket_test() ->
+    TooLargeBucket = <<0:(65537*8)>>,
+    try 
+        riak_object:new(TooLargeBucket, <<"a">>, <<>>)
+    catch throw:{error,bucket_too_large} ->
+            ok
+    end.
 
 largekey_test() ->
     TooLargeKey = <<0:(65537*8)>>,
