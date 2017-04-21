@@ -433,7 +433,7 @@
 %% @doc The number of replicas which must reply to a read request.
 {mapping, "buckets.default.r", "riak_core.default_bucket_props.r", [
   {datatype, [{enum, [quorum, all]}, integer]},
-  {default, quorum},
+  {default, 1},
   hidden
 ]}.
 
@@ -441,7 +441,7 @@
 %% indicating that the write was received.
 {mapping, "buckets.default.w", "riak_core.default_bucket_props.w", [
   {datatype, [{enum, [quorum, all]}, integer]},
-  {default, quorum},
+  {default, 1},
   hidden
 ]}.
 
@@ -457,14 +457,14 @@
 %% indicating that the write was committed to durable storage.
 {mapping, "buckets.default.dw", "riak_core.default_bucket_props.dw", [
   {datatype, [{enum, [quorum, all]}, integer]},
-  {default, quorum},
+  {default, 1},
   hidden
 ]}.
 
 %% @doc The number of replicas which must reply to a delete request.
 {mapping, "buckets.default.rw", "riak_core.default_bucket_props.rw", [
   {datatype, [{enum, [quorum, all]}, integer]},
-  {default, quorum},
+  {default, 1},
   hidden
 ]}.
 
@@ -502,7 +502,7 @@
   "buckets.default.last_write_wins",
   "riak_core.default_bucket_props.last_write_wins", [
   {datatype, {enum, [true, false]}},
-  {default, false},
+  {default, true},
   hidden
 ]}.
 
