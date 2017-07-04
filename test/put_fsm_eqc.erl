@@ -52,6 +52,7 @@
 -define(DEFAULT_BUCKET_PROPS,
         [{chash_keyfun, {riak_core_util, chash_std_keyfun}},
          {pw, 0},
+         {node_confirms, 0},
          {w, quorum},
          {dw, quorum}]).
 -define(HOOK_SAYS_NO, <<"the hook says no">>).

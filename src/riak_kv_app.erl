@@ -93,6 +93,7 @@ start(_Type, _StartArgs) ->
        {r, quorum},
        {w, quorum},
        {pw, 0},
+       {node_confirms, 0},
        {dw, quorum},
        {rw, quorum},
        {basic_quorum, false},
