@@ -298,6 +298,13 @@ validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when QProp =:= dw
         false ->
             validate(T, ValidProps, [{QProp, not_valid_quorum} | Errors])
     end;
+validate([{SyncProp, MaybeSync}=Prop | T], ValidProps, Errors) when SyncProp =:= sync_on_write ->
+    case is_valid_sync_param(MaybeSync) of
+        true ->
+            validate(T, [Prop | ValidProps], Errors);
+        false ->
+            validate(T, ValidProps, [{SyncProp, not_valid_sync_param} | Errors])
+    end;
 validate([Prop|T], ValidProps, Errors) ->
     validate(T, [Prop|ValidProps], Errors).
 
@@ -314,6 +321,17 @@ is_quorum(Q)  when Q =:= quorum
     true;
 is_quorum(_) ->
     false.
+
+-spec is_valid_sync_param(term()) -> boolean().
+is_valid_sync_param(SP) when SP =:= one
+                        orelse SP =:= all
+                        orelse SP =:= backend
+                        orelse SP =:= <<"one">>
+                        orelse SP =:= <<"all">>
+                        orelse SP =:= <<"backend">> ->
+   true;
+is_valid_sync_param(_) ->
+   false.
 
 %% @private some quorum options can be zero
 -spec is_opt_quorum(term()) -> boolean().

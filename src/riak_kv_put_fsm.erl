@@ -65,6 +65,8 @@
         %% Request additional details about request added as extra
         %% element at the end of result tuple
         {details, detail()} |
+        %% Sync-on-write setting, backend, one(co-ordinating) or all
+        {sync_on_write, atom()} |
         %% Put the value as-is, do not increment the vclocks
         %% to make the value a frontier.
         asis |
@@ -89,6 +91,7 @@
                 w :: non_neg_integer(),
                 dw :: non_neg_integer(),
                 pw :: non_neg_integer(),
+                sync_on_write :: atom(),
                 coord_pl_entry :: {integer(), atom()},
                 preflist2 :: riak_core_apl:preflist_ann(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
