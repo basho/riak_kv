@@ -408,7 +408,6 @@ malformed_timeout_param(RD, Ctx) ->
 %%      string-encoded integers.  Store the integer values
 %%      in context() if so.
 malformed_rw_params(RD, Ctx) ->
-    io:format("Checking parameters.~n"),
     Res =
     lists:foldl(fun malformed_rw_param/2,
                 {false, RD, Ctx},

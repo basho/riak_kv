@@ -705,6 +705,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                     {false, undefined, [], UpModState}
             end,
             IndexSpecs = riak_object:diff_index_data(OldIdxData, IdxData),
+
             {Reply, ModState3} =
             case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState2) of
                 {ok, UpModState2} ->
@@ -1662,16 +1663,31 @@ perform_put({true, {_Obj, _OldObj}=Objects},
             #putargs{returnbody=RB,
                      bkey=BKey,
                      reqid=ReqID,
+                     coord=Coord,
+                     bprops=BProps,
                      index_specs=IndexSpecs,
                      readrepair=ReadRepair}) ->
+    %%lager:info("Perform put bprops:~p~n", [BProps]),
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
       false ->
         MaxCheckFlag = do_max_check
     end,
-    {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
-    {Reply, State2}.
+    SyncProp = lists:keyfind(sync_on_write,1,BProps),
+    case SyncProp of
+       {sync_on_write, <<"all">>} ->
+         Sync = true;
+       {sync_on_write, <<"one">>} ->
+         Sync = Coord;
+       _ ->
+         Sync = false
+    end,
+    Modstate=State#state.modstate,
+    Modstate2=setelement(7,Modstate,[{sync,Sync}]),
+    State2 = State#state{modstate=Modstate2},
+    {Reply, State3} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State2),
+    {Reply, State3}.
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
     actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, State).
