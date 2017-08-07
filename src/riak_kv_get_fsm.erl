@@ -30,7 +30,11 @@
 -export([start/6, start_link/6, start/4, start_link/4]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([prepare/2,validate/2,execute/2,waiting_vnode_r/2,waiting_read_repair/2]).
+-export([prepare/2,
+            validate/2,
+            execute/2,
+            waiting_vnode_r/2,
+            waiting_read_repair/2]).
 
 -type detail() :: timing |
                   vnodes.
@@ -74,7 +78,9 @@
                 timing = [] :: [{atom(), erlang:timestamp()}],
                 calculated_timings :: {ResponseUSecs::non_neg_integer(),
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined,
-                crdt_op :: undefined | true
+                crdt_op :: undefined | true,
+                request_type :: undefined | head | get | update,
+                override_nodes = [] :: list()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -82,6 +88,7 @@
 -define(DEFAULT_TIMEOUT, 60000).
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
+-define(DEFAULT_RT, head).
 
 %% ===================================================================
 %% Public API
@@ -154,11 +161,11 @@ init([From, Bucket, Key, Options0]) ->
                        timing = riak_kv_fsm_timing:add_timing(prepare, []),
                        startnow = StartNow},
     Trace = app_helper:get_env(riak_kv, fsm_trace_enabled),
-    case Trace of 
+    case Trace of
         true ->
             riak_core_dtrace:put_tag([Bucket, $,, Key]),
             ?DTRACE(?C_GET_FSM_INIT, [], ["init"]);
-        _ -> 
+        _ ->
             ok
     end,
     {ok, prepare, StateData, 0};
@@ -181,14 +188,14 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                                   options=Options,
                                   trace=Trace}) ->
     ?DTRACE(Trace, ?C_GET_FSM_PREPARE, [], ["prepare"]),
-    {ok, DefaultProps} = application:get_env(riak_core, 
+    {ok, DefaultProps} = application:get_env(riak_core,
                                              default_bucket_props),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     %% typed buckets never fall back to defaults
-    Props = 
+    Props =
         case is_tuple(Bucket) of
             false ->
-                lists:keymerge(1, lists:keysort(1, BucketProps), 
+                lists:keymerge(1, lists:keysort(1, BucketProps),
                                lists:keysort(1, DefaultProps));
             true ->
                 BucketProps
@@ -211,7 +218,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
             {stop, normal, StateData2};
         _ ->
             StatTracked = get_option(stat_tracked, BucketProps, false),
-            Preflist2 = 
+            Preflist2 =
                 case get_option(sloppy_quorum, Options) of
                     false ->
                         riak_core_apl:get_primary_apl(DocIdx, N, riak_kv);
@@ -292,9 +299,12 @@ validate_quorum(_R, _ROpt, _N, _PR, _PROpt, _NumPrimaries, _NumVnodes) ->
 %% @private
 execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    bkey=BKey, trace=Trace,
-                                   preflist2 = Preflist2}) ->
-    TRef = schedule_timeout(Timeout),
+                                   preflist2 = Preflist2,
+                                   get_core = GetCore,
+                                   request_type = RequestType,
+                                   override_nodes = OverNodes}) ->
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
+    TRef = schedule_timeout(Timeout),
     case Trace of
         true ->
             ?DTRACE(?C_GET_FSM_EXECUTE, [], ["execute"]),
@@ -303,8 +313,41 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
         _ ->
             ok
     end,
-    riak_kv_vnode:get(Preflist, BKey, ReqId),
-    StateData = StateData0#state{tref=TRef},
+    RequestType2 =
+        case RequestType of
+            undefined ->
+                ?DEFAULT_RT;
+            _ ->
+                RequestType
+        end,
+    StateData =
+        case RequestType2 of
+            head ->
+                % Mark the get_core as head_merge so that when determining the
+                % response in riak_get_core the specific head_merge function
+                % will be used
+                %
+                % Send head requests to all the Preflist
+                riak_kv_vnode:head(Preflist, BKey, ReqId),
+                HO_GetCore = riak_kv_get_core:head_merge(GetCore),
+                StateData0#state{tref=TRef, get_core = HO_GetCore};
+            update ->
+                % Need to send get requests, but still merge using head_merge
+                % as there will still be head results in the result list, and
+                % more head results  may arrive from previous HEAD request
+                FetchList = lists:map(fun(Idx) ->
+                                            lists:keyfind(Idx, 1, Preflist)
+                                        end,
+                                        OverNodes),
+                riak_kv_vnode:get(FetchList, BKey, ReqId),
+                HO_GetCore = riak_kv_get_core:head_merge(GetCore),
+                StateData0#state{tref=TRef, get_core = HO_GetCore};
+            get ->
+                % Only used if the default is switched back to start with a GET
+                % not a HEAD
+                riak_kv_vnode:get(Preflist, BKey, ReqId),
+                StateData0#state{tref=TRef}
+        end,
     new_state(waiting_vnode_r, StateData).
 
 %% @private calculate a concatenated preflist for tracing macro
@@ -318,29 +361,69 @@ preflist_for_tracing(Preflist) ->
      end || {Idx, Nd} <- lists:sublist(Preflist, 4)].
 
 %% @private
-waiting_vnode_r({r, VnodeResult, Idx, _ReqId}, StateData = #state{get_core = GetCore,
-                                                                  trace=Trace}) ->
+waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
+                    StateData = #state{get_core = GetCore, trace = Trace}) ->
     case Trace of
         true ->
             ShortCode = riak_kv_get_core:result_shortcode(VnodeResult),
             IdxStr = integer_to_list(Idx),
-            ?DTRACE(?C_GET_FSM_WAITING_R, [ShortCode], ["waiting_vnode_r", IdxStr]);
+            ?DTRACE(?C_GET_FSM_WAITING_R,
+                        [ShortCode],
+                        ["waiting_vnode_r", IdxStr]);
         _ ->
             ok
     end,
-    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
+    % If the query has been to override_nodes will want to replace the result
+    % in the result list, not just append to the result list.  The r counter
+    % needs updating, regardless if primary, as in override_nodes loop we're
+    % no longer bothered as quorum has been met in a previous loop
+    UpdGetCore =
+        case StateData#state.request_type of
+            update ->
+                riak_kv_get_core:update_result(Idx,
+                                                VnodeResult,
+                                                StateData#state.override_nodes,
+                                                GetCore);
+            _ ->
+                riak_kv_get_core:add_result(Idx, VnodeResult, GetCore)
+        end,
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
-            {Reply, UpdGetCore2} = riak_kv_get_core:response(UpdGetCore),
-            NewStateData = client_reply(Reply, StateData#state{get_core = UpdGetCore2}),
-            update_stats(Reply, NewStateData),
-            maybe_finalize(NewStateData);
+            % response(GetCore) will either call merge or head_merge. This
+            % will depend on the getcore object being set to head_merge or not.
+            % head_merge is used for updates or heads.
+            %
+            % If it is not a get, and head merge is called a fetch return may
+            % be made which is a request to update certain objects in the
+            % results with bodies (i.e. by substituting a HEAD request with a
+            % GET request for that vnode)
+            case {StateData#state.request_type,
+                    riak_kv_get_core:response(UpdGetCore)} of
+                {R, {{fetch, IdxList}, _}} when R /= get ->
+                    % Trigger genuine GETs to each vnode index required to
+                    % get a merged view of an object.  Hopefully should be
+                    % just one
+                    NewGC = riak_kv_get_core:update_init(length(IdxList),
+                                                            UpdGetCore),
+                    execute(timeout,
+                                StateData#state{request_type = update,
+                                                override_nodes = IdxList,
+                                                get_core = NewGC});
+                {_, {Reply, UpdGetCore2}} ->
+                    StateWithReply = StateData#state{get_core = UpdGetCore2},
+                    NewStateData = client_reply(Reply, StateWithReply),
+                    update_stats(Reply, NewStateData),
+                    maybe_finalize(NewStateData)
+            end;
         false ->
-            %% don't use new_state/2 since we do timing per state, not per message in state
-            {next_state, waiting_vnode_r,  StateData#state{get_core = UpdGetCore}}
+            %% don't use new_state/2 since we do timing per state, not per
+            %% message in state
+            {next_state,
+                waiting_vnode_r,
+                StateData#state{get_core = UpdGetCore}}
     end;
 waiting_vnode_r(request_timeout, StateData = #state{trace=Trace}) ->
-    ?DTRACE(Trace, ?C_GET_FSM_WAITING_R_TIMEOUT, [-2], 
+    ?DTRACE(Trace, ?C_GET_FSM_WAITING_R_TIMEOUT, [-2],
             ["waiting_vnode_r", "timeout"]),
     S2 = client_reply({error,timeout}, StateData),
     update_stats(timeout, S2),
@@ -355,7 +438,7 @@ waiting_read_repair({r, VnodeResult, Idx, _ReqId},
             IdxStr = integer_to_list(Idx),
             ?DTRACE(?C_GET_FSM_WAITING_RR, [ShortCode],
                     ["waiting_read_repair", IdxStr]);
-        _ -> 
+        _ ->
             ok
     end,
     UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
@@ -438,7 +521,7 @@ maybe_delete(StateData=#state{n = N, preflist2=Sent, trace=Trace,
             ?DTRACE(Trace, ?C_GET_FSM_MAYBE_DELETE, [1],
                     ["maybe_delete", "triggered"]),
             riak_kv_vnode:del(IdealNodes, BKey, ReqId);
-        _ -> 
+        _ ->
             ?DTRACE(Trace, ?C_GET_FSM_MAYBE_DELETE, [0],
                     ["maybe_delete", "nop"]),
             nop
@@ -538,7 +621,7 @@ schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
 client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid},
-                                       options = Options, 
+                                       options = Options,
                                        timing = Timing,
                                        trace = Trace}) ->
     NewTiming = riak_kv_fsm_timing:add_timing(reply, Timing),
@@ -549,22 +632,22 @@ client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid},
                   {ReqId, Reply};
               Details ->
                   {OkError, ObjReason} = Reply,
-                  Info = client_info(Details, 
-                                     StateData#state{timing = NewTiming}, 
+                  Info = client_info(Details,
+                                     StateData#state{timing = NewTiming},
                                      []),
                   {ReqId, {OkError, ObjReason, Info}}
           end,
     Pid ! Msg,
 
-    %% calculate timings here, since the trace macro needs total 
-    %% response time. Stuff the result in state so we don't 
+    %% calculate timings here, since the trace macro needs total
+    %% response time. Stuff the result in state so we don't
     %% need to calculate it again
-    {ResponseUSecs, Stages} = 
+    {ResponseUSecs, Stages} =
         riak_kv_fsm_timing:calc_timing(NewTiming),
     case Trace of
         true ->
             ShortCode = riak_kv_get_core:result_shortcode(Reply),
-            ?DTRACE(?C_GET_FSM_CLIENT_REPLY, 
+            ?DTRACE(?C_GET_FSM_CLIENT_REPLY,
                     [ShortCode, ResponseUSecs], ["client_reply"]);
         _ ->
             ok
@@ -581,14 +664,14 @@ update_stats({ok, Obj}, #state{options=Options,
     ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
     ObjSize = riak_object:approximate_size(ObjFmt, Obj),
     Bucket = riak_object:bucket(Obj),
-    ok = riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, 
+    ok = riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages,
                               NumSiblings, ObjSize, StatTracked, CRDTMod});
-update_stats(_, #state{ bkey = {Bucket, _}, 
+update_stats(_, #state{ bkey = {Bucket, _},
                         options = Options,
-                        tracked_bucket = StatTracked, 
+                        tracked_bucket = StatTracked,
                         calculated_timings={ResponseUSecs, Stages}}) ->
     CRDTMod = get_option(crdt_op, Options),
-    ok = riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages, 
+    ok = riak_kv_stat:update({get_fsm, Bucket, ResponseUSecs, Stages,
                               undefined, undefined, StatTracked, CRDTMod}).
 
 client_info(true, StateData, Acc) ->

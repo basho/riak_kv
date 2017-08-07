@@ -29,7 +29,7 @@
 %% and secondary indexes (if supported).
 {mapping, "storage_backend", "riak_kv.storage_backend", [
   {default, {{storage_backend}} },
-  {datatype, {enum, [bitcask, leveldb, memory, multi, prefix_multi]}}
+  {datatype, {enum, [bitcask, leveldb, leveled, memory, multi, prefix_multi]}}
 ]}.
 
 {translation,
@@ -39,6 +39,7 @@
     case Setting of
       bitcask -> riak_kv_bitcask_backend;
       leveldb -> riak_kv_eleveldb_backend;
+      leveled -> riak_kv_leveled_backend;
       memory -> riak_kv_memory_backend;
       multi -> riak_kv_multi_backend;
       prefix_multi -> riak_kv_multi_prefix_backend;

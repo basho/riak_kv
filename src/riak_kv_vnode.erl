@@ -28,6 +28,8 @@
          start_vnodes/1,
          get/3,
          get/4,
+         head/3,
+         head/4,
          del/3,
          put/6,
          local_get/2,
@@ -268,6 +270,18 @@ get(Preflist, BKey, ReqId, Sender) ->
                                    Req,
                                    Sender,
                                    riak_kv_vnode_master).
+
+head(Preflist, BKey, ReqId) ->
+   %% Assuming this function is called from a FSM process
+   %% so self() == FSM pid
+   head(Preflist, BKey, ReqId, {fsm, undefined, self()}).
+
+head(Preflist, BKey, ReqId, Sender) ->
+   Req = riak_kv_requests:new_head_request(sanitize_bkey(BKey), ReqId),
+   riak_core_vnode_master:command(Preflist,
+                                  Req,
+                                  Sender,
+                                  riak_kv_vnode_master).
 
 del(Preflist, BKey, ReqId) ->
     riak_core_vnode_master:command(Preflist,
@@ -540,6 +554,8 @@ handle_overload_command(?KV_PUT_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {fail, Idx, overload});
 handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
+handle_overload_command(?KV_HEAD_REQ{req_id=ReqID}, Sender, Idx) ->
+    riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
 handle_overload_command(?KV_W1C_PUT_REQ{type=Type}, Sender, _Idx) ->
@@ -576,6 +592,18 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
+
+handle_command(?KV_HEAD_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
+    Mod = State#state.mod,
+        ModState = State#state.modstate,
+        {ok, Capabilities} = Mod:capabilities(ModState),
+        case maybe_support_head_requests(Capabilities) of
+            true ->
+                do_head(Sender, BKey, ReqId, State);
+            _ ->
+                do_get(Sender, BKey, ReqId, State)
+        end;
+
 handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{async_folding=AsyncFolding,
                             key_buf_size=BufferSize,
@@ -1785,14 +1813,33 @@ do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     StartTS = os:timestamp(),
     {Retval, ModState1} = do_get_term(BKey, Mod, ModState),
+    State1 = State#state{modstate=ModState1},
+    {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
+    update_vnode_stats(vnode_get, Idx, StartTS),
+    {reply, {r, Retval1, Idx, ReqID}, State3}.
+
+%% @private
+do_head(_Sender, BKey, ReqID,
+       State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
+    {Retval, ModState1} = do_head_term(BKey, Mod, ModState),
+    State1 = State#state{modstate=ModState1},
+    {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
+    {reply, {r, Retval1, Idx, ReqID}, State3}.
+
+%% @private
+%% Function shared between GET and HEAD requests, so should not assume
+%% presence of conetent value
+%% This was originally separated to help with consistent handling of
+%% expired object (but this is not present now this branch is from 2.1.7 and 
+%% not the develop branch which had expiry support)
+handle_returned_value(BKey, Retval, State) ->
     case Retval of
         {ok, Obj} ->
             maybe_cache_object(BKey, Obj, State);
         _ ->
             ok
     end,
-    update_vnode_stats(vnode_get, Idx, StartTS),
-    {reply, {r, Retval, Idx, ReqID}, State#state{modstate=ModState1}}.
+    {Retval, State}.
 
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
@@ -1814,6 +1861,27 @@ do_get_term({Bucket, Key}, Mod, ModState) ->
             Err
     end.
 
+  %% @private
+-spec do_head_term({binary(), binary()}, atom(), tuple()) ->
+                         {{ok, riak_object:riak_object()}, tuple()} |
+                         {{error, notfound}, tuple()} |
+                         {{error, any()}, tuple()}.
+do_head_term({Bucket, Key}, Mod, ModState) ->
+    case do_get_object(Bucket, Key, Mod, ModState, fun do_head_binary/4) of
+        {ok, Obj, UpdModState} ->
+            {{ok, Obj}, UpdModState};
+        %% @TODO Eventually it would be good to
+        %% make the use of not_found or notfound
+        %% consistent throughout the code.
+        {error, not_found, UpdModState} ->
+            {{error, notfound}, UpdModState};
+        {error, Reason, UpdModState} ->
+            {{error, Reason}, UpdModState};
+        Err ->
+            Err
+    end.
+
+
 do_get_binary(Bucket, Key, Mod, ModState) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
@@ -1822,13 +1890,19 @@ do_get_binary(Bucket, Key, Mod, ModState) ->
             Mod:get(Bucket, Key, ModState)
     end.
 
+do_head_binary(Bucket, Key, Mod, ModState) ->
+    Mod:head(Bucket, Key, ModState).
+
 do_get_object(Bucket, Key, Mod, ModState) ->
+    do_get_object(Bucket, Key, Mod, ModState, fun do_get_binary/4).
+
+do_get_object(Bucket, Key, Mod, ModState, BinFetchFun) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
             %% Non binary returns do not trigger size warnings
             Mod:get_object(Bucket, Key, false, ModState);
         false ->
-            case do_get_binary(Bucket, Key, Mod, ModState) of
+            case BinFetchFun(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
                     BinSize = size(ObjBin),
                     WarnSize = app_helper:get_env(riak_kv, warn_object_size),
@@ -2067,6 +2141,10 @@ maybe_enable_iterator_refresh(Capabilities, Opts) ->
         false ->
             lists:keydelete(iterator_refresh, 1, Opts)
     end.
+
+%% @private
+maybe_support_head_requests(Capabilities) ->
+    lists:member(head, Capabilities).
 
 %% @private
 do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->

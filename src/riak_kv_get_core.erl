@@ -20,8 +20,9 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/8, add_result/3, result_shortcode/1, enough/1, response/1,
-         has_all_results/1, final_action/1, info/1]).
+-export([init/8, update_init/2, head_merge/1,
+            add_result/3, update_result/4, result_shortcode/1,
+            enough/1, response/1, has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
 -ifdef(TEST).
@@ -44,6 +45,7 @@
 -record(getcore, {n :: pos_integer(),
                   r :: pos_integer(),
                   pr :: pos_integer(),
+                  ur :: non_neg_integer(), % updated reads
                   fail_threshold :: pos_integer(),
                   notfound_ok :: boolean(),
                   allow_mult :: boolean(),
@@ -56,7 +58,9 @@
                   num_notfound = 0 :: non_neg_integer(),
                   num_deleted = 0 :: non_neg_integer(),
                   num_fail = 0 :: non_neg_integer(),
-                  idx_type :: idx_type()}).
+                  num_upd = 0 :: non_neg_integer(),
+                  idx_type :: idx_type(),
+                  head_merge = false :: boolean()}).
 -opaque getcore() :: #getcore{}.
 
 %% ====================================================================
@@ -72,11 +76,25 @@ init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
     #getcore{n = N,
              r = R,
              pr = PR,
+             ur = 0,
              fail_threshold = FailThreshold,
              notfound_ok = NotFoundOk,
              allow_mult = AllowMult,
              deletedvclock = DeletedVClock,
              idx_type = IdxType}.
+
+%% Re-initialise a get to a restricted number of vnodes (that must all respond)
+-spec update_init(N::pos_integer(), getcore()) -> getcore().
+update_init(N, PrevGetCore) ->
+    PrevGetCore#getcore{ur = N,
+                        head_merge = true}.
+
+%% Convert the get so that it is expecting to potentially receive the
+%% responses to head requests (though for backwards compatibility these may
+%% actually still be get responses)
+-spec head_merge(getcore()) -> getcore().
+head_merge(GetCore) ->
+    GetCore#getcore{head_merge = true}.
 
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
@@ -109,6 +127,35 @@ add_result(Idx, {error, _Reason} = Result, GetCore) ->
         merged = undefined,
         num_fail = GetCore#getcore.num_fail + 1}.
 
+%% Replace a result for a vnode index i.e. when the result had previously
+%% been as a result of a HEAD, and there is now a result from a GET
+%% Ignore any results which were not from the list of updated indexes
+-spec update_result(non_neg_integer(),
+                    result(),
+                    list(),
+                    getcore()) -> getcore().
+update_result(Idx, Result, IdxList, GetCore) ->
+    case lists:member(Idx, IdxList) of
+        true ->
+            % This results should always be OK
+            UpdResults = lists:keyreplace(Idx,
+                                            1,
+                                            GetCore#getcore.results,
+                                            {Idx, Result}),
+            GetCore#getcore{results = UpdResults,
+                                merged = undefined,
+                                num_upd = GetCore#getcore.num_upd + 1};
+        false ->
+            % This is expected, sent n head requests originally, enough was
+            % reached at r/pr - so if have a follow on GET may receive n-r
+            % delayed HEADs while waiting
+            % Add them to the result set - the result set will still be used
+            % for read repair.  Will also detect if the last read was actually
+            % a more upto date object
+            add_result(Idx, Result, GetCore)
+    end.
+
+
 result_shortcode({ok, _RObj})       -> 1;
 result_shortcode({error, notfound}) -> 0;
 result_shortcode(_)                 -> -1.
@@ -116,25 +163,29 @@ result_shortcode(_)                 -> -1.
 %% Check if enough results have been added to respond
 -spec enough(getcore()) -> boolean().
 %% Met quorum
-enough(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK}) when
-      NumOK >= R andalso NumPOK >= PR ->
+enough(#getcore{r = R, ur = UR, pr= PR,
+                    num_ok = NumOK, num_pok = NumPOK,
+                    num_upd = NumUPD})
+        when NumOK >= R andalso NumPOK >= PR andalso NumUPD >= UR ->
     true;
 %% too many failures
 enough(#getcore{fail_threshold = FailThreshold, num_notfound = NumNotFound,
-        num_fail = NumFail}) when NumNotFound + NumFail >= FailThreshold ->
+            num_fail = NumFail})
+        when NumNotFound + NumFail >= FailThreshold ->
     true;
 %% Got all N responses, but unable to satisfy PR
-enough(#getcore{n = N, num_ok = NumOK, num_notfound = NumNotFound,
-        num_fail = NumFail}) when NumOK + NumNotFound + NumFail >= N ->
+enough(#getcore{n = N, ur = UR, num_ok = NumOK, num_notfound = NumNotFound,
+            num_fail = NumFail})
+        when NumOK + NumNotFound + NumFail >= N andalso UR == 0 ->
     true;
 enough(_) ->
     false.
 
 %% Get success/fail response once enough results received
 -spec response(getcore()) -> {reply(), getcore()}.
-%% Met quorum
-response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
-        when NumOK >= R andalso NumPOK >= PR ->
+%% Met quorum for a standard get request/response
+response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK, head_merge = HM} = GetCore)
+        when NumOK >= R andalso NumPOK >= PR andalso HM == false ->
     #getcore{results = Results, allow_mult=AllowMult,
         deletedvclock = DeletedVClock} = GetCore,
     {ObjState, MObj} = Merged = merge(Results, AllowMult),
@@ -143,10 +194,28 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
             Merged; % {ok, MObj}
         tombstone when DeletedVClock ->
             {error, {deleted, riak_object:vclock(MObj)}};
-        _ -> % tombstone or notfound
+        _ -> % tombstone or notfound or expired
             {error, notfound}
     end,
     {Reply, GetCore#getcore{merged = Merged}};
+%% Met quorum, but the request had asked only for head responses
+response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
+        when NumOK >= R andalso NumPOK >= PR ->
+    #getcore{results = Results, allow_mult=AllowMult,
+        deletedvclock = DeletedVClock} = GetCore,
+    Merged = head_merge(Results, AllowMult),
+    case Merged of
+        {ok, _MergedObj} ->
+            {Merged, GetCore#getcore{merged = Merged}}; % {ok, MObj}
+        {tombstone, MObj} when DeletedVClock ->
+            {{error, {deleted, riak_object:vclock(MObj)}},
+                GetCore#getcore{merged = Merged}};
+        {fetch, IdxList} ->
+            % A list of vnode indexes to be fetched from using a GET request
+            {{fetch, IdxList}, GetCore};
+        _ -> % tombstone or notfound or expired
+            {{error, notfound}, GetCore#getcore{merged = Merged}}
+    end;
 %% everything was either a tombstone or a notfound
 response(#getcore{num_notfound = NumNotFound, num_ok = NumOK,
         num_deleted = NumDel, num_fail = NumFail} = GetCore)
@@ -195,43 +264,79 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                      Merged0
              end,
     {ObjState, MObj} = Merged,
-    ReadRepairs = case ObjState of
-                      notfound ->
-                          [];
-                      _ -> % ok or tombstone
-                          %% Any object that is strictly descended by
-                          %% the merge result must be read-repaired,
-                          %% this ensures even tombstones get repaired
-                          %% so reap will work. We join the list of
-                          %% dominated (in need of repair) indexes and
-                          %% the list of not_found (in need of repair)
-                          %% indexes.
-                          [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
-                                  riak_object:strict_descendant(MObj, RObj)] ++
-                              [{Idx, notfound} || {Idx, {error, notfound}} <- Results]
-                  end,
-    Action = case ReadRepairs of
-                 [] when ObjState == tombstone ->
-                     %% Allow delete if merge object is deleted,
-                     %% there are no read repairs pending and
-                     %% a value was received from all vnodes
-                     case riak_kv_util:is_x_deleted(MObj) andalso
-                         length([xx || {_Idx, {ok, _RObj}} <- Results]) == N of
-                         true ->
-                             delete;
-                         _ ->
-                             maybe_log_old_vclock(Results),
-                             nop
-                     end;
-                 [] when ObjState == notfound ->
-                     nop;
-                 [] ->
-                     maybe_log_old_vclock(Results),
-                     nop;
-                 _ ->
-                     {read_repair, ReadRepairs, MObj}
-             end,
+
+    ReadRepairs = object_read_repairs(ObjState, Results, MObj),
+
+    Action = determine_final_action(ReadRepairs, ObjState, N, Results, MObj),
+
     {Action, GetCore#getcore{merged = Merged}}.
+
+object_read_repairs(notfound, _Results, _MObj) ->
+    [];
+object_read_repairs(ok, Results, MObj) ->
+    get_read_repairs(Results, MObj);
+object_read_repairs(tombstone, Results, MObj) ->
+    %% We only read repair in the grace period; after that,
+    %% the reaper may start harvesting tombstones.
+    %% obj_outside_grace_period also returns false if the
+    %% grace period is undefined or disabled, so as to
+    %% maintain legacy behavior.
+    %% The user needs to use delete_mode 'keep' to
+    %% use the tombstone reaping sweeper module.
+    case riak_kv_delete:obj_outside_grace_period(MObj) of
+        false ->
+            get_read_repairs(Results, MObj);
+        true ->
+            []
+    end.
+
+determine_final_action([], tombstone, N, Results, MObj) ->
+    %% Allow delete if merge object is deleted,
+    %% there are no read repairs pending and
+    %% a value was received from all vnodes
+    SuccessCount = count_successful(Results),
+    case riak_kv_util:is_x_deleted(MObj) andalso SuccessCount =:= N of
+        true ->
+            delete;
+        _ ->
+            % maybe_log_old_vclock(Results),
+            nop
+    end;
+determine_final_action([], notfound, _N, _Results, _MObj) ->
+    nop;
+determine_final_action([], _ObjState, _N, _Results, _MObj) ->
+    % maybe_log_old_vclock(Results),
+    nop;
+determine_final_action(ReadRepairs, _N, _ObjState, _Results, MObj) ->
+    {read_repair, ReadRepairs, MObj}.
+
+count_successful(Results) ->
+    Pred = fun({_Idx, {ok, _RObj}}) -> true;
+              (_) -> false
+           end,
+    riak_core_util:count(Pred, Results).
+
+%% Any object that is strictly descended by
+%% the merge result must be read-repaired,
+%% this ensures even tombstones get repaired
+%% so reap will work. We join the list of
+%% dominated (in need of repair) indexes and
+%% the list of not_found (in need of repair)
+%% indexes.
+get_read_repairs(Results, MObj) ->
+    lists:filtermap(fun(Res) -> index_read_repair(Res, MObj) end, Results).
+
+index_read_repair({Idx, {ok, RObj}}, MObj) ->
+    case riak_object:strict_descendant(MObj, RObj) of
+        true ->
+            {true, {Idx, outofdate}};
+        false ->
+            false
+    end;
+index_read_repair({Idx, {error, notfound}}, _MObj) ->
+    {true, {Idx, notfound}};
+index_read_repair(_, _) ->
+    false.
 
 %% Return request info
 -spec info(undefined | getcore()) -> [{vnode_oks, non_neg_integer()} |
@@ -268,6 +373,41 @@ merge(Replies, AllowMult) ->
             end
     end.
 
+%% @private - replaces the merge method when an initial HEAD request is used
+%% not a GET request.  The results returned will be either normal objects (if
+%% a backend not supporting HEAD was called, or the operation was an UPDATE),
+%% or body-less objects.
+%%
+
+head_merge(Replies, AllowMult) ->
+    % Replies should be a list of [{Idx, {ok, RObj}]
+    IdxObjs = [{I, {ok, RObj}} || {I, {ok, RObj}} <- Replies],
+    % Those that don't pattern match will be not_found
+    case IdxObjs of
+        [] ->
+            {notfound, undefined};
+        _ ->
+            {BestReplies, FetchIdxObjL} = riak_object:find_bestobject(IdxObjs),
+            FoldFun =
+                fun({Idx, {ok, Obj}}, Acc) ->
+                    case riak_kv_util:is_x_deleted(Obj) of
+                        true ->
+                            Acc;
+                        false ->
+                            [Idx|Acc]
+                    end
+                end,
+            case lists:foldr(FoldFun, [], FetchIdxObjL) of
+                [] ->
+                    merge(BestReplies, AllowMult);
+                IdxL ->
+                    {fetch, IdxL}
+            end
+    end.
+
+
+
+
 %% @private Checks IdxType to see if Idx is a primary.
 %% If the Idx is not in the IdxType the world must be
 %% resizing (ring expanding). In that case, Idx is
@@ -292,59 +432,108 @@ num_pr(GetCore = #getcore{num_pok=NumPOK, idx_type=IdxType}, Idx) ->
 %% This situation could happen with pre 2.1 vclocks in very rare cases. Fixing the object
 %% requires the user to rewrite the object in 2.1+ of Riak. Logic is enabled when capabilities
 %% returns a version(all nodes at least 2.2) and the entropy_manager is not yet version 0
-maybe_log_old_vclock(Results) ->
-    case riak_core_capability:get({riak_kv, object_hash_version}, legacy) of
-        legacy ->
-            ok;
-        0 ->
-            Version = riak_kv_entropy_manager:get_version(),
-            case [RObj || {_Idx, {ok, RObj}} <- Results] of
-                [] ->
-                    ok;
-                [_] ->
-                    ok;
-                _ when Version == 0 ->
-                    ok;
-                [R1|Rest] ->
-                    case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
-                        [] ->
-                            ok;
-                        _ ->
-                            object:warning("Bucket: ~p Key: ~p should be rewritten to guarantee
-                              compatability with AAE version 0",
-                                [riak_object:bucket(R1),riak_object:key(R1)])
-                    end
-            end;
-        _ ->
-            ok
-    end.
+% maybe_log_old_vclock(Results) ->
+%     case riak_core_capability:get({riak_kv, object_hash_version}, legacy) of
+%         legacy ->
+%             ok;
+%         0 ->
+%             Version = riak_kv_entropy_manager:get_version(),
+%             case [RObj || {_Idx, {ok, RObj}} <- Results] of
+%                 [] ->
+%                     ok;
+%                 [_] ->
+%                     ok;
+%                 _ when Version == 0 ->
+%                     ok;
+%                 [R1|Rest] ->
+%                     case [RObj || RObj <- Rest, not riak_object:equal(R1, RObj)] of
+%                         [] ->
+%                             ok;
+%                         _ ->
+%                             object:warning("Bucket: ~p Key: ~p should be rewritten to guarantee
+%                               compatability with AAE version 0",
+%                                 [riak_object:bucket(R1),riak_object:key(R1)])
+%                     end
+%             end;
+%         _ ->
+%             ok
+%     end.
 
 -ifdef(TEST).
+
+update_test() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some value">>,
+    InObject = riak_object:new(B, K, V,
+                                dict:from_list([{<<"X-Riak-Val-Encoding">>, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+    Obj3 = riak_object:convert_object_to_headonly(B, K, InObject),
+
+    GC0 = #getcore{n= 3, r = 2, pr=0,
+                    fail_threshold = 1, num_ok = 2, num_pok = 0,
+                    num_notfound = 0, num_deleted = 0, num_fail = 0,
+                    idx_type = [],
+                    results = [{1, {ok, fake_head1}}, {2, {ok, fake_head2}}]},
+    GC1 = update_init(1, GC0),
+    GC2 = update_result(3, {ok, Obj3}, [2], GC1),
+    ?assertMatch(3, GC2#getcore.num_ok),
+    ?assertMatch(2, GC2#getcore.r),
+    ?assertMatch(1, GC2#getcore.ur),
+    ?assertMatch(0, GC2#getcore.num_upd),
+    ?assertMatch(3, length(GC2#getcore.results)),
+    GC3 = update_result(2, {ok, fake_get2}, [2], GC2),
+    ?assertMatch(3, GC3#getcore.num_ok),
+    ?assertMatch(2, GC3#getcore.r),
+    ?assertMatch(1, GC3#getcore.ur),
+    ?assertMatch(1, GC3#getcore.num_upd),
+    ?assertMatch(3, length(GC3#getcore.results)),
+    ?assertMatch([{3, {ok, Obj3}},
+                        {1, {ok, fake_head1}},
+                        {2, {ok, fake_get2}}],
+                    GC3#getcore.results).
+
 %% simple sanity tests
 enough_test_() ->
     [
         {"Checking R",
             fun() ->
                     %% cannot meet R
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(false, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 0, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(false, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 1, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(false, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 2, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
                     %% met R
-                    ?assertEqual(true, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(true, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 3, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
+                    %% met R - missing updated
+                    ?assertEqual(false, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=1,
+                                fail_threshold = 1, num_ok = 3, num_pok = 0,
+                                num_notfound = 0, num_deleted = 0, num_upd=0,
+                                num_fail = 0})),
+                    ?assertEqual(true, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=1,
+                                fail_threshold = 1, num_ok = 3, num_pok = 0,
+                                num_notfound = 0, num_deleted = 0, num_upd=1,
+                                num_fail = 0})),
                     %% too many failures
-                    ?assertEqual(true, enough(#getcore{n= 3, r = 3, pr=0,
+                    ?assertEqual(true, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=0,
                                 fail_threshold = 1, num_ok = 2, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 1})),
@@ -353,21 +542,25 @@ enough_test_() ->
         {"Checking PR",
             fun() ->
                     %% cannot meet PR
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 0, pr=3,
+                    ?assertEqual(false, enough(#getcore{n= 3,
+                                r = 0, pr=3, ur=0,
                                 fail_threshold = 1, num_ok = 1, num_pok = 1,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
-                    ?assertEqual(false, enough(#getcore{n= 3, r = 0, pr=3,
+                    ?assertEqual(false, enough(#getcore{n= 3,
+                                r = 0, pr=3, ur=0,
                                 fail_threshold = 1, num_ok = 2, num_pok = 2,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
                     %% met PR
-                    ?assertEqual(true, enough(#getcore{n= 3, r = 0, pr=3,
+                    ?assertEqual(true, enough(#getcore{n= 3,
+                                r = 0, pr=3, ur=0,
                                 fail_threshold = 1, num_ok = 3, num_pok = 3,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
                     %% met R but not PR
-                    ?assertEqual(true, enough(#getcore{n= 3, r = 0, pr=3,
+                    ?assertEqual(true, enough(#getcore{n= 3,
+                                r = 0, pr=3, ur=0,
                                 fail_threshold = 3, num_ok = 3, num_pok = 2,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 0})),
@@ -376,7 +569,17 @@ enough_test_() ->
     ].
 
 response_test_() ->
-    [
+    {setup,
+     fun() ->
+             meck:new(riak_core_bucket),
+             meck:expect(riak_core_bucket, get_bucket,
+                         fun(_) -> [] end),
+             ok
+     end,
+     fun(_) ->
+             meck:unload(riak_core_bucket)
+     end,
+     [
         {"Requirements met",
             fun() ->
                     RObj = riak_object:new(<<"foo">>, <<"bar">>, <<"baz">>),
@@ -468,5 +671,5 @@ response_test_() ->
                                     {3, {error, notfound}}]})),
                     ok
             end}
-    ].
+    ]}.
 -endif.
