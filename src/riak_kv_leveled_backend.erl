@@ -23,7 +23,6 @@
          start/2,
          stop/1,
          get/3,
-         head/3,
          put/5,
          delete/4,
          drop/1,
@@ -34,6 +33,10 @@
          status/1,
          data_size/1,
          callback/3]).
+
+%% Extended KV Backend API
+-export([head/3,
+            fold_heads/4]).
 
 
 -include("riak_kv_index.hrl").
@@ -47,7 +50,8 @@
 -define(CAPABILITIES, [async_fold,
                         indexes,
                         head,
-                        hash_query,
+                        fold_heads,
+                        direct_fetch,
                         putfsm_pause]).
 -define(API_VERSION, 1).
 
@@ -91,7 +95,7 @@ start(Partition, Config) ->
                                             ?LEVELED_SYNCSTRATEGY) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
-                    schedule_journalcompaction(Ref),
+                    schedule_journalcompaction(Ref, Partition),
                     {ok, #state{bookie=Bookie,
                                 reference=Ref,
                                 partition=Partition,
@@ -261,6 +265,35 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
             {ok, ObjectFolder()}
     end.
 
+%% @doc Fold over all the heads for one or all buckets.
+%% Works as with fold_objects only the fun() will return
+%% FoldHeadsFun(B, K, ProxyValue, Acc) not FoldObjectsFun(B, K, V, Acc)
+%% ProxyValue may be an actual object, but will actually be a tuple of the
+%% form {proxy_object, HeadBinary, Size, {FetchFun, Clone, FetchKey}} with the
+%% expectation that the only the HeadBinary and Size is required, but if the
+%% #r_content.value is required the whole original object can be fetched using
+%% FetchFun(Clone, FetchKey), as long as the fold function has not finished
+-spec fold_heads(riak_kv_backend:fold_objects_fun(),
+                   any(),
+                   [{atom(), term()}],
+                   state()) -> {ok, any()} | {async, fun()}.
+fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
+    Query =
+        case proplists:get_value(bucket, Opts) of
+            undefined ->
+                {foldheads_allkeys, ?RIAK_TAG, {FoldHeadsFun, Acc}};
+            B ->
+                {foldheads_bybucket, ?RIAK_TAG, B, {FoldHeadsFun, Acc}}
+        end,
+    {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
+    case proplists:get_bool(async_fold, Opts) of
+        true ->
+            {async, HeadFolder};
+        false ->
+            {ok, HeadFolder()}
+    end.
+
+
 %% @doc Delete all objects from this leveled backend
 -spec drop(state()) -> {ok, state()} | {error, term(), state()}.
 drop(#state{bookie=Bookie, partition=Partition, config=Config}=_State) ->
@@ -306,7 +339,9 @@ data_size(_State) ->
 callback(Ref, compact_journal, State) ->
     case is_reference(Ref) of
         true ->
-             prompt_journalcompaction(State#state.bookie, Ref),
+             prompt_journalcompaction(State#state.bookie,
+                                        Ref,
+                                        State#state.partition),
              {ok, State}
     end.
 
@@ -329,22 +364,28 @@ get_data_dir(DataRoot, Partition) ->
 
 %% @private
 %% Request a callback in the future to check for journal compaction
-schedule_journalcompaction(Ref) when is_reference(Ref) ->
-    Interval = app_helper:get_env(riak_kv,
-                                    leveled_jc_check_interval,
-                                    ?LEVELED_JC_CHECK_INTERVAL),
-    JitterPerc = app_helper:get_env(riak_kv,
-                                    leveled_jc_check_jitter,
-                                    ?LEVELED_JC_CHECK_JITTER),
-    Jitter = Interval * JitterPerc,
-    FinalInterval = Interval + trunc(2 * random:uniform() * Jitter - Jitter),
-    lager:debug("Scheduling Leveled journal compaction check in ~pms",
-                    [FinalInterval]),
-    riak_kv_backend:callback_after(FinalInterval, Ref, compact_journal).
+schedule_journalcompaction(Ref, PartitionID) when is_reference(Ref) ->
+    ValidHours = app_helper:get_env(riak_kv,
+                                    leveled_jc_valid_hours,
+                                    ?LEVELED_JC_VALID_HOURS),
+    PerDay = app_helper:get_env(riak_kv,
+                                    leveled_jc_compactions_perday,
+                                    ?LEVELED_JC_COMPACTIONS_PERDAY),
+    random:seed(element(3, os:timestamp()),
+                    erlang:phash2(self()),
+                    PartitionID),
+    Interval = leveled_iclerk:schedule_compaction(ValidHours,
+                                                    PerDay,
+                                                    os:timestamp()),
+    lager:info("Schedule compaction for interval ~w on partition ~w",
+                    [Interval, PartitionID]),
+    riak_kv_backend:callback_after(Interval * 1000, % callback interval in ms
+                                    Ref,
+                                    compact_journal).
 
 %% @private
-%% Do journal compaciton if the callback is in a valid time period
-prompt_journalcompaction(Bookie, Ref) when is_reference(Ref) ->
+%% Do journal compaction if the callback is in a valid time period
+prompt_journalcompaction(Bookie, Ref, PartitionID) when is_reference(Ref) ->
     ValidHours = app_helper:get_env(riak_kv,
                                     leveled_jc_valid_hours,
                                     ?LEVELED_JC_VALID_HOURS),
@@ -360,7 +401,7 @@ prompt_journalcompaction(Bookie, Ref) when is_reference(Ref) ->
         false ->
             ok
     end,
-    schedule_journalcompaction(Ref).
+    schedule_journalcompaction(Ref, PartitionID).
 
 
 

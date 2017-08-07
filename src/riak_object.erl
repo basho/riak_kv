@@ -62,7 +62,10 @@
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
           updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
-          updatevalue :: term()
+          updatevalue :: term(),
+          is_proxy = false :: boolean(),
+          proxy :: tuple(),
+          size :: integer()
          }).
 -opaque riak_object() :: #r_object{}.
 
@@ -84,7 +87,7 @@
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
--export([hash/1, hash/2, approximate_size/2]).
+-export([hash/1, hash/2, approximate_size/2, proxy_size/1]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
@@ -701,17 +704,36 @@ get_metadatas(#r_object{contents=Contents}) ->
     [Content#r_content.metadata || Content <- Contents].
 
 %% @doc  Return a list of object values for this riak_object.
+%%       If the object is a proxy will need to fetch the actual object
 -spec get_values(riak_object()) -> [value()].
-get_values(#r_object{contents=C}) -> [Content#r_content.value || Content <- C].
+get_values(RObj=#r_object{contents=C, is_proxy = IsP, proxy = P}) ->
+    case IsP of
+        true ->
+            {FetchFun, Pid, FetchKey} = P,
+            ObjBin = FetchFun(Pid, FetchKey),
+            R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+            get_values(R0#r_object{is_proxy = false});
+        false ->
+            [Content#r_content.value || Content <- C]
+    end.
 
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       value.  This function will fail with a badmatch error if the object
 %%       has siblings (value_count() > 1).
+%%       If the object is a proxy will need to fetch the actual object.
 -spec get_value(riak_object()) -> value().
-get_value(Object=#r_object{}) ->
+get_value(RObj=#r_object{is_proxy = IsP, proxy = P}) ->
     % this blows up intentionally (badmatch) if more than one content value!
-    [{_M,Value}] = get_contents(Object),
-    Value.
+    case IsP of
+        true ->
+            {FetchFun, Pid, FetchKey} = P,
+            ObjBin = FetchFun(Pid, FetchKey),
+            R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+            get_values(R0#r_object{is_proxy = false});
+        false ->
+            [{_M,Value}] = get_contents(RObj),
+            Value
+    end.
 
 %% @doc calculates the canonical hash of a riak object
 %%      Old API which uses the version .
@@ -995,6 +1017,17 @@ approximate_size(Vsn, Obj=#r_object{bucket=Bucket,key=Key,vclock=VClock}) ->
     Contents = get_contents(Obj),
     size(Bucket) + size(Key) + size(term_to_binary(VClock)) + contents_size(Vsn, Contents).
 
+%% @doc Get the actual size of the object if it is a proxy object, otherwise
+%% return 0
+-spec proxy_size(riak_object()) -> integer().
+proxy_size(Obj) ->
+    case Obj#r_object.size of
+        undefined ->
+            0;
+        S ->
+            S
+    end.
+
 contents_size(Vsn, Contents) ->
     lists:sum([metadata_size(Vsn, MD) + value_size(Val) || {MD, Val} <- Contents]).
 
@@ -1034,10 +1067,17 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
     riak_object() | {error, 'bad_object_format'}.
-from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
-    binary_to_term(ObjTerm);
-
-from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
+from_binary(B, K, <<131, _Rest/binary>>=ObjTerm) ->
+    case binary_to_term(ObjTerm) of
+        {proxy_object, HeadBin, ObjSize, Fetcher} ->
+            RObj = from_binary(B, K, HeadBin),
+            RObj#r_object{is_proxy = true,
+                            proxy = Fetcher,
+                            size = ObjSize};
+        T ->
+            T
+    end;
+from_binary(B, K, <<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
     %% Version 1 of binary riak object
     case Rest of
         <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
@@ -1802,6 +1842,64 @@ verify_contents([], []) ->
 verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
     ?assertMatch({Actor, {Count, _}}, dict:fetch(?DOT, MD)),
     verify_contents(Rest, Rest2).
+
+
+head_binary(VC1) ->
+    MetaBin =
+        <<0:32/integer,
+            0:32/integer,
+            0:32/integer,
+            0:8/integer,
+            <<1>>:1/binary>>,
+
+    MetaSize = byte_size(MetaBin),
+    SibsBin =
+        <<0:32/integer, MetaSize:32/integer, MetaBin/binary,
+            0:32/integer, MetaSize:32/integer, MetaBin/binary>>,
+    VclockLen = byte_size(VC1),
+
+    RObjBin =
+        <<?MAGIC:8/integer, ?V1_VERS:8/integer,
+            VclockLen:32/integer, VC1/binary,
+            2:32/integer, SibsBin/binary>>,
+    RObjBin.
+
+
+from_binary_headonly_test() ->
+    % Confirm that from_binary works as expected for a response to a head
+    % request, which will have no r_content.value
+    Bucket = <<"B">>,
+    Key = <<"K1">>,
+    VC1 = term_to_binary(vclock:fresh(a, 3)),
+    RObjBin = head_binary(VC1),
+
+    RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+    ?assertMatch(true, is_robject(RObj)),
+    ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObj))),
+    ?assertMatch(true, is_head(RObj)).
+
+
+fetch_value(clone, "JournalKey") ->
+    term_to_binary(#r_object{contents = [#r_content{value = "V1"}]}).
+
+from_binary_foldheads_test() ->
+    % the response to fold_heads request will be a head binary, but
+    % wrapped up in a tuple
+    Bucket = <<"B">>,
+    Key = <<"K1">>,
+    VC1 = term_to_binary(vclock:fresh(a, 3)),
+    MDBin = head_binary(VC1),
+    HeadObj =
+        term_to_binary(
+            {proxy_object, MDBin, 100,
+                {fun fetch_value/2, clone, "JournalKey"}}),
+
+    RObj = riak_object:from_binary(Bucket, Key, HeadObj),
+    ?assertMatch(true, is_robject(RObj)),
+    ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObj))),
+    ?assertMatch(true, is_head(RObj)),
+    ?assertMatch(["V1"], get_value(RObj)).
+
 
 
 -endif.
