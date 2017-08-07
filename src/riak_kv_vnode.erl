@@ -204,7 +204,8 @@
                   prunetime :: undefined| non_neg_integer(),
                   readrepair=false :: boolean(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
+                  crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
+                  hash_ops = no_hash_ops
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -1543,17 +1544,35 @@ prepare_read_before_write_put(#state{mod = Mod,
                                      modstate = ModState,
                                      md_cache = MDCache}=State,
                               #putargs{bkey={Bucket, Key}=BKey,
-                                       robj=RObj}=PutArgs,
+                                       robj=RObj,
+                                       coord=Coord}=PutArgs,
                               IndexBackend, IsSearchable) ->
-    {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
-
-    RequiresGet = determine_requires_get(CacheClock, RObj, IsSearchable),
-    GetReply = get_old_object_or_fake(RequiresGet, Bucket, Key, Mod, ModState, CacheClock),
+    {CacheClock, CacheData} = maybefetch_clock_and_indexdata(MDCache,
+                                                                BKey,
+                                                                Mod,
+                                                                ModState,
+                                                                Coord,
+                                                                IsSearchable),
+    {GetReply, RequiresGet} =
+        case CacheClock of
+            not_found ->
+                {not_found, false};
+            _ ->
+                ReqGet = determine_requires_get(CacheClock,
+                                                    RObj,
+                                                    IsSearchable),
+                {get_old_object_or_fake(ReqGet,
+                                            Bucket, Key,
+                                            Mod, ModState,
+                                            CacheClock),
+                    ReqGet}
+        end,
     case GetReply of
         not_found ->
             prepare_put_new_object(State, PutArgs, IndexBackend);
         {ok, OldObj} ->
-            prepare_put_existing_object(State, PutArgs, OldObj, IndexBackend, CacheData, RequiresGet)
+            prepare_put_existing_object(State, PutArgs, OldObj,
+                                        IndexBackend, CacheData, RequiresGet)
     end.
 
 prepare_put_existing_object(#state{idx =Idx} = State,
@@ -1594,8 +1613,9 @@ get_index_specs(_IndexedBackend=true, CacheData, RequiresGet, NewObj, OldObj) ->
          RequiresGet == false of
         true ->
             NewData = riak_object:index_data(NewObj),
-            riak_object:diff_index_data(NewData,
-                                        CacheData);
+            % Note diff_index_data and diff_index_specs take inputs in reverse!
+            riak_object:diff_index_data(CacheData,
+                                        NewData);
         false ->
             riak_object:diff_index_specs(NewObj,
                                          OldObj)
@@ -1641,10 +1661,11 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
         Clock ->
             %% We need to perform a local get, to merge contents,
             %% if the local object has events unseen by the
-            %% incoming object. If the incoming object descends
+            %% incoming object. If the incoming object dominates
             %% the cache (i.e. has seen all its events) no need to
             %% do a local get and merge, just overwrite.
-            not riak_object:vclock_descends(RObj, Clock) orelse IsSearchable
+            not vclock:dominates(riak_object:vclock(RObj), Clock)
+                orelse IsSearchable
     end,
     RequiresGet.
 
@@ -1698,8 +1719,7 @@ perform_put({true, {_Obj, _OldObj}=Objects},
       false ->
         MaxCheckFlag = do_max_check
     end,
-    {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
-    {Reply, State2}.
+    actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State).
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
     actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, State).
@@ -1742,7 +1762,8 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             %% since it is assumed capabilities have been properly set
             %% to the desired version, to reformat, all we need to do
             %% is submit a new write
-            PutArgs = #putargs{returnbody=false,
+            PutArgs = #putargs{hash_ops = update,
+                               returnbody=false,
                                bkey=BKey,
                                reqid=undefined,
                                index_specs=[]},
@@ -1766,7 +1787,14 @@ enforce_allow_mult(Obj, BProps) ->
                 [_] -> Obj;
                 Mult ->
                     {MD, V} = select_newest_content(Mult),
-                    riak_object:set_contents(Obj, [{MD, V}])
+                    MergedObj = riak_object:set_contents(Obj, [{MD, V}]),
+                    case riak_object:is_head(MergedObj) of
+                        true ->
+                          lager:error("Merge resulted in head_only object"),
+                          MergedObj;
+                        false ->
+                          MergedObj
+                    end
             end
     end.
 
@@ -1776,8 +1804,8 @@ select_newest_content(Mult) ->
     hd(lists:sort(
          fun({MD0, _}, {MD1, _}) ->
                  riak_core_util:compare_dates(
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD0),
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD1))
+                   riak_object:get_last_modified(MD0),
+                   riak_object:get_last_modified(MD1))
          end,
          Mult)).
 
@@ -1830,7 +1858,7 @@ do_head(_Sender, BKey, ReqID,
 %% Function shared between GET and HEAD requests, so should not assume
 %% presence of conetent value
 %% This was originally separated to help with consistent handling of
-%% expired object (but this is not present now this branch is from 2.1.7 and 
+%% expired object (but this is not present now this branch is from 2.1.7 and
 %% not the develop branch which had expiry support)
 handle_returned_value(BKey, Retval, State) ->
     case Retval of
@@ -2524,6 +2552,48 @@ maybe_check_md_cache(Table, BKey) ->
                     {undefined, undefined}
             end
     end.
+
+%% Function to return the clock of the object to be updated as well as the
+%% index data.  If the clock is dominated by that of the new object then a
+%% backend GET can be avoided.
+%%
+%% The clock can either come from the cache (which it won't do as this is by
+%% default disabled), or from a head request if the Module has the head
+%% capability.
+%%
+%% Should return {undefined, undefined} if there is no cache to be used or
+%% {not_found, undefined} if the lack of object has been confirmed, or
+%% {VClock, IndexData} if the result is found
+maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, Coord, IsSearchable) ->
+    CacheResult = maybe_check_md_cache(Table, BKey),
+    case CacheResult of
+        {undefined, undefined} ->
+            {ok, Capabilities} = Mod:capabilities(ModState),
+            CanGetHead = maybe_support_head_requests(Capabilities)
+                            andalso (not IsSearchable)
+                            andalso (not Coord),
+                % If the bucket is searchable won't use the cache bits anyway
+            case CanGetHead of
+                true ->
+                    {Bucket, Key} = sanitize_bkey(BKey),
+                    case do_head_binary(Bucket, Key, Mod, ModState) of
+                        {error, not_found, _UpdModState} ->
+                            {not_found, undefined};
+                        {ok, OldObjBin, _UpdModState} ->
+                            TheOldObj = riak_object:from_binary(Bucket,
+                                                                Key,
+                                                                OldObjBin),
+                            VClock = riak_object:vclock(TheOldObj),
+                            IndexData = riak_object:index_data(TheOldObj),
+                            {VClock, IndexData}
+                    end;
+                _ ->
+                    CacheResult
+            end;
+        _ ->
+            CacheResult
+    end.
+
 
 maybe_cache_object(BKey, Obj, #state{md_cache = MDCache,
                                      md_cache_size = MDCacheSize}) ->
