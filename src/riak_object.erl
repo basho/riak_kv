@@ -1230,6 +1230,7 @@ update_last_modified(RObj, TS) ->
                        dict:store(?MD_LASTMOD, TS, MD0)),
     riak_object:update_metadata(RObj, NewMD).
 
+%% Get the last modified date from the metadata
 get_last_modified(MD) ->
     case dict:find(?MD_LASTMOD, MD) of
         error ->
