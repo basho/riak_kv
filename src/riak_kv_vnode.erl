@@ -273,16 +273,17 @@ get(Preflist, BKey, ReqId, Sender) ->
                                    riak_kv_vnode_master).
 
 head(Preflist, BKey, ReqId) ->
-   %% Assuming this function is called from a FSM process
-   %% so self() == FSM pid
-   head(Preflist, BKey, ReqId, {fsm, undefined, self()}).
+    %% Assuming this function is called from a FSM process
+    %% so self() == FSM pid
+    head(Preflist, BKey, ReqId, {fsm, undefined, self()}).
 
 head(Preflist, BKey, ReqId, Sender) ->
-   Req = riak_kv_requests:new_head_request(sanitize_bkey(BKey), ReqId),
-   riak_core_vnode_master:command(Preflist,
-                                  Req,
-                                  Sender,
-                                  riak_kv_vnode_master).
+    Req = ?KV_HEAD_REQ{bkey=sanitize_bkey(BKey),
+                        req_id=ReqId},
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   Sender,
+                                   riak_kv_vnode_master).
 
 del(Preflist, BKey, ReqId) ->
     riak_core_vnode_master:command(Preflist,
