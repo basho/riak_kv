@@ -2138,18 +2138,38 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
     {ok, Capabilities} = Mod:capabilities(ModState),
     Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
     Opts = maybe_enable_iterator_refresh(Capabilities, Opts0),
-    case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
+    ModFolder = maybe_use_fold_heads(Capabilities, Opts, Mod),
+    case ModFolder(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
             {reply, Acc, State};
         {async, Work} ->
             FinishFun =
                 fun(Acc) ->
-                        riak_core_vnode:reply(Sender, Acc)
+                      riak_core_vnode:reply(Sender, Acc)
                 end,
             {async, {fold, Work, FinishFun}, Sender, State};
         ER ->
             {reply, ER, State}
     end.
+
+-spec maybe_use_fold_heads(list(), list(), atom()) -> fun().
+%% @private
+%% If the fold can potential service requests through headers of objects alone,
+%% then the fold_heads function can be used on the backend if it suppports that
+%% capability.
+maybe_use_fold_heads(Capabilities, Opts, Mod) ->
+    case lists:member(fold_heads, Opts) of
+        true ->
+            case lists:member(fold_heads, Capabilities) of
+                true ->
+                    fun Mod:fold_heads/4;
+                false ->
+                    fun Mod:fold_objects/4
+            end;
+        false ->
+            fun Mod:fold_objects/4
+    end.
+
 
 %% @private
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->

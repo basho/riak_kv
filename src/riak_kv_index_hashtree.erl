@@ -616,6 +616,7 @@ fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
     Req = riak_core_util:make_fold_req(FoldFun,
                                        {0, {Limit, Wait}}, false,
                                        [aae_reconstruction,
+                                        fold_heads, 
                                         {iterator_refresh, true}]),
     Result = riak_core_vnode_master:sync_command({Partition, node()},
                                         Req,
