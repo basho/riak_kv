@@ -613,7 +613,7 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
     FoldFun = fold_fun(HashtreePid, HasIndexTree),
     {Limit, Wait} = get_build_throttle(),
-    lager:info("Making fold request to reconstruct aae store ~w", [Partition]),
+    lager:info("Making fold request to reconstruct AAE tree ~w", [Partition]),
     Req =
         riak_core_util:make_fold_req(FoldFun,
                                        {0, {Limit, Wait}}, false,
