@@ -287,12 +287,6 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
             B ->
                 {foldheads_bybucket, ?RIAK_TAG, B, {FoldHeadsFun, Acc}}
         end,
-    case proplists:get_value(aae_reconstruction, Opts) of
-        true ->
-            lager:info("AAE fold to use fold_heads~w");
-        _ ->
-            ok
-    end,
     {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
     case proplists:get_bool(async_fold, Opts) of
         true ->
