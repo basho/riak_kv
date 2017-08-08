@@ -265,78 +265,46 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
              end,
     {ObjState, MObj} = Merged,
 
-    ReadRepairs = object_read_repairs(ObjState, Results, MObj),
-
-    Action = determine_final_action(ReadRepairs, ObjState, N, Results, MObj),
-
+    ReadRepairs =
+        case ObjState of
+            notfound ->
+                [];
+            _ -> % ok or tombstone
+                %% Any object that is strictly descended by
+                %% the merge result must be read-repaired,
+                %% this ensures even tombstones get repaired
+                %% so reap will work. We join the list of
+                %% dominated (in need of repair) indexes and
+                %% the list of not_found (in need of repair)
+                %% indexes.
+                [{Idx, outofdate} || {Idx, {ok, RObj}} <- Results,
+                        riak_object:strict_descendant(MObj, RObj)] ++
+                    [{Idx, notfound} || {Idx, {error, notfound}} <- Results]
+        end,
+    Action =
+        case ReadRepairs of
+           [] when ObjState == tombstone ->
+               %% Allow delete if merge object is deleted,
+               %% there are no read repairs pending and
+               %% a value was received from all vnodes
+               case riak_kv_util:is_x_deleted(MObj) andalso
+                   length([xx || {_Idx, {ok, _RObj}} <- Results]) == N of
+                   true ->
+                       delete;
+                   _ ->
+                       % maybe_log_old_vclock(Results),
+                       nop
+               end;
+           [] when ObjState == notfound ->
+               nop;
+           [] ->
+               % maybe_log_old_vclock(Results),
+               nop;
+           _ ->
+               {read_repair, ReadRepairs, MObj}
+       end,
     {Action, GetCore#getcore{merged = Merged}}.
 
-object_read_repairs(notfound, _Results, _MObj) ->
-    [];
-object_read_repairs(ok, Results, MObj) ->
-    get_read_repairs(Results, MObj);
-object_read_repairs(tombstone, Results, MObj) ->
-    %% We only read repair in the grace period; after that,
-    %% the reaper may start harvesting tombstones.
-    %% obj_outside_grace_period also returns false if the
-    %% grace period is undefined or disabled, so as to
-    %% maintain legacy behavior.
-    %% The user needs to use delete_mode 'keep' to
-    %% use the tombstone reaping sweeper module.
-    case riak_kv_delete:obj_outside_grace_period(MObj) of
-        false ->
-            get_read_repairs(Results, MObj);
-        true ->
-            []
-    end.
-
-determine_final_action([], tombstone, N, Results, MObj) ->
-    %% Allow delete if merge object is deleted,
-    %% there are no read repairs pending and
-    %% a value was received from all vnodes
-    SuccessCount = count_successful(Results),
-    case riak_kv_util:is_x_deleted(MObj) andalso SuccessCount =:= N of
-        true ->
-            delete;
-        _ ->
-            % maybe_log_old_vclock(Results),
-            nop
-    end;
-determine_final_action([], notfound, _N, _Results, _MObj) ->
-    nop;
-determine_final_action([], _ObjState, _N, _Results, _MObj) ->
-    % maybe_log_old_vclock(Results),
-    nop;
-determine_final_action(ReadRepairs, _N, _ObjState, _Results, MObj) ->
-    {read_repair, ReadRepairs, MObj}.
-
-count_successful(Results) ->
-    Pred = fun({_Idx, {ok, _RObj}}) -> true;
-              (_) -> false
-           end,
-    riak_core_util:count(Pred, Results).
-
-%% Any object that is strictly descended by
-%% the merge result must be read-repaired,
-%% this ensures even tombstones get repaired
-%% so reap will work. We join the list of
-%% dominated (in need of repair) indexes and
-%% the list of not_found (in need of repair)
-%% indexes.
-get_read_repairs(Results, MObj) ->
-    lists:filtermap(fun(Res) -> index_read_repair(Res, MObj) end, Results).
-
-index_read_repair({Idx, {ok, RObj}}, MObj) ->
-    case riak_object:strict_descendant(MObj, RObj) of
-        true ->
-            {true, {Idx, outofdate}};
-        false ->
-            false
-    end;
-index_read_repair({Idx, {error, notfound}}, _MObj) ->
-    {true, {Idx, notfound}};
-index_read_repair(_, _) ->
-    false.
 
 %% Return request info
 -spec info(undefined | getcore()) -> [{vnode_oks, non_neg_integer()} |
