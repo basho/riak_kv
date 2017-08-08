@@ -34,7 +34,8 @@
                   {error, any()}.
 -type reply() :: {ok, riak_object:riak_object()} |
                  {error, notfound} |
-                 {error, any()}.
+                 {error, any()} |
+                 {fetch, list()}.
 -type repair_reason() :: notfound | outofdate.
 -type final_action() :: nop |
                         {read_repair, [{non_neg_integer() | repair_reason()}], riak_object:riak_object()} |

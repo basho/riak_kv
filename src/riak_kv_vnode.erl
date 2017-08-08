@@ -163,6 +163,7 @@
 -type index_value() :: integer() | binary().
 -type index() :: non_neg_integer().
 -type state() :: #state{}.
+-type index_query() :: undefined | ?KV_INDEX_Q{}.
 -type vnodeid() :: binary().
 -type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
 
@@ -997,7 +998,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     handle_coverage_index(Bucket, ItemFilter, Query,
                           FilterVNodes, Sender, State, fun result_fun_ack/2).
 
--spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
+-spec prepare_index_query(index_query()) -> index_query().
 prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
         RE =/= undefined ->
     {ok, CompiledRE} = re:compile(RE),
