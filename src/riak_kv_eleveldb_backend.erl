@@ -200,12 +200,11 @@ do_put(Bucket, PrimaryKey, IndexSpecs, Val, Sync, #state{ref=Ref,
     Updates1 = [{put, StorageKey, Val} || Val /= undefined],
 
     %% Setup write options...
-    case Sync of
+    WriteOpts2 = case Sync of
         true ->
-            WriteOpts1 = lists:keydelete(sync,1,WriteOpts),
-            WriteOpts2 = lists:append(WriteOpts1, [{sync,Sync}]);
+            lists:keyreplace(sync,1,WriteOpts, {sync,Sync});
         _ ->
-            WriteOpts2 = WriteOpts
+            WriteOpts
     end,
 
     %% Convert IndexSpecs to index updates...
