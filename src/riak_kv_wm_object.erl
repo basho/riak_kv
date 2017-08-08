@@ -447,8 +447,8 @@ malformed_rw_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
              Ctx}
     end.
 
--spec malformed_custom_param({Idx::integer(), Name::string(), Default::string()},
-                             {boolean(), #wm_reqdata{}, context(), [atom()]}) ->
+-spec malformed_custom_param({Idx::integer(), Name::string(), Default::string(), AllowedValues::[atom()]},
+                             {boolean(), #wm_reqdata{}, context()}) ->
    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Check that a custom parameter is one of the AllowedValues
 %% Store its result in context() if it is, or print an error message
