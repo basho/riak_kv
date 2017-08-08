@@ -613,14 +613,18 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
     FoldFun = fold_fun(HashtreePid, HasIndexTree),
     {Limit, Wait} = get_build_throttle(),
-    Req = riak_core_util:make_fold_req(FoldFun,
+    lager:info("Making fold request to reconstruct aae store ~w", [Partition]),
+    Req =
+        riak_core_util:make_fold_req(FoldFun,
                                        {0, {Limit, Wait}}, false,
                                        [aae_reconstruction,
-                                        fold_heads, 
+                                        fold_heads,
                                         {iterator_refresh, true}]),
-    Result = riak_core_vnode_master:sync_command({Partition, node()},
-                                        Req,
-                                        riak_kv_vnode_master, infinity),
+    Result =
+        riak_core_vnode_master:sync_command({Partition, node()},
+                                            Req,
+                                            riak_kv_vnode_master,
+                                            infinity),
     handle_fold_keys_result(Result, HashtreePid, Index).
 
 
