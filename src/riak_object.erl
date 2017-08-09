@@ -757,9 +757,15 @@ hash(Obj=#r_object{}, _Version) ->
 %% @private return the legacy full object hash of the riak_object
 -spec legacy_hash(riak_object()) -> binary().
 legacy_hash(Obj=#r_object{}) ->
-    UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
-    Hash = erlang:phash2(to_binary(v0, UpdObj)),
-    term_to_binary(Hash).
+    if 
+        Obj#r_object.is_proxy == false ->
+            % Blow up if we ever try performing a legacy hash on a proxy
+            % object.  We could fetch the object here - but for now, want
+            % to confirm we don't reach this point in this state.
+            UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
+            Hash = erlang:phash2(to_binary(v0, UpdObj)),
+            term_to_binary(Hash)
+    end.
 
 %% @private return the hash of the vclock
 -spec vclock_hash(riak_object()) -> binary().

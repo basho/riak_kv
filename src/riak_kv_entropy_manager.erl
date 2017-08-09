@@ -574,8 +574,12 @@ check_lock_type(Type, State) ->
     case Type of
         build->
             do_get_build_token(State);
-        upgrade ->
-            do_get_build_token(State);
+        % upgrade ->
+        %     do_get_build_token(State);
+        % Upgrade doesn't actually do any work, so don't spend a token on it
+        % this reduces the time a cluster spends in lock-down waiting for 
+        % rebuilds to spread through the cluster, and the tokens can be spent 
+        % building these upgraded backends.
         _ ->
             {ok, State}
     end.
