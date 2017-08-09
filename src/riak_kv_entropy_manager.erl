@@ -977,12 +977,14 @@ maybe_exchange(Ring, State) ->
                     requeue_exchange(LocalIdx, RemoteIdx, IndexN, State2);
                 false ->
                     LocalVN = {LocalIdx, node()},
-                    case start_exchange(LocalVN, {RemoteIdx, IndexN}, Ring, State2) of
-                        {ok, State3} ->
-                            State3;
-                        {_Reason, State3} ->
-                            State3
-                    end
+                    {R, State3} =  start_exchange(LocalVN, 
+                                                    {RemoteIdx, IndexN}, 
+                                                    Ring, 
+                                                    State2),
+                    lager:info("Attempt to start exchange between ~w and ~w" 
+                                    ++ " resulted in ~w",
+                                [IndexN, RemoteIdx, R]),
+                    State3
             end
     end.
 
