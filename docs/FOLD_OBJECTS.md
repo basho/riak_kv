@@ -57,3 +57,17 @@ To better understand what is there to be modified, here is a run-through of how 
 - Once all vnodes have responded, then the `CallbackMod:finish` is called, and the finish process should send the completed and merged results back to the riak_client, which is waiting in a receive loop until it either receives a `{ReqID, done}` or reaches a timeout.
 
 ## Proposed changes
+
+The intention is to add a new `riak_kv_foldobjects_fsm` that uses the `riak_core_coverage_fsm` behaviour.  The expected differences between this and other coverage FSM implementations are:
+
+- The query request will include a fold module name, and that module will need to contain functions to `generate_filter` (e.g. to filter for only specific segments), `generate_acc` (e.g. to produce a new TicTac tree to be used as the accumulator for the query - rather than a list),  `generate_mergefun` (e.g. generate a function to merge two TicTac tree together when in `process_results/3`), `generate_objectfoldfun` (e.g. generate a function to add the Key and Value to the accumulator) and `state_needs` (demand backend capabilities necessary to complete the fold) when given the query options.  
+
+- The query request can contain a `sample_only` query which will cause the query to be run on a subset of vnodes/partitions that is below full coverage - when a sample is sufficient to get a desirable result (for example on a fold to assess average object size in the database).
+
+- The query request can enforce the offset to be used within the coverage plan.
+
+- The fold module should return `fold_heads` from `state_needs/1` when the query can be returned efficiently from a proxy_object rather than a full object.  The fold module should return `standard_hash_size_only` if it has no requirements beyond a 'standard' view of the object hash and the size of the object.  This will allow for the backend to enhance performance through pre-computation where possible.
+
+- The query request can either be an object query or an index query - and the fold function should reflect the change in inputs for these queries (e.g. {B, K, Obj} or {B, Idx, T, K}).
+
+- All accumulators will need to be of fixed size (no fold buffers will be supported) and have associative merge functions.
