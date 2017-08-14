@@ -42,6 +42,8 @@ The general path coverage queries take are:
 
     - When the coverage query is for intra-cluster ant-entropy comparison, it may be desirable to control the offset.
 
+- The ring is discovered by the coverage_plan module by calling `riak_core_ring_manager:get_chash_bin/0`, and this is combined with knowledge of the offline nodes found by calling `riak_core_apl:offline_owners/2`.  This information, with the offset, and the plan inputs - is sufficient to produce a coverage plan.
+
 - The result of the coverage plan is a tuple of two lists: ``{[{VnodeIdx, Node}], [{VNodeIdx, KeySpaceIdexes}]}``.  The first part is the vnodes and nodes over which the query should be run, the second part (known as filter vnodes) highlights that for some of those vnodes there is a need to only look at certain partitions to avoid duplication of results.
 
 - The result of the plan is then sent with the request to `riak_core_vnode_master:coverage/5` the function which should distributes the request to all the coverage vnodes.  Before doing this distribution a little text transition dance is performed between functions to go from the passed in module name `riak_kv_vnode_master` to the registered vnode identity (of the form `proxy_riak_kv_vnode_0` where in this case 0 is the partition ID).
