@@ -37,7 +37,7 @@
 %%      optimise processing of this fold.
 
 
--module(riak_kv_foldobject_fsm).
+-module(riak_kv_mapfold_fsm).
 
 -behaviour(riak_core_coverage_fsm).
 
@@ -58,11 +58,15 @@
                 sample = false :: boolean()}).
 
 
-req(Bucket, Query, InitAcc, ItemFilter, ObjectFoldFun, CapabilityNeeds) ->
-    {riak_coverage_object_fold_v1,
-        Bucket, Query, InitAcc, ItemFilter, ObjectFoldFun, CapabilityNeeds}.
+req(Bucket, Type, Query, InitAcc, ItemFilter, FoldFun, CapabilityNeeds) ->
+    ?KV_MAPFOLD_REQ{bucket = Bucket,
+                    type = Type,
+                    qry = Query,
+                    item_filter = ItemFilter,
+                    fold_fun = FoldFun,
+                    init_acc = InitAcc,
+                    needs = CapabilityNeeds}.
     
-
 %% @doc 
 %% Return a tuple containing the ModFun to call per vnode, the number of 
 %% primary preflist vnodes the operation should cover, the service to use to 
@@ -79,7 +83,8 @@ req(Bucket, Query, InitAcc, ItemFilter, ObjectFoldFun, CapabilityNeeds) ->
 %% Options - options relevant to the functions in the FoldMod, and capabilites
 %% in the backend
 %% Timeout - to timeout the query 
-init(From={_, _, _}, [Bucket, Query, FoldMod, FilterList, Opts, Timeout]) ->
+init(From={_, _, _}, 
+        [Bucket, Type, Query, FoldMod, FilterList, Opts, Timeout]) ->
     % Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -89,7 +94,7 @@ init(From={_, _, _}, [Bucket, Query, FoldMod, FilterList, Opts, Timeout]) ->
     InitAcc = FoldMod:generate_acc(Opts),
     ObjectFoldFun = FoldMod:generate_objectfold(Opts),
     CapabilityNeeds = FoldMod:state_needs(Opts), 
-    Req = req(Bucket, Query, 
+    Req = req(Bucket, Type, Query, 
                 InitAcc, ItemFilter, ObjectFoldFun, 
                 CapabilityNeeds),
 
@@ -128,7 +133,7 @@ process_results(Results, State) ->
     process_results(any, Results, State).
 
 process_results(_VNode, {error, Reason}, _State) ->
-    lager:warn("Failure to process fold results due to ~w", [Reason]),
+    lager:warning("Failure to process fold results due to ~w", [Reason]),
     {error, Reason};
 process_results(_VNode, {_From, _Bucket, Results}, State) ->
     Acc = State#state.acc,
@@ -139,7 +144,7 @@ process_results(_VNode, {_From, _Bucket, Results}, State) ->
 finish({error, Error}, State=#state{from={raw, ReqId, ClientPid}}) ->
     %% Notify the requesting client that an error
     %% occurred or the timeout has elapsed.
-    lager:warn("Failure to fnish process fold due to ~w", [Error]),
+    lager:warning("Failure to fnish process fold due to ~w", [Error]),
     ClientPid ! {ReqId, {error, Error}},
     {stop, normal, State};
 finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->

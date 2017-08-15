@@ -48,7 +48,7 @@ generate_acc(Opts) ->
 generate_objectfold(_Opts) ->
     fun(_B, K, PO, Acc) ->
         HashFun = 
-            fun(Obj) ->
+            fun(_Key, Obj) ->
                 riak_object:hash(Obj, 0)
             end,
         leveled_tictac:add_kv(Acc, K, PO, HashFun)

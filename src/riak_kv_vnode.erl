@@ -996,7 +996,18 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                 FilterVNodes, Sender, State) ->
     %% v2 = ack-based backpressure
     handle_coverage_index(Bucket, ItemFilter, Query,
-                          FilterVNodes, Sender, State, fun result_fun_ack/2).
+                          FilterVNodes, Sender, State, fun result_fun_ack/2);
+handle_coverage(?KV_MAPFOLD_REQ{bucket=Bucket,
+                                type=Type,
+                                item_filter=ItemFilter,
+                                qry=Query,
+                                fold_fun=FoldFun,
+                                init_acc=InitAcc,
+                                needs=Needs},
+                    FilterVnodes, Sender, State) ->
+    handle_coverage_mapfold(Bucket, Type, 
+                                ItemFilter, Query, FoldFun, InitAcc, Needs, 
+                                FilterVnodes, Sender, State).
 
 -spec prepare_index_query(index_query()) -> index_query().
 prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
@@ -1014,6 +1025,12 @@ buffer_size_for_index_query(#riak_kv_index_v3{max_results=N}, DefaultSize)
     N;
 buffer_size_for_index_query(_Q, DefaultSize) ->
     DefaultSize.
+
+
+handle_coverage_mapfold(_Bucket, Type, 
+                            _ItemFilter, _Query, _FoldFun, _InitAcc, _Needs, 
+                            _FilterVnodes, _Sender, State) ->
+    {reply, {error, {mapfold_not_supported, Type}}, State}.
 
 handle_coverage_index(Bucket, ItemFilter, Query,
                       FilterVNodes, Sender,

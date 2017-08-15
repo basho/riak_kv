@@ -71,6 +71,17 @@
           bkeys = [] :: [{binary(), binary()}]
          }).
 
+-record(riak_kv_mapfold_req_v1, {
+            bucket :: binary() | tuple(),
+            type :: key | object,
+            qry :: riak_index:query_def(),
+            item_filter :: riak_kv_coverage_filter:filter(),
+            fold_fun :: riak_kv_backend:fold_objects_fun(),
+            init_acc :: any(),
+            needs :: list(atom())
+            }).
+
+
 -define(KV_PUT_REQ, #riak_kv_put_req_v1).
 -define(KV_W1C_PUT_REQ, #riak_kv_w1c_put_req_v1).
 -define(KV_W1C_PUT_REPLY, #riak_kv_w1c_put_reply_v1).
@@ -83,6 +94,7 @@
 -define(KV_DELETE_REQ, #riak_kv_delete_req_v1).
 -define(KV_MAP_REQ, #riak_kv_map_req_v1).
 -define(KV_VCLOCK_REQ, #riak_kv_vclock_req_v1).
+-define(KV_MAPFOLD_REQ, #riak_kv_mapfold_req_v1).
 
 %% @doc vnode_lock(PartitionIndex) is a kv per-vnode lock, used possibly,
 %% by AAE tree rebuilds, fullsync, and handoff.

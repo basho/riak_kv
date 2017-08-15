@@ -58,7 +58,7 @@ To better understand what is there to be modified, here is a run-through of how 
 
 ## Proposed changes
 
-The intention is to add a new `riak_kv_foldobjects_fsm` that uses the `riak_core_coverage_fsm` behaviour.  The expected differences between this and other coverage FSM implementations are:
+The intention is to add a new `riak_kv_mapfold_fsm` that uses the `riak_core_coverage_fsm` behaviour.  The expected differences between this and other coverage FSM implementations are:
 
 - The query request will include a fold module name, and that module will need to contain functions to `generate_filter` (e.g. to filter for only specific segments), `generate_acc` (e.g. to produce a new TicTac tree to be used as the accumulator for the query - rather than a list),  `generate_mergefun` (e.g. generate a function to merge two TicTac tree together when in `process_results/3`), `generate_objectfoldfun` (e.g. generate a function to add the Key and Value to the accumulator) and `state_needs` (demand backend capabilities necessary to complete the fold) when given the query options.  
 
