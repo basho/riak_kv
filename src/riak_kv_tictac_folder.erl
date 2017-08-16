@@ -29,7 +29,8 @@
             generate_acc/1,
             generate_objectfold/1,
             generate_mergefun/1,
-            state_needs/1
+            state_needs/1,
+            encode_results/2
             ]).
 
 -define(NEEDS, [async_fold, snap_prefold]).
@@ -56,3 +57,8 @@ generate_objectfold(_Opts) ->
 
 generate_mergefun(_Opts) ->
     fun leveled_tictac:merge_trees/2.
+
+encode_results(Tree, http) ->
+    ExportedTree = leveled_tictac:export_tree(Tree),
+    JsonKeys1 = {struct, [tree, ExportedTree]},
+    mochijson2:encode(JsonKeys1).

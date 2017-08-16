@@ -37,6 +37,7 @@
 -export([stream_list_buckets/1,stream_list_buckets/2,
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
+-export([map_fold/6]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
 -export([reload_all/2]).
@@ -702,6 +703,26 @@ stream_list_buckets(Filter, Timeout, Client, Type,
                                                              true, Type]]),
     {ok, ReqId}.
 
+%% @doc
+%%
+%% Run a map fold query - which will fold over the objects or index keys in 
+%% the query (depending on query type), using map functions, accumulators 
+%% and merge functions found in FoldMod.
+%%
+%% This was introduced after other folds (such as for 2i and list_keys) - but
+%% is arguably amore general case of these folds.
+map_fold(Bucket, Query, FoldMod, FilterList, Opts, 
+            {?MODULE, [Node, _ClientId]}) ->
+    Timeout = proplists:get_value(timeout, Opts, ?DEFAULT_TIMEOUT),
+    Me = self(),
+    ReqId = mk_reqid(),
+    riak_kv_mapfold_fsm_sup:start_mapfold_fsm(Node, 
+                                                 [{raw, ReqId, Me},
+                                                 [Bucket, Query,
+                                                    FoldMod, FilterList, Opts,
+                                                    Timeout]]),
+    wait_for_mapfold_results(ReqId, Timeout).
+
 %% @spec get_index(Bucket :: binary(),
 %%                 Query :: riak_index:query_def(),
 %%                 riak_client()) ->
@@ -858,6 +879,18 @@ wait_for_query_results(ReqId, Timeout, Acc) ->
         {ReqId, Error} -> {error, Error}
     after Timeout ->
             {error, timeout}
+    end.
+
+%% @private
+%% @doc
+%% Only final result will be received, so do not expect a separate "done"
+%% response.
+wait_for_mapfold_results(ReqId, Timeout) ->
+    receive
+        {ReqId, {results, Results}} -> {ok, Results};
+        {ReqId, Error} -> {error, Error}
+    after Timeout ->
+        {error, timeout}
     end.
 
 recv_timeout(Options) ->

@@ -46,7 +46,6 @@
 -export([init/2,
          plan/2,
          process_results/2,
-         process_results/3,
          finish/2]).
 
 -type from() :: {atom(), req_id(), pid()}.
@@ -57,15 +56,6 @@
                 merge_fun,
                 sample = false :: boolean()}).
 
-
-req(Bucket, Type, Query, InitAcc, ItemFilter, FoldFun, CapabilityNeeds) ->
-    ?KV_MAPFOLD_REQ{bucket = Bucket,
-                    type = Type,
-                    qry = Query,
-                    item_filter = ItemFilter,
-                    fold_fun = FoldFun,
-                    init_acc = InitAcc,
-                    needs = CapabilityNeeds}.
     
 %% @doc 
 %% Return a tuple containing the ModFun to call per vnode, the number of 
@@ -84,7 +74,7 @@ req(Bucket, Type, Query, InitAcc, ItemFilter, FoldFun, CapabilityNeeds) ->
 %% in the backend
 %% Timeout - to timeout the query 
 init(From={_, _, _}, 
-        [Bucket, Type, Query, FoldMod, FilterList, Opts, Timeout]) ->
+        [Bucket, Query, FoldMod, FilterList, Opts, Timeout]) ->
     % Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
@@ -92,11 +82,15 @@ init(From={_, _, _},
     % Construct the object folding request 
     ItemFilter = FoldMod:generate_filter(FilterList),
     InitAcc = FoldMod:generate_acc(Opts),
-    ObjectFoldFun = FoldMod:generate_objectfold(Opts),
+    MapFoldFun = FoldMod:generate_objectfold(Opts),
     CapabilityNeeds = FoldMod:state_needs(Opts), 
-    Req = req(Bucket, Type, Query, 
-                InitAcc, ItemFilter, ObjectFoldFun, 
-                CapabilityNeeds),
+    Req = ?KV_MAPFOLD_REQ{bucket = Bucket,
+                            type = object,
+                            qry = Query,
+                            item_filter = ItemFilter,
+                            fold_fun = MapFoldFun,
+                            init_acc = InitAcc,
+                            needs = CapabilityNeeds},
 
     % Make the merge fund
     MergeFun = FoldMod:generate_mergefun(Opts),
@@ -111,7 +105,7 @@ init(From={_, _, _},
     % between SK and EK is approcimately RS * M across the whole database).  
     % A range found by the range finder could then be used to chunk up a query
     % avoiding long lived iterators.
-    Sample = lists:member(sample, Opts),
+    {sample, Sample} = lists:keyfind(sample, 1 , Opts),
 
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{from=From, sample=Sample, acc=InitAcc, merge_fun=MergeFun}}.
@@ -129,26 +123,30 @@ plan(_CoverageVnodes, State = #state{sample=true}) ->
 plan(_CoverageVnodes, State) ->
     {ok, State}.
 
-process_results(Results, State) ->
-    process_results(any, Results, State).
 
-process_results(_VNode, {error, Reason}, _State) ->
+process_results({error, Reason}, _State) ->
     lager:warning("Failure to process fold results due to ~w", [Reason]),
     {error, Reason};
-process_results(_VNode, {_From, _Bucket, Results}, State) ->
+process_results(Results, State) ->
+    % Results are received as a one-off for each vnode in this case, and so 
+    % once results are merged work is always done.
     Acc = State#state.acc,
     MergeFun = State#state.merge_fun,
     UpdAcc = MergeFun(Acc, Results),
-    State#state{acc = UpdAcc}.
+    {done, State#state{acc = UpdAcc}}.
 
+%% Once the coverage FSM has received done for all vnodes (as an output from
+%% process_results), then it will call finish(clean, State) and so the results
+%% can be sent to the client, and the FSM can be stopped. 
 finish({error, Error}, State=#state{from={raw, ReqId, ClientPid}}) ->
-    %% Notify the requesting client that an error
-    %% occurred or the timeout has elapsed.
+    % Notify the requesting client that an error
+    % occurred or the timeout has elapsed.
     lager:warning("Failure to fnish process fold due to ~w", [Error]),
     ClientPid ! {ReqId, {error, Error}},
     {stop, normal, State};
 finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
+    % The client doesn't expect results in increments only the final result, 
+    % so no need for a seperate send of a 'done' message
     ClientPid ! {ReqId, {results, State#state.acc}},
-    ClientPid ! {ReqId, done},
     {stop, normal, State}.
 
