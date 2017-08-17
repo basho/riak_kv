@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_foldobject_fsm: Manage secondary index queries.
+%% riak_kv_tictacfolder: Module to be used in AAE MapFold.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc The fold object fsm manages the execution of pre-defined object folds.
+%% @doc MapFold Module for TicTacTree AAE
 %%
 %%      Module for computing a tictac aae tree within a fold
 
