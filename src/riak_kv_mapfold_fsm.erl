@@ -141,7 +141,7 @@ process_results(Results, State) ->
 finish({error, Error}, State=#state{from={raw, ReqId, ClientPid}}) ->
     % Notify the requesting client that an error
     % occurred or the timeout has elapsed.
-    lager:warning("Failure to fnish process fold due to ~w", [Error]),
+    lager:warning("Failure to finish process fold due to ~w", [Error]),
     ClientPid ! {ReqId, {error, Error}},
     {stop, normal, State};
 finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->

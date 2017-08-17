@@ -1028,9 +1028,42 @@ buffer_size_for_index_query(_Q, DefaultSize) ->
 
 
 handle_coverage_mapfold(_Bucket, Type, 
-                            _ItemFilter, _Query, _FoldFun, _InitAcc, _Needs, 
+                            ItemFilter, Query, FoldFun, _InitAcc, _Needs, 
                             _FilterVnodes, _Sender, State) ->
-    {reply, {error, {mapfold_not_supported, Type}}, State}.
+    Field = Query#riak_kv_index_v3.filter_field,
+    BucketFold = Type == object and Field == <<$bucket>>,
+    KeyFold = Type == object and Field == <<$key>>,
+    Filter = riak_kv_coverage_filter:build_filter(ItemFilter),
+    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
+    AsyncBackend = lists:member(async_fold, Capabilities),
+    Opts = 
+        case AsyncFolding andalso AsyncBackend of
+            true ->
+                [async_fold];
+            false ->
+                Opts0
+        end,
+    case {BucketFold, KeyFold} of 
+        {true, false} ->
+            FoldFun0 = 
+                fun(Bucket, Key, PO, Acc) ->
+                    case Filter(Key) of
+                        true ->
+                            FoldFun(Bucket, Key, PO, Acc);
+                        false ->
+                            Acc
+                    end
+                end,
+            FinishFun = 
+                fun(Acc) ->
+                    riak_core_vnode:reply(Acc, Sender)
+                end,
+            {reply, {error, {mapfold_not_supported, Type, Query}}, State};
+        {false, true} ->
+            {reply, {error, {mapfold_not_supported, Type, Query}}, State};
+        _ ->
+            {reply, {error, {mapfold_not_supported, Type, Query}}, State}
+    end.
 
 handle_coverage_index(Bucket, ItemFilter, Query,
                       FilterVNodes, Sender,
