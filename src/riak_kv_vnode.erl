@@ -1667,7 +1667,6 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                      bprops=BProps,
                      index_specs=IndexSpecs,
                      readrepair=ReadRepair}) ->
-    %%lager:info("Perform put bprops:~p~n", [BProps]),
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
@@ -1677,11 +1676,18 @@ perform_put({true, {_Obj, _OldObj}=Objects},
     SyncProp = lists:keyfind(sync_on_write,1,BProps),
     case SyncProp of
        {sync_on_write, <<"all">>} ->
-         Sync = true;
+           Sync = true;
+       {sync_on_write, all} ->
+           Sync = true;
+       %% 'one' does not override the backend value for the other nodes
+       %% therefore is only useful if the backend is configured to not sync-on-write
        {sync_on_write, <<"one">>} ->
-         Sync = Coord;
+           Sync = Coord;
+       {sync_on_write, one} ->
+           Sync = Coord;
        _ ->
-         Sync = false
+           %% anything but all or one means do the default configured backend write
+           Sync = false
     end,
     {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, Sync, State),
     {Reply, State2}.
@@ -2353,6 +2359,7 @@ encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Sync) 
 encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                             MaxCheckFlag, Sync) ->
     DoMaxCheck = MaxCheckFlag == do_max_check,
+    io:format("final put no sib check~n"),
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
             %% Non binary returning backends will have to handle size warnings
@@ -2380,29 +2387,26 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                         false ->
                             ok
                     end,
-                    case Sync of
-                        true ->
-                            PutRet = maybe_flush_put(Mod, Bucket, Key, IndexSpecs,
-                                                     EncodedVal, ModState);
-                        false ->
-                            PutRet = Mod:put(Bucket, Key, IndexSpecs, EncodedVal,
-                                             ModState)
-                    end,
+                    io:format("Selecting put fun~n"),
+                    PutFun = select_put_fun(Mod, ModState, Sync),
+                    PutRet = PutFun(Bucket, Key, IndexSpecs, EncodedVal, ModState),
                     {PutRet, EncodedVal}
             end
     end.
 
--spec maybe_flush_put(Mod::term(), Bucket::riak_object:bucket(), Key::riak_object:key(),
-                      IndexSpecs::list(), EncodedVal::binary(), ModState::term()) ->
-           {{ok, UpdModState::term()}, EncodedObj::binary()} |
-           {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
-maybe_flush_put(Mod, Bucket, Key, IndexSpecs, EncodedVal, ModState) ->
-    {ok, Capabilities} = Mod:capabilities(ModState),
-    case lists:member(flush_put, Capabilities) of
+-spec select_put_fun(Mod::term(), ModState::term(), Sync::boolean()) -> fun().
+select_put_fun(Mod, ModState, Sync) ->
+    case Sync of
         true ->
-            Mod:flush_put(Bucket, Key, IndexSpecs, EncodedVal, ModState);
-        false ->
-            Mod:put(Bucket, Key, IndexSpecs, EncodedVal, ModState)
+            {ok, Capabilities} = Mod:capabilities(ModState),
+            case lists:member(flush_put, Capabilities) of
+                true ->
+                    fun Mod:flush_put/5;
+                _ ->
+                    fun Mod:put/5
+            end;
+        _ ->
+            fun Mod:put/5
     end.
 
 uses_r_object(Mod, ModState, Bucket) ->

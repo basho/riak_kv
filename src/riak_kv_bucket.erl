@@ -298,12 +298,12 @@ validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when QProp =:= dw
         false ->
             validate(T, ValidProps, [{QProp, not_valid_quorum} | Errors])
     end;
-validate([{SyncProp, MaybeSync}=Prop | T], ValidProps, Errors) when SyncProp =:= sync_on_write ->
+validate([{sync_on_write, MaybeSync}=Prop | T], ValidProps, Errors) ->
     case is_valid_sync_param(MaybeSync) of
         true ->
             validate(T, [Prop | ValidProps], Errors);
         false ->
-            validate(T, ValidProps, [{SyncProp, not_valid_sync_param} | Errors])
+            validate(T, ValidProps, [{sync_on_write, not_valid_sync_param} | Errors])
     end;
 validate([Prop|T], ValidProps, Errors) ->
     validate(T, [Prop|ValidProps], Errors).
@@ -322,6 +322,10 @@ is_quorum(Q)  when Q =:= quorum
 is_quorum(_) ->
     false.
 
+%% validation of sync parameters
+%% one = sync coordinating node only
+%% all = sync all nodes
+%% backend = take sync value for all nodes from backend config (don't override)
 -spec is_valid_sync_param(term()) -> boolean().
 is_valid_sync_param(SP) when SP =:= one
                         orelse SP =:= all
