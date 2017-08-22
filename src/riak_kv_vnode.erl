@@ -202,7 +202,8 @@
                   prunetime :: undefined| non_neg_integer(),
                   readrepair=false :: boolean(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
+                  crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
+                  sync_on_write = undefined :: undefined | atom()
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -1427,6 +1428,7 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                         StartTime
                 end,
     Coord = proplists:get_value(coord, Options, false),
+    SyncOnWrite = proplists:get_value(sync_on_write, Options, undefined),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
@@ -1438,7 +1440,8 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        starttime=StartTime,
                        readrepair = ReadRepair,
                        prunetime=PruneTime,
-                       crdt_op = CRDTOp},
+                       crdt_op = CRDTOp,
+                       sync_on_write = SyncOnWrite},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -1664,28 +1667,23 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                      bkey=BKey,
                      reqid=ReqID,
                      coord=Coord,
-                     bprops=BProps,
                      index_specs=IndexSpecs,
-                     readrepair=ReadRepair}) ->
+                     readrepair=ReadRepair,
+                     sync_on_write=SyncOnWrite}) ->
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
       false ->
         MaxCheckFlag = do_max_check
     end,
-    SyncProp = lists:keyfind(sync_on_write,1,BProps),
-    case SyncProp of
-       {sync_on_write, <<"all">>} ->
+    case SyncOnWrite of
+        all ->
            Sync = true;
-       {sync_on_write, all} ->
-           Sync = true;
-       %% 'one' does not override the backend value for the other nodes
-       %% therefore is only useful if the backend is configured to not sync-on-write
-       {sync_on_write, <<"one">>} ->
+        %% 'one' does not override the backend value for the other nodes
+        %% therefore is only useful if the backend is configured to not sync-on-write
+        one ->
            Sync = Coord;
-       {sync_on_write, one} ->
-           Sync = Coord;
-       _ ->
+        _ ->
            %% anything but all or one means do the default configured backend write
            Sync = false
     end,
@@ -2359,7 +2357,6 @@ encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Sync) 
 encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                             MaxCheckFlag, Sync) ->
     DoMaxCheck = MaxCheckFlag == do_max_check,
-    io:format("final put no sib check~n"),
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
             %% Non binary returning backends will have to handle size warnings
@@ -2387,7 +2384,6 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                         false ->
                             ok
                     end,
-                    io:format("Selecting put fun~n"),
                     PutFun = select_put_fun(Mod, ModState, Sync),
                     PutRet = PutFun(Bucket, Key, IndexSpecs, EncodedVal, ModState),
                     {PutRet, EncodedVal}
