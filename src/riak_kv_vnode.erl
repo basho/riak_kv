@@ -1072,16 +1072,13 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-    AsyncBackend = lists:member(async_fold, Capabilities),
-    Opts = case AsyncFolding andalso AsyncBackend of
-               true ->
-                   [async_fold | Opts0];
-               false ->
-                   Opts0
-           end,
+    OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
+    Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
+        {queue, DeferrableWork} ->
+            {queue, {fold, DeferrableWork, FinishFun}, Sender, State};
         _ ->
             {noreply, State}
     end.
@@ -2173,15 +2170,30 @@ maybe_use_fold_heads(Capabilities, Opts, Mod) ->
     end.
 
 
-%% @private
+-spec maybe_enable_async_fold(boolean(), list(), list()) -> list().
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
     AsyncBackend = lists:member(async_fold, Capabilities),
-    case AsyncFolding andalso AsyncBackend of
-        true ->
-            [async_fold|Opts];
-        false ->
-            Opts
-    end.
+    options_for_folding_and_backend(Opts,
+									AsyncFolding andalso AsyncBackend,
+									async_fold).
+
+-spec maybe_enable_snap_prefold(boolean(), list(), list()) -> list().
+maybe_enable_snap_prefold(AsyncFolding, Capabilities, Opts) ->
+	SnapBackend = lists:member(snap_prefold, Capabilities),
+    options_for_folding_and_backend(Opts,
+									AsyncFolding andalso SnapBackend,
+									snap_prefold).
+
+-spec options_for_folding_and_backend(list(),
+										UseAsyncFolding :: boolean(),
+										atom()) -> list().
+options_for_folding_and_backend(Opts, true, async_fold) ->
+    [async_fold | Opts];
+options_for_folding_and_backend(Opts, true, snap_prefold) ->
+    [snap_prefold | Opts];
+options_for_folding_and_backend(Opts, false, _) ->
+    Opts.
+
 
 %% @private
 maybe_enable_iterator_refresh(Capabilities, Opts) ->

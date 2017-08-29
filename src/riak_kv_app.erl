@@ -205,6 +205,7 @@ start(_Type, _StartArgs) ->
                 {vnode_module, riak_kv_vnode},
                 {bucket_validator, riak_kv_bucket},
                 {stat_mod, riak_kv_stat},
+                {node_worker_pool, {riak_kv_worker, 1, [], []}},
                 {permissions, [get, put, delete, list_keys, list_buckets,
                                mapreduce, index, get_preflist]}
             ]

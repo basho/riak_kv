@@ -52,7 +52,8 @@
                         head,
                         fold_heads,
                         direct_fetch,
-                        putfsm_pause]).
+                        putfsm_pause,
+                        snap_prefold]).
 -define(API_VERSION, 1).
 
 -record(state, {bookie :: pid(),
@@ -212,6 +213,8 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
     Bucket = lists:keyfind(bucket, 1, Opts),
     Index = lists:keyfind(index, 1, Opts),
 
+    SnapPreFold = lists:member(snap_prefold, Opts),
+
     %% Multiple limiters may exist. Take the most specific limiter.
     {async, Folder} =
         if
@@ -222,7 +225,8 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                                                 end_term=EndTerm,
                                                 return_terms=ReturnTerms,
                                                 term_regex=TermRegex}} = Index,
-                IndexQuery = {index_query,
+                IndexQuery =
+                    {index_query,
                                 {QBucket, StartKey},
                                 {FoldKeysFun, Acc},
                                 {Field, StartTerm, EndTerm},
@@ -237,12 +241,15 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                 leveled_bookie:book_returnfolder(Bookie, AllKeyQuery)
         end,
 
-    case proplists:get_bool(async_fold, Opts) of
-        true ->
+    case {proplists:get_bool(async_fold, Opts), SnapPreFold} of
+        {true, true} ->
+            {queue, Folder};
+        {true, false} ->
             {async, Folder};
-        false ->
+        _ ->
             {ok, Folder()}
     end.
+
 
 %% @doc Fold over all the objects for one or all buckets.
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
@@ -279,19 +286,38 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
-    lager:info("Fold heads request with Opts ~w", [Opts]),
+    CheckPresence =
+        case proplists:get_value(check_presence, Opts) of
+            undefined ->
+                true;
+            CP ->
+                CP
+        end,
+    SnapPreFold = lists:member(snap_prefold, Opts),
     Query =
         case proplists:get_value(bucket, Opts) of
             undefined ->
-                {foldheads_allkeys, ?RIAK_TAG, {FoldHeadsFun, Acc}};
+                {foldheads_allkeys,
+                  ?RIAK_TAG,
+                  {FoldHeadsFun, Acc},
+                  CheckPresence,
+                  SnapPreFold};
             B ->
-                {foldheads_bybucket, ?RIAK_TAG, B, {FoldHeadsFun, Acc}}
+                {foldheads_bybucket,
+                  ?RIAK_TAG,
+                  B,
+                  {FoldHeadsFun, Acc, CheckPresence},
+                  CheckPresence,
+                  SnapPreFold}
         end,
+
     {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
-    case proplists:get_bool(async_fold, Opts) of
-        true ->
+    case {proplists:get_bool(async_fold, Opts), SnapPreFold} of
+        {true, true} ->
+            {queue, HeadFolder};
+        {true, false} ->
             {async, HeadFolder};
-        false ->
+        _ ->
             {ok, HeadFolder()}
     end.
 
