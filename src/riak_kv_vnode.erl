@@ -94,14 +94,24 @@
 -export([put_merge/6]). %% For fsm_eqc_vnode
 -endif.
 
-
-%% Yokozuna does not work anymore after this change!
-%% Search is hardcoded to disabled
+%% N.B. The ?INDEX macro should be called any time the object bytes on
+%% disk are modified.
+-ifdef(TEST).
+%% Use values so that test compile doesn't give 'unused vars' warning.
 -define(INDEX(A,B,C), _=element(1,{{_A1, _A2} = A,B,C}), ok).
 -define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
 -define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), _=element(1, {BProps}), false).
--define(YZ_SHOULD_HANDOFF(X), true).
+-else.
+-define(INDEX(Objects, Reason, Partition), yz_kv:index(Objects, Reason, Partition)).
+-define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
+-define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), yz_kv:is_search_enabled_for_bucket(BProps)).
+-endif.
 
+-ifdef(TEST).
+-define(YZ_SHOULD_HANDOFF(X), true).
+-else.
+-define(YZ_SHOULD_HANDOFF(X), yz_kv:should_handoff(X)).
+-endif.
 
 -record(mrjob, {cachekey :: term(),
                 bkey :: term(),
