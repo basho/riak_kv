@@ -1966,7 +1966,9 @@ list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
         {ok, Acc} ->
             FinishFun(Acc);
         {async, AsyncWork} ->
-            {async, AsyncWork}
+            {async, AsyncWork};
+        {queue, DeferrableWork} ->
+            {queue, DeferrableWork}
     end.
 
 %% @private
