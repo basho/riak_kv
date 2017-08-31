@@ -2064,7 +2064,9 @@ result_fun_ack(Bucket, Sender) ->
                 {Monitor, stop_fold} ->
                     erlang:demonitor(Monitor, [flush]),
                     throw(stop_fold);
-                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                {'DOWN', Monitor, process, Pid, Reason} ->
+                    lager:error("Process ~w down for reason ~w", 
+                                    [Pid, Reason]),
                     throw(receiver_down)
             end
     end.
