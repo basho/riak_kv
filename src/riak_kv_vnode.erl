@@ -1045,12 +1045,13 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
+
 %% Convenience for handling both v3 and v4 coverage-based key fold operations
-handle_coverage_keyfold(Bucket, ItemFilter, Query,
-                      FilterVNodes, Sender, State,
-                      ResultFunFun) ->
-    handle_coverage_fold(fold_keys, Bucket, ItemFilter, Query,
-                            FilterVNodes, Sender, State, ResultFunFun).
+handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+                      FilterVNodes, Sender, Opts,
+                      State) ->
+    handle_coverage_fold(fold_keys, Bucket, ItemFilter, ResultFun,
+                            FilterVNodes, Sender, Opts, State).
 
 %% Until a bit of a refactor can occur to better abstract
 %% index operations, allow the ModFun for folding to be declared
