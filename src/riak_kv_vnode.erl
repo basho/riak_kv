@@ -1050,8 +1050,9 @@ handle_coverage_index(Bucket, ItemFilter, Query,
 handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
                       FilterVNodes, Sender, Opts,
                       State) ->
+    Opts0 = [request_snap_prefold|Opts],
     handle_coverage_fold(fold_keys, Bucket, ItemFilter, ResultFun,
-                            FilterVNodes, Sender, Opts, State).
+                            FilterVNodes, Sender, Opts0, State).
 
 %% Until a bit of a refactor can occur to better abstract
 %% index operations, allow the ModFun for folding to be declared
@@ -1074,16 +1075,14 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     FinishFun = finish_fun(BufferMod, Sender),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
-    Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
+    SnapFolding = lists:member(request_snap_prefold, OptsAF) and AsyncFolding,
+    Opts = maybe_enable_snap_prefold(SnapFolding, Capabilities, OptsAF),
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
-            lager:info("List keys using async query"),
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
         {queue, DeferrableWork} ->
-            lager:info("List keys using snapshot query"),
             {queue, {fold, DeferrableWork, FinishFun}, Sender, State};
         _ ->
-            lager:info("List keys using sync query"),
             {noreply, State}
     end.
 
@@ -2186,10 +2185,10 @@ maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
 									async_fold).
 
 -spec maybe_enable_snap_prefold(boolean(), list(), list()) -> list().
-maybe_enable_snap_prefold(AsyncFolding, Capabilities, Opts) ->
+maybe_enable_snap_prefold(SnapFolding, Capabilities, Opts) ->
 	SnapBackend = lists:member(snap_prefold, Capabilities),
     options_for_folding_and_backend(Opts,
-									AsyncFolding andalso SnapBackend,
+									SnapFolding andalso SnapBackend,
 									snap_prefold).
 
 -spec options_for_folding_and_backend(list(),
