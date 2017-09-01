@@ -973,16 +973,16 @@ handle_coverage(#riak_kv_listkeys_req_v3{bucket=Bucket,
     %% v3 == no backpressure
     ResultFun = result_fun(Bucket, Sender),
     Opts = [{bucket, Bucket}],
-    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
-                            FilterVNodes, Sender, Opts, State);
+    handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
+                                FilterVNodes, Sender, Opts, State);
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
                 FilterVNodes, Sender, State) ->
     %% v4 == ack-based backpressure
     ResultFun = result_fun_ack(Bucket, Sender),
     Opts = [{bucket, Bucket}],
-    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
-                            FilterVNodes, Sender, Opts, State);
+    handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
+                             FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
@@ -1047,7 +1047,14 @@ handle_coverage_index(Bucket, ItemFilter, Query,
 
 
 %% Convenience for handling both v3 and v4 coverage-based key fold operations
-handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
+%% This will request that a snapshot is made prior to the fold, so that if the
+%% fold is queued the reuslts will be of equivalent consistency to an unqueued
+%% query.
+%%
+%% Should the backend not support the snap_prefold capability, then behaviour 
+%% will revert to standard async (and the core node_worker_pool will not be 
+%% used).  Not supporting snap_prefold maintains legacy behaviour.
+handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
                       FilterVNodes, Sender, Opts,
                       State) ->
     Opts0 = [request_snap_prefold|Opts],

@@ -213,6 +213,12 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
     Bucket = lists:keyfind(bucket, 1, Opts),
     Index = lists:keyfind(index, 1, Opts),
 
+    %% All fold_keys queries are currently snapped prior to the fold, the 
+    %% delta with setting this option is just whether the response is 
+    %% {queue, Folder} or {async, Folder} - allowing for the riak vnode to
+    %% distributed to the constrained core node_worker_pool rather than being
+    %% directly run in the vnode_worker_pool (where it will almost certainly 
+    %% be executed immediately).
     SnapPreFold = lists:member(snap_prefold, Opts),
 
     %% Multiple limiters may exist. Take the most specific limiter.
