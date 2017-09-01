@@ -195,7 +195,7 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{bookie=Bookie}) ->
     ListBucketQ = {binary_bucketlist, ?RIAK_TAG, {FoldBucketsFun, Acc}},
     {async, Folder} = leveled_bookie:book_returnfolder(Bookie, ListBucketQ),
-    case proplists:get_bool(async_fold, Opts) of
+    case lists:member(async_fold, Opts) of
         true ->
             {async, Folder};
         false ->
@@ -241,7 +241,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                 leveled_bookie:book_returnfolder(Bookie, AllKeyQuery)
         end,
 
-    case {proplists:get_bool(async_fold, Opts), SnapPreFold} of
+    case {lists:member(async_fold, Opts), SnapPreFold} of
         {true, true} ->
             {queue, Folder};
         {true, false} ->
@@ -266,7 +266,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                 {foldobjects_bybucket, ?RIAK_TAG, B, {FoldObjectsFun, Acc}}
         end,
     {async, ObjectFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
-    case proplists:get_bool(async_fold, Opts) of
+    case lists:member(async_fold, Opts) of
         true ->
             {async, ObjectFolder};
         false ->
@@ -312,7 +312,7 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
         end,
 
     {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
-    case {proplists:get_bool(async_fold, Opts), SnapPreFold} of
+    case {lists:member(async_fold, Opts), SnapPreFold} of
         {true, true} ->
             {queue, HeadFolder};
         {true, false} ->

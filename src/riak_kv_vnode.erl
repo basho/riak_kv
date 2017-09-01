@@ -1077,10 +1077,13 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
+            lager:info("List keys using async query"),
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
         {queue, DeferrableWork} ->
+            lager:info("List keys using snapshot query"),
             {queue, {fold, DeferrableWork, FinishFun}, Sender, State};
         _ ->
+            lager:info("List keys using sync query"),
             {noreply, State}
     end.
 
