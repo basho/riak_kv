@@ -195,7 +195,7 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{bookie=Bookie}) ->
     ListBucketQ = {binary_bucketlist, ?RIAK_TAG, {FoldBucketsFun, Acc}},
     {async, Folder} = leveled_bookie:book_returnfolder(Bookie, ListBucketQ),
-    case proplists:get_bool(async_fold, Opts) of
+    case lists:member(async_fold, Opts) of
         true ->
             {async, Folder};
         false ->
@@ -213,6 +213,12 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
     Bucket = lists:keyfind(bucket, 1, Opts),
     Index = lists:keyfind(index, 1, Opts),
 
+    %% All fold_keys queries are currently snapped prior to the fold, the 
+    %% delta with setting this option is just whether the response is 
+    %% {queue, Folder} or {async, Folder} - allowing for the riak vnode to
+    %% distributed to the constrained core node_worker_pool rather than being
+    %% directly run in the vnode_worker_pool (where it will almost certainly 
+    %% be executed immediately).
     SnapPreFold = lists:member(snap_prefold, Opts),
 
     %% Multiple limiters may exist. Take the most specific limiter.
@@ -241,7 +247,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                 leveled_bookie:book_returnfolder(Bookie, AllKeyQuery)
         end,
 
-    case {proplists:get_bool(async_fold, Opts), SnapPreFold} of
+    case {lists:member(async_fold, Opts), SnapPreFold} of
         {true, true} ->
             {queue, Folder};
         {true, false} ->
@@ -266,7 +272,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                 {foldobjects_bybucket, ?RIAK_TAG, B, {FoldObjectsFun, Acc}}
         end,
     {async, ObjectFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
-    case proplists:get_bool(async_fold, Opts) of
+    case lists:member(async_fold, Opts) of
         true ->
             {async, ObjectFolder};
         false ->
@@ -312,7 +318,7 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
         end,
 
     {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
-    case {proplists:get_bool(async_fold, Opts), SnapPreFold} of
+    case {lists:member(async_fold, Opts), SnapPreFold} of
         {true, true} ->
             {queue, HeadFolder};
         {true, false} ->

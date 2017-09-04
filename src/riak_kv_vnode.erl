@@ -973,16 +973,16 @@ handle_coverage(#riak_kv_listkeys_req_v3{bucket=Bucket,
     %% v3 == no backpressure
     ResultFun = result_fun(Bucket, Sender),
     Opts = [{bucket, Bucket}],
-    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
-                            FilterVNodes, Sender, Opts, State);
+    handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
+                                FilterVNodes, Sender, Opts, State);
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
                 FilterVNodes, Sender, State) ->
     %% v4 == ack-based backpressure
     ResultFun = result_fun_ack(Bucket, Sender),
     Opts = [{bucket, Bucket}],
-    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
-                            FilterVNodes, Sender, Opts, State);
+    handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
+                             FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
@@ -1081,13 +1081,25 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
+%% @doc
 %% Convenience for handling both v3 and v4 coverage-based key fold operations
-handle_coverage_keyfold(Bucket, ItemFilter, Query,
-                      FilterVNodes, Sender, State,
-                      ResultFunFun) ->
-    handle_coverage_fold(fold_keys, Bucket, ItemFilter, Query,
-                            FilterVNodes, Sender, State, ResultFunFun).
+%% This will request that a snapshot is made prior to the fold, so that if the
+%% fold is queued the reuslts will be of equivalent consistency to an unqueued
+%% query.
+%%
+%% Should the backend not support the snap_prefold capability, then behaviour 
+%% will revert to standard async (and the core node_worker_pool will not be 
+%% used).  Not supporting snap_prefold maintains legacy behaviour.
+handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
+                      FilterVNodes, Sender, Opts,
+                      State) ->
+    Opts0 = [request_snap_prefold|Opts],
+    handle_coverage_fold(fold_keys, Bucket, ItemFilter, ResultFun,
+                            FilterVNodes, Sender, Opts0, State).
 
+%% @doc
+%% This doesn't handle all coverage folds - just 2i queries and list keys
+%%
 %% Until a bit of a refactor can occur to better abstract
 %% index operations, allow the ModFun for folding to be declared
 %% to support index operations that can return objects
@@ -1100,22 +1112,37 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                                      modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
-    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    Filter = 
+        riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    
+    % Use a buffer so each result isn't sent back individually
     BufferMod = riak_kv_fold_buffer,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
+    
+    % Build the fold and finish functions
     Extras = fold_extras_keys(Index, Bucket),
     FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
+    
+    % Understand how the fold should be run - async, sync or queued
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
-    Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
+    SnapFolding = lists:member(request_snap_prefold, OptsAF) and AsyncFolding,
+    Opts = maybe_enable_snap_prefold(SnapFolding, Capabilities, OptsAF),
+    
+    % Make the fold request to the vnode - why is this called list?
+    % Perhaps this should be backend_fold/7
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
+            % This work should be sent to the vnode_worker_pool
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
         {queue, DeferrableWork} ->
+            % This work should be sent to the core node_worker_pool
             {queue, {fold, DeferrableWork, FinishFun}, Sender, State};
         _ ->
+            % This work has already been completed by the vnode, which should
+            % have already sent the results using FinishFun
             {noreply, State}
     end.
 
@@ -2002,7 +2029,9 @@ list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
         {ok, Acc} ->
             FinishFun(Acc);
         {async, AsyncWork} ->
-            {async, AsyncWork}
+            {async, AsyncWork};
+        {queue, DeferrableWork} ->
+            {queue, DeferrableWork}
     end.
 
 %% @private
@@ -2098,7 +2127,9 @@ result_fun_ack(Bucket, Sender) ->
                 {Monitor, stop_fold} ->
                     erlang:demonitor(Monitor, [flush]),
                     throw(stop_fold);
-                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                {'DOWN', Monitor, process, Pid, Reason} ->
+                    lager:error("Process ~w down for reason ~w", 
+                                    [Pid, Reason]),
                     throw(receiver_down)
             end
     end.
@@ -2214,10 +2245,10 @@ maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
 									async_fold).
 
 -spec maybe_enable_snap_prefold(boolean(), list(), list()) -> list().
-maybe_enable_snap_prefold(AsyncFolding, Capabilities, Opts) ->
+maybe_enable_snap_prefold(SnapFolding, Capabilities, Opts) ->
 	SnapBackend = lists:member(snap_prefold, Capabilities),
     options_for_folding_and_backend(Opts,
-									AsyncFolding andalso SnapBackend,
+									SnapFolding andalso SnapBackend,
 									snap_prefold).
 
 -spec options_for_folding_and_backend(list(),

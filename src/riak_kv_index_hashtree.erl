@@ -614,7 +614,7 @@ fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
     Version = get_version(HashtreePid),
     FoldFun = fold_fun(HashtreePid, HasIndexTree),
     {Limit, Wait} = get_build_throttle(),
-    lager:info("Making fold request to reconstruct AAE tree ~w"
+    lager:info("Making fold request to reconstruct AAE tree idx=~p"
                             ++ " with version ~w", 
                 [Partition, Version]),
     Opts = 
@@ -636,11 +636,14 @@ fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
 
 %% The accumulator in the fold is the number of bytes hashed
 %% modulo the "build limit" size. If we get an int back, everything is ok
-handle_fold_keys_result({Result, {_Limit, _Delay}}, HashtreePid, Index) when is_integer(Result) ->
-    lager:info("Finished AAE tree build: ~p", [Index]),
+handle_fold_keys_result({Result, {Limit, Delay}}, HashtreePid, Index) 
+                                                when is_integer(Result) ->
+    lager:info("Finished AAE tree build idx=~p limit ~w delay ~w", 
+                    [Index, Limit, Delay]),
     gen_server:cast(HashtreePid, build_finished);
 handle_fold_keys_result(Result, HashtreePid, Index) ->
-    lager:error("Failed to build hashtree for index ~p. Result was: ~p", [Index, Result]),
+    lager:error("Failed to build hashtree for idx=~p. Result was: ~p", 
+                    [Index, Result]),
     gen_server:cast(HashtreePid, build_failed).
 
 get_build_throttle() ->
