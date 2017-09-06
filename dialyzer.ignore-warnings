@@ -15,7 +15,6 @@ riak_core_pb.erl:193: The pattern 'true' can never match the type 'false'
 riak_core_pb.erl:202: The pattern <Binary, 'string'> can never match the type <_,'bytes'>
 riak_core_pb.erl:222: The pattern <Types, [{FNum, Bytes} | Tail], Acc> can never match the type <_,[],[{_,_}]>
 riak_kv_buckets_fsm.erl:27: Callback info about the riak_core_coverage_fsm behaviour is not available
-riak_kv_mapfold_fsm.erl:42: Callback info about the riak_core_coverage_fsm behaviour is not available
 riak_kv_console.erl:154: The pattern {'error', 'legacy_mode'} can never match the type {'error','is_up' | 'not_member' | 'only_member'}
 riak_kv_gcounter.erl:64: Invalid type specification for function riak_kv_gcounter:new/2. The success typing is (_,pos_integer()) -> {'ok',riak_kv_gcounter:gcounter()}
 riak_kv_gcounter.erl:75: Invalid type specification for function riak_kv_gcounter:update/3. The success typing is ('increment' | {'increment',pos_integer()},_,riak_kv_gcounter:gcounter()) -> {'ok',riak_kv_gcounter:gcounter()}
