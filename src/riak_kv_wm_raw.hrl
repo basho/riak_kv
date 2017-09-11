@@ -75,6 +75,4 @@
 -define(Q_RETURNVALUE, "returnvalue").
 -define(Q_2I_MAPFOLD, "mapfold").
 -define(Q_MF_MAPFOLDMOD, "mapfoldmod").
--define(Q_MF_SAMPLE, "sample").
--define(Q_MF_FILTERLIST, "filter_list").
--define(Q_MF_MASK, "mask").
+-define(Q_MF_MAPFOLDOPTS, "mapfoldoptions").

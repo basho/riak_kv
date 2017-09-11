@@ -74,16 +74,16 @@
 %% in the backend
 %% Timeout - to timeout the query 
 init(From={_, _, _}, 
-        [Bucket, Query, FoldMod, FilterList, Opts, Timeout]) ->
+        [Bucket, Query, FoldMod, FoldOpts, Timeout]) ->
     % Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
     
     % Construct the object folding request 
-    ItemFilter = FoldMod:generate_filter(FilterList),
-    InitAcc = FoldMod:generate_acc(Opts),
-    MapFoldFun = FoldMod:generate_objectfold(Opts),
-    CapabilityNeeds = FoldMod:state_needs(Opts), 
+    ItemFilter = FoldMod:generate_filter(FoldOpts),
+    InitAcc = FoldMod:generate_acc(FoldOpts),
+    MapFoldFun = FoldMod:generate_objectfold(FoldOpts),
+    CapabilityNeeds = FoldMod:state_needs(FoldOpts), 
     Req = ?KV_MAPFOLD_REQ{bucket = Bucket,
                             type = object,
                             qry = Query,
@@ -93,7 +93,7 @@ init(From={_, _, _},
                             needs = CapabilityNeeds},
 
     % Make the merge fund
-    MergeFun = FoldMod:generate_mergefun(Opts),
+    MergeFun = FoldMod:generate_mergefun(FoldOpts),
     
     % Sample - an option which will run the query on a single partition not a
     % covering set of partitions.  Intended to be used when the fold is to 
@@ -105,7 +105,7 @@ init(From={_, _, _},
     % between SK and EK is approcimately RS * M across the whole database).  
     % A range found by the range finder could then be used to chunk up a query
     % avoiding long lived iterators.
-    {sample, Sample} = lists:keyfind(sample, 1 , Opts),
+    {sample, Sample} = lists:keyfind(sample, 1 , FoldOpts),
 
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{from=From, sample=Sample, acc=InitAcc, merge_fun=MergeFun}}.

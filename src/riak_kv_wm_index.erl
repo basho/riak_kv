@@ -80,10 +80,8 @@
           pagination_sort :: boolean() | undefined,
           security,        %% security context
           mapfold = false :: boolean(), %% Is this a mapfold query
-          mapfoldmod,   %% If this is a mpafold query, a map fold module name required
-          sample = false :: boolean(),  %% For a mapfold query - is a sample only required
-          filter_list = [] :: list(integer()), %% A list of segments to filter on
-          mask :: integer()
+          mapfoldmod :: atom(),  %% If this is a mpafold query, a map fold module name required
+          mapfoldopts = [] :: list()
          }).
 -type context() :: #ctx{}.
 
@@ -225,10 +223,11 @@ malformed_request(RD, Ctx) ->
 
     MapFold0 = wrq:get_qs_value(?Q_2I_MAPFOLD, "false", RD),
     MapFold = normalize_boolean(string:to_lower(MapFold0)),
-    {MapFoldMod, Sample, FilterList, Mask} = 
+    {MapFoldMod, MapFoldOpts} = 
         case MapFold of 
             true ->
-                MapFoldMod0 = wrq:get_qs_value(?Q_MF_MAPFOLDMOD, undefined, RD),
+                MapFoldMod0 = 
+                    wrq:get_qs_value(?Q_MF_MAPFOLDMOD, undefined, RD),
                 MapFoldMod1 = 
                     case MapFoldMod0 of
                         undefined ->
@@ -236,23 +235,22 @@ malformed_request(RD, Ctx) ->
                         Str0 ->
                             list_to_atom(Str0)
                     end,
-                Sample0 = wrq:get_qs_value(?Q_MF_SAMPLE, "false", RD),
-                Sample1 = normalize_boolean(string:to_lower(Sample0)),
-                FilterL0 = wrq:get_qs_value(?Q_MF_FILTERLIST, "", RD),
-                FilterL1 = string:tokens(FilterL0, "|"),
-                FilterL2 = 
-                    lists:map(fun(X) -> list_to_integer(X) end, FilterL1),
-                Mask0 = wrq:get_qs_value(?Q_MF_MASK, undefined, RD),
-                Mask1 = 
-                    case Mask0 of 
+                MapFoldOpts0 = 
+                    wrg:get_qs_value(?Q_MF_MAPFOLDOPTS, undefined, RD),
+                MapFoldOpts1 = 
+                    case MapFoldOpts0 of
                         undefined ->
-                            undefined;
-                        Str1 ->
-                            list_to_integer(Str1)
+                            [];
+                        _ ->
+                            {struct, MFOpts} = 
+                                mochijson2:decode(base64:decode(MapFoldOpts0)),
+                            ConvertKeyFun = 
+                                fun({K, V}) -> {list_to_atom(K), V} end,
+                            lists:map(ConvertKeyFun, MFOpts)
                     end,
-                {MapFoldMod1, Sample1, FilterL2, Mask1};
+                {MapFoldMod1, MapFoldOpts1};
             false ->
-                {undefined, false, [], undefined}
+                {undefined, []}
         end,
 
     case {PgSort, ReturnTerms1, validate_timeout(Timeout0), MaxVal,
@@ -318,10 +316,8 @@ malformed_request(RD, Ctx) ->
                                 timeout=Timeout,
                                 pagination_sort = PgSortFinal,
                                 mapfold = MapFold,
-                                mapfoldmod = MapFoldMod,   
-                                sample = Sample,
-                                filter_list = FilterList,
-                                mask = Mask,
+                                mapfoldmod = MapFoldMod,
+                                mapfoldopts = MapFoldOpts,
                                 streamed = Stream
                       },
             {false, RD, NewCtx};
@@ -553,13 +549,11 @@ handle_all_in_memory_index_query(RD, Ctx) ->
             end;
         true ->
             % MapFold query
-            Opts = [{mask, Ctx#ctx.mask}, {sample, Ctx#ctx.sample}],
             MapFoldMod = Ctx#ctx.mapfoldmod,
             Result =  Client:map_fold(Bucket, 
                                         Query, 
                                         MapFoldMod, 
-                                        Ctx#ctx.filter_list, 
-                                        Opts),
+                                        Ctx#ctx.mapfoldopts),
 
             case Result of 
                 {ok, Results} ->
