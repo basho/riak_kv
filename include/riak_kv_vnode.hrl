@@ -75,7 +75,6 @@
             bucket :: binary() | tuple(),
             type :: key | object,
             qry :: riak_index:query_def(),
-            item_filter :: riak_kv_coverage_filter:filter(),
             fold_fun :: riak_kv_backend:fold_objects_fun(),
             init_acc :: any(),
             needs :: list(atom())

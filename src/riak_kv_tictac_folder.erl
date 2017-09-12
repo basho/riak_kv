@@ -27,13 +27,13 @@
 
 -export([generate_filter/1,
             generate_acc/1,
-            generate_objectfold/1,
+            generate_objectfold/2,
             generate_mergefun/1,
             state_needs/1,
             encode_results/2
             ]).
 
--define(NEEDS, [async_fold, snap_prefold]).
+-define(NEEDS, [async_fold, snap_prefold, fold_heads]).
 
 
 state_needs(_Opts) ->
@@ -43,10 +43,10 @@ generate_filter(_FilterList) ->
     none.
 
 generate_acc(Opts) ->
-    TreeSize = proplists:get_value(tree_size, Opts, small),
+    TreeSize = list_to_atom(proplists:get_value(tree_size, Opts, "small")),
     leveled_tictac:new_tree(tictac_folder, TreeSize).
 
-generate_objectfold(_Opts) ->
+generate_objectfold(_Opts, none) ->
     fun(_B, K, PO, Acc) ->
         HashFun = 
             fun(_Key, Obj) ->

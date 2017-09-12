@@ -999,14 +999,13 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
                           FilterVNodes, Sender, State, fun result_fun_ack/2);
 handle_coverage(?KV_MAPFOLD_REQ{bucket=Bucket,
                                 type=Type,
-                                item_filter=ItemFilter,
                                 qry=Query,
                                 fold_fun=FoldFun,
                                 init_acc=InitAcc,
                                 needs=Needs},
                     FilterVnodes, Sender, State) ->
     handle_coverage_mapfold(Bucket, Type, 
-                                ItemFilter, Query, FoldFun, InitAcc, Needs, 
+                                Query, FoldFun, InitAcc, Needs, 
                                 FilterVnodes, Sender, State).
 
 -spec prepare_index_query(index_query()) -> index_query().
@@ -1028,26 +1027,43 @@ buffer_size_for_index_query(_Q, DefaultSize) ->
 
 
 handle_coverage_mapfold(Bucket, Type, 
-                            ItemFilter, Query, _FoldFun, _InitAcc, _Needs, 
-                            _FilterVnodes, _Sender, 
+                            Query, FoldFun, InitAcc, Needs, 
+                            FilterVnodes, Sender, 
                             State=#state{mod=Mod, 
                                             modstate=ModState,
+                                            idx=Index,
                                             async_folding=AsyncFolding}) ->
     Field = Query#riak_kv_index_v3.filter_field,
-    BucketFold = Type == object andalso Field == <<"$bucket">>,
     KeyFold = Type == object andalso Field == <<"$key">>,
-    _Filter = riak_kv_coverage_filter:build_filter(ItemFilter),
-    Opts0 = [{index, Bucket, prepare_index_query(Query)},
-                    {bucket, Bucket}],
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, none, FilterVnodes),
+    
+    Opts0 = 
+        [{index, Bucket, prepare_index_query(Query)}, {bucket, Bucket}] 
+        ++ Needs,
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
-    _Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
-    case {BucketFold, KeyFold} of 
-        {true, false} ->
-            {reply, {error, {mapfold_not_supported, Type, Query}}, State};
-        {false, true} ->
-            {reply, {error, {mapfold_not_supported, Type, Query}}, State};
-        _ ->
+    Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
+
+    ModFolder = maybe_use_fold_heads(Capabilities, Opts, Mod),
+    FinishFun =
+        fun(Acc) ->
+                riak_core_vnode:reply(Sender, Acc)
+        end,
+    Extras = fold_extras_keys(Index, Bucket),
+    ObjectFoldFun = fold_fun(objects, FoldFun, Filter, Extras),
+    case KeyFold of 
+        true ->
+            % object query
+            case ModFolder(ObjectFoldFun, InitAcc, Opts, ModState) of 
+                {ok, Acc} ->
+                    {reply, Acc, State};
+                {async, Work} ->
+                    {async, {fold, Work, FinishFun}, Sender, State};
+                {queue, DeferrableWork} ->
+                    {queue, {fold, DeferrableWork, FinishFun}, Sender, State}
+            end;
+        false ->
+            % Index query
             {reply, {error, {mapfold_not_supported, Type, Query}}, State}
     end.
 
@@ -2085,7 +2101,26 @@ fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
                 _ ->
                     Buffer
             end
+    end;
+fold_fun(objects, FoldFun, Filter, undefined) ->
+    case Filter of 
+        none ->
+            FoldFun;
+        _ ->
+            fun(B, K, Obj, Acc) ->
+                case Filter(K) of 
+                    true ->
+                        FoldFun(B, K, Obj, Acc);
+                    false ->
+                        Acc
+                end 
+            end
     end.
+    % No definition of behaviour during ring-resizing.  Assumption is that
+    % ring-resizing would not be supported, and so we should let it crash
+
+
+
 
 %% @private
 result_fun(Sender) ->
