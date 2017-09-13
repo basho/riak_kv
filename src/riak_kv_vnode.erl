@@ -1026,15 +1026,13 @@ buffer_size_for_index_query(_Q, DefaultSize) ->
     DefaultSize.
 
 
-handle_coverage_mapfold(Bucket, Type, 
+handle_coverage_mapfold(Bucket, object, 
                             Query, FoldFun, InitAcc, Needs, 
                             FilterVnodes, Sender, 
                             State=#state{mod=Mod, 
                                             modstate=ModState,
                                             idx=Index,
                                             async_folding=AsyncFolding}) ->
-    Field = Query#riak_kv_index_v3.filter_field,
-    KeyFold = Type == object andalso Field == <<"$key">>,
     Filter = riak_kv_coverage_filter:build_filter(Bucket, none, FilterVnodes),
     
     Opts0 = 
@@ -1047,25 +1045,20 @@ handle_coverage_mapfold(Bucket, Type,
     ModFolder = maybe_use_fold_heads(Capabilities, Opts, Mod),
     FinishFun =
         fun(Acc) ->
-                riak_core_vnode:reply(Sender, Acc)
+            riak_core_vnode:reply(Sender, Acc)
         end,
     Extras = fold_extras_keys(Index, Bucket),
     ObjectFoldFun = fold_fun(objects, FoldFun, Filter, Extras),
-    case KeyFold of 
-        true ->
-            % object query
-            case ModFolder(ObjectFoldFun, InitAcc, Opts, ModState) of 
-                {ok, Acc} ->
-                    {reply, Acc, State};
-                {async, Work} ->
-                    {async, {fold, Work, FinishFun}, Sender, State};
-                {queue, DeferrableWork} ->
-                    {queue, {fold, DeferrableWork, FinishFun}, Sender, State}
-            end;
-        false ->
-            % Index query
-            {reply, {error, {mapfold_not_supported, Type, Query}}, State}
+    
+    case ModFolder(ObjectFoldFun, InitAcc, Opts, ModState) of 
+        {ok, Acc} ->
+            {reply, Acc, State};
+        {async, Work} ->
+            {async, {fold, Work, FinishFun}, Sender, State};
+        {queue, DeferrableWork} ->
+            {queue, {fold, DeferrableWork, FinishFun}, Sender, State}
     end.
+
 
 handle_coverage_index(Bucket, ItemFilter, Query,
                       FilterVNodes, Sender,
@@ -2102,19 +2095,16 @@ fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
                     Buffer
             end
     end;
+fold_fun(objects, FoldFun, none, undefined) ->
+    FoldFun;
 fold_fun(objects, FoldFun, Filter, undefined) ->
-    case Filter of 
-        none ->
-            FoldFun;
-        _ ->
-            fun(B, K, Obj, Acc) ->
-                case Filter(K) of 
-                    true ->
-                        FoldFun(B, K, Obj, Acc);
-                    false ->
-                        Acc
-                end 
-            end
+    fun(B, K, Obj, Acc) ->
+        case Filter(K) of 
+            true ->
+                FoldFun(B, K, Obj, Acc);
+            false ->
+                Acc
+        end 
     end.
     % No definition of behaviour during ring-resizing.  Assumption is that
     % ring-resizing would not be supported, and so we should let it crash

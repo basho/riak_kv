@@ -236,7 +236,7 @@ malformed_request(RD, Ctx) ->
                             list_to_atom(Str0)
                     end,
                 MapFoldOpts0 = 
-                    wrg:get_qs_value(?Q_MF_MAPFOLDOPTS, undefined, RD),
+                    wrq:get_qs_value(?Q_MF_MAPFOLDOPTS, undefined, RD),
                 MapFoldOpts1 = 
                     case MapFoldOpts0 of
                         undefined ->
