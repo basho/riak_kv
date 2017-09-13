@@ -104,7 +104,11 @@ init(From={_, _, _},
     % between SK and EK is approcimately RS * M across the whole database).  
     % A range found by the range finder could then be used to chunk up a query
     % avoiding long lived iterators.
-    {sample, Sample} = lists:keyfind(sample, 1 , FoldOpts),
+    Sample = 
+        case lists:keyfind(sample, 1 , FoldOpts) of
+            {sample, S} -> S;
+            false -> false
+        end,
 
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
      #state{from=From, sample=Sample, acc=InitAcc, merge_fun=MergeFun}}.
