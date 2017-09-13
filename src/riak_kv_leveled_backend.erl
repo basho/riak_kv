@@ -312,7 +312,7 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                 {foldheads_bybucket,
                   ?RIAK_TAG,
                   B,
-                  {FoldHeadsFun, Acc, CheckPresence},
+                  {FoldHeadsFun, Acc},
                   CheckPresence,
                   SnapPreFold}
         end,
