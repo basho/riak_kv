@@ -25,6 +25,17 @@
   end
 }.
 
+%% @doc Whether to allow node to participate in coverage queries.
+%% This is used as a manual switch to stop nodes in incomplete states
+%% (E.g. doing a full partition repair, or node replace) from participating
+%% in coverage queries, as their information may be incomplete (e.g. 2i
+%% issues seen in these circumstances).
+{mapping, "participate_in_coverage", "riak_core.participate_in_coverage", [
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
 %% @doc Specifies the storage engine used for Riak's key-value data
 %% and secondary indexes (if supported).
 {mapping, "storage_backend", "riak_kv.storage_backend", [
