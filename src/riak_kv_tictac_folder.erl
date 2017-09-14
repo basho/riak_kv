@@ -35,6 +35,10 @@
 
 -define(NEEDS, [async_fold, snap_prefold, fold_heads]).
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 
 state_needs(_Opts) ->
     ?NEEDS.
@@ -60,5 +64,19 @@ generate_mergefun(_Opts) ->
 
 encode_results(Tree, http) ->
     ExportedTree = leveled_tictac:export_tree(Tree),
-    JsonKeys1 = {struct, [tree, ExportedTree]},
+    JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
     mochijson2:encode(JsonKeys1).
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+-ifdef(TEST).
+
+json_encode_tictac_test() ->
+    Tree = leveled_tictac:new_tree(tictac_folder_test, small),
+    JsonTree = encode_results(Tree, http),
+    {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
+    ReverseTree = leveled_tictac:import_tree(ExportedTree),
+    ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree, ReverseTree)).
+
+-endif.
