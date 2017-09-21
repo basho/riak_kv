@@ -43,7 +43,7 @@
 state_needs(_Opts) ->
     ?NEEDS.
 
-generate_filter(_FilterList) ->
+generate_filter(_Opts) ->
     none.
 
 generate_acc(Opts) ->
