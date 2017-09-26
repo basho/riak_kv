@@ -292,6 +292,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
+    lager:info("Fold heads request with Opts ~w", [Opts]),
     CheckPresence =
         case proplists:get_value(check_presence, Opts) of
             undefined ->
