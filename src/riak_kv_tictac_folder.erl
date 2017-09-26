@@ -47,7 +47,10 @@ generate_filter(_Opts) ->
     none.
 
 generate_acc(Opts) ->
-    TreeSize = list_to_atom(proplists:get_value(tree_size, Opts, "small")),
+    TreeSize = 
+        list_to_atom(
+            binary_to_list(
+                proplists:get_value(tree_size, Opts, "small"))),
     leveled_tictac:new_tree(tictac_folder, TreeSize).
 
 generate_objectfold(_Opts, none) ->
