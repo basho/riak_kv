@@ -56,6 +56,7 @@ generate_objectfold(_Opts, none) ->
             fun(_Key, Obj) ->
                 riak_object:hash(Obj, 0)
             end,
+        lager:info("Encountered object with key ~w", [K]),
         leveled_tictac:add_kv(Acc, K, PO, HashFun)
     end.
 
