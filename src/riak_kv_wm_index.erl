@@ -245,7 +245,9 @@ malformed_request(RD, Ctx) ->
                             [{struct, MFOpts}] = 
                                 mochijson2:decode(base64:decode(MapFoldOpts0)),
                             ConvertKeyFun = 
-                                fun({K, V}) -> {list_to_atom(K), V} end,
+                                fun({K, V}) -> 
+                                    {list_to_atom(binary_to_list(K)), V} 
+                                end,
                             lists:map(ConvertKeyFun, MFOpts)
                     end,
                 {MapFoldMod1, MapFoldOpts1};
