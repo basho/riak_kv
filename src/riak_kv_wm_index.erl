@@ -242,7 +242,7 @@ malformed_request(RD, Ctx) ->
                         undefined ->
                             [];
                         _ ->
-                            {struct, MFOpts} = 
+                            [{struct, MFOpts}] = 
                                 mochijson2:decode(base64:decode(MapFoldOpts0)),
                             ConvertKeyFun = 
                                 fun({K, V}) -> {list_to_atom(K), V} end,
