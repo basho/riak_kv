@@ -1033,7 +1033,8 @@ handle_coverage_mapfold(Bucket, object,
                                             modstate=ModState,
                                             idx=Index,
                                             async_folding=AsyncFolding}) ->
-    Filter = riak_kv_coverage_filter:build_filter(Bucket, none, FilterVnodes),
+    FilterVnode = proplists:get_value(Index, FilterVnodes),
+    Filter = riak_kv_coverage_filter:build_filter(Bucket, none, FilterVnode),
     
     Opts0 = 
         [{index, Bucket, prepare_index_query(Query)}, {bucket, Bucket}] 
