@@ -54,7 +54,9 @@ generate_filter(Opts) ->
                             string:tokens(ConcatenatedSegmentList, 
                                             ?DELIM_TOKEN)),
     fun(K) ->
-        lists:member(leveled_tictac:get_segment(K, TreeSize), SegmentList)
+        lists:member(
+            leveled_tictac:get_segment(erlang:phash2(K), TreeSize), 
+            SegmentList)
     end.
 
 generate_acc(_Opts) ->
@@ -87,9 +89,9 @@ segfilter_test() ->
     K1 = "Key1",
     K2 = "Key2",
     K3 = "Key3",
-    S1 = leveled_tictac:get_segment(K1, small),
-    S2 = leveled_tictac:get_segment(K2, small),
-    S3 = leveled_tictac:get_segment(K3, small),
+    S1 = leveled_tictac:get_segment(erlang:phash2(K1), small),
+    S2 = leveled_tictac:get_segment(erlang:phash2(K2), small),
+    S3 = leveled_tictac:get_segment(erlang:phash2(K3), small),
     ?assertMatch(false, S3 == S2),
     ?assertMatch(false, S3 == S1),
 

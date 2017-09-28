@@ -54,13 +54,13 @@ generate_acc(Opts) ->
     leveled_tictac:new_tree(tictac_folder, TreeSize).
 
 generate_objectfold(_Opts, none) ->
-    fun(_B, K, PO, Acc) ->
-        HashFun = 
-            fun(_Key, Obj) ->
-                riak_object:hash(Obj, 0)
+    fun(B, K, PO, Acc) ->
+        ExtractFun = 
+            fun(Key, Obj) ->
+                RiakObj = riak_object:from_binary(B, Key, Obj),
+                {Key, lists:sort(riak_object:vclock(RiakObj))}
             end,
-        lager:info("Encountered object with key ~w", [K]),
-        leveled_tictac:add_kv(Acc, K, PO, HashFun)
+        leveled_tictac:add_kv(Acc, K, PO, ExtractFun, true)
     end.
 
 generate_mergefun(_Opts) ->
