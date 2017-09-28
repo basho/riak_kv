@@ -60,7 +60,7 @@ generate_objectfold(_Opts, none) ->
                 RiakObj = riak_object:from_binary(B, Key, Obj),
                 {Key, lists:sort(riak_object:vclock(RiakObj))}
             end,
-        leveled_tictac:add_kv(Acc, K, PO, ExtractFun, true)
+        leveled_tictac:add_kv(Acc, K, PO, ExtractFun, false)
     end.
 
 generate_mergefun(_Opts) ->
