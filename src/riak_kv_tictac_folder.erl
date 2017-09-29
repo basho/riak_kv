@@ -76,11 +76,27 @@ encode_results(Tree, http) ->
 %% ===================================================================
 -ifdef(TEST).
 
-json_encode_tictac_test() ->
-    Tree = leveled_tictac:new_tree(tictac_folder_test, small),
+json_encode_tictac_empty_test() ->
+    Tree = leveled_tictac:new_tree(tictac_folder_test, xlarge),
     JsonTree = encode_results(Tree, http),
     {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
     ReverseTree = leveled_tictac:import_tree(ExportedTree),
     ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree, ReverseTree)).
+
+json_encode_tictac_withentries_test() ->
+    Tree = leveled_tictac:new_tree(tictac_folder_test, xxsmall),
+    ExtractFun = fun(K, V) -> {K, V} end,
+    FoldFun = 
+        fun({Key, Value}, AccTree) ->
+            leveled_tictac:add_kv(AccTree, Key, Value, ExtractFun, false)
+        end,
+    KVList = [{<<"key1">>, <<"value1">>}, 
+                {<<"key2">>, <<"value2">>}, 
+                {<<"key3">>, <<"value3">>}],
+    Tree0 = lists:foldl(FoldFun, Tree, KVList),
+    JsonTree = encode_results(Tree0, http),
+    {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
+    ReverseTree = leveled_tictac:import_tree(ExportedTree),
+    ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree0, ReverseTree)).
 
 -endif.
