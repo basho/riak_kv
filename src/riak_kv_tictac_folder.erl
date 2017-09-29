@@ -50,7 +50,7 @@ generate_acc(Opts) ->
     TreeSize = 
         list_to_atom(
             binary_to_list(
-                proplists:get_value(tree_size, Opts, "small"))),
+                proplists:get_value(tree_size, Opts, <<"small">>))),
     leveled_tictac:new_tree(tictac_folder, TreeSize).
 
 generate_objectfold(_Opts, none) ->
@@ -98,5 +98,8 @@ json_encode_tictac_withentries_test() ->
     {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
     ReverseTree = leveled_tictac:import_tree(ExportedTree),
     ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree0, ReverseTree)).
+
+generate_optionless_acc_test() ->
+    ?assertMatch(small, generate_acc([])).
 
 -endif.
