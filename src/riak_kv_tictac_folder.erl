@@ -100,6 +100,7 @@ json_encode_tictac_withentries_test() ->
     ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree0, ReverseTree)).
 
 generate_optionless_acc_test() ->
-    ?assertMatch(small, generate_acc([])).
+    Empty = <<0:8192/integer>>,
+    ?assertMatch(Empty, leveled_tictac:fetch_root(generate_acc([]))).
 
 -endif.
