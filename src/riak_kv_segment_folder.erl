@@ -27,9 +27,9 @@
 
 -module(riak_kv_segment_folder).
 
--export([generate_filter/1,
+-export([generate_queryoptions/1,
             generate_acc/1,
-            generate_objectfold/2,
+            generate_objectfold/1,
             generate_mergefun/1,
             state_needs/1,
             encode_results/2
@@ -47,22 +47,15 @@
 state_needs(_Opts) ->
     ?NEEDS.
 
-generate_filter(Opts) ->
-    TreeSize = list_to_atom(proplists:get_value(tree_size, Opts, "small")),
-    ConcatenatedSegmentList = proplists:get_value(segment_list, Opts, ""),
-    SegmentList = lists:map(fun list_to_integer/1, 
-                            string:tokens(ConcatenatedSegmentList, 
-                                            ?DELIM_TOKEN)),
-    fun(K) ->
-        lists:member(
-            leveled_tictac:get_segment(erlang:phash2(K), TreeSize), 
-            SegmentList)
-    end.
+generate_queryoptions(_Opts) ->
+    [].
 
 generate_acc(_Opts) ->
     [].
 
-generate_objectfold(_Opts, FilterFun) ->
+generate_objectfold(Opts) ->
+    FilterFun = generate_filter(Opts),
+    
     fun(_B, K, PO, Acc) ->
         case FilterFun(K) of 
             true ->
@@ -77,6 +70,22 @@ generate_mergefun(_Opts) ->
 
 encode_results(KeyHashList, http) ->
     mochijson2:encode({struct, [{<<"deltas">>, KeyHashList}]}).
+
+%% ===================================================================
+%% Internal Functions
+%% ===================================================================
+
+generate_filter(Opts) ->
+    TreeSize = list_to_atom(proplists:get_value(tree_size, Opts, "small")),
+    ConcatenatedSegmentList = proplists:get_value(segment_list, Opts, ""),
+    SegmentList = lists:map(fun list_to_integer/1, 
+                            string:tokens(ConcatenatedSegmentList, 
+                                            ?DELIM_TOKEN)),
+    fun(K) ->
+        lists:member(
+            leveled_tictac:get_segment(erlang:phash2(K), TreeSize), 
+            SegmentList)
+    end.
 
 %% ===================================================================
 %% EUnit tests

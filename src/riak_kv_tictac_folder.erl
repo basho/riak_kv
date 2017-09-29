@@ -25,15 +25,18 @@
 
 -module(riak_kv_tictac_folder).
 
--export([generate_filter/1,
+-export([generate_queryoptions/1,
             generate_acc/1,
-            generate_objectfold/2,
+            generate_objectfold/1,
             generate_mergefun/1,
             state_needs/1,
             encode_results/2
             ]).
 
 -define(NEEDS, [async_fold, snap_prefold, fold_heads]).
+-define(DEFAULT_TREESIZE, small).
+-define(DEFAULT_CHECKPRESENCE, false).
+-define(UNDEFINED_INPUT, <<"undefined">>).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -43,17 +46,31 @@
 state_needs(_Opts) ->
     ?NEEDS.
 
-generate_filter(_Opts) ->
-    none.
+generate_queryoptions(Opts) ->
+    CheckPresence = 
+        list_to_atom(
+            binary_to_list(
+                proplists:get_value(check_presence, Opts, ?UNDEFINED_INPUT))),
+    case is_boolean(CheckPresence) of 
+        true ->
+            [{check_presence, CheckPresence}];
+        false ->
+            [{check_presence, ?DEFAULT_CHECKPRESENCE}]
+    end.
 
 generate_acc(Opts) ->
     TreeSize = 
         list_to_atom(
             binary_to_list(
-                proplists:get_value(tree_size, Opts, <<"small">>))),
-    leveled_tictac:new_tree(tictac_folder, TreeSize).
+                proplists:get_value(tree_size, Opts, ?UNDEFINED_INPUT))),
+    case leveled_tictac:valid_size(TreeSize) of
+        true ->
+            leveled_tictac:new_tree(tictac_folder, TreeSize);
+        false ->
+            leveled_tictac:new_tree(tictac_folder, ?DEFAULT_TREESIZE)
+    end.
 
-generate_objectfold(_Opts, none) ->
+generate_objectfold(_Opts) ->
     fun(B, K, PO, Acc) ->
         ExtractFun = 
             fun(Key, Obj) ->
@@ -101,6 +118,10 @@ json_encode_tictac_withentries_test() ->
 
 generate_optionless_acc_test() ->
     Empty = <<0:8192/integer>>,
-    ?assertMatch(Empty, leveled_tictac:fetch_root(generate_acc([]))).
+    InitAcc = generate_acc([]),
+    ?assertMatch(Empty, leveled_tictac:fetch_root(InitAcc)),
+    QueryOpts = generate_queryoptions([]),
+    ?assertMatch(?DEFAULT_CHECKPRESENCE, 
+                    proplists:get_value(check_presence, QueryOpts)).
 
 -endif.
