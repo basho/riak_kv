@@ -48,6 +48,10 @@
          process_results/2,
          finish/2]).
 
+-ifdef(TEST).
+-export([generate_options/2]).
+-endif.
+
 -define(UNDEFINED_INPUT, <<"undefined">>).
 
 -type from() :: {atom(), req_id(), pid()}.
@@ -88,7 +92,7 @@ init(From={_, _, _},
     
     % Construct the object folding request 
     OptsList = FoldMod:valid_options(),
-    Opts = generate_options(OptsList, FoldOpts),
+    Opts = [generate_options(OptsList, FoldOpts)|{bucket, Bucket}],
 
     QueryOpts = FoldMod:generate_queryoptions(Opts),
     InitAcc = FoldMod:generate_acc(Opts),

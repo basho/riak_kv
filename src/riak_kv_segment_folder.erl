@@ -27,7 +27,8 @@
 
 -module(riak_kv_segment_folder).
 
--export([generate_queryoptions/1,
+-export([valid_options/0,
+            generate_queryoptions/1,
             generate_acc/1,
             generate_objectfold/1,
             generate_mergefun/1,
@@ -47,6 +48,35 @@
 state_needs(_Opts) ->
     ?NEEDS.
 
+valid_options() ->
+    [{tree_size, 
+            % The size of the TicTac tree used when coming up with the 
+            % segment list
+                fun list_to_atom/1, 
+                fun leveled_tictac:valid_size/1, 
+                small},
+        {exportable, 
+            % Are the segment mashes based on the exportable hash algorithm
+            % used within TicTac trees for comparing between erlang and 
+            % non-erlang stores
+                fun list_to_atom/1,
+                fun is_boolean/1,
+                false},
+        {return_clocks,
+            % Should {keys, clocks} be returned not just keys
+                fun list_to_atom/1,
+                fun is_boolean/1,
+                false},
+        {segment_list,
+            % A concatenated list of segment integers stored as a string
+                fun(ConcatenatedSegmentList) ->
+                    SplitList = 
+                        string:tokens(ConcatenatedSegmentList, ?DELIM_TOKEN),
+                    lists:map(fun list_to_integer/1, SplitList)
+                end,
+                fun is_list/1,
+                []}].
+
 generate_queryoptions(_Opts) ->
     [].
 
@@ -55,12 +85,21 @@ generate_acc(_Opts) ->
 
 generate_objectfold(Opts) ->
     FilterFun = generate_filter(Opts),
+    ReturnClocks = lists:keyfond(return_clocks, 1, Opts),
     
     fun(_B, K, PO, Acc) ->
-        case FilterFun(K) of 
-            true ->
-                [{K, riak_object:hash(PO, 0)}|Acc];
-            false ->
+        case {FilterFun(K), ReturnClocks} of 
+            {true, true} ->
+                % Get the clock to return
+                RObj = riak_object:from_binary(PO),
+                {_, VClockHeader} = riak_object:vclock_header(RObj),
+                % Assume that the key will JSON encode?
+                % Is anything special done in listkeys or 2i query to make 
+                % sure of this?
+                [{K, VClockHeader}|Acc]; 
+            {true, false} ->
+                [K|Acc];
+            {false, _} ->
                 Acc
         end
     end.
@@ -76,14 +115,14 @@ encode_results(KeyHashList, http) ->
 %% ===================================================================
 
 generate_filter(Opts) ->
-    TreeSize = list_to_atom(proplists:get_value(tree_size, Opts, "small")),
-    ConcatenatedSegmentList = proplists:get_value(segment_list, Opts, ""),
-    SegmentList = lists:map(fun list_to_integer/1, 
-                            string:tokens(ConcatenatedSegmentList, 
-                                            ?DELIM_TOKEN)),
+    {tree_size, TreeSize} = lists:keyfind(tree_size, 1, Opts),
+    {segment_list, SegmentList} = lists:keyfind(segment_list, 1, Opts),
+    {exportable, Exportable} = lists:keyfind(exportable, 1, Opts),
     fun(K) ->
+        {HashK, _HashV} = 
+            leveled_tictac:tictac_hash(K, <<"null">>, Exportable),
         lists:member(
-            leveled_tictac:get_segment(erlang:phash2(K), TreeSize), 
+            leveled_tictac:get_segment(HashK, TreeSize), 
             SegmentList)
     end.
 
@@ -104,8 +143,14 @@ segfilter_test() ->
     ?assertMatch(false, S3 == S2),
     ?assertMatch(false, S3 == S1),
 
-    SegList = integer_to_list(S1) ++ "|" ++ integer_to_list(S2),
-    Opts = [{tree_size, "small"}, {segment_list, SegList}],
+    SegList = 
+        list_to_binary(integer_to_list(S1) ++ "|" ++ integer_to_list(S2)),
+    TreeSize = <<"small">>,
+    Opts = 
+        riak_kv_mapfold_fsm:generate_options(valid_options(), 
+                                                [{segment_list, SegList}, 
+                                                {tree_size, TreeSize}]),
+
     Filter = generate_filter(Opts),
 
     ?assertMatch(true, Filter(K1)),

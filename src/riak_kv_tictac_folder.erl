@@ -48,12 +48,25 @@ state_needs(_Opts) ->
 
 valid_options() ->
     [{tree_size, 
+        % The size of the TicTac tree to be used in the fold
+        % Larger tictac trees will require more network I/O, but lead to
+        % stricter segment list queries
                 fun list_to_atom/1, 
                 fun leveled_tictac:valid_size/1, 
                 small},
         {check_presence, 
+            % Should a presence check be performed in the fold when the 
+            % backend supports fold_heads. Presence checks can have a 
+            % significant impact on fold performance
                 fun list_to_atom/1, 
                 fun is_boolean/1, 
+                false},
+        {exportable, 
+            % Should the resultant TicTac tree use a hash algorithm which is 
+            % replicable in another system (i.e. uses a hash algorithm which 
+            % is not Erlang specific)
+                fun list_to_atom/1,
+                fun is_boolean/1,
                 false}].
 
 generate_queryoptions(Opts) ->
@@ -63,14 +76,15 @@ generate_acc(Opts) ->
     {tree_size, TreeSize} = lists:keyfind(tree_size, 1, Opts),
     leveled_tictac:new_tree(tictac_folder, TreeSize).
 
-generate_objectfold(_Opts) ->
+generate_objectfold(Opts) ->
+    {exportable, Exportable} = lists:keyfind(exportable, 1, Opts),
     fun(B, K, PO, Acc) ->
         ExtractFun = 
             fun(Key, Obj) ->
                 RiakObj = riak_object:from_binary(B, Key, Obj),
                 {Key, lists:sort(riak_object:vclock(RiakObj))}
             end,
-        leveled_tictac:add_kv(Acc, K, PO, ExtractFun, false)
+        leveled_tictac:add_kv(Acc, K, PO, ExtractFun, Exportable)
     end.
 
 generate_mergefun(_Opts) ->
