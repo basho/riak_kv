@@ -92,7 +92,7 @@ init(From={_, _, _},
     
     % Construct the object folding request 
     OptsList = FoldMod:valid_options(),
-    Opts = [generate_options(OptsList, FoldOpts)|{bucket, Bucket}],
+    Opts = [{bucket, Bucket}|generate_options(OptsList, FoldOpts)],
 
     QueryOpts = FoldMod:generate_queryoptions(Opts),
     InitAcc = FoldMod:generate_acc(Opts),

@@ -85,13 +85,13 @@ generate_acc(_Opts) ->
 
 generate_objectfold(Opts) ->
     FilterFun = generate_filter(Opts),
-    ReturnClocks = lists:keyfond(return_clocks, 1, Opts),
+    {return_clocks, ReturnClocks} = lists:keyfind(return_clocks, 1, Opts),
     
-    fun(_B, K, PO, Acc) ->
+    fun(B, K, PO, Acc) ->
         case {FilterFun(K), ReturnClocks} of 
             {true, true} ->
                 % Get the clock to return
-                RObj = riak_object:from_binary(PO),
+                RObj = riak_object:from_binary(B, K, PO),
                 {_, VClockHeader} = riak_object:vclock_header(RObj),
                 % Assume that the key will JSON encode?
                 % Is anything special done in listkeys or 2i query to make 
