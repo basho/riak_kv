@@ -48,6 +48,8 @@
          process_results/2,
          finish/2]).
 
+-define(UNDEFINED_INPUT, <<"undefined">>).
+
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
@@ -55,6 +57,11 @@
                 acc,
                 merge_fun,
                 sample = false :: boolean()}).
+
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
     
 %% @doc 
@@ -80,10 +87,13 @@ init(From={_, _, _},
     NVal = proplists:get_value(n_val, BucketProps),
     
     % Construct the object folding request 
-    QueryOpts = FoldMod:generate_queryoptions(FoldOpts),
-    InitAcc = FoldMod:generate_acc(FoldOpts),
-    MapFoldFun = FoldMod:generate_objectfold(FoldOpts),
-    CapabilityNeeds = FoldMod:state_needs(FoldOpts), 
+    OptsList = FoldMod:valid_options(),
+    Opts = generate_options(OptsList, FoldOpts),
+
+    QueryOpts = FoldMod:generate_queryoptions(Opts),
+    InitAcc = FoldMod:generate_acc(Opts),
+    MapFoldFun = FoldMod:generate_objectfold(Opts),
+    CapabilityNeeds = FoldMod:state_needs(Opts), 
     lager:info("Received mapfold coverage query ~w for bucket ~w foldfun ~w" 
                 ++ " and fold options ~w", 
                     [Query, Bucket, FoldMod, FoldOpts]),
@@ -156,4 +166,58 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     % so no need for a seperate send of a 'done' message
     ClientPid ! {ReqId, {results, State#state.acc}},
     {stop, normal, State}.
+
+%% ===================================================================
+%% Internal functions
+%% ===================================================================
+
+generate_options(ExpectedOpts, SubmittedOpts) ->
+    FindExpectedOptionsFun =
+        fun({OptionName, ConvertTermFun, ValidateTermFun, Default}, OptsAcc) ->
+            BinTerm = 
+                binary_to_list(
+                    proplists:get_value(OptionName, 
+                                            SubmittedOpts, 
+                                            ?UNDEFINED_INPUT)),
+            try ValidateTermFun(ConvertTermFun(BinTerm)) of
+                true ->
+                    [{OptionName, ConvertTermFun(BinTerm)}| OptsAcc];
+                false ->
+                    [{OptionName, Default}| OptsAcc]
+            catch
+                error:_Error ->
+                    [{OptionName, Default}| OptsAcc]
+            end
+        end,
+    lists:foldl(FindExpectedOptionsFun, [], ExpectedOpts).
+
+%% ===================================================================
+%% EUnit tests
+%% ===================================================================
+-ifdef(TEST).
+
+options_test() ->
+    OptsList = [{tree_size, 
+                        fun list_to_atom/1, 
+                        fun leveled_tictac:valid_size/1, 
+                        small},
+                {check_presence, 
+                        fun list_to_atom/1, 
+                        fun is_boolean/1, 
+                        false},
+                {limit,
+                        fun list_to_integer/1,
+                        fun is_integer/1,
+                        infinity}],
+    FoldOpts1 = [{tree_size, <<"xxsmall">>}, {check_presence, <<"true">>}],
+    ?assertMatch(
+        [{limit, infinity}, {check_presence, true}, {tree_size, xxsmall}],
+            generate_options(OptsList, FoldOpts1)),
+    FoldOpts2 = [{nonce_sense, <<"nonsense">>}, {limit, <<"nonsense">>}],
+    ?assertMatch(
+        [{limit, infinity}, {check_presence, false}, {tree_size, small}],
+            generate_options(OptsList, FoldOpts2)).
+
+
+-endif.
 
