@@ -1025,7 +1025,23 @@ buffer_size_for_index_query(#riak_kv_index_v3{max_results=N}, DefaultSize)
 buffer_size_for_index_query(_Q, DefaultSize) ->
     DefaultSize.
 
-
+%% @doc
+%% Coverage queries using mapfold functions
+%% - Bucket - must always be per-bucket (handling different n-vals)
+%% - Type - hardcoded to object (may be removed from function?)
+%% - Query - riak_kv_index_v3 record, which is currently ignored, but can 
+%% be used in the future to support StartKey and EndKey of the fold and also
+%% changing between index and object folds
+%% - FoldFun - needs to be 4-arity function expecting Bucket, Key, Object and
+%% Accumulator
+%% - InitAcc - initial accumulator to use in the fold, must be mergable
+%% - Needs - any cpabilities required by the backend, which will be appended 
+%% to the options passed to the fold
+%% - FilterVnodes - output of the coverage plan use for vnodes where the fold 
+%% needs to cover a subset of partitions within the vnode to avoid duplicate
+%% additions
+%% - Sender - used to send reply
+%% - State
 handle_coverage_mapfold(Bucket, object, 
                             Query, FoldFun, InitAcc, Needs, 
                             FilterVnodes, Sender, 
@@ -1033,22 +1049,41 @@ handle_coverage_mapfold(Bucket, object,
                                             modstate=ModState,
                                             idx=Index,
                                             async_folding=AsyncFolding}) ->
+    % Unless ring_size div n = 0, for some vnodes only a subset of data will 
+    % be required.  Index here means parition identifier (it has nothing to 
+    % do with Index as in query) 
     FilterVnode = proplists:get_value(Index, FilterVnodes),
     Filter = riak_kv_coverage_filter:build_filter(Bucket, none, FilterVnode),
     
+    % Build query options.  Want to do asnyc folds here so as not to block the 
+    % vnode, but also want these async folds to be snapped pre-fold.  This 
+    % allows the fold to be queued, whilst still representing the state of the 
+    % store at the point the query was initialised. 
     Opts0 = 
-        [{index, Bucket, prepare_index_query(Query)}, {bucket, Bucket}] 
+        [{index, Bucket, Query}, {bucket, Bucket}] 
         ++ Needs,
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
     Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
 
-    ModFolder = maybe_use_fold_heads(Capabilities, Opts, Mod),
+    % What to do with the accumulator when we finish
     FinishFun =
         fun(Acc) ->
             riak_core_vnode:reply(Sender, Acc)
         end,
+    % Required for ring resizing?  Which we don't support?
     Extras = fold_extras_keys(Index, Bucket),
+
+    % Should be a decision here on whether this is a fold over objects or a 
+    % fold over keys.  There should be information in the Query to help.  The
+    % alternative would be to get the backend to react differently in the 
+    % query was an index.
+    %
+    % The FoldObjectsFun takes (B, K, Obj, Acc) - Obj can simply be the index 
+    % term, and the backend needs to do the transition.  So riak_kv_vnode 
+    % does not need to know that this is implemented differently when the 
+    % Query is an index
+    ModFolder = maybe_use_fold_heads(Capabilities, Opts, Mod),
     ObjectFoldFun = fold_fun(objects, FoldFun, Filter, Extras),
     
     case ModFolder(ObjectFoldFun, InitAcc, Opts, ModState) of 
