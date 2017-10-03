@@ -998,7 +998,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     handle_coverage_index(Bucket, ItemFilter, Query,
                           FilterVNodes, Sender, State, fun result_fun_ack/2);
 handle_coverage(?KV_MAPFOLD_REQ{bucket=Bucket,
-                                type=Type,
+                                type=_Type,
                                 qry=Query,
                                 query_opts=QueryOpts,
                                 fold_fun=FoldFun,
