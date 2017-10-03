@@ -1000,11 +1000,12 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
 handle_coverage(?KV_MAPFOLD_REQ{bucket=Bucket,
                                 type=Type,
                                 qry=Query,
+                                query_opts=QueryOpts,
                                 fold_fun=FoldFun,
                                 init_acc=InitAcc,
                                 needs=Needs},
                     FilterVnodes, Sender, State) ->
-    handle_coverage_mapfold(Bucket, Type, 
+    handle_coverage_mapfold(Bucket, QueryOpts, 
                                 Query, FoldFun, InitAcc, Needs, 
                                 FilterVnodes, Sender, State).
 
@@ -1028,7 +1029,7 @@ buffer_size_for_index_query(_Q, DefaultSize) ->
 %% @doc
 %% Coverage queries using mapfold functions
 %% - Bucket - must always be per-bucket (handling different n-vals)
-%% - Type - hardcoded to object (may be removed from function?)
+%% - QueryOpts - list of additional options to be passed into query
 %% - Query - riak_kv_index_v3 record, which is currently ignored, but can 
 %% be used in the future to support StartKey and EndKey of the fold and also
 %% changing between index and object folds
@@ -1042,7 +1043,7 @@ buffer_size_for_index_query(_Q, DefaultSize) ->
 %% additions
 %% - Sender - used to send reply
 %% - State
-handle_coverage_mapfold(Bucket, object, 
+handle_coverage_mapfold(Bucket, QueryOpts, 
                             Query, FoldFun, InitAcc, Needs, 
                             FilterVnodes, Sender, 
                             State=#state{mod=Mod, 
@@ -1059,9 +1060,14 @@ handle_coverage_mapfold(Bucket, object,
     % vnode, but also want these async folds to be snapped pre-fold.  This 
     % allows the fold to be queued, whilst still representing the state of the 
     % store at the point the query was initialised. 
+    %
+    % Note that async folding is both a required cpability of the backend and 
+    % a property of riak_kv (hence the presence of async_folding on the vnode 
+    % State)
     Opts0 = 
         [{index, Bucket, Query}, {bucket, Bucket}] 
-        ++ Needs,
+        ++ Needs
+        ++ QueryOpts,
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
     Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
@@ -1086,6 +1092,8 @@ handle_coverage_mapfold(Bucket, object,
     ModFolder = maybe_use_fold_heads(Capabilities, Opts, Mod),
     ObjectFoldFun = fold_fun(objects, FoldFun, Filter, Extras),
     
+    % Requires riak_core_vnode to understand and handle to the {queue, Work} 
+    % if snap_prefold and async_worker have been passed and are supported
     case ModFolder(ObjectFoldFun, InitAcc, Opts, ModState) of 
         {ok, Acc} ->
             {reply, Acc, State};
