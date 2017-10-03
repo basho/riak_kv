@@ -97,6 +97,7 @@
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
+-export([summary_from_binary/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1, is_head/1]).
 -export([update_last_modified/1, update_last_modified/2, get_last_modified/1]).
@@ -1096,6 +1097,40 @@ from_binary(B, K, <<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
 from_binary(_B, _K, Obj = #r_object{}) ->
     Obj.
 
+
+-spec summary_from_binary(binary()) -> {vclock:vclock(), integer(), integer()}.
+%% @doc
+%% Extract only sumarry infromation from the binary - the vector, the object 
+%% size and the sibling count
+summary_from_binary(<<131, _Rest/binary>>=ObjBin) ->
+    case binary_to_term(ObjBin) of 
+        {proxy_object, HeadBin, ObjSize, _Fetcher} ->
+            summary_from_binary(HeadBin, ObjSize);
+        T ->
+            {vclock(T), byte_size(ObjBin), value_count(T)}
+    end;
+summary_from_binary(ObjBin) when is_binary(ObjBin) ->
+    summary_from_binary(ObjBin, byte_size(ObjBin));
+summary_from_binary(Obj = #r_object{}) ->
+    % Unexpected scenario but included for parity with from_binary
+    % Caluclating object size is expensive (relatively to other branches)
+    {vclock(Obj), byte_size(to_binary(v1, Obj)), value_count(Obj)}.
+
+
+-spec summary_from_binary(binary(), integer()) ->
+    {vclock:vclock(), non_neg_integer(), non_neg_integer()}.
+%% @doc 
+%% Return afrom a version 1 binary the vector clock and siblings
+summary_from_binary(ObjBin, ObjSize) ->
+    <<?MAGIC:8/integer, 
+        1:8/integer, 
+        VclockLen:32/integer, VclockBin:VclockLen/binary, 
+        SibCount:32/integer, 
+        _Rest/binary>> = ObjBin,
+    {binary_to_term(VclockBin), ObjSize, SibCount}.
+
+
+
 sibs_of_binary(Count,SibsBin) ->
     sibs_of_binary(Count, SibsBin, []).
 
@@ -1535,7 +1570,8 @@ bucket_prop_needers_test_() ->
       {"Mixed Merge", fun mixed_merge/0},
       {"Mixed Merge 2", fun mixed_merge2/0},
         {"Find Object Ancestor", fun find_bestobject_ancestor/0},
-        {"Find Object Reconcile", fun find_bestobject_reconcile/0}]
+        {"Find Object Reconcile", fun find_bestobject_reconcile/0},
+        {"Test Summary Bin Extract", fun summary_binary_extract/0}]
     }.
 
 ancestor() ->
@@ -1906,6 +1942,32 @@ from_binary_foldheads_test() ->
     ?assertMatch(true, is_head(RObj)),
     ?assertMatch(["V1"], get_value(RObj)).
 
+summary_from_binary_foldheads_test() ->
+    % the response to fold_heads request will be a head binary, but
+    % wrapped up in a tuple
+    VC1 = term_to_binary(vclock:fresh(a, 3)),
+    MDBin = head_binary(VC1),
+    HeadObj =
+        term_to_binary(
+            {proxy_object, MDBin, 100,
+                {fun fetch_value/2, clone, "JournalKey"}}),
 
+    {VC_Summ, BS_Summ, SC_Summ} = summary_from_binary(HeadObj),
+    ?assertMatch(VC1, term_to_binary(VC_Summ)),
+    ?assertMatch(100, BS_Summ),
+    ?assertMatch(2, SC_Summ).
+
+summary_binary_extract() ->
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some Binary Data">>,
+    Object0 = riak_object:new(B, K, V),
+    Object = riak_object:increment_vclock(Object0, a),
+    Binary = to_binary(v1, Object),
+    {Clock, Size, SibCount} = summary_from_binary(Binary),
+    ?assertMatch(1, SibCount),
+    ?assertMatch(1, length(Clock)),
+    ?assertMatch(true, Size > 0),
+    {Clock, Size, SibCount} = summary_from_binary(Object).
 
 -endif.

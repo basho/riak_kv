@@ -78,11 +78,11 @@ generate_acc(Opts) ->
 
 generate_objectfold(Opts) ->
     {exportable, Exportable} = lists:keyfind(exportable, 1, Opts),
-    fun(B, K, PO, Acc) ->
+    fun(_B, K, PO, Acc) ->
         ExtractFun = 
             fun(Key, Obj) ->
-                RiakObj = riak_object:from_binary(B, Key, Obj),
-                {Key, lists:sort(riak_object:vclock(RiakObj))}
+                {VC, _Sz, _SC} = riak_object:summary_from_binary(Obj),
+                {Key, lists:sort(VC)}
             end,
         leveled_tictac:add_kv(Acc, K, PO, ExtractFun, Exportable)
     end.
