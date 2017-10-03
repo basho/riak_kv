@@ -242,13 +242,7 @@ malformed_request(RD, Ctx) ->
                         undefined ->
                             [];
                         _ ->
-                            [{struct, MFOpts}] = 
-                                mochijson2:decode(base64:decode(MapFoldOpts0)),
-                            ConvertKeyFun = 
-                                fun({K, V}) -> 
-                                    {list_to_atom(binary_to_list(K)), V} 
-                                end,
-                            lists:map(ConvertKeyFun, MFOpts)
+                            riak_kv_mapfold_fsm:decode_options(MapFoldOpts0)
                     end,
                 {MapFoldMod1, MapFoldOpts1};
             false ->

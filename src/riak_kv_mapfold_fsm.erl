@@ -46,7 +46,8 @@
 -export([init/2,
          plan/2,
          process_results/2,
-         finish/2]).
+         finish/2,
+         decode_options/1]).
 
 -ifdef(TEST).
 -export([generate_options/2]).
@@ -171,6 +172,20 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     ClientPid ! {ReqId, {results, State#state.acc}},
     {stop, normal, State}.
 
+-spec decode_options(list()) -> list().
+%% @doc
+%% Options are receieved as a JSON document like -
+%% '[{"tree_size": "xsmall"}, {"check_presence": "true"}]'
+%% this is then base64 encoded.
+%% Decode this to a key list in erlang where the key is an atom
+decode_options(EncodedOpts) ->
+    {struct, Opts} = mochijson2:decode(base64:decode(EncodedOpts)),
+    ConvertKeyFun = 
+            fun({K, V}) -> 
+                {list_to_atom(binary_to_list(K)), V} 
+            end,
+    lists:map(ConvertKeyFun, Opts).
+
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
@@ -221,6 +236,15 @@ options_test() ->
     ?assertMatch(
         [{limit, infinity}, {check_presence, false}, {tree_size, small}],
             generate_options(OptsList, FoldOpts2)).
+
+
+decode_http_options_test() ->
+    Opts = 
+        "eyJjaGVja19wcmVzZW5jZSI6ICJ0cnVlIiwgInRyZWVfc2l6ZSI6ICJ4c21hbGwifQ==",
+    DecodedOpts = decode_options(Opts),
+    io:format("Decoded options of ~w", [DecodedOpts]),
+    ?assertMatch({check_presence, <<"true">>}, % will still be encoded as bin 
+                    lists:keyfind(check_presence, 1, DecodedOpts)).
 
 
 -endif.
