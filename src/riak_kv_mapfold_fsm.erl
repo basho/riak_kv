@@ -110,27 +110,11 @@ init(From={_, _, _},
                             init_acc = InitAcc,
                             needs = CapabilityNeeds},
 
-    % Make the merge fund
+    % Make the merge fun
     MergeFun = FoldMod:generate_mergefun(FoldOpts),
     
-    % Sample - an option which will run the query on a single partition not a
-    % covering set of partitions.  Intended to be used when the fold is to 
-    % return statistics (such as average object size), and an approximation 
-    % from a sample would suffice.  
-    %
-    % May be used as a range finder as well (e.g. if ring-size = RS, get the 
-    % Mth Key after SK in the sample to find an EK - such that the range 
-    % between SK and EK is approcimately RS * M across the whole database).  
-    % A range found by the range finder could then be used to chunk up a query
-    % avoiding long lived iterators.
-    Sample = 
-        case lists:keyfind(sample, 1 , FoldOpts) of
-            {sample, S} -> S;
-            false -> false
-        end,
-
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From, sample=Sample, acc=InitAcc, merge_fun=MergeFun}}.
+     #state{from=From, acc=InitAcc, merge_fun=MergeFun}}.
 
 %% @doc
 %% Need to do something about recognising the sample case in plan/2
@@ -189,6 +173,7 @@ decode_options(EncodedOpts) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
 
 generate_options(ExpectedOpts, SubmittedOpts) ->
     FindExpectedOptionsFun =
