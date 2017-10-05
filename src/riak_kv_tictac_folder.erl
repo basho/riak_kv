@@ -74,25 +74,29 @@ generate_queryoptions(Opts) ->
 
 generate_acc(Opts) ->
     {tree_size, TreeSize} = lists:keyfind(tree_size, 1, Opts),
-    leveled_tictac:new_tree(tictac_folder, TreeSize).
+    {0, leveled_tictac:new_tree(tictac_folder, TreeSize)}.
 
 generate_objectfold(Opts) ->
     {exportable, Exportable} = lists:keyfind(exportable, 1, Opts),
-    fun(_B, K, PO, Acc) ->
+    fun(_B, K, PO, {Count, TreeAcc}) ->
         ExtractFun = 
             fun(Key, Obj) ->
                 {VC, _Sz, _SC} = riak_object:summary_from_binary(Obj),
                 {Key, lists:sort(VC)}
             end,
-        leveled_tictac:add_kv(Acc, K, PO, ExtractFun, Exportable)
+        {Count + 1, 
+            leveled_tictac:add_kv(TreeAcc, K, PO, ExtractFun, Exportable)}
     end.
 
 generate_mergefun(_Opts) ->
-    fun leveled_tictac:merge_trees/2.
+    fun({C0, T0},{C1, T1}) ->
+        {C0 + C1, leveled_tictac:merge_trees(T0,T1)}
+    end.
 
-encode_results(Tree, http) ->
+encode_results({Count, Tree}, http) ->
     ExportedTree = leveled_tictac:export_tree(Tree),
-    JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
+    JsonKeys1 = {struct, [{<<"tree">>, ExportedTree},
+                            {<<"count">>, integer_to_list(Count)}]},
     mochijson2:encode(JsonKeys1).
 
 
@@ -103,8 +107,9 @@ encode_results(Tree, http) ->
 
 json_encode_tictac_empty_test() ->
     Tree = leveled_tictac:new_tree(tictac_folder_test, xlarge),
-    JsonTree = encode_results(Tree, http),
-    {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
+    JsonTree = encode_results({0, Tree}, http),
+    {struct, [{<<"tree">>, ExportedTree}, {<<"count">>, "0"}]} 
+        = mochijson2:decode(JsonTree),
     ReverseTree = leveled_tictac:import_tree(ExportedTree),
     ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree, ReverseTree)).
 
@@ -119,14 +124,16 @@ json_encode_tictac_withentries_test() ->
                 {<<"key2">>, <<"value2">>}, 
                 {<<"key3">>, <<"value3">>}],
     Tree0 = lists:foldl(FoldFun, Tree, KVList),
-    JsonTree = encode_results(Tree0, http),
-    {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
+    JsonTree = encode_results({0, Tree0}, http),
+    {struct, [{<<"tree">>, ExportedTree}, {<<"count">>, "0"}]} 
+        = mochijson2:decode(JsonTree),
     ReverseTree = leveled_tictac:import_tree(ExportedTree),
     ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree0, ReverseTree)).
 
 generate_optionless_acc_test() ->
     Empty = <<0:8192/integer>>,
-    InitAcc = generate_acc([{tree_size, small}]),
-    ?assertMatch(Empty, leveled_tictac:fetch_root(InitAcc)).
+    {InitCount, InitTree} = generate_acc([{tree_size, small}]),
+    ?assertMatch(Empty, leveled_tictac:fetch_root(InitTree)),
+    ?assertMatch(0, InitCount).
 
 -endif.
