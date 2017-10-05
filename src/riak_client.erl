@@ -50,6 +50,7 @@
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
 -define(DEFAULT_TIMEOUT, 60000).
+-define(DEFAULT_FOLD_TIMEOUT, 3600000)
 -define(DEFAULT_ERRTOL, 0.00003).
 
 %% TODO: This type needs to be better specified and validated against
@@ -713,20 +714,14 @@ stream_list_buckets(Filter, Timeout, Client, Type,
 %% is arguably amore general case of these folds.
 map_fold(Bucket, Query, FoldMod, FoldOpts, 
             {?MODULE, [Node, _ClientId]}) ->
-    Timeout = 
-        list_to_integer(
-            proplists:get_value(timeout, 
-                                FoldOpts, 
-                                integer_to_list(?DEFAULT_TIMEOUT))
-                        ),
     Me = self(),
     ReqId = mk_reqid(),
     riak_kv_mapfold_fsm_sup:start_mapfold_fsm(Node, 
                                                  [{raw, ReqId, Me},
                                                  [Bucket, Query, 
                                                     FoldMod, FoldOpts, 
-                                                    Timeout]]),
-    wait_for_mapfold_results(ReqId, Timeout).
+                                                    ?DEFAULT_FOLD_TIMEOUT]]),
+    wait_for_mapfold_results(ReqId, ?DEFAULT_FOLD_TIMEOUT).
 
 %% @spec get_index(Bucket :: binary(),
 %%                 Query :: riak_index:query_def(),

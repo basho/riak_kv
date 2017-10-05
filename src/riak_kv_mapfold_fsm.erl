@@ -61,7 +61,9 @@
 -record(state, {from :: from(),
                 acc,
                 merge_fun,
-                sample = false :: boolean()}).
+                sample = false :: boolean(),
+                start_time :: tuple(),
+                fold_module :: atom()}).
 
 
 -ifdef(TEST).
@@ -114,7 +116,11 @@ init(From={_, _, _},
     MergeFun = FoldMod:generate_mergefun(FoldOpts),
     
     {Req, all, NVal, 1, riak_kv, riak_kv_vnode_master, Timeout,
-     #state{from=From, acc=InitAcc, merge_fun=MergeFun}}.
+     #state{from=From, 
+            acc=InitAcc, 
+            merge_fun=MergeFun, 
+            start_time=os:timestamp(),
+            fold_module = FoldMod}}.
 
 %% @doc
 %% Need to do something about recognising the sample case in plan/2
@@ -153,6 +159,9 @@ finish({error, Error}, State=#state{from={raw, ReqId, ClientPid}}) ->
 finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     % The client doesn't expect results in increments only the final result, 
     % so no need for a seperate send of a 'done' message
+    QueryDuration = timer:now_diff(os:timestamp(), State#state.start_time),
+    lager:info("Finished mapfold in ~w seconds using module ~w", 
+                [QueryDuration/1000000, State#state.fold_module]),
     ClientPid ! {ReqId, {results, State#state.acc}},
     {stop, normal, State}.
 

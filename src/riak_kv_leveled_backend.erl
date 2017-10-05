@@ -263,7 +263,6 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
-    lager:info("Fold objects request with Opts ~w", [Opts]),
     Query =
         case proplists:get_value(bucket, Opts) of
             undefined ->
@@ -292,7 +291,6 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
-    lager:info("Fold heads request with Opts ~w", [Opts]),
     CheckPresence =
         case proplists:get_value(check_presence, Opts) of
             undefined ->
