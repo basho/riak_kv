@@ -306,7 +306,7 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                     <<"$key">> ->
                         {foldheads_bybucket,
                             ?RIAK_TAG,
-                            B,
+                            Bucket,
                             {IdxQuery#riak_kv_index_v3.start_term,
                                 IdxQuery#riak_kv_index_v3.end_term},
                             {FoldHeadsFun, Acc},
@@ -315,7 +315,7 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                     Field ->
                         {foldheads_byindex,
                             ?RIAK_TAG,
-                            B,
+                            Bucket,
                             Field,
                             {IdxQuery#riak_kv_index_v3.start_term,
                                 IdxQuery#riak_kv_index_v3.end_term},
