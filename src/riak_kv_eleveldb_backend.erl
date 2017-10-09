@@ -498,11 +498,19 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
             false -> [];
             Tuple -> [Tuple]
         end,
+    
+    StandardObjectFold = 
+        case lists:keyfind(standard_object_fold, 1, Opts) of    
+            {standard_object_fold, Bool} ->
+                Bool;
+            false ->
+                false
+        end,
 
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
     FoldOpts1 = IteratorRefresh ++ [{first_key, FirstKey} | FoldOpts],
-    FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Limiter, StandardObjectFold),
 
     ObjectFolder =
         fun() ->
@@ -824,20 +832,27 @@ fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
 
 %% @private
 %% Return a function to fold over the objects on this backend
-fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
+fold_objects_fun(FoldObjectsFun, 
+                    {index, FilterBucket, Q=?KV_INDEX_Q{}}, 
+                    StObjFold) ->
     %% 2I query on $key or $bucket field with return_body
     fun({StorageKey, Value}, Acc) ->
             ObjectKey = from_object_key(StorageKey),
             case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
-                    FoldObjectsFun(Bucket, {o, Key, Value}, Acc);
+                    case StObjFold of   
+                        true ->
+                            FoldObjectsFun(Bucket, Key, Value, Acc);
+                        false ->
+                            FoldObjectsFun(Bucket, {o, Key, Value}, Acc)
+                    end;
                 {skip, _BK} ->
                     Acc;
                 _ ->
                     throw({break, Acc})
             end
     end;
-fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
+fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}, _StObjFold) ->
     fun({StorageKey, Value}, Acc) ->
             case from_object_key(StorageKey) of
                 {Bucket, Key} when Bucket == FilterBucket ->
@@ -848,7 +863,7 @@ fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
                     throw({break, Acc})
             end
     end;
-fold_objects_fun(FoldObjectsFun, undefined) ->
+fold_objects_fun(FoldObjectsFun, undefined, _StObjFold) ->
     fun({StorageKey, Value}, Acc) ->
             case from_object_key(StorageKey) of
                 {Bucket, Key} ->

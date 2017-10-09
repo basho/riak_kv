@@ -1065,7 +1065,14 @@ handle_coverage_mapfold(Bucket, QueryOpts,
     % a property of riak_kv (hence the presence of async_folding on the vnode 
     % State)
     Opts0 = 
-        [{index, Bucket, Query}, {bucket, Bucket}] 
+        [{index, Bucket, Query}, 
+            {bucket, Bucket},
+            {standard_object_fold, true} 
+                % LevelDB will switch the expectation of the fold function 
+                % away from the standard 4 arity function if it thinks it 
+                % is a special fold as there is index information in the 
+                % query.  So need to tell it not to switch in this case
+            ] 
         ++ Needs
         ++ QueryOpts,
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
