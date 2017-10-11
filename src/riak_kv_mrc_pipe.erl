@@ -692,23 +692,9 @@ send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
 %% decide whether yokozuna or riak_search should be used for
 %% {search, ...} inputs
 search_module() ->
-    case {enabled(yokozuna), enabled(riak_search)} of
-        {true, true} ->
-            case application:get_env(riak_kv, mapred_search) of
-                %% being explicit here to help find typo errors earlier
-                {ok, yokozuna} ->
-                    {ok, yokozuna};
-                {ok, riak_search} ->
-                    {ok, riak_search};
-                undefined ->
-                    {ok, riak_search};
-                Other ->
-                    {error, {unknown_mapred_provider, Other}}
-            end;
-        {true, _} ->
+    case enabled(yokozuna) of
+        true ->
             {ok, yokozuna};
-        {_, true} ->
-            {ok, riak_search};
         _ ->
             {error, "search not enabled"}
     end.
