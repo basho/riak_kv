@@ -48,7 +48,7 @@ new_entry(Name, SjName, AliasPrefix, Opts) ->
     exometer_new(Name, SjName, [{aliases, aliases(AliasPrefix)}|Opts]).
 
 exometer_new(Name, SjName, Opts) ->
-    exometer:new(Name, ad_hoc, [{module, ?MODULE},
+    exometer:re_register(Name, ad_hoc, [{module, ?MODULE},
 				{type, sidejob},
 				{sj_name, SjName}|Opts]).
 

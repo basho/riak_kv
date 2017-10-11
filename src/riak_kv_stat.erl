@@ -516,7 +516,7 @@ stats() ->
      %% node stats: gets
      {[node, gets], spiral, [], [{one  , node_gets},
                                  {count, node_gets_total}]},
-     {[node, gets, fsm, active], counter, [], [{value, node_get_fsm_active}]},
+     {[node, gets, fsm, active], counter},
      {[node, gets, fsm, errors], spiral, [], [{one, node_get_fsm_errors},
                                               {count, node_get_fsm_errors_total}]},
      {[node, gets, objsize], histogram, [], [{mean  , node_get_fsm_objsize_mean},
