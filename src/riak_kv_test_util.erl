@@ -170,7 +170,6 @@ wait_for_children(PPid) ->
 setup(TestName, SetupFun) ->
     %% Cleanup in case a previous test did not
     cleanup(TestName, SetupFun, setup),
-
     %% Load application environments
     Deps = dep_apps(TestName, SetupFun),
     do_dep_apps(load, Deps),
@@ -209,6 +208,7 @@ cleanup(Test, CleanupFun, StartedApps) ->
                                            not lists:member(A, Deps)
                                    end, lists:reverse(StartedApps)),
 
+
     %% Stop the applications in reverse order.
     do_dep_apps(stop, Apps),
 
@@ -221,7 +221,6 @@ cleanup(Test, CleanupFun, StartedApps) ->
     %% where riak_kv_stat is already started by another supervisor from a
     %% previous test.
     wait_for_unregister(riak_kv_stat),
-
     %% Stop distributed Erlang
     net_kernel:stop(),
 
@@ -265,8 +264,9 @@ dep_apps(Test, Extra) ->
                 application:set_env(riak_core, ring_state_dir, Test ++ "/ring"),
                 application:set_env(riak_core, platform_data_dir, Test ++ "/data"),
                 application:set_env(riak_core, handoff_port, 0), %% pick a random handoff port
-                {ok, Dir} = file:get_cwd(),
-                Dirs = [Dir ++ "/../deps/*/priv"],
+                %% @TODO this is wrong still
+                DepsDir = get_deps_dir(),
+                Dirs = [DepsDir ++ "*/priv"],
                 application:set_env(riak_core, schema_dirs, Dirs),
                 application:set_env(lager, handlers, [{lager_file_backend,
                                                        [
@@ -287,18 +287,19 @@ dep_apps(Test, Extra) ->
 %% see dep_apps/2
 -spec do_dep_apps(load | start | stop, [ atom() | fun() ]) -> [ any() ].
 do_dep_apps(start, Apps) ->
-    lists:foldl(fun(A, Acc) when is_atom(A) ->
-                        case include_app_phase(start, A) of
-                            true ->
-				{ok, Started} = start_app_and_deps(A, Acc),
-                                Started;
-                            _ ->
-                                Acc
-                        end;
-                    (F, Acc) ->
-                       F(start),
-                       Acc
-               end, [], Apps);
+    lists:foldl(fun do_dep_apps_fun/2,%% fun(A, Acc) when is_atom(A) ->
+                %%     case include_app_phase(start, A) of
+                %%         true ->
+                %%     	{ok, Started} = start_app_and_deps(A, Acc),
+                %%             Started;
+                %%         _ ->
+                %%             Acc
+                %%     end;
+                %% (F, Acc) ->
+                %%    F(start),
+                %%    Acc
+                %% end,
+                [], Apps);
 do_dep_apps(LoadStop, Apps) ->
     lists:map(fun(A) when is_atom(A) ->
                       case include_app_phase(LoadStop, A) of
@@ -310,6 +311,18 @@ do_dep_apps(LoadStop, Apps) ->
                  (F) ->
                       F(LoadStop)
               end, Apps).
+
+do_dep_apps_fun(A, Acc) when is_atom(A) ->
+    case include_app_phase(start, A) of
+        true ->
+            {ok, Started} = start_app_and_deps(A, Acc),
+            Started;
+        _ ->
+            Acc
+    end;
+do_dep_apps_fun(F, Acc) ->
+    F(start),
+    Acc.
 
 %% Determines whether a given application should be modified in
 %% the given phase. If this returns false, the application will not be
@@ -326,6 +339,7 @@ start_app_and_deps(Application, Started) ->
         true ->
             {ok, Started};
         false ->
+            _Apps = application:which_applications(),
             case application:start(Application) of
                 ok ->
                     {ok, [Application|Started]};
@@ -343,5 +357,39 @@ start_app_and_deps(Application, Started) ->
                     {error, Reason}
             end
     end.
+
+get_deps_dir() ->
+    case os:getenv("REBAR_DEPS_DIR") of
+        false ->
+            guess_deps_dir();
+        Dir  ->
+            Dir
+    end.
+
+guess_deps_dir() ->
+    {ok, CWD} = file:get_cwd(),
+    case filename:rootname(CWD) == CWD of
+        true ->
+            %% not in .eunit, must be running from console
+            case filelib:is_dir("deps") of
+                true ->
+                    %% probably a root checkout
+                    "deps";
+                false ->
+                    %% probably part of an applications deps
+                    "../"
+            end;
+        false ->
+            %% probably running in .eunit
+            case filelib:is_dir("../deps") of
+                true ->
+                    "../deps";
+                false ->
+                    %% maybe we're in a deps/* situation, worse case tests
+                    %% fail, which is what they did before this hack
+                    "../../"
+            end
+    end.
+
 
 -endif. % TEST

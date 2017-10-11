@@ -325,16 +325,22 @@ correct_error_handling_by_multibackend_test() ->
         {["multi_backend", "default", "bitcask", "data_root"], "/data/default_bitcask"}
     ],
 
-    Config = cuttlefish_unit:generate_templated_config([
-        "../priv/riak_kv.schema",
-        "../priv/multi_backend.schema",
-        "../deps/bitcask/priv/bitcask.schema",
-        "../deps/bitcask/priv/bitcask_multi.schema",
-        "../deps/eleveldb/priv/eleveldb.schema",
-        "../deps/eleveldb/priv/eleveldb_multi.schema",
-        "../test/bad_bitcask_multi.schema"
-        ],
-        Conf, context(), predefined_schema()),
+    DepsPath = get_deps_dir(),
+
+    SchemaPaths = [
+                   "../priv/riak_kv.schema",
+                   "../priv/multi_backend.schema",
+                   filename:join(DepsPath, "bitcask/priv/bitcask.schema"),
+                   filename:join(DepsPath, "bitcask/priv/bitcask_multi.schema"),
+                   filename:join(DepsPath, "eleveldb/priv/eleveldb.schema"),
+                   filename:join(DepsPath, "eleveldb/priv/eleveldb_multi.schema"),
+                   "../test/bad_bitcask_multi.schema"
+                  ],
+
+    Config = cuttlefish_unit:generate_templated_config(SchemaPaths,
+                                                       Conf,
+                                                       context(),
+                                                       predefined_schema()),
 
 
     ?assertMatch({error, apply_translations, {errorlist, _}}, Config),
@@ -363,14 +369,18 @@ all_backend_multi_test() ->
 
     ],
 
-    Config = cuttlefish_unit:generate_templated_config([
-        "../priv/riak_kv.schema",
-        "../priv/multi_backend.schema",
-        "../deps/bitcask/priv/bitcask.schema",
-        "../deps/bitcask/priv/bitcask_multi.schema",
-        "../deps/eleveldb/priv/eleveldb.schema",
-        "../deps/eleveldb/priv/eleveldb_multi.schema"
-        ],
+    DepsPath = get_deps_dir(),
+
+    SchemaPaths = [
+                   "../priv/riak_kv.schema",
+                   "../priv/multi_backend.schema",
+                   filename:join(DepsPath, "bitcask/priv/bitcask.schema"),
+                   filename:join(DepsPath, "bitcask/priv/bitcask_multi.schema"),
+                   filename:join(DepsPath, "eleveldb/priv/eleveldb.schema"),
+                   filename:join(DepsPath, "eleveldb/priv/eleveldb_multi.schema")
+                  ],
+
+    Config = cuttlefish_unit:generate_templated_config(SchemaPaths,
         Conf, context(), predefined_schema()),
 
 
@@ -496,3 +506,38 @@ riak_core_dir([Deps | TryDeps]) ->
     end;
 riak_core_dir([]) ->
     {error, enoent}.
+
+%% NOTE: this is somewhat duplicated/similar to the above
+%% riak_core_dir() stuff, but more general, and used to fix existing
+%% broken tests. When rebar eunit is run it makes cwd
+%% riak_kv/.eunit. rebar knows about the env var REBAR_DEPS_DIR and it
+%% also has the cli option `deps_dir' and they look independent of
+%% each other. Or at least setting both is required in some
+%% situations. The top level riak Makefile can safely set
+%% REBAR_DEPS_DIR to it's own deps directory, which it does. And so in
+%% that case the deps directory is known. If `rebar eunit' is run
+%% locally (in riak_kv) there is no way to tell if riak_kv is part of
+%% a checked out riak deps structure, or a standalone project or
+%% what. In that case, if the user has neglected to inform rebar with
+%% the REBAR_DEPS_DIR variable, then we guess. If ../deps exist we use
+%% that, otherwise we use ../../ It's a bit of a hack. Maybe there is
+%% a way to get at what rebar is doing, but I think rebar3 can better
+%% fix this.
+get_deps_dir() ->
+    case os:getenv("REBAR_DEPS_DIR") of
+        false ->
+            guess_deps_dir();
+        Dir  ->
+            Dir
+    end.
+
+guess_deps_dir() ->
+    case filelib:is_dir("../deps") of
+        true ->
+            "../deps";
+        false ->
+            %% maybe we're in a deps/* situation, worse case tests
+            %% fail, which is what they did before this hack
+            "../../"
+    end.
+
