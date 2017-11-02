@@ -76,16 +76,16 @@ generate_acc(Opts) ->
     {tree_size, TreeSize} = lists:keyfind(tree_size, 1, Opts),
     {0, leveled_tictac:new_tree(tictac_folder, TreeSize)}.
 
-generate_objectfold(Opts) ->
-    {exportable, Exportable} = lists:keyfind(exportable, 1, Opts),
-    fun(_B, K, PO, {Count, TreeAcc}) ->
+generate_objectfold(_Opts) ->
+    fun(B, K, PO, {Count, TreeAcc}) ->
         ExtractFun = 
             fun(Key, Obj) ->
                 {VC, _Sz, _SC} = riak_object:summary_from_binary(Obj),
                 {Key, lists:sort(VC)}
             end,
+        BinK = <<B/binary, K/binary>>,
         {Count + 1, 
-            leveled_tictac:add_kv(TreeAcc, K, PO, ExtractFun, Exportable)}
+            leveled_tictac:add_kv(TreeAcc, BinK, PO, ExtractFun)}
     end.
 
 generate_mergefun(_Opts) ->
@@ -118,7 +118,7 @@ json_encode_tictac_withentries_test() ->
     ExtractFun = fun(K, V) -> {K, V} end,
     FoldFun = 
         fun({Key, Value}, AccTree) ->
-            leveled_tictac:add_kv(AccTree, Key, Value, ExtractFun, false)
+            leveled_tictac:add_kv(AccTree, Key, Value, ExtractFun)
         end,
     KVList = [{<<"key1">>, <<"value1">>}, 
                 {<<"key2">>, <<"value2">>}, 

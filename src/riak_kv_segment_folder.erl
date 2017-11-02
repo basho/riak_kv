@@ -88,7 +88,7 @@ generate_objectfold(Opts) ->
     {return_clocks, ReturnClocks} = lists:keyfind(return_clocks, 1, Opts),
     
     fun(B, K, PO, Acc) ->
-        case {FilterFun(K), ReturnClocks} of 
+        case {FilterFun(B, K), ReturnClocks} of 
             {true, true} ->
                 % Get the clock to return
                 RObj = riak_object:from_binary(B, K, PO),
@@ -117,10 +117,8 @@ encode_results(KeyHashList, http) ->
 generate_filter(Opts) ->
     {tree_size, TreeSize} = lists:keyfind(tree_size, 1, Opts),
     {segment_list, SegmentList} = lists:keyfind(segment_list, 1, Opts),
-    {exportable, Exportable} = lists:keyfind(exportable, 1, Opts),
-    fun(K) ->
-        {HashK, _HashV} = 
-            leveled_tictac:tictac_hash(K, <<"null">>, Exportable),
+    fun(B, K) ->
+        HashK = leveled_tictac:keyto_segment32(<<B/binary, K/binary>>),
         lists:member(
             leveled_tictac:get_segment(HashK, TreeSize), 
             SegmentList)
@@ -133,13 +131,15 @@ generate_filter(Opts) ->
 
 segfilter_test() ->
     % Simple test to check FilterFun
-
-    K1 = "Key1",
-    K2 = "Key2",
-    K3 = "Key3",
-    S1 = leveled_tictac:get_segment(erlang:phash2(K1), small),
-    S2 = leveled_tictac:get_segment(erlang:phash2(K2), small),
-    S3 = leveled_tictac:get_segment(erlang:phash2(K3), small),
+    B = <<"Bucket">>,
+    K1 = <<"Key1">>,
+    K2 = <<"Key2">>,
+    K3 = <<"Key3">>,
+    HashFun = 
+        fun(K) -> leveled_tictac:keyto_segment32(<<B/binary, K/binary>>) end,
+    S1 = leveled_tictac:get_segment(HashFun(K1), small),
+    S2 = leveled_tictac:get_segment(HashFun(K2), small),
+    S3 = leveled_tictac:get_segment(HashFun(K3), small),
     ?assertMatch(false, S3 == S2),
     ?assertMatch(false, S3 == S1),
 
@@ -152,10 +152,11 @@ segfilter_test() ->
                                                 {tree_size, TreeSize}]),
 
     Filter = generate_filter(Opts),
+    
 
-    ?assertMatch(true, Filter(K1)),
-    ?assertMatch(true, Filter(K2)),
-    ?assertMatch(false, Filter(K3)).
+    ?assertMatch(true, Filter(B, K1)),
+    ?assertMatch(true, Filter(B, K2)),
+    ?assertMatch(false, Filter(B, K3)).
 
 checkjsonreversal_test() ->
     % Check what goes into Json comes back out the same way

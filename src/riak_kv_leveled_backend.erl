@@ -311,7 +311,8 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                                 IdxQuery#riak_kv_index_v3.end_term},
                             {FoldHeadsFun, Acc},
                             CheckPresence,
-                            SnapPreFold};
+                            SnapPreFold,
+                            false};
                     Field ->
                         {foldheads_byindex,
                             ?RIAK_TAG,
@@ -329,7 +330,8 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             ?RIAK_TAG,
                             {FoldHeadsFun, Acc},
                             CheckPresence,
-                            SnapPreFold};
+                            SnapPreFold,
+                            false};
                     B ->
                         {foldheads_bybucket,
                             ?RIAK_TAG,
@@ -337,7 +339,8 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             all,
                             {FoldHeadsFun, Acc},
                             CheckPresence,
-                            SnapPreFold}
+                            SnapPreFold,
+                            false}
                 end
         end,
 
