@@ -90,10 +90,13 @@ start(Partition, Config) ->
     DataRoot = ?LEVELED_DATAROOT,
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
-            case leveled_bookie:book_start(DataDir,
-                                            ?LEVELED_LEDGERCACHE,
-                                            ?LEVELED_JOURNALSIZE,
-                                            ?LEVELED_SYNCSTRATEGY) of
+            StartOpts = [{root_path, DataDir},
+                            {max_journalsize, ?LEVELED_JOURNALSIZE},
+                            {max_pencillercachesize, ?LEVELED_LEDGERCACHE},
+                            {sync_strategy, ?LEVELED_SYNCSTRATEGY},
+                            {compression_method, ?LEVELED_PRESSMETHOD},
+                            {compression_point, ?LEVELED_PRESSPOINT}],
+            case leveled_bookie:book_start(StartOpts) of
                 {ok, Bookie} ->
                     Ref = make_ref(),
                     schedule_journalcompaction(Ref, Partition),
