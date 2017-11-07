@@ -53,7 +53,8 @@
                         fold_heads,
                         direct_fetch,
                         putfsm_pause,
-                        snap_prefold]).
+                        snap_prefold,
+                        segment_accelerate]).
 -define(API_VERSION, 1).
 
 -record(state, {bookie :: pid(),
@@ -299,6 +300,13 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                 CP
         end,
     SnapPreFold = lists:member(snap_prefold, Opts),
+    SegmentList = 
+        case proplists:get_value(segment_accelerate, Opts) of 
+            undefined ->
+                false;
+            SL ->
+                SL 
+        end,
     Query = 
         case lists:keyfind(index, 1, Opts) of 
             {index, Bucket, IdxQuery} ->
@@ -312,7 +320,7 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             {FoldHeadsFun, Acc},
                             CheckPresence,
                             SnapPreFold,
-                            false};
+                            SegmentList};
                     Field ->
                         {foldheads_byindex,
                             ?RIAK_TAG,
@@ -331,7 +339,7 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             {FoldHeadsFun, Acc},
                             CheckPresence,
                             SnapPreFold,
-                            false};
+                            SegmentList};
                     B ->
                         {foldheads_bybucket,
                             ?RIAK_TAG,
@@ -340,7 +348,7 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             {FoldHeadsFun, Acc},
                             CheckPresence,
                             SnapPreFold,
-                            false}
+                            SegmentList}
                 end
         end,
 

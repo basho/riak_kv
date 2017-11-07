@@ -241,5 +241,23 @@ decode_http_options_test() ->
                     lists:keyfind(check_presence, 1, DecodedOpts)).
 
 
+default_seglist_options_test() ->
+    Bucket = <<"Bucket">>,
+    FoldOpts = [],
+    OptsList = riak_kv_segment_folder:valid_options(),
+    Opts = [{bucket, Bucket}|generate_options(OptsList, FoldOpts)],
+    QueryOpts = riak_kv_segment_folder:generate_queryoptions(Opts),
+    ?assertMatch([{check_presence, false}], QueryOpts).
+
+accelerate_seglist_options_test() ->
+    Bucket = <<"Bucket">>,
+    FoldOpts = [{segment_accelerate, <<"true">>}, 
+                    {segment_list, <<"1|100">>}],
+    OptsList = riak_kv_segment_folder:valid_options(),
+    Opts = [{bucket, Bucket}|generate_options(OptsList, FoldOpts)],
+    QueryOpts = riak_kv_segment_folder:generate_queryoptions(Opts),
+    ?assertMatch([{segment_list, [1, 100]},
+                    {check_presence, false}], QueryOpts).
+
 -endif.
 

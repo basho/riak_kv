@@ -55,15 +55,20 @@ valid_options() ->
                 fun list_to_atom/1, 
                 fun leveled_tictac:valid_size/1, 
                 small},
-        {exportable, 
-            % Are the segment mashes based on the exportable hash algorithm
-            % used within TicTac trees for comparing between erlang and 
-            % non-erlang stores
+        {return_clocks,
+            % Should {keys, clocks} be returned not just keys
                 fun list_to_atom/1,
                 fun is_boolean/1,
                 false},
-        {return_clocks,
-            % Should {keys, clocks} be returned not just keys
+        {check_presence,
+            % Should the value store be checked (where the backend has a 
+            % value store)
+                fun list_to_atom/1,
+                fun is_boolean/1,
+                false},
+        {segment_accelerate,
+            % Should the query be accelerated by the backend filtering on
+            % the segment list
                 fun list_to_atom/1,
                 fun is_boolean/1,
                 false},
@@ -77,8 +82,17 @@ valid_options() ->
                 fun is_list/1,
                 []}].
 
-generate_queryoptions(_Opts) ->
-    [].
+generate_queryoptions(Opts) ->
+    Opts0 =
+        case proplists:get_bool(segment_accelerate, Opts) of
+            true ->
+                [lists:keyfind(segment_list, 1, Opts)];
+            false ->
+                []
+        end,
+    Opts1 = 
+        [lists:keyfind(check_presence, 1, Opts)],
+    Opts0 ++ Opts1.
 
 generate_acc(_Opts) ->
     [].
@@ -86,17 +100,12 @@ generate_acc(_Opts) ->
 generate_objectfold(Opts) ->
     FilterFun = generate_filter(Opts),
     {return_clocks, ReturnClocks} = lists:keyfind(return_clocks, 1, Opts),
-    
     fun(B, K, PO, Acc) ->
         case {FilterFun(B, K), ReturnClocks} of 
             {true, true} ->
                 % Get the clock to return
-                RObj = riak_object:from_binary(B, K, PO),
-                {_, VClockHeader} = riak_object:vclock_header(RObj),
-                % Assume that the key will JSON encode?
-                % Is anything special done in listkeys or 2i query to make 
-                % sure of this?
-                [{K, VClockHeader}|Acc]; 
+                {VC, _Sz, _SC} = riak_object:summary_from_binary(PO),
+                [{B, K, VC}|Acc];
             {true, false} ->
                 [K|Acc];
             {false, _} ->
