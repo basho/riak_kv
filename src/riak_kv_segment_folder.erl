@@ -116,8 +116,8 @@ generate_objectfold(Opts) ->
 generate_mergefun(_Opts) ->
     fun lists:append/2.
 
-encode_results(KeyHashList, http) ->
-    mochijson2:encode({struct, [{<<"deltas">>, KeyHashList}]}).
+encode_results(KeyList, http) ->
+    mochijson2:encode({struct, [{<<"deltas">>, KeyList}]}).
 
 %% ===================================================================
 %% Internal Functions
