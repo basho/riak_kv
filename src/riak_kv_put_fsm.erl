@@ -512,7 +512,7 @@ precommit(timeout, State = #state{precommit = [Hook | Rest],
     end.
 
 %% @private
-execute(State=#state{options = Options, coord_pl_entry = CPL}) ->
+execute(State=#state{options = Options, timeout = Timeout, coord_pl_entry = CPL}) ->
     %% If we are a forwarded coordinator, the originating node is expecting
     %% an ack from us.
     case get_option(ack_execute, Options) of
@@ -521,19 +521,20 @@ execute(State=#state{options = Options, coord_pl_entry = CPL}) ->
         Pid ->
             Pid ! {ack, node(), now_executing}
     end,
+    TRef = schedule_timeout(Timeout),
+    NewState = State#state{tref = TRef},
     case CPL of
         undefined ->
-            execute_remote(State);
+            execute_remote(NewState);
         _ ->
-            execute_local(State)
+            execute_local(NewState)
     end.
 
 %% @private
 %% Send the put coordinating put requests to the local vnode - the returned object
 %% will guarantee a frontier object.
 %% N.B. Not actually a state - here in the source to make reading the flow easier
-execute_local(StateData=#state{robj=RObj, req_id = ReqId,
-                               timeout=Timeout, bkey=BKey,
+execute_local(StateData=#state{robj=RObj, req_id = ReqId, bkey=BKey,
                                coord_pl_entry = {_Index, Node} = CoordPLEntry,
                                vnode_options=VnodeOptions,
                                trace = Trace,
@@ -546,9 +547,8 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
             _ ->
                 StateData
         end,
-    TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
-    StateData2 = StateData1#state{robj = RObj, tref = TRef},
+    StateData2 = StateData1#state{robj = RObj},
     %% Must always wait for local vnode - it contains the object with updated vclock
     %% to use for the remotes. (Ignore optimization for N=1 case for now).
     new_state(waiting_local_vnode, StateData2).
