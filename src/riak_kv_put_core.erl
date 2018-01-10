@@ -20,7 +20,7 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_put_core).
--export([init/11, add_result/2, enough/1, response/1,
+-export([init/8, add_result/2, enough/1, response/1,
          final/1, result_shortcode/1, result_idx/1]).
 -export_type([putcore/0, result/0, reply/0]).
 
@@ -69,19 +69,22 @@
 %% Initialize a put and return an opaque put core context
 -spec init(N::pos_integer(), W::non_neg_integer(),
            PW::non_neg_integer(), NodeConfirms::non_neg_integer(),
-           DW::non_neg_integer(), PWFail::pos_integer(),
-           NodeConfirmsFail::pos_integer(), DWFail::pos_integer(),
+           DW::non_neg_integer(),
            AllowMult::boolean(), ReturnBody::boolean(),
            IDXType::idx_type()) -> putcore().
-init(N, W, PW, NodeConfirms, DW, PWFailThreshold, NodeConfirmsFailThreshold,
-     DWFailThreshold, AllowMult, ReturnBody, IdxType) ->
+init(N, W, PW, NodeConfirms, DW, AllowMult, ReturnBody, IdxType) ->
     #putcore{n = N, w = W, pw = PW, dw = DW, node_confirms = NodeConfirms,
-             pw_fail_threshold = PWFailThreshold,
-             node_confirms_fail_threshold = NodeConfirmsFailThreshold,
-             dw_fail_threshold = DWFailThreshold,
+             pw_fail_threshold = calculate_fail_threshold(N, PW),
+             node_confirms_fail_threshold = calculate_fail_threshold(N, NodeConfirms),
+             dw_fail_threshold = calculate_fail_threshold(N, DW),
              allowmult = AllowMult,
              returnbody = ReturnBody,
              idx_type = IdxType}.
+
+%% @priv
+-spec calculate_fail_threshold(pos_integer(), non_neg_integer()) -> non_neg_integer().
+calculate_fail_threshold(N, Q) ->
+    N-Q+1.
 
 %% Add a result from the vnode
 -spec add_result(vput_result(), putcore()) -> putcore().

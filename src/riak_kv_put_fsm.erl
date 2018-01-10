@@ -459,9 +459,6 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                         end
                 end,
             PutCore = riak_kv_put_core:init(N, W, PW, NodeConfirms, DW,
-                                            N-PW+1,  % cannot ever get PW replies
-                                            N-NodeConfirms+1,  % cannot ever get NodeConfirms replies
-                                            N-DW+1,  % cannot ever get DW replies
                                             AllowMult,
                                             ReturnBody,
                                             IdxType),

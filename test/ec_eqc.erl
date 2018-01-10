@@ -724,12 +724,8 @@ put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
     AllowMult = true,
     ReturnBody = false,
     NodeConfirms = 0,
-    NodeConfirmsfailthreshold = N-NodeConfirms+1,
     PutCore = riak_kv_put_core:init(N, W, DW, NodeConfirms,
                                     DW, %% SLF hack
-                                    N-W+1,   % cannot ever get W replies
-                                    NodeConfirmsfailthreshold,
-                                    N-DW+1,  % cannot ever get DW replies
                                     AllowMult,
                                     ReturnBody,
                                     [{Idx, primary, node1 } || Idx <- lists:seq(1, N)] %% SLF hack
