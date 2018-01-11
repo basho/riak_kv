@@ -63,36 +63,43 @@ achieved a desired level of node diversity.
 ## Implementation
 
 When riak receives a 'put', it starts up a
-[riak_kv_put_fsm](../src/riak_kv_put_fsm.erl) (finite state
-machine). This [prepares](../src/riak_kv_put_fsm.erl#L277) and then
-[validates](../src/riak_kv_put_fsm.erl#L386) the options, then calls
-any [precommit hooks](../src/riak_kv_put_fsm.erl#L501), before
-[executing a put to the local vnode](../src/riak_kv_put_fsm.erl#L542)
-in the preflist, which becomes the co-ordinating node. This then
-[waits for the local vnode response](../src/riak_kv_put_fsm.erl#L564)
+[riak_kv_put_fsm](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl)
+(finite state machine). This
+[prepares](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L277)
+and then
+[validates](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L386)
+the options, then calls any
+[precommit hooks](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L501),
 before
-[executing the put request remotely](../src/riak_kv_put_fsm.erl#L598)
+[executing a put to the local vnode](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L542)
+in the preflist, which becomes the co-ordinating node. This then
+[waits for the local vnode response](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L564)
+before
+[executing the put request remotely](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L598)
 on the two remaining nodes in the preflist.
 
 The fsm then
-[waits for the remote vnode responses](../src/riak_kv_put_fsm.erl#L628),
+[waits for the remote vnode responses](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L628),
 and as it receives responses, it
-[adds these results](../src/riak_kv_put_core.erl#L88) and checks
-whether [enough](../src/riak_kv_put_core.erl#L111) results have been
-collected to satisfy the bucket properties such as _'dw'_ and _'pw'_.
+[adds these results](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_core.erl#L88)
+and checks whether
+[enough](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_core.erl#L111)
+results have been collected to satisfy the bucket properties such as
+`dw` and `pw`.
 
-This stage has now been enhanced through this branch.  When analysing
-the responses, Riak will now
-[count the number of different nodes](../src/riak_kv_put_core.erl#L246)
+This stage has now been enhanced through the addition of
+`node_confirms`.  When analysing the responses, Riak will now
+[count the number of different nodes](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_core.erl#L246)
 from which results have been returned.  The finite state machine can
 now be required to wait for a minimum number of confirmations from
 different nodes, whilst also ensuring all other configured options are
 satisfied.
 
 Once all options are satisfied, the
-[response is returned](../src/riak_kv_put_fsm.erl#L766),
-[post commit hooks](../src/riak_kv_put_fsm.erl#L666) are called and
-the [fsm finishes](../src/riak_kv_put_fsm.erl#L683).
+[response is returned](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L766),
+[post commit hooks](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L666)
+are called and the
+[fsm finishes](https://github.com/nhs-riak/riak_kv/blob/6c6ce819af2b6f73476f44611212ad755c5a2833/src/riak_kv_put_fsm.erl#L683).
 
 ### What's in an option name?
 
@@ -115,7 +122,7 @@ this is a node based option, and it is also more descriptive.
 
 Testing is done by adding unit tests for the count mechanisms, and by
 creating a
-[riak_test](https://github.com/ramensen/riak_test/blob/rs-physical-promises/tests/node_confirms_vs_pw.erl)
+[riak_test](https://github.com/ramensen/riak_test/blob/aa088b8931c7361a4e2956a4930126e9954f3b4e/tests/node_confirms_vs_pw.erl)
 that does the following:
 
 * Start a 5 node cluster
