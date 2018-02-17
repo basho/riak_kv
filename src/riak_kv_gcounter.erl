@@ -250,7 +250,7 @@ roundtrip_bin_test() ->
 lots_of_actors_test() ->
     GC = lists:foldl(fun(_, GCnt) ->
                              ActorLen = crypto:rand_uniform(1, 1000),
-                             Actor = crypto:rand_bytes(ActorLen),
+                             Actor = crypto:strong_rand_bytes(ActorLen),
                              Cnt = crypto:rand_uniform(1, 10000),
                              {ok, GC} = riak_kv_gcounter:update({increment, Cnt}, Actor, GCnt),
                              GC

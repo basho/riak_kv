@@ -22,7 +22,7 @@
 
 -module(crdt_statem_eqc).
 
--include("riak_kv_types.hrl").
+-include("include/riak_kv_types.hrl").
 
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").

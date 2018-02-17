@@ -37,10 +37,10 @@
 %% basic schema test will check to make sure that all defaults from the schema
 %% make it into the generated app.config
 basic_schema_test() ->
-    %% The defaults are defined in ../priv/riak_kv.schema and multi_backend.schema.
+    %% The defaults are defined in priv/riak_kv.schema and multi_backend.schema.
     %% they are the files under test.
     Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], [], context(), predefined_schema()),
+        ["priv/riak_kv.schema", "priv/multi_backend.schema"], [], context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, []}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_bitcask_backend),
@@ -155,7 +155,7 @@ override_non_multi_backend_schema_test() ->
     ],
 
     Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+        ["priv/riak_kv.schema", "priv/multi_backend.schema"], Conf, context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, [debug]}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_eleveldb_backend),
@@ -235,7 +235,7 @@ multi_backend_test() ->
     ],
 
     Config = cuttlefish_unit:generate_templated_config(
-        ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+        ["priv/riak_kv.schema", "priv/multi_backend.schema"], Conf, context(), predefined_schema()),
 
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy", {on, []}),
     cuttlefish_unit:assert_config(Config, "riak_kv.storage_backend", riak_kv_multi_backend),
@@ -299,7 +299,7 @@ commit_hooks_test() ->
             {["buckets", "default", "postcommit"], "jsLOL"}
            ],
     Config = cuttlefish_unit:generate_templated_config(
-               ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+               ["priv/riak_kv.schema", "priv/multi_backend.schema"], Conf, context(), predefined_schema()),
     ?assertEqual({error, apply_translations,
                   {errorlist, [
                                {error,
@@ -315,7 +315,7 @@ commit_hooks_test() ->
 datatype_compression_validator_test() ->
     Conf = [{["datatypes", "compression_level"], 10}],
     Config = cuttlefish_unit:generate_templated_config(
-               ["../priv/riak_kv.schema", "../priv/multi_backend.schema"], Conf, context(), predefined_schema()),
+               ["priv/riak_kv.schema", "priv/multi_backend.schema"], Conf, context(), predefined_schema()),
     cuttlefish_unit:assert_error_in_phase(Config, validation),
     ok.
 
@@ -328,13 +328,13 @@ correct_error_handling_by_multibackend_test() ->
     DepsPath = get_deps_dir(),
 
     SchemaPaths = [
-                   "../priv/riak_kv.schema",
-                   "../priv/multi_backend.schema",
+                   "priv/riak_kv.schema",
+                   "priv/multi_backend.schema",
                    filename:join(DepsPath, "bitcask/priv/bitcask.schema"),
                    filename:join(DepsPath, "bitcask/priv/bitcask_multi.schema"),
                    filename:join(DepsPath, "eleveldb/priv/eleveldb.schema"),
                    filename:join(DepsPath, "eleveldb/priv/eleveldb_multi.schema"),
-                   "../test/bad_bitcask_multi.schema"
+                   "test/bad_bitcask_multi.schema"
                   ],
 
     Config = cuttlefish_unit:generate_templated_config(SchemaPaths,
@@ -372,8 +372,8 @@ all_backend_multi_test() ->
     DepsPath = get_deps_dir(),
 
     SchemaPaths = [
-                   "../priv/riak_kv.schema",
-                   "../priv/multi_backend.schema",
+                   "priv/riak_kv.schema",
+                   "priv/multi_backend.schema",
                    filename:join(DepsPath, "bitcask/priv/bitcask.schema"),
                    filename:join(DepsPath, "bitcask/priv/bitcask_multi.schema"),
                    filename:join(DepsPath, "eleveldb/priv/eleveldb.schema"),
@@ -420,7 +420,7 @@ job_class_enabled_test() ->
 
 test_job_class_enabled({true, RCSchema}) when erlang:is_list(RCSchema) ->
     Config = cuttlefish_unit:generate_templated_config(
-        [RCSchema, "../priv/riak_kv.schema"], [],
+        [RCSchema, "priv/riak_kv.schema"], [],
         riak_core_schema_tests:context() ++ context()),
 
     cuttlefish_unit:assert_config(

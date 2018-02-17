@@ -25,8 +25,8 @@
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include_lib("riak_kv_types.hrl").
--include("../src/riak_kv_wm_raw.hrl").
+-include("include/riak_kv_types.hrl").
+-include("src/riak_kv_wm_raw.hrl").
 
 -compile(export_all).
 

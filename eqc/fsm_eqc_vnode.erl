@@ -28,7 +28,7 @@
 
 -module(fsm_eqc_vnode).
 -behaviour(gen_fsm).
--include_lib("riak_kv_vnode.hrl").
+-include("include/riak_kv_vnode.hrl").
 
 -export([start_link/0, start_link/1, set_data/2, set_vput_replies/1, 
          get_history/0, get_put_history/0,

@@ -276,8 +276,8 @@ dep_apps(Test, Extra) ->
            (_) -> ok
         end,
 
-    [sasl, Silencer, goldrush, lager, exometer_core, runtime_tools, erlang_js,
-     mochiweb, webmachine, sidejob, poolboy, basho_stats, bitcask, protobuffs,
+    [sasl, Silencer, goldrush, lager, folsom, exometer_core, runtime_tools,
+     mochiweb, webmachine, sidejob, poolboy, basho_stats, bitcask,
      eleveldb, riak_core, riak_pipe, riak_api, riak_dt, riak_pb, riak_kv,
      DefaultSetupFun, Extra].
 

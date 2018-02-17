@@ -382,7 +382,7 @@ bucket_type(T, B) ->
 -ifdef(TEST).
 
 -define(CODE(Msg), riak_pb_codec:msg_code(Msg)).
--define(PAYLOAD(Msg), riak_kv_pb:encode(Msg)).
+-define(PAYLOAD(Msg), riak_kv_pb:encode_msg(Msg)).
 
 empty_bucket_key_test_() ->
     Name = "empty_bucket_key_test",
@@ -397,11 +397,11 @@ empty_bucket_key_test_() ->
      [{"RpbPutReq with empty key is disallowed",
        ?_assertMatch([0|_], request(#'RpbPutReq'{bucket = <<"foo">>,
                                                key = <<>>,
-                                               content=#rpbcontent{value = <<"dummy">>}}))},
+                                               content=#'RpbContent'{value = <<"dummy">>}}))},
       {"RpbPutReq with empty bucket is disallowed",
        ?_assertMatch([0|_], request(#'RpbPutReq'{bucket = <<>>,
                                                key = <<"foo">>,
-                                               content=#rpbcontent{value = <<"dummy">>}}))},
+                                               content=#'RpbContent'{value = <<"dummy">>}}))},
       {"RpbGetReq with empty key is disallowed",
        ?_assertMatch([0|_], request(#'RpbGetReq'{bucket = <<"foo">>,
                                                key = <<>>}))},
