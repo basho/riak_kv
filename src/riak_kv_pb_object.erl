@@ -81,15 +81,15 @@ init() ->
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #rpbgetreq{} ->
-            {ok, Msg, {"riak_kv.get", bucket_type(Msg#rpbgetreq.type,
-                                                        Msg#rpbgetreq.bucket)}};
-        #rpbputreq{} ->
-            {ok, Msg, {"riak_kv.put", bucket_type(Msg#rpbputreq.type,
-                                                        Msg#rpbputreq.bucket)}};
-        #rpbdelreq{} ->
-            {ok, Msg, {"riak_kv.delete", bucket_type(Msg#rpbdelreq.type,
-                                                           Msg#rpbdelreq.bucket)}};
+        #'RpbGetReq'{} ->
+            {ok, Msg, {"riak_kv.get", bucket_type(Msg#'RpbGetReq'.type,
+                                                        Msg#'RpbGetReq'.bucket)}};
+        #'RpbPutReq'{} ->
+            {ok, Msg, {"riak_kv.put", bucket_type(Msg#'RpbPutReq'.type,
+                                                        Msg#'RpbPutReq'.bucket)}};
+        #'RpbDelReq'{} ->
+            {ok, Msg, {"riak_kv.delete", bucket_type(Msg#'RpbDelReq'.type,
+                                                           Msg#'RpbDelReq'.bucket)}};
         _ ->
             {ok, Msg}
     end.
@@ -104,10 +104,10 @@ process(rpbgetclientidreq, #state{client=C, client_id=CID} = State) ->
                    true -> CID;
                    false -> C:get_client_id()
                end,
-    Resp = #rpbgetclientidresp{client_id = ClientId},
+    Resp = #'RpbGetClientIdResp'{client_id = ClientId},
     {reply, Resp, State};
 
-process(#rpbsetclientidreq{client_id = ClientId}, State) ->
+process(#'RpbSetClientIdReq'{client_id = ClientId}, State) ->
     NewState = case riak_core_capability:get({riak_kv, vnode_vclocks}) of
                    true -> State#state{client_id=ClientId};
                    false ->
@@ -116,13 +116,13 @@ process(#rpbsetclientidreq{client_id = ClientId}, State) ->
                end,
     {reply, rpbsetclientidresp, NewState};
 
-process(#rpbgetreq{bucket = <<>>}, State) ->
+process(#'RpbGetReq'{bucket = <<>>}, State) ->
     {error, "Bucket cannot be zero-length", State};
-process(#rpbgetreq{key = <<>>}, State) ->
+process(#'RpbGetReq'{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
-process(#rpbgetreq{type = <<>>}, State) ->
+process(#'RpbGetReq'{type = <<>>}, State) ->
     {error, "Type cannot be zero-length", State};
-process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
+process(#'RpbGetReq'{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    basic_quorum=BQ, if_modified=VClock,
                    head=Head, deletedvclock=DeletedVClock,
                    n_val=N_val, sloppy_quorum=SloppyQuorum,
@@ -142,7 +142,7 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
 
             case erlify_rpbvc(VClock) == riak_object:vclock(O) of
                 true ->
-                    {reply, #rpbgetresp{unchanged = true}, State};
+                    {reply, #'RpbGetResp'{unchanged = true}, State};
                 _ ->
                     Contents = riak_object:get_contents(O),
                     PbContent = case Head of
@@ -155,26 +155,26 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                                     _ ->
                                         riak_pb_kv_codec:encode_contents(Contents)
                                 end,
-                    {reply, #rpbgetresp{content = PbContent,
+                    {reply, #'RpbGetResp'{content = PbContent,
                                         vclock = pbify_rpbvc(riak_object:vclock(O))}, State}
             end;
         {error, {deleted, TombstoneVClock}} ->
             %% Found a tombstone - return its vector clock so it can
             %% be properly overwritten
-            {reply, #rpbgetresp{vclock = pbify_rpbvc(TombstoneVClock)}, State};
+            {reply, #'RpbGetResp'{vclock = pbify_rpbvc(TombstoneVClock)}, State};
         {error, notfound} ->
-            {reply, #rpbgetresp{}, State};
+            {reply, #'RpbGetResp'{}, State};
         {error, Reason} ->
             {error, {format,Reason}, State}
     end;
 
-process(#rpbputreq{bucket = <<>>}, State) ->
+process(#'RpbPutReq'{bucket = <<>>}, State) ->
     {error, "Bucket cannot be zero-length", State};
-process(#rpbputreq{key = <<>>}, State) ->
+process(#'RpbPutReq'{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
-process(#rpbputreq{type = <<>>}, State) ->
+process(#'RpbPutReq'{type = <<>>}, State) ->
     {error, "Type cannot be zero-length", State};
-process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
+process(#'RpbPutReq'{bucket=B0, type=T, key=K, vclock=PbVC,
                    if_not_modified=NotMod, if_none_match=NoneMatch,
                    n_val=N_val, sloppy_quorum=SloppyQuorum} = Req,
         #state{client=C} = State) when NotMod; NoneMatch ->
@@ -189,7 +189,7 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
              end,
     case Result of
         consistent ->
-            process(Req#rpbputreq{if_not_modified=undefined,
+            process(Req#'RpbPutReq'{if_not_modified=undefined,
                                   if_none_match=consistent},
                     State);
         {ok, _} when NoneMatch ->
@@ -197,14 +197,14 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
         {ok, O} when NotMod ->
             case erlify_rpbvc(PbVC) == riak_object:vclock(O) of
                 true ->
-                    process(Req#rpbputreq{if_not_modified=undefined,
+                    process(Req#'RpbPutReq'{if_not_modified=undefined,
                                           if_none_match=undefined},
                             State);
                 _ ->
                     {error, "modified", State}
             end;
         {error, _} when NoneMatch ->
-            process(Req#rpbputreq{if_not_modified=undefined,
+            process(Req#'RpbPutReq'{if_not_modified=undefined,
                                   if_none_match=undefined},
                     State);
         {error, notfound} when NotMod ->
@@ -213,7 +213,7 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
             {error, {format, Reason}, State}
     end;
 
-process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
+process(#'RpbPutReq'{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
                    return_head=ReturnHead, timeout=Timeout, asis=AsIs,
                    n_val=N_val, sloppy_quorum=SloppyQuorum,
@@ -259,10 +259,10 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                                 {n_val, N_val},
                                 {sloppy_quorum, SloppyQuorum}]) ++ Options2) of
         ok when is_binary(ReturnKey) ->
-            PutResp = #rpbputresp{key = ReturnKey},
+            PutResp = #'RpbPutResp'{key = ReturnKey},
             {reply, PutResp, State};
         ok ->
-            {reply, #rpbputresp{}, State};
+            {reply, #'RpbPutResp'{}, State};
         {ok, Obj} ->
             Contents = riak_object:get_contents(Obj),
             PbContents = case ReturnHead of
@@ -275,18 +275,18 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                              _ ->
                                  riak_pb_kv_codec:encode_contents(Contents)
                          end,
-            PutResp = #rpbputresp{content = PbContents,
+            PutResp = #'RpbPutResp'{content = PbContents,
                                   vclock = pbify_rpbvc(riak_object:vclock(Obj)),
                                   key = ReturnKey
                                  },
             {reply, PutResp, State};
         {error, notfound} ->
-            {reply, #rpbputresp{}, State};
+            {reply, #'RpbPutResp'{}, State};
         {error, Reason} ->
             {error, {format, Reason}, State}
     end;
 
-process(#rpbdelreq{bucket=B0, type=T, key=K, vclock=PbVc,
+process(#'RpbDelReq'{bucket=B0, type=T, key=K, vclock=PbVc,
                    r=R0, w=W0, pr=PR0, pw=PW0, dw=DW0, rw=RW0,
                    timeout=Timeout, n_val=N_val, sloppy_quorum=SloppyQuorum},
         #state{client=C} = State) ->
@@ -395,18 +395,18 @@ empty_bucket_key_test_() ->
      riak_kv_test_util:common_setup(Name, SetupFun),
      riak_kv_test_util:common_cleanup(Name, SetupFun),
      [{"RpbPutReq with empty key is disallowed",
-       ?_assertMatch([0|_], request(#rpbputreq{bucket = <<"foo">>,
+       ?_assertMatch([0|_], request(#'RpbPutReq'{bucket = <<"foo">>,
                                                key = <<>>,
                                                content=#rpbcontent{value = <<"dummy">>}}))},
       {"RpbPutReq with empty bucket is disallowed",
-       ?_assertMatch([0|_], request(#rpbputreq{bucket = <<>>,
+       ?_assertMatch([0|_], request(#'RpbPutReq'{bucket = <<>>,
                                                key = <<"foo">>,
                                                content=#rpbcontent{value = <<"dummy">>}}))},
       {"RpbGetReq with empty key is disallowed",
-       ?_assertMatch([0|_], request(#rpbgetreq{bucket = <<"foo">>,
+       ?_assertMatch([0|_], request(#'RpbGetReq'{bucket = <<"foo">>,
                                                key = <<>>}))},
       {"RpbGetReq with empty bucket is disallowed",
-       ?_assertMatch([0|_], request(#rpbgetreq{bucket = <<>>,
+       ?_assertMatch([0|_], request(#'RpbGetReq'{bucket = <<>>,
                                                key = <<"foo">>}))}]}.
 
 %% Utility funcs copied from riak_api/test/pb_service_test.erl

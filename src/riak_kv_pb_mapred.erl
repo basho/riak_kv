@@ -61,10 +61,10 @@ init() ->
 decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     case Msg of
-        #rpbmapredreq{} ->
+        #'RpbMapRedReq'{} ->
             %% I know we decode it in process() too, but we need to figure out
             %% what permissions this mapreduce will require
-            #rpbmapredreq{request=MrReq, content_type=ContentType}=Msg,
+            #'RpbMapRedReq'{request=MrReq, content_type=ContentType}=Msg,
             case decode_mapred_query(MrReq, ContentType) of
                 {error, _} ->
                     %% can't decode it, so we can't apply permissions to it.
@@ -80,7 +80,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% Start map/reduce job - results will be processed in handle_info
-process(#rpbmapredreq{request=MrReq, content_type=ContentType}=Req, State) ->
+process(#'RpbMapRedReq'{request=MrReq, content_type=ContentType}=Req, State) ->
     Class = {riak_kv, map_reduce},
     Accept = riak_core_util:job_class_enabled(Class),
     _ = riak_core_util:report_job_request_disposition(
@@ -116,7 +116,7 @@ process_stream(#kv_mrc_sink{ref=ReqId,
                              logs=Logs,
                              done=Done},
                ReqId,
-               State=#state{req=#rpbmapredreq{},
+               State=#state{req=#'RpbMapRedReq'{},
                             req_ctx=#pipe_ctx{ref=ReqId,
                                               mrc=Mrc}=PipeCtx}) ->
     case riak_kv_mrc_pipe:error_exists(Logs) of
@@ -131,7 +131,7 @@ process_stream(#kv_mrc_sink{ref=ReqId,
                             %% client libs that aren't expecting it;
                             %% play it safe for now
                             {done,
-                             Msgs++[#rpbmapredresp{done=1}],
+                             Msgs++[#'RpbMapRedResp'{done=1}],
                              clear_state_req(State)};
                        true ->
                             {Sink, _} = Mrc#mrc_ctx.sink,
@@ -152,7 +152,7 @@ process_stream(#kv_mrc_sink{ref=ReqId,
     end;
 
 process_stream({'DOWN', Ref, process, Pid, Reason}, _PipeRef,
-               State=#state{req=#rpbmapredreq{},
+               State=#state{req=#'RpbMapRedReq'{},
                             req_ctx=#pipe_ctx{sender={Pid, Ref}}=PipeCtx}) ->
     %% the async input sender exited
     if Reason == normal ->
@@ -169,7 +169,7 @@ process_stream({'DOWN', Ref, process, Pid, Reason}, _PipeRef,
              clear_state_req(State)}
     end;
 process_stream({'DOWN', Mon, process, Pid, Reason}, _PipeRef,
-               State=#state{req=#rpbmapredreq{},
+               State=#state{req=#'RpbMapRedReq'{},
                             req_ctx=#pipe_ctx{sink={Pid, Mon}}=PipeCtx}) ->
     %% the sink died, which it shouldn't be able to do before
     %% delivering our final results
@@ -179,7 +179,7 @@ process_stream({'DOWN', Mon, process, Pid, Reason}, _PipeRef,
      {format, "Error receiving outputs: ~p", [Reason]},
      clear_state_req(State)};
 process_stream({pipe_timeout, Ref}, Ref,
-               State=#state{req=#rpbmapredreq{},
+               State=#state{req=#'RpbMapRedReq'{},
                             req_ctx=#pipe_ctx{ref=Ref}=PipeCtx}) ->
     destroy_pipe(PipeCtx),
     {error, "timeout", clear_state_req(State)};
@@ -232,7 +232,7 @@ decode_mapred_query(_Query, ContentType) ->
 %% so we have to build a message for each
 msgs_for_results(Results, #state{req=Req, req_ctx=PipeCtx}) ->
     msgs_for_results(Results,
-                   Req#rpbmapredreq.content_type,
+                   Req#'RpbMapRedReq'.content_type,
                    PipeCtx#pipe_ctx.has_mr_query,
                    []).
 
@@ -241,7 +241,7 @@ msgs_for_results([{PhaseId, Results}|Rest], CType, HasMRQuery, Acc) ->
         {error, _}=Error ->
             Error;
         Encoded ->
-            Msg=#rpbmapredresp{phase=PhaseId, response=Encoded},
+            Msg=#'RpbMapRedResp'{phase=PhaseId, response=Encoded},
             msgs_for_results(Rest, CType, HasMRQuery, [Msg|Acc])
     end;
 msgs_for_results([], _, _, Acc) ->
