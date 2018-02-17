@@ -83,20 +83,20 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#dtfetchreq{type=?DEFAULT_BUCKET}=Req0, State) ->
+process(#'DtFetchReq'{type=?DEFAULT_BUCKET}=Req0, State) ->
     %% Handle a typeless message
     %% See downgrade_request/1 etc below for details
     Req = downgrade_request(Req0),
     process_legacy_counter(Req, State);
-process(#dtfetchreq{bucket=B, type=BType}=Req, State) ->
+process(#'DtFetchReq'{bucket=B, type=BType}=Req, State) ->
     %% V2 fetch operation
     fetch_type(bucket_type_to_type(B, BType), Req, State);
-process(#dtupdatereq{type=?DEFAULT_BUCKET}=Req0, State) ->
+process(#'DtUpdateReq'{type=?DEFAULT_BUCKET}=Req0, State) ->
     %% Handle a typeless update message
     %% See downgrade_request/1 etc below for details
     Req = downgrade_request(Req0),
     process_legacy_counter(Req, State);
-process(#dtupdatereq{bucket=B, type=BType}=Req, State) ->
+process(#'DtUpdateReq'{bucket=B, type=BType}=Req, State) ->
     %% V2 update operation
     update_type(bucket_type_to_type(B, BType), Req, State).
 
@@ -116,11 +116,11 @@ fetch_type({ok, {true, Type}}, Req, State) ->
     maybe_fetch(Supported, Req, State#state{mod=Mod, type=Type});
 fetch_type({ok, {false, _Type}}, _Req, State) ->
     {error, {format, "Bucket must be allow_mult=true"}, State};
-fetch_type({error, no_type}, #dtfetchreq{type=BType}, State) ->
+fetch_type({error, no_type}, #'DtFetchReq'{type=BType}, State) ->
     {error, {format, "Error no bucket type `~p`", [BType]}, State}.
 
 maybe_fetch(true, Req, State) ->
-    #dtfetchreq{bucket=B, key=K, type=BType, include_context=InclCtx} = Req,
+    #'DtFetchReq'{bucket=B, key=K, type=BType, include_context=InclCtx} = Req,
     #state{client=C} = State,
     Options = make_options(Req),
     Resp = C:get({BType, B}, K, [{crdt_op, State#state.mod}|Options]),
@@ -145,7 +145,7 @@ process_fetch_response({error, notfound}, State) ->
 process_fetch_response({error, Reason}, State) ->
     {error, {format,Reason}, State}.
 
-update_type({ok, {true, Type}}, #dtupdatereq{op=Op0}=Req, State0) ->
+update_type({ok, {true, Type}}, #'DtUpdateReq'{op=Op0}=Req, State0) ->
     Mod = riak_kv_crdt:to_mod(Type),
     Supported = riak_kv_crdt:supported(Mod),
     ModMap = riak_kv_crdt:mod_map(Type),
@@ -156,11 +156,11 @@ update_type({ok, {true, Type}}, #dtupdatereq{op=Op0}=Req, State0) ->
     maybe_update({Supported, ModsMatch}, Req, State);
 update_type({ok, {false, _Type}}, _Req, State) ->
     {error, {format, "Bucket must be allow_mult=true"}, State};
-update_type({error, no_type}, #dtupdatereq{type=BType}, State) ->
+update_type({error, no_type}, #'DtUpdateReq'{type=BType}, State) ->
     {error, {format, "Error no bucket type `~p`", [BType]}, State}.
 
 maybe_update({true, true}, Req, State0) ->
-    #dtupdatereq{bucket=B, key=K, type=BType,
+    #'DtUpdateReq'{bucket=B, key=K, type=BType,
                  include_context=InclCtx,
                  context=Ctx} = Req,
     #state{client=C, mod=Mod, op=Op} = State0,
@@ -183,7 +183,7 @@ maybe_update({_, false}, _Req, State) ->
 
 process_update_response(ok, State) ->
     #state{return_key=ReturnKey} = State,
-    {reply, #dtupdateresp{key=ReturnKey}, State};
+    {reply, #'DtUpdateResp'{key=ReturnKey}, State};
 process_update_response({ok, RObj}, State) ->
     #state{type=Type, mod=Mod, return_key=Key, return_ctx=ReturnCtx} = State,
     {{Ctx, Value}, Stats} = riak_kv_crdt:value(RObj, Mod),
@@ -193,12 +193,12 @@ process_update_response({ok, RObj}, State) ->
                                                    get_context(Ctx, ReturnCtx), ModMap),
     {reply, Resp, State};
 process_update_response({error, notfound}, State) ->
-    {reply, #dtupdateresp{}, State};
+    {reply, #'DtUpdateResp'{}, State};
 process_update_response({error, Reason}, State) ->
     {error, {format, Reason}, State}.
 
 %% Make a list of options for the Get / Put ops
-make_options(#dtfetchreq{r=R0, pr=PR0,
+make_options(#'DtFetchReq'{r=R0, pr=PR0,
                          notfound_ok=NFOk, basic_quorum=BQ,
                          sloppy_quorum=SloppyQ, n_val=NVal}) ->
     R = decode_quorum(R0),
@@ -209,7 +209,7 @@ make_options(#dtfetchreq{r=R0, pr=PR0,
         make_option(basic_quorum, BQ) ++
         make_option(sloppy_quorum, SloppyQ) ++
         make_option(n_val, NVal);
-make_options(#dtupdatereq{w=W0, dw=DW0, pw=PW0,
+make_options(#'DtUpdateReq'{w=W0, dw=DW0, pw=PW0,
                           timeout=Timeout, sloppy_quorum=SloppyQ,
                           n_val=NVal, return_body=RetVal}) ->
     W = decode_quorum(W0),
@@ -301,13 +301,13 @@ mods_match(BucketMod, OpType) ->
 %% interface
 
 %% Downgrade a crdt request to a v1 counter request
-downgrade_request(#dtfetchreq{bucket=B, key=K, r=R, pr=PR, notfound_ok=NOFOK,
+downgrade_request(#'DtFetchReq'{bucket=B, key=K, r=R, pr=PR, notfound_ok=NOFOK,
                               basic_quorum=BQ}) ->
-    #rpbcountergetreq{bucket=B, key=K, r=R, pr=PR, notfound_ok=NOFOK, basic_quorum=BQ};
-downgrade_request(#dtupdatereq{bucket=B, key=K, w=W, pw=PW, dw=DW, return_body=RB, op=Op}) ->
+    #'RpbCounterGetReq'{bucket=B, key=K, r=R, pr=PR, notfound_ok=NOFOK, basic_quorum=BQ};
+downgrade_request(#'DtUpdateReq'{bucket=B, key=K, w=W, pw=PW, dw=DW, return_body=RB, op=Op}) ->
     case operation_to_amt(Op) of
         Amt when is_integer(Amt) ->
-            #rpbcounterupdatereq{bucket=B, key=K, w=W, pw=PW, dw=DW,
+            #'RpbCounterUpdateReq'{bucket=B, key=K, w=W, pw=PW, dw=DW,
                                  returnvalue=RB, amount=Amt};
         Err -> Err
     end.
@@ -336,21 +336,21 @@ process_legacy_counter(Req, State) ->
     upgrade_response(Req, {E1, E2, State}).
 
 %% Transform a v1.4 counter response to a v2.0 dt response
-upgrade_response(_, {reply, #rpbcountergetresp{value=Val}, State}) ->
+upgrade_response(_, {reply, #'RpbCounterGetResp'{value=Val}, State}) ->
     Resp = riak_pb_dt_codec:encode_fetch_response(riak_kv_crdt:from_mod(?COUNTER_TYPE),
                                                   Val, undefined, ?MOD_MAP),
     {reply, Resp, State};
-upgrade_response(#rpbcounterupdatereq{}, {reply, #rpbcounterupdateresp{}, State}) ->
-    {reply, #dtupdateresp{}, State};
-upgrade_response(_, {reply, #rpbcounterupdateresp{value=Value}, State}) ->
-    {reply, #dtupdateresp{counter_value=Value}, State};
+upgrade_response(#'RpbCounterUpdateReq'{}, {reply, #'RpbCounterUpdateResp'{}, State}) ->
+    {reply, #'DtUpdateResp'{}, State};
+upgrade_response(_, {reply, #'RpbCounterUpdateResp'{value=Value}, State}) ->
+    {reply, #'DtUpdateResp'{counter_value=Value}, State};
 upgrade_response(_, {error, Err, State}) ->
     {error, Err, State}.
 
 %% End of v1.4 adapter
 %% ===================================================================
 
-permission_for(#dtupdatereq{bucket=B, type=T}) ->
+permission_for(#'DtUpdateReq'{bucket=B, type=T}) ->
     {"riak_kv.put", {T,B}};
-permission_for(#dtfetchreq{bucket=B, type=T}) ->
+permission_for(#'DtFetchReq'{bucket=B, type=T}) ->
     {"riak_kv.get", {T,B}}.

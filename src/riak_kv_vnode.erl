@@ -2289,8 +2289,8 @@ decode_binary_object(BinaryObject) ->
 do_zlib_decode(BinaryObject) ->
     DecodedObject = zlib:unzip(BinaryObject),
     PBObj = riak_core_pb:decode_riakobject_pb(DecodedObject),
-    BKey = {PBObj#riakobject_pb.bucket,PBObj#riakobject_pb.key},
-    {BKey, PBObj#riakobject_pb.val}.
+    BKey = {PBObj#'RiakObject_PB'.bucket,PBObj#'RiakObject_PB'.key},
+    {BKey, PBObj#'RiakObject_PB'.val}.
 
 encode_binary_object(Bucket, Key, Value) ->
     Method = handoff_data_encoding_method(),
@@ -2300,7 +2300,7 @@ encode_binary_object(Bucket, Key, Value) ->
                        return_encoded_binary_object(Method, EncodedObject);
 
         %% zlib encoding is a special case, we return the legacy format:
-        encode_zlib -> PBEncodedObject = riak_core_pb:encode_riakobject_pb(#riakobject_pb{bucket=Bucket, key=Key, val=Value}),
+        encode_zlib -> PBEncodedObject = riak_core_pb:encode_riakobject_pb(#'RiakObject_PB'{bucket=Bucket, key=Key, val=Value}),
                        zlib:zip(PBEncodedObject)
     end.
 

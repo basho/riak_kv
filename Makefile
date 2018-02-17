@@ -1,23 +1,22 @@
-.PHONY: deps test
+.PHONY: compile rel cover test dialyzer
+REBAR=./rebar3
 
-DIALYZER_FLAGS =
-
-all: deps compile
-
-compile: deps
-	./rebar compile
-
-deps:
-	./rebar get-deps
+compile:
+	$(REBAR) compile
 
 clean:
-	./rebar clean
-	rm -rf test.*-temp-data
+	$(REBAR) clean
 
-distclean: clean
-	./rebar delete-deps
+cover: test
+	$(REBAR) cover
 
-DIALYZER_APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
-	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler
+test: compile
+	$(REBAR) as test do eunit
 
-include tools.mk
+dialyzer:
+	$(REBAR) dialyzer
+
+xref:
+	$(REBAR) xref
+
+check: test dialyzer xref

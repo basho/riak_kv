@@ -56,7 +56,7 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
-    #rpbindexreq{type=T, bucket=B} = Msg = riak_pb_codec:decode(Code, Bin),
+    #'RpbIndexReq'{type=T, bucket=B} = Msg = riak_pb_codec:decode(Code, Bin),
     Bucket = bucket_type(T, B),
     {ok, Msg, {"riak_kv.index", Bucket}}.
 
@@ -65,12 +65,12 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 
-validate_request(#rpbindexreq{qtype = eq, key = SKey}) when not is_binary(SKey) ->
+validate_request(#'RpbIndexReq'{qtype = eq, key = SKey}) when not is_binary(SKey) ->
     {error, {format, "Invalid equality query ~p", [SKey]}};
-validate_request(#rpbindexreq{qtype = range, range_min = Min, range_max = Max})
+validate_request(#'RpbIndexReq'{qtype = range, range_min = Min, range_max = Max})
     when not is_binary(Min); not is_binary(Max) ->
     {error, {format, "Invalid range query: ~p -> ~p", [Min, Max]}};
-validate_request(#rpbindexreq{term_regex = TermRe} = Req) ->
+validate_request(#'RpbIndexReq'{term_regex = TermRe} = Req) ->
     {ValRe, ValErr} = ensure_compiled_re(TermRe),
     case ValRe of
         error ->
@@ -98,7 +98,7 @@ ensure_compiled_re(TermRe) ->
     end.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#rpbindexreq{stream = S} = Req, State) ->
+process(#'RpbIndexReq'{stream = S} = Req, State) ->
     Class = case S of
         true ->
             {riak_kv, stream_secondary_index};
@@ -126,8 +126,8 @@ validate_request_and_maybe_perform_query(Req, State) ->
 error_accept(Class, State) ->
     {error, riak_core_util:job_class_disabled_message(binary, Class), State}.
 
-maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
-    #rpbindexreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout,
+maybe_perform_query({ok, Query}, Req=#'RpbIndexReq'{stream=true}, State) ->
+    #'RpbIndexReq'{type=T, bucket=B, max_results=MaxResults, timeout=Timeout,
                  pagination_sort=PgSort0, continuation=Continuation} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
@@ -136,10 +136,10 @@ maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
     Opts = riak_index:add_timeout_opt(Timeout, Opts0),
     {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
-    ReturnTerms = riak_index:return_terms(Req#rpbindexreq.return_terms, Query),
-    {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req#rpbindexreq{return_terms=ReturnTerms}}};
+    ReturnTerms = riak_index:return_terms(Req#'RpbIndexReq'.return_terms, Query),
+    {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req#'RpbIndexReq'{return_terms=ReturnTerms}}};
 maybe_perform_query({ok, Query}, Req, State) ->
-    #rpbindexreq{type=T, bucket=B, max_results=MaxResults,
+    #'RpbIndexReq'{type=T, bucket=B, max_results=MaxResults,
                  return_terms=ReturnTerms0, timeout=Timeout,
                  pagination_sort=PgSort0, continuation=Continuation} = Req,
     #state{client=Client} = State,
@@ -164,18 +164,18 @@ handle_query_results(ReturnTerms, MaxResults,  {ok, Results}, State) ->
     Resp = encode_results(ReturnTerms, Results, Cont),
     {reply, Resp, State}.
 
-query_params(#rpbindexreq{index=Index= <<"$bucket">>,
+query_params(#'RpbIndexReq'{index=Index= <<"$bucket">>,
                           term_regex=Re, max_results=MaxResults,
                           continuation=Continuation}) ->
     [{field, Index},
      {return_terms, false}, {term_regex, Re},
      {max_results, MaxResults}, {continuation, Continuation}];
-query_params(#rpbindexreq{qtype=eq, index=Index, key=Value,
+query_params(#'RpbIndexReq'{qtype=eq, index=Index, key=Value,
                           term_regex=Re, max_results=MaxResults,
                           continuation=Continuation}) ->
     [{field, Index}, {start_term, Value}, {end_term, Value}, {term_regex, Re},
      {max_results, MaxResults}, {return_terms, false}, {continuation, Continuation}];
-query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
+query_params(#'RpbIndexReq'{index=Index, range_min=Min, range_max=Max,
                           term_regex=Re, max_results=MaxResults,
                           continuation=Continuation}) ->
      [{field, Index}, {start_term, Min}, {end_term, Max},
@@ -184,10 +184,10 @@ query_params(#rpbindexreq{index=Index, range_min=Min, range_max=Max,
 
 encode_results(true, Results0, Continuation) ->
     Results = [encode_result(Res) || Res <- Results0],
-    #rpbindexresp{results=Results, continuation=Continuation};
+    #'RpbIndexResp'{results=Results, continuation=Continuation};
 encode_results(_, Results, Continuation) ->
     JustTheKeys = filter_values(Results),
-    #rpbindexresp{keys=JustTheKeys, continuation=Continuation}.
+    #'RpbIndexResp'{keys=JustTheKeys, continuation=Continuation}.
 
 encode_result({V, K}) when is_integer(V) ->
     V1 = list_to_binary(integer_to_list(V)),
@@ -213,16 +213,16 @@ process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
                                                   req=Req,
                                                   result_count=Count}) ->
     %% Only add the continuation if there (may) be more results to send
-    #rpbindexreq{max_results=MaxResults} = Req,
+    #'RpbIndexReq'{max_results=MaxResults} = Req,
     Resp = case is_integer(MaxResults) andalso Count >= MaxResults of
-               true -> #rpbindexresp{done=1, continuation=Continuation};
-               false -> #rpbindexresp{done=1}
+               true -> #'RpbIndexResp'{done=1, continuation=Continuation};
+               false -> #'RpbIndexResp'{done=1}
            end,
     {done, Resp, State};
 process_stream({ReqId, {results, []}}, ReqId, State=#state{req_id=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, {results, Results}}, ReqId, State=#state{req_id=ReqId, req=Req, result_count=Count}) ->
-    #rpbindexreq{return_terms=ReturnTerms, max_results=MaxResults} = Req,
+    #'RpbIndexReq'{return_terms=ReturnTerms, max_results=MaxResults} = Req,
     Count2 = length(Results) + Count,
     Continuation = make_continuation(MaxResults, Results, Count2),
     Response = encode_results(ReturnTerms, Results, undefined),
