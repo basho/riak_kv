@@ -42,6 +42,11 @@
 
 -export([data_size/1]).
 
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-export([prop_bitcask_backend/0]).
+-endif.
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -954,35 +959,22 @@ key_version_test() ->
 
 -ifdef(EQC).
 
-eqc_test_() ->
-    {spawn,
-     [{inorder,
-       [{setup,
-         fun setup/0,
-         fun cleanup/1,
-         [
-          {timeout, 180,
-           [?_assertEqual(true,
-                          backend_eqc:test(?MODULE,
-                                           false,
-                                           [{data_root,
-                                             "test/bitcask-backend"}]))]}
-         ]}]}]}.
+prop_bitcask_backend() ->
+    ?SETUP(fun() ->
+                   application:load(sasl),
+                   application:set_env(sasl, sasl_error_logger,
+                                       {file, "riak_kv_bitcask_backend_eqc_sasl.log"}),
+                   error_logger:tty(false),
+                   error_logger:logfile({open, "riak_kv_bitcask_backend_eqc.log"}),
 
-setup() ->
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger,
-                        {file, "riak_kv_bitcask_backend_eqc_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "riak_kv_bitcask_backend_eqc.log"}),
-
-    application:load(bitcask),
-    application:set_env(bitcask, merge_window, never),
-    ok.
-
-cleanup(_) ->
-    os:cmd("rm -rf test/bitcask-backend/*").
-
+                   application:load(bitcask),
+                   application:set_env(bitcask, merge_window, never),
+                   fun() ->  os:cmd("rm -rf test/bitcask-backend/*") end
+           end,
+           backend_eqc:prop_backend(?MODULE,
+                            false,
+                            [{data_root,
+                              "test/bitcask-backend"}])).
 -endif. % EQC
 
 -endif.

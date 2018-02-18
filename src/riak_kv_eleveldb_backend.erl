@@ -55,6 +55,12 @@
 
 -include("riak_kv_index.hrl").
 
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-export([prop_eleveldb_backend/0]).
+-endif.
+
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -1027,31 +1033,17 @@ retry_fail() ->
 
 
 -ifdef(EQC).
+prop_eleveldb_backend() ->
+    ?SETUP(fun() ->
+                   application:load(sasl),
+                   application:set_env(sasl, sasl_error_logger, {file, "riak_kv_eleveldb_backend_eqc_sasl.log"}),
+                   error_logger:tty(false),
+                   error_logger:logfile({open, "riak_kv_eleveldb_backend_eqc.log"}),
+                   fun() -> ?_assertCmd("rm -rf test/eleveldb-backend") end
+           end,
+           backend_eqc:prop_backend(?MODULE, false, [{data_root,
+                                                      "test/eleveldb-backend"}])).
 
-eqc_test_() ->
-    {spawn,
-     [{inorder,
-       [{setup,
-         fun setup/0,
-         fun cleanup/1,
-         [
-          {timeout, 180,
-            [?_assertEqual(true,
-                          backend_eqc:test(?MODULE, false,
-                                           [{data_root,
-                                             "test/eleveldb-backend"}]))]}
-         ]}]}]}.
-
-setup() ->
-    application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_eleveldb_backend_eqc_sasl.log"}),
-    error_logger:tty(false),
-    error_logger:logfile({open, "riak_kv_eleveldb_backend_eqc.log"}),
-
-    ok.
-
-cleanup(_) ->
-    ?_assertCmd("rm -rf test/eleveldb-backend").
 
 -endif. % EQC
 
