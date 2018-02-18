@@ -25,14 +25,8 @@
 
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
 -compile(export_all).
-
-roundtrip_eqc_test_() ->
-    Res = eqc:quickcheck(numtests(1000, ?QC_OUT(prop_roundtrip()))),
-    ?_assertEqual(true, Res).
 
 %% deserializing a binary representation of a riak_object and
 %% reserializing it for the same version should result in the same

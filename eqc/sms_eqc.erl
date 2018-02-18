@@ -37,14 +37,6 @@
         received = [] :: [{integer(), [integer()]}] % Sorted received inputs [Num], a call to sms
         }).
 
--define(NUM_TESTS, 200).
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
-
-sms_eqc_test_() ->
-    {timeout, 60,
-     ?_assert(eqc:quickcheck(eqc:numtests(?NUM_TESTS, ?QC_OUT(?MODULE:sms_prop()))))}.
-
 % Basicaly create one sms with a list of sources,
 % then issue commands appending ordered data from those sources
 % verifying at each point that it returns data that is safe to consume without

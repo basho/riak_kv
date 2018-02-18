@@ -16,34 +16,7 @@
 
 -record(state,{}).
 
--define(NUMTESTS, 1000).
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) ->
-                              io:format(user, Str, Args) end, P)).
-
 -define(MAX_INT, ((1 bsl 32) -1)).
-
-%%====================================================================
-%% eunit test
-%%====================================================================
-
-eqc_test_() ->
-    {timeout, 40,
-     ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(20,
-                                                         ?QC_OUT(prop_monotonic())
-                                                        )
-                                       )
-                  )}.
-
-run() ->
-    run(?NUMTESTS).
-
-run(Count) ->
-    eqc:quickcheck(eqc:numtests(Count, prop_monotonic())).
-
-check() ->
-    eqc:check(prop_monotonic()).
-
 
 %% @doc Returns the state in which each test case starts. (Unless a different
 %%      initial state is supplied explicitly to, e.g. commands/2.)

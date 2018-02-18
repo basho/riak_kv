@@ -770,12 +770,6 @@ coerce_bool_test_ () ->
     ].
 
 -ifdef(EQC).
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) ->
-                              io:format(user, Str, Args) end, P)).
-
--define(TEST_TIME_SECS, 10).
-
 setup() ->
     meck:new(riak_core_bucket),
     meck:new(riak_core_capability, []),
@@ -790,27 +784,6 @@ cleanup(_) ->
     meck:unload(riak_core_capability),
     meck:unload(riak_core_bucket),
     ok.
-
-immutable_test_() ->
-    [{setup,
-       fun setup/0,
-       fun cleanup/1,
-       [{timeout, ?TEST_TIME_SECS+5, [?_assert(test_immutable() =:= true)]}]
-      }].
-
-valid_test_() ->
-    [{setup,
-       fun setup/0,
-       fun cleanup/1,
-       [{timeout, ?TEST_TIME_SECS+5, [?_assert(test_create() =:= true)]}]
-      }].
-
-merges_props_test_() ->
-    [{setup,
-       fun setup/0,
-       fun cleanup/1,
-       [{timeout, ?TEST_TIME_SECS+5, [?_assert(test_merges() =:= true)]}]
-      }].
 
 -define(LAST_WRITE_WINS, {last_write_wins, true}).
 -define(DVV_ENABLED, {dvv_enabled, true}).
@@ -906,24 +879,6 @@ test_dt_hll_validation_update_invalid_reduce_p() ->
                                           [?HLL, ?HLL_INVALID_REDUCE_P]),
     ?assertEqual([{datatype, hll}], Validated),
     ?assertMatch([{hll_precision, _Msg}], Errors).
-
-test_immutable() ->
-   test_immutable(?TEST_TIME_SECS).
-
-test_immutable(TestTimeSecs) ->
-       eqc:quickcheck(eqc:testing_time(TestTimeSecs, ?QC_OUT(prop_immutable()))).
-
-test_create() ->
-    test_create(?TEST_TIME_SECS).
-
-test_create(TestTimeSecs) ->
-        eqc:quickcheck(eqc:testing_time(TestTimeSecs, ?QC_OUT(prop_create_valid()))).
-
-test_merges() ->
-     test_merges(?TEST_TIME_SECS).
-
-test_merges(TestTimeSecs) ->
-         eqc:quickcheck(eqc:testing_time(TestTimeSecs, ?QC_OUT(prop_merges()))).
 
 %% Props
 
