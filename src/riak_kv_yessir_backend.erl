@@ -138,6 +138,10 @@
          callback/3]).
 -export([make_riak_safe_obj/3, make_riak_safe_obj/4]).
 
+-ifdef(EQC).
+-export([prop_yessir_backend/0]).
+-endif.
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -474,12 +478,12 @@ t0_number1(_BucketSuffix, Bucket, Key) ->
 simple_test() ->
    Config = [],
    backend_test_util:standard_test_fun(?MODULE, Config).
+-endif. % TEST
 
 -ifdef(EQC).
-eqc_test() ->
+prop_yessir_backend() ->
     Cleanup = fun(_State,_Olds) -> ok end,
     Config = [],
-    ?assertEqual(true, backend_eqc:test(?MODULE, false, Config, Cleanup)).
+    backend_eqc:prop_backend(?MODULE, false, Config, Cleanup).
 -endif. % EQC
--endif. % TEST
 -endif. % USE_BROKEN_TESTS

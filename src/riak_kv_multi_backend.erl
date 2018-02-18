@@ -77,6 +77,11 @@
          mark_indexes_fixed/2,
          fixed_index_status/1]).
 
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-export([prop_multi_backend_sample/0, prop_multi_backend_async_fold/0]).
+-endif.
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -719,17 +724,13 @@ multi_backend_test_() ->
 
 -ifdef(EQC).
 
-eqc_test_() ->
-    {spawn,
-     [{inorder,
-       [{setup,
-         fun setup/0,
-         fun cleanup/1,
-         [{timeout, 60000, [?_assertEqual(true,
-                        backend_eqc:test(?MODULE, true, sample_config()))]},
-          {timeout, 60000, [?_assertEqual(true,
-                        backend_eqc:test(?MODULE, true, async_fold_config()))]}
-         ]}]}]}.
+prop_multi_backend_sample() ->
+    ?SETUP(fun setup/0,
+           backend_eqc:prop_backend(?MODULE, true, sample_config())).
+
+prop_multi_backend_async_fold() ->
+    ?SETUP(fun setup/0,
+           backend_eqc:prop_backend(?MODULE, true, async_fold_config())).
 
 setup() ->
     %% Start the ring manager...
@@ -743,18 +744,17 @@ setup() ->
     riak_core_bucket:set_bucket(<<"b1">>, [{backend, first_backend}]),
     riak_core_bucket:set_bucket(<<"b2">>, [{backend, second_backend}]),
 
-    {P1, P2}.
+    fun() ->
+            crypto:stop(),
+            application:stop(riak_core),
 
-cleanup({P1, P2}) ->
-    crypto:stop(),
-    application:stop(riak_core),
-
-    unlink(P1),
-    unlink(P2),
-    catch exit(P1, kill),
-    catch exit(P2, kill),
-    wait_until_dead(P1),
-    wait_until_dead(P2).
+            unlink(P1),
+            unlink(P2),
+            catch exit(P1, kill),
+            catch exit(P2, kill),
+            wait_until_dead(P1),
+            wait_until_dead(P2)
+    end.
 
 async_fold_config() ->
     [
