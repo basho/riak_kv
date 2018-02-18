@@ -56,8 +56,6 @@
          link_phase/3,
          validate_arg/1]).
 
--include_lib("riak_kv_js_pools.hrl").
-
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
@@ -67,8 +65,6 @@
                 arg :: term()}).
 -opaque state() :: #state{}.
 -export_type([state/0]).
-
--define(DEFAULT_JS_RESERVE_ATTEMPTS, 10).
 
 %% @doc Init verifies the phase spec, and then stashes it away with
 %% `Partition' and the rest of `FittingDetails' for use during
@@ -89,26 +85,22 @@ init(Partition, #fitting_details{arg={Phase, Arg}}=FittingDetails) ->
 
 %% @doc Perform any one-time initialization of the phase that's
 %% possible/needed.  This currently includes looking up functions from
-%% Riak KV (for `{jsanon, {Bucket, Key}}' and `{strfun, {Bucket,
-%% Key}}', as well as compiling `strfun' specs to Erlang functions.
+%% Riak KV (for `{strfun, {Bucket, Key}}',
+%% as well as compiling `strfun' specs to Erlang functions.
 %%
 %% <ul>
-%%   <li>`{jsanon, {Bucket, Key}}' is converted to `{jsanon, Source}'</li>
-%%
 %%   <li>`{strfun, {Bucket, Key}}' and `{strfun, Source}' are both
 %%   converted to `{qfun, Fun}' after compiling</li>
 %% </ul>
 -spec init_phase(PhaseSpec :: term()) ->
          {ok, PhaseSpec :: term()} | {error, Reason :: term()}.
 init_phase({Anon, {Bucket, Key}})
-  when Anon =:= jsanon; Anon =:= strfun ->
+  when Anon =:= strfun ->
     %% lookup source for stored functions only at fitting worker startup
     {ok, C} = riak:local_client(),
     case C:get(Bucket, Key, 1) of
         {ok, Object} ->
             case riak_object:get_value(Object) of
-                Source when Anon =:= jsanon, is_binary(Source) ->
-                    {ok, {jsanon, Source}};
                 Source when Anon =:= strfun,
                             (is_binary(Source) orelse is_list(Source)) ->
                     init_phase({strfun, Source});
@@ -169,14 +161,9 @@ map({modfun, Module, Function}, Arg, Input0) ->
 map({qfun, Fun}, Arg, Input0) ->
     Input = erlang_input(Input0),
     KeyData = erlang_keydata(Input0),
-    {ok, Fun(Input, KeyData, Arg)};
+    {ok, Fun(Input, KeyData, Arg)}.
 %% {strfun, Source} is converted to {qfun, Fun} in init
 %% {strfun, {Bucket, Key}} is converted to {qfun, Fun} in init
-%% {jsanon, {Bucket, Key}} is converted to {jsanon, Source} in init
-map({jsfun, Name}, Arg, Input) ->
-    map_js({jsfun, Name}, Arg, Input);
-map({jsanon, Source}, Arg, Input) ->
-    map_js({jsanon, Source}, Arg, Input).
 
 %% select which bit of the input to hand to the map function
 erlang_input({ok, Input, _})          -> Input;
@@ -184,21 +171,6 @@ erlang_input({{error,_}=Input, _, _}) -> Input.
 
 %% extract keydata from the input
 erlang_keydata({_OkError, _Input, KeyData}) -> KeyData.
-
-%% @doc Evaluate Javascript map functions ... if the input is ok.
-map_js(_JS, _Arg, {{error, notfound}, {Bucket, Key}, KeyData}) ->
-    {ok, [{not_found,
-           {Bucket, Key},
-           KeyData}]};
-map_js(JS, Arg, {ok, Input, KeyData}) ->
-    JSArgs = [riak_object_json:encode(Input), KeyData, Arg],
-    JSCall = {JS, JSArgs},
-    case riak_kv_js_manager:blocking_dispatch(
-           ?JSPOOL_MAP, JSCall, ?DEFAULT_JS_RESERVE_ATTEMPTS) of
-        {ok, Results}   -> {ok, Results};
-        {error, no_vms} -> {forward_preflist, no_js_vms};
-        {error, Error}  -> {error, Error}
-    end.
 
 %% @doc Function to do link extraction via this module.  The function
 %% will extract all links matching Bucket and Tag from an input
@@ -257,7 +229,7 @@ validate_arg({Phase, _Arg}) ->
               "PhaseSpec", 3, erlang:make_fun(Module, Function, 3));
         {qfun, Fun} ->
             riak_pipe_v:validate_function("PhaseSpec", 3, Fun);
-        {Anon, {Bucket, Key}} when Anon =:= jsanon; Anon =:= strfun->
+        {Anon, {Bucket, Key}} when Anon =:= strfun->
             if is_binary(Bucket), is_binary(Key) -> ok;
                true ->
                     {error, io_lib:format(
@@ -266,22 +238,6 @@ validate_arg({Phase, _Arg}) ->
                               [?MODULE, Anon,
                                riak_pipe_v:type_of(Bucket),
                                riak_pipe_v:type_of(Key)])}
-            end;
-        {jsfun, Name} ->
-            if is_binary(Name) -> ok; %% TODO: validate name somehow?
-               true ->
-                    {error, io_lib:format(
-                              "~p requires that the Name of a jsfun"
-                              " request be a binary, not a ~p",
-                              [?MODULE, riak_pipe_v:type_of(Name)])}
-            end;
-        {jsanon, Source} ->
-            if is_binary(Source) -> ok; %% TODO: validate JS code somehow?
-               true ->
-                    {error, io_lib:format(
-                              "~p requires that the Source of a jsanon"
-                              " request be a binary, not a ~p",
-                              [?MODULE, riak_pipe_v:type_of(Source)])}
             end;
         {strfun, Source} ->
             if is_binary(Source); is_list(Source) ->
@@ -298,9 +254,6 @@ validate_arg({Phase, _Arg}) ->
                       " must be of one of the following forms:~n"
                       "   {modfun, Module :: atom(), Function :: atom()}~n"
                       "   {qfun, Function :: function()}~n"
-                      "   {jsanon, {Bucket :: binary(), Key :: binary()}}~n"
-                      "   {jsanon, Source :: binary()}~n"
-                      "   {jsfun, Name :: binary()}~n"
                       "   {strfun, Source :: string()}~n"
                       "   {strfun, {Bucket :: binary(), Key :: binary()}}~n",
                       [?MODULE])}

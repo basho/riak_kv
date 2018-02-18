@@ -936,6 +936,10 @@ test_merges(TestTimeSecs) ->
 %%   * No inclusion of hyperloglog datatype-precision "checks" b/c it's not
 %%     an immutable property, but has some specific validation constraints.
 prop_immutable() ->
+    ?SETUP(fun() ->
+                   setup(),
+                   fun() -> cleanup(undefined) end
+           end,
     ?FORALL(Args, gen_args(no_default_buckets),
             begin
                 Result = erlang:apply(?MODULE, validate, Args),
@@ -962,7 +966,7 @@ prop_immutable() ->
                             valid_consistent(New), n_val_changed(Existing,
                                                                  New)},
                            immutable(Phase, New, Existing, Result)))
-            end).
+            end)).
 
 %% When creating a bucket type:
 %%  * for datatypes, the datatype must be
@@ -971,6 +975,10 @@ prop_immutable() ->
 %%  * for hll datatypes, we default to a precision whether or not an hll
 %%    datatype is specified, otherwise we check validity
 prop_create_valid() ->
+    ?SETUP(fun() ->
+                   setup(),
+                   fun() -> cleanup(undefined) end
+           end,
     ?FORALL({Bucket, Existing, New}, {gen_bucket(create, bucket_types),
                                       gen_existing(), gen_new(create)},
             begin
@@ -1000,11 +1008,15 @@ prop_create_valid() ->
                             last_write_wins(New), dvv_enabled(New),
                             has_hll(New), valid_hll(New)},
                            only_create_if_valid(Result, New)))
-            end).
+            end)).
 
 %% As of 2.* validate/4 must merge the new and existing props, verify
 %% that. Not sure if this test isn't just a tautology. Reviewer?
 prop_merges() ->
+    ?SETUP(fun() ->
+                   setup(),
+                   fun() -> cleanup(undefined) end
+           end,
     ?FORALL({Bucket, Existing0, New0}, {gen_bucket(update, any),
                                         gen_existing(),
                                         gen_new(update)},
@@ -1082,7 +1094,7 @@ prop_merges() ->
                            false
                    end
                   )
-            end).
+            end)).
 
 valid_dvv_lww({Good, Bad}) ->
     case last_write_wins(Good) of

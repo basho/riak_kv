@@ -27,7 +27,6 @@
 -include_lib("eunit/include/eunit.hrl").
 %-endif.
 -include_lib("riak_kv_vnode.hrl").
--include_lib("riak_kv_js_pools.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_types.hrl").
 
@@ -832,19 +831,17 @@ handle_options([{_,_}|T], Acc) -> handle_options(T, Acc).
 %% Invokes the hook and returns a tuple of
 %% {Lang, Called, Result}
 %% Where Called = {Mod, Fun} if Lang = erlang
-%%       Called = JSName if Lang = javascript
 invoke_hook({struct, Hook}=HookDef, RObj) ->
     Mod = get_option(<<"mod">>, Hook),
     Fun = get_option(<<"fun">>, Hook),
-    JSName = get_option(<<"name">>, Hook),
-    if (Mod == undefined orelse Fun == undefined) andalso JSName == undefined ->
+    if (Mod == undefined orelse Fun == undefined) ->
             {error, {invalid_hook_def, HookDef}};
-       true -> invoke_hook(Mod, Fun, JSName, RObj)
+       true -> invoke_hook(Mod, Fun, RObj)
     end;
 invoke_hook(HookDef, _RObj) ->
     {error, {invalid_hook_def, HookDef}}.
 
-invoke_hook(Mod0, Fun0, undefined, RObj) when Mod0 /= undefined, Fun0 /= undefined ->
+invoke_hook(Mod0, Fun0, RObj) when Mod0 /= undefined, Fun0 /= undefined ->
     Mod = binary_to_atom(Mod0, utf8),
     Fun = binary_to_atom(Fun0, utf8),
     try
@@ -853,9 +850,7 @@ invoke_hook(Mod0, Fun0, undefined, RObj) when Mod0 /= undefined, Fun0 /= undefin
         Class:Exception ->
             {erlang, {Mod, Fun}, {'EXIT', Mod, Fun, Class, Exception}}
     end;
-invoke_hook(undefined, undefined, JSName, RObj) when JSName /= undefined ->
-    {js, JSName, riak_kv_js_manager:blocking_dispatch(?JSPOOL_HOOK, {{jsfun, JSName}, RObj}, 5)};
-invoke_hook(_, _, _, _) ->
+invoke_hook(_, _, _) ->
     {error, {invalid_hook_def, no_hook}}.
 
 -spec decode_precommit(any(), boolean()) -> fail | {fail, any()} | 
@@ -898,36 +893,6 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
                     {fail, {invalid_return, {Mod, Fun, Result}}}
 
             end
-    end;
-decode_precommit({js, JSName, Result}, Trace) ->
-    case Result of
-        {ok, <<"fail">>} ->
-            ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-5], []),
-            ok = riak_kv_stat:update(precommit_fail),
-            lager:debug("Pre-commit hook ~p failed, no reason given",
-                        [JSName]),
-            fail;
-        {ok, [{<<"fail">>, Message}]} ->
-            ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-6],
-                    [dtrace_errstr(Message)]),
-            ok = riak_kv_stat:update(precommit_fail),
-            lager:debug("Pre-commit hook ~p failed with reason ~p",
-                        [JSName, Message]),
-            {fail, Message};
-        {ok, Json} ->
-            case catch riak_object:from_json(Json) of
-                {'EXIT', _} ->
-                    ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-7], []),
-                    {fail, {invalid_return, {JSName, Json}}};
-                Obj ->
-                    Obj
-            end;
-        {error, Error} ->
-            ok = riak_kv_stat:update(precommit_fail),
-            ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-7], 
-                    [dtrace_errstr(Error)]),
-            lager:debug("Problem invoking pre-commit hook: ~p", [Error]),
-            fail
     end;
 decode_precommit({error, Reason}, Trace) ->
     ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-8], 

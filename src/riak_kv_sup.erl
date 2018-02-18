@@ -24,7 +24,6 @@
 
 -module(riak_kv_sup).
 
--include_lib("riak_kv_js_pools.hrl").
 
 -behaviour(supervisor).
 
@@ -49,24 +48,9 @@ init([]) ->
                {riak_core_vnode_master, start_link,
                 [riak_kv_vnode, riak_kv_legacy_vnode, riak_kv]},
                permanent, 5000, worker, [riak_core_vnode_master]},
-    MapJSPool = {?JSPOOL_MAP,
-                 {riak_kv_js_manager, start_link,
-                  [?JSPOOL_MAP, read_js_pool_size(map_js_vm_count, "map")]},
-                 permanent, 30000, worker, [riak_kv_js_manager]},
-    ReduceJSPool = {?JSPOOL_REDUCE,
-                    {riak_kv_js_manager, start_link,
-                     [?JSPOOL_REDUCE, read_js_pool_size(reduce_js_vm_count, "reduce")]},
-                    permanent, 30000, worker, [riak_kv_js_manager]},
-    HookJSPool = {?JSPOOL_HOOK,
-                  {riak_kv_js_manager, start_link,
-                  [?JSPOOL_HOOK, read_js_pool_size(hook_js_vm_count, "hook callback")]},
-                  permanent, 30000, worker, [riak_kv_js_manager]},
     HTTPCache = {riak_kv_http_cache,
 		 {riak_kv_http_cache, start_link, []},
 		 permanent, 5000, worker, [riak_kv_http_cache]},
-    JSSup = {riak_kv_js_sup,
-             {riak_kv_js_sup, start_link, []},
-             permanent, infinity, supervisor, [riak_kv_js_sup]},
     FastPutSup = {riak_kv_w1c_sup,
                  {riak_kv_w1c_sup, start_link, []},
                  permanent, infinity, supervisor, [riak_kv_w1c_sup]},
@@ -107,29 +91,8 @@ init([]) ->
         KeysFsmSup,
         IndexFsmSup,
         [EnsemblesKV || riak_core_sup:ensembles_enabled()],
-        JSSup,
-        MapJSPool,
-        ReduceJSPool,
-        HookJSPool,
         HTTPCache
     ]),
 
     % Run the proesses...
     {ok, {{one_for_one, 10, 10}, Processes}}.
-
-%% Internal functions
-read_js_pool_size(Entry, PoolType) ->
-    case app_helper:get_env(riak_kv, Entry, undefined) of
-        undefined ->
-            OldSize = app_helper:get_env(riak_kv, js_vm_count, 0),
-            lager:warning("js_vm_count has been deprecated. "
-                            "Please use ~p to configure the ~s pool.", [Entry, PoolType]),
-            case OldSize > 8 of
-                true ->
-                    OldSize div 3;
-                false ->
-                    OldSize
-            end;
-        Size ->
-            Size
-    end.

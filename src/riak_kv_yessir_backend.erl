@@ -138,8 +138,10 @@
          callback/3]).
 -export([make_riak_safe_obj/3, make_riak_safe_obj/4]).
 
+-ifdef(USE_BROKEN_TESTS).
 -ifdef(EQC).
 -export([prop_yessir_backend/0]).
+-endif.
 -endif.
 
 -ifdef(TEST).
