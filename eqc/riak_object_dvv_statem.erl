@@ -48,44 +48,10 @@
 -define(B, {<<"t">>, <<"b">>}).
 -define(K, <<"k">>).
 
--define(NUMTESTS, 1000).
--define(QC_OUT(P),
-        eqc:on_output(fun(Str, Args) ->
-                              io:format(user, Str, Args) end, P)).
-
-%%====================================================================
-%% eunit test
-%%====================================================================
-
-eqc_test_() ->
-    {setup,
-     fun() ->
-             meck:new(riak_core_bucket),
-             meck:expect(riak_core_bucket, get_bucket,
-                         fun(_Bucket) -> [dvv_enabled] end)
-     end,
-     fun(_) ->
-             meck:unload(riak_core_bucket)
-     end,
-     %% Kelly and Andrew T. have both recommended setting the eunit
-     %% timeout at 2x the `eqc:testing_time'.
-     [{timeout, 120, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(60, ?QC_OUT(prop_merge()))))}]
-    }.
-
-run() ->
-    run(?NUMTESTS).
-
-run(Count) ->
-    eqc:quickcheck(eqc:numtests(Count, prop_merge())).
-
-check() ->
-    eqc:check(prop_merge()).
-
 %% Initialize the state
 -spec initial_state() -> eqc_statem:symbolic_state().
 initial_state() ->
     #state{}.
-
 
 %% ------ Grouped operator: set_nr
 %% Only set N, R if N has not been set (ie run once, as the first command)
@@ -101,7 +67,6 @@ set_nr(_) ->
 
 set_nr_next(S=#state{time=T}, _V, [{N, R}]) ->
     S#state{n=N, r=R, time=T+1}.
-
 
 %% ------ Grouped operator: make_ring
 %% Generate a bunch of vnodes, only runs until enough are generated
@@ -274,29 +239,37 @@ replicate_next(S, Res, Args) ->
 %% update/merge/reconcile/syntactic_merge functions are identical to
 %% dvvset's sync/join/update functions.
 prop_merge() ->
-    ?FORALL(Cmds,commands(?MODULE),
-            begin
-                {H, S=#state{vnodes=VNodes, vnode_data=VNodeData}, Res} = run_commands(?MODULE,Cmds),
-                %% Check that collapsing all values leads to the same results for dvv and riak_object
-                {OValues, DVVValues} = case VNodes of
-                                           [] ->
-                                               {[], []};
-                                           _L ->
-                                               %% Get ALL vnodes values, not just R
-                                               case get(hd(VNodes), length(VNodes), VNodes, VNodeData) of
-                                                   {undefined, undefined} ->
-                                                       {[], []};
-                                                   {O, DVV} ->
-                                                       {riak_object:get_values(O), dvvset:values(DVV)}
-                                               end
-                                       end,
-                collect(with_title(sibling_count), length(OValues),
-                        aggregate(command_names(Cmds),
-                                  pretty_commands(?MODULE,Cmds, {H,S,Res},
-                                                  conjunction([{result,  equals(Res, ok)},
-                                                               {values, equals(lists:sort(OValues), lists:sort(DVVValues))}])
-                                                 )))
-            end).
+    ?SETUP(fun() ->
+                   meck:new(riak_core_bucket),
+                   meck:expect(riak_core_bucket, get_bucket,
+                               fun(_Bucket) -> [dvv_enabled] end),
+                   fun() ->
+                           meck:unload(riak_core_bucket)
+                   end
+           end,
+           ?FORALL(Cmds,commands(?MODULE),
+                   begin
+                       {H, S=#state{vnodes=VNodes, vnode_data=VNodeData}, Res} = run_commands(?MODULE,Cmds),
+                       %% Check that collapsing all values leads to the same results for dvv and riak_object
+                       {OValues, DVVValues} = case VNodes of
+                                                  [] ->
+                                                      {[], []};
+                                                  _L ->
+                                                      %% Get ALL vnodes values, not just R
+                                                      case get(hd(VNodes), length(VNodes), VNodes, VNodeData) of
+                                                          {undefined, undefined} ->
+                                                              {[], []};
+                                                          {O, DVV} ->
+                                                              {riak_object:get_values(O), dvvset:values(DVV)}
+                                                      end
+                                              end,
+                       collect(with_title(sibling_count), length(OValues),
+                               aggregate(command_names(Cmds),
+                                         pretty_commands(?MODULE,Cmds, {H,S,Res},
+                                                         conjunction([{result,  equals(Res, ok)},
+                                                                      {values, equals(lists:sort(OValues), lists:sort(DVVValues))}])
+                                                        )))
+                   end)).
 
 %% -----------
 %% Helpers

@@ -475,83 +475,51 @@ vnode_status_test_() ->
 %% style of io_lib:format("~p.", [?R16_STATUS]).
 -define(R16_STATUS, [{vnodeid,<<"'êÍ§L÷=d">>}]).
 
-%% @doc eunit helper for prop_any_bin_consult
-eqc_vnode_status_file_test_() ->
-    {setup,
-     fun() ->
-             file:delete(?TEST_FILE)
-     end,
-     fun(_) ->
-             file:delete(?TEST_FILE)
-     end,
-     %% Kelly and Andrew T. have both recommended setting the eunit
-     %% timeout at 2x the `eqc:testing_time'.
-     [{timeout, 10, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(5, ?QC_OUT(prop_any_bin_consult()))))},
-      {timeout, 10, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(5, ?QC_OUT(prop_any_file_status()))))}]
-    }.
-
-run_any_bin() ->
-    run(?NUMTESTS, fun prop_any_bin_consult/0).
-
-
-run_any_file() ->
-    run(?NUMTESTS, fun prop_any_file_status/0).
-
-run_any_bin(NumTests) ->
-    run(NumTests, fun prop_any_bin_consult/0).
-
-run_any_file(NumTests) ->
-    run(NumTests, fun prop_any_file_status/0).
-
-run(Count, Prop) ->
-    eqc:quickcheck(eqc:numtests(Count, Prop())).
-
-check_any_bin() ->
-    check(fun prop_any_bin_consult/0).
-
-check_any_file() ->
-    check(fun prop_any_file_status/0).
-
-check(Prop) ->
-    eqc:check(Prop()).
-
 %% Properties
 
 %% @private any binary we write, we can read. (Try changing ~w. to
 %% ~p. in `write_vnode_status/3' for an example of _why_ this test).
 prop_any_bin_consult() ->
-    ?FORALL(Bin, binary(),
-            begin
-                Status = [{version, 1}, {vnodeid, Bin}],
-                ok = write_vnode_status(Status, ?TEST_FILE, 1),
-                equals({ok, Status}, read_vnode_status(?TEST_FILE))
-            end).
+    ?SETUP(fun() ->
+                   file:delete(?TEST_FILE),
+                   fun() -> file:delete(?TEST_FILE) end
+           end,
+           ?FORALL(Bin, binary(),
+                   begin
+                       Status = [{version, 1}, {vnodeid, Bin}],
+                       ok = write_vnode_status(Status, ?TEST_FILE, 1),
+                       equals({ok, Status}, read_vnode_status(?TEST_FILE))
+                   end)).
 
 %% @private regardless of the contents of the vnode status file, we
 %% always get a status result. If the file is valid, we get its
 %% contents, if not, we get a blank status, if there is no file we get
 %% a blank status.
 prop_any_file_status() ->
-    ?FORALL({Type, _StatusFile},
-            ?LET(Type, oneof([r16, valid, absent, corrupt]), {Type, gen_status_file(Type)}),
-            begin
-                {ok, Status} = read_vnode_status(?TEST_FILE),
+    ?SETUP(fun() ->
+                   file:delete(?TEST_FILE),
+                   fun() -> file:delete(?TEST_FILE) end
+           end,
+           ?FORALL({Type, _StatusFile},
+                   ?LET(Type, oneof([r16, valid, absent, corrupt]), {Type, gen_status_file(Type)}),
+                   begin
+                       {ok, Status} = read_vnode_status(?TEST_FILE),
 
-                case Type of
-                    valid ->
-                        %% There is a vnodeid
-                        is_binary(orddict:fetch(vnodeid, Status));
-                    r16 ->
-                        %% There is a vnodeid
-                        is_binary(orddict:fetch(vnodeid, Status));
-                    corrupt ->
-                        %% empty
-                        is_list(Status) andalso equals(error, orddict:find(vnodeid, Status));
-                    absent ->
-                        %% empty
-                        is_list(Status) andalso equals(error, orddict:find(vnodeid, Status))
-                end
-            end).
+                       case Type of
+                           valid ->
+                               %% There is a vnodeid
+                               is_binary(orddict:fetch(vnodeid, Status));
+                           r16 ->
+                               %% There is a vnodeid
+                               is_binary(orddict:fetch(vnodeid, Status));
+                           corrupt ->
+                               %% empty
+                               is_list(Status) andalso equals(error, orddict:find(vnodeid, Status));
+                           absent ->
+                               %% empty
+                               is_list(Status) andalso equals(error, orddict:find(vnodeid, Status))
+                       end
+                   end)).
 
 %% @private generate the file on disk TBQH, this might be fine as a
 %% straight up eunit tests, given how little random there really is

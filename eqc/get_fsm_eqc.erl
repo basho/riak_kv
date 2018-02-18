@@ -40,19 +40,6 @@
 %% eunit test
 %%====================================================================
 
-eqc_test_() ->
-    {spawn,
-     [{setup,
-       fun setup/0,
-       fun cleanup/1,
-       [%% Run the quickcheck tests
-        {timeout, 70,
-         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(60, ?QC_OUT(prop_basic_get()))))}
-       ]
-      }
-     ]
-    }.
-
 setup() ->
     %% Shut logging up - too noisy.
     application:load(sasl),
@@ -76,7 +63,7 @@ setup() ->
                 end),
     ok.
 
-cleanup(_) ->
+cleanup() ->
     fsm_eqc_util:cleanup_mock_servers(),
     meck:unload(sidejob_resource_stats),
     meck:unload(riak_core_bucket),
@@ -199,133 +186,137 @@ rr_abort_opts() ->
     {choose(1000, 2000), choose(3000, 4000), choose(0, 4999), choose(0, 100)}.
 
 prop_basic_get() ->
-    ?FORALL({RSeed,PRSeed,Options0, Objects,ReqId,VGetResps,RRAbort},
-            {r_seed(), r_seed(), options(),
-             fsm_eqc_util:riak_objects(), noshrink(largeint()),
-             vnodegetresps(),rr_abort_opts()},
-    begin
-        N = length(VGetResps),
-        {R, RealR} = r_val(N, 1000000, RSeed),
-        {PR, RealPR} = pr_val(N, 1000000, PRSeed),
-        PL2 = make_preflist2(VGetResps, 1, []),
-        PartVals = make_partvals(VGetResps, []),
-        fsm_eqc_vnode:set_data(Objects, PartVals),
-        BucketProps = [{n_val, N}
-                       |?DEFAULT_BUCKET_PROPS],
+    ?SETUP(fun() ->
+                   setup(),
+                   fun cleanup/0
+           end,
+           ?FORALL({RSeed,PRSeed,Options0, Objects,ReqId,VGetResps,RRAbort},
+                   {r_seed(), r_seed(), options(),
+                    fsm_eqc_util:riak_objects(), noshrink(largeint()),
+                    vnodegetresps(),rr_abort_opts()},
+                   begin
+                       N = length(VGetResps),
+                       {R, RealR} = r_val(N, 1000000, RSeed),
+                       {PR, RealPR} = pr_val(N, 1000000, PRSeed),
+                       PL2 = make_preflist2(VGetResps, 1, []),
+                       PartVals = make_partvals(VGetResps, []),
+                       fsm_eqc_vnode:set_data(Objects, PartVals),
+                       BucketProps = [{n_val, N}
+                                      |?DEFAULT_BUCKET_PROPS],
 
-        %% Needed for riak_kv_util get_default_rw_val
-        application:set_env(riak_core,
-                            default_bucket_props,
-                            BucketProps),
+                       %% Needed for riak_kv_util get_default_rw_val
+                       application:set_env(riak_core,
+                                           default_bucket_props,
+                                           BucketProps),
 
-        [{_,Object}|_] = Objects,
+                       [{_,Object}|_] = Objects,
 
-        Options = fsm_eqc_util:make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
+                       Options = fsm_eqc_util:make_options([{r, R}, {pr, PR}], [{timeout, 200} | Options0]),
 
-        {SoftCap, HardCap, Actual, Roll} = RRAbort,
-        application:set_env(riak_kv, read_repair_soft, SoftCap),
-        application:set_env(riak_kv, read_repair_max, HardCap),
-        application:set_env(riak_kv, fake_get_fsm_usage, Actual),
-        fsm_eqc_util:set_fake_rng(?MODULE, Roll),
+                       {SoftCap, HardCap, Actual, Roll} = RRAbort,
+                       application:set_env(riak_kv, read_repair_soft, SoftCap),
+                       application:set_env(riak_kv, read_repair_max, HardCap),
+                       application:set_env(riak_kv, fake_get_fsm_usage, Actual),
+                       fsm_eqc_util:set_fake_rng(?MODULE, Roll),
 
-        {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
-                            riak_object:bucket(Object),
-                            riak_object:key(Object),
-                            Options,
-                            [{starttime, riak_core_util:moment()},
-                             {n, N},
-                             {bucket_props, BucketProps},
-                             {preflist2, PL2}]),
+                       {ok, GetPid} = riak_kv_get_fsm:test_link({raw, ReqId, self()},
+                                                                riak_object:bucket(Object),
+                                                                riak_object:key(Object),
+                                                                Options,
+                                                                [{starttime, riak_core_util:moment()},
+                                                                 {n, N},
+                                                                 {bucket_props, BucketProps},
+                                                                 {preflist2, PL2}]),
 
-        process_flag(trap_exit, true),
-        ok = riak_kv_test_util:wait_for_pid(GetPid),
-        Res = fsm_eqc_util:wait_for_req_id(ReqId, GetPid),
-        process_flag(trap_exit, false),
+                       process_flag(trap_exit, true),
+                       ok = riak_kv_test_util:wait_for_pid(GetPid),
+                       Res = fsm_eqc_util:wait_for_req_id(ReqId, GetPid),
+                       process_flag(trap_exit, false),
 
-        History = fsm_eqc_vnode:get_history(),
-        RepairHistory = fsm_eqc_vnode:get_put_history(),
-        Ok         = length([ ok || {_, {ok, _}} <- History ]),
-        NotFound   = length([ ok || {_, notfound} <- History ]),
-        NoReply    = length([ ok || {_, timeout}  <- History ]),
-        Partitions = [ P || {P, _} <- History ],
-        Deleted    = [ {Lin, case riak_kv_util:obj_not_deleted(Obj) == undefined of
-                                 true  -> deleted;
-                                 false -> present
-                             end
-                       }
-                        || {Lin, Obj} <- Objects ],
-        NotFoundIsOk = proplists:get_value(notfound_ok, Options, false),
-        BasicQuorum = proplists:get_value(basic_quorum, Options, true),
-        DeletedVClock = proplists:get_value(deletedvclock, Options, false),
-        NumPrimaries = length([xx || {_,primary} <- PL2]),
-        State = expect(#state{n = N, r = R, real_r = RealR, pr = PR, real_pr = RealPR,
-                              history = History, preflist=PL2,
-                              objects = Objects, deleted = Deleted, options = Options,
-                              notfound_is_ok = NotFoundIsOk, basic_quorum = BasicQuorum,
-                              num_primaries = NumPrimaries, deletedvclock = DeletedVClock}),
-        ExpResult = State#state.exp_result,
-        ExpectedN = case ExpResult of
-                        {error, {n_val_violation, _}} ->
-                            0;
-                        {error, {r_val_violation, _}} ->
-                            0;
-                        {error, {pr_val_violation, _}} ->
-                            0;
-                        {error, {pr_val_unsatisfied, _, Y}} ->
-                            case Y >= NumPrimaries of
-                                true ->
-                                    %% if this preflist can never satisfy PR,
-                                    %% the put fsm will bail early
-                                    0;
-                                false ->
-                                    length([xx || {_, Resp} <- VGetResps, Resp /= timeout])
-                            end;
-                        _ ->
-                            length([xx || {_, Resp} <- VGetResps, Resp /= timeout])
-                    end,
+                       History = fsm_eqc_vnode:get_history(),
+                       RepairHistory = fsm_eqc_vnode:get_put_history(),
+                       Ok         = length([ ok || {_, {ok, _}} <- History ]),
+                       NotFound   = length([ ok || {_, notfound} <- History ]),
+                       NoReply    = length([ ok || {_, timeout}  <- History ]),
+                       Partitions = [ P || {P, _} <- History ],
+                       Deleted    = [ {Lin, case riak_kv_util:obj_not_deleted(Obj) == undefined of
+                                                true  -> deleted;
+                                                false -> present
+                                            end
+                                      }
+                                      || {Lin, Obj} <- Objects ],
+                       NotFoundIsOk = proplists:get_value(notfound_ok, Options, false),
+                       BasicQuorum = proplists:get_value(basic_quorum, Options, true),
+                       DeletedVClock = proplists:get_value(deletedvclock, Options, false),
+                       NumPrimaries = length([xx || {_,primary} <- PL2]),
+                       State = expect(#state{n = N, r = R, real_r = RealR, pr = PR, real_pr = RealPR,
+                                             history = History, preflist=PL2,
+                                             objects = Objects, deleted = Deleted, options = Options,
+                                             notfound_is_ok = NotFoundIsOk, basic_quorum = BasicQuorum,
+                                             num_primaries = NumPrimaries, deletedvclock = DeletedVClock}),
+                       ExpResult = State#state.exp_result,
+                       ExpectedN = case ExpResult of
+                                       {error, {n_val_violation, _}} ->
+                                           0;
+                                       {error, {r_val_violation, _}} ->
+                                           0;
+                                       {error, {pr_val_violation, _}} ->
+                                           0;
+                                       {error, {pr_val_unsatisfied, _, Y}} ->
+                                           case Y >= NumPrimaries of
+                                               true ->
+                                                   %% if this preflist can never satisfy PR,
+                                                   %% the put fsm will bail early
+                                                   0;
+                                               false ->
+                                                   length([xx || {_, Resp} <- VGetResps, Resp /= timeout])
+                                           end;
+                                       _ ->
+                                           length([xx || {_, Resp} <- VGetResps, Resp /= timeout])
+                                   end,
 
-        %% A perfect preference list has all owner partitions available
-        PerfectPreflist = lists:all(fun({{_Idx,_Node},primary}) -> true;
-                                       ({{_Idx,_Node},fallback}) -> false
-                                    end, PL2),
+                       %% A perfect preference list has all owner partitions available
+                       PerfectPreflist = lists:all(fun({{_Idx,_Node},primary}) -> true;
+                                                      ({{_Idx,_Node},fallback}) -> false
+                                                   end, PL2),
 
 
-        {RetResult, RetInfo} = case Res of
-                                   timeout ->
-                                       {Res, undefined};
-                                   {ok, _RetObj} ->
-                                       {Res, undefined};
-                                   {error, _Reason} ->
-                                       {Res, undefined};
-                                   {ok, RetObj, Info0} ->
-                                       {{ok, RetObj}, Info0};
-                                   {error, Reason, Info0} ->
-                                       {{error, Reason}, Info0}
-                               end,
-        ?WHENFAIL(
-            begin
-                io:format("Res: ~p\n", [Res]),
-                io:format("Repair: ~p~nHistory: ~p~n",
-                          [RepairHistory, History]),
-                io:format("SoftCap: ~p~nHardCap: ~p~nActual: ~p~nRoll: ~p~n",
-                          [SoftCap, HardCap, Actual, Roll]),
-                io:format("RetResult: ~p~nExpResult: ~p~nDeleted objects: ~p~n",
-                          [RetResult, ExpResult, Deleted]),
-                io:format("N: ~p  R: ~p  RealR: ~p  PR: ~p  RealPR: ~p~n"
-                          "Options: ~p~nVGetResps: ~p~nPL2: ~p~n",
-                          [N, R, RealR, PR, RealPR, Options, VGetResps, PL2]),
-                io:format("Ok: ~p~nNotFound: ~p~nNoReply: ~p~n",
-                          [Ok, NotFound, NoReply])
-            end,
-            conjunction(
-                [{result, equals(RetResult, ExpResult)},
-                 {details, check_details(RetInfo, State)},
-                 {n_value, equals(length(History), ExpectedN)},
-                 {repair, check_repair(Objects, RepairHistory, History, RRAbort)},
-                 {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
-                 {distinct, all_distinct(Partitions)}
-                ]))
-    end).
+                       {RetResult, RetInfo} = case Res of
+                                                  timeout ->
+                                                      {Res, undefined};
+                                                  {ok, _RetObj} ->
+                                                      {Res, undefined};
+                                                  {error, _Reason} ->
+                                                      {Res, undefined};
+                                                  {ok, RetObj, Info0} ->
+                                                      {{ok, RetObj}, Info0};
+                                                  {error, Reason, Info0} ->
+                                                      {{error, Reason}, Info0}
+                                              end,
+                       ?WHENFAIL(
+                          begin
+                              io:format("Res: ~p\n", [Res]),
+                              io:format("Repair: ~p~nHistory: ~p~n",
+                                        [RepairHistory, History]),
+                              io:format("SoftCap: ~p~nHardCap: ~p~nActual: ~p~nRoll: ~p~n",
+                                        [SoftCap, HardCap, Actual, Roll]),
+                              io:format("RetResult: ~p~nExpResult: ~p~nDeleted objects: ~p~n",
+                                        [RetResult, ExpResult, Deleted]),
+                              io:format("N: ~p  R: ~p  RealR: ~p  PR: ~p  RealPR: ~p~n"
+                                        "Options: ~p~nVGetResps: ~p~nPL2: ~p~n",
+                                        [N, R, RealR, PR, RealPR, Options, VGetResps, PL2]),
+                              io:format("Ok: ~p~nNotFound: ~p~nNoReply: ~p~n",
+                                        [Ok, NotFound, NoReply])
+                          end,
+                          conjunction(
+                            [{result, equals(RetResult, ExpResult)},
+                             {details, check_details(RetInfo, State)},
+                             {n_value, equals(length(History), ExpectedN)},
+                             {repair, check_repair(Objects, RepairHistory, History, RRAbort)},
+                             {delete,  check_delete(Objects, RepairHistory, History, PerfectPreflist)},
+                             {distinct, all_distinct(Partitions)}
+                            ]))
+                   end)).
 
 
 %% make preflist2 from the vnode responses.

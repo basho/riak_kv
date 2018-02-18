@@ -42,7 +42,6 @@
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include("include/riak_kv_vnode.hrl").
--include("include/riak_kv_js_pools.hrl").
 -include("../src/riak_kv_wm_raw.hrl").
 
 -compile(export_all).
@@ -62,30 +61,6 @@
 %%====================================================================
 %% eunit test 
 %%====================================================================
-
-eqc_test_() ->
-    {spawn, 
-     [{setup,
-       fun setup/0,
-       fun cleanup/1,
-       [%% Check networking/clients are set up 
-        ?_assert(node() /= 'nonode@nohost'),
-        ?_assertEqual(pong, net_adm:ping(node())),
-        {timeout, 60, [?_assertEqual(pang, net_adm:ping('nonode@nohost'))]},
-        ?_assertMatch({ok,_C}, riak:local_client()),
-        %% Check javascript is working
-        ?_assertMatch({ok, 123}, 
-                      riak_kv_js_manager:blocking_dispatch(riak_kv_js_hook,
-                                                           {{jsanon, 
-                                                             <<"function() { return 123; }">>},
-                                                            []}, 5)),
-        %% Run the quickcheck tests
-        {timeout, 70,
-         ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(60, ?QC_OUT(prop_basic_put()))))}
-       ]
-      }
-     ]
-    }.
 
 setup() ->
     %% Start net_kernel - hopefully can remove this after FSM is purified..
@@ -126,54 +101,22 @@ setup() ->
                 fun(_Bucket) ->
                         [dvv_enabled]
                 end),
-
-    start_javascript(),
-    State.
+    %% Check networking/clients are set up 
+    ?_assert(node() /= 'nonode@nohost'),
+    ?_assertEqual(pong, net_adm:ping(node())),
+    {timeout, 60, [?_assertEqual(pang, net_adm:ping('nonode@nohost'))]},
+    ?_assertMatch({ok,_C}, riak:local_client()),
+    fun() -> cleanup(State) end.
 
 cleanup(running) ->
     application:stop(lager),
     application:unload(lager),
-    cleanup_javascript(),
     meck:unload(riak_core_bucket),
     fsm_eqc_util:cleanup_mock_servers(),
-    %% Cleanup the JS manager process
-    %% since it tends to hang around too long.
-    case whereis(?JSPOOL_HOOK) of
-        undefined ->
-            ignore;
-        Pid ->
-            exit(Pid, put_fsm_eqc_js_cleanup)
-    end,
     ok;
 cleanup(started) ->
     ok = net_kernel:stop(),
     cleanup(running).
-
-%%====================================================================
-%% Shell helpers 
-%%====================================================================
-
-prepare() ->
-    fsm_eqc_util:start_mock_servers(),
-    start_javascript().
-
-test() ->
-    test(100).
-
-test(N) ->
-    State = setup(),
-    try quickcheck(numtests(N, prop_basic_put()))
-    after
-        cleanup(State)
-    end.
-
-check() ->
-    State = setup(),
-    try check(prop_basic_put(), current_counterexample())
-    after
-        cleanup(State)
-    end.
-
 
 %%====================================================================
 %% Generators
@@ -252,13 +195,6 @@ precommit_hook() ->
                {1,  {erlang, precommit_fail_reason}},
                {1,  {erlang, precommit_crash}},
                {1,  {erlang, precommit_undefined}},
-               {5,  {js, precommit_noop}},
-               {5,  {js, precommit_append_value}},
-               {5,  {js, precommit_nonobj}},
-               {1,  {js, precommit_fail}},
-               {1,  {js, precommit_fail_reason}},
-               {1,  {js, precommit_crash}},
-               {1,  {js, precommit_undefined}},
                {1,  {garbage, garbage}},
                {1,  {garbage, empty}}]).
                 
@@ -293,140 +229,141 @@ w_dw_seed() ->
 %%====================================================================
 
 prop_basic_put() ->
-    ?FORALL({PWSeed, WSeed, DWSeed,
-             Objects, ObjectIdxSeed,
-             VPutResp,
-             Options0, AllowMult, Precommit, Postcommit,
-             LogLevel}, 
-            {w_dw_seed(), w_dw_seed(), w_dw_seed(),
-             fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
-             vnodeputresps(),
-             options(),bool(), precommit_hooks(), postcommit_hooks(),
-             oneof([info, debug])},
-    begin
-        lager:set_loglevel(lager_file_backend, ?LAGER_LOGFILE, LogLevel),
+    ?SETUP(fun setup/0,
+           ?FORALL({PWSeed, WSeed, DWSeed,
+                    Objects, ObjectIdxSeed,
+                    VPutResp,
+                    Options0, AllowMult, Precommit, Postcommit,
+                    LogLevel}, 
+                   {w_dw_seed(), w_dw_seed(), w_dw_seed(),
+                    fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
+                    vnodeputresps(),
+                    options(),bool(), precommit_hooks(), postcommit_hooks(),
+                    oneof([info, debug])},
+                   begin
+                       lager:set_loglevel(lager_file_backend, ?LAGER_LOGFILE, LogLevel),
 
-        N = length(VPutResp),
-        {PW, RealPW} = pw_val(N, 1000000, PWSeed),
-        %% DW is always at least 1 because of coordinating puts
-        {DW, RealDW}  = w_dw_val(N, 1, DWSeed),
-        %% W can be 0
-        {W, RealW0} = w_dw_val(N, 0, WSeed),
+                       N = length(VPutResp),
+                       {PW, RealPW} = pw_val(N, 1000000, PWSeed),
+                       %% DW is always at least 1 because of coordinating puts
+                       {DW, RealDW}  = w_dw_val(N, 1, DWSeed),
+                       %% W can be 0
+                       {W, RealW0} = w_dw_val(N, 0, WSeed),
 
-        %% {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0), 
+                       %% {Q, _Ring, NodeStatus} = fsm_eqc_util:mock_ring(N + NQdiff, NodeStatus0), 
 
-        %% Pick the object to put - as ObjectIdxSeed shrinks, it should go
-        %% towards the end of the list (for current), so simplest to just
-        %% reverse the list and calculate modulo list length
-        ObjectIdx = (ObjectIdxSeed rem length(Objects)) + 1,
-        {_PutLin,Object0} = lists:nth(ObjectIdx, lists:reverse(Objects)),
-        Object = riak_object:update_value(Object0, riak_object:get_value(Object0)),
+                       %% Pick the object to put - as ObjectIdxSeed shrinks, it should go
+                       %% towards the end of the list (for current), so simplest to just
+                       %% reverse the list and calculate modulo list length
+                       ObjectIdx = (ObjectIdxSeed rem length(Objects)) + 1,
+                       {_PutLin,Object0} = lists:nth(ObjectIdx, lists:reverse(Objects)),
+                       Object = riak_object:update_value(Object0, riak_object:get_value(Object0)),
 
-        %% Work out how the vnodes should respond and in which order
-        %% the messages should be delivered.
-        Options = fsm_eqc_util:make_options([{pw, PW}, {w, W}, {dw, DW},
-                                             {timeout, 200} | Options0], []),
-        VPutReplies = make_vput_replies(VPutResp, Objects, Options),
-        PL2 = make_preflist2(VPutResp, 1, []),
-        [{CoordPLEntry,_}|_] = PL2,
+                       %% Work out how the vnodes should respond and in which order
+                       %% the messages should be delivered.
+                       Options = fsm_eqc_util:make_options([{pw, PW}, {w, W}, {dw, DW},
+                                                            {timeout, 200} | Options0], []),
+                       VPutReplies = make_vput_replies(VPutResp, Objects, Options),
+                       PL2 = make_preflist2(VPutResp, 1, []),
+                       [{CoordPLEntry,_}|_] = PL2,
 
-        %% Prepare the mock vnode master
-        ok = fsm_eqc_vnode:set_data(Objects, []),
-        ok = fsm_eqc_vnode:set_vput_replies(VPutReplies),
-        
-        %% Transform the hook test atoms into the arcane hook config
-        BucketProps = make_bucket_props(N, AllowMult, Precommit, Postcommit),
+                       %% Prepare the mock vnode master
+                       ok = fsm_eqc_vnode:set_data(Objects, []),
+                       ok = fsm_eqc_vnode:set_vput_replies(VPutReplies),
 
-        %% Needed for riak_kv_util get_default_rw_val
-        application:set_env(riak_core,
-                            default_bucket_props,
-                            BucketProps),
+                       %% Transform the hook test atoms into the arcane hook config
+                       BucketProps = make_bucket_props(N, AllowMult, Precommit, Postcommit),
 
-        %% Run the test and wait for all processes spawned by it to settle.
-        process_flag(trap_exit, true),
-        {ok, PutPid} = riak_kv_put_fsm:test_link({raw, ?REQ_ID, self()},
-                                                 Object,
-                                                 Options,
-                                                 [{starttime, riak_core_util:moment()},
-                                                  {n, N},
-                                                  {bucket_props, BucketProps},
-                                                  {preflist2, PL2},
-                                                  {coord_pl_entry, CoordPLEntry}]),
-        ok = riak_kv_test_util:wait_for_pid(PutPid),
-        ok = riak_kv_test_util:wait_for_children(PutPid),
-        Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
-        receive % check for death during postcommit hooks
-            {'EXIT', PutPid, Why} ->
-                ?assertEqual(normal, Why)
-        after
-            0 ->
-                ok
-        end,
-        process_flag(trap_exit, false),
+                       %% Needed for riak_kv_util get_default_rw_val
+                       application:set_env(riak_core,
+                                           default_bucket_props,
+                                           BucketProps),
 
-        %% Get the history of what happened to the vnode master
-        H = fsm_eqc_vnode:get_reply_history(),
-        PostCommits = fsm_eqc_vnode:get_postcommits(),
+                       %% Run the test and wait for all processes spawned by it to settle.
+                       process_flag(trap_exit, true),
+                       {ok, PutPid} = riak_kv_put_fsm:test_link({raw, ?REQ_ID, self()},
+                                                                Object,
+                                                                Options,
+                                                                [{starttime, riak_core_util:moment()},
+                                                                 {n, N},
+                                                                 {bucket_props, BucketProps},
+                                                                 {preflist2, PL2},
+                                                                 {coord_pl_entry, CoordPLEntry}]),
+                       ok = riak_kv_test_util:wait_for_pid(PutPid),
+                       ok = riak_kv_test_util:wait_for_children(PutPid),
+                       Res = fsm_eqc_util:wait_for_req_id(?REQ_ID, PutPid),
+                       receive % check for death during postcommit hooks
+                           {'EXIT', PutPid, Why} ->
+                               ?assertEqual(normal, Why)
+                       after
+                           0 ->
+                               ok
+                       end,
+                       process_flag(trap_exit, false),
 
-        %% Work out the expected results.  Have to determine the effective dw
-        %% the FSM would have used to know when it would have stopped processing responses
-        %% and returned to the client.
-        EffDW0 = get_effective_dw(RealDW, Options, Postcommit),
+                       %% Get the history of what happened to the vnode master
+                       H = fsm_eqc_vnode:get_reply_history(),
+                       PostCommits = fsm_eqc_vnode:get_postcommits(),
 
-        EffDW = erlang:max(EffDW0, RealPW),
-        RealW = erlang:max(EffDW, RealW0),
+                       %% Work out the expected results.  Have to determine the effective dw
+                       %% the FSM would have used to know when it would have stopped processing responses
+                       %% and returned to the client.
+                       EffDW0 = get_effective_dw(RealDW, Options, Postcommit),
 
-        ExpectObject = expect_object(H, RealW, EffDW, RealPW, AllowMult, PL2),
-        {Expected, ExpectedPostCommits, ExpectedVnodePuts} = 
-            expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
-                   Precommit, Postcommit, ExpectObject, PL2),
+                       EffDW = erlang:max(EffDW0, RealPW),
+                       RealW = erlang:max(EffDW, RealW0),
 
-        {RetResult, RetInfo} = case Res of 
-                                   timeout ->
-                                       {Res, undefined};
-                                   ok ->
-                                       {ok, undefined};
-                                   {ok, Info} when is_list(Info) ->
-                                       {ok, Info};
-                                   {ok, _RetObj} ->
-                                       {Res, undefined};
-                                   {error, _Reason} ->
-                                       {Res, undefined};
-                                   {ok, RetObj, Info0} ->
-                                       {{ok, RetObj}, Info0};
-                                   {error, Reason, Info0} ->
-                                       {{error, Reason}, Info0};
-                                   {error, Reason, Info0, Info1} ->
-                                       {{error, Reason, Info0, Info1}, undefined};
-                                   {error, Reason, Info0, Info1, _Info2} ->
-                                       {{error, Reason, Info0, Info1}, undefined}
-                               end,
+                       ExpectObject = expect_object(H, RealW, EffDW, RealPW, AllowMult, PL2),
+                       {Expected, ExpectedPostCommits, ExpectedVnodePuts} = 
+                       expect(VPutResp, H, N, PW, RealPW, W, RealW, DW, EffDW, Options,
+                              Precommit, Postcommit, ExpectObject, PL2),
 
-        ?WHENFAIL(
-           begin
-               io:format(user, "BucketProps: ~p\n", [BucketProps]),
-               io:format(user, "VPutResp = ~p\n", [VPutResp]),
-               io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
-               io:format(user, "PrefList2: ~p\n", [PL2]),
-               io:format(user, "N: ~p PW: ~p RealPW: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p"
-                         " Pid: ~p\n",
-                         [N, PW, RealPW, W, RealW, DW, RealDW, EffDW, PutPid]),
-               io:format(user, "Options: ~p\n", [Options]),
-               io:format(user, "Precommit: ~p\n", [Precommit]),
-               io:format(user, "Postcommit: ~p\n", [Postcommit]),
-               io:format(user, "Object: ~p\n", [Object]),
-               io:format(user, "Expected Object: ~p\n", [ExpectObject]),
-               %% io:format(user, "Expected Object Given Lineage: ~p\n", [ExpectObjectGivenLineage]),
-               io:format(user, "History: ~p\n", [H]),
-               io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res]),
-               io:format(user, "PostCommits:\nExpected: ~p\nGot: ~p\n",
-                         [ExpectedPostCommits, PostCommits])
-           end,
-           conjunction([{result, equals(RetResult, Expected)},
-                        {details, check_details(RetInfo, Options)},
-                        {postcommit, equals(PostCommits, ExpectedPostCommits)},
-                        {puts_sent, check_puts_sent(ExpectedVnodePuts, H)}]))
-    end).
+                       {RetResult, RetInfo} = case Res of 
+                                                  timeout ->
+                                                      {Res, undefined};
+                                                  ok ->
+                                                      {ok, undefined};
+                                                  {ok, Info} when is_list(Info) ->
+                                                      {ok, Info};
+                                                  {ok, _RetObj} ->
+                                                      {Res, undefined};
+                                                  {error, _Reason} ->
+                                                      {Res, undefined};
+                                                  {ok, RetObj, Info0} ->
+                                                      {{ok, RetObj}, Info0};
+                                                  {error, Reason, Info0} ->
+                                                      {{error, Reason}, Info0};
+                                                  {error, Reason, Info0, Info1} ->
+                                                      {{error, Reason, Info0, Info1}, undefined};
+                                                  {error, Reason, Info0, Info1, _Info2} ->
+                                                      {{error, Reason, Info0, Info1}, undefined}
+                                              end,
+
+                       ?WHENFAIL(
+                          begin
+                              io:format(user, "BucketProps: ~p\n", [BucketProps]),
+                              io:format(user, "VPutResp = ~p\n", [VPutResp]),
+                              io:format(user, "VPutReplies = ~p\n", [VPutReplies]),
+                              io:format(user, "PrefList2: ~p\n", [PL2]),
+                              io:format(user, "N: ~p PW: ~p RealPW: ~p W:~p RealW: ~p DW: ~p RealDW: ~p EffDW: ~p"
+                                        " Pid: ~p\n",
+                                        [N, PW, RealPW, W, RealW, DW, RealDW, EffDW, PutPid]),
+                              io:format(user, "Options: ~p\n", [Options]),
+                              io:format(user, "Precommit: ~p\n", [Precommit]),
+                              io:format(user, "Postcommit: ~p\n", [Postcommit]),
+                              io:format(user, "Object: ~p\n", [Object]),
+                              io:format(user, "Expected Object: ~p\n", [ExpectObject]),
+                              %% io:format(user, "Expected Object Given Lineage: ~p\n", [ExpectObjectGivenLineage]),
+                              io:format(user, "History: ~p\n", [H]),
+                              io:format(user, "Expected: ~p Res: ~p\n", [Expected, Res]),
+                              io:format(user, "PostCommits:\nExpected: ~p\nGot: ~p\n",
+                                        [ExpectedPostCommits, PostCommits])
+                          end,
+                          conjunction([{result, equals(RetResult, Expected)},
+                                       {details, check_details(RetInfo, Options)},
+                                       {postcommit, equals(PostCommits, ExpectedPostCommits)},
+                                       {puts_sent, check_puts_sent(ExpectedVnodePuts, H)}]))
+                   end)).
 
 make_options([], Options) ->
     Options;
@@ -502,8 +439,6 @@ make_bucket_props(N, AllowMult, Precommit, Postcommit) ->
     HookXform = fun({erlang, Hook}) ->
                         {struct, [ModDef,
                                    {<<"fun">>, atom_to_binary(Hook,latin1)}]};
-                   ({js, Hook}) ->
-                        {struct, [{<<"name">>, atom_to_binary(Hook,latin1)}]};
                    ({garbage, garbage}) ->
                         not_a_hook_def;
                    ({garbage, empty}) ->
@@ -891,8 +826,6 @@ precommit_should_fail([{_Lang,precommit_fail_reason}| _Rest]) ->
 precommit_should_fail([{Lang, precommit_nonobj} | _Rest]) ->
     %% Javascript precommit returning a non-object crashes the JS VM.
     Details = case Lang of
-                  js ->
-                      {<<"precommit_nonobj">>,<<"not_an_obj">>};
                   erlang ->
                       {?MODULE, precommit_nonobj, not_an_obj}
               end,
@@ -922,27 +855,6 @@ check_puts_sent(ExpectedPuts, VPutResp) ->
                   io:format(user, "Requests: ~p = ~p\n", [Requests, NumPutReqs])
               end,
               equals(ExpectedPuts, NumPutReqs)).
-
-%%====================================================================
-%% Javascript helpers 
-%%====================================================================
-
-start_javascript() ->
-    application:stop(erlang_js),
-    application:stop(sasl),
-    application:start(sasl),
-    application:load(erlang_js),
-    application:start(erlang_js),
-    %% Set up the test dir so erlang_js will find put_fsm_precommit.js
-    TestDir = filename:join([filename:dirname(code:which(?MODULE)), "..", "test"]),
-    application:set_env(riak_kv, js_source_dir, TestDir),
-    {ok, _} = riak_kv_js_sup:start_link(),
-    {ok, _} = riak_kv_js_manager:start_link(?JSPOOL_HOOK, 1),
-    ok.
-
-cleanup_javascript() ->
-    application:stop(erlang_js),
-    application:stop(sasl).
 
 -endif. % EQC
 

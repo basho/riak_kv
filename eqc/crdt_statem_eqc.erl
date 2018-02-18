@@ -80,10 +80,6 @@ postcondition(_S,{call, ?MODULE, crdt_equals, _},Res) ->
 postcondition(_S,{call,_,_,_},_Res) ->
     true.
 
-prop_converge(InitialValue, NumTests, Mod) ->
-    eqc:quickcheck(eqc:numtests(NumTests, ?QC_OUT(prop_converge(InitialValue,
-                                                                Mod)))).
-
 prop_converge(InitialValue, ?HLL_TYPE=Mod) ->
     ?FORALL(Cmds,commands(?MODULE, #state{mod=Mod, mod_state=InitialValue}),
             begin

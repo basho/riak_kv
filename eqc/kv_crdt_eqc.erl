@@ -41,44 +41,6 @@
                               io:format(user, Str, Args) end, P)).
 
 %%====================================================================
-%% eunit test
-%%====================================================================
-
-counter_value_test_() ->
-    {timeout, 60000, % do not trust the docs - timeout is in msec
-      ?_assertEqual(true, quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_value()))))}.
-
-counter_merge_test_() ->
-    {timeout, 60000, % do not trust the docs - timeout is in msec
-       ?_assertEqual(true, quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_merge()))))}.
-
-counter_update_test_() ->
-    {timeout, 60000, % do not trust the docs - timeout is in msec
-       ?_assertEqual(true, quickcheck(numtests(?NUMTESTS, ?QC_OUT(prop_update()))))}.
-
-%%====================================================================
-%% Shell helpers
-%%====================================================================
-
-test() ->
-    test(100).
-
-test(N) ->
-    quickcheck(numtests(N, prop_value())).
-
-test_merge() ->
-    test_merge(100).
-
-test_merge(N) ->
-    quickcheck(numtests(N, prop_merge())).
-
-test_update() ->
-    test_update(100).
-
-test_update(N) ->
-    quickcheck(numtests(N, prop_update())).
-
-%%====================================================================
 %% properties
 %%====================================================================
 

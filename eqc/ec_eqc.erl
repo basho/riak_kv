@@ -10,42 +10,6 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
-%%====================================================================
-%% eunit test
-%%====================================================================
-
-eqc_test_() ->
-    {setup,
-     fun() ->
-             meck:new(riak_core_bucket),
-             meck:expect(riak_core_bucket, get_bucket,
-                         fun(_Bucket) ->
-                                 [dvv_enabled]
-                         end)
-     end,
-     fun(_) ->
-             meck:unload(riak_core_bucket)
-     end,
-     [
-      {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}
-     ]}.
-
-%% TODO: 
-%% Change put to use per-node vclock.
-%% Convert put core to require response from the coordinating node.
-
-
-%% FSM scheduler EQC test.
-
-test() ->
-    test(100).
-
-test(N) ->
-    quickcheck(numtests(N, prop())).
-
-check() ->
-    check(prop(), current_counterexample()).
-
 -define(B, <<"b">>).
 -define(K, <<"k">>).
 
@@ -135,41 +99,51 @@ gen_client_seeds() ->
 gen_dvv_enabled() ->
     bool().
 
-prop() ->
-    ?FORALL({Pris, ClientSeeds, ParamsSeed, DVVEnabled},
-            {gen_pris(), gen_client_seeds(),gen_params(), gen_dvv_enabled()},
-            begin
-                application:set_env(riak_kv, dvv_enabled, DVVEnabled),
-                %% io:format(user, "Pris: ~p\n", [Pris]),
-                set_pri(Pris),
-                Params = make_params(ParamsSeed),
-                                                %NodeProcs = make_nodes(Q),
-                VnodeProcs = make_vnodes(Params),
-                Initial = #state{params = Params, 
-                                 procs = VnodeProcs},
-                Clients = make_clients(ClientSeeds, Params),
-                Start = Initial#state{clients = Clients},
-                %% io:format(user, "=== Start ===\nParams:\n~p\nClientSeeds\n~p\nState: ~p\n",
-                %%           [ann_params(Params), ClientSeeds, Start]),
-                case exec(Start) of
-                    {ok, Final} ->
-                        ?WHENFAIL(
-                           begin
-                               io:format(user, "Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory\n",
-                                         [ann_params(Params),
-                                          Clients,
-                                          Final]),
-                               pretty_history(Final#state.history)
-                           end,
-                           check_final(Final));
-                    {What, Reason, Next, FailS} ->
-                        io:format(user, "FAILED: ~p: ~p\nParams:\n~p\nNext: ~p\nStart:\n~p\n"
-                                  "FailS:\n~p\n",
-                                  [What, Reason, ann_params(Params), Next,
-                                   ann_state(Start), ann_state(FailS)]),
-                        false
-                end
-            end).
+prop_ec() ->
+    ?SETUP(fun() ->
+                   meck:new(riak_core_bucket),
+                   meck:expect(riak_core_bucket, get_bucket,
+                               fun(_Bucket) ->
+                                       [dvv_enabled]
+                               end),
+                   fun() ->
+                           meck:unload(riak_core_bucket)
+                   end
+           end,
+           ?FORALL({Pris, ClientSeeds, ParamsSeed, DVVEnabled},
+                   {gen_pris(), gen_client_seeds(),gen_params(), gen_dvv_enabled()},
+                   begin
+                       application:set_env(riak_kv, dvv_enabled, DVVEnabled),
+                       %% io:format(user, "Pris: ~p\n", [Pris]),
+                       set_pri(Pris),
+                       Params = make_params(ParamsSeed),
+                       %NodeProcs = make_nodes(Q),
+                       VnodeProcs = make_vnodes(Params),
+                       Initial = #state{params = Params, 
+                                        procs = VnodeProcs},
+                       Clients = make_clients(ClientSeeds, Params),
+                       Start = Initial#state{clients = Clients},
+                       %% io:format(user, "=== Start ===\nParams:\n~p\nClientSeeds\n~p\nState: ~p\n",
+                       %%           [ann_params(Params), ClientSeeds, Start]),
+                       case exec(Start) of
+                           {ok, Final} ->
+                               ?WHENFAIL(
+                                  begin
+                                      io:format(user, "Params:\n~p\nClients:\n~p\nFinal:\n~p\nHistory\n",
+                                                [ann_params(Params),
+                                                 Clients,
+                                                 Final]),
+                                      pretty_history(Final#state.history)
+                                  end,
+                                  check_final(Final));
+                           {What, Reason, Next, FailS} ->
+                               io:format(user, "FAILED: ~p: ~p\nParams:\n~p\nNext: ~p\nStart:\n~p\n"
+                                         "FailS:\n~p\n",
+                                         [What, Reason, ann_params(Params), Next,
+                                          ann_state(Start), ann_state(FailS)]),
+                               false
+                       end
+                   end)).
 
 check_final(#state{history = H}) ->
     %% Go through the history and check for the expected values

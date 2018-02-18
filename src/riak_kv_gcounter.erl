@@ -42,7 +42,8 @@
 %% EQC API
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
--export([gen_op/0, update_expected/3, eqc_state_value/1]).
+-export([gen_op/0, update_expected/3, eqc_state_value/1,
+         prop_gcounter_converge/0]).
 -endif.
 
 -ifdef(TEST).
@@ -142,7 +143,6 @@ from_binary(<<?TAG:8/integer, ?V1_VERS:8/integer, EntriesBin/binary>>) ->
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
--ifdef(TEST).
 
 -ifdef(EQC).
 %% EQC generator
@@ -162,10 +162,11 @@ update_expected(_ID, _Op, Prev) ->
 eqc_state_value(S) ->
     S.
 
-eqc_value_test_() ->
-    {timeout, 120, [?_assert(crdt_statem_eqc:prop_converge(0, 1000, ?MODULE))]}.
+prop_gcounter_converge() ->
+    crdt_statem_eqc:prop_converge(0, ?MODULE).
 -endif.
 
+-ifdef(TEST).
 new_test() ->
     ?assertEqual([], new()).
 
