@@ -328,7 +328,6 @@ start_app_and_deps(Application, Started) ->
         true ->
             {ok, Started};
         false ->
-            _Apps = application:which_applications(),
             case application:start(Application) of
                 ok ->
                     {ok, [Application|Started]};
