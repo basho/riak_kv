@@ -381,14 +381,6 @@
   hidden
 ]}.
 
-%% @doc a dummy value added to riak 2.2.5 to handle upgrades from
-%% older riak_ee installs that have `jmx` in their riak.conf
-{mapping, "jmx", "riak_kv.jmx_dummy", [
-  {datatype, flag},
-  {default, off},
-  hidden
-]}.
-
 %% @doc Reading or writing objects bigger than this size will write a
 %% warning in the logs.
 {mapping, "object.size.warning_threshold", "riak_kv.warn_object_size", [
