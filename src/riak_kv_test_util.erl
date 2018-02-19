@@ -264,7 +264,8 @@ dep_apps(Test, Extra) ->
                 application:set_env(riak_core, ring_state_dir, Test ++ "/ring"),
                 application:set_env(riak_core, platform_data_dir, Test ++ "/data"),
                 application:set_env(riak_core, handoff_port, 0), %% pick a random handoff port
-                %% @TODO this is wrong still
+                %% @TODO this is wrong still as the deps dirs is a
+                %% best guest in `get_deps_dir/0'
                 DepsDir = get_deps_dir(),
                 Dirs = [DepsDir ++ "*/priv"],
                 application:set_env(riak_core, schema_dirs, Dirs),
