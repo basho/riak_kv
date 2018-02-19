@@ -44,7 +44,10 @@
   {git,"git://github.com/erlang-lager/lager.git",
        {ref,"6cc6b125ad55835748cd847f03314698ae439aea"}},
   2},
- {<<"mochiweb">>,{pkg,<<"mochiweb">>,<<"2.12.2">>},2},
+ {<<"mochiweb">>,
+  {git,"git://github.com/mochi/mochiweb.git",
+       {ref,"23dc11959affd9b0849c2ac0ff4200c1c82aa80c"}},
+  1},
  {<<"parse_trans">>,{pkg,<<"parse_trans">>,<<"3.0.0">>},3},
  {<<"pbkdf2">>,
   {git,"git://github.com/basho/erlang-pbkdf2.git",
@@ -56,7 +59,7 @@
   2},
  {<<"riak_api">>,
   {git,"git://github.com/basho/riak_api.git",
-       {ref,"3da3f8d23808a64081cd23ff18476f1e35453496"}},
+       {ref,"ba7e3a559b910fdf6c131d71226dd65866e15c70"}},
   0},
  {<<"riak_core">>,
   {git,"git://github.com/basho/riak_core.git",
@@ -102,7 +105,6 @@
  {<<"folsom">>, <<"94A027B56FE84FEED264F9B33CB4C6AC9A801FAD84B87DBDA0836CE83C3B8D69">>},
  {<<"goldrush">>, <<"F06E5D5F1277DA5C413E84D5A2924174182FB108DABB39D5EC548B27424CD106">>},
  {<<"hut">>, <<"0089DF0FAA2827C605BBADA88153F24FFF5EA7A4BE32ECF0250A7FDC2719CAFB">>},
- {<<"mochiweb">>, <<"80804AD342AFA3D7F3524040D4EED66CE74B17A555DE454AC85B07C479928E46">>},
  {<<"parse_trans">>, <<"9E96B1C9C3A0DF54E7B76F8F685D38BFA1EB21B31E042B1D1A5A70258E4DB1E3">>},
  {<<"setup">>, <<"738DB0685DC1741F45C6A9BF78478E0D5877F3D0876C0B50FD02F0210EDB5AA4">>}]}
 ].
