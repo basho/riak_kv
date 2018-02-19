@@ -288,17 +288,6 @@ dep_apps(Test, Extra) ->
 -spec do_dep_apps(load | start | stop, [ atom() | fun() ]) -> [ any() ].
 do_dep_apps(start, Apps) ->
     lists:foldl(fun do_dep_apps_fun/2,%% fun(A, Acc) when is_atom(A) ->
-                %%     case include_app_phase(start, A) of
-                %%         true ->
-                %%     	{ok, Started} = start_app_and_deps(A, Acc),
-                %%             Started;
-                %%         _ ->
-                %%             Acc
-                %%     end;
-                %% (F, Acc) ->
-                %%    F(start),
-                %%    Acc
-                %% end,
                 [], Apps);
 do_dep_apps(LoadStop, Apps) ->
     lists:map(fun(A) when is_atom(A) ->
