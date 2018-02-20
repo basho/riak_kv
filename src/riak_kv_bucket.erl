@@ -1144,7 +1144,7 @@ gen_valid_mult_dt(true) ->
     ?LET(Datatype, gen_datatype(), gen_valid_mult_dt_hll(Datatype)).
 
 gen_valid_mult_dt_hll(hll) ->
-    [{allow_mult, true}, {datatype, hll} | gen_hll_precision()];
+    [{allow_mult, true}, {datatype, hll} | gen_valid_hll_precision()];
 gen_valid_mult_dt_hll(Datatype) ->
     [{allow_mult, true}, {datatype, Datatype}].
 
@@ -1199,9 +1199,12 @@ gen_datatype_props(hll) ->
 gen_datatype_props(Datatype) ->
     [{datatype, Datatype}].
 
+gen_valid_hll_precision() ->
+     ?LET(P, choose(4, 16), [{hll_precision, P}]).
+
 gen_hll_precision() ->
-    ?LET(P, frequency([{9, choose(4, 16)},
-                       {1, elements([1,2,17,19,20,99, a])}]),
+    ?LET(P, frequency([{8, choose(4, 16)},
+                       {2, elements([1,2,17,19,20,99, a])}]),
          [{hll_precision, P}]).
 
 gen_lww() ->
