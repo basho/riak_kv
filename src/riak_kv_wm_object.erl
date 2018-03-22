@@ -165,6 +165,7 @@
               rw,           %% integer() - rw-value for deletes
               pr,           %% integer() - number of primary nodes required in preflist on read
               pw,           %% integer() - number of primary nodes required in preflist on write
+              node_confirms,%% integer() - number of physically diverse nodes required in preflist on write
               basic_quorum, %% boolean() - whether to use basic_quorum
               notfound_ok,  %% boolean() - whether to treat notfounds as successes
               asis,         %% boolean() - whether to send the put without modifying the vclock
@@ -415,6 +416,7 @@ malformed_rw_params(RD, Ctx) ->
                  {#ctx.dw, "dw", "default"},
                  {#ctx.rw, "rw", "default"},
                  {#ctx.pw, "pw", "default"},
+                 {#ctx.node_confirms, "node_confirms", "default"},
                  {#ctx.pr, "pr", "default"}]),
     lists:foldl(fun malformed_boolean_param/2,
                 Res,
@@ -1208,7 +1210,7 @@ handle_common_error(Reason, RD, Ctx) ->
                             encode_vclock_header(RD, Ctx)))),
                 Ctx};
         {error, {n_val_violation, N}} ->
-            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
+            Msg = io_lib:format("Specified w/dw/pw/node_confirms values invalid for bucket"
                 " n value of ~p~n", [N]),
             {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, {r_val_unsatisfied, Requested, Returned}} ->
@@ -1239,6 +1241,10 @@ handle_common_error(Reason, RD, Ctx) ->
             Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
                     Requested]),
             {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
+        {error, {node_confirms_val_unsatisfied, Requested, Returned}} ->
+            Msg = io_lib:format("node_confirms-value unsatisfied: ~p/~p~n", [Returned,
+                    Requested]),
+            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, failed} ->
             {{halt, 412}, RD, Ctx};
         {error, Err} ->
@@ -1252,7 +1258,8 @@ handle_common_error(Reason, RD, Ctx) ->
 
 make_options(Prev, Ctx) ->
     NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w},
-                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw},
+                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw},
+                {node_confirms, Ctx#ctx.node_confirms}, {dw, Ctx#ctx.dw},
                 {timeout, Ctx#ctx.timeout}, {asis, Ctx#ctx.asis}],
     NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],

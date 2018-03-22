@@ -104,7 +104,9 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0,
         false ->
             {error, {format, "Counters are not supported"}, State}
     end;
-process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
+process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0,
+                             node_confirms=NodeConfirms0,
+                             amount=CounterOp,
                              returnvalue=RetVal},
         #state{client=C} = State) ->
     case {allow_mult(B), lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, []))} of
@@ -115,8 +117,10 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Coun
             W = decode_quorum(W0),
             DW = decode_quorum(DW0),
             PW = decode_quorum(PW0),
+            NodeConfirms = decode_quorum(NodeConfirms0),
             Options = [{counter_op, CounterOp}] ++ return_value(RetVal),
             case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
+                           make_option(node_confirms, NodeConfirms) ++
                            make_option(pw, PW) ++ [{timeout, default_timeout()},
                                                    {retry_put_coordinator_failure, false} | Options]) of
                 ok ->

@@ -89,6 +89,7 @@
                 w :: non_neg_integer(),
                 dw :: non_neg_integer(),
                 pw :: non_neg_integer(),
+                node_confirms :: non_neg_integer(),
                 coord_pl_entry :: {integer(), atom()},
                 preflist2 :: riak_core_apl:preflist_ann(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -390,10 +391,12 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       preflist2 = Preflist2}) ->
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
     PW0 = get_option(pw, Options0, default),
+    NodeConfirms0 = get_option(node_confirms, Options0, default),
     W0 = get_option(w, Options0, default),
     DW0 = get_option(dw, Options0, default),
 
     PW = riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N),
+    NodeConfirms = riak_kv_util:expand_rw_value(node_confirms, NodeConfirms0, BucketProps, N),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
 
     %% Expand the DW value, but also ensure that DW <= W
@@ -408,7 +411,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             DW = erlang:max(DW1, 1)
     end,
 
-    IdxType = [{Part, Type} || {{Part, _Node}, Type} <- Preflist2],
+    IdxType = [{Part, Type, Node} || {{Part, Node}, Type} <- Preflist2],
     NumPrimaries = length([x || {_,primary} <- Preflist2]),
     NumVnodes = length(Preflist2),
     MinVnodes = lists:max([1, W, DW, PW]), % always need at least one vnode
@@ -416,11 +419,13 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
     if
         PW =:= error ->
             process_reply({error, {pw_val_violation, PW0}}, StateData0);
+        NodeConfirms =:= error ->
+            process_reply({error, {node_confirms_val_violation, NodeConfirms0}}, StateData0);
         W =:= error ->
             process_reply({error, {w_val_violation, W0}}, StateData0);
         DW =:= error ->
             process_reply({error, {dw_val_violation, DW0}}, StateData0);
-        (W > N) or (DW > N) or (PW > N) ->
+        (W > N) or (DW > N) or (PW > N) or (NodeConfirms > N)->
             process_reply({error, {n_val_violation, N}}, StateData0);
         PW > NumPrimaries ->
             process_reply({error, {pw_val_unsatisfied, PW, NumPrimaries}}, StateData0);
@@ -453,16 +458,15 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                 {[{returnbody,true}], false}
                         end
                 end,
-            PutCore = riak_kv_put_core:init(N, W, PW, DW,
-                                            N-PW+1,  % cannot ever get PW replies
-                                            N-DW+1,  % cannot ever get DW replies
+            PutCore = riak_kv_put_core:init(N, W, PW, NodeConfirms, DW,
                                             AllowMult,
                                             ReturnBody,
                                             IdxType),
             VNodeOpts = handle_options(Options, VNodeOpts0),
             StateData = StateData0#state{n=N,
                                          w=W,
-                                         pw=PW, dw=DW, allowmult=AllowMult,
+                                         pw=PW, node_confirms=NodeConfirms, dw=DW,
+                                         allowmult=AllowMult,
                                          precommit = Precommit,
                                          postcommit = Postcommit,
                                          req_id = ReqId,
@@ -470,7 +474,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                          putcore = PutCore,
                                          vnode_options = VNodeOpts,
                                          timeout = Timeout},
-            ?DTRACE(Trace, ?C_PUT_FSM_VALIDATE, [N, W, PW, DW], []),
+            ?DTRACE(Trace, ?C_PUT_FSM_VALIDATE, [N, W, PW, NodeConfirms, DW], []),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
                     execute(StateData);

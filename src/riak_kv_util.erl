@@ -135,8 +135,21 @@ make_request(Request, Index) ->
 get_bucket_option(Type, BucketProps) ->
     case lists:keyfind(Type, 1, BucketProps) of
         {Type, Val} -> Val;
-        _ -> throw(unknown_bucket_option)
+        _ ->
+            get_default_bucket_option(Type)
     end.
+
+get_default_bucket_option(Type) ->
+    %% NOTE: the call to _type_ is because only bucket types don't
+    %% automagically inherit new properties added to riak_kv
+    %% https://github.com/nhs-riak/riak_kv/issues/9
+    case lists:keyfind(Type, 1, riak_core_bucket_type:defaults()) of
+        {Type, Val} ->
+            Val;
+        _ ->
+            throw({unknown_bucket_option, Type})
+    end.
+
 
 expand_value(Type, default, BucketProps) ->
     get_bucket_option(Type, BucketProps);

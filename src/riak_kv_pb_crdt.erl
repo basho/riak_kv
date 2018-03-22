@@ -211,13 +211,16 @@ make_options(#dtfetchreq{r=R0, pr=PR0,
         make_option(n_val, NVal);
 make_options(#dtupdatereq{w=W0, dw=DW0, pw=PW0,
                           timeout=Timeout, sloppy_quorum=SloppyQ,
+                          node_confirms=NodeConfirms0,
                           n_val=NVal, return_body=RetVal}) ->
     W = decode_quorum(W0),
     DW = decode_quorum(DW0),
     PW = decode_quorum(PW0),
+    NodeConfirms = decode_quorum(NodeConfirms0),
     make_option(w, W) ++
         make_option(dw, DW) ++
         make_option(pw, PW) ++
+        make_option(node_confirms, NodeConfirms) ++
         make_option(timeout, timeout(Timeout)) ++
         make_option(sloppy_quorum, SloppyQ) ++
         make_option(n_val, NVal) ++ return_value(RetVal).
