@@ -157,7 +157,8 @@
          encodings_provided/2,
          resource_exists/2,
          process_post/2,           %% POST handler
-         produce_json/2           %% GET/HEAD handler
+         produce_json/2,           %% GET/HEAD handler
+         generate_etag/2
         ]).
 
 -include_lib("webmachine/include/webmachine.hrl").
@@ -402,6 +403,22 @@ produce_json(RD, Ctx=#ctx{module=Mod, data=RObj, include_context=I}) ->
     Body = riak_kv_crdt_json:fetch_response_to_json(
                      Type, Value, get_context(RespCtx,I), ModMap),
     {mochijson2:encode(Body), RD, Ctx}.
+
+generate_etag(RD, Ctx=#ctx{module=Mod, data=RObj, method=Method})
+  when Method == 'GET'; Method == 'HEAD' ->
+    {{RespCtx, _}, _} = riak_kv_crdt:value(RObj, Mod),
+    ETag =
+        case RespCtx of
+            undefined ->
+                undefined;
+            <<>> ->
+                undefined;
+            _ when is_binary(RespCtx) ->
+                base64:encode(RespCtx) %% HTTP/1.1 ETag (https://tools.ietf.org/html/rfc7232#section-2.3) is valid Base64 (https://tools.ietf.org/html/rfc2045#section-6.8).
+        end,
+    {ETag, RD, Ctx};
+generate_etag(RD, Ctx) ->
+    {undefined, RD, Ctx}.
 
 %% Internal functions
 
