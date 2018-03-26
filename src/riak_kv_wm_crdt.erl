@@ -414,7 +414,7 @@ generate_etag(RD, Ctx=#ctx{module=Mod, data=RObj, method=Method})
             <<>> ->
                 undefined;
             _ when is_binary(RespCtx) ->
-                base64:encode(RespCtx) %% HTTP/1.1 ETag (https://tools.ietf.org/html/rfc7232#section-2.3) is valid Base64 (https://tools.ietf.org/html/rfc2045#section-6.8).
+                binary_to_list(base64:encode(RespCtx)) %% HTTP/1.1 ETag (https://tools.ietf.org/html/rfc7232#section-2.3) is valid Base64 (https://tools.ietf.org/html/rfc2045#section-6.8).
         end,
     {ETag, RD, Ctx};
 generate_etag(RD, Ctx) ->
