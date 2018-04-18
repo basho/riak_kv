@@ -87,7 +87,7 @@ capabilities(_, _) ->
 -spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     %% Get the data root directory - cuttlefish not working
-    DataRoot = ?LEVELED_DATAROOT,
+    DataRoot = app_help:get_prop_or_env(data_root, Config, leveled, ?LEVELED_DATAROOT),
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             StartOpts = [{root_path, DataDir},
@@ -228,18 +228,26 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
     {async, Folder} =
         if
             Index /= false  ->
-                {index, QBucket, ?KV_INDEX_Q{filter_field=Field,
-                                                start_key=StartKey,
-                                                start_term=StartTerm,
-                                                end_term=EndTerm,
-                                                return_terms=ReturnTerms,
-                                                term_regex=TermRegex}} = Index,
-                IndexQuery =
-                    {index_query,
-                                {QBucket, StartKey},
-                                {FoldKeysFun, Acc},
-                                {Field, StartTerm, EndTerm},
-                                {ReturnTerms, TermRegex}},
+                {index, QBucket, Q} = Index,
+                ?KV_INDEX_Q{filter_field=Field,
+                            start_key=StartKey,
+                            start_term=StartTerm,
+                            end_term=EndTerm,
+                            return_terms=ReturnTerms,
+                            term_regex=TermRegex} = riak_index:upgrade_query(Q),
+
+                IndexQuery = case Field of
+                                 <<"$bucket">> ->
+                                     {keylist, ?RIAK_TAG, QBucket, {FoldKeysFun, Acc}};
+                                 <<"$key">> ->
+                                     {keylist, ?RIAK_TAG, QBucket, {StartKey, EndTerm}, {FoldKeysFun, Acc}};
+                                 _ ->
+                                     {index_query,
+                                      {QBucket, StartKey},
+                                      {FoldKeysFun, Acc},
+                                      {Field, StartTerm, EndTerm},
+                                      {ReturnTerms, TermRegex}}
+                             end,
                 leveled_bookie:book_returnfolder(Bookie, IndexQuery);
             Bucket /= false ->
                 {bucket, B} = Bucket,
@@ -270,9 +278,9 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
     Query =
         case proplists:get_value(bucket, Opts) of
             undefined ->
-                {foldobjects_allkeys, ?RIAK_TAG, {FoldObjectsFun, Acc}};
+                {foldobjects_allkeys, ?RIAK_TAG, {FoldObjectsFun, Acc}, false};
             B ->
-                {foldobjects_bybucket, ?RIAK_TAG, B, {FoldObjectsFun, Acc}}
+                {foldobjects_bybucket, ?RIAK_TAG, B, {FoldObjectsFun, Acc}, false}
         end,
     {async, ObjectFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
     case lists:member(async_fold, Opts) of
@@ -447,6 +455,33 @@ prompt_journalcompaction(Bookie, Ref, PartitionID) when is_reference(Ref) ->
 %% ===================================================================
 -ifdef(TEST).
 
+-ifdef(EQC).
 
+eqc_test_() ->
+    {spawn,
+     [{inorder,
+       [{setup,
+         fun setup/0,
+         fun cleanup/1,
+         [
+          {timeout, 180,
+            [?_assertEqual(true,
+                          backend_eqc:test(?MODULE, false,
+                                           [{data_root,
+                                             "test/eleveldb-backend"}]))]}
+         ]}]}]}.
+
+setup() ->
+    application:load(sasl),
+    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_eleveldb_backend_eqc_sasl.log"}),
+    error_logger:tty(false),
+    error_logger:logfile({open, "riak_kv_eleveldb_backend_eqc.log"}),
+
+    ok.
+
+cleanup(_) ->
+    ?_assertCmd("rm -rf test/eleveldb-backend").
+
+-endif. % EQC
 
 -endif.

@@ -35,6 +35,7 @@
          test/3,
          test/4,
          test/5,
+         test_with_options/2,
          property/1,
          property/2,
          property/3,
@@ -83,13 +84,29 @@ test(Backend, Volatile) ->
 
 test(Backend, Volatile, Config) ->
     test2(property(Backend, Volatile, Config,
-                   fun(BeState,_Olds) -> catch(Backend:stop(BeState)) end)).
+                   cleanup_fun(Backend))).
 
 test(Backend, Volatile, Config, Cleanup) ->
     test2(property(Backend, Volatile, Config, Cleanup, ?TEST_SECONDS)).
 
 test(Backend, Volatile, Config, Cleanup, NumTests) ->
     test2(property(Backend, Volatile, Config, Cleanup, NumTests)).
+
+check(Backend) ->
+    check2(property(Backend, false)).
+
+test_with_options(Backend, Ops) when is_list(Ops) ->
+    Volatile = proplists:get_value(volatile, Ops, false),
+    Config = proplists:get_value(config, Ops, []),
+    Cleanup = proplists:get_value(cleanup_fun, Ops, cleanup_fun(Backend)),
+    TestingTime = proplists:get_value(testing_time, Ops, ?TEST_SECONDS),
+    test2(property(Backend, Volatile, Config, Cleanup, TestingTime)).
+
+cleanup_fun(Backend) ->
+    fun(BeState,_Olds) -> catch(Backend:stop(BeState)) end.
+
+check2(Prop) ->
+    eqc:check(Prop).
 
 test2(Prop) ->
     eqc:quickcheck(Prop).
@@ -173,7 +190,7 @@ val() ->
     %% differ since at this point in the processing
     %% pipeline the information has already been
     %% extracted.
-    term_to_binary(riak_object:new(<<"b1">>, <<"k1">>, <<"v1">>)).
+    riak_object:to_binary(v1, riak_object:new(<<"b1">>, <<"k1">>, <<"v1">>)).
 
 g_opts() ->
     frequency([{5, [async_fold]}, {2, []}]).
@@ -448,12 +465,20 @@ running(#qcst{backend=Backend,
      {history, {call, Backend, get, [bucket(Q), key(Q), State]}},
      {history, {call, ?MODULE, delete, [bucket(Q), key(Q), Backend, State, Indexes]}},
      {history, {call, Backend, fold_buckets, [fold_buckets_fun(), get_fold_buffer(), g_opts(), State]}},
+%%     {history, {call, ?MODULE, fold_keys, [fold_keys_fun(), get_fold_buffer(), fold_keys_opts(Q), Backend, State]}},
      {history, {call, Backend, fold_keys, [fold_keys_fun(), get_fold_buffer(), fold_keys_opts(Q), State]}},
      {history, {call, Backend, fold_objects, [fold_objects_fun(), get_fold_buffer(), g_opts(), State]}},
      {history, {call, Backend, is_empty, [State]}},
      {stopped, {call, ?MODULE, drop, [Backend, State]}},
      {stopped, {call, Backend, stop, [State]}}
     ].
+
+fold_keys(FoldKeysFun, FoldBuffer, {index, Bucket, Query}, Backend, State) ->
+    UpQuery = riak_index:upgrade_query(Query),
+    Backend:fold_keys(FoldKeysFun, FoldBuffer, {index, Bucket, UpQuery}, State);
+fold_keys(FoldKeysFun, FoldBuffer, Q, Backend, State) ->
+    Backend:fold_keys(FoldKeysFun, FoldBuffer, Q, State).
+
 
 dynamic_precondition(_From,_To,#qcst{backend=Backend},{call, _M, fold_keys, [_FoldFun, _Acc, [{index, Bucket, _}], BeState]}) ->
     {ok, Capabilities} = Backend:capabilities(Bucket, BeState),
