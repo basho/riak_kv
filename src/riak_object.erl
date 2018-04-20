@@ -29,7 +29,7 @@
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
 
--export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0]).
+-export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0, index_value/0]).
 
 -type key() :: binary().
 -type bucket() :: binary() | {binary(), binary()}.
@@ -62,7 +62,10 @@
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
           updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
-          updatevalue :: term()
+          updatevalue :: term(),
+          is_proxy = false :: boolean(),
+          proxy :: tuple(),
+          size :: integer()
          }).
 -opaque riak_object() :: #r_object{}.
 
@@ -80,11 +83,11 @@
                          %% Shanley's(11) + Joe's(42)
 -define(EMPTY_VTAG_BIN, <<"e">>).
 
--export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2]).
+-export([new/3, new/4, ensure_robject/1, ancestors/1, reconcile/2, equal/2, remove_dominated/1]).
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
--export([hash/1, hash/2, approximate_size/2]).
+-export([hash/1, hash/2, approximate_size/2, proxy_size/1]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
@@ -95,9 +98,14 @@
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
--export([is_robject/1]).
--export([update_last_modified/1, update_last_modified/2]).
+-export([is_robject/1, is_head/1]).
+-export([update_last_modified/1, update_last_modified/2, get_last_modified/1]).
 -export([strict_descendant/2]).
+-export([find_bestobject/1]).
+
+-ifdef(TEST).
+-export([convert_object_to_headonly/3]). % Used in unit testing of get_core
+-endif.
 
 %% @doc Constructor for new riak objects.
 -spec new(Bucket::bucket(), Key::key(), Value::value()) -> riak_object().
@@ -214,13 +222,84 @@ reconcile(Objects, AllowMultiple) ->
             RObj
     end.
 
-%% @private remove all Objects from the list that are causally
+%% @doc remove all Objects from the list that are causally
 %% dominated by any other object in the list. Only concurrent /
 %% conflicting objects will remain.
 remove_dominated(Objects) ->
     All = sets:from_list(Objects),
     Del = sets:from_list(ancestors(Objects)),
     sets:to_list(sets:subtract(All, Del)).
+
+%% @doc Take a list of {Idx, {ok, Object}} tuples that have been the result
+%% of HEAD requests or GET requests.
+%%
+%% Works out the best answers and returns {IdxObjList, IdxHeadList} where the
+%% IdxHeadList is a list of indexes and headers that may need to be updated to
+%% objects before the merge can be complete, and the IdxObjList is a list of
+%% vnode indexes and objects which are ready to be merged
+find_bestobject(FetchedItems) ->
+    % Find the best object.  Normally we expect this to be a score-draw in
+    % terms of vector clock, so in this case 'best' means an object not a
+    % head as the get-response can be used immediately.  Then the best is
+    % the first received (the fastest responder) - as if there is a need
+    % for a follow-up fetch, we should prefer the vnode that had responded
+    % fastest to he HEAD (this may be local).
+    PredHeadFun = fun({_Idx, Rsp}) -> not is_head(Rsp) end,
+    {Objects, Heads} = lists:partition(PredHeadFun, FetchedItems),
+    FoldList = Heads ++ Objects,
+    {TailIdx, {ok, TailObject}} = lists:last(FoldList),
+
+    FoldFun =
+        fun({Idx, {ok, Obj}}, {IsSibling, BestAnswer}) ->
+            case IsSibling of
+                true ->
+                    % If there are siblings could be smart about only fetching
+                    % conflicting objects. Will be lazy, though - fetch and
+                    % merge everything if it is a sibling
+                    {true, [{Idx, {ok, Obj}}|BestAnswer]};
+                false ->
+                    {_BestIdx, {ok, BestObj}} = BestAnswer,
+                    case vclock:descends(vclock(BestObj), vclock(Obj)) of
+                        true ->
+                            {false, BestAnswer};
+                        false ->
+                            case vclock:descends(vclock(Obj), vclock(BestObj)) of
+                                true ->
+                                    {false, {Idx, {ok, Obj}}};
+                                false ->
+                                    {true, [{Idx, {ok, Obj}}|[BestAnswer]]}
+                            end
+                    end
+            end
+        end,
+
+    case lists:foldr(FoldFun,
+                        {false, {TailIdx, {ok, TailObject}}},
+                        FoldList) of
+        {true, IdxObjList} ->
+            lists:partition(PredHeadFun, IdxObjList);
+        {false, {BestIdx, BestObj}} ->
+            case is_head(BestObj) of
+                false ->
+                    {[{BestIdx, BestObj}], []};
+                true ->
+                    {[], [{BestIdx, BestObj}]}
+            end
+    end.
+
+
+%% @private Check if an object is simply a head response
+
+is_head({ok, Obj}) ->
+    C0 = lists:nth(1, Obj#r_object.contents),
+    case C0#r_content.value of
+        head_only ->
+            true;
+        _ ->
+            false
+    end;
+is_head(Obj) ->
+    is_head({ok, Obj}).
 
 %% @private pairwise merge the objects in the list so that a single,
 %% merged riak_object remains that contains all sibling values. Only
@@ -462,11 +541,11 @@ fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
                     %% CRDT binary start tag. Either way, gather the
                     %% error for later logging.
                     MergeAcc#merge_acc{error=[E | Error]};
-                {CRDT, [{Dict, Value}], []} ->
+                {CRDT, [{Dict, Value}], E} when is_list(E)->
                     %% The sibling value was not a CRDT, but a
                     %% (legacy?) un-dotted user opaque value. Add it
                     %% to the list of values to keep.
-                    MergeAcc#merge_acc{keep=[C0|Keep]};
+                    MergeAcc#merge_acc{keep=[C0|Keep], error=E ++ Error};
                 {CRDT2, [], []} ->
                     %% The sibling was a CRDT and the CRDT accumulator
                     %% has been updated.
@@ -625,17 +704,36 @@ get_metadatas(#r_object{contents=Contents}) ->
     [Content#r_content.metadata || Content <- Contents].
 
 %% @doc  Return a list of object values for this riak_object.
+%%       If the object is a proxy will need to fetch the actual object
 -spec get_values(riak_object()) -> [value()].
-get_values(#r_object{contents=C}) -> [Content#r_content.value || Content <- C].
+get_values(RObj=#r_object{contents=C, is_proxy = IsP, proxy = P}) ->
+    case IsP of
+        true ->
+            {FetchFun, Pid, FetchKey} = P,
+            ObjBin = FetchFun(Pid, FetchKey),
+            R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+            get_values(R0#r_object{is_proxy = false});
+        false ->
+            [Content#r_content.value || Content <- C]
+    end.
 
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       value.  This function will fail with a badmatch error if the object
 %%       has siblings (value_count() > 1).
+%%       If the object is a proxy will need to fetch the actual object.
 -spec get_value(riak_object()) -> value().
-get_value(Object=#r_object{}) ->
+get_value(RObj=#r_object{is_proxy = IsP, proxy = P}) ->
     % this blows up intentionally (badmatch) if more than one content value!
-    [{_M,Value}] = get_contents(Object),
-    Value.
+    case IsP of
+        true ->
+            {FetchFun, Pid, FetchKey} = P,
+            ObjBin = FetchFun(Pid, FetchKey),
+            R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+            get_values(R0#r_object{is_proxy = false});
+        false ->
+            [{_M,Value}] = get_contents(RObj),
+            Value
+    end.
 
 %% @doc calculates the canonical hash of a riak object
 %%      Old API which uses the version .
@@ -659,9 +757,15 @@ hash(Obj=#r_object{}, _Version) ->
 %% @private return the legacy full object hash of the riak_object
 -spec legacy_hash(riak_object()) -> binary().
 legacy_hash(Obj=#r_object{}) ->
-    UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
-    Hash = erlang:phash2(to_binary(v0, UpdObj)),
-    term_to_binary(Hash).
+    if 
+        Obj#r_object.is_proxy == false ->
+            % Blow up if we ever try performing a legacy hash on a proxy
+            % object.  We could fetch the object here - but for now, want
+            % to confirm we don't reach this point in this state.
+            UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
+            Hash = erlang:phash2(to_binary(v0, UpdObj)),
+            term_to_binary(Hash)
+    end.
 
 %% @private return the hash of the vclock
 -spec vclock_hash(riak_object()) -> binary().
@@ -919,6 +1023,17 @@ approximate_size(Vsn, Obj=#r_object{bucket=Bucket,key=Key,vclock=VClock}) ->
     Contents = get_contents(Obj),
     size(Bucket) + size(Key) + size(term_to_binary(VClock)) + contents_size(Vsn, Contents).
 
+%% @doc Get the actual size of the object if it is a proxy object, otherwise
+%% return 0
+-spec proxy_size(riak_object()) -> integer().
+proxy_size(Obj) ->
+    case Obj#r_object.size of
+        undefined ->
+            0;
+        S ->
+            S
+    end.
+
 contents_size(Vsn, Contents) ->
     lists:sum([metadata_size(Vsn, MD) + value_size(Val) || {MD, Val} <- Contents]).
 
@@ -958,10 +1073,17 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
     riak_object() | {error, 'bad_object_format'}.
-from_binary(_B,_K,<<131, _Rest/binary>>=ObjTerm) ->
-    binary_to_term(ObjTerm);
-
-from_binary(B,K,<<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
+from_binary(B, K, <<131, _Rest/binary>>=ObjTerm) ->
+    case binary_to_term(ObjTerm) of
+        {proxy_object, HeadBin, ObjSize, Fetcher} ->
+            RObj = from_binary(B, K, HeadBin),
+            RObj#r_object{is_proxy = true,
+                            proxy = Fetcher,
+                            size = ObjSize};
+        T ->
+            T
+    end;
+from_binary(B, K, <<?MAGIC:8/integer, 1:8/integer, Rest/binary>>=_ObjBin) ->
     %% Version 1 of binary riak object
     case Rest of
         <<VclockLen:32/integer, VclockBin:VclockLen/binary, SibCount:32/integer, SibsBin/binary>> ->
@@ -995,6 +1117,8 @@ sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, Met
     MD = dict:from_list(MDList),
     {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
 
+val_encoding_meta(<<>>, MDList) ->
+    MDList;
 val_encoding_meta(<<0, _Rest/binary>>, MDList) ->
     MDList;
 val_encoding_meta(<<1, _Rest/binary>>, MDList) ->
@@ -1106,6 +1230,8 @@ determine_binary_type(Val, Meta) when is_binary(Val) ->
 determine_binary_type(_Val, Meta) ->
     {0, Meta}.
 
+decode_maybe_binary(<<>>) ->
+    head_only;
 decode_maybe_binary(<<1, Bin/binary>>) ->
     Bin;
 decode_maybe_binary(<<0, Bin/binary>>) ->
@@ -1149,6 +1275,15 @@ update_last_modified(RObj, TS) ->
     NewMD = dict:store(?MD_VTAG, riak_kv_util:make_vtag(TS),
                        dict:store(?MD_LASTMOD, TS, MD0)),
     riak_object:update_metadata(RObj, NewMD).
+
+%% Get the last modified date from the metadata
+get_last_modified(MD) ->
+    case dict:find(?MD_LASTMOD, MD) of
+        error ->
+            {0, 0, 0};
+        {ok, TS} ->
+            TS
+    end.
 
 %%
 %% Helpers for managing vector clock encoding and related capability:
@@ -1250,6 +1385,120 @@ get_binary_type_tag_and_metadata_from_full_binary(Binary) ->
     <<FirstBinaryByte:8, _Rest/binary>> = ValBin,
     {FirstBinaryByte, dict:from_list(meta_of_binary(MetaBin, []))}.
 
+
+convert_object_to_headonly(B, K, Object) ->
+    % Use in unit tests to simulate an object returned as a result of a HEAD
+    % request
+    Binary = to_binary(v1, Object),
+    <<?MAGIC:8/integer,
+        ?V1_VERS:8/integer,
+        VclockLen:32/integer,
+        VclockBin:VclockLen/binary,
+        SibCount:32/integer, SibsBin/binary>> = Binary,
+    <<ValLen:32/integer,
+        _ValBin:ValLen/binary,
+        MetaLen:32/integer,
+        MetaBinRest:MetaLen/binary>> = SibsBin,
+    SibsBin0 = <<0:32/integer,
+                    MetaLen:32/integer,
+                    MetaBinRest:MetaLen/binary>>,
+    HeadBin = <<?MAGIC:8/integer,
+                ?V1_VERS:8/integer,
+                VclockLen:32/integer,
+                VclockBin:VclockLen/binary,
+                SibCount:32/integer, SibsBin0/binary>>,
+    from_binary(B, K, HeadBin).
+
+val_decoding_headresponse_test() ->
+    % An empty binary as a value results in the content value being marked as
+    % head_only
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some value">>,
+    InObject = riak_object:new(B, K, V,
+                                dict:from_list([{?MD_VAL_ENCODING, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+    OutObject = convert_object_to_headonly(B, K, InObject),
+    C0 = lists:nth(1, OutObject#r_object.contents),
+    ?assertMatch(head_only, C0#r_content.value).
+
+find_bestobject_equal_test() ->
+    % three identical objects, but one is head_only
+    B = <<"buckets are binaries">>,
+    K = <<"keys are binaries">>,
+    V = <<"Some value">>,
+    InObject = riak_object:new(B, K, V,
+                                dict:from_list([{?MD_VAL_ENCODING, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+    Obj1 = InObject,
+    Obj2 = InObject,
+    Obj3 = convert_object_to_headonly(B, K, InObject),
+    ?assertMatch(true, is_head({ok, Obj3})),
+    ?assertMatch(false, is_head({ok, Obj1})),
+    % The response is:
+    % {[{Idx, {ok, ObjG}}], [{Idx, {ok, ObjH}}] where heads need to be fetched
+    % and gets are ready to be merged
+    ?assertMatch({[{1, {ok, Obj1}}], []},
+                    find_bestobject([{3, {ok, Obj3}},
+                                        {2, {ok, Obj2}},
+                                        {1, {ok, Obj1}}])),
+    % Shuffle and get same result
+    ?assertMatch({[{2, {ok, Obj2}}], []},
+                    find_bestobject([{1, {ok, Obj1}},
+                                        {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}}])).
+
+find_bestobject_ancestor() ->
+    % one object is behind, and one of the dominant objects is head_only
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+    {Obj1, Obj2} = ancestor(),
+    Obj3 = convert_object_to_headonly(B, K, Obj2),
+    ?assertMatch({[{2, {ok, Obj2}}], []},
+                    find_bestobject([{3, {ok, Obj3}},
+                                        {2, {ok, Obj2}},
+                                        {1, {ok, Obj1}}])),
+    % Change ordering - still works
+    ?assertMatch({[{2, {ok, Obj2}}], []},
+                    find_bestobject([{2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {1, {ok, Obj1}}])).
+
+find_bestobject_reconcile() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+    {Obj1, UpdO} = update_test(),
+    Obj2 = riak_object:increment_vclock(UpdO, one_pid),
+    Obj3 = riak_object:increment_vclock(UpdO, alt_pid),
+    Obj4 = convert_object_to_headonly(B, K, Obj2),
+    Obj5 = convert_object_to_headonly(B, K, Obj3),
+    ?assertMatch({[{1, {ok, Obj1}},
+                        {2, {ok, Obj2}},
+                        {3, {ok, Obj3}}],
+                    [{4, {ok, Obj4}}]},
+                    find_bestobject([{1, {ok, Obj1}},
+                                        {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {4, {ok, Obj4}}])),
+    % due to change in ordering knows that 1 is dominated
+    ?assertMatch({[{2, {ok, Obj2}},
+                        {3, {ok, Obj3}}],
+                    [{4, {ok, Obj4}}]},
+                    find_bestobject([{4, {ok, Obj4}},
+                                        {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {1, {ok, Obj1}}])),
+    ?assertMatch({[{2, {ok, Obj2}},
+                        {3, {ok, Obj3}}],
+                    [{4, {ok, Obj4}},
+                        {5, {ok, Obj5}}]},
+                    find_bestobject([{4, {ok, Obj4}},
+                                        {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {5, {ok, Obj5}},
+                                        {1, {ok, Obj1}}])).
+
+
 update_test() ->
     O = object_test(),
     V2 = <<"testvalue2">>,
@@ -1284,7 +1533,9 @@ bucket_prop_needers_test_() ->
       {"Dotted values reconcile", fun dotted_values_reconcile/0},
       {"Weird Clocks, Weird Dots", fun weird_clocks_weird_dots/0},
       {"Mixed Merge", fun mixed_merge/0},
-      {"Mixed Merge 2", fun mixed_merge2/0}]
+      {"Mixed Merge 2", fun mixed_merge2/0},
+        {"Find Object Ancestor", fun find_bestobject_ancestor/0},
+        {"Find Object Reconcile", fun find_bestobject_reconcile/0}]
     }.
 
 ancestor() ->
@@ -1597,5 +1848,64 @@ verify_contents([], []) ->
 verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
     ?assertMatch({Actor, {Count, _}}, dict:fetch(?DOT, MD)),
     verify_contents(Rest, Rest2).
+
+
+head_binary(VC1) ->
+    MetaBin =
+        <<0:32/integer,
+            0:32/integer,
+            0:32/integer,
+            0:8/integer,
+            <<1>>:1/binary>>,
+
+    MetaSize = byte_size(MetaBin),
+    SibsBin =
+        <<0:32/integer, MetaSize:32/integer, MetaBin/binary,
+            0:32/integer, MetaSize:32/integer, MetaBin/binary>>,
+    VclockLen = byte_size(VC1),
+
+    RObjBin =
+        <<?MAGIC:8/integer, ?V1_VERS:8/integer,
+            VclockLen:32/integer, VC1/binary,
+            2:32/integer, SibsBin/binary>>,
+    RObjBin.
+
+
+from_binary_headonly_test() ->
+    % Confirm that from_binary works as expected for a response to a head
+    % request, which will have no r_content.value
+    Bucket = <<"B">>,
+    Key = <<"K1">>,
+    VC1 = term_to_binary(vclock:fresh(a, 3)),
+    RObjBin = head_binary(VC1),
+
+    RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+    ?assertMatch(true, is_robject(RObj)),
+    ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObj))),
+    ?assertMatch(true, is_head(RObj)).
+
+
+fetch_value(clone, "JournalKey") ->
+    term_to_binary(#r_object{contents = [#r_content{value = "V1"}]}).
+
+from_binary_foldheads_test() ->
+    % the response to fold_heads request will be a head binary, but
+    % wrapped up in a tuple
+    Bucket = <<"B">>,
+    Key = <<"K1">>,
+    VC1 = term_to_binary(vclock:fresh(a, 3)),
+    MDBin = head_binary(VC1),
+    HeadObj =
+        term_to_binary(
+            {proxy_object, MDBin, 100,
+                {fun fetch_value/2, clone, "JournalKey"}}),
+
+    RObj = riak_object:from_binary(Bucket, Key, HeadObj),
+    ?assertMatch(true, is_robject(RObj)),
+    ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObj))),
+    ?assertMatch(true, is_head(RObj)),
+    ?assertMatch(["V1"], get_value(RObj)).
+
+
 
 -endif.

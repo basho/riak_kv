@@ -13,11 +13,9 @@ riak_core_pb.erl:163: The pattern 'true' can never match the type 'false'
 riak_core_pb.erl:175: The pattern {_, _, Dict} can never match the type 'false'
 riak_core_pb.erl:193: The pattern 'true' can never match the type 'false'
 riak_core_pb.erl:202: The pattern <Binary, 'string'> can never match the type <_,'bytes'>
-riak_core_pb.erl:222: The pattern <Types, [{Fnum, Bytes} | Tail], Acc> can never match the type <_,[],[{_,_}]>
-riak_kv_bitcask_backend.erl:24: Callback info about the riak_kv_backend behaviour is not available
+riak_core_pb.erl:222: The pattern <Types, [{FNum, Bytes} | Tail], Acc> can never match the type <_,[],[{_,_}]>
 riak_kv_buckets_fsm.erl:27: Callback info about the riak_core_coverage_fsm behaviour is not available
 riak_kv_console.erl:154: The pattern {'error', 'legacy_mode'} can never match the type {'error','is_up' | 'not_member' | 'only_member'}
-riak_kv_eleveldb_backend.erl:24: Callback info about the riak_kv_backend behaviour is not available
 riak_kv_gcounter.erl:64: Invalid type specification for function riak_kv_gcounter:new/2. The success typing is (_,pos_integer()) -> {'ok',riak_kv_gcounter:gcounter()}
 riak_kv_gcounter.erl:75: Invalid type specification for function riak_kv_gcounter:update/3. The success typing is ('increment' | {'increment',pos_integer()},_,riak_kv_gcounter:gcounter()) -> {'ok',riak_kv_gcounter:gcounter()}
 riak_kv_gcounter.erl:85: Function merge/2 has no local return
@@ -26,8 +24,6 @@ riak_kv_gcounter.erl:99: The call riak_kv_gcounter:merge(Rest::any(),RestOfClock
 riak_kv_gcounter.erl:101: The call riak_kv_gcounter:merge(Rest::any(),Clock2::[tuple()],[{_,_},...]) does not have opaque terms as 2nd and 3rd arguments
 riak_kv_index_fsm.erl:38: Callback info about the riak_core_coverage_fsm behaviour is not available
 riak_kv_keys_fsm.erl:38: Callback info about the riak_core_coverage_fsm behaviour is not available
-riak_kv_memory_backend.erl:40: Callback info about the riak_kv_backend behaviour is not available
-riak_kv_multi_backend.erl:24: Callback info about the riak_kv_backend behaviour is not available
 riak_kv_pipe_index.erl:164: Function queue_existing_pipe/4 has no local return
 riak_kv_pipe_listkeys.erl:159: Function queue_existing_pipe/3 has no local return
 riak_kv_pncounter.erl:100: Function merge/2 has no local return
@@ -53,6 +49,7 @@ Unknown functions:
   cluster_info:register_app/1
   dtrace:init/0
   yz_kv:index/3
+  yz_kv:index_binary/5
   yz_kv:is_search_enabled_for_bucket/1
   yz_kv:should_handoff/1
 Unknown types:

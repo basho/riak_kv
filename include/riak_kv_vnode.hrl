@@ -23,6 +23,10 @@
           bkey :: {binary(), binary()},
           req_id :: non_neg_integer()}).
 
+-record(riak_kv_head_req_v1, {
+          bkey :: {binary(), binary()},
+          req_id :: non_neg_integer()}).
+
 -record(riak_kv_listkeys_req_v2, {
           bucket :: binary()|'_'|tuple(),
           req_id :: non_neg_integer(),
@@ -71,6 +75,7 @@
 -define(KV_W1C_PUT_REQ, #riak_kv_w1c_put_req_v1).
 -define(KV_W1C_PUT_REPLY, #riak_kv_w1c_put_reply_v1).
 -define(KV_GET_REQ, #riak_kv_get_req_v1).
+-define(KV_HEAD_REQ, #riak_kv_head_req_v1).
 -define(KV_LISTBUCKETS_REQ, #riak_kv_listbuckets_req_v1).
 -define(KV_LISTKEYS_REQ, #riak_kv_listkeys_req_v4).
 -define(KV_INDEX_REQ, #riak_kv_index_req_v2).

@@ -215,9 +215,9 @@ is_field_match(Key, Suffix) when size(Suffix) < size(Key) ->
     %% suffix.
     Offset = size(Key) - size(Suffix),
     case Key of
-        <<_:Offset/binary, Suffix/binary>> -> 
+        <<_:Offset/binary, Suffix/binary>> ->
             true;
-        _ -> 
+        _ ->
             false
     end;
 is_field_match(_, _) ->
@@ -670,7 +670,7 @@ parse_object_hook_test() ->
         end,
 
     ?assertMatch(
-       {r_object, _, _, _, _, _, _},
+       {r_object, _, _, _, _, _, _, false, undefined, undefined},
        F([
           {<<"field_bin">>, <<"A">>},
           {<<"field_int">>, <<"1">>}

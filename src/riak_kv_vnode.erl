@@ -28,6 +28,8 @@
          start_vnodes/1,
          get/3,
          get/4,
+         head/3,
+         head/4,
          del/3,
          put/6,
          local_get/2,
@@ -161,6 +163,7 @@
 -type index_value() :: integer() | binary().
 -type index() :: non_neg_integer().
 -type state() :: #state{}.
+-type index_query() :: undefined | ?KV_INDEX_Q{}.
 -type vnodeid() :: binary().
 -type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
 
@@ -202,7 +205,8 @@
                   prunetime :: undefined| non_neg_integer(),
                   readrepair=false :: boolean(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
-                  crdt_op = undefined :: undefined | term() %% if set this is a crdt operation
+                  crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
+                  hash_ops = no_hash_ops
                  }).
 
 -spec maybe_create_hashtrees(state()) -> state().
@@ -264,6 +268,19 @@ get(Preflist, BKey, ReqId) ->
 get(Preflist, BKey, ReqId, Sender) ->
     Req = ?KV_GET_REQ{bkey=sanitize_bkey(BKey),
                       req_id=ReqId},
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   Sender,
+                                   riak_kv_vnode_master).
+
+head(Preflist, BKey, ReqId) ->
+    %% Assuming this function is called from a FSM process
+    %% so self() == FSM pid
+    head(Preflist, BKey, ReqId, {fsm, undefined, self()}).
+
+head(Preflist, BKey, ReqId, Sender) ->
+    Req = ?KV_HEAD_REQ{bkey=sanitize_bkey(BKey),
+                        req_id=ReqId},
     riak_core_vnode_master:command(Preflist,
                                    Req,
                                    Sender,
@@ -540,6 +557,8 @@ handle_overload_command(?KV_PUT_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {fail, Idx, overload});
 handle_overload_command(?KV_GET_REQ{req_id=ReqID}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
+handle_overload_command(?KV_HEAD_REQ{req_id=ReqID}, Sender, Idx) ->
+    riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(?KV_VNODE_STATUS_REQ{}, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {vnode_status, Idx, [{error, overload}]});
 handle_overload_command(?KV_W1C_PUT_REQ{type=Type}, Sender, _Idx) ->
@@ -576,6 +595,18 @@ handle_command(?KV_PUT_REQ{bkey=BKey,
 
 handle_command(?KV_GET_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
     do_get(Sender, BKey, ReqId, State);
+
+handle_command(?KV_HEAD_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
+    Mod = State#state.mod,
+        ModState = State#state.modstate,
+        {ok, Capabilities} = Mod:capabilities(ModState),
+        case maybe_support_head_requests(Capabilities) of
+            true ->
+                do_head(Sender, BKey, ReqId, State);
+            _ ->
+                do_get(Sender, BKey, ReqId, State)
+        end;
+
 handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{async_folding=AsyncFolding,
                             key_buf_size=BufferSize,
@@ -942,16 +973,16 @@ handle_coverage(#riak_kv_listkeys_req_v3{bucket=Bucket,
     %% v3 == no backpressure
     ResultFun = result_fun(Bucket, Sender),
     Opts = [{bucket, Bucket}],
-    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
-                            FilterVNodes, Sender, Opts, State);
+    handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
+                                FilterVNodes, Sender, Opts, State);
 handle_coverage(?KV_LISTKEYS_REQ{bucket=Bucket,
                                  item_filter=ItemFilter},
                 FilterVNodes, Sender, State) ->
     %% v4 == ack-based backpressure
     ResultFun = result_fun_ack(Bucket, Sender),
     Opts = [{bucket, Bucket}],
-    handle_coverage_keyfold(Bucket, ItemFilter, ResultFun,
-                            FilterVNodes, Sender, Opts, State);
+    handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
+                             FilterVNodes, Sender, Opts, State);
 handle_coverage(#riak_kv_index_req_v1{bucket=Bucket,
                               item_filter=ItemFilter,
                               qry=Query},
@@ -967,7 +998,7 @@ handle_coverage(?KV_INDEX_REQ{bucket=Bucket,
     handle_coverage_index(Bucket, ItemFilter, Query,
                           FilterVNodes, Sender, State, fun result_fun_ack/2).
 
--spec prepare_index_query(?KV_INDEX_Q{}) -> ?KV_INDEX_Q{}.
+-spec prepare_index_query(index_query()) -> index_query().
 prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
         RE =/= undefined ->
     {ok, CompiledRE} = re:compile(RE),
@@ -1014,13 +1045,25 @@ handle_coverage_index(Bucket, ItemFilter, Query,
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end.
 
+%% @doc
 %% Convenience for handling both v3 and v4 coverage-based key fold operations
-handle_coverage_keyfold(Bucket, ItemFilter, Query,
-                      FilterVNodes, Sender, State,
-                      ResultFunFun) ->
-    handle_coverage_fold(fold_keys, Bucket, ItemFilter, Query,
-                            FilterVNodes, Sender, State, ResultFunFun).
+%% This will request that a snapshot is made prior to the fold, so that if the
+%% fold is queued the reuslts will be of equivalent consistency to an unqueued
+%% query.
+%%
+%% Should the backend not support the snap_prefold capability, then behaviour 
+%% will revert to standard async (and the core node_worker_pool will not be 
+%% used).  Not supporting snap_prefold maintains legacy behaviour.
+handle_coverage_snapkeyfold(Bucket, ItemFilter, ResultFun,
+                      FilterVNodes, Sender, Opts,
+                      State) ->
+    Opts0 = [request_snap_prefold|Opts],
+    handle_coverage_fold(fold_keys, Bucket, ItemFilter, ResultFun,
+                            FilterVNodes, Sender, Opts0, State).
 
+%% @doc
+%% This doesn't handle all coverage folds - just 2i queries and list keys
+%%
 %% Until a bit of a refactor can occur to better abstract
 %% index operations, allow the ModFun for folding to be declared
 %% to support index operations that can return objects
@@ -1033,25 +1076,37 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
                                      modstate=ModState}) ->
     %% Construct the filter function
     FilterVNode = proplists:get_value(Index, FilterVNodes),
-    Filter = riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    Filter = 
+        riak_kv_coverage_filter:build_filter(Bucket, ItemFilter, FilterVNode),
+    
+    % Use a buffer so each result isn't sent back individually
     BufferMod = riak_kv_fold_buffer,
     BufferSize = proplists:get_value(buffer_size, Opts0, DefaultBufSz),
     Buffer = BufferMod:new(BufferSize, ResultFun),
+    
+    % Build the fold and finish functions
     Extras = fold_extras_keys(Index, Bucket),
     FoldFun = fold_fun(keys, BufferMod, Filter, Extras),
     FinishFun = finish_fun(BufferMod, Sender),
+    
+    % Understand how the fold should be run - async, sync or queued
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-    AsyncBackend = lists:member(async_fold, Capabilities),
-    Opts = case AsyncFolding andalso AsyncBackend of
-               true ->
-                   [async_fold | Opts0];
-               false ->
-                   Opts0
-           end,
+    OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
+    SnapFolding = lists:member(request_snap_prefold, OptsAF) and AsyncFolding,
+    Opts = maybe_enable_snap_prefold(SnapFolding, Capabilities, OptsAF),
+    
+    % Make the fold request to the vnode - why is this called list?
+    % Perhaps this should be backend_fold/7
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
+            % This work should be sent to the vnode_worker_pool
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
+        {queue, DeferrableWork} ->
+            % This work should be sent to the core node_worker_pool
+            {queue, {fold, DeferrableWork, FinishFun}, Sender, State};
         _ ->
+            % This work has already been completed by the vnode, which should
+            % have already sent the results using FinishFun
             {noreply, State}
     end.
 
@@ -1515,17 +1570,35 @@ prepare_read_before_write_put(#state{mod = Mod,
                                      modstate = ModState,
                                      md_cache = MDCache}=State,
                               #putargs{bkey={Bucket, Key}=BKey,
-                                       robj=RObj}=PutArgs,
+                                       robj=RObj,
+                                       coord=Coord}=PutArgs,
                               IndexBackend, IsSearchable) ->
-    {CacheClock, CacheData} = maybe_check_md_cache(MDCache, BKey),
-
-    RequiresGet = determine_requires_get(CacheClock, RObj, IsSearchable),
-    GetReply = get_old_object_or_fake(RequiresGet, Bucket, Key, Mod, ModState, CacheClock),
+    {CacheClock, CacheData} = maybefetch_clock_and_indexdata(MDCache,
+                                                                BKey,
+                                                                Mod,
+                                                                ModState,
+                                                                Coord,
+                                                                IsSearchable),
+    {GetReply, RequiresGet} =
+        case CacheClock of
+            not_found ->
+                {not_found, false};
+            _ ->
+                ReqGet = determine_requires_get(CacheClock,
+                                                    RObj,
+                                                    IsSearchable),
+                {get_old_object_or_fake(ReqGet,
+                                            Bucket, Key,
+                                            Mod, ModState,
+                                            CacheClock),
+                    ReqGet}
+        end,
     case GetReply of
         not_found ->
             prepare_put_new_object(State, PutArgs, IndexBackend);
         {ok, OldObj} ->
-            prepare_put_existing_object(State, PutArgs, OldObj, IndexBackend, CacheData, RequiresGet)
+            prepare_put_existing_object(State, PutArgs, OldObj,
+                                        IndexBackend, CacheData, RequiresGet)
     end.
 
 prepare_put_existing_object(#state{idx =Idx} = State,
@@ -1566,8 +1639,9 @@ get_index_specs(_IndexedBackend=true, CacheData, RequiresGet, NewObj, OldObj) ->
          RequiresGet == false of
         true ->
             NewData = riak_object:index_data(NewObj),
-            riak_object:diff_index_data(NewData,
-                                        CacheData);
+            % Note diff_index_data and diff_index_specs take inputs in reverse!
+            riak_object:diff_index_data(CacheData,
+                                        NewData);
         false ->
             riak_object:diff_index_specs(NewObj,
                                          OldObj)
@@ -1613,10 +1687,11 @@ determine_requires_get(CacheClock, RObj, IsSearchable) ->
         Clock ->
             %% We need to perform a local get, to merge contents,
             %% if the local object has events unseen by the
-            %% incoming object. If the incoming object descends
+            %% incoming object. If the incoming object dominates
             %% the cache (i.e. has seen all its events) no need to
             %% do a local get and merge, just overwrite.
-            not riak_object:vclock_descends(RObj, Clock) orelse IsSearchable
+            not vclock:dominates(riak_object:vclock(RObj), Clock)
+                orelse IsSearchable
     end,
     RequiresGet.
 
@@ -1670,8 +1745,7 @@ perform_put({true, {_Obj, _OldObj}=Objects},
       false ->
         MaxCheckFlag = do_max_check
     end,
-    {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State),
-    {Reply, State2}.
+    actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State).
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
     actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, State).
@@ -1714,7 +1788,8 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             %% since it is assumed capabilities have been properly set
             %% to the desired version, to reformat, all we need to do
             %% is submit a new write
-            PutArgs = #putargs{returnbody=false,
+            PutArgs = #putargs{hash_ops = update,
+                               returnbody=false,
                                bkey=BKey,
                                reqid=undefined,
                                index_specs=[]},
@@ -1738,7 +1813,14 @@ enforce_allow_mult(Obj, BProps) ->
                 [_] -> Obj;
                 Mult ->
                     {MD, V} = select_newest_content(Mult),
-                    riak_object:set_contents(Obj, [{MD, V}])
+                    MergedObj = riak_object:set_contents(Obj, [{MD, V}]),
+                    case riak_object:is_head(MergedObj) of
+                        true ->
+                          lager:error("Merge resulted in head_only object"),
+                          MergedObj;
+                        false ->
+                          MergedObj
+                    end
             end
     end.
 
@@ -1748,8 +1830,8 @@ select_newest_content(Mult) ->
     hd(lists:sort(
          fun({MD0, _}, {MD1, _}) ->
                  riak_core_util:compare_dates(
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD0),
-                   dict:fetch(<<"X-Riak-Last-Modified">>, MD1))
+                   riak_object:get_last_modified(MD0),
+                   riak_object:get_last_modified(MD1))
          end,
          Mult)).
 
@@ -1785,14 +1867,33 @@ do_get(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
     StartTS = os:timestamp(),
     {Retval, ModState1} = do_get_term(BKey, Mod, ModState),
+    State1 = State#state{modstate=ModState1},
+    {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
+    update_vnode_stats(vnode_get, Idx, StartTS),
+    {reply, {r, Retval1, Idx, ReqID}, State3}.
+
+%% @private
+do_head(_Sender, BKey, ReqID,
+       State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
+    {Retval, ModState1} = do_head_term(BKey, Mod, ModState),
+    State1 = State#state{modstate=ModState1},
+    {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
+    {reply, {r, Retval1, Idx, ReqID}, State3}.
+
+%% @private
+%% Function shared between GET and HEAD requests, so should not assume
+%% presence of conetent value
+%% This was originally separated to help with consistent handling of
+%% expired object (but this is not present now this branch is from 2.1.7 and
+%% not the develop branch which had expiry support)
+handle_returned_value(BKey, Retval, State) ->
     case Retval of
         {ok, Obj} ->
             maybe_cache_object(BKey, Obj, State);
         _ ->
             ok
     end,
-    update_vnode_stats(vnode_get, Idx, StartTS),
-    {reply, {r, Retval, Idx, ReqID}, State#state{modstate=ModState1}}.
+    {Retval, State}.
 
 %% @private
 -spec do_get_term({binary(), binary()}, atom(), tuple()) ->
@@ -1814,6 +1915,27 @@ do_get_term({Bucket, Key}, Mod, ModState) ->
             Err
     end.
 
+  %% @private
+-spec do_head_term({binary(), binary()}, atom(), tuple()) ->
+                         {{ok, riak_object:riak_object()}, tuple()} |
+                         {{error, notfound}, tuple()} |
+                         {{error, any()}, tuple()}.
+do_head_term({Bucket, Key}, Mod, ModState) ->
+    case do_get_object(Bucket, Key, Mod, ModState, fun do_head_binary/4) of
+        {ok, Obj, UpdModState} ->
+            {{ok, Obj}, UpdModState};
+        %% @TODO Eventually it would be good to
+        %% make the use of not_found or notfound
+        %% consistent throughout the code.
+        {error, not_found, UpdModState} ->
+            {{error, notfound}, UpdModState};
+        {error, Reason, UpdModState} ->
+            {{error, Reason}, UpdModState};
+        Err ->
+            Err
+    end.
+
+
 do_get_binary(Bucket, Key, Mod, ModState) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
@@ -1822,13 +1944,19 @@ do_get_binary(Bucket, Key, Mod, ModState) ->
             Mod:get(Bucket, Key, ModState)
     end.
 
+do_head_binary(Bucket, Key, Mod, ModState) ->
+    Mod:head(Bucket, Key, ModState).
+
 do_get_object(Bucket, Key, Mod, ModState) ->
+    do_get_object(Bucket, Key, Mod, ModState, fun do_get_binary/4).
+
+do_get_object(Bucket, Key, Mod, ModState, BinFetchFun) ->
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
             %% Non binary returns do not trigger size warnings
             Mod:get_object(Bucket, Key, false, ModState);
         false ->
-            case do_get_binary(Bucket, Key, Mod, ModState) of
+            case BinFetchFun(Bucket, Key, Mod, ModState) of
                 {ok, ObjBin, _UpdModState} ->
                     BinSize = size(ObjBin),
                     WarnSize = app_helper:get_env(riak_kv, warn_object_size),
@@ -1865,7 +1993,9 @@ list(FoldFun, FinishFun, Mod, ModFun, ModState, Opts, Buffer) ->
         {ok, Acc} ->
             FinishFun(Acc);
         {async, AsyncWork} ->
-            {async, AsyncWork}
+            {async, AsyncWork};
+        {queue, DeferrableWork} ->
+            {queue, DeferrableWork}
     end.
 
 %% @private
@@ -1961,7 +2091,9 @@ result_fun_ack(Bucket, Sender) ->
                 {Monitor, stop_fold} ->
                     erlang:demonitor(Monitor, [flush]),
                     throw(stop_fold);
-                {'DOWN', Monitor, process, _Pid, _Reason} ->
+                {'DOWN', Monitor, process, Pid, Reason} ->
+                    lager:error("Process ~w down for reason ~w", 
+                                    [Pid, Reason]),
                     throw(receiver_down)
             end
     end.
@@ -2032,31 +2164,67 @@ do_delete(BKey, State) ->
 do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
                                                  mod=Mod,
                                                  modstate=ModState}) ->
+    lager:info("Fold request received ReqOpts ~w", [ReqOpts]),
     {ok, Capabilities} = Mod:capabilities(ModState),
     Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
     Opts = maybe_enable_iterator_refresh(Capabilities, Opts0),
-    case Mod:fold_objects(Fun, Acc0, Opts, ModState) of
+    ModFolder = maybe_use_fold_heads(Capabilities, Opts, Mod),
+    case ModFolder(Fun, Acc0, Opts, ModState) of
         {ok, Acc} ->
             {reply, Acc, State};
         {async, Work} ->
             FinishFun =
                 fun(Acc) ->
-                        riak_core_vnode:reply(Sender, Acc)
+                      riak_core_vnode:reply(Sender, Acc)
                 end,
             {async, {fold, Work, FinishFun}, Sender, State};
         ER ->
             {reply, ER, State}
     end.
 
+-spec maybe_use_fold_heads(list(), list(), atom()) -> fun().
 %% @private
+%% If the fold can potential service requests through headers of objects alone,
+%% then the fold_heads function can be used on the backend if it suppports that
+%% capability.
+maybe_use_fold_heads(Capabilities, Opts, Mod) ->
+    case lists:member(fold_heads, Opts) of
+        true ->
+            case lists:member(fold_heads, Capabilities) of
+                true ->
+                    fun Mod:fold_heads/4;
+                false ->
+                    fun Mod:fold_objects/4
+            end;
+        false ->
+            fun Mod:fold_objects/4
+    end.
+
+
+-spec maybe_enable_async_fold(boolean(), list(), list()) -> list().
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
     AsyncBackend = lists:member(async_fold, Capabilities),
-    case AsyncFolding andalso AsyncBackend of
-        true ->
-            [async_fold|Opts];
-        false ->
-            Opts
-    end.
+    options_for_folding_and_backend(Opts,
+									AsyncFolding andalso AsyncBackend,
+									async_fold).
+
+-spec maybe_enable_snap_prefold(boolean(), list(), list()) -> list().
+maybe_enable_snap_prefold(SnapFolding, Capabilities, Opts) ->
+	SnapBackend = lists:member(snap_prefold, Capabilities),
+    options_for_folding_and_backend(Opts,
+									SnapFolding andalso SnapBackend,
+									snap_prefold).
+
+-spec options_for_folding_and_backend(list(),
+										UseAsyncFolding :: boolean(),
+										atom()) -> list().
+options_for_folding_and_backend(Opts, true, async_fold) ->
+    [async_fold | Opts];
+options_for_folding_and_backend(Opts, true, snap_prefold) ->
+    [snap_prefold | Opts];
+options_for_folding_and_backend(Opts, false, _) ->
+    Opts.
+
 
 %% @private
 maybe_enable_iterator_refresh(Capabilities, Opts) ->
@@ -2067,6 +2235,10 @@ maybe_enable_iterator_refresh(Capabilities, Opts) ->
         false ->
             lists:keydelete(iterator_refresh, 1, Opts)
     end.
+
+%% @private
+maybe_support_head_requests(Capabilities) ->
+    lists:member(head, Capabilities).
 
 %% @private
 do_get_vclocks(KeyList,_State=#state{mod=Mod,modstate=ModState}) ->
@@ -2446,6 +2618,48 @@ maybe_check_md_cache(Table, BKey) ->
                     {undefined, undefined}
             end
     end.
+
+%% Function to return the clock of the object to be updated as well as the
+%% index data.  If the clock is dominated by that of the new object then a
+%% backend GET can be avoided.
+%%
+%% The clock can either come from the cache (which it won't do as this is by
+%% default disabled), or from a head request if the Module has the head
+%% capability.
+%%
+%% Should return {undefined, undefined} if there is no cache to be used or
+%% {not_found, undefined} if the lack of object has been confirmed, or
+%% {VClock, IndexData} if the result is found
+maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, Coord, IsSearchable) ->
+    CacheResult = maybe_check_md_cache(Table, BKey),
+    case CacheResult of
+        {undefined, undefined} ->
+            {ok, Capabilities} = Mod:capabilities(ModState),
+            CanGetHead = maybe_support_head_requests(Capabilities)
+                            andalso (not IsSearchable)
+                            andalso (not Coord),
+                % If the bucket is searchable won't use the cache bits anyway
+            case CanGetHead of
+                true ->
+                    {Bucket, Key} = sanitize_bkey(BKey),
+                    case do_head_binary(Bucket, Key, Mod, ModState) of
+                        {error, not_found, _UpdModState} ->
+                            {not_found, undefined};
+                        {ok, OldObjBin, _UpdModState} ->
+                            TheOldObj = riak_object:from_binary(Bucket,
+                                                                Key,
+                                                                OldObjBin),
+                            VClock = riak_object:vclock(TheOldObj),
+                            IndexData = riak_object:index_data(TheOldObj),
+                            {VClock, IndexData}
+                    end;
+                _ ->
+                    CacheResult
+            end;
+        _ ->
+            CacheResult
+    end.
+
 
 maybe_cache_object(BKey, Obj, #state{md_cache = MDCache,
                                      md_cache_size = MDCacheSize}) ->
