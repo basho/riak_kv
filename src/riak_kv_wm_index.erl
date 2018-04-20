@@ -73,11 +73,15 @@
           bucket_type,  %% Bucket type (from uri)
           bucket,       %% The bucket to query.
           index_query,   %% The query..
+          streamed = false :: boolean(), %% stream results to client
           max_results :: all | pos_integer(), %% maximum number of 2i results to return, the page size.
           return_terms = false :: boolean(), %% should the index values be returned
           timeout :: non_neg_integer() | undefined | infinity,
           pagination_sort :: boolean() | undefined,
-          security        %% security context
+          security,        %% security context
+          mapfold = false :: boolean(), %% Is this a mapfold query
+          mapfoldmod :: atom(),  %% If this is a mpafold query, a map fold module name required
+          mapfoldopts = [] :: list()
          }).
 -type context() :: #ctx{}.
 
@@ -214,39 +218,84 @@ malformed_request(RD, Ctx) ->
             re:compile(TermRegex)
     end,
 
-    case {PgSort,
-          ReturnTerms1,
-          validate_timeout(Timeout0),
-          MaxVal,
+    Stream0 = wrq:get_qs_value("stream", "false", RD),
+    Stream = normalize_boolean(string:to_lower(Stream0)),
+
+    MapFold0 = wrq:get_qs_value(?Q_2I_MAPFOLD, "false", RD),
+    MapFold = normalize_boolean(string:to_lower(MapFold0)),
+    {MapFoldMod, MapFoldOpts} = 
+        case MapFold of 
+            true ->
+                MapFoldMod0 = 
+                    wrq:get_qs_value(?Q_MF_MAPFOLDMOD, undefined, RD),
+                MapFoldMod1 = 
+                    case MapFoldMod0 of
+                        undefined ->
+                            undefined;
+                        Str0 ->
+                            list_to_atom(Str0)
+                    end,
+                MapFoldOpts0 = 
+                    wrq:get_qs_value(?Q_MF_MAPFOLDOPTS, undefined, RD),
+                MapFoldOpts1 = 
+                    case MapFoldOpts0 of
+                        undefined ->
+                            [];
+                        _ ->
+                            riak_kv_mapfold_fsm:decode_options(MapFoldOpts0)
+                    end,
+                {MapFoldMod1, MapFoldOpts1};
+            false ->
+                {undefined, []}
+        end,
+
+    case {PgSort, ReturnTerms1, validate_timeout(Timeout0), MaxVal,
           QRes,
-          ValRe} of
-        {malformed, _, _, _, _, _} ->
-             {true,
-             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
+          ValRe, MapFold, Stream} of
+        {malformed, _, _, _, 
+                _, 
+                _, _, _} ->
+            {true,
+            wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_PAGINATION_SORT, PgSort0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx};
-        {_, malformed, _, _, _, _} ->
-             {true,
-             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
+            Ctx};
+        {_, malformed, _, _, 
+                _, 
+                _, _, _} ->
+            {true,
+            wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a boolean",
                                              [?Q_2I_RETURNTERMS, ReturnTerms0]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx};
-        {_, _, _, _, {ok, ?KV_INDEX_Q{start_term=NormStart}}, {ok, _CompiledRe}}
-         when is_integer(NormStart) ->
+            Ctx};
+        {_, _, _, _, 
+                {ok, ?KV_INDEX_Q{start_term=NormStart}}, 
+                {ok, _CompiledRe}, _, _}
+                when is_integer(NormStart) ->
             {true,
-             wrq:set_resp_body("Can not use term regular expressions"
+            wrq:set_resp_body("Can not use term regular expressions"
                                " on integer queries",
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx};
-        {_, _, _, _, _, {error, ReError}} ->
-            {true,
-             wrq:set_resp_body(
+            Ctx};
+        {_, _, _, _, 
+                _, 
+                {error, ReError}, _, _} ->
+                {true,
+            wrq:set_resp_body(
                     io_lib:format("Invalid term regular expression ~p : ~p",
                                   [TermRegex, ReError]),
                     wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx};
-        {_, _, {true, Timeout}, {true, MaxResults}, {ok, Query}, _} ->
+            Ctx};
+        {_, _, _, _, 
+                _, 
+                _, true, true} ->
+            {true,
+            wrq:set_resp_body(io_lib:format("Cannot stream MapFold results", []),
+                               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+            Ctx};
+        {_, _, {true, Timeout}, {true, MaxResults}, 
+                {ok, Query}, 
+                _, _, _} ->
             %% Request is valid.
             ReturnTerms2 = riak_index:return_terms(ReturnTerms1, Query),
             %% Special case: a continuation implies pagination sort
@@ -256,27 +305,37 @@ malformed_request(RD, Ctx) ->
                               _ -> true
                           end,
             NewCtx = Ctx#ctx{
-                       bucket = Bucket,
-                       index_query = Query,
-                       max_results = MaxResults,
-                       return_terms = ReturnTerms2,
-                       timeout=Timeout,
-                       pagination_sort = PgSortFinal
+                                bucket = Bucket,
+                                index_query = Query,
+                                max_results = MaxResults,
+                                return_terms = ReturnTerms2,
+                                timeout=Timeout,
+                                pagination_sort = PgSortFinal,
+                                mapfold = MapFold,
+                                mapfoldmod = MapFoldMod,
+                                mapfoldopts = MapFoldOpts,
+                                streamed = Stream
                       },
             {false, RD, NewCtx};
-        {_, _, _, _, {error, Reason}, _} ->
+        {_, _, _, _, 
+                {error, Reason}, 
+                _, _, _} ->
             {true,
-             wrq:set_resp_body(
-               io_lib:format("Invalid query: ~p~n", [Reason]),
-               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx};
-        {_, _, _, {false, BadVal}, _, _} ->
+                wrq:set_resp_body(
+                io_lib:format("Invalid query: ~p~n", [Reason]),
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+            Ctx};
+        {_, _, _, {false, BadVal},
+                _, 
+                _, _, _} ->
             {true,
-             wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
+            wrq:set_resp_body(io_lib:format("Invalid ~p. ~p is not a positive integer",
                                              [?Q_2I_MAX_RESULTS, BadVal]),
                                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
-             Ctx};
-        {_, _, {error, Input}, _, _, _} ->
+            Ctx};
+        {_, _, {error, Input}, _,
+                _, 
+                _, _, _} ->
             {true, wrq:append_to_resp_body(io_lib:format("Bad timeout "
                                                            "value ~p. Must be a non-negative integer~n",
                                                            [Input]),
@@ -447,30 +506,68 @@ handle_all_in_memory_index_query(RD, Ctx) ->
     Client = Ctx#ctx.client,
     Bucket = riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket),
     Query = Ctx#ctx.index_query,
-    MaxResults = Ctx#ctx.max_results,
-    ReturnTerms = Ctx#ctx.return_terms,
-    PgSort = Ctx#ctx.pagination_sort,
     Timeout = Ctx#ctx.timeout,
 
-    Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
-    Opts = riak_index:add_timeout_opt(Timeout, Opts0),
+    case Ctx#ctx.mapfold of 
+        false ->
+            % Standard secondary index query
 
-    %% Do the index lookup...
-    case Client:get_index(Bucket, Query, Opts) of
-        {ok, Results} ->
-            Continuation = make_continuation(MaxResults, Results, length(Results)),
-            JsonResults = encode_results(ReturnTerms, Results, Continuation),
-            {JsonResults, RD, Ctx};
-        {error, timeout} ->
-            {{halt, 503},
-             wrq:set_resp_header("Content-Type", "text/plain",
-                                 wrq:append_to_response_body(
-                                   io_lib:format("request timed out~n",[]),
-                                   RD)),
-             Ctx};
-        {error, Reason} ->
-            {{error, Reason}, RD, Ctx}
+            MaxResults = Ctx#ctx.max_results,
+            ReturnTerms = Ctx#ctx.return_terms,
+            PgSort = Ctx#ctx.pagination_sort,
+            
+            Opts0 = 
+                [{max_results, MaxResults}] ++ 
+                    [{pagination_sort, PgSort} || PgSort /= undefined],
+            Opts = 
+                riak_index:add_timeout_opt(Timeout, Opts0),
+
+            %% Do the index lookup...
+            case Client:get_index(Bucket, Query, Opts) of
+                {ok, Results} ->
+                    Continuation = make_continuation(MaxResults, 
+                                                        Results, 
+                                                        length(Results)),
+                    JsonResults = encode_results(ReturnTerms, 
+                                                    Results, 
+                                                    Continuation),
+                    {JsonResults, RD, Ctx};
+                {error, timeout} ->
+                    {{halt, 503},
+                    wrq:set_resp_header("Content-Type", "text/plain",
+                                        wrq:append_to_response_body(
+                                        io_lib:format("request timed out~n",
+                                                        []),
+                                        RD)),
+                    Ctx};
+                {error, Reason} ->
+                    {{error, Reason}, RD, Ctx}
+            end;
+        true ->
+            % MapFold query
+            MapFoldMod = Ctx#ctx.mapfoldmod,
+            Result =  Client:map_fold(Bucket, 
+                                        Query, 
+                                        MapFoldMod, 
+                                        Ctx#ctx.mapfoldopts),
+
+            case Result of 
+                {ok, Results} ->
+                    JsonResults = MapFoldMod:encode_results(Results, http),
+                    {JsonResults, RD, Ctx};
+                {error, timeout} ->
+                    {{halt, 503},
+                    wrq:set_resp_header("Content-Type", "text/plain",
+                                        wrq:append_to_response_body(
+                                        io_lib:format("request timed out~n",
+                                                        []),
+                                        RD)),
+                    Ctx};
+                {error, Reason} ->
+                    {{error, Reason}, RD, Ctx}
+            end
     end.
+
 
 encode_results(ReturnTerms, Results) ->
     encode_results(ReturnTerms, Results, undefined).

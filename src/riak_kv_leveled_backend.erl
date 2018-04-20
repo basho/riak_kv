@@ -53,7 +53,8 @@
                         fold_heads,
                         direct_fetch,
                         putfsm_pause,
-                        snap_prefold]).
+                        snap_prefold,
+                        segment_accelerate]).
 -define(API_VERSION, 1).
 
 -record(state, {bookie :: pid(),
@@ -274,7 +275,6 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
-    lager:info("Fold objects request with Opts ~w", [Opts]),
     Query =
         case proplists:get_value(bucket, Opts) of
             undefined ->
@@ -311,21 +311,56 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
                 CP
         end,
     SnapPreFold = lists:member(snap_prefold, Opts),
-    Query =
-        case proplists:get_value(bucket, Opts) of
+    SegmentList = 
+        case proplists:get_value(segment_accelerate, Opts) of 
             undefined ->
-                {foldheads_allkeys,
-                  ?RIAK_TAG,
-                  {FoldHeadsFun, Acc},
-                  CheckPresence,
-                  SnapPreFold};
-            B ->
-                {foldheads_bybucket,
-                  ?RIAK_TAG,
-                  B,
-                  {FoldHeadsFun, Acc, CheckPresence},
-                  CheckPresence,
-                  SnapPreFold}
+                false;
+            SL ->
+                SL 
+        end,
+    Query = 
+        case lists:keyfind(index, 1, Opts) of 
+            {index, Bucket, IdxQuery} ->
+                case IdxQuery#riak_kv_index_v3.filter_field of 
+                    <<"$key">> ->
+                        {foldheads_bybucket,
+                            ?RIAK_TAG,
+                            Bucket,
+                            {IdxQuery#riak_kv_index_v3.start_term,
+                                IdxQuery#riak_kv_index_v3.end_term},
+                            {FoldHeadsFun, Acc},
+                            CheckPresence,
+                            SnapPreFold,
+                            SegmentList};
+                    Field ->
+                        {foldheads_byindex,
+                            ?RIAK_TAG,
+                            Bucket,
+                            Field,
+                            {IdxQuery#riak_kv_index_v3.start_term,
+                                IdxQuery#riak_kv_index_v3.end_term},
+                            {FoldHeadsFun, Acc},
+                            SnapPreFold}
+                end;
+            false ->
+                case proplists:get_value(bucket, Opts) of
+                    undefined ->
+                        {foldheads_allkeys,
+                            ?RIAK_TAG,
+                            {FoldHeadsFun, Acc},
+                            CheckPresence,
+                            SnapPreFold,
+                            SegmentList};
+                    B ->
+                        {foldheads_bybucket,
+                            ?RIAK_TAG,
+                            B,
+                            all,
+                            {FoldHeadsFun, Acc},
+                            CheckPresence,
+                            SnapPreFold,
+                            SegmentList}
+                end
         end,
 
     {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
