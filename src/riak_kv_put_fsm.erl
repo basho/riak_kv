@@ -331,15 +331,15 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
             end,
 
             CoordinatorType = get_coordinator_type(Options),
+
             %% Check if this node is in the preference list so it can coordinate
             LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
                                     Node == node()],
 
-
             case select_coordinator(LocalPL, CoordinatorType) of
                 forward ->
-                    %% This node is not in the preference list
-                    %% forward on to a random node
+                    %% This node is not in the preference list, or
+                    %% it's too loaded, forward on to a random node
                     {ListPos, _} = random:uniform_s(length(Preflist2), os:timestamp()),
                     {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
                     ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [1],
@@ -1068,28 +1068,42 @@ get_coordinator_type(Options) ->
     end.
 
 %% @private an attempt at readability for the prepare function's
-%% routing decisions based on the preflist and options. Doesn't do
-%% anything beyond return an atom for the prepare function to act on.
+%% routing decisions based on the preflist and options
 -spec select_coordinator(riak_core_apl:preflist_ann(), any | local) ->
-                               empty | forward | {continue, Coordinator::term()}.
-select_coordinator(_LocalPreflist=[], local=_CoordinatorType) ->
+                                forward |
+				{continue, Coordinator::{Idx::pos_integer(), node()}}.
+select_coordinator(_LocalPreflist=[], _CoordinatorType=local) ->
     %% Wants local, no local PL, forward
     forward;
-select_coordinator(LocalPreflist, local=_CoordinatorType) ->
+select_coordinator(LocalPreflist, _CoordinatorType=local) ->
     %% wants local, there are some local entries, (see riak#1661) do
     %% we want to stick, or twist
-    %% @TODO
     case check_mailbox(LocalPreflist) of
         {ok, Coordinator} ->
-            {ok, Coordinator};
+            {continue, Coordinator};
         loaded ->
             forward
     end;
 select_coordinator(_LocalPreflist, any) ->
+    %% for `any' type coordinator downstream code exects `undefined'
     {continue, undefined}.
 
-
+%% @private check the hd of the local preflists mailbox, if it's below configured threshold, return it.
 -spec check_mailbox(riak_core_apl:preflist_ann()) -> ok | loaded.
-check_mailbox(_LocalPrelist) ->
-    ok.
+check_mailbox([Entry | _Rest]) ->
+    {Idx, _Node} = Entry,
+    RegName = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
+    case riak_core_vnode_proxy:call(RegName, mailbox_size) of
+	{ok, N} when is_integer(N),
+		     N < 100 ->
+	    {ok, Entry};
+	{ok, N} when is_integer(N) ->
+	    lager:warn("Mailbox for ~p with soft-overload of ~p", [Entry, N]),
+	    loaded;
+	_ ->
+	    %% assume an not ok response is loaded too
+	    lager:error("unexpected response from "
+			"riak_core_vnode_proxy mailbox_size for ~p", [Entry]),
+	    loaded
+    end.
 
