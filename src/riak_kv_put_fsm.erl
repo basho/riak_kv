@@ -319,17 +319,25 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                         [X || X = {{_Index, Node}, _Type} <- Preflist1,
                               not lists:member(Node, BadCoordinators)]
                 end,
-            %% Check if this node is in the preference list so it can coordinate
-            LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
-                                Node == node()],
-            Must = (get_option(asis, Options, false) /= true),
-            case {Preflist2, LocalPL =:= [] andalso Must == true} of
-                {[], _} ->
+
+            %% NOTE: ends here if preflist2 is empty
+            if Preflist2 =:= [] ->
                     %% Empty preflist
-                    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-1], 
+                    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-1],
                             ["prepare",<<"all nodes down">>]),
                     process_reply({error, all_nodes_down}, StateData0);
-                {_, true} ->
+               true ->
+                    continue
+            end,
+
+            CoordinatorType = get_coordinator_type(Options),
+            %% Check if this node is in the preference list so it can coordinate
+            LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
+                                    Node == node()],
+
+
+            case select_coordinator(LocalPL, CoordinatorType) of
+                forward ->
                     %% This node is not in the preference list
                     %% forward on to a random node
                     {ListPos, _} = random:uniform_s(length(Preflist2), os:timestamp()),
@@ -338,7 +346,7 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                             ["prepare", atom2list(CoordNode)]),
                     try
                         {UseAckP, Options2} = make_ack_options(
-                                               [{ack_execute, self()}|Options]),
+                                                [{ack_execute, self()}|Options]),
                         MiddleMan = spawn_coordinator_proc(
                                       CoordNode, riak_kv_put_fsm, start_link,
                                       [From,RObj,Options2]),
@@ -355,27 +363,19 @@ prepare(timeout, StateData0 = #state{from = From, robj = RObj,
                                         [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
                             process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
                     end;
-                _ ->
-                    %% Putting asis, no need to handle locally on a node in the
-                    %% preflist, can coordinate from anywhere
-                    CoordPLEntry = case Must of
-                                    true ->
-                                        hd(LocalPL);
-                                    _ ->
-                                        undefined
-                                end,
+                {continue, CoordPLEntry} ->
                     CoordPlNode = case CoordPLEntry of
-                                    undefined  -> undefined;
-                                    {_Idx, Nd} -> atom2list(Nd)
-                                end,
+                                      undefined  -> undefined;
+                                      {_Idx, Nd} -> atom2list(Nd)
+                                  end,
                     %% This node is in the preference list, continue
                     StartTime = riak_core_util:moment(),
                     StateData = StateData0#state{n = N,
-                                                bucket_props = Props,
-                                                coord_pl_entry = CoordPLEntry,
-                                                preflist2 = Preflist2,
-                                                starttime = StartTime,
-                                                tracked_bucket = StatTracked},
+                                                 bucket_props = Props,
+                                                 coord_pl_entry = CoordPLEntry,
+                                                 preflist2 = Preflist2,
+                                                 starttime = StartTime,
+                                                 tracked_bucket = StatTracked},
                     ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0], 
                             ["prepare", CoordPlNode]),
                     new_state_timeout(validate, StateData)
@@ -1055,3 +1055,41 @@ dtrace_errstr(Term) ->
 %% This function is for dbg tracing purposes
 late_put_fsm_coordinator_ack(_Node) ->
     ok.
+
+%% @private decide if the coordinator has to be a local, causality
+%% advancing vnode, or just any/all at once
+-spec get_coordinator_type(list()) -> any | local.
+get_coordinator_type(Options) ->
+    case get_option(asis, Options, false) of
+        true ->
+            any;
+        false ->
+            local
+    end.
+
+%% @private an attempt at readability for the prepare function's
+%% routing decisions based on the preflist and options. Doesn't do
+%% anything beyond return an atom for the prepare function to act on.
+-spec select_coordinator(riak_core_apl:preflist_ann(), any | local) ->
+                               empty | forward | {continue, Coordinator::term()}.
+select_coordinator(_LocalPreflist=[], local=_CoordinatorType) ->
+    %% Wants local, no local PL, forward
+    forward;
+select_coordinator(LocalPreflist, local=_CoordinatorType) ->
+    %% wants local, there are some local entries, (see riak#1661) do
+    %% we want to stick, or twist
+    %% @TODO
+    case check_mailbox(LocalPreflist) of
+        {ok, Coordinator} ->
+            {ok, Coordinator};
+        loaded ->
+            forward
+    end;
+select_coordinator(_LocalPreflist, any) ->
+    {continue, undefined}.
+
+
+-spec check_mailbox(riak_core_apl:preflist_ann()) -> ok | loaded.
+check_mailbox(_LocalPrelist) ->
+    ok.
+
