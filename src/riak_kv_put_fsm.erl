@@ -1094,11 +1094,10 @@ check_mailbox([Entry | _Rest]) ->
     {Idx, _Node} = Entry,
     RegName = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
     case riak_core_vnode_proxy:call(RegName, mailbox_size) of
-	{ok, N} when is_integer(N),
-		     N < 100 ->
+	ok ->
 	    {ok, Entry};
-	{ok, N} when is_integer(N) ->
-	    lager:warn("Mailbox for ~p with soft-overload of ~p", [Entry, N]),
+	soft_loaded ->
+	    lager:warn("Mailbox for ~p with soft-overload", [Entry]),
 	    loaded;
 	_ ->
 	    %% assume an not ok response is loaded too
