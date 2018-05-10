@@ -23,9 +23,9 @@
 %% @doc coordination of Riak PUT requests
 
 -module(riak_kv_put_fsm).
-%-ifdef(TEST).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
-%-endif.
+-endif.
 -include_lib("riak_kv_vnode.hrl").
 -include_lib("riak_kv_js_pools.hrl").
 -include("riak_kv_wm_raw.hrl").
@@ -274,113 +274,12 @@ init({test, Args, StateProps}) ->
     {ok, validate, TestStateData}.
 
 %% @private
-prepare(timeout, StateData0 = #state{from = From, robj = RObj,
-                                     bkey = BKey = {Bucket, _Key},
-                                     options = Options,
-                                     trace = Trace,
-                                     bad_coordinators = BadCoordinators}) ->
-    {ok, DefaultProps} = application:get_env(riak_core, 
-                                             default_bucket_props),
-    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
-    %% typed buckets never fall back to defaults
-    Props = 
-        case is_tuple(Bucket) of
-            false -> 
-                lists:keymerge(1, lists:keysort(1, BucketProps), 
-                               lists:keysort(1, DefaultProps));
-            true ->
-                BucketProps
-        end,
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
-    Bucket_N = get_option(n_val, BucketProps),
-    N = case get_option(n_val, Options, false) of
-            false ->
-                Bucket_N;
-            N_val when is_integer(N_val), N_val > 0, N_val =< Bucket_N ->
-                %% don't allow custom N to exceed bucket N
-                N_val;
-            Bad_N ->
-                {error, {n_val_violation, Bad_N}}
-        end,
-    case N of
-        {error, _} = Error ->
-            process_reply(Error, StateData0);
-        _ ->
-            StatTracked = get_option(stat_tracked, BucketProps, false),
-            Preflist2 = 
-                case get_option(sloppy_quorum, Options, true) of
-                    true ->
-                        UpNodes = riak_core_node_watcher:nodes(riak_kv),
-                        riak_core_apl:get_apl_ann(DocIdx, N, 
-                                                  UpNodes -- BadCoordinators);
-                    false ->
-                        Preflist1 =
-                            riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
-                        [X || X = {{_Index, Node}, _Type} <- Preflist1,
-                              not lists:member(Node, BadCoordinators)]
-                end,
-
-            %% NOTE: ends here if preflist2 is empty
-            if Preflist2 =:= [] ->
-                    %% Empty preflist
-                    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-1],
-                            ["prepare",<<"all nodes down">>]),
-                    process_reply({error, all_nodes_down}, StateData0);
-               true ->
-                    continue
-            end,
-
-            CoordinatorType = get_coordinator_type(Options),
-
-            %% Check if this node is in the preference list so it can coordinate
-            LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
-                                    Node == node()],
-
-            case select_coordinator(LocalPL, CoordinatorType) of
-                forward ->
-                    %% This node is not in the preference list, or
-                    %% it's too loaded, forward on to a random node
-                    {ListPos, _} = random:uniform_s(length(Preflist2), os:timestamp()),
-                    {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
-                    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [1],
-                            ["prepare", atom2list(CoordNode)]),
-                    try
-                        {UseAckP, Options2} = make_ack_options(
-                                                [{ack_execute, self()}|Options]),
-                        MiddleMan = spawn_coordinator_proc(
-                                      CoordNode, riak_kv_put_fsm, start_link,
-                                      [From,RObj,Options2]),
-                        ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [2],
-                                ["prepare", atom2list(CoordNode)]),
-                        ok = riak_kv_stat:update(coord_redir),
-                        monitor_remote_coordinator(UseAckP, MiddleMan,
-                                                   CoordNode, StateData0)
-                    catch
-                        _:Reason ->
-                            ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
-                                    ["prepare", dtrace_errstr(Reason)]),
-                            lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
-                                        [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
-                            process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
-                    end;
-                {continue, CoordPLEntry} ->
-                    CoordPlNode = case CoordPLEntry of
-                                      undefined  -> undefined;
-                                      {_Idx, Nd} -> atom2list(Nd)
-                                  end,
-                    %% This node is in the preference list, continue
-                    StartTime = riak_core_util:moment(),
-                    StateData = StateData0#state{n = N,
-                                                 bucket_props = Props,
-                                                 coord_pl_entry = CoordPLEntry,
-                                                 preflist2 = Preflist2,
-                                                 starttime = StartTime,
-                                                 tracked_bucket = StatTracked},
-                    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0], 
-                            ["prepare", CoordPlNode]),
-                    new_state_timeout(validate, StateData)
-            end
-    end.
+prepare(timeout, State = #state{robj = RObj, options=Options}) ->
+    Bucket = riak_object:bucket(RObj),
+    BucketProps = get_bucket_props(Bucket),
+    StatTracked = get_option(stat_tracked, BucketProps, false),
+    N = get_n_val(Options, BucketProps),
+    get_preflist(N, State#state{tracked_bucket=StatTracked, bucket_props=BucketProps}).
 
 %% @private
 validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
@@ -730,6 +629,9 @@ handle_info({ack, Node, now_executing}, StateName, StateData) ->
     late_put_fsm_coordinator_ack(Node),
     ok = riak_kv_stat:update(late_put_fsm_coordinator_ack),
     {next_state, StateName, StateData};
+handle_info({mbox, _}, StateName, StateData) ->
+    %% Delayed mailbox size check response, ignore it
+    {next_state, StateName, StateData};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
 
@@ -1056,53 +958,398 @@ dtrace_errstr(Term) ->
 late_put_fsm_coordinator_ack(_Node) ->
     ok.
 
+-spec get_bucket_props(riak_object:bucket()) -> list().
+get_bucket_props(Bucket) ->
+    {ok, DefaultProps} = application:get_env(riak_core,
+                                             default_bucket_props),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    %% typed buckets never fall back to defaults
+    case is_tuple(Bucket) of
+        false ->
+            lists:keymerge(1, lists:keysort(1, BucketProps),
+                           lists:keysort(1, DefaultProps));
+        true ->
+            BucketProps
+    end.
+
+%% @private decide on the N Val for the put request, and error if
+%% there is a violation.
+get_n_val(Options, BucketProps) ->
+    Bucket_N = get_option(n_val, BucketProps),
+    case get_option(n_val, Options, false) of
+        false ->
+            Bucket_N;
+        N_val when is_integer(N_val), N_val > 0, N_val =< Bucket_N ->
+            %% don't allow custom N to exceed bucket N
+            N_val;
+        Bad_N ->
+            {error, {n_val_violation, Bad_N}}
+    end.
+
+%% @private given no n-val violation, generate a preflist.
+get_preflist({error, _Reason}=Err, State) ->
+    process_reply(Err, State);
+get_preflist(N, State) ->
+    #state{bkey = BKey,
+           options = Options,
+           bucket_props=BucketProps,
+           bad_coordinators = BadCoordinators} = State,
+
+    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
+
+    Preflist =
+        case get_option(sloppy_quorum, Options, true) of
+            true ->
+                UpNodes = riak_core_node_watcher:nodes(riak_kv),
+                riak_core_apl:get_apl_ann(DocIdx, N,
+                                          UpNodes -- BadCoordinators);
+            false ->
+                Preflist0 =
+                    riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
+                [X || X = {{_Index, Node}, _Type} <- Preflist0,
+                      not lists:member(Node, BadCoordinators)]
+        end,
+
+    coordinate_or_forward(Preflist, State#state{n=N}).
+
+%% @private if there is a non-empty preflist, select a coordinator, as
+%% needed.
+coordinate_or_forward([], State=#state{trace=Trace}) ->
+    %% Empty preflist
+    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-1],
+            ["prepare",<<"all nodes down">>]),
+    process_reply({error, all_nodes_down}, State);
+coordinate_or_forward(Preflist, State) ->
+    #state{options = Options, n = N, trace=Trace} = State,
+    CoordinatorType = get_coordinator_type(Options),
+    MBoxCheck = get_option(mbox_check, Options, true),
+    {LocalPL, RemotePL} = partition_local_remote(Preflist),
+
+    case select_coordinator(LocalPL, RemotePL, CoordinatorType, MBoxCheck) of
+        {local, CoordPLEntry} ->
+            CoordPlNode = case CoordPLEntry of
+                              undefined  -> undefined;
+                              {_Idx, Nd} -> atom2list(Nd)
+                          end,
+            StartTime = riak_core_util:moment(),
+            StateData = State#state{n = N,
+                                    coord_pl_entry = CoordPLEntry,
+                                    preflist2 = Preflist,
+                                    starttime = StartTime},
+            ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0],
+                    ["prepare", CoordPlNode]),
+            new_state_timeout(validate, StateData);
+        {loaded_forward, ForwardNode} ->
+            %% This is a soft-overload forward, we don't want to
+            %% bounce around, we chose the "best" coordinator, update
+            %% the options to short-circuit mailbox checking in the
+            %% new, forwarded put fsm
+            State2 = State#state{options=[{mbox_check, false} | Options]},
+            forward(ForwardNode, State2);
+        {forward, ForwardNode} ->
+            forward(ForwardNode, State)
+    end.
+
+select_coordinator(_LocalPreflist=[], RemotePreflist, _CoordinatorType=local, _MBoxCheck) ->
+    %% Wants local, no local PL, chose a node at random to forward to
+    %% NOTE: `RemotePreflist' cannot be empty, if LocalPreflist is empty, or
+    %% the original Preflist was empty, and that is handled in
+    %% `coordinate_or_forward/2'
+    %% @TODO - Do we want to check the mbox size first?
+    {ListPos, _} = random:uniform_s(length(RemotePreflist), os:timestamp()),
+    {_Idx, CoordNode} = lists:nth(ListPos, RemotePreflist),
+    {forward, CoordNode};
+select_coordinator(LocalPreflist, RemotePreflist, _CoordinatorType=local, true=_MBoxCheck) ->
+    %% wants local, there are local entries, check mailbox soft
+    %% limits (see riak#1661)
+    case check_mailboxes(LocalPreflist) of
+        {true, Entry} ->
+            {local, Entry};
+        {false, LocalMBoxData} ->
+            case check_mailboxes(RemotePreflist) of
+                {true, {_Idx, Remote}} ->
+                    {loaded_forward, Remote};
+                {false, RemoteMBoxData} ->
+                    select_least_loaded_coordinator(LocalMBoxData, RemoteMBoxData)
+            end
+    end;
+select_coordinator(LocalPreflist, _RemotePreflist, _CoordinatorType=local, false=_MBoxCheck) ->
+    %% No mailbox check, don't change behaviour from pre-gh1661 work
+    {local, hd(LocalPreflist)};
+select_coordinator(_LocalPreflist, _RemotePreflist, any=_CoordinatorType, _MBoxCheck) ->
+    %% for `any' type coordinator downstream code expects `undefined',
+    %% no coordinator, no mailbox queues to route around
+    {local, undefined}.
+
+-define(DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS, 100).
+
+%% @private check the mailboxes for the preflist.
+check_mailboxes(Preflist) ->
+    TimeLimit = get_timestamp_millis() + ?DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS,
+    _ = [check_mailbox(Entry) || Entry <- Preflist],
+    case join_mbox_replies(length(Preflist),
+                           TimeLimit,
+                           []) of
+        {true, Entry} ->
+            {true, Entry};
+        {ok, MBoxData} ->
+            {false, MBoxData};
+        {timeout, MBoxData0} ->
+            MBoxData = add_errors_to_mbox_data(Preflist, MBoxData0),
+            {false, MBoxData}
+    end.
+
+%% @private cast off to vnode proxy for mailbox size.
+check_mailbox({Idx, Node}=Entry) ->
+    RegName = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx, Node),
+    riak_core_vnode_proxy:cast(RegName, {mailbox_size, self(), Entry}).
+
+%% @private wait at most `TimeOutMillis' for `HowMany' `{mbox, _}'
+%% replies from riak_core_vnode_proxy. Returns either `Acc' as mbox
+%% data or short-circuits to `{true, Entry}' if any proxy replies
+%% below the soft limit.
+join_mbox_replies(0, _TimeLimit, Acc) ->
+    {ok, Acc};
+join_mbox_replies(HowMany, TimeLimit, Acc) ->
+    TimeOut = max(0, TimeLimit - get_timestamp_millis()),
+    receive
+        {mbox, {Entry, {ok, _Mbox, _Limit}}} ->
+            %% shortcut it
+            {true, Entry};
+        {mbox, {Entry, {soft_loaded, MBox, Limit}}} ->
+            %% Keep waiting
+            lager:warn("Mailbox for ~p with soft-overload", [Entry]),
+            join_mbox_replies(HowMany-1, TimeLimit,
+                 [{Entry, MBox, Limit} | Acc])
+    after TimeOut ->
+            {timeout, Acc}
+    end.
+
+%% @private in the case that some preflist entr(y|ies) did not respond
+%% in time, add them to the mbox data result as `error' entries.
+add_errors_to_mbox_data(Preflist, Acc) ->
+    lists:map(fun(Entry) ->
+                      case lists:keyfind(Entry, 1, Acc) of
+                          false ->
+                              lager:warn("Mailbox for ~p with did not return in time", [Entry]),
+                              {Entry, error, error};
+                          Res ->
+                              Res
+                      end
+              end, Preflist).
+
+%% @private @TODO test to find the best strategy
+select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
+    [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
+    {loaded_forward, Entry};
+select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
+    [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
+    {local, Entry}.
+
+%% @private used by select_least_loaded_coordinator/2 to sort mbox
+%% data results
+mbox_data_sort({_, error, error}, {_, error, error}) ->
+    true;
+mbox_data_sort({_, error, error}, {_, _Load, _Limit}) ->
+    false;
+mbox_data_sort({_, _LoadA, _LimitA}, {_, error, error}) ->
+    true;
+mbox_data_sort({_, LoadA, _LimitA}, {_, LoadB, _LimitB})  ->
+    LoadA =< LoadB.
+
 %% @private decide if the coordinator has to be a local, causality
 %% advancing vnode, or just any/all at once
 -spec get_coordinator_type(list()) -> any | local.
 get_coordinator_type(Options) ->
     case get_option(asis, Options, false) of
-        true ->
-            any;
         false ->
-            local
+            local;
+        true ->
+            any
     end.
 
-%% @private an attempt at readability for the prepare function's
-%% routing decisions based on the preflist and options
--spec select_coordinator(riak_core_apl:preflist_ann(), any | local) ->
-                                forward |
-				{continue, Coordinator::{Idx::pos_integer(), node()}}.
-select_coordinator(_LocalPreflist=[], _CoordinatorType=local) ->
-    %% Wants local, no local PL, forward
-    forward;
-select_coordinator(LocalPreflist, _CoordinatorType=local) ->
-    %% wants local, there are some local entries, (see riak#1661) do
-    %% we want to stick, or twist
-    case check_mailbox(LocalPreflist) of
-        {ok, Coordinator} ->
-            {continue, Coordinator};
-        loaded ->
-            forward
-    end;
-select_coordinator(_LocalPreflist, any) ->
-    %% for `any' type coordinator downstream code exects `undefined'
-    {continue, undefined}.
+%% @private used by `coordinate_or_forward' above. Removes `Type' info
+%% from preflist entries and splits a preflist into local and remote
+partition_local_remote(Preflist) ->
+    lists:foldl(fun partition_local_remote/2,
+                {[], []},
+                Preflist).
 
-%% @private check the hd of the local preflists mailbox, if it's below configured threshold, return it.
--spec check_mailbox(riak_core_apl:preflist_ann()) -> ok | loaded.
-check_mailbox([Entry | _Rest]) ->
-    {Idx, _Node} = Entry,
-    RegName = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx),
-    case riak_core_vnode_proxy:call(RegName, mailbox_size) of
-	ok ->
-	    {ok, Entry};
-	soft_loaded ->
-	    lager:warn("Mailbox for ~p with soft-overload", [Entry]),
-	    loaded;
-	_ ->
-	    %% assume an not ok response is loaded too
-	    lager:error("unexpected response from "
-			"riak_core_vnode_proxy mailbox_size for ~p", [Entry]),
-	    loaded
+%% @private fold fun for `partition_local_remote/1'
+partition_local_remote({{_Index, Node}=IN, _Type}, {L, R})
+  when Node == node() ->
+    {[IN | L], R};
+partition_local_remote({IN, _Type}, {L, R}) ->
+    {L, [IN | R]}.
+
+%% @private the local node is not in the preflist, or is overloaded,
+%% forward to another node
+forward(CoordNode, State) ->
+    #state{trace=Trace,
+           options=Options,
+           from=From,
+           robj=RObj,
+           bkey=BKey} = State,
+    %% This node is not in the preference list, or it's too loaded,
+    %% forward on to (a less loaded?) node
+
+    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [1],
+            ["prepare", atom2list(CoordNode)]),
+    try
+        {UseAckP, Options2} = make_ack_options(
+                                [{ack_execute, self()}|Options]),
+        MiddleMan = spawn_coordinator_proc(
+                      CoordNode, riak_kv_put_fsm, start_link,
+                      [From, RObj, Options2]),
+        ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [2],
+                ["prepare", atom2list(CoordNode)]),
+        ok = riak_kv_stat:update(coord_redir),
+        monitor_remote_coordinator(UseAckP, MiddleMan,
+                                   CoordNode, State)
+    catch
+        _:Reason ->
+            ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
+                    ["prepare", dtrace_errstr(Reason)]),
+            lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
+                        [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
+            process_reply({error, {coord_handoff_failed, Reason}}, State)
     end.
 
+-spec get_timestamp_millis() -> pos_integer().
+get_timestamp_millis() ->
+  {Mega, Sec, Micro} = os:timestamp(),
+  (Mega*1000000 + Sec)*1000 + round(Micro/1000).
+
+-ifdef(TEST).
+
+mbox_data_sort_test() ->
+    ?assert(mbox_data_sort({x, error, error}, {x, error, error})),
+    ?assert(mbox_data_sort({x, 1000, 10}, {x, error, error})),
+    ?assertNot(mbox_data_sort({x, error, error}, {x, 100, 10})),
+    ?assertNot(mbox_data_sort({x, 10, 10}, {x, 1, 10})),
+    ?assert(mbox_data_sort({x, 10, 10}, {x, 10, 10})),
+    ?assert(mbox_data_sort({x, 1, 10}, {x, 10, 10})).
+
+select_least_loaded_coordinator_test() ->
+    MBoxData = [{x, 100, 10},
+                {y, 10, 10},
+                {z, error, error},
+                {a, 1, 10},
+                {b, error, error},
+                {c, 10001, 10}],
+    ?assertEqual({local, a}, select_least_loaded_coordinator(MBoxData, [])),
+    ?assertEqual({loaded_forward, a}, select_least_loaded_coordinator([], MBoxData)),
+    ?assertEqual({local, a}, select_least_loaded_coordinator(MBoxData, MBoxData)).
+
+get_coordinator_type_test() ->
+    Opts0 = proplists:unfold([asis]),
+    ?assertEqual(any, get_coordinator_type(Opts0)),
+    Opts1 = proplists:unfold([]),
+    ?assertEqual(local, get_coordinator_type(Opts1)).
+
+get_bucket_props_test_() ->
+    BucketProps = [{bprop1, bval1},
+                   {bprop2, bval2},
+                   {prop2, bval9},
+                   {prop1, val1}],
+    DefaultProps = [{prop1, val1},
+                    {prop2, val2},
+                    {prop3, val3}],
+    {setup, fun() ->
+                    DefPropsOrig = application:get_env(riak_core,
+                                                       default_bucket_props),
+                    application:set_env(riak_core,
+                                        default_bucket_props,
+                                        DefaultProps),
+
+                    meck:new(riak_core_bucket),
+                    meck:expect(riak_core_bucket, get_bucket,
+                                fun(_) ->
+                                        BucketProps
+                                end),
+
+                    DefPropsOrig
+            end,
+     fun(DefPropsOrig) ->
+             application:set_env(riak_core,
+                                 default_bucket_props,
+                                 DefPropsOrig),
+             meck:unload(riak_core_bucket)
+
+     end,
+     [{"untyped bucket",
+       ?_test(
+          begin
+              Bucket = <<"bucket">>,
+              %% amazing, not a ukeymerge
+              Props = get_bucket_props(Bucket),
+              %% i.e. a merge with defaults
+              ?assertEqual([
+                            {bprop1,bval1},
+                            {bprop2,bval2},
+                            {prop1,val1},
+                            {prop1,val1},
+                            {prop2,bval9},
+                            {prop2,val2},
+                            {prop3,val3}
+                           ], Props)
+          end)
+      },
+      {"typed bucket",
+       ?_test(
+          begin
+              Bucket = {<<"type">>, <<"bucket">>},
+              Props = get_bucket_props(Bucket),
+              %% i.e. no merge with defaults
+              ?assertEqual(BucketProps, Props)
+          end
+         )
+      }
+     ]}.
+
+partition_local_remote_test() ->
+    Node = node(),
+    PL1 = [
+           {{0, 'node0'}, primary},
+           {{1, Node}, fallback},
+           {{2, 'node1'}, primary}
+          ],
+    ?assertEqual({
+                   [{1, Node}],
+                   [{2, 'node1'},
+                    {0, 'node0'}]
+                 }, partition_local_remote(PL1)),
+
+    PL2 = [
+           {{0, 'node0'}, primary},
+           {{1, Node}, fallback},
+           {{2, Node}, primary},
+           {{3, 'node0'}, fallback}
+          ],
+
+    ?assertEqual({
+                   [{2, Node},
+                    {1, Node}],
+                   [{3, 'node0'},
+                    {0, 'node0'}]
+                 }, partition_local_remote(PL2)),
+    ?assertEqual({[], []}, partition_local_remote([])),
+    ?assertEqual({[], [{3, 'node0'},
+                       {0, 'node0'}]}, partition_local_remote([
+                                                               {{0, 'node0'}, primary},
+                                                               {{3, 'node0'}, fallback}
+                                                              ])),
+    ?assertEqual({[{1, Node}], []}, partition_local_remote([
+                                                            {{1, Node}, primary}
+                                                           ])).
+
+get_n_val_test() ->
+    Opts0 = [],
+    BProps = [{n_val, 3}, {other, props}],
+    ?assertEqual(3, get_n_val(Opts0, BProps)),
+    Opts1 = [{n_val, 1}],
+    ?assertEqual(1, get_n_val(Opts1, BProps)),
+    Opts2 = [{n_val, 4}],
+    ?assertEqual({error, {n_val_violation, 4}}, get_n_val(Opts2, BProps)).
+
+-endif.
