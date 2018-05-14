@@ -1118,7 +1118,7 @@ join_mbox_replies(HowMany, TimeLimit, Acc) ->
             {true, Entry};
         {mbox, {Entry, {soft_loaded, MBox, Limit}}} ->
             %% Keep waiting
-            lager:warn("Mailbox for ~p with soft-overload", [Entry]),
+            lager:warning("Mailbox for ~p with soft-overload", [Entry]),
             join_mbox_replies(HowMany-1, TimeLimit,
                  [{Entry, MBox, Limit} | Acc])
     after TimeOut ->
@@ -1131,7 +1131,7 @@ add_errors_to_mbox_data(Preflist, Acc) ->
     lists:map(fun(Entry) ->
                       case lists:keyfind(Entry, 1, Acc) of
                           false ->
-                              lager:warn("Mailbox for ~p with did not return in time", [Entry]),
+                              lager:warning("Mailbox for ~p with did not return in time", [Entry]),
                               {Entry, error, error};
                           Res ->
                               Res
