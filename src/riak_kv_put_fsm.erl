@@ -200,6 +200,8 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
     after StateData#state.coordinator_timeout ->
             exit(MiddleMan, kill),
             Bad = StateData#state.bad_coordinators,
+            lager:warning("timed out waiting for forward-ack, adding ~p to bad coordinators",
+                          [CoordNode]),
             prepare(timeout, StateData#state{bad_coordinators=[CoordNode|Bad]})
     end.
 
