@@ -1068,6 +1068,7 @@ select_coordinator(LocalPreflist, RemotePreflist, _CoordinatorType=local, true=_
         {false, LocalMBoxData} ->
             case check_mailboxes(RemotePreflist) of
                 {true, {_Idx, Remote}} ->
+                    lager:info("loaded forward"),
                     {loaded_forward, Remote};
                 {false, RemoteMBoxData} ->
                     select_least_loaded_coordinator(LocalMBoxData, RemoteMBoxData)
@@ -1095,6 +1096,8 @@ check_mailboxes(Preflist) ->
         {ok, MBoxData} ->
             {false, MBoxData};
         {timeout, MBoxData0} ->
+            lager:warning("Mailbox soft-load poll timout ~p",
+                          [?DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS]),
             MBoxData = add_errors_to_mbox_data(Preflist, MBoxData0),
             {false, MBoxData}
     end.
@@ -1141,9 +1144,11 @@ add_errors_to_mbox_data(Preflist, Acc) ->
 %% @private @TODO test to find the best strategy
 select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
     [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
+    lager:info("loaded forward"),
     {loaded_forward, Entry};
 select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
     [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
+    lager:warning("soft-loaded local coordinator"),
     {local, Entry}.
 
 %% @private used by select_least_loaded_coordinator/2 to sort mbox
