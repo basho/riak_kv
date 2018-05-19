@@ -100,3 +100,9 @@
 %% by AAE tree rebuilds, fullsync, and handoff.
 %% See @link riak_core_background_mgr:get_lock/1
 -define(KV_VNODE_LOCK(Idx), {vnode_lock, Idx}).
+
+-define(ENABLE_TICTACAAE, true).
+-define(SHUTDOWN_BUCKET, <<"_SHUTDOWN">>).
+-define(SHUTDOWN_KEY, integer_to_binary(erlang:phash2(<<"_SHUTDOWN_KEY">>))).
+-define(PARALLEL_AAEORDER, lveled_ko).
+-define(REBUILD_SCHEDULE, {120, 14400}).

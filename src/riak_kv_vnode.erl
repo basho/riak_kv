@@ -156,7 +156,9 @@
                 md_cache :: ets:tab(),
                 md_cache_size :: pos_integer(),
                 counter :: #counter_state{},
-                status_mgr_pid :: pid() %% a process that manages vnode status persistence
+                status_mgr_pid :: pid(), %% a process that manages vnode status persistence
+                tictac_aae = false :: boolean(),
+                aae_controller :: undefined|pid()
                }).
 
 -type index_op() :: add | remove.
@@ -243,6 +245,90 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
         _ ->
             State#state{upgrade_hashtree=false}
     end.
+
+
+-spec maybe_start_aaecontroller(boolean(), state()) -> state().
+%% @doc
+%% Start an AAE controller if riak_kv has been consfigured to use cached
+%% tictac tree based AAE
+maybe_start_aaecontroller(false, State) ->
+    State#state{tictac_aae=false, aae_controller=undefined};
+maybe_start_aaecontroller(true, State=#state{mod=Mod, 
+                                                idx=Partition, 
+                                                modstate=ModState}) ->
+
+    {ShutdownGUID, UpdModState} =
+        case do_get_binary(?SHUTDOWN_BUCKET, ?SHUTDOWN_KEY, Mod, ModState) of
+            {ok, V, ModState0} ->
+                {ok, ModState1} = 
+                    Mod:delete(?SHUTDOWN_BUCKET, ?SHUTDOWN_KEY, [], ModState0),
+                    {V, ModState1};
+            _ ->
+                {none, ModState}
+        end,
+    IsEmpty = 
+        case is_empty(State) of
+            {true, _}     -> true;
+            {false, _, _} -> false
+        end,
+    KeyStoreType =
+        case lists:member(leveled, Mod:capabilities(UpdModState)) of 
+            true ->
+                Bookie = Mod:get_bookie(UpdModState),
+                {native, leveled_nko, Bookie};
+            false ->
+                ParallelStore = 
+                    app_helper:get_env(riak_kv, parallel_store, ?PARALLEL_AAEORDER),
+                    % TODO: To cheat sorting out cuttlefish - this can be set by changing
+                    % the default in riak_kv_vnode.hrl.  Needs to be proper cuttlefish 
+                    % enabled going forward 
+                {parallel, ParallelStore}
+        end,
+    Preflists = riak_kv_util:responsible_preflists(Partition),
+    RootPath = determine_aaedata_root(Partition),
+
+    {ok, AAECntrl} = 
+        aae_controller:aae_start(KeyStoreType, 
+                                    {IsEmpty, ShutdownGUID}, 
+                                    ?REBUILD_SCHEDULE, 
+                                    Preflists, 
+                                    RootPath, 
+                                    fun from_object_binary/1),
+    
+    State#state{tictac_aae = true,
+                aae_controller = AAECntrl,
+                modstate = UpdModState}.
+
+
+-spec from_object_binary(binary()) -> {integer(), integer(), integer(), null}.
+%% @doc
+%% When folding over objects need to be able to convert from the object into 
+%% a tuple of metadata for the AAE keystore
+from_object_binary(RobjBin) ->
+    {_Clock, Size, SibCount} = riak_object:summary_from_binary(RobjBin),
+    % TODO: Actually get the index hash
+    {Size, SibCount, 0, null}.
+
+
+-spec determine_aaedata_root(integer()) -> list().
+%% @doc
+%% Get a filepath to be used by the AAE store
+determine_aaedata_root(Partition) ->
+    DataRoot = 
+        case application:get_env(riak_kv, tictacaae_data_dir) of
+            {ok, EntropyRoot} ->
+                EntropyRoot;
+            undefined ->
+                {ok, PlatformRoot} 
+                    = application:get_env(riak_core, platform_data_dir),
+                Root = filename:join(PlatformRoot, "tictac_aae"),
+                lager:warning("Config riak_kv/anti_entropy_data_dir is "
+                                "missing. Defaulting to: ~p", [Root]),
+                application:set_env(riak_kv, tictacaee_data_dir, Root),
+                Root
+        end,
+    filename:join(DataRoot, integer_to_list(Partition)).
+    
 
 %% @doc Reveal the underlying module state for testing
 -spec(get_modstate(state()) -> {atom(), state()}).
@@ -506,6 +592,13 @@ init([Index]) ->
                 lager:debug("No metadata cache size defined, not starting"),
                 undefined
         end,
+    EnableTictacAAE = 
+        app_helper:get_env(riak_kv, tictac_aae, ?ENABLE_TICTACAAE),
+        % Enable TicTac cached AAE.  
+        % TODO: To cheat sorting out cuttlefish - this can be set by changing
+        % the default in riak_kv_vnode.hrl.  Needs to be proper cuttlefish 
+        % enabled going forward 
+
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
@@ -536,7 +629,8 @@ init([Index]) ->
                     %% Create worker pool initialization tuple
                     FoldWorkerPool = {pool, riak_kv_worker, WorkerPoolSize, []},
                     State2 = maybe_create_hashtrees(State),
-                    {ok, State2, [FoldWorkerPool]};
+                    State3 = maybe_start_aaecontroller(EnableTictacAAE, State2),
+                    {ok, State3, [FoldWorkerPool]};
                 false ->
                     {ok, State}
             end;
@@ -713,10 +807,10 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
 handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState}) ->
     case do_get_binary(Bucket, Key, Mod, ModState) of
         {ok, Bin, _UpdModState} ->
-            update_hashtree(Bucket, Key, Bin, State);
+            aae_update(Bucket, Key, use_binary, undefined, Bin, State);
         _ ->
             %% Make sure hashtree isn't tracking deleted data
-            delete_from_hashtree(Bucket, Key, State)
+            aae_delete(Bucket, Key, undefined, State)
     end,
     {noreply, State};
 
@@ -746,9 +840,11 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
             end,
             case Exists of
                 true ->
-                    update_hashtree(Bucket, Key, RObj, State);
+                    aae_update(Bucket, Key, 
+                                RObj, undefined, use_object, 
+                                State);
                 false ->
-                    delete_from_hashtree(Bucket, Key, State)
+                    aae_delete(Bucket, Key, undefined, State)
             end,
             riak_core_vnode:reply(Sender, Reply),
             {noreply, State#state{modstate=ModState3}};
@@ -927,7 +1023,7 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     StartTS = os:timestamp(),
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
-            update_hashtree(Bucket, Key, EncodedVal, State),
+            aae_update(Bucket, Key, use_binary, undefined, EncodedVal, State),
             ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
@@ -1387,7 +1483,7 @@ terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) 
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx}) ->
-    update_hashtree(Bucket, Key, EncodedVal, State),
+    aae_update(Bucket, Key, use_binary, undefined, EncodedVal, State),
     ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
@@ -1610,7 +1706,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
             ?INDEX({RObj, no_old_object}, delete, Idx),
-            delete_from_hashtree(Bucket, Key, State),
+            aae_delete(Bucket, Key, RObj, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
             State#state{modstate = UpdModState};
@@ -1853,7 +1949,7 @@ actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFla
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
-            update_hashtree(Bucket, Key, EncodedVal, State),
+            aae_update(Bucket, Key, Obj, OldObj, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
             ?INDEX({Obj, OldObj}, put, Idx),
             Reply = case RB of
@@ -2382,8 +2478,10 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             end,
             case encode_and_put(DiffObj, Mod, Bucket, Key,
                                 IndexSpecs, ModState, no_max_check) of
-                {{ok, _UpdModState} = InnerRes, _EncodedVal} ->
-                    update_hashtree(Bucket, Key, DiffObj, StateData),
+                {{ok, _UpdModState} = InnerRes, EncodedVal} ->
+                    aae_update(Bucket, Key, 
+                                DiffObj, none, EncodedVal, 
+                                StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
                     ?INDEX({DiffObj, no_old_object}, handoff, Idx),
@@ -2408,8 +2506,10 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     end,
                     case encode_and_put(AMObj, Mod, Bucket, Key,
                                         IndexSpecs, ModState, no_max_check) of
-                        {{ok, _UpdModState} = InnerRes, _EncodedVal} ->
-                            update_hashtree(Bucket, Key, AMObj, StateData),
+                        {{ok, _UpdModState} = InnerRes, EncodedVal} ->
+                            aae_update(Bucket, Key, 
+                                        AMObj, OldObj, EncodedVal, 
+                                        StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
                             ?INDEX({AMObj, OldObj}, handoff, Idx),
@@ -2420,15 +2520,107 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             end
     end.
 
--spec update_hashtree(binary(), binary(),
-                      riak_object:riak_object() | binary(),
-                      state()) -> ok.
-update_hashtree(_Bucket, _Key, _RObj, #state{hashtrees=undefined}) ->
-    ok;
-update_hashtree(Bucket, Key, BinObj, State) when is_binary(BinObj) ->
-    RObj = riak_object:from_binary(Bucket, Key, BinObj),
-    update_hashtree(Bucket, Key, RObj, State);
-update_hashtree(Bucket, Key, RObj, #state{hashtrees=Trees}) ->
+
+-spec aae_update(binary(), binary(),
+                    riak_object:riak_object()|none|undefined|use_binary,
+                    riak_object:riak_object()|none|undefined,
+                    binary()|use_object, 
+                        % cannot be use_object if object is use_binary
+                    state()) -> ok.
+%% @doc
+%% Update both the AAE controller (tictac aae) and old school hashtree aae
+%% if either or both are enabled.
+aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
+    case State#state.hashtrees of 
+        undefined ->
+            ok;
+        Trees ->
+            RObj = 
+                case UpdObj of 
+                    use_binary ->
+                        riak_object:from_binary(Bucket, Key, UpdObjBin);
+                    _ ->
+                        UpdObj
+                end,
+            update_hashtree(Bucket, Key, RObj, Trees)
+    end,
+    case State#state.tictac_aae of 
+        false ->
+            ok;
+        true ->
+            UpdClock = 
+                case UpdObj of 
+                    use_binary ->
+                        {VC, _Sz, _Sc} = 
+                            riak_object:summary_from_binary(UpdObjBin),
+                        lists:usort(VC);
+                    _ ->
+                        get_clock(UpdObj)
+                end,
+            PrevClock = get_clock(PrevObj),
+            IndexN = riak_kv_util:get_index_n({Bucket, Key}),
+            ObjBin = 
+                case UpdObjBin of 
+                    use_object ->
+                        riak_object:to_binary(UpdObj);
+                    _ ->
+                        UpdObjBin
+                end,
+            aae_controller:aae_put(State#state.aae_controller, 
+                                    IndexN, 
+                                    Bucket, Key, 
+                                    UpdClock, PrevClock, 
+                                    ObjBin)
+    end.
+
+
+-spec aae_delete(binary(), binary(), 
+                    riak_object:riak_object()|none|undefined, 
+                    state()) -> ok.
+%% @doc
+%% Remove an item from the AAE store, where AAE has been enabled
+aae_delete(Bucket, Key, PrevObj, State) ->
+    case State#state.hashtrees of 
+        undefined ->
+            ok;
+        Trees ->
+            delete_from_hashtree(Bucket, Key, Trees)
+    end,
+    case State#state.tictac_aae of 
+        false ->
+            ok;
+        true ->
+            PrevClock = get_clock(PrevObj),
+            IndexN = riak_kv_util:get_index_n({Bucket, Key}),
+            aae_controller:aae_put(State#state.aae_controller, 
+                                    IndexN, 
+                                    Bucket, Key, 
+                                    none, PrevClock, 
+                                    <<>>)
+    end.
+
+
+-spec get_clock(riak_object:riak_object()|none|undefined) 
+                                            -> aae_controller:version_vector().
+%% @doc
+%% Get the vector clock from the object to pass to the aae_controller
+get_clock(undefined) ->
+    undefined;
+get_clock(none) ->
+    none;
+get_clock(Object) ->
+    lists:usort(riak_object:vclock(Object)).
+
+
+-spec update_hashtree(binary(), binary(), riak_object:riak_object(), pid()) 
+                                                                        -> ok.
+%% @doc
+%% Update hashtree based AAE when enabled.
+%% Note that this requires an object copy - the object has been converted from
+%% a binary before being sent to another pid.  Also, all information on the 
+%% object is ignored other than that necessary to hash the object.  There is 
+%% scope for greater efficiency here, even without moving to Tictac AAE
+update_hashtree(Bucket, Key, RObj, Trees) ->
     Items = [{object, {Bucket, Key}, RObj}],
     case get_hashtree_token() of
         true ->
@@ -2440,7 +2632,11 @@ update_hashtree(Bucket, Key, RObj, #state{hashtrees=Trees}) ->
             ok
     end.
 
-delete_from_hashtree(Bucket, Key, #state{hashtrees=Trees})->
+
+-spec delete_from_hashtree(binary(), binary(), pid()) -> ok.
+%% @doc
+%% Remove an object from the hashtree based AAE
+delete_from_hashtree(Bucket, Key, Trees)->
     Items = [{object, {Bucket, Key}}],
     case get_hashtree_token() of
         true ->
