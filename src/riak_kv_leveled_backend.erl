@@ -97,19 +97,13 @@ start(Partition, Config) ->
                             {sync_strategy, ?LEVELED_SYNCSTRATEGY},
                             {compression_method, ?LEVELED_PRESSMETHOD},
                             {compression_point, ?LEVELED_PRESSPOINT}],
-            case leveled_bookie:book_start(StartOpts) of
-                {ok, Bookie} ->
-                    Ref = make_ref(),
-                    schedule_journalcompaction(Ref, Partition),
-                    {ok, #state{bookie=Bookie,
-                                reference=Ref,
-                                partition=Partition,
-                                config=Config }};
-                {error, OpenReason}=OpenError ->
-                    lager:error("Failed to open leveled: ~p\n",
-                                    [OpenReason]),
-                    OpenError
-            end;
+            {ok, Bookie} = leveled_bookie:book_start(StartOpts),
+            Ref = make_ref(),
+            schedule_journalcompaction(Ref, Partition),
+            {ok, #state{bookie=Bookie,
+                        reference=Ref,
+                        partition=Partition,
+                        config=Config }};
         {error, Reason} ->
             lager:error("Failed to start leveled backend: ~p\n",
                             [Reason]),
@@ -131,9 +125,7 @@ get(Bucket, Key, #state{bookie=Bookie}=State) ->
         {ok, Value} ->
             {ok, Value, State};
         not_found  ->
-            {error, not_found, State};
-        {error, Reason} ->
-            {error, Reason, State}
+            {error, not_found, State}
     end.
 
 %% @doc Retrieve an object from the leveled backend as a binary
@@ -146,9 +138,7 @@ head(Bucket, Key, #state{bookie=Bookie}=State) ->
         {ok, Value} ->
             {ok, Value, State};
         not_found  ->
-            {error, not_found, State};
-        {error, Reason} ->
-            {error, Reason, State}
+            {error, not_found, State}
     end.
 
 %% @doc Insert an object into the leveled backend.

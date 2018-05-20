@@ -2562,7 +2562,7 @@ aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
             ObjBin = 
                 case UpdObjBin of 
                     use_object ->
-                        riak_object:to_binary(UpdObj);
+                        riak_object:to_binary(v1, UpdObj);
                     _ ->
                         UpdObjBin
                 end,

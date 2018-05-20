@@ -79,13 +79,13 @@ generate_acc(Opts) ->
 generate_objectfold(_Opts) ->
     fun(B, K, PO, {Count, TreeAcc}) ->
         ExtractFun = 
-            fun(Key, Obj) ->
+            fun({B0, K0}, Obj) ->
+                BinK = <<B0/binary, K0/binary>>,
                 {VC, _Sz, _SC} = riak_object:summary_from_binary(Obj),
-                {Key, lists:sort(VC)}
+                {BinK, lists:sort(VC)}
             end,
-        BinK = <<B/binary, K/binary>>,
         {Count + 1, 
-            leveled_tictac:add_kv(TreeAcc, BinK, PO, ExtractFun)}
+            leveled_tictac:add_kv(TreeAcc, {B, K}, PO, ExtractFun)}
     end.
 
 generate_mergefun(_Opts) ->
