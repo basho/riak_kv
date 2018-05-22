@@ -348,7 +348,7 @@ test_vnode(I) ->
     riak_core_vnode:start_link(riak_kv_vnode, I, infinity).
 
 
--spec aae_send(list(tuple())) -> fun().
+-spec aae_send(tuple()) -> fun().
 %% @doc
 %% Return a function which will send an aae request to a given vnode, and can
 %% prompt the response to be received by sender 

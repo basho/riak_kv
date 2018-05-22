@@ -45,6 +45,8 @@
                   {basic_quorum, boolean()} |  %% Whether to use basic quorum (return early
                                                %% in some failure cases.
                   {notfound_ok, boolean()}  |  %% Count notfound reponses as successful.
+                  {force_aae, boolean()}    |  %% Force there to be be an AAE exchange for the
+                                               %% preflist after the GEt has been completed 
                   {timeout, pos_integer() | infinity} | %% Timeout for vnode responses
                   {details, details()} |       %% Return extra details as a 3rd element
                   {details, true} |
@@ -80,6 +82,7 @@
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined,
                 crdt_op :: undefined | true,
                 request_type :: undefined | head | get | update,
+                force_aae = false :: boolean(),
                 override_nodes = [] :: list()
                }).
 
@@ -203,6 +206,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
     Bucket_N = get_option(n_val, BucketProps),
     CrdtOp = get_option(crdt_op, Options),
+    ForceAAE = get_option(force_aae, Options, false),
     N = case get_option(n_val, Options) of
             undefined ->
                 Bucket_N;
@@ -231,7 +235,8 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                                                 bucket_props=Props,
                                                 preflist2 = Preflist2,
                                                 tracked_bucket = StatTracked,
-                                                crdt_op = CrdtOp})
+                                                crdt_op = CrdtOp,
+                                                force_aae = ForceAAE})
     end.
 
 %% @private
@@ -494,7 +499,8 @@ maybe_finalize(StateData=#state{get_core = GetCore}) ->
         false -> {next_state,waiting_read_repair,StateData}
     end.
 
-finalize(StateData=#state{get_core = GetCore, trace = Trace }) ->
+finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
+                            preflist2 = PL, n = N, force_aae = ForceAAE}) ->
     {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
     UpdStateData = StateData#state{get_core = UpdGetCore},
     case Action of
@@ -506,7 +512,40 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace }) ->
             ?DTRACE(Trace, ?C_GET_FSM_FINALIZE, [], ["finalize"]),
             ok
     end,
+    case ForceAAE of 
+        true ->
+            Primaries = 
+                [{{I, Node}, {I, N}} || {{I, Node}, primary} <- PL],
+            case length(Primaries) of 
+                L when L < 2 ->
+                    lager:info("Insufficient Primaries to support force AAE request", []),
+                    ok;
+                L ->
+                    {BlueP, BlueIN} = lists:nth((ReqID rem L) + 1, Primaries),
+                    {PinkP, PinkIN} = lists:nth(((ReqID + 1) rem L) + 1, Primaries),
+                    BlueList = [{riak_kv_vnode:aae_send(BlueP), [BlueIN]}], 
+                    PinkList = [{riak_kv_vnode:aae_send(PinkP), [PinkIN]}], 
+                    aae_exchange:start(BlueList, 
+                                        PinkList, 
+                                        prompt_readrepair(), 
+                                        fun reply_fun/1)
+            end;
+        false ->
+            ok
+    end,
     {stop,normal,StateData}.
+
+
+prompt_readrepair() ->
+    C = riak_client:new(local, undefined),
+    fun(B, K, _BlueClock, _PinkClock) ->
+        riak_client:get(B, K, C)
+    end.
+
+reply_fun({EndStateName, DeltaCount}) ->
+    lager:info("AAE Reached end_state=~w with delta_count=~w", 
+                [EndStateName, DeltaCount]).
+
 
 %% Maybe issue deletes if all primary nodes are available.
 %% Get core will only requestion deletion if all vnodes
