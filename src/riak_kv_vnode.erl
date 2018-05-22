@@ -54,7 +54,8 @@
          upgrade_hashtree/1,
          reformat_object/2,
          stop_fold/1,
-         get_modstate/1]).
+         get_modstate/1,
+         aae_send/1]).
 
 %% riak_core_vnode API
 -export([init/1,
@@ -345,6 +346,21 @@ start_vnodes(IdxList) ->
 
 test_vnode(I) ->
     riak_core_vnode:start_link(riak_kv_vnode, I, infinity).
+
+
+-spec aae_send(list(tuple())) -> fun().
+%% @doc
+%% Return a function which will send an aae request to a given vnode, and can
+%% prompt the response to be received by sender 
+aae_send(Preflist) ->
+    fun(AAERequest, IndexNs, Colour) ->
+        Sender = {fsm, undefined, self()},
+        riak_core_vnode_master:command(Preflist, 
+                                        {aae, AAERequest, IndexNs, Colour}, 
+                                        Sender, 
+                                        riak_kv_vnode_master)
+    end.
+
 
 get(Preflist, BKey, ReqId) ->
     %% Assuming this function is called from a FSM process
@@ -675,6 +691,36 @@ handle_overload_info({raw_forward_get, _, From}, _Idx) ->
 handle_overload_info(_, _) ->
     ok.
 
+
+handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
+    ReturnFun =
+        fun(R) ->
+            riak_core_vnode:reply(Sender, {R, Colour})
+        end,
+    case State#state.tictac_aae of 
+        false ->
+            ReturnFun(not_supported);
+        true ->
+            Cntrl = State#state.aae_controller,
+            case AAERequest of 
+                fetch_root ->
+                    aae_controller:aae_mergeroot(Cntrl, 
+                                                    IndexNs, 
+                                                    ReturnFun);
+                {fetch_branches, BranchIDs} ->
+                    aae_controller:aae_mergebranches(Cntrl, 
+                                                        IndexNs, 
+                                                        BranchIDs, 
+                                                        ReturnFun);
+                {fetch_clocks, SegmentIDs} ->
+                    aae_controller:aae_fetchclocks(Cntrl,
+                                                        IndexNs,
+                                                        SegmentIDs,
+                                                        ReturnFun,
+                                                        null)
+            end
+    end,
+    {noreply, State};
 handle_command(?KV_PUT_REQ{bkey=BKey,
                            object=Object,
                            req_id=ReqId,
