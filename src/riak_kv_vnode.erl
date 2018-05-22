@@ -275,7 +275,7 @@ maybe_start_aaecontroller(true, State=#state{mod=Mod,
     KeyStoreType =
         case lists:member(leveled, Mod:capabilities(UpdModState)) of 
             true ->
-                Bookie = Mod:get_bookie(UpdModState),
+                Bookie = Mod:return_self(UpdModState),
                 {native, leveled_nko, Bookie};
             false ->
                 ParallelStore = 

@@ -36,7 +36,8 @@
 
 %% Extended KV Backend API
 -export([head/3,
-            fold_heads/4]).
+            fold_heads/4,
+            return_self/1]).
 
 
 -include("riak_kv_index.hrl").
@@ -54,7 +55,8 @@
                         direct_fetch,
                         putfsm_pause,
                         snap_prefold,
-                        segment_accelerate]).
+                        segment_accelerate,
+                        leveled]).
 -define(API_VERSION, 1).
 
 -record(state, {bookie :: pid(),
@@ -109,6 +111,11 @@ start(Partition, Config) ->
                             [Reason]),
             {error, Reason}
     end.
+
+-spec return_self(state()) -> pid().
+%% @doc
+%% Return the Bookie PID from the ModState
+return_self(State) -> State#state.bookie.
 
 %% @doc Stop the leveled backend
 -spec stop(state()) -> ok.
