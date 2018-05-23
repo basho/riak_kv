@@ -538,8 +538,12 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
 
 prompt_readrepair() ->
     C = riak_client:new(local, undefined),
-    fun({B, K}, {_BlueClock, _PinkClock}) ->
-        riak_client:get(B, K, C)
+    ElementFun = 
+        fun({B, K}, {_BlueClock, _PinkClock}) ->
+            riak_client:get(B, K, C)
+        end,
+    fun(RepairList) ->
+        lists:foreach(ElementFun, RepairList)
     end.
 
 reply_fun({EndStateName, DeltaCount}) ->
