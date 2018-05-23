@@ -37,7 +37,8 @@
 %% Extended KV Backend API
 -export([head/3,
             fold_heads/4,
-            return_self/1]).
+            return_self/1,
+            shutdown_guid/2]).
 
 
 -include("riak_kv_index.hrl").
@@ -56,8 +57,12 @@
                         putfsm_pause,
                         snap_prefold,
                         segment_accelerate,
-                        leveled]).
+                        leveled,
+                        shutdown_guid]).
 -define(API_VERSION, 1).
+-define(BUCKET_SDG, <<"MD">>).
+-define(KEY_SDG, <<"SHUDOWN_GUID">>).
+-define(TAG_SDG, o).
 
 -record(state, {bookie :: pid(),
                 reference :: reference(),
@@ -121,6 +126,28 @@ return_self(State) -> State#state.bookie.
 -spec stop(state()) -> ok.
 stop(#state{bookie=Bookie}) ->
     ok = leveled_bookie:book_close(Bookie).
+
+-spec shutdown_guid(state(), on_close|on_start) -> string()|none.
+%% @doc
+%% Check the shutdown GUID on startup, or generate and ave it on shutdown
+shutdown_guid(#state{bookie=Bookie}, on_close) ->
+    ShutdownGUID = leveled_util:generate_uuid(),
+    ok = leveled_bookie:book_put(Bookie, 
+                                    ?BUCKET_SDG, ?KEY_SDG, 
+                                    ShutdownGUID, [], 
+                                    ?TAG_SDG),
+    ShutdownGUID;
+shutdown_guid(#state{bookie=Bookie}, on_start) ->
+    % Check for a shutdown GUID and delete if present
+    case leveled_bookie:book_get(Bookie, ?BUCKET_SDG, ?KEY_SDG, ?TAG_SDG) of
+        {ok, Value} ->
+            leveled_bookie:book_put(Bookie,
+                                    ?BUCKET_SDG, ?KEY_SDG, delete, [],
+                                    ?TAG_SDG),
+            Value;
+        not_found  ->
+            none
+    end.
 
 %% @doc Retrieve an object from the leveled backend as a binary
 -spec get(riak_object:bucket(), riak_object:key(), state()) ->

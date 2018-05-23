@@ -102,7 +102,5 @@
 -define(KV_VNODE_LOCK(Idx), {vnode_lock, Idx}).
 
 -define(ENABLE_TICTACAAE, true).
--define(SHUTDOWN_BUCKET, <<"_SHUTDOWN">>).
--define(SHUTDOWN_KEY, integer_to_binary(erlang:phash2(<<"_SHUTDOWN_KEY">>))).
 -define(PARALLEL_AAEORDER, leveled_ko).
 -define(REBUILD_SCHEDULE, {120, 14400}).

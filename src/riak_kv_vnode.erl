@@ -257,26 +257,23 @@ maybe_start_aaecontroller(false, State) ->
 maybe_start_aaecontroller(true, State=#state{mod=Mod, 
                                                 idx=Partition, 
                                                 modstate=ModState}) ->
-
-    {ShutdownGUID, UpdModState} =
-        case do_get_binary(?SHUTDOWN_BUCKET, ?SHUTDOWN_KEY, Mod, ModState) of
-            {ok, V, ModState0} ->
-                {ok, ModState1} = 
-                    Mod:delete(?SHUTDOWN_BUCKET, ?SHUTDOWN_KEY, [], ModState0),
-                    {V, ModState1};
-            _ ->
-                {none, ModState}
+    {ok, ModCaps} = Mod:capabilities(ModState),
+    ShutdownGUID =
+        case lists:member(shutdown_guid, ModCaps) of
+            true ->
+                Mod:shutdown_guid(ModState, on_start);
+            false ->
+                none
         end,
     IsEmpty = 
         case is_empty(State) of
             {true, _}     -> true;
             {false, _, _} -> false
         end,
-    {ok, ModCaps} = Mod:capabilities(UpdModState),
     KeyStoreType =
         case lists:member(leveled, ModCaps) of 
             true ->
-                Bookie = Mod:return_self(UpdModState),
+                Bookie = Mod:return_self(ModState),
                 {native, leveled_nko, Bookie};
             false ->
                 ParallelStore = 
@@ -299,7 +296,7 @@ maybe_start_aaecontroller(true, State=#state{mod=Mod,
     
     State#state{tictac_aae = true,
                 aae_controller = AAECntrl,
-                modstate = UpdModState}.
+                modstate = ModState}.
 
 
 -spec from_object_binary(binary()) -> {integer(), integer(), integer(), null}.
@@ -1518,15 +1515,33 @@ delete(State=#state{status_mgr_pid=StatusMgr, mod=Mod, modstate=ModState}) ->
     end,
     {ok, State#state{modstate=UpdModState,vnodeid=undefined,hashtrees=undefined}}.
 
-terminate(_Reason, #state{idx=Idx, mod=Mod, modstate=ModState,hashtrees=Trees}) ->
-    Mod:stop(ModState),
+terminate(_Reason, #state{idx=Idx, 
+                            mod=Mod, modstate=ModState, 
+                            hashtrees=Trees, 
+                            tictac_aae=TicTacAAE, aae_controller=Cntrl}) ->
+    
+    case TicTacAAE of 
+        true ->
+            {ok, ModCaps} = Mod:capabilities(ModState),
+            ShutdownGUID = 
+                case lists:member(shutdown_guid, ModCaps) of
+                    true ->
+                        Mod:shutdown_guid(ModState, on_close);
+                    false ->
+                        none
+                end,
+            Mod:stop(ModState),
+            ok = aae_controller:aae_close(Cntrl, ShutdownGUID);
+        false ->
+            Mod:stop(ModState),
 
-    %% Explicitly stop the hashtree rather than relying on the process monitor
-    %% to detect the vnode exit.  As riak_kv_index_hashtree is not a supervised
-    %% process in the riak_kv application, on graceful shutdown riak_kv and
-    %% riak_core can complete their shutdown before the hashtree is written
-    %% to disk causing the hashtree to be closed dirty.
-    riak_kv_index_hashtree:sync_stop(Trees),
+            %% Explicitly stop the hashtree rather than relying on the process monitor
+            %% to detect the vnode exit.  As riak_kv_index_hashtree is not a supervised
+            %% process in the riak_kv application, on graceful shutdown riak_kv and
+            %% riak_core can complete their shutdown before the hashtree is written
+            %% to disk causing the hashtree to be closed dirty.
+            riak_kv_index_hashtree:sync_stop(Trees)
+    end,
     riak_kv_stat:unregister_vnode_stats(Idx),
     ok.
 
