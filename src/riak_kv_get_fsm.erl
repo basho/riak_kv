@@ -527,7 +527,7 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
                     PinkList = [{riak_kv_vnode:aae_send(PinkP), [PinkIN]}], 
                     aae_exchange:start(BlueList, 
                                         PinkList, 
-                                        prompt_readrepair(), 
+                                        prompt_readrepair([BlueP, PinkP]), 
                                         fun reply_fun/1)
             end;
         false ->
@@ -536,11 +536,12 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
     {stop,normal,StateData}.
 
 
-prompt_readrepair() ->
+prompt_readrepair(VnodeList) ->
     C = riak_client:new(local, undefined),
     ElementFun = 
         fun({{B, K}, {_BlueClock, _PinkClock}}) ->
-            riak_client:get(B, K, C)
+            riak_client:get(B, K, C),
+            riak_kv_vnode:rehash(VnodeList, B, K)
         end,
     fun(RepairList) ->
         lists:foreach(ElementFun, RepairList)
