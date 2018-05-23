@@ -2527,7 +2527,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                                 IndexSpecs, ModState, no_max_check) of
                 {{ok, _UpdModState} = InnerRes, EncodedVal} ->
                     aae_update(Bucket, Key, 
-                                DiffObj, none, EncodedVal, 
+                                DiffObj, no_old_object, EncodedVal, 
                                 StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
@@ -2570,7 +2570,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
 
 -spec aae_update(binary(), binary(),
                     riak_object:riak_object()|none|undefined|use_binary,
-                    riak_object:riak_object()|none|undefined,
+                    riak_object:riak_object()|no_old_object|undefined,
                     binary()|use_object, 
                         % cannot be use_object if object is use_binary
                     state()) -> ok.
@@ -2647,13 +2647,13 @@ aae_delete(Bucket, Key, PrevObj, State) ->
     end.
 
 
--spec get_clock(riak_object:riak_object()|none|undefined) 
+-spec get_clock(riak_object:riak_object()|no_old_object|undefined) 
                                             -> aae_controller:version_vector().
 %% @doc
 %% Get the vector clock from the object to pass to the aae_controller
 get_clock(undefined) ->
     undefined;
-get_clock(none) ->
+get_clock(no_old_object) ->
     none;
 get_clock(Object) ->
     lists:usort(riak_object:vclock(Object)).
