@@ -714,11 +714,13 @@ handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
                                                         BranchIDs, 
                                                         ReturnFun);
                 {fetch_clocks, SegmentIDs} ->
+                    IndexNFun = 
+                        fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
                     aae_controller:aae_fetchclocks(Cntrl,
-                                                        IndexNs,
-                                                        SegmentIDs,
-                                                        ReturnFun,
-                                                        null)
+                                                    IndexNs,
+                                                    SegmentIDs,
+                                                    ReturnFun,
+                                                    IndexNFun)
             end
     end,
     {noreply, State};
