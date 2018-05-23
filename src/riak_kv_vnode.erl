@@ -696,7 +696,7 @@ handle_overload_info(_, _) ->
 handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
     ReturnFun =
         fun(R) ->
-            riak_core_vnode:reply(Sender, {R, Colour})
+            riak_core_vnode:reply(Sender, {reply, R, Colour})
         end,
     case State#state.tictac_aae of 
         false ->
