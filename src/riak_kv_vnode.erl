@@ -272,8 +272,9 @@ maybe_start_aaecontroller(true, State=#state{mod=Mod,
             {true, _}     -> true;
             {false, _, _} -> false
         end,
+    {ok, ModCaps} = Mod:capabilities(UpdModState),
     KeyStoreType =
-        case lists:member(leveled, Mod:capabilities(UpdModState)) of 
+        case lists:member(leveled, ModCaps) of 
             true ->
                 Bookie = Mod:return_self(UpdModState),
                 {native, leveled_nko, Bookie};
