@@ -169,7 +169,22 @@
 -type index_query() :: undefined | ?KV_INDEX_Q{}.
 -type vnodeid() :: binary().
 -type counter_lease_error() :: {error, counter_lease_max_errors | counter_lease_timeout}.
-
+-type old_object() :: riak_object:riak_object()|
+                        confirmed_no_old_object|
+                        assumed_no_old_object|
+                        unchanged_no_old_object|
+                        unknown_no_old_object.
+    % Hooks use no_old_object, but no_old_object can mean four things.
+    % 1 - A GET was done before the PUT, and no old object was found
+    % 2 - The path used assumes there is no old object
+    % 3 - The old object hasn't changed - so the new object is the old object
+    % 4 - The path doesn't consider an old object to be relevant 
+    % This creates a type to represent these three cases separately, as 
+    % well as the scenario where the is an old object.
+    % The function maybe_old-object/1 can be called to normalise the three
+    % cases back to the single case of no_old_object for hooks.
+-type hook_old_object() :: riak_object:riak_object()|no_old_object.
+    % Type for old objects to be passed into hooks
 
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
@@ -853,7 +868,7 @@ handle_command({hashtree_pid, Node}, _, State=#state{hashtrees=HT}) ->
 handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState}) ->
     case do_get_binary(Bucket, Key, Mod, ModState) of
         {ok, Bin, _UpdModState} ->
-            aae_update(Bucket, Key, use_binary, undefined, Bin, State);
+            aae_update(Bucket, Key, use_binary, unknown_no_old_object, Bin, State);
         _ ->
             %% Make sure hashtree isn't tracking deleted data
             aae_delete(Bucket, Key, undefined, State)
@@ -868,13 +883,13 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
     case IndexCap of
         true ->
             {Exists, RObj, IdxData, ModState2} =
-            case do_get_term(BKey, Mod, ModState) of
-                {{ok, ExistingObj}, UpModState} ->
-                    {true, ExistingObj, riak_object:index_data(ExistingObj),
-                     UpModState};
-                {{error, _}, UpModState} ->
-                    {false, undefined, [], UpModState}
-            end,
+                case do_get_term(BKey, Mod, ModState) of
+                    {{ok, ExistingObj}, UpModState} ->
+                        {true, ExistingObj, riak_object:index_data(ExistingObj),
+                        UpModState};
+                    {{error, _}, UpModState} ->
+                        {false, undefined, [], UpModState}
+                end,
             IndexSpecs = riak_object:diff_index_data(OldIdxData, IdxData),
             {Reply, ModState3} =
             case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState2) of
@@ -887,7 +902,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
             case Exists of
                 true ->
                     aae_update(Bucket, Key, 
-                                RObj, undefined, use_object, 
+                                RObj, unknown_no_old_object, use_object, 
                                 State);
                 false ->
                     aae_delete(Bucket, Key, undefined, State)
@@ -1069,7 +1084,9 @@ handle_command(?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=
     StartTS = os:timestamp(),
     case Mod:put(Bucket, Key, [], EncodedVal, ModState) of
         {ok, UpModState} ->
-            aae_update(Bucket, Key, use_binary, undefined, EncodedVal, State),
+            aae_update(Bucket, Key, use_binary, assumed_no_old_object, EncodedVal, State),
+                % Write once path - and so should be a new object.  If not this
+                % is an application fault
             ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=Type}, State#state{modstate=UpModState}};
@@ -1547,7 +1564,9 @@ terminate(_Reason, #state{idx=Idx,
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
             State=#state{idx=Idx}) ->
-    aae_update(Bucket, Key, use_binary, undefined, EncodedVal, State),
+    aae_update(Bucket, Key, use_binary, assumed_no_old_object, EncodedVal, State),
+        % Write once path - and so should be a new object.  If not this
+        % is an application fault
     ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
@@ -1820,7 +1839,8 @@ prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State) ->
         false ->
             RObj
     end,
-    {{true, {ObjToStore, no_old_object}}, PutArgs#putargs{is_index = false}, State}.
+    {{true, {ObjToStore, unknown_no_old_object}}, 
+        PutArgs#putargs{is_index = false}, State}.
 
 prepare_read_before_write_put(#state{mod = Mod,
                                      modstate = ModState,
@@ -1869,7 +1889,7 @@ prepare_put_existing_object(#state{idx =Idx} = State,
     {ActorId, State2} = maybe_new_key_epoch(Coord, State, OldObj, RObj),
     case put_merge(Coord, LWW, OldObj, RObj, ActorId, StartTime) of
         {oldobj, OldObj} ->
-            {{false, {OldObj, no_old_object}}, PutArgs, State2};
+            {{false, {OldObj, unchanged_no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
             AMObj = enforce_allow_mult(NewObj, BProps),
             IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
@@ -1921,7 +1941,7 @@ prepare_put_new_object(#state{idx =Idx} = State,
     {EpochId, State2} = new_key_epoch(State),
     RObj2 = maybe_update_vclock(Coord, RObj, EpochId, StartTime),
     RObj3 = maybe_do_crdt_update(Coord, CRDTOp, EpochId, RObj2),
-    determine_put_result(RObj3, no_old_object, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
+    determine_put_result(RObj3, confirmed_no_old_object, Idx, PutArgs, State2, IndexSpecs, IndexBackend).
 
 get_old_object_or_fake(true, Bucket, Key, Mod, ModState, _CacheClock) ->
     case do_get_object(Bucket, Key, Mod, ModState) of
@@ -2015,7 +2035,7 @@ actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFla
         {{ok, UpdModState}, EncodedVal} ->
             aae_update(Bucket, Key, Obj, OldObj, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
-            ?INDEX({Obj, OldObj}, put, Idx),
+            ?INDEX({Obj, maybe_old_object(OldObj)}, put, Idx),
             Reply = case RB of
                 true ->
                     {dw, Idx, Obj, ReqID};
@@ -2049,7 +2069,7 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
                                bkey=BKey,
                                reqid=undefined,
                                index_specs=[]},
-            case perform_put({true, {RObj, no_old_object}}, State, PutArgs) of
+            case perform_put({true, {RObj, unchanged_no_old_object}}, State, PutArgs) of
                 {{fail, _, Reason}, UpdState}  ->
                     Reply = {error, Reason};
                 {_, UpdState} ->
@@ -2544,7 +2564,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                                 IndexSpecs, ModState, no_max_check) of
                 {{ok, _UpdModState} = InnerRes, EncodedVal} ->
                     aae_update(Bucket, Key, 
-                                DiffObj, no_old_object, EncodedVal, 
+                                DiffObj, confirmed_no_old_object, EncodedVal, 
                                 StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
@@ -2576,7 +2596,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                                         StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
-                            ?INDEX({AMObj, OldObj}, handoff, Idx),
+                            ?INDEX({AMObj, maybe_old_object(OldObj)}, handoff, Idx),
                             InnerRes;
                         {InnerRes, _EncodedVal} ->
                             InnerRes
@@ -2587,7 +2607,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
 
 -spec aae_update(binary(), binary(),
                     riak_object:riak_object()|none|undefined|use_binary,
-                    riak_object:riak_object()|no_old_object|undefined,
+                    old_object(),
                     binary()|use_object, 
                         % cannot be use_object if object is use_binary
                     state()) -> ok.
@@ -2608,10 +2628,12 @@ aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
                 end,
             update_hashtree(Bucket, Key, RObj, Trees)
     end,
-    case State#state.tictac_aae of 
-        false ->
+    case {State#state.tictac_aae, PrevObj} of 
+        {false, _} ->
             ok;
-        true ->
+        {_, unchanged_no_old_object} ->
+            ok;
+        _ ->
             UpdClock = 
                 case UpdObj of 
                     use_binary ->
@@ -2664,16 +2686,31 @@ aae_delete(Bucket, Key, PrevObj, State) ->
     end.
 
 
--spec get_clock(riak_object:riak_object()|no_old_object|undefined) 
-                                            -> aae_controller:version_vector().
+-spec get_clock(old_object()) -> aae_controller:version_vector().
 %% @doc
 %% Get the vector clock from the object to pass to the aae_controller
-get_clock(undefined) ->
-    undefined;
-get_clock(no_old_object) ->
+get_clock(confirmed_no_old_object) ->
     none;
+get_clock(assumed_no_old_object) ->
+    none;
+get_clock(unknown_no_old_object) ->
+    undefined;
 get_clock(Object) ->
     lists:usort(riak_object:vclock(Object)).
+
+-spec maybe_old_object(old_object()) -> hook_old_object().
+%% @doc
+%% Normalize different no_old_object cases back to no_old_object
+maybe_old_object(confirmed_no_old_object) ->
+    no_old_object;
+maybe_old_object(assumed_no_old_object) ->
+    no_old_object;
+maybe_old_object(unchanged_no_old_object) ->
+    no_old_object;
+maybe_old_object(unknown_no_old_object) ->
+    no_old_object;
+maybe_old_object(OldObject) ->
+    OldObject.
 
 
 -spec update_hashtree(binary(), binary(), riak_object:riak_object(), pid()) 
