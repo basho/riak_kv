@@ -500,7 +500,8 @@ maybe_finalize(StateData=#state{get_core = GetCore}) ->
     end.
 
 finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
-                            preflist2 = PL, n = N, force_aae = ForceAAE}) ->
+                            preflist2 = PL, bkey = {B, K}, 
+                            force_aae = ForceAAE}) ->
     {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
     UpdStateData = StateData#state{get_core = UpdGetCore},
     case Action of
@@ -515,16 +516,17 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
     case ForceAAE of 
         true ->
             Primaries = 
-                [{{I, Node}, {I, N}} || {{I, Node}, primary} <- PL],
+                [{I, Node} || {{I, Node}, primary} <- PL],
             case length(Primaries) of 
                 L when L < 2 ->
                     lager:info("Insufficient Primaries to support force AAE request", []),
                     ok;
                 L ->
-                    {BlueP, BlueIN} = lists:nth((ReqID rem L) + 1, Primaries),
-                    {PinkP, PinkIN} = lists:nth(((ReqID + 1) rem L) + 1, Primaries),
-                    BlueList = [{riak_kv_vnode:aae_send(BlueP), [BlueIN]}], 
-                    PinkList = [{riak_kv_vnode:aae_send(PinkP), [PinkIN]}], 
+                    BlueP = lists:nth((ReqID rem L) + 1, Primaries),
+                    PinkP = lists:nth(((ReqID + 1) rem L) + 1, Primaries),
+                    IndexN = riak_kv_util:get_index_n({B, K}),
+                    BlueList = [{riak_kv_vnode:aae_send(BlueP), [IndexN]}], 
+                    PinkList = [{riak_kv_vnode:aae_send(PinkP), [IndexN]}], 
                     aae_exchange:start(BlueList, 
                                         PinkList, 
                                         prompt_readrepair([BlueP, PinkP]), 

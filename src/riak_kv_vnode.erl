@@ -905,7 +905,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                                 RObj, unknown_no_old_object, use_object, 
                                 State);
                 false ->
-                    aae_delete(Bucket, Key, undefined, State)
+                    aae_delete(Bucket, Key, confirmed_no_old_object, State)
             end,
             riak_core_vnode:reply(Sender, Reply),
             {noreply, State#state{modstate=ModState3}};
@@ -2660,9 +2660,7 @@ aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
     end.
 
 
--spec aae_delete(binary(), binary(), 
-                    riak_object:riak_object()|none|undefined, 
-                    state()) -> ok.
+-spec aae_delete(binary(), binary(), old_object(), state()) -> ok.
 %% @doc
 %% Remove an item from the AAE store, where AAE has been enabled
 aae_delete(Bucket, Key, PrevObj, State) ->
