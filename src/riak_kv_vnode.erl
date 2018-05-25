@@ -871,7 +871,7 @@ handle_command({rehash, Bucket, Key}, _, State=#state{mod=Mod, modstate=ModState
             aae_update(Bucket, Key, use_binary, unknown_no_old_object, Bin, State);
         _ ->
             %% Make sure hashtree isn't tracking deleted data
-            aae_delete(Bucket, Key, undefined, State)
+            aae_delete(Bucket, Key, confirmed_no_old_object, State)
     end,
     {noreply, State};
 
