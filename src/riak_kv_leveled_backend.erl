@@ -67,7 +67,9 @@
 -record(state, {bookie :: pid(),
                 reference :: reference(),
                 partition :: integer(),
-                config }).
+                config,
+                compactions_perday :: integer(),
+                valid_hours = [] :: list(integer())}).
 
 -type state() :: #state{}.
 
@@ -94,24 +96,36 @@ capabilities(_, _) ->
 %% @doc Start the hanoidb backend
 -spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
-    % Get the data root directory - cuttlefish not working
     DataRoot = app_helper:get_prop_or_env(data_root, Config, leveled),
-    lager:info("Starting with Config ~w", [Config]),
+    MJS = app_helper:get_prop_or_env(journal_size, Config, leveled),
+    BCS = app_helper:get_prop_or_env(cache_size, Config, leveled),
+    PCS = app_helper:get_prop_or_env(penciller_cache_size, Config, leveled),
+    SYS = app_helper:get_prop_or_env(sync_strategy, Config, leveled),
+    CMM = app_helper:get_prop_or_env(compression_method, Config, leveled),
+    CMP = app_helper:get_prop_or_env(compression_point, Config, leveled),
+    CRD = app_helper:get_prop_or_env(compaction_runs_perday, Config, leveled),
+    CLH = app_helper:get_prop_or_env(compaction_low_hour, Config, leveled),
+    CTH = app_helper:get_prop_or_env(compaction_top_hour, Config, leveled),
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             StartOpts = [{root_path, DataDir},
-                            {max_journalsize, ?LEVELED_JOURNALSIZE},
-                            {max_pencillercachesize, ?LEVELED_LEDGERCACHE},
-                            {sync_strategy, ?LEVELED_SYNCSTRATEGY},
-                            {compression_method, ?LEVELED_PRESSMETHOD},
-                            {compression_point, ?LEVELED_PRESSPOINT}],
+                            {max_journalsize, MJS},
+                            {cache_size, BCS},
+                            {max_pencillercachesize, PCS},
+                            {sync_strategy, SYS},
+                            {compression_method, CMM},
+                            {compression_point, CMP},
+                            {max_run_length, MRL}],
             {ok, Bookie} = leveled_bookie:book_start(StartOpts),
             Ref = make_ref(),
-            schedule_journalcompaction(Ref, Partition),
+            ValidHours = valid_hours(CLH, CTH),
+            schedule_journalcompaction(Ref, Partition, CRD, ValidHours),
             {ok, #state{bookie=Bookie,
                         reference=Ref,
                         partition=Partition,
-                        config=Config }};
+                        config=Config,
+                        compactions_perday = CRD,
+                        valid_hours = ValidHours}};
         {error, Reason} ->
             lager:error("Failed to start leveled backend: ~p\n",
                             [Reason]),
@@ -446,7 +460,9 @@ callback(Ref, compact_journal, State) ->
         true ->
              prompt_journalcompaction(State#state.bookie,
                                         Ref,
-                                        State#state.partition),
+                                        State#state.partition,
+                                        State#state.compactions_perday,
+                                        State#state.valid_hours),
              {ok, State}
     end.
 
@@ -467,15 +483,10 @@ get_data_dir(DataRoot, Partition) ->
             {error, Reason}
     end.
 
+-spec schedule_journalcompaction(ref(), any(), integer(), list(integer()) -> ok.
 %% @private
 %% Request a callback in the future to check for journal compaction
-schedule_journalcompaction(Ref, PartitionID) when is_reference(Ref) ->
-    ValidHours = app_helper:get_env(riak_kv,
-                                    leveled_jc_valid_hours,
-                                    ?LEVELED_JC_VALID_HOURS),
-    PerDay = app_helper:get_env(riak_kv,
-                                    leveled_jc_compactions_perday,
-                                    ?LEVELED_JC_COMPACTIONS_PERDAY),
+schedule_journalcompaction(Ref, PartitionID, PerDay, ValidHours) when is_reference(Ref) ->
     random:seed(element(3, os:timestamp()),
                     erlang:phash2(self()),
                     PartitionID),
@@ -490,10 +501,7 @@ schedule_journalcompaction(Ref, PartitionID) when is_reference(Ref) ->
 
 %% @private
 %% Do journal compaction if the callback is in a valid time period
-prompt_journalcompaction(Bookie, Ref, PartitionID) when is_reference(Ref) ->
-    ValidHours = app_helper:get_env(riak_kv,
-                                    leveled_jc_valid_hours,
-                                    ?LEVELED_JC_VALID_HOURS),
+prompt_journalcompaction(Bookie, Ref, PartitionID, PerDay, ValidHours) when is_reference(Ref) ->
     {{_Yr, _Mth, _Day}, {Hr, _Min, _Sec}} = calendar:local_time(),
     case lists:member(Hr, ValidHours) of
         true ->
@@ -506,9 +514,14 @@ prompt_journalcompaction(Bookie, Ref, PartitionID) when is_reference(Ref) ->
         false ->
             ok
     end,
-    schedule_journalcompaction(Ref, PartitionID).
+    schedule_journalcompaction(Ref, PartitionID, PerDay, ValidHours).
 
-
+%% @private
+%% Change the low hour and high hour into a list of valid hours
+valid_hours(LowHour, HighHour) when LowHour > HighHour ->
+    lists:seq(0, HighHour) ++ lists:seq(LowHour, 23);
+valid_hours(LowHour, HighHour) ->
+    lists:seq(LowHour, HighHour).
 
 %% ===================================================================
 %% EUnit tests
