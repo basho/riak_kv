@@ -263,17 +263,16 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
     end.
 
 
--spec maybe_start_aaecontroller(boolean(), state(), list()) -> state().
+-spec maybe_start_aaecontroller(boolean(), state() -> state().
 %% @doc
 %% Start an AAE controller if riak_kv has been consfigured to use cached
 %% tictac tree based AAE
-maybe_start_aaecontroller(false, State, _Config) ->
+maybe_start_aaecontroller(false, State) ->
     State#state{tictac_aae=false, aae_controller=undefined};
 maybe_start_aaecontroller(true, 
                             State=#state{mod=Mod, 
                                             idx=Partition, 
-                                            modstate=ModState},
-                            Config) ->
+                                            modstate=ModState}) ->
     {ok, ModCaps} = Mod:capabilities(ModState),
     ShutdownGUID =
         case lists:member(shutdown_guid, ModCaps) of
@@ -294,16 +293,14 @@ maybe_start_aaecontroller(true,
                 {native, leveled_nko, Bookie};
             false ->
                 ParallelStore = 
-                    app_helper:get_prop_or_env(parallel_store, 
-                                                Config,
-                                                kv_index_tictactree),
+                    app_helper:get_env(kv_index_tictactree, parallel_store),
                 {parallel, ParallelStore}
         end,
     Preflists = riak_kv_util:responsible_preflists(Partition),
     RootPath = determine_aaedata_root(Partition),
 
-    RD = app_helper:get_prop_or_env(rebuild_delay, Config, kv_index_tictactree),
-    RW = app_helper:get_prop_or_env(rebuild_wait, Config, kv_index_tictactree),
+    RD = app_helper:get_prop_or_env(kv_index_tictactree, rebuild_delay),
+    RW = app_helper:get_prop_or_env(kv_index_tictactree, rebuild_wait),
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
@@ -626,7 +623,7 @@ init([Index]) ->
                 undefined
         end,
     EnableTictacAAE = 
-        app_helper:get_prop_or_env(active, Configuration, kv_index_tictactree),
+        app_helper:get_env(kv_index_tictactree, active),
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
@@ -658,9 +655,7 @@ init([Index]) ->
                     FoldWorkerPool = {pool, riak_kv_worker, WorkerPoolSize, []},
                     State2 = maybe_create_hashtrees(State),
                     State3 = 
-                        maybe_start_aaecontroller(EnableTictacAAE, 
-                                                    State2, 
-                                                    Configuration),
+                        maybe_start_aaecontroller(EnableTictacAAE, State2),
                     {ok, State3, [FoldWorkerPool]};
                 false ->
                     {ok, State}
