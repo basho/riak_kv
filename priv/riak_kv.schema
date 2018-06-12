@@ -51,7 +51,7 @@
 %% @doc Minimum Rebuild Wait
 %% The minimum number of hours to wait between rebuilds.  Default value is 2 
 %% weeks
-{mapping, "tictacaae_rebuildwait", "riak_kv_tictacaae_rebuildwait", [
+{mapping, "tictacaae_rebuildwait", "riak_kv.tictacaae_rebuildwait", [
   {datatype, integer},
   {default, 336}
 ]}.
