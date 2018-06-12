@@ -295,15 +295,15 @@ maybe_start_aaecontroller(true,
             false ->
                 ParallelStore = 
                     app_helper:get_prop_or_env(parallel_store, 
-                                                Config, 
-                                            tictac_aae),
+                                                Config,
+                                                kv_index_tictactree),
                 {parallel, ParallelStore}
         end,
     Preflists = riak_kv_util:responsible_preflists(Partition),
     RootPath = determine_aaedata_root(Partition),
 
-    RD = app_helper:get_prop_or_env(rebuild_delay, Config, tictac_aae),
-    RW = app_helper:get_prop_or_env(rebuild_wait, Config, tictac_aae),
+    RD = app_helper:get_prop_or_env(rebuild_delay, Config, kv_index_tictactree),
+    RW = app_helper:get_prop_or_env(rebuild_wait, Config, kv_index_tictactree),
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
@@ -626,13 +626,7 @@ init([Index]) ->
                 undefined
         end,
     EnableTictacAAE = 
-        app_helper:get_prop_or_env(active, Configuration, tictac_aae),
-    case EnableTictacAAE of
-        undefined ->
-            lager:info("Not working - config ~w~n", [Configuration]);
-        _ ->
-            ok
-    end,
+        app_helper:get_prop_or_env(active, Configuration, kv_index_tictactree),
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
