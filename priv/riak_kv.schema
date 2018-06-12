@@ -25,6 +25,59 @@
   end
 }.
 
+{mapping, "tictacaae_active", "riak_kv.tictacaae_active", [
+  {datatype, {enum, [active, passive]}},
+  {default, passive}
+]}.
+
+%% @doc A path under which aae data files will be stored.
+{mapping, "tictacaae_dataroot", "riak_kv.tictacaae_dataroot", [
+  {default, "$(platform_data_dir)/tictac_aae"},
+  {datatype, directory}
+]}.
+
+%% @doc Parallel key store type
+%% When running in parallel mode, which will be the default if the backend does
+%% not support native tictac aae (i.e. is not leveled), what type of parallel 
+%% key store should be kept - leveled_ko (leveled and key-ordered), or 
+%% leveled_so (leveled and segment ordered).
+%% When running in native mode, this setting is ignored
+{mapping, "tictacaae_parallelstore", "riak_kv.tictacaae_parallelstore", [
+  {datatype, {enum, [leveled_ko, leveled_so]}},
+  {default, leveled_so},
+  {commented, leveled_so}
+]}.
+
+%% @doc Minimum Rebuild Wait
+%% The minimum number of hours to wait between rebuilds.  Default value is 2 
+%% weeks
+{mapping, "tictacaae_rebuildwait", "riak_kv_tictacaae_rebuildwait", [
+  {datatype, integer},
+  {default, 336}
+]}.
+
+%% @doc Maximum Rebuild Delay
+%% The number of seconds which represents the length of the period in which the
+%% next rebuild will be scheduled.  So if all vnodes are scheduled to rebuild 
+%% at the same time, they will actually rebuild randomly between 0 an this 
+%% value (in seconds) after the rebuild time. Default value is 4 days
+{mapping, "tictacaae_rebuilddelay", "riak_kv.tictacaae_rebuilddelay", [
+  {datatype, integer},
+  {default, 345600}
+]}.
+
+%% @doc Store heads in parallel key stores
+%% If running a parallel key store, the whole "head" object may be stored to 
+%% allow for fold_heads queries to be run against the parallel store.  
+%% Alternatively, the cost of the paralle key store can be reduced by storing 
+%% only a minimal data set necessary for AAE and monitoring
+{mapping, "tictacaae_storeheads", "riak_kv.tictacaae_storeheads", [
+  {datatype, {flag, enabled, disabled}},
+  {default, enabled},
+  {commented, enabled}
+]}.
+
+
 %% @doc Whether to allow node to participate in coverage queries.
 %% This is used as a manual switch to stop nodes in incomplete states
 %% (E.g. doing a full partition repair, or node replace) from participating

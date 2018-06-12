@@ -299,8 +299,8 @@ maybe_start_aaecontroller(true,
     Preflists = riak_kv_util:responsible_preflists(Partition),
     RootPath = determine_aaedata_root(Partition),
 
-    RD = app_helper:get_prop_or_env(kv_index_tictactree, rebuild_delay),
-    RW = app_helper:get_prop_or_env(kv_index_tictactree, rebuild_wait),
+    RD = app_helper:get_env(riak_kv, tictacaae_rebuilddelay),
+    RW = app_helper:get_env(riak_kv, tictacaae_rebuildwait),
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
@@ -330,7 +330,7 @@ from_object_binary(RobjBin) ->
 %% Get a filepath to be used by the AAE store
 determine_aaedata_root(Partition) ->
     DataRoot = 
-        case app_helper:get_env(tictac_aae, directory) of
+        case app_helper:get_env(riak_kv, tictacaae_dataroot) of
             {ok, EntropyRoot} ->
                 EntropyRoot;
             undefined ->
@@ -339,7 +339,7 @@ determine_aaedata_root(Partition) ->
                 Root = filename:join(PlatformRoot, "tictac_aae"),
                 lager:warning("Config riak_kv/anti_entropy_data_dir is "
                                 "missing. Defaulting to: ~p", [Root]),
-                application:set_env(tictac_aae, directory, Root),
+                application:set_env(riak_kv, tictacaae_dataroot, Root),
                 Root
         end,
     filename:join(DataRoot, integer_to_list(Partition)).
@@ -623,7 +623,7 @@ init([Index]) ->
                 undefined
         end,
     EnableTictacAAE = 
-        app_helper:get_env(kv_index_tictactree, active),
+        app_helper:get_env(riak_kv, tictacaae_active),
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
