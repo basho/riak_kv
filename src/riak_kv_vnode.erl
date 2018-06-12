@@ -328,19 +328,7 @@ from_object_binary(RobjBin) ->
 %% @doc
 %% Get a filepath to be used by the AAE store
 determine_aaedata_root(Partition) ->
-    DataRoot = 
-        case app_helper:get_env(riak_kv, tictacaae_dataroot) of
-            {ok, EntropyRoot} ->
-                EntropyRoot;
-            undefined ->
-                {ok, PlatformRoot} 
-                    = application:get_env(riak_core, platform_data_dir),
-                Root = filename:join(PlatformRoot, "tictac_aae"),
-                lager:warning("Config riak_kv/anti_entropy_data_dir is "
-                                "missing. Defaulting to: ~p", [Root]),
-                application:set_env(riak_kv, tictacaae_dataroot, Root),
-                Root
-        end,
+    DataRoot = app_helper:get_env(riak_kv, tictacaae_dataroot),
     filename:join(DataRoot, integer_to_list(Partition)).
     
 
