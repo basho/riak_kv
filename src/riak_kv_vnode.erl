@@ -267,12 +267,11 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
 %% @doc
 %% Start an AAE controller if riak_kv has been consfigured to use cached
 %% tictac tree based AAE
-maybe_start_aaecontroller(false, State) ->
+maybe_start_aaecontroller(passive, State) ->
     State#state{tictac_aae=false, aae_controller=undefined};
-maybe_start_aaecontroller(true, 
-                            State=#state{mod=Mod, 
-                                            idx=Partition, 
-                                            modstate=ModState}) ->
+maybe_start_aaecontroller(active, State=#state{mod=Mod, 
+                                                idx=Partition, 
+                                                modstate=ModState}) ->
     {ok, ModCaps} = Mod:capabilities(ModState),
     ShutdownGUID =
         case lists:member(shutdown_guid, ModCaps) of
