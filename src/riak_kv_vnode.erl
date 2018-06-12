@@ -627,6 +627,12 @@ init([Index]) ->
         end,
     EnableTictacAAE = 
         app_helper:get_prop_or_env(active, Configuration, tictac_aae),
+    case EnableTictacAAE of
+        undefined ->
+            lager:info("Not working - config ~w~n", [Configuration]);
+        _ ->
+            ok
+    end,
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
