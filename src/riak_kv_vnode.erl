@@ -263,15 +263,17 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
     end.
 
 
--spec maybe_start_aaecontroller(boolean(), state()) -> state().
+-spec maybe_start_aaecontroller(boolean(), state(), list()) -> state().
 %% @doc
 %% Start an AAE controller if riak_kv has been consfigured to use cached
 %% tictac tree based AAE
-maybe_start_aaecontroller(false, State) ->
+maybe_start_aaecontroller(false, State, _Config) ->
     State#state{tictac_aae=false, aae_controller=undefined};
-maybe_start_aaecontroller(true, State=#state{mod=Mod, 
-                                                idx=Partition, 
-                                                modstate=ModState}) ->
+maybe_start_aaecontroller(true, 
+                            State=#state{mod=Mod, 
+                                            idx=Partition, 
+                                            modstate=ModState},
+                            Config) ->
     {ok, ModCaps} = Mod:capabilities(ModState),
     ShutdownGUID =
         case lists:member(shutdown_guid, ModCaps) of
@@ -291,15 +293,17 @@ maybe_start_aaecontroller(true, State=#state{mod=Mod,
                 Bookie = Mod:return_self(ModState),
                 {native, leveled_nko, Bookie};
             false ->
-                ParallelStore = app_helper:get_env(tictac_aae, 
-                                                    parallel_store),
+                ParallelStore = 
+                    app_helper:get_prop_or_env(parallel_store, 
+                                                Config, 
+                                            tictac_aae),
                 {parallel, ParallelStore}
         end,
     Preflists = riak_kv_util:responsible_preflists(Partition),
     RootPath = determine_aaedata_root(Partition),
 
-    RD = app_helper:get_env(tictac_aee, rebuild_delay),
-    RW = app_helper:get_env(tictac_aae, rebuild_wait),
+    RD = app_helper:get_prop_or_env(rebuild_delay, Config, tictac_aae),
+    RW = app_helper:get_prop_or_env(rebuild_wait, Config, tictac_aae),
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
@@ -621,7 +625,8 @@ init([Index]) ->
                 lager:debug("No metadata cache size defined, not starting"),
                 undefined
         end,
-    EnableTictacAAE = app_helper:get_env(tictac_aae, active),
+    EnableTictacAAE = 
+        app_helper:get_prop_or_env(active, Configuration, tictac_aae),
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
@@ -652,7 +657,10 @@ init([Index]) ->
                     %% Create worker pool initialization tuple
                     FoldWorkerPool = {pool, riak_kv_worker, WorkerPoolSize, []},
                     State2 = maybe_create_hashtrees(State),
-                    State3 = maybe_start_aaecontroller(EnableTictacAAE, State2),
+                    State3 = 
+                        maybe_start_aaecontroller(EnableTictacAAE, 
+                                                    State2, 
+                                                    Configuration),
                     {ok, State3, [FoldWorkerPool]};
                 false ->
                     {ok, State}
