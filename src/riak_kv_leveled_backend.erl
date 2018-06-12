@@ -42,7 +42,6 @@
 
 
 -include("riak_kv_index.hrl").
--include("riak_kv_leveled.hrl").
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -106,6 +105,7 @@ start(Partition, Config) ->
     CRD = app_helper:get_prop_or_env(compaction_runs_perday, Config, leveled),
     CLH = app_helper:get_prop_or_env(compaction_low_hour, Config, leveled),
     CTH = app_helper:get_prop_or_env(compaction_top_hour, Config, leveled),
+    MRL = app_helper:get_prop_or_env(max_run_length, Config, leveled),
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             StartOpts = [{root_path, DataDir},
@@ -483,7 +483,7 @@ get_data_dir(DataRoot, Partition) ->
             {error, Reason}
     end.
 
--spec schedule_journalcompaction(ref(), any(), integer(), list(integer()) -> ok.
+-spec schedule_journalcompaction(reference(), integer(), integer(), list(integer())) -> reference().
 %% @private
 %% Request a callback in the future to check for journal compaction
 schedule_journalcompaction(Ref, PartitionID, PerDay, ValidHours) when is_reference(Ref) ->

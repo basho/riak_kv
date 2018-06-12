@@ -291,20 +291,20 @@ maybe_start_aaecontroller(true, State=#state{mod=Mod,
                 Bookie = Mod:return_self(ModState),
                 {native, leveled_nko, Bookie};
             false ->
-                ParallelStore = 
-                    app_helper:get_env(riak_kv, parallel_store, ?PARALLEL_AAEORDER),
-                    % TODO: To cheat sorting out cuttlefish - this can be set by changing
-                    % the default in riak_kv_vnode.hrl.  Needs to be proper cuttlefish 
-                    % enabled going forward 
+                ParallelStore = app_helper:get_env(tictac_aae, 
+                                                    parallel_store),
                 {parallel, ParallelStore}
         end,
     Preflists = riak_kv_util:responsible_preflists(Partition),
     RootPath = determine_aaedata_root(Partition),
 
+    RD = app_helper:get_env(tictac_aee, rebuild_delay),
+    RW = app_helper:get_env(tictac_aae, rebuild_wait),
+
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
                                     {IsEmpty, ShutdownGUID}, 
-                                    ?REBUILD_SCHEDULE, 
+                                    {RW, RD}, 
                                     Preflists, 
                                     RootPath, 
                                     fun from_object_binary/1),
@@ -329,7 +329,7 @@ from_object_binary(RobjBin) ->
 %% Get a filepath to be used by the AAE store
 determine_aaedata_root(Partition) ->
     DataRoot = 
-        case application:get_env(riak_kv, tictacaae_data_dir) of
+        case app_helper:get_env(tictac_aae, directory) of
             {ok, EntropyRoot} ->
                 EntropyRoot;
             undefined ->
@@ -338,7 +338,7 @@ determine_aaedata_root(Partition) ->
                 Root = filename:join(PlatformRoot, "tictac_aae"),
                 lager:warning("Config riak_kv/anti_entropy_data_dir is "
                                 "missing. Defaulting to: ~p", [Root]),
-                application:set_env(riak_kv, tictacaee_data_dir, Root),
+                application:set_env(tictac_aae, directory, Root),
                 Root
         end,
     filename:join(DataRoot, integer_to_list(Partition)).
@@ -621,13 +621,7 @@ init([Index]) ->
                 lager:debug("No metadata cache size defined, not starting"),
                 undefined
         end,
-    EnableTictacAAE = 
-        app_helper:get_env(riak_kv, tictac_aae, ?ENABLE_TICTACAAE),
-        % Enable TicTac cached AAE.  
-        % TODO: To cheat sorting out cuttlefish - this can be set by changing
-        % the default in riak_kv_vnode.hrl.  Needs to be proper cuttlefish 
-        % enabled going forward 
-
+    EnableTictacAAE = app_helper:get_env(tictac_aae, active),
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
