@@ -292,7 +292,7 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                 {native, leveled_nko, Bookie};
             false ->
                 ParallelStore = 
-                    app_helper:get_env(kv_index_tictactree, parallel_store),
+                    app_helper:get_env(riak_kv, tictacaae_parallelstore),
                 {parallel, ParallelStore}
         end,
     Preflists = riak_kv_util:responsible_preflists(Partition),
