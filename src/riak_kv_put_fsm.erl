@@ -76,7 +76,14 @@
         %% Some CRDTs and other client operations that cannot tolerate
         %% an automatic retry on the server side; those operations should
         %% use {retry_put_coordinator_failure, false}.
-        {retry_put_coordinator_failure, boolean()}.
+        {retry_put_coordinator_failure, boolean()} |
+        %% When selecting a coordinator, `mbox_check' controls wether
+        %% the vnode mailbox soft-limit is checked. see riak#gh1661
+        %% for details. NOTE: defaults to `true' but will be set to
+        %% `false' by the puts_fsm when it forwards to a new put fsm
+        %% i.e. ONLY forward once, when a coordinator is chosen, use
+        %% it.
+        {mbox_check, boolean()}.
 
 -type options() :: [option()].
 
@@ -1025,10 +1032,10 @@ coordinate_or_forward(Preflist, State) ->
     #state{options = Options, n = N, trace=Trace} = State,
     CoordinatorType = get_coordinator_type(Options),
     MBoxCheck = get_option(mbox_check, Options, true),
-    {LocalPL, RemotePL} = partition_local_remote(Preflist),
 
-    case select_coordinator(LocalPL, RemotePL, CoordinatorType, MBoxCheck) of
+    case select_coordinator(Preflist, CoordinatorType, MBoxCheck) of
         {local, CoordPLEntry} ->
+            %% for DTRACE
             CoordPlNode = case CoordPLEntry of
                               undefined  -> undefined;
                               {_Idx, Nd} -> atom2list(Nd)
@@ -1042,51 +1049,74 @@ coordinate_or_forward(Preflist, State) ->
                     ["prepare", CoordPlNode]),
             new_state_timeout(validate, StateData);
         {loaded_forward, ForwardNode} ->
-            %% This is a soft-overload forward, we don't want to
-            %% bounce around, we chose the "best" coordinator, update
-            %% the options to short-circuit mailbox checking in the
-            %% new, forwarded put fsm
-            State2 = State#state{options=[{mbox_check, false} | Options]},
-            forward(ForwardNode, State2);
+            %% @TODO add stat here OR stick with existing
+            %% coord_redirect stat, if no stat, do we need this clause
+            %% at all?
+            forward(ForwardNode, State);
         {forward, ForwardNode} ->
             forward(ForwardNode, State)
     end.
 
-select_coordinator(_LocalPreflist=[], RemotePreflist, _CoordinatorType=local, _MBoxCheck) ->
-    %% Wants local, no local PL, chose a node at random to forward to
-    %% NOTE: `RemotePreflist' cannot be empty, if LocalPreflist is empty, or
-    %% the original Preflist was empty, and that is handled in
-    %% `coordinate_or_forward/2'
-    %% @TODO - Do we want to check the mbox size first?
-    {ListPos, _} = random:uniform_s(length(RemotePreflist), os:timestamp()),
-    {_Idx, CoordNode} = lists:nth(ListPos, RemotePreflist),
-    {forward, CoordNode};
-select_coordinator(LocalPreflist, RemotePreflist, _CoordinatorType=local, true=_MBoxCheck) ->
-    %% wants local, there are local entries, check mailbox soft
-    %% limits (see riak#1661)
+%% @private selects a coordinating vnode for the put, depending on
+%% locality, mailbox length, etc.
+select_coordinator(Preflist, _CoordinatorType=local, true=_MBoxCheck) ->
+    %% wants local, there are local entries, check mailbox soft limits
+    %% (see riak#1661) locally first, only checking remote if no
+    %% local-preflist, or local softloaded/not replying
+    {LocalPreflist, RemotePreflist} = partition_local_remote(Preflist),
+
     case check_mailboxes(LocalPreflist) of
         {true, Entry} ->
             {local, Entry};
         {false, LocalMBoxData} ->
             case check_mailboxes(RemotePreflist) of
                 {true, {_Idx, Remote}} ->
-                    lager:info("loaded forward"),
                     {loaded_forward, Remote};
                 {false, RemoteMBoxData} ->
                     select_least_loaded_coordinator(LocalMBoxData, RemoteMBoxData)
             end
     end;
-select_coordinator(LocalPreflist, _RemotePreflist, _CoordinatorType=local, false=_MBoxCheck) ->
+select_coordinator(Preflist, _CoordinatorType=local, false=_MBoxCheck) ->
     %% No mailbox check, don't change behaviour from pre-gh1661 work
+    {LocalPreflist, _RemotePreflist} = partition_local_remote(Preflist),
     {local, hd(LocalPreflist)};
-select_coordinator(_LocalPreflist, _RemotePreflist, any=_CoordinatorType, _MBoxCheck) ->
+select_coordinator(_Preflist, any=_CoordinatorType, _MBoxCheck) ->
     %% for `any' type coordinator downstream code expects `undefined',
     %% no coordinator, no mailbox queues to route around
     {local, undefined}.
 
+%% @private @TODO test to find the best strategy
+select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
+    [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
+    lager:debug("loaded forward"),
+    {loaded_forward, Entry};
+select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
+    [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
+    lager:warning("soft-loaded local coordinator"),
+    {local, Entry}.
+
+%% @private used by select_least_loaded_coordinator/2 to sort mbox
+%% data results
+mbox_data_sort({_, error, error}, {_, error, error}) ->
+    %% @TODO maybe use random here, so that a list full of errors
+    %% picks a random node to forward to (as per pre-gh1661 code
+    true;
+mbox_data_sort({_, error, error}, {_, _Load, _Limit}) ->
+    false;
+mbox_data_sort({_, _LoadA, _LimitA}, {_, error, error}) ->
+    true;
+mbox_data_sort({_, LoadA, _LimitA}, {_, LoadB, _LimitB})   ->
+    %% @TODO should we randomise where load is equal? Or let load take
+    %% care of it (i.e. is we always choose NodeA, it will get a
+    %% longer queue and we will choose NodeB)
+    LoadA =< LoadB.
+
 -define(DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS, 100).
 
 %% @private check the mailboxes for the preflist.
+check_mailboxes([]) ->
+    %% shortcut for empty (local)preflist
+    {false, []};
 check_mailboxes(Preflist) ->
     TimeLimit = get_timestamp_millis() + ?DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS,
     _ = [check_mailbox(Entry) || Entry <- Preflist],
@@ -1096,6 +1126,7 @@ check_mailboxes(Preflist) ->
         {true, Entry} ->
             {true, Entry};
         {ok, MBoxData} ->
+            %% all replies in, none are below soft-limit
             {false, MBoxData};
         {timeout, MBoxData0} ->
             lager:warning("Mailbox soft-load poll timout ~p",
@@ -1143,27 +1174,6 @@ add_errors_to_mbox_data(Preflist, Acc) ->
                       end
               end, Preflist).
 
-%% @private @TODO test to find the best strategy
-select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
-    [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
-    lager:info("loaded forward"),
-    {loaded_forward, Entry};
-select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
-    [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
-    lager:warning("soft-loaded local coordinator"),
-    {local, Entry}.
-
-%% @private used by select_least_loaded_coordinator/2 to sort mbox
-%% data results
-mbox_data_sort({_, error, error}, {_, error, error}) ->
-    true;
-mbox_data_sort({_, error, error}, {_, _Load, _Limit}) ->
-    false;
-mbox_data_sort({_, _LoadA, _LimitA}, {_, error, error}) ->
-    true;
-mbox_data_sort({_, LoadA, _LimitA}, {_, LoadB, _LimitB})  ->
-    LoadA =< LoadB.
-
 %% @private decide if the coordinator has to be a local, causality
 %% advancing vnode, or just any/all at once
 -spec get_coordinator_type(list()) -> any | local.
@@ -1204,7 +1214,13 @@ forward(CoordNode, State) ->
             ["prepare", atom2list(CoordNode)]),
     try
         {UseAckP, Options2} = make_ack_options(
-                                [{ack_execute, self()}|Options]),
+                                [
+                                 %% don't check mbox at new fsm, we
+                                 %% picked the "best"
+                                 {mbox_check, false},
+                                 %% ack forwarder
+                                 {ack_execute, self()}
+                                 | Options]),
         MiddleMan = spawn_coordinator_proc(
                       CoordNode, riak_kv_put_fsm, start_link,
                       [From, RObj, Options2]),
