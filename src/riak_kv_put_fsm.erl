@@ -1050,7 +1050,7 @@ coordinate_or_forward(Preflist, State) ->
             new_state_timeout(validate, StateData);
         {loaded_forward, ForwardNode} ->
             %% @TODO add stat here OR stick with existing
-            %% coord_redirect stat, if no stat, do we need this clause
+            %% coord_redirect stat, if no stat, do we need that below clause
             %% at all?
             forward(ForwardNode, State);
         {forward, ForwardNode} ->
@@ -1059,6 +1059,10 @@ coordinate_or_forward(Preflist, State) ->
 
 %% @private selects a coordinating vnode for the put, depending on
 %% locality, mailbox length, etc.
+-spec select_coordinator(list(), local | any, boolean()) ->
+                                {local, {pos_integer(), node()}} |
+                                {local, undefined} |
+                                {loaded_forward, node()}.
 select_coordinator(Preflist, _CoordinatorType=local, true=_MBoxCheck) ->
     %% wants local, there are local entries, check mailbox soft limits
     %% (see riak#1661) locally first, only checking remote if no
@@ -1086,10 +1090,12 @@ select_coordinator(_Preflist, any=_CoordinatorType, _MBoxCheck) ->
     {local, undefined}.
 
 %% @private @TODO test to find the best strategy
+-spec select_least_loaded_coordinator(list(), list()) -> {local, {pos_integer(), node()}} |
+                                                         {loaded_forward, node()}.
 select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
-    [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
+    [{{_Idx, Node}, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
     lager:debug("loaded forward"),
-    {loaded_forward, Entry};
+    {loaded_forward, Node};
 select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
     [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
     lager:warning("soft-loaded local coordinator"),
@@ -1098,9 +1104,14 @@ select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
 %% @private used by select_least_loaded_coordinator/2 to sort mbox
 %% data results
 mbox_data_sort({_, error, error}, {_, error, error}) ->
-    %% @TODO maybe use random here, so that a list full of errors
-    %% picks a random node to forward to (as per pre-gh1661 code
-    true;
+    %% @TODO do we use random here, so that a list full of errors
+    %% picks a random node to forward to (as per pre-gh1661 code)?
+    case random:uniform_s(2, os:timestamp()) of
+        {1, _} ->
+            true;
+        {2, _} ->
+            false
+    end;
 mbox_data_sort({_, error, error}, {_, _Load, _Limit}) ->
     false;
 mbox_data_sort({_, _LoadA, _LimitA}, {_, error, error}) ->
@@ -1167,7 +1178,7 @@ add_errors_to_mbox_data(Preflist, Acc) ->
     lists:map(fun(Entry) ->
                       case lists:keyfind(Entry, 1, Acc) of
                           false ->
-                              lager:warning("Mailbox for ~p with did not return in time", [Entry]),
+                              lager:warning("Mailbox for ~p did not return in time", [Entry]),
                               {Entry, error, error};
                           Res ->
                               Res
