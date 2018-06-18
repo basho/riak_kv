@@ -1283,15 +1283,15 @@ mbox_data_sort_test() ->
     ?assert(mbox_data_sort({x, 1, 10}, {x, 10, 10})).
 
 select_least_loaded_coordinator_test() ->
-    MBoxData = [{x, 100, 10},
-                {y, 10, 10},
-                {z, error, error},
-                {a, 1, 10},
-                {b, error, error},
-                {c, 10001, 10}],
-    ?assertEqual({local, a}, select_least_loaded_coordinator(MBoxData, [])),
-    ?assertEqual({loaded_forward, a}, select_least_loaded_coordinator([], MBoxData)),
-    ?assertEqual({local, a}, select_least_loaded_coordinator(MBoxData, MBoxData)).
+    MBoxData = [{{0, nodex}, 100, 10},
+                {{1919191919, nodey}, 10, 10},
+                {{91829, nodez}, error, error},
+                {{100, nodea}, 1, 10},
+                {{90, nodeb}, error, error},
+                {{182, c}, 10001, 10}],
+    ?assertEqual({local, {100, nodea}}, select_least_loaded_coordinator(MBoxData, [])),
+    ?assertEqual({forward, nodea}, select_least_loaded_coordinator([], MBoxData)),
+    ?assertEqual({local, {100, nodea}}, select_least_loaded_coordinator(MBoxData, MBoxData)).
 
 get_coordinator_type_test() ->
     Opts0 = proplists:unfold([asis]),
