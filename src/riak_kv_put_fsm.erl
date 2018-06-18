@@ -87,6 +87,13 @@
 
 -type options() :: [option()].
 
+-type preflist_entry() :: {Idx::non_neg_integer(), node()}.
+%% the information about vnode mailbox queues used to select a
+%% coordinator
+-type mbox_data() :: [{preflist_entry(),
+                       MBoxSize::error | non_neg_integer(),
+                       MBoxSofLimit:: error | non_neg_integer()}] | [].
+
 -export_type([option/0, options/0, detail/0, detail_info/0]).
 
 -record(state, {from :: {raw, integer(), pid()},
@@ -1048,25 +1055,22 @@ coordinate_or_forward(Preflist, State) ->
             ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0],
                     ["prepare", CoordPlNode]),
             new_state_timeout(validate, StateData);
-        {loaded_forward, ForwardNode} ->
-            %% @TODO add stat here OR stick with existing
-            %% coord_redirect stat, if no stat, do we need that below clause
-            %% at all?
-            forward(ForwardNode, State);
         {forward, ForwardNode} ->
             forward(ForwardNode, State)
     end.
 
 %% @private selects a coordinating vnode for the put, depending on
 %% locality, mailbox length, etc.
--spec select_coordinator(list(), local | any, boolean()) ->
-                                {local, {pos_integer(), node()}} |
+-spec select_coordinator(riak_core_apl:preflist_ann(), local | any, boolean()) ->
+                                {local, preflist_entry()} |
                                 {local, undefined} |
-                                {loaded_forward, node()}.
+                                {forward, node()}.
 select_coordinator(Preflist, _CoordinatorType=local, true=_MBoxCheck) ->
-    %% wants local, there are local entries, check mailbox soft limits
-    %% (see riak#1661) locally first, only checking remote if no
-    %% local-preflist, or local softloaded/not replying
+    %% wants local, if there are local entries, check mailbox soft
+    %% limits (see riak#1661) locally first, only checking remote if
+    %% no local-preflist, or local softloaded/not replying.
+
+    %% NOTE:: an annotated preflist goes in, two un-annotated come out
     {LocalPreflist, RemotePreflist} = partition_local_remote(Preflist),
 
     case check_mailboxes(LocalPreflist) of
@@ -1075,7 +1079,7 @@ select_coordinator(Preflist, _CoordinatorType=local, true=_MBoxCheck) ->
         {false, LocalMBoxData} ->
             case check_mailboxes(RemotePreflist) of
                 {true, {_Idx, Remote}} ->
-                    {loaded_forward, Remote};
+                    {forward, Remote};
                 {false, RemoteMBoxData} ->
                     select_least_loaded_coordinator(LocalMBoxData, RemoteMBoxData)
             end
@@ -1091,11 +1095,11 @@ select_coordinator(_Preflist, any=_CoordinatorType, _MBoxCheck) ->
 
 %% @private @TODO test to find the best strategy
 -spec select_least_loaded_coordinator(list(), list()) -> {local, {pos_integer(), node()}} |
-                                                         {loaded_forward, node()}.
+                                                         {forward, node()}.
 select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
     [{{_Idx, Node}, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
     lager:debug("loaded forward"),
-    {loaded_forward, Node};
+    {forward, Node};
 select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
     [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
     lager:warning("soft-loaded local coordinator"),
@@ -1125,6 +1129,9 @@ mbox_data_sort({_, LoadA, _LimitA}, {_, LoadB, _LimitB})   ->
 -define(DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS, 100).
 
 %% @private check the mailboxes for the preflist.
+-spec check_mailboxes(riak_core_apl:preflist()) ->
+                             {true, preflist_entry()} |
+                             {false, mbox_data()}.
 check_mailboxes([]) ->
     %% shortcut for empty (local)preflist
     {false, []};
@@ -1147,6 +1154,7 @@ check_mailboxes(Preflist) ->
     end.
 
 %% @private cast off to vnode proxy for mailbox size.
+-spec check_mailbox(preflist_entry()) -> ok.
 check_mailbox({Idx, Node}=Entry) ->
     RegName = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx, Node),
     riak_core_vnode_proxy:cast(RegName, {mailbox_size, self(), Entry}).
@@ -1155,6 +1163,11 @@ check_mailbox({Idx, Node}=Entry) ->
 %% replies from riak_core_vnode_proxy. Returns either `Acc' as mbox
 %% data or short-circuits to `{true, Entry}' if any proxy replies
 %% below the soft limit.
+-spec join_mbox_replies(NumReplies::non_neg_integer(),
+                        Timeout::pos_integer(), Acc::mbox_data()) ->
+                               {true, preflist_entry()} |
+                               {timeout, mbox_data()} |
+                               {ok, mbox_data()}.
 join_mbox_replies(0, _TimeLimit, Acc) ->
     {ok, Acc};
 join_mbox_replies(HowMany, TimeLimit, Acc) ->
@@ -1164,8 +1177,8 @@ join_mbox_replies(HowMany, TimeLimit, Acc) ->
             %% shortcut it
             {true, Entry};
         {mbox, {Entry, {soft_loaded, MBox, Limit}}} ->
-            %% Keep waiting
-            lager:warning("Mailbox for ~p with soft-overload", [Entry]),
+            %% Keep waiting @TODO warning? Over 2million in 24h load test!
+            lager:debug("Mailbox for ~p with soft-overload", [Entry]),
             join_mbox_replies(HowMany-1, TimeLimit,
                  [{Entry, MBox, Limit} | Acc])
     after TimeOut ->
@@ -1174,6 +1187,8 @@ join_mbox_replies(HowMany, TimeLimit, Acc) ->
 
 %% @private in the case that some preflist entr(y|ies) did not respond
 %% in time, add them to the mbox data result as `error' entries.
+-spec add_errors_to_mbox_data(riak_core_apl:preflist(), mbox_data()) ->
+                                     mbox_data().
 add_errors_to_mbox_data(Preflist, Acc) ->
     lists:map(fun(Entry) ->
                       case lists:keyfind(Entry, 1, Acc) of
@@ -1187,7 +1202,7 @@ add_errors_to_mbox_data(Preflist, Acc) ->
 
 %% @private decide if the coordinator has to be a local, causality
 %% advancing vnode, or just any/all at once
--spec get_coordinator_type(list()) -> any | local.
+-spec get_coordinator_type(options()) -> any | local.
 get_coordinator_type(Options) ->
     case get_option(asis, Options, false) of
         false ->
@@ -1197,7 +1212,10 @@ get_coordinator_type(Options) ->
     end.
 
 %% @private used by `coordinate_or_forward' above. Removes `Type' info
-%% from preflist entries and splits a preflist into local and remote
+%% from preflist entries and splits a preflist into local and remote.
+-spec partition_local_remote(riak_core_apl:preflist_ann()) ->
+                                    {riak_core_apl:preflist(),
+                                     riak_core_apl:preflist()}.
 partition_local_remote(Preflist) ->
     lists:foldl(fun partition_local_remote/2,
                 {[], []},
