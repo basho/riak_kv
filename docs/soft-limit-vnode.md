@@ -138,4 +138,8 @@ to a more accurate estimate of the vnode queue, which in turn can be
 used to route puts to the least loaded coordinator, leading to lower
 tail latency for put operations.
 
+## UPDATE 2018/06/20 17:00:17 Caveat!
 
+We just found out that one of the nodes (node 3) has a potential
+hardware fault that was present during the benchmarks. It's being
+replaced, and we will be re-running the experiment in the near future.
