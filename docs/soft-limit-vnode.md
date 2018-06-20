@@ -2,16 +2,16 @@
 
 The NHS care a great deal about predictable and dependable latencies
 for their Spine II deployment of Riak. This post is about some work
-recently completed that aims to minimise the extremes of latency
+recently completed that aims to lower the extremes of latency
 variation for put operations.
 
 
 ## Coordinated Puts
 
-Since Riak 1.0 PUTs have been coordinated by a vnode on the
+Since Riak 1.0 Puts have been coordinated by a vnode on the
 preflist. This work brought the responsibility for actor management
 from the client to Riak (here's a post about
-[vnode vclocks](http://basho.com/posts/technical/vector-clocks-revisited/).)
+[vnode clocks](http://basho.com/posts/technical/vector-clocks-revisited/).)
 Coordinated Puts means that a vnode on the preflist is chosen to first
 update the version vector, and store the object, before the value is
 replicated to the remaining N-1 vnodes on the preflist.
@@ -19,11 +19,11 @@ replicated to the remaining N-1 vnodes on the preflist.
 ### Picking a Coordinator
 
 In riak-2.2.5 and previous versions since riak-1.0 the coordinator has
-been chosen by a very simple alogrithm:
+been chosen by a very simple algorithm:
 
 - if the node receiving the put request is in the preflist, it
   coordinates
-- otherwise, pick a node at random from the prefist
+- otherwise, pick a node at random from the preflist
 
 ### Vnode Proxies, Queues, and Overload
 
@@ -32,7 +32,7 @@ Riak-1.3 came with
 mainly by the module `riak_core_vnode_proxy`.
 
 The vnode is the main actor in a riak cluster, it wraps the individual
-key/value store instances, and serialises access, so that a causal
+key/value store instances, and serializes access, so that a causal
 frontier can be generated. The vnode is an Erlang process, and has an
 Erlang mailbox queue of messages.
 
@@ -50,11 +50,11 @@ error, giving the vnode time to clear the backlog.
 A 10,000 message backlog is long. If it takes 1ms for a vnode to
 perform a put operation, an un-overloaded vnode that is busy can take
 4 orders of magnitude longer to service a request than an idle
-vnode. Quite a variation is response times.
+vnode. Quite the variation in response times.
 
 The vnode proxy's queue estimate is too vague. After `5000` messages
 it sends a `ping`. Up until that point it estimates the vnode queue
-length is `4999`. It might be `0` or `4999`, or anything inbetween.
+length is `4999`. It might be `0` or `4999`, or anything in between.
 
 By changing the `riak_core` variable `vnode_check_interval` to just
 `50` we get a far more accurate estimate of the vnode queue length, at
@@ -79,22 +79,27 @@ Now the algorithm for picking a coordinator is:
 
 We ran two 24hr [basho-bench]() load tests with the new code and
 compared to previous benchmarks from the riak-2.2.5 release
-cycle. Throughput was not negatively impacted, and may have shown a
-slight improvement (see thoughput graph).
+cycle. Throughput was not negatively impacted (see throughput graph
+below.)
 
 ![Comparing Throughput](throughput.png "Comparative throughput")
 
 For put and update (fetch then put) operations, the 99th and above
 percentiles showed marked improvement (see latencies) graph.
 
-![99th percentile and above latency](put-latencies.png "Comparative
+![99th percentile and above latency](put-latency-tail.png "Comparative
  99th latency")
 
-Typical network message RTT for the cluster under test was 0.2ms. With
-a timeout of 100ms, over a 24hr load test, only once was the timeout
-triggered and the worst case random vnode chosen. Given that a vnode
-queue of even modest length introduces more latency than the full
-timeout, it looks like a reasonable trade-off.
+Typical network message RTT for the cluster under test is ~0.2ms. With
+a soft-limit message timeout of 100ms, over a 24hr load test, only
+once was the timeout triggered and the worst case random vnode
+chosen. Given that a vnode queue of even modest length introduces more
+latency than the full timeout, it looks like a reasonable trade-off.
+
+Below is the mean latency plot, which also shows improvement.
+
+![Mean latency](put-latency-mean.png "Comparative
+ mean latency")
 
 
 ### Todo
@@ -103,5 +108,8 @@ We still need to benchmark against bitcask.
 
 ## Summary
 
-
-
+Even a small vnode mailbox queue can have an adverse effect on tail
+latency. A small tweak to the frequency of polling by the proxy leads
+to a more accurate estimate of the vnode queue, which in turn can be
+used to route puts to be the least loaded coordinator, leading to
+lower tail latency for put operations.
