@@ -143,3 +143,6 @@ tail latency for put operations.
 We just found out that one of the nodes (node 3) has a potential
 hardware fault that was present during the benchmarks. It's being
 replaced, and we will be re-running the experiment in the near future.
+
+The benchmark was run on an 8 node cluser with the following specs per-node:
+96GB RAM, 2GB FBWC, 8 x 10K RPM 900GB SAS Disks (RAID 10), 12 core 2.2GHz CPUs (2 x E5-2430)
