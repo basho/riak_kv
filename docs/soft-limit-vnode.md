@@ -135,5 +135,7 @@ for a discussion.
 Even a small vnode mailbox queue can have an adverse effect on tail
 latency. A small tweak to the frequency of polling by the proxy leads
 to a more accurate estimate of the vnode queue, which in turn can be
-used to route puts to be the least loaded coordinator, leading to
-lower tail latency for put operations.
+used to route puts to the least loaded coordinator, leading to lower
+tail latency for put operations.
+
+
