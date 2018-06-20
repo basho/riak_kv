@@ -18,8 +18,8 @@ replicated to the remaining N-1 vnodes on the preflist.
 
 ### Picking a Coordinator
 
-In riak-2.2.5 and previous versions since riak-1.0 the coordinator has
-been chosen by a very simple algorithm:
+In riak-2.2.5, and previous versions since riak-1.0, the coordinator
+has been chosen by a very simple algorithm:
 
 - if the node receiving the put request is in the preflist, it
   coordinates
@@ -105,6 +105,30 @@ Below is the mean latency plot, which also shows improvement.
 ### Todo
 
 We still need to benchmark against bitcask.
+
+### Why do queues build up?
+
+When a read or write request is handled by riak it _always_ contacts
+`N` vnodes. Even though only `R` or `W` responses are required for the
+client, each vnode ends up with an equal amount of work. Sometimes,
+individual vnode backends are temporarily busy, for example leveldb
+compaction, or AAE tree rebuilding. A busy vnode can take longer to
+process a request, and its queue can build up. Using soft-limits for
+picking a coordinator is a way to avoid having a busy node on the
+latency critical part of the put path.
+
+### Future Work
+
+Another solution is to find a way of giving busy nodes less
+work. There is ongoing work that splits GET request traffic so that
+busy nodes need only read the object metadata (a HEAD request) and
+therefore do less, while still allowing riak to send the read request
+to `N` vnodes. This work requires the
+[LevelEd backend](https://github.com/martinsumner/leveled), but
+similar soft-limiting with possible GET request coordinating is also
+being investigated. See
+[here](https://github.com/martinsumner/leveled/blob/master/docs/FUTURE.md#n-heads-1-get-or-1-get-n-1-heads)
+for a discussion.
 
 ## Summary
 
