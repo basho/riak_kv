@@ -248,6 +248,14 @@ has_all_results(#getcore{n = N, num_ok = NOk,
                          num_fail = NFail, num_notfound = NNF}) ->
     NOk + NFail + NNF >= N.
 
+
+-spec isnot_head(tuple()) -> boolean().
+%% Is a result an object head
+isnot_head({ok, Robj}) ->
+    not riak_object:is_head(Robj);
+isnot_head(_Result) ->
+    false.
+
 %% Decide on any post-response actions
 %% nop - do nothing
 %% {readrepair, Indices, MObj} - send read repairs iff any vnode has ancestor data
@@ -258,12 +266,22 @@ has_all_results(#getcore{n = N, num_ok = NOk,
 -spec final_action(getcore()) -> {final_action(), getcore()}.
 final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                                 allow_mult = AllowMult}) ->
-    Merged = case Merged0 of
-                 undefined ->
-                     merge(Results, AllowMult);
-                 _ ->
-                     Merged0
-             end,
+    PredFun = fun({_Idx, Res}) -> isnot_head(Res) end,
+    {FilteredResults, _ResultHEADs} = lists:partition(PredFun, Results),
+    Merged = 
+        case Merged0 of
+            undefined ->
+                % We will only repair from a fetched object (not a head_only
+                % object).  It is possible that we may have, when n > r, 
+                % received a better HEAD response after r has been fulfilled, 
+                % and after the GET response was received. This will not now 
+                % reliably be read repaired.  We only read repair a superior 
+                % object discovered up to 'enough' and the receipt of the GET
+                % response.
+                merge(FilteredResults, AllowMult);
+            _ ->
+                Merged0
+            end,
     {ObjState, MObj} = Merged,
 
     ReadRepairs =

@@ -263,7 +263,7 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
     end.
 
 
--spec maybe_start_aaecontroller(boolean(), state()) -> state().
+-spec maybe_start_aaecontroller(active|passive, state()) -> state().
 %% @doc
 %% Start an AAE controller if riak_kv has been consfigured to use cached
 %% tictac tree based AAE
