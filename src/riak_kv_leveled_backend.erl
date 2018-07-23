@@ -106,6 +106,9 @@ start(Partition, Config) ->
     CLH = app_helper:get_prop_or_env(compaction_low_hour, Config, leveled),
     CTH = app_helper:get_prop_or_env(compaction_top_hour, Config, leveled),
     MRL = app_helper:get_prop_or_env(max_run_length, Config, leveled),
+    MCP = app_helper:get_prop_or_env(maxrunlength_compactionpercentage, Config, leveled),
+    SCP = app_helper:get_prop_or_env(singlefile_compactionpercentage, Config, leveled),
+
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             StartOpts = [{root_path, DataDir},
@@ -115,7 +118,9 @@ start(Partition, Config) ->
                             {sync_strategy, SYS},
                             {compression_method, CMM},
                             {compression_point, CMP},
-                            {max_run_length, MRL}],
+                            {max_run_length, MRL},
+                            {maxrunlength_compactionpercentage, MCP},
+                            {singlefile_compactionpercentage, SCP}],
             {ok, Bookie} = leveled_bookie:book_start(StartOpts),
             Ref = make_ref(),
             ValidHours = valid_hours(CLH, CTH),
