@@ -543,22 +543,32 @@ eqc_test_() ->
          fun cleanup/1,
          [
           {timeout, 180,
-            [?_assertEqual(true,
-                          backend_eqc:test(?MODULE, false,
-                                           [{data_root,
-                                             "test/eleveldb-backend"}]))]}
-         ]}]}]}.
+           [?_assertEqual(true,
+                          begin
+                              DepsDir = riak_kv_schema_tests:get_deps_dir(),
+                              Schema = filename:join(DepsDir, "leveled/priv/leveled.schema"),
+                              ?debugFmt("Loading schema from ~p~n", [Schema]),
+                              %% load leveled schema to get the defaults
+                              [{leveled, Conf}] = cuttlefish_unit:generate_config(
+                                                    [Schema],
+                                                    [
+                                                     {["leveled","data_root"], "test/leveled-backend"}
+                                                    ]),
+                              backend_eqc:test(?MODULE, false, Conf)
+                          end
+                         )
+           ]}]}]}]}. %% <--- hahahaha, erlang/eunit, wat?
 
 setup() ->
     application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_eleveldb_backend_eqc_sasl.log"}),
+    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_leveled_backend_eqc_sasl.log"}),
     error_logger:tty(false),
-    error_logger:logfile({open, "riak_kv_eleveldb_backend_eqc.log"}),
+    error_logger:logfile({open, "riak_kv_leveled_backend_eqc.log"}),
 
     ok.
 
 cleanup(_) ->
-    ?_assertCmd("rm -rf test/eleveldb-backend").
+    ?_assertCmd("rm -rf test/leveled-backend").
 
 -endif. % EQC
 
