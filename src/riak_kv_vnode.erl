@@ -301,6 +301,11 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                                     Preflists, 
                                     RootPath, 
                                     fun from_object_binary/1),
+    R = aae_controller:aae_rebuildtrees(AAECntrl, Preflists, 
+                                        fun preflistfun/2, fun workerfun/2, 
+                                        true),
+    lager:info("AAE Controller started wiht pid ~w and rebuild state ~w", 
+                [AAECntrl, R]),
     
     State#state{tictac_aae = true,
                 aae_controller = AAECntrl,
@@ -324,12 +329,29 @@ determine_aaedata_root(Partition) ->
     DataRoot = app_helper:get_env(riak_kv, tictacaae_dataroot),
     filename:join(DataRoot, integer_to_list(Partition)).
     
+-spec preflistfun(binary(), binary()) -> riak_kv_util:index_n().
+%% @doc
+%% Function to calculate preflist from Bucket and Key
+preflistfun(Bucket, Key) -> riak_kv_util:get_index_n({Bucket, Key}).
+
+
+-spec workerfun(fun(), fun()) -> ok.
+%% @doc
+%% A wrapper around the node_worker_pool to provide workers for tictac aae
+%% folds.  As the pool is a named pool started with riak_core, should be safe
+%% to used in init of inidivdual vnodes.
+workerfun(FoldFun, FinishFun) ->
+    Sender = self(),
+    riak_core_node_worker_pool:handle_work(node_worker_pool,
+                                            {fold, FoldFun, FinishFun},
+                                            Sender).
+
 
 %% @doc Reveal the underlying module state for testing
 -spec(get_modstate(state()) -> {atom(), state()}).
-get_modstate(_State=#state{mod=Mod,
-                           modstate=ModState}) ->
+get_modstate(_State=#state{mod=Mod, modstate=ModState}) ->
     {Mod, ModState}.
+
 
 %% API
 start_vnode(I) ->
