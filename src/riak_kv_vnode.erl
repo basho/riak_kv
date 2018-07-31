@@ -603,7 +603,7 @@ init([Index]) ->
                 undefined
         end,
     EnableTictacAAE = 
-        app_helper:get_env(riak_kv, tictacaae_active, passive),
+        app_helper:get_env(riak_kv, tictacaae_active),
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
