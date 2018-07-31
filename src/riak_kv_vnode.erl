@@ -273,13 +273,6 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                                                 idx=Partition, 
                                                 modstate=ModState}) ->
     {ok, ModCaps} = Mod:capabilities(ModState),
-    ShutdownGUID =
-        case lists:member(shutdown_guid, ModCaps) of
-            true ->
-                Mod:shutdown_guid(ModState, on_start);
-            false ->
-                none
-        end,
     IsEmpty = 
         case is_empty(State) of
             {true, _}     -> true;
@@ -303,7 +296,7 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
-                                    {IsEmpty, ShutdownGUID}, 
+                                    IsEmpty, 
                                     {RW, RD}, 
                                     Preflists, 
                                     RootPath, 
@@ -1523,16 +1516,8 @@ terminate(_Reason, #state{idx=Idx,
     
     case TicTacAAE of 
         true ->
-            {ok, ModCaps} = Mod:capabilities(ModState),
-            ShutdownGUID = 
-                case lists:member(shutdown_guid, ModCaps) of
-                    true ->
-                        Mod:shutdown_guid(ModState, on_close);
-                    false ->
-                        none
-                end,
             Mod:stop(ModState),
-            ok = aae_controller:aae_close(Cntrl, ShutdownGUID);
+            ok = aae_controller:aae_close(Cntrl);
         false ->
             Mod:stop(ModState),
 
