@@ -205,6 +205,9 @@
 %% die
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
 
+%% If tictac aae is active the vnode should be poked every 5 minutes to see
+%% if there is any outstanding rebuild activity  
+-define(TICTACAAE_POKETIME, 1800000). % 30 minutes
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -304,9 +307,14 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     R = aae_controller:aae_rebuildtrees(AAECntrl, Preflists, 
                                         fun preflistfun/2, fun workerfun/2, 
                                         true),
-    lager:info("AAE Controller started wiht pid ~w and rebuild state ~w", 
+    lager:info("AAE Controller started with pid ~w and rebuild state ~w", 
                 [AAECntrl, R]),
     
+    InitD = erlang:phash2(Partition, 256),
+    % Space out the initial poke to avoid over-coordination between vnodes
+    FirstDelay = (?TICTACAAE_POKETIME div 256) * InitD,
+    riak_core_vnode:send_command_after(FirstDelay, tictacaae_poke),
+
     State#state{tictac_aae = true,
                 aae_controller = AAECntrl,
                 modstate = ModState}.
@@ -335,6 +343,27 @@ determine_aaedata_root(Partition) ->
 preflistfun(Bucket, Key) -> riak_kv_util:get_index_n({Bucket, Key}).
 
 
+-spec tictac_returnfun(state(), store|trees) -> fun().
+%% @doc
+%% Function to be passed to return a res[ons eonce na operation is complete
+tictac_returnfun(State, ProcessType) ->
+    Vnode = {State#state.idx, node()},
+    ReturnFun = 
+        fun(ok) ->
+            ok = tictacrebuild_complete(Vnode, ProcessType)
+        end,
+    ReturnFun.
+
+-spec tictac_rebuild(binary(), binary(), riak_object:riak_object()) -> 
+            {riak_kv_util:index_n(), vclock:vclock()}.
+%% @doc
+%% Return a function that takes [B, K, v] as arguements and converts that into
+%% a {Preflist, Clock} output
+tictac_rebuild(B, K, V) ->
+    IndexN = preflistfun(B, K),
+    Clock = riak_object:vclock(V),
+    {IndexN, Clock}.
+
 -spec workerfun(fun(), fun()) -> ok.
 %% @doc
 %% A wrapper around the node_worker_pool to provide workers for tictac aae
@@ -352,6 +381,27 @@ workerfun(FoldFun, FinishFun) ->
 get_modstate(_State=#state{mod=Mod, modstate=ModState}) ->
     {Mod, ModState}.
 
+-spec get_asyncopts(state(), binary()|all) -> list(atom()|tuple()).
+%% @doc
+%% Return a start to the options list based on the async capability of the
+%% vnode and the backend 
+get_asyncopts(State, Bucket) ->
+    {Mod, ModState} = get_modstate(State),
+    AsyncFolding = State#state.async_folding,
+    {{ok, Capabilities}, Opts0} = 
+        case Bucket of
+            all ->
+                {Mod:capabilities(ModState), []};
+            _ ->
+                {Mod:capabilities(Bucket, ModState), [{bucket, Bucket}]}
+        end,
+    AsyncBackend = lists:member(async_fold, Capabilities),
+    case AsyncFolding andalso AsyncBackend of
+        true ->
+            [async_fold|Opts0];
+        false ->
+            Opts0
+    end.
 
 %% API
 start_vnode(I) ->
@@ -377,6 +427,14 @@ aae_send(Preflist) ->
                                         riak_kv_vnode_master)
     end.
 
+-spec tictacrebuild_complete({partition(), node()}, store|trees) -> ok.
+%% @doc
+%% Inform the vnode that an aae rebuild is complete
+tictacrebuild_complete(Vnode, ProcessType) ->
+    riak_core_vnode_master:sync_command(Vnode, 
+                                        {rebuild_complete, ProcessType},
+                                        riak_kv_vnode_master,
+                                        infinity).
 
 get(Preflist, BKey, ReqId) ->
     %% Assuming this function is called from a FSM process
@@ -762,8 +820,7 @@ handle_command(?KV_HEAD_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
         end;
 
 handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Caller}, _Sender,
-               State=#state{async_folding=AsyncFolding,
-                            key_buf_size=BufferSize,
+               State=#state{key_buf_size=BufferSize,
                             mod=Mod,
                             modstate=ModState,
                             idx=Idx}) ->
@@ -776,14 +833,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
     BufferMod = riak_kv_fold_buffer,
     case Bucket of
         '_' ->
-            {ok, Capabilities} = Mod:capabilities(ModState),
-            AsyncBackend = lists:member(async_fold, Capabilities),
-            case AsyncFolding andalso AsyncBackend of
-                true ->
-                    Opts = [async_fold];
-                false ->
-                    Opts = []
-            end,
+            Opts = get_asyncopts(State, all),
             BufferFun =
                 fun(Results) ->
                         UniqueResults = lists:usort(Results),
@@ -792,14 +842,7 @@ handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Calle
             FoldFun = fold_fun(buckets, BufferMod, Filter, undefined),
             ModFun = fold_buckets;
         _ ->
-            {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-            AsyncBackend = lists:member(async_fold, Capabilities),
-            case AsyncFolding andalso AsyncBackend of
-                true ->
-                    Opts = [async_fold, {bucket, Bucket}];
-                false ->
-                    Opts = [{bucket, Bucket}]
-            end,
+            Opts = get_asyncopts(State, Bucket),
             BufferFun =
                 fun(Results) ->
                         Caller ! {ReqId, {kl, Idx, Results}}
@@ -925,6 +968,18 @@ handle_command({fold_indexes, FoldIndexFun, Acc}, Sender, State=#state{mod=Mod, 
             {reply, {error, {indexes_not_supported, Mod}}, State}
     end;
 
+
+handle_command({rebuild_complete, store}, _Sender, State) ->
+    %% If store rebuild complete - then need to rebuild trees
+    AAECntrl = State#state.aae_controller,
+    Preflists = riak_kv_util:responsible_preflists(State#state.idx),
+    R = aae_controller:aae_rebuildtrees(AAECntrl, Preflists, 
+                                        fun preflistfun/2, fun workerfun/2, 
+                                        false),
+    lager:info("AAE Controller started with pid ~w and rebuild state ~w", 
+                [AAECntrl, R]),
+    {noreply, State};
+    
 handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
     %% Make sure we dont kick off an upgrade during a possible handoff
     case node() of
@@ -956,6 +1011,50 @@ handle_command({backend_callback, Ref, Msg}, _Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
     Mod:callback(Ref, Msg, ModState),
     {noreply, State};
+handle_command(tictacaae_poke, Sender, State) ->
+    NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
+    case NRT > os:timestamp() of 
+        true ->
+            {noreply, State};
+        false ->
+            % Next Rebuild Time is in the past - prompt a rebuild
+            NRT_PP = calendar:now_to_datetime(NRT),
+            lager:info("Prompting rebuild as NextRebuildTime=~w", [NRT_PP]),
+            ReturnFun = tictac_returnfun(State, store),
+            riak_core_vnode:send_command_after(?TICTACAAE_POKETIME, tictacaae_poke),
+
+            case aae_controller:aae_rebuildstore(State#state.aae_controller, 
+                                                    fun tictac_rebuild/3) of
+                ok ->
+                    % This store is rebuilt already (i.e. it is native), so nothing to
+                    % do here other than prompt the status change
+                    ReturnFun(ok);
+                {ok, FoldFun, FinishFun} ->
+                    FinishFun0 = 
+                        fun(FoldOutput) ->
+                            FinishFun(FoldOutput),
+                            ReturnFun(ok)
+                        end,
+                    {Mod, ModState} = get_modstate(State),
+                    Opts = get_asyncopts(State, all),
+                    % Make the fold request to the vnode - why is this called list?
+                    % Perhaps this should be backend_fold/7
+                    case list(FoldFun, FinishFun0, 
+                                Mod, fold_objects, ModState, 
+                                Opts, []) of
+                        {async, AsyncWork} ->
+                            % This work should be sent to the vnode_worker_pool
+                            {async, {fold, AsyncWork, FinishFun0}, Sender, State};
+                        {queue, DeferrableWork} ->
+                            % This work should be sent to the core node_worker_pool
+                            {queue, {fold, DeferrableWork, FinishFun0}, Sender, State};
+                        _ ->
+                            % This work has already been completed by the vnode, which should
+                            % have already sent the results using FinishFun
+                            {noreply, State}
+                    end
+            end
+    end;
 handle_command({mapexec_error_noretry, JobId, Err}, _Sender, #state{mrjobs=Jobs}=State) ->
     NewState = case dict:find(JobId, Jobs) of
                    {ok, Job} ->
