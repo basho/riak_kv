@@ -431,10 +431,9 @@ aae_send(Preflist) ->
 %% @doc
 %% Inform the vnode that an aae rebuild is complete
 tictacrebuild_complete(Vnode, ProcessType) ->
-    riak_core_vnode_master:sync_command(Vnode, 
-                                        {rebuild_complete, ProcessType},
-                                        riak_kv_vnode_master,
-                                        infinity).
+    riak_core_vnode_master:command(Vnode, 
+                                    {rebuild_complete, ProcessType},
+                                    riak_kv_vnode_master).
 
 get(Preflist, BKey, ReqId) ->
     %% Assuming this function is called from a FSM process
@@ -973,11 +972,10 @@ handle_command({rebuild_complete, store}, _Sender, State) ->
     %% If store rebuild complete - then need to rebuild trees
     AAECntrl = State#state.aae_controller,
     Preflists = riak_kv_util:responsible_preflists(State#state.idx),
-    R = aae_controller:aae_rebuildtrees(AAECntrl, Preflists, 
-                                        fun preflistfun/2, fun workerfun/2, 
-                                        false),
-    lager:info("AAE Controller started with pid ~w and rebuild state ~w", 
-                [AAECntrl, R]),
+    aae_controller:aae_rebuildtrees(AAECntrl, Preflists, 
+                                    fun preflistfun/2, fun workerfun/2,
+                                    false),
+    lager:info("AAE Controller rebuild trees started with pid ~w", [AAECntrl]),
     {noreply, State};
     
 handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
@@ -1013,12 +1011,14 @@ handle_command({backend_callback, Ref, Msg}, _Sender,
     {noreply, State};
 handle_command(tictacaae_poke, Sender, State) ->
     NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
-    case NRT > os:timestamp() of 
+    NRT_PP = calendar:now_to_datetime(NRT),
+    case os:timestamp() < NRT of 
         true ->
+            lager:info("No rebuild as NextRebuildTime=~w in future", [NRT_PP]),
+            riak_core_vnode:send_command_after(?TICTACAAE_POKETIME, tictacaae_poke),
             {noreply, State};
         false ->
             % Next Rebuild Time is in the past - prompt a rebuild
-            NRT_PP = calendar:now_to_datetime(NRT),
             lager:info("Prompting rebuild as NextRebuildTime=~w", [NRT_PP]),
             ReturnFun = tictac_returnfun(State, store),
             riak_core_vnode:send_command_after(?TICTACAAE_POKETIME, tictacaae_poke),
@@ -1028,7 +1028,8 @@ handle_command(tictacaae_poke, Sender, State) ->
                 ok ->
                     % This store is rebuilt already (i.e. it is native), so nothing to
                     % do here other than prompt the status change
-                    ReturnFun(ok);
+                    ReturnFun(ok),
+                    {noreply, State};
                 {ok, FoldFun, FinishFun} ->
                     FinishFun0 = 
                         fun(FoldOutput) ->
