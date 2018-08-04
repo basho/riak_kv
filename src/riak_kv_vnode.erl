@@ -2785,7 +2785,7 @@ get_clock(assumed_no_old_object) ->
 get_clock(unknown_no_old_object) ->
     undefined;
 get_clock(Object) ->
-    lists:usort(riak_object:vclock(Object)).
+    riak_object:vclock(Object).
 
 -spec maybe_old_object(old_object()) -> hook_old_object().
 %% @doc
