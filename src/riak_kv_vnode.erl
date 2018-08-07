@@ -160,7 +160,7 @@
                 status_mgr_pid :: pid(), %% a process that manages vnode status persistence
                 tictac_aae = false :: boolean(),
                 aae_controller :: undefined|pid(),
-                tictac_exchangequeue :: list(riak_kv_entropy_manager:exchange())
+                tictac_exchangequeue = [] :: list(riak_kv_entropy_manager:exchange())
                }).
 
 -type index_op() :: add | remove.
