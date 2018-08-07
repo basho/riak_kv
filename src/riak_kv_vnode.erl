@@ -210,9 +210,11 @@
 %% if there is any outstanding rebuild activity  
 -define(TICTACAAE_REBUILDPOKETIME, 1800000). % 30 minutes
 
-%% If tictac aae is active the vnode should be poked every 1 minute to see
-%% if there is any outstanding exchange activity  
--define(TICTACAAE_EXCHANGEPOKETIME, 60000). % 30 minutes
+%% If tictac aae is active the vnode should be poked every 2 minute to see
+%% if there is any outstanding exchange activity.  Once all exchanges have
+%% been poked, the next poke will be used to load-up a new set of exchanges
+%% based on the current ring
+-define(TICTACAAE_EXCHANGEPOKETIME, 120000). % 2 minutes
 
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
@@ -1031,7 +1033,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                                 tictacaae_exchangepoke),
             {noreply, State#state{tictac_exchangequeue = Exchanges}};
         [{Local, Remote, {DocIdx, N}}|Rest] ->
-            PL = riak_core_apl:get_apl(<<DocIdx:160/integer>>, N, riak_kv),
+            PL = riak_core_apl:get_apl(<<(DocIdx-1):160/integer>>, N, riak_kv),
             case {lists:keyfind(Local, 1, PL), lists:keyfind(Remote, 1, PL)} of
                 {{Local, LN}, {Remote, RN}} ->
                     IndexN = {DocIdx, N},
