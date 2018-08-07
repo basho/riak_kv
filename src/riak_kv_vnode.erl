@@ -159,7 +159,8 @@
                 counter :: #counter_state{},
                 status_mgr_pid :: pid(), %% a process that manages vnode status persistence
                 tictac_aae = false :: boolean(),
-                aae_controller :: undefined|pid()
+                aae_controller :: undefined|pid(),
+                tictac_exchangequeue :: list(riak_kv_entropy_manager:exchange())
                }).
 
 -type index_op() :: add | remove.
@@ -205,9 +206,14 @@
 %% die
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
 
-%% If tictac aae is active the vnode should be poked every 5 minutes to see
+%% If tictac aae is active the vnode should be poked every 30 minutes to see
 %% if there is any outstanding rebuild activity  
--define(TICTACAAE_POKETIME, 1800000). % 30 minutes
+-define(TICTACAAE_REBUILDPOKETIME, 1800000). % 30 minutes
+
+%% If tictac aae is active the vnode should be poked every 1 minute to see
+%% if there is any outstanding exchange activity  
+-define(TICTACAAE_EXCHANGEPOKETIME, 60000). % 30 minutes
+
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -312,8 +318,12 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     
     InitD = erlang:phash2(Partition, 256),
     % Space out the initial poke to avoid over-coordination between vnodes
-    FirstDelay = (?TICTACAAE_POKETIME div 256) * InitD,
-    riak_core_vnode:send_command_after(FirstDelay, tictacaae_poke),
+    FirstRebuildDelay = (?TICTACAAE_REBUILDPOKETIME div 256) * InitD,
+    FirstExchangeDelay = (?TICTACAAE_EXCHANGEPOKETIME div 256) * InitD,
+    riak_core_vnode:send_command_after(FirstRebuildDelay, 
+                                        tictacaae_rebuildpoke),
+    riak_core_vnode:send_command_after(FirstExchangeDelay, 
+                                        tictacaae_exchangepoke),
 
     State#state{tictac_aae = true,
                 aae_controller = AAECntrl,
@@ -1009,19 +1019,59 @@ handle_command({backend_callback, Ref, Msg}, _Sender,
                State=#state{mod=Mod, modstate=ModState}) ->
     Mod:callback(Ref, Msg, ModState),
     {noreply, State};
-handle_command(tictacaae_poke, Sender, State) ->
+handle_command(tictacaae_exchangepoke, _Sender, State) ->
+    case State#state.tictac_exchangequeue of
+        [] ->
+            {ok, Ring} = 
+                riak_core_ring_manager:get_my_ring(),
+            Exchanges = 
+                riak_kv_entropy_manager:all_pairwise_exchanges(State#state.idx,
+                                                                Ring),
+            riak_core_vnode:send_command_after(?TICTACAAE_EXCHANGEPOKETIME,
+                                                tictacaae_exchangepoke),
+            {noreply, State#state{tictac_exchangequeue = Exchanges}};
+        [{Local, Remote, {DocIdx, N}}|Rest] ->
+            PL = riak_core_apl:get_apl(<<DocIdx:160/integer>>, N, riak_kv),
+            case {lists:keyfind(Local, 1, PL), lists:keyfind(Remote, 1, PL)} of
+                {{Local, LN}, {Remote, RN}} ->
+                    IndexN = {DocIdx, N},
+                    BlueList = 
+                        [{riak_kv_vnode:aae_send({Local, LN}), [IndexN]}],
+                    PinkList = 
+                        [{riak_kv_vnode:aae_send({Remote, RN}), [IndexN]}],
+                    RepairFun = 
+                        riak_kv_get_fsm:prompt_readrepair([{Local, LN}, 
+                                                            {Remote, RN}]),
+                    ReplyFun = fun riak_kv_get_fsm:reply_fun/1,
+                    aae_exchange:start(BlueList, 
+                                        PinkList, 
+                                        RepairFun, 
+                                        ReplyFun);
+                _ ->
+                    lager:warning("Proposed exchange between ~w and ~w " ++ 
+                                    "not currently supported within " ++
+                                    "preflist for IndexN=~w",
+                                    [Local, Remote, {DocIdx, N}])
+            end,
+            riak_core_vnode:send_command_after(?TICTACAAE_EXCHANGEPOKETIME,
+                                                tictacaae_exchangepoke),
+            {noreply, State#state{tictac_exchangequeue = Rest}}
+    end;
+handle_command(tictacaae_rebuildpoke, Sender, State) ->
     NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
     NRT_PP = calendar:now_to_datetime(NRT),
     case os:timestamp() < NRT of 
         true ->
             lager:info("No rebuild as NextRebuildTime=~w in future", [NRT_PP]),
-            riak_core_vnode:send_command_after(?TICTACAAE_POKETIME, tictacaae_poke),
+            riak_core_vnode:send_command_after(?TICTACAAE_REBUILDPOKETIME, 
+                                                tictacaae_rebuildpoke),
             {noreply, State};
         false ->
             % Next Rebuild Time is in the past - prompt a rebuild
             lager:info("Prompting rebuild as NextRebuildTime=~w", [NRT_PP]),
             ReturnFun = tictac_returnfun(State, store),
-            riak_core_vnode:send_command_after(?TICTACAAE_POKETIME, tictacaae_poke),
+            riak_core_vnode:send_command_after(?TICTACAAE_REBUILDPOKETIME, 
+                                                tictacaae_rebuildpoke),
 
             case aae_controller:aae_rebuildstore(State#state.aae_controller, 
                                                     fun tictac_rebuild/3) of
