@@ -1022,6 +1022,7 @@ handle_command({backend_callback, Ref, Msg}, _Sender,
     Mod:callback(Ref, Msg, ModState),
     {noreply, State};
 handle_command(tictacaae_exchangepoke, _Sender, State) ->
+    lager:info("Exchange poke received"),
     case State#state.tictac_exchangequeue of
         [] ->
             {ok, Ring} = 
