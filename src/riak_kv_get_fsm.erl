@@ -36,7 +36,7 @@
             waiting_vnode_r/2,
             waiting_read_repair/2]).
 
--export([prompt_readrepair/1, reply_fun/1]).
+-export([prompt_readrepair/1]).
 
 -type detail() :: timing |
                   vnodes.
