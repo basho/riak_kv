@@ -405,7 +405,7 @@ drop(#state{bookie=Bookie, partition=Partition, config=Config}=_State) ->
 %% non-tombstone values; otherwise returns false.
 -spec is_empty(state()) -> boolean().
 is_empty(#state{bookie=Bookie}) ->
-    leveled_book:book_isempty(Bookie, ?RIAK_TAG).
+    leveled_bookie:book_isempty(Bookie, ?RIAK_TAG).
 
 %% @doc Get the status information for this leveled backend
 -spec status(state()) -> [{atom(), term()}].
