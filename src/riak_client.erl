@@ -46,6 +46,7 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
+-export([rt_enqueue/4]).
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
@@ -132,6 +133,76 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
         _ ->
             ok
     end.
+
+%% @doc Users of Riak sometimes want Riak to realtime replicate an
+%% object on demand (dropped messages, external divergence detection
+%% etc) This function gets the object stored under `Bucket' `Key',
+%% with the get options from `Options' and calls the postcommit
+%% function(s) defined for realtime IF realtime is enabled for
+%% `Bucket'. Returns `ok' if all went well, or `{error, Reason}' is
+%% there was a failure. Riak seems to support "hybrid" configurations
+%% with the possibility that two types of realtime queue are in use,
+%% therefore error may obscure partial success.
+-spec rt_enqueue(riak_object:bucket(), riak_object:key(), Options::list(), riak_client()) ->
+                        ok |
+                        {error, Reason::term()}.
+rt_enqueue(Bucket, Key, Options, {?MODULE, [_Node, _ClientId]}=THIS) when is_list(Options) ->
+    GetRes = get(Bucket, Key, Options, THIS),
+    case GetRes of
+        {ok, Object} ->
+            rt_enqueue_object(Object);
+        GetErr ->
+            GetErr
+    end.
+
+%% @private used by rt_equeue, once the object has been got.
+-spec rt_enqueue_object(riak_object:object()) ->
+                               ok | {error, ErrReason::term()}.
+rt_enqueue_object(Object) ->
+    BucketProps = riak_kv_bucket:get_bucket_props(Object),
+    %% If repl is a thing, then get the postcommit hook(s) from the
+    %% util (not the props) as the props does not name hooks, and may
+    %% have many we don't care about. See riak_repl:fixup/2
+    RTEnabled = app_helper:get_env(riak_repl, rtenabled, false),
+    case proplists:get_value(repl, BucketProps) of
+        Val when (Val==true orelse Val==realtime orelse Val==both),
+                 RTEnabled == true  ->
+            Hooks = riak_repl_util:get_hooks_for_modes(),
+            run_rt_hooks(Object, Hooks, []);
+        _ ->
+            {error, realtime_not_enabled}
+    end.
+
+-spec run_rt_hooks(riak_object:riak_object(), Hooks::list(), ResAcc::list()) ->
+                          ok | {error, Err::term()}.
+run_rt_hooks(_Object, _Hooks=[], Acc) ->
+    lists:foldl(fun rt_repl_results/2, ok, Acc);
+run_rt_hooks(Object, [{struct, Hook} | Hooks], Acc) ->
+    %% Bit jankey as it duplicates code in riak_kv_fsm postcommit
+    ModBin = proplist:get_value(<<"mod">>, Hook),
+    FunBin = proplist:get_value(<<"fun">>, Hook),
+
+    Res =
+        try
+            Mod = binary_to_atom(ModBin, utf8),
+            Fun = binary_to_atom(FunBin, utf8),
+            Mod:Fun(Object)
+        catch
+            Class:Exception ->
+                {error, {Hook, Class, Exception}}
+        end,
+    run_rt_hooks(Object, Hooks, [Res | Acc]).
+
+-spec rt_repl_results(Res, ResAcc) -> ResAcc when
+      Res :: ok | Err,
+      Err :: any(),
+      ResAcc:: ok | {error, list(Err)}.
+rt_repl_results(_Res=ok, _ResAcc=ok) ->
+    ok;
+rt_repl_results(ErrRes, _ResAcc=ok) ->
+    {error, [ErrRes]};
+rt_repl_results(ErrRes, {error, Errors}) ->
+    {error, [ErrRes | Errors]}.
 
 %% @spec get(riak_object:bucket(), riak_object:key(), options(), riak_client()) ->
 %%       {ok, riak_object:riak_object()} |
@@ -934,3 +1005,4 @@ write_once(Node, Bucket) ->
         Result ->
             Result
     end.
+
