@@ -405,18 +405,7 @@ drop(#state{bookie=Bookie, partition=Partition, config=Config}=_State) ->
 %% non-tombstone values; otherwise returns false.
 -spec is_empty(state()) -> boolean().
 is_empty(#state{bookie=Bookie}) ->
-    FoldBucketsFun = fun(B, Acc) -> sets:add_element(B, Acc) end,
-    ListBucketQ = {binary_bucketlist,
-                    ?RIAK_TAG,
-                    {FoldBucketsFun, sets:new()}},
-    {async, Folder} = leveled_bookie:book_returnfolder(Bookie, ListBucketQ),
-    BSet = Folder(),
-    case sets:size(BSet) of
-        0 ->
-            true;
-        _ ->
-            false
-    end.
+    leveled_book:book_isempty(Bookie, ?RIAK_TAG).
 
 %% @doc Get the status information for this leveled backend
 -spec status(state()) -> [{atom(), term()}].
