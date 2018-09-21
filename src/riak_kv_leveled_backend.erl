@@ -260,9 +260,15 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
 
                 IndexQuery = case Field of
                                  <<"$bucket">> ->
-                                     {keylist, ?RIAK_TAG, QBucket, {FoldKeysFun, Acc}};
+                                     {keylist, ?RIAK_TAG, QBucket,
+                                        {null, null}, 
+                                        {FoldKeysFun, Acc},
+                                        TermRegex};
                                  <<"$key">> ->
-                                     {keylist, ?RIAK_TAG, QBucket, {StartKey, EndTerm}, {FoldKeysFun, Acc}};
+                                     {keylist, ?RIAK_TAG, QBucket, 
+                                        {StartKey, EndTerm}, 
+                                        {FoldKeysFun, Acc},
+                                        TermRegex};
                                  _ ->
                                      {index_query,
                                       {QBucket, StartKey},
