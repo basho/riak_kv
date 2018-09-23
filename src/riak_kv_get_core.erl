@@ -99,11 +99,12 @@ head_merge(GetCore) ->
 
 %% Add a result for a vnode index
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
-add_result(Idx, {ok, RObj} = Result, GetCore) ->
-    Dels = case riak_kv_util:is_x_deleted(RObj) of
-        true ->  1;
-        false -> 0
-    end,
+add_result(Idx, {ok, RObj}, GetCore) ->
+    {Dels, Result} = 
+        case riak_kv_util:is_x_deleted(RObj) of
+            true ->  {1, {ok, riak_object:spoof_getdeletedobject(RObj)}};
+            false -> {0, {ok, RObj}}
+        end,
     num_pr(GetCore#getcore{
             results = [{Idx, Result}|GetCore#getcore.results],
             merged = undefined,

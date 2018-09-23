@@ -103,6 +103,7 @@
 -export([update_last_modified/1, update_last_modified/2, get_last_modified/1]).
 -export([strict_descendant/2]).
 -export([find_bestobject/1]).
+-export([spoof_getdeletedobject/1]).
 
 -ifdef(TEST).
 -export([convert_object_to_headonly/3]). % Used in unit testing of get_core
@@ -301,6 +302,24 @@ is_head({ok, Obj}) ->
     end;
 is_head(Obj) ->
     is_head({ok, Obj}).
+
+
+%% @doc
+%% If an object has been confirmed as deleted by riak_util:is_x_deleted, then
+%% any head_only contents can be uplifted to a GET-equivalent by swapping the
+%% head_only for an empty value.  There is no need to fetch vales we know must
+%% be empty
+spoof_getdeletedobject(Obj) ->
+    MapFun =
+        fun(Content) ->
+            V0 =
+                case Content#r_content.value of
+                    head_only -> <<>>;
+                    V -> V
+                end,
+            Content#r_content{value = V0}
+        end,
+    Obj#r_object{contents = lists:map(MapFun, Obj#r_object.contents)}.
 
 %% @private pairwise merge the objects in the list so that a single,
 %% merged riak_object remains that contains all sibling values. Only
