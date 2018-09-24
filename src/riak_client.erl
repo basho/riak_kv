@@ -146,11 +146,23 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
 -spec rt_enqueue(riak_object:bucket(), riak_object:key(), Options::list(), riak_client()) ->
                         ok |
                         {error, Reason::term()}.
-rt_enqueue(Bucket, Key, Options, {?MODULE, [_Node, _ClientId]}=THIS) when is_list(Options) ->
+rt_enqueue(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list(Options) ->
     GetRes = get(Bucket, Key, Options, THIS),
     case GetRes of
         {ok, Object} ->
-            rt_enqueue_object(Object);
+            case node() of
+                Node ->
+                    rt_enqueue_object(Object);
+                _Other ->
+                    Me = self(),
+                    ReqId = mk_reqid(),
+                    erlang:spawn(Node, fun() ->
+                                               Res = rt_enqueue_object(Object),
+                                               Me ! {ReqId, Res}
+                                       end),
+                    Timeout = recv_timeout(Options),
+                    wait_for_reqid(ReqId, Timeout)
+            end;
         GetErr ->
             GetErr
     end.
@@ -164,6 +176,7 @@ rt_enqueue_object(Object) ->
     %% util (not the props) as the props does not name hooks, and may
     %% have many we don't care about. See riak_repl:fixup/2
     RTEnabled = app_helper:get_env(riak_repl, rtenabled, false),
+
     case proplists:get_value(repl, BucketProps) of
         Val when (Val==true orelse Val==realtime orelse Val==both),
                  RTEnabled == true  ->
@@ -173,14 +186,15 @@ rt_enqueue_object(Object) ->
             {error, realtime_not_enabled}
     end.
 
+
 -spec run_rt_hooks(riak_object:riak_object(), Hooks::list(), ResAcc::list()) ->
                           ok | {error, Err::term()}.
 run_rt_hooks(_Object, _Hooks=[], Acc) ->
     lists:foldl(fun rt_repl_results/2, ok, Acc);
 run_rt_hooks(Object, [{struct, Hook} | Hooks], Acc) ->
     %% Bit jankey as it duplicates code in riak_kv_fsm postcommit
-    ModBin = proplist:get_value(<<"mod">>, Hook),
-    FunBin = proplist:get_value(<<"fun">>, Hook),
+    ModBin = proplists:get_value(<<"mod">>, Hook),
+    FunBin = proplists:get_value(<<"fun">>, Hook),
 
     Res =
         try
@@ -188,7 +202,7 @@ run_rt_hooks(Object, [{struct, Hook} | Hooks], Acc) ->
             Fun = binary_to_atom(FunBin, utf8),
             Mod:Fun(Object)
         catch
-            Class:Exception ->
+             Class:Exception ->
                 {error, {Hook, Class, Exception}}
         end,
     run_rt_hooks(Object, Hooks, [Res | Acc]).
