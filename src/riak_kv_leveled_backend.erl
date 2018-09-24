@@ -252,11 +252,23 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
             Index /= false  ->
                 {index, QBucket, Q} = Index,
                 ?KV_INDEX_Q{filter_field=Field,
-                            start_key=StartKey,
+                            start_key=StartKey0,
                             start_term=StartTerm,
                             end_term=EndTerm,
                             return_terms=ReturnTerms,
                             term_regex=TermRegex} = riak_index:upgrade_query(Q),
+
+                StartKey = 
+                    case StartKey0 of
+                        <<>> -> <<>>;
+                        _ -> leveled_codec:next_key(StartKey0)
+                    end,
+                    % Note that this is used as the StartKey definition only in
+                    % the index_query - where it is understood that the StartKey
+                    % If this is a $key index query, the start key is assumed 
+                    % to mean the start of the range, and so we want to use
+                    % this start key inclusively (and so don't advance it to
+                    % the next_key.
 
                 IndexQuery = case Field of
                                  <<"$bucket">> ->
@@ -266,7 +278,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                                         TermRegex};
                                  <<"$key">> ->
                                      {keylist, ?RIAK_TAG, QBucket, 
-                                        {StartKey, EndTerm}, 
+                                        {StartKey0, EndTerm}, 
                                         {FoldKeysFun, Acc},
                                         TermRegex};
                                  _ ->
