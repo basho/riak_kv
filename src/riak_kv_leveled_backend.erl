@@ -256,12 +256,13 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                             start_term=StartTerm,
                             end_term=EndTerm,
                             return_terms=ReturnTerms,
+                            start_inclusive=StartInc,
                             term_regex=TermRegex} = riak_index:upgrade_query(Q),
 
                 StartKey = 
-                    case StartKey0 of
-                        <<>> -> <<>>;
-                        _ -> leveled_codec:next_key(StartKey0)
+                    case StartInc of
+                        true -> StartKey0;
+                        false -> leveled_codec:next_key(StartKey0)
                     end,
                     % Note that this is used as the StartKey definition only in
                     % the index_query - where it is understood that the StartKey
@@ -278,7 +279,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                                         TermRegex};
                                  <<"$key">> ->
                                      {keylist, ?RIAK_TAG, QBucket, 
-                                        {StartKey0, EndTerm}, 
+                                        {StartKey, EndTerm}, 
                                         {FoldKeysFun, Acc},
                                         TermRegex};
                                  _ ->
