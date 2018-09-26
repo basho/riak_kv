@@ -26,6 +26,7 @@
 %% <pre>
 %%  3 - RpbGetClientIdReq
 %%  5 - RpbSetClientIdReq
+%%  7 - RpbRTEReq
 %%  9 - RpbGetReq
 %% 11 - RpbPutReq
 %% 13 - RpbDelReq
@@ -36,6 +37,7 @@
 %% <pre>
 %%  4 - RpbGetClientIdResp
 %%  6 - RpbSetClientIdResp
+%%  8 - RpbRTEResp
 %% 10 - RpbGetResp
 %% 12 - RpbPutResp - 0 length
 %% 14 - RpbDelResp
@@ -90,6 +92,10 @@ decode(Code, Bin) ->
         #rpbdelreq{} ->
             {ok, Msg, {"riak_kv.delete", bucket_type(Msg#rpbdelreq.type,
                                                            Msg#rpbdelreq.bucket)}};
+        %% @TODO(rdb) Do we want security here??
+        %% #rpbrtereq{} ->
+        %%     {ok, Msg, {"riak_kv.rtenqueue", bucket_type(Msg#rpbrtereq.type,
+        %%                                                 Msg#rpbrtereq.bucket)}};
         _ ->
             {ok, Msg}
     end.
@@ -179,7 +185,7 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
                    n_val=N_val, sloppy_quorum=SloppyQuorum} = Req,
         #state{client=C} = State) when NotMod; NoneMatch ->
     GetOpts = make_option(n_val, N_val) ++
-              make_option(sloppy_quorum, SloppyQuorum),
+        make_option(sloppy_quorum, SloppyQuorum),
     B = maybe_bucket_type(T, B0),
     Result = case riak_kv_util:consistent_object(B) of
                  true ->
@@ -318,6 +324,32 @@ process(#rpbdelreq{bucket=B0, type=T, key=K, vclock=PbVc,
             {reply, rpbdelresp, State};
         {error, Reason} ->
             {error, {format, Reason}, State}
+    end;
+%% rt_enqueue request
+process(#rpbrtereq{bucket = <<>>}, State) ->
+    {error, "Bucket cannot be zero-length", State};
+process(#rpbrtereq{key = <<>>}, State) ->
+    {error, "Key cannot be zero-length", State};
+process(#rpbrtereq{type = <<>>}, State) ->
+    {error, "Type cannot be zero-length", State};
+process(#rpbrtereq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
+                   basic_quorum=BQ,
+                   n_val=N_val, sloppy_quorum=SloppyQuorum,
+                   timeout=Timeout}, #state{client=C} = State) ->
+    R = decode_quorum(R0),
+    PR = decode_quorum(PR0),
+    B = maybe_bucket_type(T, B0),
+    case C:rt_enqueue(B, K, make_option(r, R) ++
+                   make_option(pr, PR) ++
+                   make_option(timeout, Timeout) ++
+                   make_option(notfound_ok, NFOk) ++
+                   make_option(basic_quorum, BQ) ++
+                   make_option(n_val, N_val) ++
+                   make_option(sloppy_quorum, SloppyQuorum)) of
+        ok ->
+            {reply, rpbrteresp, State};
+        {error, Reason} ->
+            {error, {format,Reason}, State}
     end.
 
 %% @doc process_stream/3 callback. This service does not create any
