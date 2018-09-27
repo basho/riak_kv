@@ -2338,9 +2338,11 @@ do_get(_Sender, BKey, ReqID,
 %% @private
 do_head(_Sender, BKey, ReqID,
        State=#state{idx=Idx, mod=Mod, modstate=ModState}) ->
+    StartTS = os:timestamp(),
     {Retval, ModState1} = do_head_term(BKey, Mod, ModState),
     State1 = State#state{modstate=ModState1},
     {Retval1, State3} = handle_returned_value(BKey, Retval, State1),
+    update_vnode_stats(vnode_head, Idx, StartTS),
     {reply, {r, Retval1, Idx, ReqID}, State3}.
 
 %% @private
@@ -2986,7 +2988,8 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
     end.
 
 %% @private
--spec update_vnode_stats(vnode_get | vnode_put, partition(), erlang:timestamp()) ->
+-spec update_vnode_stats(vnode_get | vnode_put | vnode_head, 
+                            partition(), erlang:timestamp()) ->
                                 ok.
 update_vnode_stats(Op, Idx, StartTS) ->
     ok = riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).

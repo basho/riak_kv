@@ -66,6 +66,7 @@ register_stats() ->
 
 unregister_vnode_stats(Index) ->
     unregister_per_index(gets, Index),
+    unregister_per_index(heads, Index),
     unregister_per_index(puts, Index).
 
 %% @spec get_stats() -> proplist()
@@ -179,6 +180,11 @@ do_update({vnode_get, Idx, USecs}) ->
     ok = exometer:update([P, ?APP, vnode, gets], 1),
     ok = create_or_update([P, ?APP, vnode, gets, time], USecs, histogram),
     do_per_index(gets, Idx, USecs);
+do_update({vnode_head, Idx, USecs}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, vnode, heads], 1),
+    ok = create_or_update([P, ?APP, vnode, heads, time], USecs, histogram),
+    do_per_index(heads, Idx, USecs);
 do_update({vnode_put, Idx, USecs}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, vnode, puts], 1),
@@ -465,6 +471,13 @@ stats() ->
                                            {95    , vnode_get_fsm_time_95},
                                            {99    , vnode_get_fsm_time_99},
                                            {max   , vnode_get_fsm_time_100}]},
+     {[vnode, heads], spiral, [], [{one, vnode_heads},
+                                  {count, vnode_heads_total}]},
+     {[vnode, heads, time], histogram, [], [{mean , vnode_head_fsm_time_mean},
+                                           {median, vnode_head_fsm_time_median},
+                                           {95    , vnode_head_fsm_time_95},
+                                           {99    , vnode_head_fsm_time_99},
+                                           {max   , vnode_head_fsm_time_100}]},
      {[vnode, puts], spiral, [], [{one  , vnode_puts},
                                   {count, vnode_puts_total}]},
      {[vnode, puts, time], histogram, [], [{mean  , vnode_put_fsm_time_mean},
