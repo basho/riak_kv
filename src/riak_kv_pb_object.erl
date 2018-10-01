@@ -85,17 +85,16 @@ decode(Code, Bin) ->
     case Msg of
         #rpbgetreq{} ->
             {ok, Msg, {"riak_kv.get", bucket_type(Msg#rpbgetreq.type,
-                                                        Msg#rpbgetreq.bucket)}};
+                                                  Msg#rpbgetreq.bucket)}};
         #rpbputreq{} ->
             {ok, Msg, {"riak_kv.put", bucket_type(Msg#rpbputreq.type,
-                                                        Msg#rpbputreq.bucket)}};
+                                                  Msg#rpbputreq.bucket)}};
         #rpbdelreq{} ->
             {ok, Msg, {"riak_kv.delete", bucket_type(Msg#rpbdelreq.type,
-                                                           Msg#rpbdelreq.bucket)}};
-        %% @TODO(rdb) Do we want security here??
-        %% #rpbrtereq{} ->
-        %%     {ok, Msg, {"riak_kv.rtenqueue", bucket_type(Msg#rpbrtereq.type,
-        %%                                                 Msg#rpbrtereq.bucket)}};
+                                                     Msg#rpbdelreq.bucket)}};
+        #rpbrtereq{} ->
+            {ok, Msg, {"riak_kv.rtenqueue", bucket_type(Msg#rpbrtereq.type,
+                                                        Msg#rpbrtereq.bucket)}};
         _ ->
             {ok, Msg}
     end.
