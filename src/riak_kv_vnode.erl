@@ -298,7 +298,7 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     RD = app_helper:get_env(riak_kv, tictacaae_rebuilddelay),
     RW = app_helper:get_env(riak_kv, tictacaae_rebuildwait),
     XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
-    RTick = app_helper:get_env(riak_kv, tictacaae_rebuildpoke),
+    RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
@@ -1095,7 +1095,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
 handle_command(tictacaae_rebuildpoke, Sender, State) ->
     NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
     NRT_PP = calendar:now_to_datetime(NRT),
-    RTick = app_helper:get_env(riak_kv, tictacaae_rebuildpoke),
+    RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
     riak_core_vnode:send_command_after(RTick, tictacaae_rebuildpoke),
     case os:timestamp() < NRT of 
         true ->
