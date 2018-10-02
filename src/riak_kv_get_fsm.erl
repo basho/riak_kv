@@ -541,13 +541,15 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
 
 
 prompt_readrepair(VnodeList) ->
-    C = riak_client:new(local, undefined),
+    {ok, C} = riak:local_client(),
     ElementFun = 
         fun({{B, K}, {_BlueClock, _PinkClock}}) ->
             riak_client:get(B, K, C),
             riak_kv_vnode:rehash(VnodeList, B, K)
         end,
     fun(RepairList) ->
+        lager:info("Repairing ~w keys between ~w", 
+                    [length(RepairList), VnodeList]),
         lists:foreach(ElementFun, RepairList)
     end.
 
