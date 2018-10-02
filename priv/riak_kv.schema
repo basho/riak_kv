@@ -77,6 +77,23 @@
   {commented, enabled}
 ]}.
 
+%% @doc Frequency to prompt exchange per vnode
+%% The number of seconds which the vnode must wait between self-pokes to maybe
+%% prompt the next exchange. Default is 2 minutes.  
+{mapping, "tictacaae_exchangetick", "riak_kv.tictacaae_exchangetick", [
+  {datatype, integer},
+  {default, 120000},
+  hidden
+]}.
+
+%% @doc Frequency to prompt rebuild check per vnode
+%% The number of seconds which the vnode must wait between self-pokes to maybe
+%% prompt the next rebuild. Default is 30 minutes.  
+{mapping, "tictacaae_rebuildtick", "riak_kv.tictacaae_rebuildtick", [
+  {datatype, integer},
+  {default, 1800000},
+  hidden
+]}.
 
 %% @doc Whether to allow node to participate in coverage queries.
 %% This is used as a manual switch to stop nodes in incomplete states

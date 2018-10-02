@@ -210,17 +210,6 @@
 %% die
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
 
-%% If tictac aae is active the vnode should be poked every 30 minutes to see
-%% if there is any outstanding rebuild activity  
--define(TICTACAAE_REBUILDPOKETIME, 1800000). % 30 minutes
-
-%% If tictac aae is active the vnode should be poked every 2 minute to see
-%% if there is any outstanding exchange activity.  Once all exchanges have
-%% been poked, the next poke will be used to load-up a new set of exchanges
-%% based on the current ring
--define(TICTACAAE_EXCHANGEPOKETIME, 120000). % 2 minutes
-
-
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
 %% a macro, ?ELSE to use in if statements. You're welcome.
@@ -308,6 +297,8 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
 
     RD = app_helper:get_env(riak_kv, tictacaae_rebuilddelay),
     RW = app_helper:get_env(riak_kv, tictacaae_rebuildwait),
+    XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
+    RTick = app_helper:get_env(riak_kv, tictacaae_rebuildpoke),
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
@@ -324,8 +315,8 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     
     InitD = erlang:phash2(Partition, 256),
     % Space out the initial poke to avoid over-coordination between vnodes
-    FirstRebuildDelay = (?TICTACAAE_REBUILDPOKETIME div 256) * InitD,
-    FirstExchangeDelay = (?TICTACAAE_EXCHANGEPOKETIME div 256) * InitD,
+    FirstRebuildDelay = (RTick div 256) * InitD,
+    FirstExchangeDelay = (XTick div 256) * InitD,
     riak_core_vnode:send_command_after(FirstRebuildDelay, 
                                         tictacaae_rebuildpoke),
     riak_core_vnode:send_command_after(FirstExchangeDelay, 
@@ -1050,6 +1041,8 @@ handle_command({backend_callback, Ref, Msg}, _Sender,
     Mod:callback(Ref, Msg, ModState),
     {noreply, State};
 handle_command(tictacaae_exchangepoke, _Sender, State) ->
+    XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
+    riak_core_vnode:send_command_after(XTick, tictacaae_exchangepoke),
     case State#state.tictac_exchangequeue of
         [] ->
             Idx = State#state.idx,
@@ -1057,8 +1050,6 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                 riak_core_ring_manager:get_my_ring(),
             Exchanges = 
                 riak_kv_entropy_manager:all_pairwise_exchanges(Idx, Ring),
-            riak_core_vnode:send_command_after(?TICTACAAE_EXCHANGEPOKETIME,
-                                                tictacaae_exchangepoke),
             Now = os:timestamp(),
             LoopDuration = 
                 timer:now_diff(Now, State#state.tictac_startqueue),
@@ -1099,26 +1090,21 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                     "preflist for IndexN=~w",
                                     [Local, Remote, {DocIdx, N}])
             end,
-            riak_core_vnode:send_command_after(?TICTACAAE_EXCHANGEPOKETIME,
-                                                tictacaae_exchangepoke),
             {noreply, State#state{tictac_exchangequeue = Rest}}
     end;
 handle_command(tictacaae_rebuildpoke, Sender, State) ->
     NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
     NRT_PP = calendar:now_to_datetime(NRT),
+    RTick = app_helper:get_env(riak_kv, tictacaae_rebuildpoke),
+    riak_core_vnode:send_command_after(RTick, tictacaae_rebuildpoke),
     case os:timestamp() < NRT of 
         true ->
             lager:info("No rebuild as NextRebuildTime=~w in future", [NRT_PP]),
-            riak_core_vnode:send_command_after(?TICTACAAE_REBUILDPOKETIME, 
-                                                tictacaae_rebuildpoke),
             {noreply, State};
         false ->
             % Next Rebuild Time is in the past - prompt a rebuild
             lager:info("Prompting rebuild as NextRebuildTime=~w", [NRT_PP]),
             ReturnFun = tictac_returnfun(State, store),
-            riak_core_vnode:send_command_after(?TICTACAAE_REBUILDPOKETIME, 
-                                                tictacaae_rebuildpoke),
-
             case aae_controller:aae_rebuildstore(State#state.aae_controller, 
                                                     fun tictac_rebuild/3) of
                 ok ->
