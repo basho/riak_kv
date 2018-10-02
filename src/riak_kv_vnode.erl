@@ -1105,18 +1105,31 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
             % Next Rebuild Time is in the past - prompt a rebuild
             lager:info("Prompting rebuild as NextRebuildTime=~w", [NRT_PP]),
             ReturnFun = tictac_returnfun(State, store),
-            case aae_controller:aae_rebuildstore(State#state.aae_controller, 
+            AAECntrl = State#state.aae_controller,
+            Partition = State#state.idx,
+            Preflists = riak_kv_util:responsible_preflists(Partition),
+            CompleteFun = 
+                fun() ->
+                    R = aae_controller:aae_rebuildtrees(AAECntrl, Preflists, 
+                                        fun preflistfun/2, fun workerfun/2, 
+                                        false),
+                    ReturnFun(ok),
+                    lager:info("Tree rebuild prompted for ~w " ++ 
+                                "with result of prompt ~w",
+                                [Partition, R])
+                end,
+            case aae_controller:aae_rebuildstore(AAECntrl, 
                                                     fun tictac_rebuild/3) of
                 ok ->
-                    % This store is rebuilt already (i.e. it is native), so nothing to
-                    % do here other than prompt the status change
-                    ReturnFun(ok),
+                    % This store is rebuilt already (i.e. it is native), so
+                    % nothing has happened here.  Still need to rebuild trees
+                    CompleteFun(),
                     {noreply, State};
                 {ok, FoldFun, FinishFun} ->
                     FinishFun0 = 
                         fun(FoldOutput) ->
                             FinishFun(FoldOutput),
-                            ReturnFun(ok)
+                            CompleteFun() % will rebuild trees
                         end,
                     {Mod, ModState} = get_modstate(State),
                     Opts = get_asyncopts(State, all),
