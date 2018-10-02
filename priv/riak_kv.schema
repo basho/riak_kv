@@ -78,8 +78,8 @@
 ]}.
 
 %% @doc Frequency to prompt exchange per vnode
-%% The number of seconds which the vnode must wait between self-pokes to maybe
-%% prompt the next exchange. Default is 2 minutes.  
+%% The number of milliseconds which the vnode must wait between self-pokes to
+%% maybe prompt the next exchange. Default is 2 minutes.  
 {mapping, "tictacaae_exchangetick", "riak_kv.tictacaae_exchangetick", [
   {datatype, integer},
   {default, 120000},
@@ -87,8 +87,8 @@
 ]}.
 
 %% @doc Frequency to prompt rebuild check per vnode
-%% The number of seconds which the vnode must wait between self-pokes to maybe
-%% prompt the next rebuild. Default is 30 minutes.  
+%% The number of milliseconds which the vnode must wait between self-pokes to
+%% maybe prompt the next rebuild. Default is 30 minutes.  
 {mapping, "tictacaae_rebuildtick", "riak_kv.tictacaae_rebuildtick", [
   {datatype, integer},
   {default, 1800000},
