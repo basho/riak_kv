@@ -1165,13 +1165,14 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
         {true, false} ->
             % Next Rebuild Time is in the past - prompt a rebuild
             ReturnFun = tictac_returnfun(State#state.idx, store),
+            State0 = State#state{tictac_rebuilding = os:timestamp()},
             case aae_controller:aae_rebuildstore(State#state.aae_controller, 
                                                     fun tictac_rebuild/3) of
                 ok ->
                     % This store is rebuilt already (i.e. it is native), so nothing to
                     % do here other than prompt the status change
                     ReturnFun(ok),
-                    {noreply, State};
+                    {noreply, State0};
                 {ok, FoldFun, FinishFun} ->
                     FinishFun0 = 
                         fun(FoldOutput) ->
@@ -1180,7 +1181,6 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
                         end,
                     {Mod, ModState} = get_modstate(State),
                     Opts = get_asyncopts(State, all),
-                    State0 = State#state{tictac_rebuilding = os:timestamp()},
                     % Make the fold request to the vnode - why is this called list?
                     % Perhaps this should be backend_fold/7
                     case list(FoldFun, FinishFun0, 
