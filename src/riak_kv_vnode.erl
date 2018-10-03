@@ -164,7 +164,8 @@
                     :: list(riak_kv_entropy_manager:exchange()),
                 tictac_exchangecount = 0 :: integer(),
                 tictac_deltacount = 0 :: integer(),
-                tictac_startqueue = os:timestamp() :: erlang:timestamp()
+                tictac_startqueue = os:timestamp() :: erlang:timestamp(),
+                tictac_rebuilding = false :: erlang:timestamp()|false
                }).
 
 -type index_op() :: add | remove.
@@ -209,6 +210,8 @@
 %% If it takes more than 20 seconds to fsync the vnode counter to disk,
 %% die
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
+
+-define(MAX_REBUILD_TIME, 86400).
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -307,11 +310,20 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                                     Preflists, 
                                     RootPath, 
                                     fun from_object_binary/1),
-    R = aae_controller:aae_rebuildtrees(AAECntrl, Preflists, 
-                                        fun preflistfun/2, fun workerfun/2, 
+    R = aae_controller:aae_rebuildtrees(AAECntrl, 
+                                        Preflists, 
+                                        fun preflistfun/2, 
+                                        rebuildtrees_workerfun(Partition),
                                         true),
     lager:info("AAE Controller started with pid ~w and rebuild state ~w", 
                 [AAECntrl, R]),
+    Rebuilding = 
+        case R of
+            ok -> 
+                os:timestamp();
+            skipped ->
+                false
+        end,
     
     InitD = erlang:phash2(Partition, 256),
     % Space out the initial poke to avoid over-coordination between vnodes
@@ -324,7 +336,8 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
 
     State#state{tictac_aae = true,
                 aae_controller = AAECntrl,
-                modstate = ModState}.
+                modstate = ModState,
+                tictac_rebuilding = Rebuilding}.
 
 
 -spec from_object_binary(binary()) -> {integer(), integer(), integer(), null}.
@@ -350,24 +363,23 @@ determine_aaedata_root(Partition) ->
 preflistfun(Bucket, Key) -> riak_kv_util:get_index_n({Bucket, Key}).
 
 
--spec tictac_returnfun(state(), store|trees|exchange) -> fun().
+-spec tictac_returnfun(partition(), store|trees|exchange) -> fun().
 %% @doc
 %% Function to be passed to return a response once an operation is complete
-tictac_returnfun(State, exchange) ->
-    Vnode = {State#state.idx, node()},
+tictac_returnfun(Partition, exchange) ->
+    Vnode = {Partition, node()},
     ReturnFun = 
         fun(ExchangeResult) ->
             ok = tictacexchange_complete(Vnode, ExchangeResult)
         end,
     ReturnFun;
-tictac_returnfun(State, RebuildType) ->
-    Vnode = {State#state.idx, node()},
+tictac_returnfun(Partition, RebuildType) ->
+    Vnode = {Partition, node()},
     ReturnFun = 
         fun(ok) ->
             ok = tictacrebuild_complete(Vnode, RebuildType)
         end,
     ReturnFun.
-
 
 
 -spec tictac_rebuild(binary(), binary(), riak_object:riak_object()) -> 
@@ -380,17 +392,26 @@ tictac_rebuild(B, K, V) ->
     Clock = riak_object:vclock(V),
     {IndexN, Clock}.
 
--spec workerfun(fun(), fun()) -> ok.
+-spec rebuildtrees_workerfun(partition()) -> fun().
 %% @doc
 %% A wrapper around the node_worker_pool to provide workers for tictac aae
 %% folds.  As the pool is a named pool started with riak_core, should be safe
 %% to used in init of inidivdual vnodes.
-workerfun(FoldFun, FinishFun) ->
-    Sender = self(),
-    riak_core_node_worker_pool:handle_work(node_worker_pool,
-                                            {fold, FoldFun, FinishFun},
-                                            Sender).
-
+rebuildtrees_workerfun(Partition) ->
+    fun(FoldFun, FinishFun) ->
+        Sender = self(),
+        ReturnFun = tictac_returnfun(Partition, trees),
+        FinishPlusReturnFun =
+            fun(WorkOutput) ->
+                FinishFun(WorkOutput),
+                ReturnFun(ok)
+            end,
+        riak_core_node_worker_pool:handle_work(node_worker_pool,
+                                                {fold, 
+                                                    FoldFun, 
+                                                    FinishPlusReturnFun},
+                                                Sender)
+    end.
 
 %% @doc Reveal the underlying module state for testing
 -spec(get_modstate(state()) -> {atom(), state()}).
@@ -996,12 +1017,32 @@ handle_command({fold_indexes, FoldIndexFun, Acc}, Sender, State=#state{mod=Mod, 
 handle_command({rebuild_complete, store}, _Sender, State) ->
     %% If store rebuild complete - then need to rebuild trees
     AAECntrl = State#state.aae_controller,
-    Preflists = riak_kv_util:responsible_preflists(State#state.idx),
-    aae_controller:aae_rebuildtrees(AAECntrl, Preflists, 
-                                    fun preflistfun/2, fun workerfun/2,
+    Partition = State#state.idx,
+    Preflists = riak_kv_util:responsible_preflists(Partition),
+    aae_controller:aae_rebuildtrees(AAECntrl,
+                                    Preflists,
+                                    fun preflistfun/2, 
+                                    rebuildtrees_workerfun(Partition),
                                     false),
     lager:info("AAE Controller rebuild trees started with pid ~w", [AAECntrl]),
     {noreply, State};
+
+handle_command({rebuild_complete, trees}, _Sender, State) ->
+    % Rebuilding the trees now complete, so change the status of the 
+    % rebuilding state so other rebuilds may be prompted
+    Partition = State#state.idx,
+    case State#state.tictac_rebuilding of
+        false ->
+            lager:warning("Rebuild complete for Partition=~w but not expected",
+                        [Partition]),
+            {noreply, State};
+        TS ->
+            RebuildTime = timer:now_diff(os:timestamp(), TS) / (1000 * 1000),
+            lager:info("Rebuild complete for " ++ 
+                            "Partition=~w in duration=~w seconds",
+                        [Partition, RebuildTime]),
+            {noreply, State#state{tictac_rebuilding = false}}
+    end;
 
 handle_command({exchange_complete, {_EndState, DeltaCount}}, _Sender, State) ->
     %% Record how many deltas were seen in the exchange
@@ -1043,9 +1084,9 @@ handle_command({backend_callback, Ref, Msg}, _Sender,
 handle_command(tictacaae_exchangepoke, _Sender, State) ->
     XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
     riak_core_vnode:send_command_after(XTick, tictacaae_exchangepoke),
+    Idx = State#state.idx,
     case State#state.tictac_exchangequeue of
         [] ->
-            Idx = State#state.idx,
             {ok, Ring} = 
                 riak_core_ring_manager:get_my_ring(),
             Exchanges = 
@@ -1079,7 +1120,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                     RepairFun = 
                         riak_kv_get_fsm:prompt_readrepair([{Local, LN}, 
                                                             {Remote, RN}]),
-                    ReplyFun = tictac_returnfun(State, exchange),
+                    ReplyFun = tictac_returnfun(Idx, exchange),
                     aae_exchange:start(BlueList, 
                                         PinkList, 
                                         RepairFun, 
@@ -1092,19 +1133,38 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
             end,
             {noreply, State#state{tictac_exchangequeue = Rest}}
     end;
+
 handle_command(tictacaae_rebuildpoke, Sender, State) ->
     NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
     NRT_PP = calendar:now_to_datetime(NRT),
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
     riak_core_vnode:send_command_after(RTick, tictacaae_rebuildpoke),
-    case os:timestamp() < NRT of 
-        true ->
+    RebuildDue = os:timestamp() > NRT,
+    RebuildPending = State#state.tictac_rebuilding =/= false,
+
+    case {RebuildDue, RebuildPending} of 
+        {false, _} ->
             lager:info("No rebuild as NextRebuildTime=~w in future", [NRT_PP]),
             {noreply, State};
-        false ->
+        {true, true} ->
+            HowLong = 
+                timer:now_diff(os:timestamp(), State#state.tictac_rebuilding)
+                    / (1000 * 1000),
+            case HowLong > ?MAX_REBUILD_TIME of
+                true ->
+                    lager:warning("Pending rebuild time is now " ++ 
+                                "~w seconds for partition ~w " ++ 
+                                "... something isn't right", 
+                            [HowLong, State#state.idx]);
+                false ->
+                    lager:info("Skip poke with rebuild pending duration=~w" ++
+                                " for partition ~w",
+                            [HowLong, State#state.idx])
+            end,
+            {noreply, State};
+        {true, false} ->
             % Next Rebuild Time is in the past - prompt a rebuild
-            lager:info("Prompting rebuild as NextRebuildTime=~w", [NRT_PP]),
-            ReturnFun = tictac_returnfun(State, store),
+            ReturnFun = tictac_returnfun(State#state.idx, store),
             case aae_controller:aae_rebuildstore(State#state.aae_controller, 
                                                     fun tictac_rebuild/3) of
                 ok ->
@@ -1120,6 +1180,7 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
                         end,
                     {Mod, ModState} = get_modstate(State),
                     Opts = get_asyncopts(State, all),
+                    State0 = State#state{tictac_rebuilding = os:timestamp()},
                     % Make the fold request to the vnode - why is this called list?
                     % Perhaps this should be backend_fold/7
                     case list(FoldFun, FinishFun0, 
@@ -1127,14 +1188,15 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
                                 Opts, []) of
                         {async, AsyncWork} ->
                             % This work should be sent to the vnode_worker_pool
-                            {async, {fold, AsyncWork, FinishFun0}, Sender, State};
+                            {async, {fold, AsyncWork, FinishFun0}, Sender, State0};
                         {queue, DeferrableWork} ->
                             % This work should be sent to the core node_worker_pool
-                            {queue, {fold, DeferrableWork, FinishFun0}, Sender, State};
+                            {queue, {fold, DeferrableWork, FinishFun0}, Sender, State0};
                         _ ->
                             % This work has already been completed by the vnode, which should
                             % have already sent the results using FinishFun
-                            {noreply, State}
+                            {noreply, State} 
+                                % Stick to orginal state, as no rebuild has been prompted
                     end
             end
     end;
