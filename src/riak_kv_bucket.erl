@@ -27,7 +27,8 @@
 
 %% helper functions exports
 -export([allow_mult/1,
-         hll_precision/2]).
+         hll_precision/2,
+         get_bucket_props/1]).
 
 -include_lib("riak_kv_types.hrl").
 
@@ -708,6 +709,24 @@ hll_precision(PNew, POld, Mod) ->
             false;
         _ ->
             ok
+    end.
+
+%% @doc get the properties for a riak_kv_object's bucket. This code
+%% appears in a few places, and I was about to cut and paste it to yet
+%% another, and decided to give it home.
+-spec get_bucket_props(riak_object:riak_object()) -> props().
+get_bucket_props(RObj) ->
+    Bucket = riak_object:bucket(RObj),
+    {ok, DefaultProps} = application:get_env(riak_core,
+                                             default_bucket_props),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    %% typed buckets never fall back to defaults
+    case is_tuple(Bucket) of
+        false ->
+            lists:keymerge(1, lists:keysort(1, BucketProps),
+                           lists:keysort(1, DefaultProps));
+        true ->
+            BucketProps
     end.
 
 %% @doc Error function for datatype creation.
