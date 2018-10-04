@@ -1136,15 +1136,15 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
 
 handle_command(tictacaae_rebuildpoke, Sender, State) ->
     NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
-    NRT_PP = calendar:now_to_datetime(NRT),
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
     riak_core_vnode:send_command_after(RTick, tictacaae_rebuildpoke),
-    RebuildDue = os:timestamp() > NRT,
+    TimeToRebuild = timer:now_diff(os:timestamp(), NRT),
     RebuildPending = State#state.tictac_rebuilding =/= false,
 
-    case {RebuildDue, RebuildPending} of 
+    case {TimeToRebuild < 0, RebuildPending} of 
         {false, _} ->
-            lager:info("No rebuild as NextRebuildTime=~w in future", [NRT_PP]),
+            lager:info("No rebuild as next_rebuild=~w seconds in the future",
+                        [TimeToRebuild / (1000 * 1000)]),
             {noreply, State};
         {true, true} ->
             HowLong = 
@@ -1153,9 +1153,9 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
             case HowLong > ?MAX_REBUILD_TIME of
                 true ->
                     lager:warning("Pending rebuild time is now " ++ 
-                                "~w seconds for partition ~w " ++ 
-                                "... something isn't right", 
-                            [HowLong, State#state.idx]);
+                                    "~w seconds for partition ~w " ++ 
+                                    "... something isn't right", 
+                                [HowLong, State#state.idx]);
                 false ->
                     lager:info("Skip poke with rebuild pending duration=~w" ++
                                 " for partition ~w",
