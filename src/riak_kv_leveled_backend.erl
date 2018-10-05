@@ -274,32 +274,42 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                     % this start key inclusively (and so don't advance it to
                     % the next_key.
 
-                IndexQuery = case Field of
-                                 <<"$bucket">> ->
-                                     {keylist, ?RIAK_TAG, QBucket,
-                                        {StartKey, null}, 
-                                        {FoldKeysFun, Acc},
-                                        TermRegex};
-                                 <<"$key">> ->
-                                     {keylist, ?RIAK_TAG, QBucket, 
-                                        {StartKey, EndTerm}, 
-                                        {FoldKeysFun, Acc},
-                                        TermRegex};
-                                 _ ->
-                                     {index_query,
-                                      {QBucket, StartKey},
-                                      {FoldKeysFun, Acc},
-                                      {Field, StartTerm, EndTerm},
-                                      {ReturnTerms, TermRegex}}
-                             end,
-                leveled_bookie:book_returnfolder(Bookie, IndexQuery);
+                case Field of
+                    <<"bucket">> ->
+                        leveled_bookie:book_keylist(Bookie,
+                                                    ?RIAK_TAG,
+                                                    QBucket,
+                                                    {StartKey, null},
+                                                    {FoldKeysFun, Acc},
+                                                    TermRegex);
+                    <<"$key">> ->
+                        leveled_bookie:book_keylist(Bookie,
+                                                    ?RIAK_TAG,
+                                                    QBucket,
+                                                    {StartKey, EndTerm},
+                                                    {FoldKeysFun, Acc},
+                                                    TermRegex);
+                    _ ->
+                        leveled_bookie:book_indexfold(Bookie,
+                                                        {QBucket, StartKey},
+                                                        {FoldKeysFun, Acc},
+                                                        {Field, 
+                                                            StartTerm, 
+                                                            EndTerm},
+                                                        {ReturnTerms, 
+                                                            TermRegex})
+                end;
             Bucket /= false ->
+                % Equivalent to $bucket query, but without the StartKey
                 {bucket, B} = Bucket,
-                BucketQuery = {keylist, ?RIAK_TAG, B, {FoldKeysFun, Acc}},
-                leveled_bookie:book_returnfolder(Bookie, BucketQuery);
+                leveled_bookie:book_keylist(Bookie, 
+                                            ?RIAK_TAG, B, 
+                                            {FoldKeysFun, Acc});
             true ->
-                AllKeyQuery = {keylist, ?RIAK_TAG, {FoldKeysFun, Acc}},
-                leveled_bookie:book_returnfolder(Bookie, AllKeyQuery)
+                % All key query - don't constrain by bucket
+                leveled_bookie:book_keylist(Bookie, 
+                                            ?RIAK_TAG,
+                                            {FoldKeysFun, Acc})
         end,
 
     case {lists:member(async_fold, Opts), SnapPreFold} of
@@ -318,14 +328,26 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
-    Query =
+    {async, ObjectFolder} =
         case proplists:get_value(bucket, Opts) of
             undefined ->
-                {foldobjects_allkeys, ?RIAK_TAG, {FoldObjectsFun, Acc}, false};
+                % It is expected (but not proven) that sqn_order should be
+                % more efficient than key_order when folding over all objects
+                leveled_bookie:book_objectfold(Bookie, 
+                                                ?RIAK_TAG, 
+                                                {FoldObjectsFun, Acc},
+                                                false, 
+                                                sqn_order);
             B ->
-                {foldobjects_bybucket, ?RIAK_TAG, B, {FoldObjectsFun, Acc}, false}
+                % The order of this will be key_order and not sqn_order as
+                % defined for fold_objects/4 when not constrained by bucket
+                leveled_bookie:book_objectfold(Bookie, 
+                                                ?RIAK_TAG,
+                                                B, 
+                                                all, 
+                                                {FoldObjectsFun, Acc}, 
+                                                false)
         end,
-    {async, ObjectFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
     case lists:member(async_fold, Opts) of
         true ->
             {async, ObjectFolder};
@@ -361,52 +383,44 @@ fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
             SL ->
                 SL 
         end,
-    Query = 
+    {async, HeadFolder} = 
         case lists:keyfind(index, 1, Opts) of 
             {index, Bucket, IdxQuery} ->
-                case IdxQuery#riak_kv_index_v3.filter_field of 
-                    <<"$key">> ->
-                        {foldheads_bybucket,
-                            ?RIAK_TAG,
-                            Bucket,
-                            {IdxQuery#riak_kv_index_v3.start_term,
-                                IdxQuery#riak_kv_index_v3.end_term},
-                            {FoldHeadsFun, Acc},
-                            CheckPresence,
-                            SnapPreFold,
-                            SegmentList};
-                    Field ->
-                        {foldheads_byindex,
-                            ?RIAK_TAG,
-                            Bucket,
-                            Field,
-                            {IdxQuery#riak_kv_index_v3.start_term,
-                                IdxQuery#riak_kv_index_v3.end_term},
-                            {FoldHeadsFun, Acc},
-                            SnapPreFold}
-                end;
+                % This is currently only $key
+                % For MapFold may be extended to allow for the range to be an
+                % index 
+                <<"$key">> = IdxQuery#riak_kv_index_v3.filter_field,
+                KeyRange = 
+                    {IdxQuery#riak_kv_index_v3.start_term,
+                        IdxQuery#riak_kv_index_v3.end_term},
+                leveled_bookie:book_headfold(Bookie, 
+                                                ?RIAK_TAG, 
+                                                {range, Bucket, KeyRange},
+                                                {FoldHeadsFun, Acc}, 
+                                                CheckPresence, 
+                                                SnapPreFold, 
+                                                SegmentList);
             false ->
                 case proplists:get_value(bucket, Opts) of
                     undefined ->
-                        {foldheads_allkeys,
-                            ?RIAK_TAG,
-                            {FoldHeadsFun, Acc},
-                            CheckPresence,
-                            SnapPreFold,
-                            SegmentList};
+                        leveled_bookie:book_headfold(Bookie, 
+                                                        ?RIAK_TAG, 
+                                                        {FoldHeadsFun, Acc}, 
+                                                        CheckPresence,
+                                                        SnapPreFold,
+                                                        SegmentList);
                     B ->
-                        {foldheads_bybucket,
-                            ?RIAK_TAG,
-                            B,
-                            all,
-                            {FoldHeadsFun, Acc},
-                            CheckPresence,
-                            SnapPreFold,
-                            SegmentList}
+                        % Equivalent to a $key query, but without the key range
+                        leveled_bookie:book_headfold(Bookie, 
+                                                        ?RIAK_TAG, 
+                                                        {range, B, all},
+                                                        {FoldHeadsFun, Acc}, 
+                                                        CheckPresence, 
+                                                        SnapPreFold, 
+                                                        SegmentList)
                 end
         end,
 
-    {async, HeadFolder} = leveled_bookie:book_returnfolder(Bookie, Query),
     case {lists:member(async_fold, Opts), SnapPreFold} of
         {true, true} ->
             {queue, HeadFolder};

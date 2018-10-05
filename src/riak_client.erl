@@ -168,7 +168,7 @@ rt_enqueue(Bucket, Key, Options, {?MODULE, [Node, _ClientId]}=THIS) when is_list
     end.
 
 %% @private used by rt_equeue, once the object has been got.
--spec rt_enqueue_object(riak_object:object()) ->
+-spec rt_enqueue_object(riak_object:riak_object()) ->
                                ok | {error, ErrReason::term()}.
 rt_enqueue_object(Object) ->
     BucketProps = riak_kv_bucket:get_bucket_props(Object),
