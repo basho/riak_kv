@@ -331,7 +331,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
 
     {async, ObjectFolder} =
         case {proplists:get_value(bucket, Opts), 
-                proplist:get_value(index, Opts)} of
+                proplists:get_value(index, Opts)} of
             {undefined, undefined} ->
                 % It is expected (but not proven) that sqn_order should be
                 % more efficient than key_order when folding over all objects
