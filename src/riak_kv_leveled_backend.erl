@@ -328,9 +328,11 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                    [{atom(), term()}],
                    state()) -> {ok, any()} | {async, fun()}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
+
     {async, ObjectFolder} =
-        case proplists:get_value(bucket, Opts) of
-            undefined ->
+        case {proplists:get_value(bucket, Opts), 
+                proplist:get_value(index, Opts)} of
+            {undefined, undefined} ->
                 % It is expected (but not proven) that sqn_order should be
                 % more efficient than key_order when folding over all objects
                 leveled_bookie:book_objectfold(Bookie, 
@@ -338,7 +340,41 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                                                 {FoldObjectsFun, Acc},
                                                 false, 
                                                 sqn_order);
-            B ->
+            {undefined, {index, FilterBucket, Q=?KV_INDEX_Q{}}} ->
+                % This is an undocumented thing - required by CS
+                % Copied as far as possible from eleveldb backend - as actual
+                % requirements not known
+                StndObjFold = 
+                    case lists:keyfind(standard_object_fold, 1, Opts) of
+                        {standard_object_fold, Bool} ->
+                            Bool;
+                        false ->
+                            false
+                    end,
+                SpecialFoldFun = 
+                    fun(ObjB, ObjK, Obj, InnerAcc) ->
+                        case riak_index:object_key_in_range({ObjB, ObjK}, 
+                                                            FilterBucket, Q) of
+                            {true, _BK} ->
+                                case StndObjFold of   
+                                    true ->
+                                        FoldObjectsFun(ObjB, ObjK, Obj, 
+                                                        InnerAcc);
+                                    false ->
+                                        FoldObjectsFun(ObjB, {o, ObjK, Obj}, 
+                                                        InnerAcc)
+                                end;
+                            {skip, _BK} ->
+                                Acc
+                        end
+                    end,
+                leveled_bookie:book_objectfold(Bookie, 
+                                                ?RIAK_TAG,
+                                                FilterBucket, 
+                                                all, 
+                                                {SpecialFoldFun, Acc}, 
+                                                false);
+            {B, undefined} ->
                 % The order of this will be key_order and not sqn_order as
                 % defined for fold_objects/4 when not constrained by bucket
                 leveled_bookie:book_objectfold(Bookie, 
