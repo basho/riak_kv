@@ -275,7 +275,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                     % the next_key.
 
                 case Field of
-                    <<"bucket">> ->
+                    <<"$bucket">> ->
                         leveled_bookie:book_keylist(Bookie,
                                                     ?RIAK_TAG,
                                                     QBucket,
