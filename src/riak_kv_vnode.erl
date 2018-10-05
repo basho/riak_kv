@@ -1138,7 +1138,7 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
     NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
     riak_core_vnode:send_command_after(RTick, tictacaae_rebuildpoke),
-    TimeToRebuild = timer:now_diff(os:timestamp(), NRT),
+    TimeToRebuild = timer:now_diff(NRT, os:timestamp()),
     RebuildPending = State#state.tictac_rebuilding =/= false,
 
     case {TimeToRebuild < 0, RebuildPending} of 
