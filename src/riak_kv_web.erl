@@ -115,12 +115,6 @@ raw_dispatch(Name) ->
      {Prefix ++ ["buckets", bucket, "keys", key, "preflist"],
       riak_kv_wm_preflist, Props},
 
-     {Prefix ++ ["rtq", bucket_type, bucket, key],
-      riak_kv_wm_rtenqueue, Props},
-
-     {Prefix ++ ["rtq", bucket, key],
-      riak_kv_wm_rtenqueue, Props},
-
      {Prefix ++ ["buckets", bucket, "keys", key, '*'],
       riak_kv_wm_link_walker, Props},
 
