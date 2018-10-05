@@ -330,9 +330,9 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
 fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
 
     {async, ObjectFolder} =
-        case {proplists:get_value(bucket, Opts), 
-                proplists:get_value(index, Opts)} of
-            {_B, {index, FilterBucket, Q=?KV_INDEX_Q{}}} ->
+        case {lists:keyfind(bucket, 1, Opts), 
+                lists:keyfind(index, 1, Opts)} of
+            {_, {index, FilterBucket, Q=?KV_INDEX_Q{}}} ->
                 % This is an undocumented thing - required by CS
                 % Copied as far as possible from eleveldb backend - as actual
                 % requirements not known
@@ -370,7 +370,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                                                 all, 
                                                 {SpecialFoldFun, Acc}, 
                                                 false);
-            {undefined, undefined} ->
+            {false, false} ->
                 % It is expected (but not proven) that sqn_order should be
                 % more efficient than key_order when folding over all objects
                 leveled_bookie:book_objectfold(Bookie, 
@@ -379,7 +379,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                                                 false, 
                                                 sqn_order);
             
-            {B, undefined} ->
+            {{bucket, B}, false} ->
                 % The order of this will be key_order and not sqn_order as
                 % defined for fold_objects/4 when not constrained by bucket
                 leveled_bookie:book_objectfold(Bookie, 
