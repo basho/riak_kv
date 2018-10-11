@@ -584,15 +584,12 @@ load_built(#state{trees=Trees}) ->
 
 %% Generate a hash value for a `riak_object'
 -spec hash_object({riak_object:bucket(), riak_object:key()},
-                  riak_object_t2b() | riak_object:riak_object(),
-                  version()) -> binary().
-hash_object({Bucket, Key}, RObj0, Version) ->
+                    riak_object_t2b() | 
+                        riak_object:riak_object() | riak_object:proxy_object(),
+                    version()) -> binary().
+hash_object({Bucket, Key}, RObj, Version) ->
     try
-        RObj = case riak_object:is_robject(RObj0) of
-            true -> RObj0;
-            false -> riak_object:from_binary(Bucket, Key, RObj0)
-        end,
-        riak_object:hash(RObj, Version)
+        riak_object:hash(Bucket, Key, RObj, Version)
     catch _:_ ->
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)

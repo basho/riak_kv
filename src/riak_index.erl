@@ -670,7 +670,7 @@ parse_object_hook_test() ->
         end,
 
     ?assertMatch(
-       {r_object, _, _, _, _, _, _, false, undefined, undefined},
+       {r_object, _, _, _, _, _, _},
        F([
           {<<"field_bin">>, <<"A">>},
           {<<"field_int">>, <<"1">>}
