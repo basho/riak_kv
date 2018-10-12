@@ -29,7 +29,7 @@
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
 
--export_type([riak_object/0, bucket/0, key/0, value/0, binary_version/0, index_value/0]).
+-export_type([riak_object/0, proxy_object/0, bucket/0, key/0, value/0, binary_version/0, index_value/0]).
 
 -type key() :: binary().
 -type bucket() :: binary() | {binary(), binary()}.
@@ -62,12 +62,15 @@
           contents :: [#r_content{}],
           vclock = vclock:fresh() :: vclock:vclock(),
           updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
-          updatevalue :: term(),
-          is_proxy = false :: boolean(),
-          proxy :: tuple(),
-          size :: integer()
+          updatevalue :: term()
          }).
+-record(p_object, {
+            r_object :: riak_object(),
+            proxy :: tuple(),
+            size :: integer()}).
+
 -opaque riak_object() :: #r_object{}.
+-opaque proxy_object() :: #p_object{}.
 
 -type merge_acc() :: #merge_acc{}.
 -type r_content() :: #r_content{}.
@@ -87,7 +90,7 @@
 -export([increment_vclock/2, increment_vclock/3, prune_vclock/3, vclock_descends/2, all_actors/1]).
 -export([actor_counter/2]).
 -export([key/1, get_metadata/1, get_metadatas/1, get_values/1, get_value/1]).
--export([hash/1, hash/2, approximate_size/2, proxy_size/1]).
+-export([hash/1, hash/2, hash/4, approximate_size/2, proxy_size/1]).
 -export([vclock_encoding_method/0, vclock/1, vclock_header/1, encode_vclock/1, decode_vclock/1]).
 -export([encode_vclock/2, decode_vclock/2]).
 -export([update/5, update_value/2, update_metadata/2, bucket/1, bucket_only/1, type/1, value_count/1]).
@@ -151,8 +154,15 @@ new_int(B, K, V, MD) ->
             end
     end.
 
+-spec is_robject(any()) -> boolean()|proxy.
+%% Is this a recognised riak object
+%% true - riak object
+%% proxy -  a proxy for a riak object
+%% false - something else, hopefully just needs converting from binary
 is_robject(#r_object{}) ->
     true;
+is_robject(#p_object{}) ->
+    proxy;
 is_robject(_) ->
     false.
 
@@ -290,16 +300,18 @@ find_bestobject(FetchedItems) ->
     end.
 
 
+-spec is_head(any()) -> boolean().
 %% @private Check if an object is simply a head response
-
-is_head({ok, Obj}) ->
-    C0 = lists:nth(1, Obj#r_object.contents),
+is_head({ok, #r_object{contents=Contents}}) ->
+    C0 = lists:nth(1, Contents),
     case C0#r_content.value of
         head_only ->
             true;
         _ ->
             false
     end;
+is_head({ok, #p_object{}}) ->
+    true;
 is_head(Obj) ->
     is_head({ok, Obj}).
 
@@ -367,7 +379,7 @@ compare_content_dates(C1,C2) ->
 %%       call with concurrent objects. Use `syntactic_merge/2' if one
 %%       object may strictly dominate another.
 -spec merge(riak_object(), riak_object()) -> riak_object().
-merge(OldObject, NewObject) ->
+merge(OldObject=#r_object{}, NewObject=#r_object{}) ->
     NewObj1 = apply_updates(NewObject),
     Bucket = bucket(OldObject),
     case riak_kv_util:get_write_once(Bucket) of
@@ -676,84 +688,95 @@ apply_updates(Object=#r_object{}) ->
                     updatevalue=undefined}.
 
 %% @doc Return the containing bucket for this riak_object.
--spec bucket(riak_object()) -> bucket().
-bucket(#r_object{bucket=Bucket}) -> Bucket.
+-spec bucket(riak_object()|proxy_object()) -> bucket().
+bucket(#r_object{bucket=Bucket}) -> Bucket;
+bucket(#p_object{r_object=RObj}) -> bucket(RObj).
 
 %% @doc Return the containing bucket for this riak_object without any type
 %% information, if present.
--spec bucket_only(riak_object()) -> binary().
+-spec bucket_only(riak_object()|proxy_object()) -> binary().
 bucket_only(#r_object{bucket={_Type, Bucket}}) -> Bucket;
-bucket_only(#r_object{bucket=Bucket}) -> Bucket.
+bucket_only(#r_object{bucket=Bucket}) -> Bucket;
+bucket_only(#p_object{r_object=RObj}) -> bucket_only(RObj).
 
 %% @doc Return the containing bucket-type for this riak_object.
--spec type(riak_object()) -> binary() | undefined.
+-spec type(riak_object()|proxy_object()) -> binary() | undefined.
 type(#r_object{bucket={Type, _Bucket}}) -> Type;
-type(#r_object{bucket=_Bucket}) -> undefined.
+type(#r_object{bucket=_Bucket}) -> undefined;
+type(#p_object{r_object=RObj}) -> type(RObj).
 
 %% @doc  Return the key for this riak_object.
--spec key(riak_object()) -> key().
-key(#r_object{key=Key}) -> Key.
+-spec key(riak_object()|proxy_object()) -> key().
+key(#r_object{key=Key}) -> Key;
+key(#p_object{r_object=RObj}) -> key(RObj).
 
 %% @doc  Return the vector clock for this riak_object.
--spec vclock(riak_object()) -> vclock:vclock().
-vclock(#r_object{vclock=VClock}) -> VClock.
+-spec vclock(riak_object()|proxy_object()) -> vclock:vclock().
+vclock(#r_object{vclock=VClock}) -> VClock;
+vclock(#p_object{r_object=RObj}) -> vclock(RObj).
+
 
 %% @doc  Return the number of values (siblings) of this riak_object.
--spec value_count(riak_object()) -> non_neg_integer().
-value_count(#r_object{contents=Contents}) -> length(Contents).
+-spec value_count(riak_object()|proxy_object()) -> non_neg_integer().
+value_count(#r_object{contents=Contents}) -> length(Contents);
+value_count(#p_object{r_object=RObj}) -> value_count(RObj).
 
 %% @doc  Return the contents (a list of {metadata, value} tuples) for
 %%       this riak_object.
--spec get_contents(riak_object()) -> [{riak_object_dict(), value()}].
+-spec get_contents(riak_object()|proxy_object()) -> [{riak_object_dict(), value()}].
 get_contents(#r_object{contents=Contents}) ->
     [{Content#r_content.metadata, Content#r_content.value} ||
-        Content <- Contents].
+        Content <- Contents];
+get_contents(#p_object{r_object=RObj, proxy=P}) ->
+    {FetchFun, Pid, FetchKey} = P,
+    ObjBin = FetchFun(Pid, FetchKey),
+    R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+    get_contents(R0).
 
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       metadata.  This function will fail with a badmatch error if the
 %%       object has siblings (value_count() > 1).
--spec get_metadata(riak_object()) -> riak_object_dict().
+-spec get_metadata(riak_object()|proxy_object()) -> riak_object_dict().
 get_metadata(O=#r_object{}) ->
     % this blows up intentionally (badmatch) if more than one content value!
     [{Metadata,_V}] = get_contents(O),
-    Metadata.
+    Metadata;
+get_metadata(#p_object{r_object=RObj}) ->
+    [Content] = RObj#r_object.contents,
+    Content#r_content.metadata.
 
 %% @doc  Return a list of the metadata values for this riak_object.
--spec get_metadatas(riak_object()) -> [riak_object_dict()].
+-spec get_metadatas(riak_object()|proxy_object()) -> [riak_object_dict()].
 get_metadatas(#r_object{contents=Contents}) ->
-    [Content#r_content.metadata || Content <- Contents].
+    [Content#r_content.metadata || Content <- Contents];
+get_metadatas(#p_object{r_object=RObj}) ->
+    get_metadatas(RObj).
 
 %% @doc  Return a list of object values for this riak_object.
 %%       If the object is a proxy will need to fetch the actual object
--spec get_values(riak_object()) -> [value()].
-get_values(RObj=#r_object{contents=C, is_proxy = IsP, proxy = P}) ->
-    case IsP of
-        true ->
-            {FetchFun, Pid, FetchKey} = P,
-            ObjBin = FetchFun(Pid, FetchKey),
-            R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
-            get_values(R0#r_object{is_proxy = false});
-        false ->
-            [Content#r_content.value || Content <- C]
-    end.
+-spec get_values(riak_object()|proxy_object()) -> [value()].
+get_values(#r_object{contents=C}) ->
+    [Content#r_content.value || Content <- C];
+get_values(#p_object{r_object = RObj, proxy = P}) ->
+    {FetchFun, Pid, FetchKey} = P,
+    ObjBin = FetchFun(Pid, FetchKey),
+    R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+    get_values(R0).
 
 %% @doc  Assert that this riak_object has no siblings and return its associated
 %%       value.  This function will fail with a badmatch error if the object
 %%       has siblings (value_count() > 1).
 %%       If the object is a proxy will need to fetch the actual object.
--spec get_value(riak_object()) -> value().
-get_value(RObj=#r_object{is_proxy = IsP, proxy = P}) ->
+-spec get_value(riak_object()|proxy_object()) -> value().
+get_value(RObj=#r_object{}) ->
     % this blows up intentionally (badmatch) if more than one content value!
-    case IsP of
-        true ->
-            {FetchFun, Pid, FetchKey} = P,
-            ObjBin = FetchFun(Pid, FetchKey),
-            R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
-            get_values(R0#r_object{is_proxy = false});
-        false ->
-            [{_M,Value}] = get_contents(RObj),
-            Value
-    end.
+    [{_M,Value}] = get_contents(RObj),
+    Value;
+get_value(#p_object{r_object=RObj, proxy = P}) ->
+    {FetchFun, Pid, FetchKey} = P,
+    ObjBin = FetchFun(Pid, FetchKey),
+    R0 = from_binary(RObj#r_object.bucket, RObj#r_object.key, ObjBin),
+    get_value(R0).
 
 %% @doc calculates the canonical hash of a riak object
 %%      Old API which uses the version .
@@ -767,6 +790,21 @@ hash(Obj=#r_object{}) ->
             legacy_hash(Obj)
     end.
 
+-spec hash(bucket(), key(), 
+            riak_object()|proxy_object()|binary(), 
+            non_neg_integer()|legacy) -> binary().
+%% @doc calculates the canonical hash of a riak object depending on version
+%% May accept as input either a real object or a proxy object, or an object
+%% that is still serialised in a binary form (where that serialised object 
+%% could be either a proxy or a riak object)
+hash(_Bucket, _Key, RObj=#r_object{}, Version) ->
+    hash(RObj, Version);
+hash(_Bucket, _Key, PObj=#p_object{}, Version) ->
+    hash(PObj#p_object.r_object, Version);
+hash(Bucket, Key, ObjBin, Version) when is_binary(ObjBin) ->
+    hash(Bucket, Key, riak_object:from_binary(Bucket, Key, ObjBin), Version).
+
+
 %% @doc calculates the canonical hash of a riak object depending on version
 -spec hash(riak_object(), non_neg_integer() | legacy) -> binary().
 hash(Obj=#r_object{}, _Version=0) ->
@@ -777,15 +815,11 @@ hash(Obj=#r_object{}, _Version) ->
 %% @private return the legacy full object hash of the riak_object
 -spec legacy_hash(riak_object()) -> binary().
 legacy_hash(Obj=#r_object{}) ->
-    if 
-        Obj#r_object.is_proxy == false ->
-            % Blow up if we ever try performing a legacy hash on a proxy
-            % object.  We could fetch the object here - but for now, want
-            % to confirm we don't reach this point in this state.
-            UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
-            Hash = erlang:phash2(to_binary(v0, UpdObj)),
-            term_to_binary(Hash)
-    end.
+    % Blow up if we ever try performing a legacy hash on a proxy
+    % object.  
+    UpdObj = riak_object:set_vclock(Obj, lists:sort(vclock(Obj))),
+    Hash = erlang:phash2(to_binary(v0, UpdObj)),
+    term_to_binary(Hash).
 
 %% @private return the hash of the vclock
 -spec vclock_hash(riak_object()) -> binary().
@@ -858,7 +892,7 @@ actor_counter(Actor, #r_object{vclock=VC}) ->
 %% call with a valid dot. Only assign dot when there is a single value
 %% in contents.
 -spec assign_dot(riak_object(), vclock:dot(), boolean()) -> riak_object().
-assign_dot(Object, Dot, true) ->
+assign_dot(Object=#r_object{}, Dot, true) ->
     #r_object{contents=[C=#r_content{metadata=Meta0}]} = Object,
     Object#r_object{contents=[C#r_content{metadata=dict:store(?DOT, Dot, Meta0)}]};
 assign_dot(Object, _Dot, _DVVEnabled) ->
@@ -983,9 +1017,9 @@ is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
              NewObj :: riak_object(), Actor ::vclock:vclock_node(),
              TimeStamp :: vclock:timestamp()) ->
                     riak_object().
-update(true, _OldObject, NewObject, Actor, Timestamp) ->
+update(true, _OldObject, NewObject=#r_object{}, Actor, Timestamp) ->
     increment_vclock(NewObject, Actor, Timestamp);
-update(false, OldObject, NewObject, Actor, Timestamp) ->
+update(false, OldObject=#r_object{}, NewObject=#r_object{}, Actor, Timestamp) ->
     %% Get the vclock we have for the local / old object
     LocalVC = vclock(OldObject),
     %% get the vclock from the new object
@@ -1045,9 +1079,9 @@ approximate_size(Vsn, Obj=#r_object{bucket=Bucket,key=Key,vclock=VClock}) ->
 
 %% @doc Get the actual size of the object if it is a proxy object, otherwise
 %% return 0
--spec proxy_size(riak_object()) -> integer().
+-spec proxy_size(proxy_object()) -> integer().
 proxy_size(Obj) ->
-    case Obj#r_object.size of
+    case Obj#p_object.size of
         undefined ->
             0;
         S ->
@@ -1092,14 +1126,14 @@ binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
-    riak_object() | {error, 'bad_object_format'}.
+    riak_object() | {error, 'bad_object_format'} | proxy_object().
 from_binary(B, K, <<131, _Rest/binary>>=ObjTerm) ->
     case binary_to_term(ObjTerm) of
         {proxy_object, HeadBin, ObjSize, Fetcher} ->
             RObj = from_binary(B, K, HeadBin),
-            RObj#r_object{is_proxy = true,
-                            proxy = Fetcher,
-                            size = ObjSize};
+            #p_object{r_object = RObj,
+                        proxy = Fetcher,
+                        size = ObjSize};
         T ->
             T
     end;
@@ -1956,10 +1990,13 @@ from_binary_foldheads_test() ->
                 {fun fetch_value/2, clone, "JournalKey"}}),
 
     RObj = riak_object:from_binary(Bucket, Key, HeadObj),
-    ?assertMatch(true, is_robject(RObj)),
+    ?assertMatch(proxy, is_robject(RObj)),
     ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObj))),
     ?assertMatch(true, is_head(RObj)),
-    ?assertMatch(["V1"], get_value(RObj)).
+    ?assertMatch("V1", get_value(RObj)),
+    ?assertMatch(["V1"], get_values(RObj)),
+    ?assertMatch(Bucket, bucket(RObj)),
+    ?assertMatch(Key, key(RObj)).
 
 summary_from_binary_foldheads_test() ->
     % the response to fold_heads request will be a head binary, but
