@@ -43,6 +43,9 @@
 -endif.
 
 -define(UNDEFINED_INPUT, <<"undefined">>).
+-define(NVAL_QUERIES, [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
+-define(RANGE_QUERIES, [merge_branch_range, fetch_clocks_range,
+                        find_siblings, object_stats]).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -99,24 +102,39 @@
         % segment_filter and the number of keys in the range increase.
 
     % Operational support functions
-    {find_siblings, bucket(), key_range()}|
-        % Find all the objects in the key range that have more than one 
-        % sibling.  This uses the AAE keystore, but will only discover
-        % siblings that have been generated and stored within a vnode (which 
-        % should evelntually be all siblings if AAE is enabled and allow_mult
-        % is true.  
-        % The query returns a list of [{key, sibling_count}] tuples.  This cost of
-        % the operation will increase with the size of the range
-    {object_stats, bucket(), key_range(), excess_size_limit(), sample_size()}.
+    {find_keys, bucket(), key_range(), 
+        {sibling_count, pos_integer()}|{object_size, pos_integer()}|
+        % Find all the objects in the key range that have more than the given 
+        % count of siblings, or are bigger than the given object size.  This 
+        % uses the AAE keystore, and will only discover siblings that have been 
+        % generated and stored within a vnode (which should eventually be all 
+        % siblings given AAE is enabled and if allow_mult is true). If finding
+        % keys by size, then the size is the pre-calculated size stored in the
+        % aae key store as metadata.
+        %
+        % The query returns a list of [{Key, SiblingCount}] tuples or 
+        % [{Key, ObjectSize}] tuples depending on the filter requested.  The 
+        % cost of this operation will increase with the size of the range
+    {object_stats, bucket(), key_range(), sample_size()}.
         % Returns:
         % - the total count of objects in the key range
-        % - a list of [{key, object_size]] tuples for objects whose size 
-        % exceeds the excess_size_limit()
         % - the accumulated total size of all objects in the range
+        % - a list [{Magnitude, ObjectCount}] tuples where Magnitude represents
+        % the order of magnitude of the size of the object (e.g. 1KB is objects 
+        % from 100 bytes to 1KB, 10KB is objects from 1KB to 10KB etc)
+        % - a list of [{SiblingCount, ObjectCount}] tuples where Sibling Count
+        % is the number of siblings the object has.
+        % - sample portion - (n_val * sample_size) / ring_size
+        % e.g.
+        % [{total_count, 1000}, 
+        %   {total_size, 1000000}, 
+        %   {sizes, [{1000, 800}, {10000, 180}, {100000, 20}]}, 
+        %   {siblings, [{1, 1000}],
+        %   {sample_portion, 100.0}]
         %
         % The sample_size determines how many vnodes in the coverage plan 
-        % should be consulted.  Obviously if this is not set to `all` the
-        % list of objects over the excess_size_limit will be incomplete
+        % should be consulted.  Setting sample_size to all does a full coverage
+        % query to give cluster-wide stats.  
 
 
 
