@@ -42,10 +42,19 @@
 -export([generate_options/2]).
 -endif.
 
--define(UNDEFINED_INPUT, <<"undefined">>).
--define(NVAL_QUERIES, [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
--define(RANGE_QUERIES, [merge_branch_range, fetch_clocks_range,
-                        find_siblings, object_stats]).
+-define(TREE_SIZE, 4096).
+    % TODO: Need to sort what to do about changing the tree size.  This needs
+    % to align with the default tree size (large) defined in 
+    % kv_index_tictcatree.  Bit of a magic value problem here
+-define(EMPTY, <<0:8/integer>>).
+
+-define(NVAL_QUERIES, 
+            [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
+-define(RANGE_QUERIES, 
+            [merge_branch_range, fetch_clocks_range, find_keys, object_stats]).
+-define(LIST_ACCUMULATE_QUERIES,
+            [fetch_clocks_nval, fetch_clocks_range, find_keys]).
+
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -67,7 +76,7 @@
         % a single root for the cluster.  This should be a fast, low-overhead
         % operation
     {merge_branch_nval, integer(), branch_filter()}|
-        % Merge a slection of branches of cached Tictac trees for the given
+        % Merge a selection of branches of cached Tictac trees for the given
         % n-val to give a combined view of those branches across the cluster.
         % This should be a fast, low-overhead operation
     {fetch_clocks_nval, integer(), segment_filter()}|
@@ -100,6 +109,7 @@
         % Return the keys and clocks for a given list of segment IDs.  The
         % cost of the operation will be increased as both the size of the
         % segment_filter and the number of keys in the range increase.
+        % The function returns a list of [{Key, Clock}] tuples
 
     % Operational support functions
     {find_keys, bucket(), key_range(), 
@@ -136,11 +146,11 @@
         % should be consulted.  Setting sample_size to all does a full coverage
         % query to give cluster-wide stats.  
 
-
+-export_type() :: [query_definitions/0].
 
 -record(state, {from :: from(),
                 acc,
-                fold_reference,
+                query_definition :: query_definition(),
                 sample_size = all :: all|integer(),
                 start_time :: tuple()}).
 
@@ -150,10 +160,9 @@
 -endif.
 
 
--spec init(from(), 
-            [query_definition(),
-            integer()]).
-
+-spec init(from(), [query_definition(), integer()]) -> tuple().
+    % tuple definition - {Request, VNodeSelector, NVal, PrimaryVNodeCoverage,
+    %  NodeCheckService, VNodeMaster, Timeout, ModState} 
 %% @doc 
 %% Return a tuple containing the ModFun to call per vnode, the number of 
 %% primary preflist vnodes the operation should cover, the service to use to 
@@ -161,8 +170,78 @@
 %% vnode master process.
 init(From={_, _, _}, [Query, Timeout]) ->
     % Get the bucket n_val for use in creating a coverage plan
+    QueryType = element(1, Query),
+    NVal = 
+        case {lists:member(QueryType, ?NVAL_QUERIES), 
+                lists:member(QueryType, ?RANGE_QUERIES) of
+            {true, false} ->
+                element(2, Query);
+            {false, true} ->
+                BucketProps = riak_core_bucket:get_bucket(element(2, Query)),
+                proplists:get_value(n_val, BucketProps)
+        end,
     
-    {Req0, State0}.
+    SampleSize =
+        case Query of
+            {object_stats, _B, _KR, N} ->
+                N;
+            _ ->
+                all
+        end,
+    
+    InitAcc =
+        case lists:member(QueryType, ?LIST_ACCUMULATE_QUERIES) of
+            true ->
+                [];
+            false ->
+                case QueryType of
+                    merge_root_nval ->
+                        ?EMPTY;
+                    merge_branch_nval ->
+                        lists:map(fun(X) -> {X, ?EMPTY} end, element(3, Query));
+                    merge_branch_range ->
+                        BranchIDList = 
+                            case element(4, Query) of
+                                all ->
+                                    lists:seq(1, ?TREE_SIZE);
+                                BL ->
+                                    BL
+                            end,
+                        lists:map(fun(X) -> {X, ?EMPTY} end, BranchIDList);
+                    object_stats ->
+                        SamplePerc = 
+                            case SampleSize of
+                                all ->
+                                    100.0;
+                                N ->
+                                    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+                                    RingSize = riak_core_ring:num_partitions(Ring),
+                                    (100 * N * NVal) / RingSize
+                            end,
+                        [{total_count, 0}, 
+                            {total_size, 0},
+                            {sizes, []},
+                            {siblings, []},
+                            {sample_portion, SamplePerc}]
+                end
+        end,
+    
+    Req = ?AAE_FOLDREQ{qry = Query, init_acc = InitAcc}, 
+
+    VNS = case SampleSize of all -> all; N -> allup end,
+    NumberOfPrimaries = 1,
+
+    State = #state{from = From, 
+                    acc = InitAcc, 
+                    start_time = os:timestamp(),
+                    sample_size = SampleSize,
+                    query_definition = Query},
+    
+    {Req, VNS, NVal, NumberOfPrimaries, 
+        riak_kv, riak_kv_vnode_master, 
+        Timeout, 
+        State}.
+        
                 
 
 

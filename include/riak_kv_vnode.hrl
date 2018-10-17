@@ -81,6 +81,9 @@
             needs :: list(atom())
             }).
 
+-record(riak_kv_aaefold_req_v1, 
+            {qry :: riak_kv_aaefold_fsm:query_definitions(),
+                init_acc :: any()}).
 
 -define(KV_PUT_REQ, #riak_kv_put_req_v1).
 -define(KV_W1C_PUT_REQ, #riak_kv_w1c_put_req_v1).
@@ -95,6 +98,7 @@
 -define(KV_MAP_REQ, #riak_kv_map_req_v1).
 -define(KV_VCLOCK_REQ, #riak_kv_vclock_req_v1).
 -define(KV_MAPFOLD_REQ, #riak_kv_mapfold_req_v1).
+-define(KV_AAEFOLD_REQ, #riak_kv_aaefold_req_v1).
 
 %% @doc vnode_lock(PartitionIndex) is a kv per-vnode lock, used possibly,
 %% by AAE tree rebuilds, fullsync, and handoff.
