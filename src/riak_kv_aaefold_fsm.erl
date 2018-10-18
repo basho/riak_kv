@@ -20,11 +20,6 @@
 
 %% @doc The AAE fold FSM allows for coverage folds acrosss Tictac AAE 
 %% Controllers
-%%
-%% There are multiple types of AAE folds
-%%
-
-
 
 -module(riak_kv_aaefold_fsm).
 
@@ -34,12 +29,7 @@
 
 -export([init/2,
          process_results/2,
-         finish/2,
-         decode_options/1]).
-
--ifdef(TEST).
--export([generate_options/2]).
--endif.
+         finish/2]).
 
 -define(TREE_SIZE, 4096).
     % TODO: Need to sort what to do about changing the tree size.  This needs
@@ -62,9 +52,10 @@
 -type segment_filter() :: list(integer()).
 -type branch_filter() :: list(integer()).
 -type key_range() :: {riak_object:key(), riak_object:key()}|all.
--type sample_size() :: integer()|all.
--type excess_size_limit() :: integer()|infinity.
 -type bucket() :: riak_object:bucket().
+-type query_types() :: 
+    merge_root_nval|merge_branch_nval|fetch_clocks_nval|
+    merge_branch_range|fetch_clocks_range|find_keys|object_stats.
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
     % native mode, or in parallel mode with key_order bieng used.  
@@ -112,7 +103,7 @@
 
     % Operational support functions
     {find_keys, bucket(), key_range(), 
-        {sibling_count, pos_integer()}|{object_size, pos_integer()}|
+        {sibling_count, pos_integer()}|{object_size, pos_integer()}}|
         % Find all the objects in the key range that have more than the given 
         % count of siblings, or are bigger than the given object size.  This 
         % uses the AAE keystore, and will only discover siblings that have been 
@@ -139,12 +130,13 @@
         %   {total_size, 1000000}, 
         %   {sizes, [{1000, 800}, {10000, 180}, {100000, 20}]}, 
         %   {siblings, [{1, 1000}]}]
+-type inbound_api() :: list(query_definition()|integer()).
 
--export_type() :: [query_definitions/0].
+-export_type([query_definition/0]).
 
 -record(state, {from :: from(),
                 acc,
-                query_definition :: query_definition(),
+                query_type :: query_types(),
                 start_time :: tuple()}).
 
 
@@ -152,10 +144,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
-
--spec init(from(), [query_definition(), integer()]) -> tuple().
-    % tuple definition - {Request, VNodeSelector, NVal, PrimaryVNodeCoverage,
-    %  NodeCheckService, VNodeMaster, Timeout, ModState} 
+-spec init(from(), inbound_api()) -> tuple().
 %% @doc 
 %% Return a tuple containing the ModFun to call per vnode, the number of 
 %% primary preflist vnodes the operation should cover, the service to use to 
@@ -166,7 +155,7 @@ init(From={_, _, _}, [Query, Timeout]) ->
     QueryType = element(1, Query),
     NVal = 
         case {lists:member(QueryType, ?NVAL_QUERIES), 
-                lists:member(QueryType, ?RANGE_QUERIES) of
+                lists:member(QueryType, ?RANGE_QUERIES)} of
             {true, false} ->
                 element(2, Query);
             {false, true} ->
@@ -201,17 +190,16 @@ init(From={_, _, _}, [Query, Timeout]) ->
                 end
         end,
     
-    Req = ?AAE_FOLDREQ{qry = Query, init_acc = InitAcc}, 
+    Req = ?KV_AAEFOLD_REQ{qry = Query, init_acc = InitAcc}, 
 
-    VNS = case SampleSize of all -> all; N -> allup end,
     NumberOfPrimaries = 1,
 
     State = #state{from = From, 
                     acc = InitAcc, 
                     start_time = os:timestamp(),
-                    query_definition = Query},
-    
-    {Req, VNS, NVal, NumberOfPrimaries, 
+                    query_type = QueryType},
+    lager:info("AAE fold prompted of type=~w", [QueryType]),
+    {Req, all, NVal, NumberOfPrimaries, 
         riak_kv, riak_kv_vnode_master, 
         Timeout, 
         State}.
@@ -224,8 +212,40 @@ process_results(Results, State) ->
     % Results are received as a one-off for each vnode in this case, and so 
     % once results are merged work is always done.
     Acc = State#state.acc,
-    MergeFun = State#state.merge_fun,
-    UpdAcc = MergeFun(Acc, Results),
+    QueryType = State#state.query_type,
+    UpdAcc = 
+        case lists:member(QueryType, ?LIST_ACCUMULATE_QUERIES) of
+            true ->
+                lists:umerge(Acc, Results);
+            false ->
+                case QueryType of
+                    merge_root_nval ->
+                        leveled_tictac:merge_binaries(Acc, Results);
+                    QT when QT == merge_branch_nval; QT == merge_branch_range ->
+                        MapFun = 
+                            fun({X, XBin}) ->
+                                {X, RBin} = lists:keyfind(X, 1, Results),
+                                UpdBin = 
+                                    leveled_tictac:merge_binaries(XBin, RBin),
+                                {X, UpdBin}
+                            end,
+                        lists:map(MapFun, Acc);
+                    object_stats ->
+                        [{total_count, R_TC}, 
+                            {total_size, R_TS},
+                            {sizes, R_SzL},
+                            {siblings, R_SbL}] = Results,
+                        [{total_count, A_TC}, 
+                            {total_size, A_TS},
+                            {sizes, A_SzL},
+                            {siblings, A_SbL}] = Acc,
+                        [{total_count, R_TC + A_TC}, 
+                            {total_size, R_TS + A_TS},
+                            {sizes, lists:umerge(A_SzL, R_SzL)},
+                            {siblings, lists:umerge(A_SbL, R_SbL)}]
+                end
+        end,
+
     {done, State#state{acc = UpdAcc}}.
 
 %% Once the coverage FSM has received done for all vnodes (as an output from
@@ -241,8 +261,8 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     % The client doesn't expect results in increments only the final result, 
     % so no need for a seperate send of a 'done' message
     QueryDuration = timer:now_diff(os:timestamp(), State#state.start_time),
-    lager:info("Finished mapfold in ~w seconds using module ~w", 
-                [QueryDuration/1000000, State#state.fold_module]),
+    lager:info("Finished aaefold of type=~w with fold_time=~w seconds", 
+                [State#state.query_type, QueryDuration/1000000]),
     ClientPid ! {ReqId, {results, State#state.acc}},
     {stop, normal, State}.
 

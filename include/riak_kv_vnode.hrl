@@ -82,7 +82,7 @@
             }).
 
 -record(riak_kv_aaefold_req_v1, 
-            {qry :: riak_kv_aaefold_fsm:query_definitions(),
+            {qry :: riak_kv_aaefold_fsm:query_definition(),
                 init_acc :: any()}).
 
 -define(KV_PUT_REQ, #riak_kv_put_req_v1).
