@@ -33,7 +33,6 @@
 -include_lib("riak_kv_vnode.hrl").
 
 -export([init/2,
-         plan/2,
          process_results/2,
          finish/2,
          decode_options/1]).
@@ -125,7 +124,7 @@
         % The query returns a list of [{Key, SiblingCount}] tuples or 
         % [{Key, ObjectSize}] tuples depending on the filter requested.  The 
         % cost of this operation will increase with the size of the range
-    {object_stats, bucket(), key_range(), sample_size()}.
+    {object_stats, bucket(), key_range()}.
         % Returns:
         % - the total count of objects in the key range
         % - the accumulated total size of all objects in the range
@@ -139,19 +138,13 @@
         % [{total_count, 1000}, 
         %   {total_size, 1000000}, 
         %   {sizes, [{1000, 800}, {10000, 180}, {100000, 20}]}, 
-        %   {siblings, [{1, 1000}],
-        %   {sample_portion, 100.0}]
-        %
-        % The sample_size determines how many vnodes in the coverage plan 
-        % should be consulted.  Setting sample_size to all does a full coverage
-        % query to give cluster-wide stats.  
+        %   {siblings, [{1, 1000}]}]
 
 -export_type() :: [query_definitions/0].
 
 -record(state, {from :: from(),
                 acc,
                 query_definition :: query_definition(),
-                sample_size = all :: all|integer(),
                 start_time :: tuple()}).
 
 
@@ -181,14 +174,6 @@ init(From={_, _, _}, [Query, Timeout]) ->
                 proplists:get_value(n_val, BucketProps)
         end,
     
-    SampleSize =
-        case Query of
-            {object_stats, _B, _KR, N} ->
-                N;
-            _ ->
-                all
-        end,
-    
     InitAcc =
         case lists:member(QueryType, ?LIST_ACCUMULATE_QUERIES) of
             true ->
@@ -209,20 +194,10 @@ init(From={_, _, _}, [Query, Timeout]) ->
                             end,
                         lists:map(fun(X) -> {X, ?EMPTY} end, BranchIDList);
                     object_stats ->
-                        SamplePerc = 
-                            case SampleSize of
-                                all ->
-                                    100.0;
-                                N ->
-                                    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-                                    RingSize = riak_core_ring:num_partitions(Ring),
-                                    (100 * N * NVal) / RingSize
-                            end,
                         [{total_count, 0}, 
                             {total_size, 0},
                             {sizes, []},
-                            {siblings, []},
-                            {sample_portion, SamplePerc}]
+                            {siblings, []}]
                 end
         end,
     
@@ -234,7 +209,6 @@ init(From={_, _, _}, [Query, Timeout]) ->
     State = #state{from = From, 
                     acc = InitAcc, 
                     start_time = os:timestamp(),
-                    sample_size = SampleSize,
                     query_definition = Query},
     
     {Req, VNS, NVal, NumberOfPrimaries, 
@@ -242,22 +216,6 @@ init(From={_, _, _}, [Query, Timeout]) ->
         Timeout, 
         State}.
         
-                
-
-
-%% @doc
-%% Need to do something about recognising the sample case in plan/2
-%% However, maybe cannot do in callback as we don't know about which of the
-%% coverage vnodes are filtered (so the sample may be 1, 2 or n partitions).
-%% This probably therefore needs to happen in the behaviour.  Perhaps return
-%% something of other than 'ok'.
-plan(_CoverageVnodes, State = #state{sample=true}) ->
-    % filter to a single partition, or perhaps to a single vnode that isn't 
-    % filtered
-    {filter, State}; 
-plan(_CoverageVnodes, State) ->
-    {ok, State}.
-
 
 process_results({error, Reason}, _State) ->
     lager:warning("Failure to process fold results due to ~w", [Reason]),
