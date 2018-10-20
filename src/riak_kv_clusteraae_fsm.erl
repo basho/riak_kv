@@ -40,7 +40,7 @@
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
 -define(RANGE_QUERIES, 
-            [merge_branch_range, fetch_clocks_range, find_keys, object_stats]).
+            [merge_tree_range, fetch_clocks_range, find_keys, object_stats]).
 -define(LIST_ACCUMULATE_QUERIES,
             [fetch_clocks_nval, fetch_clocks_range, find_keys]).
 
@@ -57,7 +57,7 @@
 -type bucket() :: riak_object:bucket().
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
-    merge_branch_range|fetch_clocks_range|find_keys|object_stats.
+    merge_tree_range|fetch_clocks_range|find_keys|object_stats.
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
     % native mode, or in parallel mode with key_order being used.  
@@ -217,6 +217,8 @@ process_results(Results, State) ->
                         aae_exchange:merge_root(Results, Acc);
                     merge_branch_nval ->
                         aae_exchange:merge_branches(Results, Acc);
+                    merge_tree_range ->
+                        leveled_tictac:merge_trees(Results, Acc);
                     object_stats ->
                         [{total_count, R_TC}, 
                             {total_size, R_TS},
@@ -228,8 +230,8 @@ process_results(Results, State) ->
                             {siblings, A_SbL}] = Acc,
                         [{total_count, R_TC + A_TC}, 
                             {total_size, R_TS + A_TS},
-                            {sizes, lists:umerge(A_SzL, R_SzL)},
-                            {siblings, lists:umerge(A_SbL, R_SbL)}]
+                            {sizes, merge_countinlists(A_SzL, R_SzL)},
+                            {siblings, merge_countinlists(A_SbL, R_SbL)}]
                 end
         end,
 
@@ -257,11 +259,33 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
 %% Internal functions
 %% ===================================================================
 
+merge_countinlists(ResultList, AccList) ->
+    MapFun =
+        fun({Idx, AccCount}) ->
+            case lists:keyfind(Idx, 1, ResultList) of
+                false ->
+                    {Idx, AccCount};
+                {Idx, VnodeCount} ->
+                    {Idx, AccCount + VnodeCount}
+            end
+        end,
+    AccList0 = lists:map(MapFun, AccList),
+    lists:ukeymerge(1, 
+                    lists:ukeysort(1, AccList0),
+                    lists:ukeysort(1, ResultList)).
+
 
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
+
+merge_countinlists_test() ->
+    L0 = [{1, 23}, {4, 36}, {3, 17}, {8, 12}],
+    L1 = [{7, 11}, {8, 15}, {1, 15}],
+    Merged = [{1, 38}, {3, 17}, {4, 36}, {7, 11}, {8,27}],
+    ?assertMatch(Merged, merge_countinlists(L0, L1)),
+    ?assertMatch(Merged, merge_countinlists(L1, L0)).
 
 -endif.
 
