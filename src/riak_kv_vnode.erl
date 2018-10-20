@@ -1409,7 +1409,10 @@ handle_coverage(?KV_MAPFOLD_REQ{bucket=Bucket,
                     FilterVnodes, Sender, State) ->
     handle_coverage_mapfold(Bucket, QueryOpts, 
                                 Query, FoldFun, InitAcc, Needs, 
-                                FilterVnodes, Sender, State).
+                                FilterVnodes, Sender, State);
+handle_coverage(?KV_AAEFOLD_REQ{qry = Query, init_acc=InitAcc, n_val=Nval}, 
+                    FilterVnodes, Sender, State) ->
+    handle_coverage_aaefold(Query, InitAcc, Nval, FilterVnodes, Sender, State).
 
 -spec prepare_index_query(index_query()) -> index_query().
 prepare_index_query(#riak_kv_index_v3{term_regex=RE} = Q) when
@@ -1427,6 +1430,226 @@ buffer_size_for_index_query(#riak_kv_index_v3{max_results=N}, DefaultSize)
     N;
 buffer_size_for_index_query(_Q, DefaultSize) ->
     DefaultSize.
+
+
+%% @doc
+%% Coverage queries sent to the Tictac AAE
+handle_coverage_aaefold(Query, InitAcc, Nval, 
+                        FilterVnodes, Sender, 
+                        State=#state{aae_controller=Cntrl, 
+                                        idx=Index,
+                                        tictac_aae=AAE}) 
+                            when AAE == true ->
+    {IndexNs, Filtered} = 
+        case proplists:get_value(Index, FilterVnodes) of
+            undefined ->
+                {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+                {riak_kv_util:responsible_preflists(Index, [Nval], Ring), 
+                    false};
+            IdxList ->
+                {lists:map(fun(I) -> {I, Nval} end, IdxList),
+                    true}
+        end,
+    ReturnFun = 
+        fun(Acc) ->
+            riak_core_vnode:reply(Sender, Acc)
+        end,
+    handle_aaefold(Query, InitAcc, Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State).
+
+handle_aaefold({merge_root_nval, Nval}, 
+                    _InitAcc, Nval,
+                    IndexNs, _Filtered, ReturnFun, Cntrl, _Sender,
+                    State) ->
+    aae_controller:aae_mergeroot(Cntrl, IndexNs, ReturnFun),
+    {noreply, State};
+handle_aaefold({merge_branch_nval, Nval, BranchIDs}, 
+                    _InitAcc, Nval,
+                    IndexNs, _Filtered, ReturnFun, Cntrl, _Sender,
+                    State) ->
+    aae_controller:aae_mergebranches(Cntrl, 
+                                        IndexNs,
+                                        BranchIDs, 
+                                        ReturnFun),
+    {noreply, State};
+handle_aaefold({fetch_clocks_nval, Nval, SegmentIDs}, 
+                    _InitAcc, Nval,
+                    IndexNs, _Filtered, ReturnFun, Cntrl, _Sender,
+                    State) ->
+    aae_controller:aae_fetchclocks(Cntrl, 
+                                    IndexNs, 
+                                    SegmentIDs, 
+                                    ReturnFun, 
+                                    fun preflistfun/2),
+    {noreply, State};
+handle_aaefold({merge_tree_range, Bucket, KeyRange, _TreeSize}, 
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun = 
+        fun(BF, KF, EFs, TreeAcc) ->
+            {hash, CH} = lists:keyfind(hash, 1, EFs),
+            NullExtractFun = 
+                fun({B0, K0}, V0) -> 
+                    {aae_util:make_binarykey(B0, K0), V0} 
+                end,
+            leveled_tictac:add_kv(TreeAcc, 
+                                    {BF, KF},
+                                    {is_hash, CH}, 
+                                    NullExtractFun)
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    {async, Folder} = 
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                all,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{hash, null}]),
+    {queue, {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({fetch_clocks_range, Bucket, KeyRange, SegmentList}, 
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, KeyClockAcc) ->
+            {clock, VV} = lists:keyfind(clock, 1, EFs),
+            [{BF, KF, VV}|KeyClockAcc]
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    {async, Folder} = 
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                {segments, SegmentList},
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{clock, null}]),
+    {queue, {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({find_keys, Bucket, KeyRange, {sibling_count, MaxCount}},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, KeyCountAcc) ->
+            {sibcount, SC} = lists:keyfind(sibcount, 1, EFs),
+            case SC > MaxCount of
+                true ->
+                    [{BF, KF, SC}|KeyCountAcc];
+                false ->
+                    KeyCountAcc
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                all,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{sibcount, null}]),
+    {queue, {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({find_keys, Bucket, KeyRange, {object_size, MaxSize}},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, KeySizeAcc) ->
+            {size, SZ} = lists:keyfind(size, 1, EFs),
+            case SZ > MaxSize of
+                true ->
+                    [{BF, KF, SZ}|KeySizeAcc];
+                false ->
+                    KeySizeAcc
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                all,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{size, null}]),
+    {queue, {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({object_stats, Bucket, KeyRange},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(_BF, _KF, EFs, StatsAcc) ->
+            [{total_count, TC}, {total_size, TSz},
+                {sizes, SzL}, {siblings, ScL}] = StatsAcc,
+            {size, SZ} = lists:keyfind(size, 1, EFs),
+            {sibcount, SC} = lists:keyfind(sibcount, 1, EFs),
+            SzOrder = power10(SZ, 1),
+            SzL0 = 
+                case lists:keyfind(SzOrder, 1, SzL) of
+                    false ->
+                        [{SzOrder, 1}|SzL];
+                    {SzOrder, SzOrderC} ->
+                        lists:keyreplace(SzOrder, 1, SzL, 
+                                            {SzOrder, SzOrderC + 1})
+                end,
+            ScL0 =
+                case lists:keyfind(SC, 1, ScL) of
+                    false ->
+                        [{SC, 1}|ScL];
+                    {SC, SCcount} ->
+                        lists:keyreplace(SC, 1, ScL, 
+                                            {SC, SCcount + 1})
+                end,
+            [{total_count, TC + 1},  {total_size, TSz + SZ},
+                {sizes, SzL0}, {siblings, ScL0}]
+        end,
+    WrappedFoldFun = 
+        aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                all,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{sibcount, null}, {size, null}]),
+    {queue, {fold, Folder, ReturnFun}, Sender, State}.
+
+
+
+aaefold_setrangelimiter(Bucket, all) ->
+    {buckets, [Bucket]};
+aaefold_setrangelimiter(Bucket, {StartKey, EndKey}) ->
+    {key_range, Bucket, StartKey, EndKey}.
+
+aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered) ->
+    fun(BF, KF, EFs, Acc) ->
+        InCoverage =
+            case Filtered of
+                true ->
+                    lists:member(preflistfun(BF, KF), IndexNs);
+                false ->
+                    true
+            end,
+        case InCoverage of
+            true ->
+                FoldFun(BF, KF, EFs, Acc);
+            false ->
+                Acc
+        end
+    end.
+
+power10(Number, Count) ->
+    case Number div 10 of
+        N when N > 1 ->
+            power10(N, Count + 1);
+        _N ->
+            Count
+    end.
+
 
 %% @doc
 %% Coverage queries using mapfold functions

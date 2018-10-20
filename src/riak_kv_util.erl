@@ -39,6 +39,7 @@
          fix_incorrect_index_entries/0,
          responsible_preflists/1,
          responsible_preflists/2,
+         responsible_preflists/3,
          make_vtag/1,
          puts_active/0,
          exact_puts_active/0,

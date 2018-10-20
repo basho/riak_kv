@@ -50,6 +50,8 @@
 
 % Building blocks for supported aae fold query definitions
 -type segment_filter() :: list(integer()).
+    % Segment filter is based on a large tree_size - so if a smaller tree size
+    % is used, then the segment list must be expanded out
 -type branch_filter() :: list(integer()).
 -type key_range() :: {riak_object:key(), riak_object:key()}|all.
 -type bucket() :: riak_object:bucket().
@@ -79,7 +81,7 @@
         % segment filter being small - ideally o(10) or smaller
     
     % Range-based AAE (requiring folds over native/parallel AAE key stores)
-    {merge_branch_range, bucket(), key_range(), branch_filter()|all}|
+    {merge_tree_range, bucket(), key_range(), small|medium|large}|
         % Provide the values for a subset of AAE tree branches for the given
         % key range.  This will be a background operation, and the cost of
         % the operation will be in-proportion to the number of keys in the
@@ -173,15 +175,9 @@ init(From={_, _, _}, [Query, Timeout]) ->
                         ?EMPTY;
                     merge_branch_nval ->
                         lists:map(fun(X) -> {X, ?EMPTY} end, element(3, Query));
-                    merge_branch_range ->
-                        BranchIDList = 
-                            case element(4, Query) of
-                                all ->
-                                    lists:seq(1, ?TREE_SIZE);
-                                BL ->
-                                    BL
-                            end,
-                        lists:map(fun(X) -> {X, ?EMPTY} end, BranchIDList);
+                    merge_tree_range ->
+                        TreeSize = element(4, Query),
+                        leveled_tictac:new_tree(range_tree, TreeSize);
                     object_stats ->
                         [{total_count, 0}, 
                             {total_size, 0},
@@ -190,16 +186,14 @@ init(From={_, _, _}, [Query, Timeout]) ->
                 end
         end,
     
-    Req = ?KV_AAEFOLD_REQ{qry = Query, init_acc = InitAcc}, 
-
-    NumberOfPrimaries = 1,
+    Req = ?KV_AAEFOLD_REQ{qry = Query, init_acc = InitAcc, n_val = NVal}, 
 
     State = #state{from = From, 
                     acc = InitAcc, 
                     start_time = os:timestamp(),
                     query_type = QueryType},
     lager:info("AAE fold prompted of type=~w", [QueryType]),
-    {Req, all, NVal, NumberOfPrimaries, 
+    {Req, all, NVal, 1, 
         riak_kv, riak_kv_vnode_master, 
         Timeout, 
         State}.
