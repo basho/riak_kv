@@ -37,7 +37,7 @@
 -export([stream_list_buckets/1,stream_list_buckets/2,
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
--export([map_fold/5]).
+-export([map_fold/5, aae_fold/2]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
 -export([reload_all/2]).
@@ -722,7 +722,24 @@ map_fold(Bucket, Query, FoldMod, FoldOpts,
                                                  [Bucket, Query, 
                                                     FoldMod, FoldOpts, 
                                                     ?DEFAULT_FOLD_TIMEOUT]]),
-    wait_for_mapfold_results(ReqId, ?DEFAULT_FOLD_TIMEOUT).
+    wait_for_fold_results(ReqId, ?DEFAULT_FOLD_TIMEOUT).
+
+
+-spec aae_fold(riak_kv_clusteraae_fsm:query_definition(), riak_client()) 
+                    -> {ok, any()}|{error, timeout}|{error, Err :: term()}.
+%% @doc
+%%
+%% Run a cluster-wide aae query - which can either access cached aae data 
+%% across the cluster, or fold over ranges of the AAE store (which in the
+%% case of Leveled can be the native AAe store.
+aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    TimeOut = ?DEFAULT_FOLD_TIMEOUT,
+    riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node, 
+                                                    [{raw, ReqId, Me},
+                                                    [Query, TimeOut]]),
+    wait_for_fold_results(ReqId, TimeOut).
 
 %% @spec get_index(Bucket :: binary(),
 %%                 Query :: riak_index:query_def(),
@@ -886,7 +903,7 @@ wait_for_query_results(ReqId, Timeout, Acc) ->
 %% @doc
 %% Only final result will be received, so do not expect a separate "done"
 %% response.
-wait_for_mapfold_results(ReqId, Timeout) ->
+wait_for_fold_results(ReqId, Timeout) ->
     receive
         {ReqId, {results, Results}} -> {ok, Results};
         {ReqId, Error} -> {error, Error}

@@ -210,7 +210,7 @@ process_results(Results, State) ->
     UpdAcc = 
         case lists:member(QueryType, ?LIST_ACCUMULATE_QUERIES) of
             true ->
-                lists:umerge(Acc, Results);
+                lists:umerge(Acc, lists:reverse(Results));
             false ->
                 case QueryType of
                     merge_root_nval ->
