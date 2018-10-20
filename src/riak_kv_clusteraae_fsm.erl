@@ -35,7 +35,7 @@
     % TODO: Need to sort what to do about changing the tree size.  This needs
     % to align with the default tree size (large) defined in 
     % kv_index_tictcatree.  Bit of a magic value problem here
--define(EMPTY, <<r>>).
+-define(EMPTY, <<>>).
 
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
