@@ -82,7 +82,7 @@
             }).
 
 -record(riak_kv_aaefold_req_v1, 
-            {qry :: riak_kv_aaefold_fsm:query_definition(),
+            {qry :: riak_kv_clusteraae_fsm:query_definition(),
                 init_acc :: any(),
                 n_val :: pos_integer()}).
 

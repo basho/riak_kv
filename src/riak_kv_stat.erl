@@ -130,7 +130,8 @@ init([]) ->
     register_stats(),
     Me = self(),
     State = #state{monitors = [{index, spawn_link(?MODULE, monitor_loop, [index])},
-                               {list, spawn_link(?MODULE, monitor_loop, [list])}],
+                               {list, spawn_link(?MODULE, monitor_loop, [list])},
+                               {clusteraae, spawn_link(?MODULE, monitor_loop, [clusteraae])}],
                    repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
 
@@ -294,6 +295,14 @@ do_update({index_create, Pid}) ->
     ok;
 do_update(index_create_error) ->
     exometer:update([?PFX, ?APP, index, fsm, create, error], 1);
+do_update({clusteraae_create, Pid}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, clusteraae, fsm, create], 1),
+    ok = exometer:update([P, ?APP, clusteraae, fsm, active], 1),
+    add_monitor(clusteraae, Pid),
+    ok;
+do_update(clusteraae_create_error) ->
+    exometer:update([?PFX, ?APP, clusteraae, fsm, create, error], 1);
 do_update({list_create, Pid}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, list, fsm, create], 1),
@@ -668,7 +677,7 @@ stats() ->
                                                {99    , node_put_fsm_map_time_99},
                                                {max   , node_put_fsm_map_time_100}]},
 
-     %% index & list{keys,buckets} stats
+     %% index & list{keys,buckets} & clusteraae stats
      {[index, fsm, create], spiral, [], [{one, index_fsm_create}]},
      {[index, fsm, create, error], spiral, [], [{one, index_fsm_create_error}]},
      {[index, fsm, active], counter, [], [{value, index_fsm_active}]},
@@ -677,6 +686,9 @@ stats() ->
      {[list, fsm, create, error], spiral, [], [{one  , list_fsm_create_error},
                                                {count, list_fsm_create_error_total}]},
      {[list, fsm, active], counter, [], [{value, list_fsm_active}]},
+     {[clusteraae, fsm, create], spiral, [], [{one, clusteraae_fsm_create}]},
+     {[clusteraae, fsm, create, error], spiral, [], [{one, clusteraae_fsm_create_error}]},
+     {[clusteraae, fsm, active], counter, [], [{value, clusteraae_fsm_active}]},
 
      %% misc stats
      {mapper_count, counter, [], [{value, executing_mappers}]},

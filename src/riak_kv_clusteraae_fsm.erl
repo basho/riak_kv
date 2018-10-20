@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_aaefold_fsm: Manage folds over tictacaae controllers
+%% riak_clusteraae_fsm: Manage folds over tictacaae controllers
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -21,7 +21,7 @@
 %% @doc The AAE fold FSM allows for coverage folds acrosss Tictac AAE 
 %% Controllers
 
--module(riak_kv_aaefold_fsm).
+-module(riak_kv_clusteraae_fsm).
 
 -behaviour(riak_core_coverage_fsm).
 

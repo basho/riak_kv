@@ -1586,7 +1586,7 @@ handle_aaefold({object_stats, Bucket, KeyRange},
                 {sizes, SzL}, {siblings, ScL}] = StatsAcc,
             {size, SZ} = lists:keyfind(size, 1, EFs),
             {sibcount, SC} = lists:keyfind(sibcount, 1, EFs),
-            SzOrder = power10(SZ, 1),
+            SzOrder = power10(SZ),
             SzL0 = 
                 case lists:keyfind(SzOrder, 1, SzL) of
                     false ->
@@ -1642,9 +1642,15 @@ aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered) ->
         end
     end.
 
+-spec power10(non_neg_integer()) -> non_neg_integer().
+%% @doc
+%% Order of magnitude of size
+power10(Number) ->
+    power10(Number, 0).
+
 power10(Number, Count) ->
     case Number div 10 of
-        N when N > 1 ->
+        N when N >= 1 ->
             power10(N, Count + 1);
         _N ->
             Count
@@ -4019,6 +4025,14 @@ filter_keys_test() ->
     riak_kv_test_util:stop_process(riak_core_metadata_manager),
     riak_kv_test_util:stop_process(riak_core_bg_manager),
     flush_msgs().
+
+power_10_test() ->
+    ?assertMatch(0, power10(0)),
+    ?assertMatch(0, power10(1)),
+    ?assertMatch(1, power10(10)),
+    ?assertMatch(5, power10(999999)),
+    ?assertMatch(6, power10(999999 + 1)).
+
 
 %% include bitcask.hrl for HEADER_SIZE macro
 -include_lib("bitcask/include/bitcask.hrl").

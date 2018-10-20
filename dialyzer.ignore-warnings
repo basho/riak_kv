@@ -24,7 +24,7 @@ riak_kv_gcounter.erl:99: The call riak_kv_gcounter:merge(Rest::any(),RestOfClock
 riak_kv_gcounter.erl:101: The call riak_kv_gcounter:merge(Rest::any(),Clock2::[tuple()],[{_,_},...]) does not have opaque terms as 2nd and 3rd arguments
 riak_kv_index_fsm.erl:38: Callback info about the riak_core_coverage_fsm behaviour is not available
 riak_kv_mapfold_fsm.erl:42: Callback info about the riak_core_coverage_fsm behaviour is not available
-riak_kv_aaefold_fsm.erl:26: Callback info about the riak_core_coverage_fsm behaviour is not available
+riak_kv_clusteraae_fsm.erl:26: Callback info about the riak_core_coverage_fsm behaviour is not available
 riak_kv_keys_fsm.erl:38: Callback info about the riak_core_coverage_fsm behaviour is not available
 riak_kv_pipe_index.erl:164: Function queue_existing_pipe/4 has no local return
 riak_kv_pipe_listkeys.erl:159: Function queue_existing_pipe/3 has no local return
