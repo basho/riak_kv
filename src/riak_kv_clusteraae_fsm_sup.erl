@@ -50,7 +50,7 @@ start_link() ->
 init([]) ->
     ClusterAAEFsmSpec = 
         {undefined,
-            {riak_core_coverage_fsm, start_link, [riak_kv_clusteraaefold_fsm]},
+            {riak_core_coverage_fsm, start_link, [riak_kv_clusteraae_fsm]},
             temporary, 5000, worker, [riak_kv_clusteraae_fsm]},
 
     {ok, {{simple_one_for_one, 10, 10}, [ClusterAAEFsmSpec]}}.
