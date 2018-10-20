@@ -60,7 +60,7 @@
     merge_branch_range|fetch_clocks_range|find_keys|object_stats.
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
-    % native mode, or in parallel mode with key_order bieng used.  
+    % native mode, or in parallel mode with key_order being used.  
 
     % N-val AAE (using cached trees)
     {merge_root_nval, integer()}|
@@ -214,16 +214,9 @@ process_results(Results, State) ->
             false ->
                 case QueryType of
                     merge_root_nval ->
-                        leveled_tictac:merge_binaries(Acc, Results);
-                    QT when QT == merge_branch_nval; QT == merge_branch_range ->
-                        MapFun = 
-                            fun({X, XBin}) ->
-                                {X, RBin} = lists:keyfind(X, 1, Results),
-                                UpdBin = 
-                                    leveled_tictac:merge_binaries(XBin, RBin),
-                                {X, UpdBin}
-                            end,
-                        lists:map(MapFun, Acc);
+                        aae_exchange:merge_root(Results, Acc);
+                    merge_branch_nval ->
+                        aae_exchange:merge_branches(Results, Acc);
                     object_stats ->
                         [{total_count, R_TC}, 
                             {total_size, R_TS},
