@@ -37,10 +37,12 @@
     % TODO: Need to sort what to do about changing the tree size.  This needs
     % to align with the default tree size (large) defined in 
     % kv_index_tictcatree.  
-    % There is some stuff done as apart of previous work to manipulate segment
+    % There is some stuff done as part of previous work to manipulate segment
     % lists so that dirty segments that have outputted from one tree size can
     % be still found with a different tree size
 -define(EMPTY, <<>>).
+-define(MAX_SEGMENT_FILTER, 256).
+-define(MAX_BRANCH_FILTER,, 256).
 
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
@@ -171,6 +173,8 @@ init(From={_, _, _}, [Query, Timeout]) ->
                 proplists:get_value(n_val, BucketProps)
         end,
     
+    true = safe_query(Query),
+
     InitAcc =
         case lists:member(QueryType, ?LIST_ACCUMULATE_QUERIES) of
             true ->
@@ -277,7 +281,6 @@ json_encode_results(merge_tree_range, Tree) ->
     JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
     mochijson2:encode(JsonKeys1).
 
-
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
@@ -304,6 +307,19 @@ merge_countinlists(ResultList, AccList) ->
                     lists:ukeysort(1, AccList0),
                     lists:ukeysort(1, ResultList)).
 
+
+-spec safe_query(query_definition()) -> boolean().
+%% @doc
+%% Some queries may have a significant impact on the cluster.  In particular
+%% asking for too mnay branch IDs or segment IDs.
+safe_query({fetch_clocks_range, _B, _KR, SegList}) 
+                                when length(SegList) > ?MAX_SEGMENT_FILTER ->
+    false;
+safe_query({fetch_clocks_nval, _N, SegList}) 
+                                when length(SegList) > ?MAX_SEGMENT_FILTER ->
+    false;
+safe_query(_Query) ->
+    true.
 
 %% ===================================================================
 %% EUnit tests
