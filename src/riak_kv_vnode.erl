@@ -1508,7 +1508,11 @@ handle_aaefold({merge_tree_range, Bucket, KeyRange, _TreeSize},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{hash, null}]),
-    {queue, {fold, Folder, ReturnFun}, Sender, State};
+    % These queries are sent to the vnode_worker_pool - as it is not strictly
+    % a background task.
+    % TODO: perhaps there is a need for 2 x node_worker_pools to separate 
+    % background tasks, from user-initiated tasks that should be throttled
+    {async, {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({fetch_clocks_range, Bucket, KeyRange, SegmentList}, 
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
@@ -1527,7 +1531,7 @@ handle_aaefold({fetch_clocks_range, Bucket, KeyRange, SegmentList},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{clock, null}]),
-    {queue, {fold, Folder, ReturnFun}, Sender, State};
+    {async, {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({find_keys, Bucket, KeyRange, {sibling_count, MaxCount}},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
@@ -1551,6 +1555,9 @@ handle_aaefold({find_keys, Bucket, KeyRange, {sibling_count, MaxCount}},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{sibcount, null}]),
+    % As this is an 'operator' task, assumed that this cna be delayed behind
+    % other background tasks (e.g. rebuilds), and so the node_worker_pool is
+    % used
     {queue, {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({find_keys, Bucket, KeyRange, {object_size, MaxSize}},
                     InitAcc, _Nval,
@@ -1575,6 +1582,9 @@ handle_aaefold({find_keys, Bucket, KeyRange, {object_size, MaxSize}},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{size, null}]),
+    % As this is an 'operator' task, assumed that this cna be delayed behind
+    % other background tasks (e.g. rebuilds), and so the node_worker_pool is
+    % used
     {queue, {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({object_stats, Bucket, KeyRange},
                     InitAcc, _Nval,
@@ -1616,6 +1626,9 @@ handle_aaefold({object_stats, Bucket, KeyRange},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{sibcount, null}, {size, null}]),
+    % As this is an 'operator' task, assumed that this cna be delayed behind
+    % other background tasks (e.g. rebuilds), and so the node_worker_pool is
+    % used
     {queue, {fold, Folder, ReturnFun}, Sender, State}.
 
 

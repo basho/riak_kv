@@ -31,10 +31,15 @@
          process_results/2,
          finish/2]).
 
+-export([json_encode_results/2]).
+
 -define(TREE_SIZE, 4096).
     % TODO: Need to sort what to do about changing the tree size.  This needs
     % to align with the default tree size (large) defined in 
-    % kv_index_tictcatree.  Bit of a magic value problem here
+    % kv_index_tictcatree.  
+    % There is some stuff done as apart of previous work to manipulate segment
+    % lists so that dirty segments that have outputted from one tree size can
+    % be still found with a different tree size
 -define(EMPTY, <<>>).
 
 -define(NVAL_QUERIES, 
@@ -50,6 +55,7 @@
 
 % Building blocks for supported aae fold query definitions
 -type segment_filter() :: list(integer()).
+    % TODO:
     % Segment filter is based on a large tree_size - so if a smaller tree size
     % is used, then the segment list must be expanded out
 -type branch_filter() :: list(integer()).
@@ -174,7 +180,8 @@ init(From={_, _, _}, [Query, Timeout]) ->
                     merge_root_nval ->
                         ?EMPTY;
                     merge_branch_nval ->
-                        lists:map(fun(X) -> {X, ?EMPTY} end, element(3, Query));
+                        lists:map(fun(X) -> {X, ?EMPTY} end, 
+                                    element(3, Query));
                     merge_tree_range ->
                         TreeSize = element(4, Query),
                         leveled_tictac:new_tree(range_tree, TreeSize);
@@ -255,10 +262,33 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     ClientPid ! {ReqId, {results, State#state.acc}},
     {stop, normal, State}.
 
+
+%% ===================================================================
+%% External functions
+%% ===================================================================
+
+-spec json_encode_results(query_types(), any()) -> iolist().
+%% @doc
+%% Encode the results of a query in JSON
+%% Expected this will be called from the webmachine module that needs to
+%% generate the response
+json_encode_results(merge_tree_range, Tree) ->
+    ExportedTree = leveled_tictac:export_tree(Tree),
+    JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
+    mochijson2:encode(JsonKeys1).
+
+
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
 
+-spec merge_countinlists(list({integer(), integer()}), 
+                            list({integer(), integer()})) 
+                                            -> list({integer(), integer()}).
+%% @doc
+%% Take two lists with {IntegerId, Count} tuples and return a list where the
+%% counts have been summed across the lists - even where one list is missing
+%% an integer id
 merge_countinlists(ResultList, AccList) ->
     MapFun =
         fun({Idx, AccCount}) ->
@@ -286,6 +316,33 @@ merge_countinlists_test() ->
     Merged = [{1, 38}, {3, 17}, {4, 36}, {7, 11}, {8,27}],
     ?assertMatch(Merged, merge_countinlists(L0, L1)),
     ?assertMatch(Merged, merge_countinlists(L1, L0)).
+
+json_encode_tictac_empty_test() ->
+    Tree = leveled_tictac:new_tree(tictac_folder_test, large),
+    JsonTree = json_encode_results(merge_tree_range, Tree),
+    {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
+    ReverseTree = leveled_tictac:import_tree(ExportedTree),
+    ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree, ReverseTree)).
+
+json_encode_tictac_withentries_test() ->
+    encode_results_ofsize(small),
+    encode_results_ofsize(large).
+
+encode_results_ofsize(TreeSize) ->
+    Tree = leveled_tictac:new_tree(tictac_folder_test, TreeSize),
+    ExtractFun = fun(K, V) -> {K, V} end,
+    FoldFun = 
+        fun({Key, Value}, AccTree) ->
+            leveled_tictac:add_kv(AccTree, Key, Value, ExtractFun)
+        end,
+    KVList = [{<<"key1">>, <<"value1">>}, 
+                {<<"key2">>, <<"value2">>}, 
+                {<<"key3">>, <<"value3">>}],
+    Tree0 = lists:foldl(FoldFun, Tree, KVList),
+    JsonTree = json_encode_results(merge_tree_range, Tree0),
+    {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
+    ReverseTree = leveled_tictac:import_tree(ExportedTree),
+    ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree0, ReverseTree)).
 
 -endif.
 
