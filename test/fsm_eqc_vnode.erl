@@ -104,7 +104,9 @@ active(?VNODE_REQ{index = Idx,
        State) ->
     active_handle_request(riak_kv_requests:request_type(Req), Req, Idx, Sender, State).
 
-active_handle_request(kv_get_request, Req, Idx, Sender, State) ->
+active_handle_request(GetIshRequest, Req, Idx, Sender, State) when
+      GetIshRequest == kv_get_request orelse
+      GetIshRequest == kv_head_request ->
     ReqId = riak_kv_requests:get_request_id(Req),
     {Value, State1} = get_data(Idx,State),
     case Value of

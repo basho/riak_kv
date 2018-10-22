@@ -6,10 +6,6 @@
     type :: primary | fallback
 }).
 
--record(riak_kv_head_req_v1, {
-          bkey :: {binary(), binary()},
-          req_id :: non_neg_integer()}).
-
 %% this is a legacy request *potentially* handled via riak_core_vnode_master
 %% we are not refactoring it because we think it likely should be deleted.
 %% TODO: investigate whether it *can* be deleted
@@ -28,9 +24,6 @@
             needs :: list(atom())
             }).
 
-
-
--define(KV_HEAD_REQ, #riak_kv_head_req_v1).
 -define(KV_MAPFOLD_REQ, #riak_kv_mapfold_req_v1).
 -define(KV_W1C_PUT_REPLY, #riak_kv_w1c_put_reply_v1).
 

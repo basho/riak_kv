@@ -498,8 +498,7 @@ head(Preflist, BKey, ReqId) ->
     head(Preflist, BKey, ReqId, {fsm, undefined, self()}).
 
 head(Preflist, BKey, ReqId, Sender) ->
-    Req = ?KV_HEAD_REQ{bkey=sanitize_bkey(BKey),
-                        req_id=ReqId},
+    Req = riak_kv_requests:new_head_request(sanitize_bkey(BKey), ReqId),
     riak_core_vnode_master:command(Preflist,
                                    Req,
                                    Sender,
@@ -762,14 +761,15 @@ init([Index]) ->
             {error, Reason1}
     end.
 
-handle_overload_command(?KV_HEAD_REQ{req_id=ReqID}, Sender, Idx) ->
-    riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqID});
 handle_overload_command(Req, Sender, Idx) ->
     handle_overload_request(riak_kv_requests:request_type(Req), Req, Sender, Idx).
 
 handle_overload_request(kv_put_request, _Req, Sender, Idx) ->
     riak_core_vnode:reply(Sender, {fail, Idx, overload});
 handle_overload_request(kv_get_request, Req, Sender, Idx) ->
+    ReqId = riak_kv_requests:get_request_id(Req),
+    riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqId});
+handle_overload_request(kv_head_request, Req, Sender, Idx) ->
     ReqId = riak_kv_requests:get_request_id(Req),
     riak_core_vnode:reply(Sender, {r, {error, overload}, Idx, ReqId});
 handle_overload_request(kv_w1c_put_request, Req, Sender, _Idx) ->
@@ -828,16 +828,6 @@ handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
             end
     end,
     {noreply, State};
-handle_command(?KV_HEAD_REQ{bkey=BKey,req_id=ReqId},Sender,State) ->
-    Mod = State#state.mod,
-        ModState = State#state.modstate,
-        {ok, Capabilities} = Mod:capabilities(ModState),
-        case maybe_support_head_requests(Capabilities) of
-            true ->
-                do_head(Sender, BKey, ReqId, State);
-            _ ->
-                do_get(Sender, BKey, ReqId, State)
-        end;
 handle_command(#riak_kv_listkeys_req_v2{bucket=Input, req_id=ReqId, caller=Caller}, _Sender,
                State=#state{key_buf_size=BufferSize,
                             mod=Mod,
@@ -1286,6 +1276,18 @@ handle_request(kv_get_request, Req, Sender, State) ->
     BKey = riak_kv_requests:get_bucket_key(Req),
     ReqId = riak_kv_requests:get_request_id(Req),
     do_get(Sender, BKey, ReqId, State);
+handle_request(kv_head_request, Req, Sender, State) ->
+    Mod = State#state.mod,
+    ModState = State#state.modstate,
+    BKey = riak_kv_requests:get_bucket_key(Req),
+    ReqId = riak_kv_requests:get_request_id(Req),
+    {ok, Capabilities} = Mod:capabilities(ModState),
+    case maybe_support_head_requests(Capabilities) of
+        true ->
+            do_head(Sender, BKey, ReqId, State);
+        _ ->
+            do_get(Sender, BKey, ReqId, State)
+    end;
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
     {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),

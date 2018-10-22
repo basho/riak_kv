@@ -24,6 +24,7 @@
 %% API
 -export([new_put_request/5,
          new_get_request/2,
+         new_head_request/2,
          new_w1c_put_request/3,
          new_listkeys_request/3,
          new_listbuckets_request/1,
@@ -51,6 +52,7 @@
 
 -export_type([put_request/0,
               get_request/0,
+              head_request/0,
               w1c_put_request/0,
               listkeys_request/0,
               listbuckets_request/0,
@@ -130,6 +132,10 @@
 -record(riak_kv_vclock_req_v1, {bkeys = [] :: [bucket_key()]}).
 
 
+-record(riak_kv_head_req_v1, {
+          bkey :: {binary(), binary()},
+          req_id :: non_neg_integer()}).
+
 -opaque put_request() :: #riak_kv_put_req_v1{}.
 -opaque get_request() :: #riak_kv_get_req_v1{}.
 -opaque w1c_put_request() :: #riak_kv_w1c_put_req_v1{}.
@@ -140,6 +146,7 @@
 -opaque delete_request() :: #riak_kv_delete_req_v1{}.
 -opaque map_request() :: #riak_kv_map_req_v1{}.
 -opaque vclock_request() :: #riak_kv_vclock_req_v1{}.
+-opaque head_request() :: #riak_kv_head_req_v1{}.
 
 
 -type request() :: put_request()
@@ -151,7 +158,8 @@
                  | vnode_status_request()
                  | delete_request()
                  | map_request()
-                 | vclock_request().
+                 | vclock_request()
+                 | head_request().
 
 -type request_type() :: kv_put_request
                       | kv_get_request
@@ -163,6 +171,7 @@
                       | kv_delete_request
                       | kv_map_request
                       | kv_vclock_request
+                      | kv_head_request
                       | unknown.
 
 -spec request_type(request()) -> request_type().
@@ -178,6 +187,7 @@ request_type(#riak_kv_vnode_status_req_v1{})-> kv_vnode_status_request;
 request_type(#riak_kv_delete_req_v1{})-> kv_delete_request;
 request_type(#riak_kv_map_req_v1{})-> kv_map_request;
 request_type(#riak_kv_vclock_req_v1{})-> kv_vclock_request;
+request_type(#riak_kv_head_req_v1{}) -> kv_head_request;
 request_type(_) -> unknown.
 
 -spec new_put_request(bucket_key(),
@@ -195,6 +205,10 @@ new_put_request(BKey, Object, ReqId, StartTime, Options) ->
 -spec new_get_request(bucket_key(), request_id()) -> get_request().
 new_get_request(BKey, ReqId) ->
     #riak_kv_get_req_v1{bkey = BKey, req_id = ReqId}.
+
+-spec new_head_request(bucket_key(), request_id()) -> head_request().
+new_head_request(BKey, ReqId) ->
+    #riak_kv_head_req_v1{bkey = BKey, req_id = ReqId}.
 
 -spec new_w1c_put_request(bucket_key(), encoded_obj(), replica_type()) -> w1c_put_request().
 new_w1c_put_request(BKey, EncodedObj, ReplicaType) ->
@@ -311,6 +325,8 @@ get_replica_type(#riak_kv_w1c_put_req_v1{type = Type}) ->
 
 -spec get_request_id(request()) -> request_id().
 get_request_id(#riak_kv_put_req_v1{req_id = ReqId}) ->
+    ReqId;
+get_request_id(#riak_kv_head_req_v1{req_id = ReqId}) ->
     ReqId;
 get_request_id(#riak_kv_get_req_v1{req_id = ReqId}) ->
     ReqId.
