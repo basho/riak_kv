@@ -1383,7 +1383,16 @@ handle_coverage_request(kv_index_request, Req, FilterVNodes, Sender, State) ->
                     true  -> result_fun_ack(Bucket, Sender);
                     false -> result_fun(Bucket, Sender)
                 end,
-    handle_coverage_index(Bucket, ItemFilter, Query, FilterVNodes, Sender, State, ResultFun).
+    handle_coverage_index(Bucket, ItemFilter, Query, 
+                            FilterVNodes, Sender, 
+                            State, ResultFun);
+handle_coverage_request(kv_aaefold_request, Req, FilterVNodes, Sender, State) ->
+    Query = riak_kv_requests:get_query(Req),
+    InitAcc = riak_kv_requests:get_initacc(Req),
+    Nval = riak_kv_requests:get_nval(Req),
+    handle_coverage_aaefold(Query, InitAcc, Nval, 
+                            FilterVNodes, Sender, 
+                            State).
 
 
 %% @doc Handle a coverage request.
@@ -1401,9 +1410,6 @@ handle_coverage(?KV_MAPFOLD_REQ{bucket=Bucket,
     handle_coverage_mapfold(Bucket, QueryOpts, 
                                 Query, FoldFun, InitAcc, Needs, 
                                 FilterVnodes, Sender, State);
-handle_coverage(?KV_AAEFOLD_REQ{qry = Query, init_acc=InitAcc, n_val=Nval}, 
-                    FilterVnodes, Sender, State) ->
-    handle_coverage_aaefold(Query, InitAcc, Nval, FilterVnodes, Sender, State);
 handle_coverage(Req, FilterVNodes, Sender, State) ->
     handle_coverage_request(riak_kv_requests:request_type(Req),
                             Req,

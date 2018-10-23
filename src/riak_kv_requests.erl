@@ -33,6 +33,7 @@
          new_delete_request/2,
          new_map_request/3,
          new_vclock_request/1,
+         new_aaefold_request/3,
          is_coordinated_put/1,
          get_bucket_key/1,
          get_bucket_keys/1,
@@ -47,6 +48,8 @@
          get_request_id/1,
          get_start_time/1,
          get_options/1,
+         get_initacc/1,
+         get_nval/1,
          remove_option/2,
          request_type/1]).
 
@@ -61,6 +64,7 @@
               delete_request/0,
               map_request/0,
               vclock_request/0,
+              aaefold_request/0,
               request/0,
               request_type/0]).
 
@@ -75,6 +79,7 @@
 -type item_filter() :: function().
 -type coverage_filter() :: riak_kv_coverage_filter:filter().
 -type query() :: riak_index:query_def().
+-type aae_query() :: riak_kv_clusteraae_fsm:query_definition().
 
 -record(riak_kv_put_req_v1,
         { bkey :: bucket_key(),
@@ -131,10 +136,14 @@
 
 -record(riak_kv_vclock_req_v1, {bkeys = [] :: [bucket_key()]}).
 
-
 -record(riak_kv_head_req_v1, {
           bkey :: {binary(), binary()},
           req_id :: non_neg_integer()}).
+
+-record(riak_kv_aaefold_req_v1, 
+            {qry :: riak_kv_clusteraae_fsm:query_definition(),
+                init_acc :: any(),
+                n_val :: pos_integer()}).
 
 -opaque put_request() :: #riak_kv_put_req_v1{}.
 -opaque get_request() :: #riak_kv_get_req_v1{}.
@@ -147,6 +156,7 @@
 -opaque map_request() :: #riak_kv_map_req_v1{}.
 -opaque vclock_request() :: #riak_kv_vclock_req_v1{}.
 -opaque head_request() :: #riak_kv_head_req_v1{}.
+-opaque aaefold_request() :: #riak_kv_aaefold_req_v1{}.
 
 
 -type request() :: put_request()
@@ -159,7 +169,8 @@
                  | delete_request()
                  | map_request()
                  | vclock_request()
-                 | head_request().
+                 | head_request()
+                 | aaefold_request().
 
 -type request_type() :: kv_put_request
                       | kv_get_request
@@ -172,6 +183,7 @@
                       | kv_map_request
                       | kv_vclock_request
                       | kv_head_request
+                      | kv_aaefold_request
                       | unknown.
 
 -spec request_type(request()) -> request_type().
@@ -188,6 +200,7 @@ request_type(#riak_kv_delete_req_v1{})-> kv_delete_request;
 request_type(#riak_kv_map_req_v1{})-> kv_map_request;
 request_type(#riak_kv_vclock_req_v1{})-> kv_vclock_request;
 request_type(#riak_kv_head_req_v1{}) -> kv_head_request;
+request_type(#riak_kv_aaefold_req_v1{}) -> kv_aaefold_request;
 request_type(_) -> unknown.
 
 -spec new_put_request(bucket_key(),
@@ -221,6 +234,12 @@ new_listkeys_request(Bucket, ItemFilter, true) ->
 new_listkeys_request(Bucket, ItemFilter, false) ->
     #riak_kv_listkeys_req_v3{bucket=Bucket,
                              item_filter=ItemFilter}.
+
+-spec new_aaefold_request(aae_query(),
+                            any(),
+                            pos_integer()) -> aaefold_request().
+new_aaefold_request(Query, InitAcc, NVal) ->
+    #riak_kv_aaefold_req_v1{qry = Query, init_acc = InitAcc, n_val = NVal}.
 
 -spec new_listbuckets_request(item_filter()) -> listbuckets_request().
 new_listbuckets_request(ItemFilter) ->
@@ -306,10 +325,12 @@ get_ack_backpressure(#riak_kv_index_req_v1{}) ->
 get_ack_backpressure(#riak_kv_index_req_v2{}) ->
     true.
 
--spec get_query(request()) -> query().
+-spec get_query(request()) -> query()|aae_query().
 get_query(#riak_kv_index_req_v1{qry = Query}) ->
     Query;
 get_query(#riak_kv_index_req_v2{qry = Query}) ->
+    Query;
+get_query(#riak_kv_aaefold_req_v1{qry = Query}) ->
     Query.
 
 -spec get_encoded_obj(request()) -> encoded_obj().
@@ -322,6 +343,14 @@ get_object(#riak_kv_put_req_v1{object = Object}) ->
 -spec get_replica_type(request()) -> replica_type().
 get_replica_type(#riak_kv_w1c_put_req_v1{type = Type}) ->
     Type.
+
+-spec get_initacc(request()) -> any().
+get_initacc(#riak_kv_aaefold_req_v1{init_acc = InitAcc}) ->
+    InitAcc.
+
+-spec get_nval(request()) -> pos_integer().
+get_nval(#riak_kv_aaefold_req_v1{n_val = NVal}) ->
+    NVal.
 
 -spec get_request_id(request()) -> request_id().
 get_request_id(#riak_kv_put_req_v1{req_id = ReqId}) ->

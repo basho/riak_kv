@@ -24,12 +24,6 @@
             needs :: list(atom())
             }).
 
--record(riak_kv_aaefold_req_v1, 
-            {qry :: riak_kv_clusteraae_fsm:query_definition(),
-                init_acc :: any(),
-                n_val :: pos_integer()}).
-
--define(KV_AAEFOLD_REQ, #riak_kv_aaefold_req_v1).
 -define(KV_MAPFOLD_REQ, #riak_kv_mapfold_req_v1).
 -define(KV_W1C_PUT_REPLY, #riak_kv_w1c_put_reply_v1).
 

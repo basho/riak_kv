@@ -197,7 +197,7 @@ init(From={_, _, _}, [Query, Timeout]) ->
                 end
         end,
     
-    Req = ?KV_AAEFOLD_REQ{qry = Query, init_acc = InitAcc, n_val = NVal}, 
+    Req = riak_kv_requests:new_aaefold_request(Query, InitAcc, NVal), 
 
     State = #state{from = From, 
                     acc = InitAcc, 

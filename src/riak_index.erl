@@ -68,7 +68,9 @@
 %% @type query_element()   = {eq,    index_field(), index_value()} |
 %%                           {range, index_field(), index_value(), index_value()}
 
--type query_def() :: {ok, term()} | {error, term()} | {term(), {error, term()}}.
+% -type query_def() :: {ok, term()} | {error, term()} | {term(), {error, term()}}.
+% -export_type([query_def/0]).
+-type query_def() :: #riak_kv_index_v3{}|#riak_kv_index_v2{}.
 -export_type([query_def/0]).
 
 -type last_result() :: {value(), key()} | key().
