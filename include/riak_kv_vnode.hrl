@@ -14,17 +14,6 @@
           req_id :: non_neg_integer(),
           caller :: pid()}).
 
--record(riak_kv_mapfold_req_v1, {
-            bucket :: binary() | tuple(),
-            type :: key | object,
-            qry :: riak_index:query_def(),
-            query_opts = [] :: list(),
-            fold_fun :: riak_kv_backend:fold_objects_fun(),
-            init_acc :: any(),
-            needs :: list(atom())
-            }).
-
--define(KV_MAPFOLD_REQ, #riak_kv_mapfold_req_v1).
 -define(KV_W1C_PUT_REPLY, #riak_kv_w1c_put_reply_v1).
 
 %% @doc vnode_lock(PartitionIndex) is a kv per-vnode lock, used possibly,

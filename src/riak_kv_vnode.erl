@@ -1399,17 +1399,6 @@ handle_coverage_request(kv_aaefold_request, Req, FilterVNodes, Sender, State) ->
 %% More information about the specification for the ItemFilter
 %% parameter can be found in the documentation for the
 %% {@link riak_kv_coverage_filter} module.
-handle_coverage(?KV_MAPFOLD_REQ{bucket=Bucket,
-                                type=_Type,
-                                qry=Query,
-                                query_opts=QueryOpts,
-                                fold_fun=FoldFun,
-                                init_acc=InitAcc,
-                                needs=Needs},
-                    FilterVnodes, Sender, State) ->
-    handle_coverage_mapfold(Bucket, QueryOpts, 
-                                Query, FoldFun, InitAcc, Needs, 
-                                FilterVnodes, Sender, State);
 handle_coverage(Req, FilterVNodes, Sender, State) ->
     handle_coverage_request(riak_kv_requests:request_type(Req),
                             Req,
@@ -1664,92 +1653,6 @@ power10(Number, Count) ->
         _N ->
             Count
     end.
-
-
-%% @doc
-%% Coverage queries using mapfold functions
-%% - Bucket - must always be per-bucket (handling different n-vals)
-%% - QueryOpts - list of additional options to be passed into query
-%% - Query - riak_kv_index_v3 record, which is currently ignored, but can 
-%% be used in the future to support StartKey and EndKey of the fold and also
-%% changing between index and object folds
-%% - FoldFun - needs to be 4-arity function expecting Bucket, Key, Object and
-%% Accumulator
-%% - InitAcc - initial accumulator to use in the fold, must be mergable
-%% - Needs - any cpabilities required by the backend, which will be appended 
-%% to the options passed to the fold
-%% - FilterVnodes - output of the coverage plan use for vnodes where the fold 
-%% needs to cover a subset of partitions within the vnode to avoid duplicate
-%% additions
-%% - Sender - used to send reply
-%% - State
-handle_coverage_mapfold(Bucket, QueryOpts, 
-                            Query, FoldFun, InitAcc, Needs, 
-                            FilterVnodes, Sender, 
-                            State=#state{mod=Mod, 
-                                            modstate=ModState,
-                                            idx=Index,
-                                            async_folding=AsyncFolding}) ->
-    % Unless ring_size div n = 0, for some vnodes only a subset of data will 
-    % be required.  Index here means parition identifier (it has nothing to 
-    % do with Index as in query) 
-    FilterVnode = proplists:get_value(Index, FilterVnodes),
-    Filter = riak_kv_coverage_filter:build_filter(Bucket, none, FilterVnode),
-    
-    % Build query options.  Want to do asnyc folds here so as not to block the 
-    % vnode, but also want these async folds to be snapped pre-fold.  This 
-    % allows the fold to be queued, whilst still representing the state of the 
-    % store at the point the query was initialised. 
-    %
-    % Note that async folding is both a required cpability of the backend and 
-    % a property of riak_kv (hence the presence of async_folding on the vnode 
-    % State)
-    Opts0 = 
-        [{index, Bucket, Query}, 
-            {bucket, Bucket},
-            {standard_object_fold, true} 
-                % LevelDB will switch the expectation of the fold function 
-                % away from the standard 4 arity function if it thinks it 
-                % is a special fold as there is index information in the 
-                % query.  So need to tell it not to switch in this case
-            ] 
-        ++ Needs
-        ++ QueryOpts,
-    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-    OptsAF = maybe_enable_async_fold(AsyncFolding, Capabilities, Opts0),
-    Opts = maybe_enable_snap_prefold(AsyncFolding, Capabilities, OptsAF),
-
-    % What to do with the accumulator when we finish
-    FinishFun =
-        fun(Acc) ->
-            riak_core_vnode:reply(Sender, Acc)
-        end,
-    % Required for ring resizing?  Which we don't support?
-    Extras = fold_extras_keys(Index, Bucket),
-
-    % Should be a decision here on whether this is a fold over objects or a 
-    % fold over keys.  There should be information in the Query to help.  The
-    % alternative would be to get the backend to react differently in the 
-    % query was an index.
-    %
-    % The FoldObjectsFun takes (B, K, Obj, Acc) - Obj can simply be the index 
-    % term, and the backend needs to do the transition.  So riak_kv_vnode 
-    % does not need to know that this is implemented differently when the 
-    % Query is an index
-    ModFolder = maybe_use_fold_heads(Capabilities, Opts, Mod),
-    ObjectFoldFun = fold_fun(objects, FoldFun, Filter, Extras),
-    
-    % Requires riak_core_vnode to understand and handle to the {queue, Work} 
-    % if snap_prefold and async_worker have been passed and are supported
-    case ModFolder(ObjectFoldFun, InitAcc, Opts, ModState) of 
-        {ok, Acc} ->
-            {reply, Acc, State};
-        {async, Work} ->
-            {async, {fold, Work, FinishFun}, Sender, State};
-        {queue, DeferrableWork} ->
-            {queue, {fold, DeferrableWork, FinishFun}, Sender, State}
-    end.
-
 
 handle_coverage_index(Bucket, ItemFilter, Query,
                       FilterVNodes, Sender,
@@ -2802,22 +2705,7 @@ fold_fun(keys, BufferMod, Filter, {Bucket, Index, N, NumPartitions}) ->
                 _ ->
                     Buffer
             end
-    end;
-fold_fun(objects, FoldFun, none, undefined) ->
-    FoldFun;
-fold_fun(objects, FoldFun, Filter, undefined) ->
-    fun(B, K, Obj, Acc) ->
-        case Filter(K) of 
-            true ->
-                FoldFun(B, K, Obj, Acc);
-            false ->
-                Acc
-        end 
     end.
-    % No definition of behaviour during ring-resizing.  Assumption is that
-    % ring-resizing would not be supported, and so we should let it crash
-
-
 
 
 %% @private
