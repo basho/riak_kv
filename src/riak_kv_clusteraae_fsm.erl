@@ -138,7 +138,7 @@
         % e.g.
         % [{total_count, 1000}, 
         %   {total_size, 1000000}, 
-        %   {sizes, [{1000, 800}, {10000, 180}, {100000, 20}]}, 
+        %   {sizes, [{1, 800}, {2, 180}, {3, 20}]}, 
         %   {siblings, [{1, 1000}]}]
 -type inbound_api() :: list(query_definition()|integer()).
 
