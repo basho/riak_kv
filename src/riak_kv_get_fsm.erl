@@ -59,6 +59,7 @@
 
 -type options() :: [option()].
 -type req_id() :: non_neg_integer().
+-type request_type() :: head | get | update.
 
 -export_type([options/0, option/0]).
 
@@ -83,7 +84,7 @@
                 calculated_timings :: {ResponseUSecs::non_neg_integer(),
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined,
                 crdt_op :: undefined | true,
-                request_type :: undefined | head | get | update,
+                request_type :: undefined | request_type(),
                 force_aae = false :: boolean(),
                 override_nodes = [] :: list()
                }).
@@ -323,7 +324,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
     RequestType2 =
         case RequestType of
             undefined ->
-                ?DEFAULT_RT;
+                get_default_support_request_type(?DEFAULT_RT);
             _ ->
                 RequestType
         end,
@@ -750,6 +751,11 @@ add_timing(Stage, State = #state{timing = Timing}) ->
 details() ->
     [timing,
      vnodes].
+
+-spec get_default_support_request_type(Default::request_type()) -> request_type().
+get_default_support_request_type(Default) ->
+    Type = riak_core_capability:get({riak_kv, get_request_type}, Default),
+    Type.
 
 -ifdef(TEST).
 -define(expect_msg(Exp,Timeout),
