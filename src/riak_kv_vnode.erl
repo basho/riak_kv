@@ -1498,7 +1498,7 @@ handle_aaefold({merge_tree_range, Bucket, KeyRange, _TreeSize},
     % TODO: perhaps there is a need for 2 x node_worker_pools to separate 
     % background tasks, from user-initiated tasks that should be throttled
     {async, {fold, Folder, ReturnFun}, Sender, State};
-handle_aaefold({fetch_clocks_range, Bucket, KeyRange, SegmentList}, 
+handle_aaefold({fetch_clocks_range, Bucket, KeyRange, SegmentList, TreeSize},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
@@ -1512,7 +1512,7 @@ handle_aaefold({fetch_clocks_range, Bucket, KeyRange, SegmentList},
     {async, Folder} = 
         aae_controller:aae_fold(Cntrl, 
                                 RangeLimiter,
-                                {segments, SegmentList},
+                                {segments, SegmentList, TreeSize},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{clock, null}]),

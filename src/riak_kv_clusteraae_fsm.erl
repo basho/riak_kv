@@ -41,8 +41,15 @@
     % lists so that dirty segments that have outputted from one tree size can
     % be still found with a different tree size
 -define(EMPTY, <<>>).
--define(MAX_SEGMENT_FILTER, 256).
--define(MAX_BRANCH_FILTER,, 256).
+-define(MAX_SEGMENT_FILTER_SMALL, 16).
+-define(MAX_SEGMENT_FILTER_MEDIUM, 64).
+-define(MAX_SEGMENT_FILTER_LARGE, 256).
+    % If the segment list is too large the continuous the list:member/2 check
+    % may be expensive, and a large number of slots may need to be lifted from
+    % disk
+    % Means that if there are 4096 queries required if clusters are fully
+    % divergent - this is not an efficient mechanism for resolving full-sync
+    % between significantly diverged clusters (e.g. o(100K) objects different
 
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
@@ -57,9 +64,7 @@
 
 % Building blocks for supported aae fold query definitions
 -type segment_filter() :: list(integer()).
-    % TODO:
-    % Segment filter is based on a large tree_size - so if a smaller tree size
-    % is used, then the segment list must be expanded out
+-type tree_size() :: leveled_tictac:tree_size().
 -type branch_filter() :: list(integer()).
 -type key_range() :: {riak_object:key(), riak_object:key()}|all.
 -type bucket() :: riak_object:bucket().
@@ -105,7 +110,7 @@
         % Result is a list of tuples [{branchID, binary()}], where the binary
         % is a binary of concatenated hashes for all the segments in the
         % branch.
-    {fetch_clocks_range, bucket(), key_range(), segment_filter()}|
+    {fetch_clocks_range, bucket(), key_range(), segment_filter(), tree_size()}|
         % Return the keys and clocks for a given list of segment IDs.  The
         % cost of the operation will be increased as both the size of the
         % segment_filter and the number of keys in the range increase.
@@ -312,11 +317,17 @@ merge_countinlists(ResultList, AccList) ->
 %% @doc
 %% Some queries may have a significant impact on the cluster.  In particular
 %% asking for too mnay branch IDs or segment IDs.
-safe_query({fetch_clocks_range, _B, _KR, SegList}) 
-                                when length(SegList) > ?MAX_SEGMENT_FILTER ->
+safe_query({fetch_clocks_range, _B, _KR, SegList, small}) 
+                        when length(SegList) > ?MAX_SEGMENT_FILTER_SMALL ->
+    false;
+safe_query({fetch_clocks_range, _B, _KR, SegList, medium}) 
+                        when length(SegList) > ?MAX_SEGMENT_FILTER_MEDIUM ->
+    false;
+safe_query({fetch_clocks_range, _B, _KR, SegList, large}) 
+                        when length(SegList) > ?MAX_SEGMENT_FILTER_LARGE ->
     false;
 safe_query({fetch_clocks_nval, _N, SegList}) 
-                                when length(SegList) > ?MAX_SEGMENT_FILTER ->
+                        when length(SegList) > ?MAX_SEGMENT_FILTER_LARGE ->
     false;
 safe_query(_Query) ->
     true.
