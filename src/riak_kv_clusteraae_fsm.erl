@@ -34,12 +34,6 @@
 -export([json_encode_results/2]).
 
 -define(TREE_SIZE, 4096).
-    % TODO: Need to sort what to do about changing the tree size.  This needs
-    % to align with the default tree size (large) defined in 
-    % kv_index_tictcatree.  
-    % There is some stuff done as part of previous work to manipulate segment
-    % lists so that dirty segments that have outputted from one tree size can
-    % be still found with a different tree size
 -define(EMPTY, <<>>).
 -define(MAX_SEGMENT_FILTER_SMALL, 16).
 -define(MAX_SEGMENT_FILTER_MEDIUM, 64).
@@ -50,6 +44,8 @@
     % Means that if there are 4096 queries required if clusters are fully
     % divergent - this is not an efficient mechanism for resolving full-sync
     % between significantly diverged clusters (e.g. o(100K) objects different
+-define(DEFAULT_LOOSELIMIT, {pervnode_count, 1000}).
+    % Only fetch a 1000 results per vnode by default
 
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
@@ -68,6 +64,10 @@
 -type branch_filter() :: list(integer()).
 -type key_range() :: {riak_object:key(), riak_object:key()}|all.
 -type bucket() :: riak_object:bucket().
+-type n_val() :: pos_integer().
+-type modified_range() :: {integer(), integer()}|all.
+-type loose_limit() :: {pervnode_count, integer()}|default.
+
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|find_keys|object_stats.
@@ -76,15 +76,15 @@
     % native mode, or in parallel mode with key_order being used.  
 
     % N-val AAE (using cached trees)
-    {merge_root_nval, integer()}|
+    {merge_root_nval, n_val()}|
         % Merge the roots of cached Tictac trees for the given n-val to give
         % a single root for the cluster.  This should be a fast, low-overhead
         % operation
-    {merge_branch_nval, integer(), branch_filter()}|
+    {merge_branch_nval, n_val(), branch_filter()}|
         % Merge a selection of branches of cached Tictac trees for the given
         % n-val to give a combined view of those branches across the cluster.
         % This should be a fast, low-overhead operation
-    {fetch_clocks_nval, integer(), segment_filter()}|
+    {fetch_clocks_nval, n_val(), segment_filter()}|
         % Scan over all the keys for a given n_val in the tictac AAE key store
         % (which for native stores will be the actual key store), skipping 
         % those blocks of the store not containing keys in the segment filter,
@@ -110,14 +110,40 @@
         % Result is a list of tuples [{branchID, binary()}], where the binary
         % is a binary of concatenated hashes for all the segments in the
         % branch.
-    {fetch_clocks_range, bucket(), key_range(), segment_filter(), tree_size()}|
-        % Return the keys and clocks for a given list of segment IDs.  The
-        % cost of the operation will be increased as both the size of the
-        % segment_filter and the number of keys in the range increase.
-        % The function returns a list of [{Key, Clock}] tuples
+    {fetch_clocks_range, 
+        bucket(), key_range(), 
+        {segment, segment_filter(), tree_size()}|
+                % TODO - filters other than segment_filter
+            {date, modified_range(), loose_limit()}|
+            {all, loose_limit()}}|
+        % Return the keys and clocks in the given bucket and key range.
+        % There are two filters that may be applied to the results:
+        % - A segment filter to be used after a tree comparison has shown that
+        % a manageable subset of segments is mismatched.  There is a limit on
+        % the number of segments which may be passed (to ensure the query is
+        % relatively efficient.
+        % - A modified date filter.  The modified date filter is not efficient
+        % in that all keys in the range must be checked (there is no backend
+        % acceleration to skip blocks which don't contain these keys).
+        %
+        % The loose_limit is important, as handling large numbers of query
+        % results may overwhelm the client process.  As the query may be
+        % handled by the node_worker_pool on snapshots, a strict max_results
+        % and continuation process cannot be used (as with index queries).  So
+        % a loose_limit is used instead which limits only the number of
+        % results to be returned from each vnode.  Take care with respect to
+        % increasing the default.  The loose_limit is not included when a
+        % segment filter is applied - as there are already limits on the length
+        % of the segment filter which should control the number of results
+        % returned.
+        % 
+        % The results returned will be of the form:
+        % {complete, ResultList} if no single vnode breached the limit
+        % {contained, ResultList} if at least one vnode breached the limit.
 
     % Operational support functions
-    {find_keys, bucket(), key_range(), 
+    {find_keys, 
+        bucket(), key_range(), 
         {sibling_count, pos_integer()}|{object_size, pos_integer()}}|
         % Find all the objects in the key range that have more than the given 
         % count of siblings, or are bigger than the given object size.  This 
@@ -130,6 +156,11 @@
         % The query returns a list of [{Key, SiblingCount}] tuples or 
         % [{Key, ObjectSize}] tuples depending on the filter requested.  The 
         % cost of this operation will increase with the size of the range
+        % 
+        % It would be beneficial to use the results of object_stats (or 
+        % knowledge of the application) to ensure that the result size of
+        % this query is reasonably bounded.
+
     {object_stats, bucket(), key_range()}.
         % Returns:
         % - the total count of objects in the key range
@@ -145,6 +176,8 @@
         %   {total_size, 1000000}, 
         %   {sizes, [{1, 800}, {2, 180}, {3, 20}]}, 
         %   {siblings, [{1, 1000}]}]
+    
+
 -type inbound_api() :: list(query_definition()|integer()).
 
 -export_type([query_definition/0]).
