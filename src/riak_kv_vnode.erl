@@ -1468,7 +1468,10 @@ handle_aaefold({fetch_clocks_nval, Nval, SegmentIDs},
                                     ReturnFun, 
                                     fun preflistfun/2),
     {noreply, State};
-handle_aaefold({merge_tree_range, Bucket, KeyRange, _TreeSize}, 
+handle_aaefold({merge_tree_range, 
+                        Bucket, KeyRange, 
+                        _TreeSize, 
+                        SegmentFilter, ModifiedRange}, 
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
@@ -1486,10 +1489,13 @@ handle_aaefold({merge_tree_range, Bucket, KeyRange, _TreeSize},
         end,
     WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
     RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
     {async, Folder} = 
         aae_controller:aae_fold(Cntrl, 
                                 RangeLimiter,
-                                all,
+                                SegmentFilter,
+                                ModifiedLimiter,
+                                false,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{hash, null}]),
@@ -1498,7 +1504,9 @@ handle_aaefold({merge_tree_range, Bucket, KeyRange, _TreeSize},
     % TODO: perhaps there is a need for 2 x node_worker_pools to separate 
     % background tasks, from user-initiated tasks that should be throttled
     {async, {fold, Folder, ReturnFun}, Sender, State};
-handle_aaefold({fetch_clocks_range, Bucket, KeyRange, SegmentList, TreeSize},
+handle_aaefold({fetch_clocks_range, 
+                        Bucket, KeyRange, 
+                        SegmentFilter, ModifiedRange},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
@@ -1509,15 +1517,21 @@ handle_aaefold({fetch_clocks_range, Bucket, KeyRange, SegmentList, TreeSize},
         end,
     WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
     RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
     {async, Folder} = 
         aae_controller:aae_fold(Cntrl, 
                                 RangeLimiter,
-                                {segments, SegmentList, TreeSize},
+                                SegmentFilter,
+                                ModifiedLimiter,
+                                false,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{clock, null}]),
     {async, {fold, Folder, ReturnFun}, Sender, State};
-handle_aaefold({find_keys, Bucket, KeyRange, {sibling_count, MaxCount}},
+handle_aaefold({find_keys, 
+                        Bucket, KeyRange,
+                        ModifiedRange,
+                        {sibling_count, MaxCount}},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
@@ -1533,10 +1547,13 @@ handle_aaefold({find_keys, Bucket, KeyRange, {sibling_count, MaxCount}},
         end,
     WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
     RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
     {async, Folder} =
         aae_controller:aae_fold(Cntrl, 
                                 RangeLimiter,
                                 all,
+                                ModifiedLimiter,
+                                false,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{sibcount, null}]),
@@ -1544,7 +1561,10 @@ handle_aaefold({find_keys, Bucket, KeyRange, {sibling_count, MaxCount}},
     % other background tasks (e.g. rebuilds), and so the node_worker_pool is
     % used
     {queue, {fold, Folder, ReturnFun}, Sender, State};
-handle_aaefold({find_keys, Bucket, KeyRange, {object_size, MaxSize}},
+handle_aaefold({find_keys, 
+                        Bucket, KeyRange,
+                        ModifiedRange,
+                        {object_size, MaxSize}},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
@@ -1560,10 +1580,13 @@ handle_aaefold({find_keys, Bucket, KeyRange, {object_size, MaxSize}},
         end,
     WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
     RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
     {async, Folder} =
         aae_controller:aae_fold(Cntrl, 
                                 RangeLimiter,
                                 all,
+                                ModifiedLimiter,
+                                false,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{size, null}]),
@@ -1571,7 +1594,7 @@ handle_aaefold({find_keys, Bucket, KeyRange, {object_size, MaxSize}},
     % other background tasks (e.g. rebuilds), and so the node_worker_pool is
     % used
     {queue, {fold, Folder, ReturnFun}, Sender, State};
-handle_aaefold({object_stats, Bucket, KeyRange},
+handle_aaefold({object_stats, Bucket, KeyRange, ModifiedRange},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
@@ -1604,10 +1627,13 @@ handle_aaefold({object_stats, Bucket, KeyRange},
     WrappedFoldFun = 
         aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
     RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
     {async, Folder} =
         aae_controller:aae_fold(Cntrl, 
                                 RangeLimiter,
                                 all,
+                                ModifiedLimiter,
+                                false,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{sibcount, null}, {size, null}]),
@@ -1617,11 +1643,25 @@ handle_aaefold({object_stats, Bucket, KeyRange},
     {queue, {fold, Folder, ReturnFun}, Sender, State}.
 
 
-
+-spec aaefold_setrangelimiter(riak_object:bucket(), 
+                                all | {riak_object:key(), riak_object:key()})
+                                    -> aae_keystore:range_limiter().
+%% @doc
+%% Convert the format of the range limiter to one compatible with the aae store
 aaefold_setrangelimiter(Bucket, all) ->
     {buckets, [Bucket]};
 aaefold_setrangelimiter(Bucket, {StartKey, EndKey}) ->
     {key_range, Bucket, StartKey, EndKey}.
+
+-spec aaefold_setmodifiedlimiter({date, pos_integer(), pos_integer()} | all)
+                                    -> aae_keystore:modified_limiter().
+%% @doc
+%% Convert the format of the date limiter to one compatible with the aae store
+aaefold_setmodifiedlimiter({date, LowModDate, HighModDate}) 
+                        when is_integer(LowModDate), is_integer(HighModDate) ->
+    {LowModDate, HighModDate};
+aaefold_setmodifiedlimiter(_) ->
+    all.
 
 aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered) ->
     fun(BF, KF, EFs, Acc) ->

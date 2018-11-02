@@ -44,8 +44,12 @@
     % Means that if there are 4096 queries required if clusters are fully
     % divergent - this is not an efficient mechanism for resolving full-sync
     % between significantly diverged clusters (e.g. o(100K) objects different
--define(DEFAULT_LOOSELIMIT, {pervnode_count, 1000}).
+
+
+% TODO - consider further loose limits
+% -define(DEFAULT_LOOSELIMIT, {pervnode_count, 1000}).
     % Only fetch a 1000 results per vnode by default
+% -type loose_limit() :: {pervnode_count, integer()} | default.
 
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
@@ -65,8 +69,7 @@
 -type key_range() :: {riak_object:key(), riak_object:key()}|all.
 -type bucket() :: riak_object:bucket().
 -type n_val() :: pos_integer().
--type modified_range() :: {integer(), integer()}|all.
--type loose_limit() :: {pervnode_count, integer()}|default.
+-type modified_range() :: {date, non_neg_integer(), non_neg_integer()}.
 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
@@ -94,28 +97,37 @@
         % segment filter being small - ideally o(10) or smaller
     
     % Range-based AAE (requiring folds over native/parallel AAE key stores)
-    {merge_tree_range, bucket(), key_range(), small|medium|large}|
+    {merge_tree_range, 
+        bucket(), key_range(), 
+        tree_size(),
+        {segments, segment_filter(), tree_size()} | all,
+        modified_range() | all}|
         % Provide the values for a subset of AAE tree branches for the given
         % key range.  This will be a background operation, and the cost of
         % the operation will be in-proportion to the number of keys in the
-        % range.
+        % range, depending on the filter applied
         %
-        % `all` may be used as an alternative to a branch_filter to return
-        % all branches. Unlike consulting the cached trees with the queries
-        % merge_root_nval|merge_branch_nval, the size of the accumulator tends
-        % not to be relevant to the order of magnitude of the cost of the
-        % query, and so there is not generally a benefit in asking (and
-        % re-asking) for subsets of the tree rather than the whole tree
+        % Different size trees can be requested.  Smaller tree sizes are more
+        % likely to elad to false negative results, but are more effiecient
+        % to calculate and have a reduced load on the network
+        % 
+        % A segment_filter() may be passed.  For example, if a tree comparison
+        % has been done between two clusters, it might be preferable to confirm
+        % the differences before fetching clocks. This can be done by
+        % requesting a seocnd tree but placing the mismatched segments into a
+        % segment filter so that the subsequent comparison will be made just on
+        % those segments.  This will reduce the cost of producing the tree by
+        % an order of magnitude.
         %
-        % Result is a list of tuples [{branchID, binary()}], where the binary
-        % is a binary of concatenated hashes for all the segments in the
-        % branch.
+        % A modified_range() may be passed.  This will calculate the tree based
+        % only on the keys which were last modified within the range.  If the
+        % subset of keys above the low date in the range is small relative to
+        % the overall key space in the range - then this will reduce the cost
+        % of producing the tree by an order of magnitude.
     {fetch_clocks_range, 
         bucket(), key_range(), 
-        {segment, segment_filter(), tree_size()}|
-                % TODO - filters other than segment_filter
-            {date, modified_range(), loose_limit()}|
-            {all, loose_limit()}}|
+        {segments, segment_filter(), tree_size()} | all,
+        modified_range() | all}|
         % Return the keys and clocks in the given bucket and key range.
         % There are two filters that may be applied to the results:
         % - A segment filter to be used after a tree comparison has shown that
@@ -126,24 +138,31 @@
         % in that all keys in the range must be checked (there is no backend
         % acceleration to skip blocks which don't contain these keys).
         %
-        % The loose_limit is important, as handling large numbers of query
-        % results may overwhelm the client process.  As the query may be
-        % handled by the node_worker_pool on snapshots, a strict max_results
-        % and continuation process cannot be used (as with index queries).  So
-        % a loose_limit is used instead which limits only the number of
-        % results to be returned from each vnode.  Take care with respect to
-        % increasing the default.  The loose_limit is not included when a
-        % segment filter is applied - as there are already limits on the length
-        % of the segment filter which should control the number of results
-        % returned.
-        % 
-        % The results returned will be of the form:
-        % {complete, ResultList} if no single vnode breached the limit
-        % {contained, ResultList} if at least one vnode breached the limit.
+        % Care should be taken when using this feature if TictacAAE is running
+        % in parallel mode with the leveled_so backend (not the leveled_ko)
+        % backend.  If no segment_filter of modified_range is provided, the
+        % whole store will be scanned. The leveled_ko backend should be used
+        % for parallel TictacAAE key stores if range-type folds are to be run.
+        %
+        % Large result sets (e.g. o(100K) keys may cause issues with the size
+        % of the result set.  It is currently an application responsibility to
+        % control the size of the result set by use of the filter options
+        % available.
+        %
+        % TODO - loose_limit()
+        %
+        % The leveled backend supports a max_key_count which could be used to
+        % provide a loose_limit on the results returned.  However, there are
+        % issues with this and segment_ordered backends, as well as extra 
+        % complexity curtailing the results (and signalling the results are
+        % curtailed).  The main downside of large result sets is network over
+        % use.  Perhaps compressing the payload may be a better answer?
+        
 
     % Operational support functions
     {find_keys, 
-        bucket(), key_range(), 
+        bucket(), key_range(),
+        modified_range() | all,
         {sibling_count, pos_integer()}|{object_size, pos_integer()}}|
         % Find all the objects in the key range that have more than the given 
         % count of siblings, or are bigger than the given object size.  This 
@@ -159,9 +178,11 @@
         % 
         % It would be beneficial to use the results of object_stats (or 
         % knowledge of the application) to ensure that the result size of
-        % this query is reasonably bounded.
+        % this query is reasonably bounded (e.g. don't set too low an object
+        % size).  If only interested in the outcom of recent modifications,
+        % use a modified_range().
 
-    {object_stats, bucket(), key_range()}.
+    {object_stats, bucket(), key_range(), modified_range() | all}.
         % Returns:
         % - the total count of objects in the key range
         % - the accumulated total size of all objects in the range
@@ -176,7 +197,10 @@
         %   {total_size, 1000000}, 
         %   {sizes, [{1, 800}, {2, 180}, {3, 20}]}, 
         %   {siblings, [{1, 1000}]}]
-    
+        %
+        % If only interested in the outcom of recent modifications,
+        % use a modified_range().
+
 
 -type inbound_api() :: list(query_definition()|integer()).
 
@@ -350,13 +374,13 @@ merge_countinlists(ResultList, AccList) ->
 %% @doc
 %% Some queries may have a significant impact on the cluster.  In particular
 %% asking for too mnay branch IDs or segment IDs.
-safe_query({fetch_clocks_range, _B, _KR, SegList, small}) 
+safe_query({fetch_clocks_range, _B, _KR, {segments, SegList, small}, _MR})
                         when length(SegList) > ?MAX_SEGMENT_FILTER_SMALL ->
     false;
-safe_query({fetch_clocks_range, _B, _KR, SegList, medium}) 
+safe_query({fetch_clocks_range, _B, _KR, {segments, SegList, medium}, _MR}) 
                         when length(SegList) > ?MAX_SEGMENT_FILTER_MEDIUM ->
     false;
-safe_query({fetch_clocks_range, _B, _KR, SegList, large}) 
+safe_query({fetch_clocks_range, _B, _KR, {segments, SegList, large}, _MR}) 
                         when length(SegList) > ?MAX_SEGMENT_FILTER_LARGE ->
     false;
 safe_query({fetch_clocks_nval, _N, SegList}) 
