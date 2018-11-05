@@ -302,13 +302,20 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
 
+    StoreHead = app_helper:get_env(riak_kv, tictacaae_storeheads),
+    ObjSplitFun = 
+        case StoreHead of
+            true -> fun from_object_binary/1;
+            false -> fun from_object_binary_headless/1
+        end,
+
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
                                     IsEmpty, 
                                     {RW, RD}, 
                                     Preflists, 
                                     RootPath, 
-                                    fun from_object_binary/1),
+                                    ObjSplitFun),
     R = aae_controller:aae_rebuildtrees(AAECntrl, 
                                         Preflists, 
                                         fun preflistfun/2, 
@@ -339,14 +346,27 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                 tictac_rebuilding = Rebuilding}.
 
 
--spec from_object_binary(binary()) -> {integer(), integer(), integer(), null}.
+-spec from_object_binary(binary()) ->
+        {integer(), integer(), integer(), list(erlang:timestamp()), binary()}.
 %% @doc
 %% When folding over objects need to be able to convert from the object into 
 %% a tuple of metadata for the AAE keystore
 from_object_binary(RobjBin) ->
-    {_Clock, Size, SibCount} = riak_object:summary_from_binary(RobjBin),
+    {_Clock, Size, SibCount, LastMods, SibsBin} =
+        riak_object:summary_from_binary(RobjBin),
     % TODO: Actually get the index hash
-    {Size, SibCount, 0, null}.
+    {Size, SibCount, 0, LastMods, SibsBin}.
+
+-spec from_object_binary_headless(binary()) ->
+        {integer(), integer(), integer(), list(erlang:timestamp()), binary()}.
+%% @doc
+%% When folding over objects need to be able to convert from the object into 
+%% a tuple of metadata for the AAE keystore
+from_object_binary_headless(RobjBin) ->
+    {_Clock, Size, SibCount, LastMods, _SibsBin} =
+        riak_object:summary_from_binary(RobjBin),
+    % TODO: Actually get the index hash
+    {Size, SibCount, 0, LastMods, <<>>}.
 
 
 -spec determine_aaedata_root(integer()) -> list().
@@ -1590,7 +1610,7 @@ handle_aaefold({find_keys,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{size, null}]),
-    % As this is an 'operator' task, assumed that this cna be delayed behind
+    % As this is an 'operator' task, assumed that this can be delayed behind
     % other background tasks (e.g. rebuilds), and so the node_worker_pool is
     % used
     {queue, {fold, Folder, ReturnFun}, Sender, State};
@@ -3053,7 +3073,7 @@ aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
             UpdClock = 
                 case UpdObj of 
                     use_binary ->
-                        {VC, _Sz, _Sc} = 
+                        {VC, _Sz, _Sc, _LMDs, _SibBin} = 
                             riak_object:summary_from_binary(UpdObjBin),
                         lists:usort(VC);
                     _ ->

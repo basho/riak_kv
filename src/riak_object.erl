@@ -1171,7 +1171,9 @@ from_binary(_B, _K, Obj = #r_object{}) ->
     Obj.
 
 
--spec summary_from_binary(binary()) -> {vclock:vclock(), integer(), integer()}.
+-spec summary_from_binary(binary()) -> 
+        {vclock:vclock(), integer(), integer(),
+            list(erlang:timestamp())|undefined, binary()}.
 %% @doc
 %% Extract only sumarry infromation from the binary - the vector, the object 
 %% size and the sibling count
@@ -1180,18 +1182,22 @@ summary_from_binary(<<131, _Rest/binary>>=ObjBin) ->
         {proxy_object, HeadBin, ObjSize, _Fetcher} ->
             summary_from_binary(HeadBin, ObjSize);
         T ->
-            {vclock(T), byte_size(ObjBin), value_count(T)}
+            {vclock(T), byte_size(ObjBin), value_count(T),
+                undefined, <<>>}
+            % Legacy object version will end up with dummy details
     end;
 summary_from_binary(ObjBin) when is_binary(ObjBin) ->
     summary_from_binary(ObjBin, byte_size(ObjBin));
 summary_from_binary(Obj = #r_object{}) ->
     % Unexpected scenario but included for parity with from_binary
-    % Caluclating object size is expensive (relatively to other branches)
-    {vclock(Obj), byte_size(to_binary(v1, Obj)), value_count(Obj)}.
+    % Calculating object size is expensive (relatively to other branches)
+    {vclock(Obj), byte_size(to_binary(v1, Obj)), value_count(Obj),
+        undefined, <<>>}.
 
 
 -spec summary_from_binary(binary(), integer()) ->
-    {vclock:vclock(), non_neg_integer(), non_neg_integer()}.
+    {vclock:vclock(), non_neg_integer(), non_neg_integer(),
+        list(erlang:timestamp()), binary()}.
 %% @doc 
 %% Return afrom a version 1 binary the vector clock and siblings
 summary_from_binary(ObjBin, ObjSize) ->
@@ -1199,9 +1205,38 @@ summary_from_binary(ObjBin, ObjSize) ->
         1:8/integer, 
         VclockLen:32/integer, VclockBin:VclockLen/binary, 
         SibCount:32/integer, 
-        _Rest/binary>> = ObjBin,
-    {binary_to_term(VclockBin), ObjSize, SibCount}.
+        SibsBin/binary>> = ObjBin,
+    {LastMods, SibBin} = 
+        case SibCount of
+            SC when is_integer(SC) ->
+                get_metadata_from_siblings(SibsBin,
+                                            SibCount,
+                                            [],
+                                            [])
+        end,
+    {binary_to_term(VclockBin), ObjSize, SibCount, LastMods, SibBin}.
 
+
+
+-spec get_metadata_from_siblings(binary(), integer(),
+                                    list(erlang:timestamp()), list()) ->
+                                    {list(erlang:timestamp()), binary()}.
+%% @doc
+%% Split the metadata and the last modification date away from the rest of the
+%% object
+get_metadata_from_siblings(<<>>, 0, LastMods, SibMDList) ->
+    {LastMods, term_to_binary(SibMDList)};
+get_metadata_from_siblings(<<ValLen:32/integer, Rest0/binary>>,
+                            SibCount,
+                            LastMods,
+                            SibMDList) ->
+    <<_ValBin:ValLen/binary, MetaLen:32/integer, Rest1/binary>> = Rest0,
+    SibBin = <<0:32/integer, MetaLen:32/integer, Rest1/binary>>,
+    {SibMetaData, LastMod, Remainder} = sib_of_binary(SibBin),
+    get_metadata_from_siblings(Remainder,
+                                SibCount - 1,
+                                [LastMod|LastMods],
+                                [SibMetaData|SibMDList]).
 
 
 sibs_of_binary(Count,SibsBin) ->
@@ -1211,19 +1246,19 @@ sibs_of_binary(0, <<>>, Result) -> lists:reverse(Result);
 sibs_of_binary(0, _NotEmpty, _Result) ->
     {error, corrupt_contents};
 sibs_of_binary(Count, SibsBin, Result) ->
-    {Sib, SibsRest} = sib_of_binary(SibsBin),
+    {Sib, _LastMod, SibsRest} = sib_of_binary(SibsBin),
     sibs_of_binary(Count-1, SibsRest, [Sib | Result]).
 
 sib_of_binary(<<ValLen:32/integer, ValBin:ValLen/binary, MetaLen:32/integer, MetaBin:MetaLen/binary, Rest/binary>>) ->
     <<LMMega:32/integer, LMSecs:32/integer, LMMicro:32/integer, VTagLen:8/integer, VTag:VTagLen/binary, Deleted:1/binary-unit:8, MetaRestBin/binary>> = MetaBin,
-
+    LastModDate = {LMMega, LMSecs, LMMicro},
     MDList0 = deleted_meta(Deleted, []),
-    MDList1 = last_mod_meta({LMMega, LMSecs, LMMicro}, MDList0),
+    MDList1 = last_mod_meta(LastModDate, MDList0),
     MDList2 = vtag_meta(VTag, MDList1),
     MDList3 = val_encoding_meta(ValBin, MDList2),
     MDList = meta_of_binary(MetaRestBin, MDList3),
     MD = dict:from_list(MDList),
-    {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, Rest}.
+    {#r_content{metadata=MD, value=decode_maybe_binary(ValBin)}, LastModDate, Rest}.
 
 val_encoding_meta(<<>>, MDList) ->
     MDList;
@@ -2028,7 +2063,7 @@ summary_from_binary_foldheads_test() ->
             {proxy_object, MDBin, 100,
                 {fun fetch_value/2, clone, "JournalKey"}}),
 
-    {VC_Summ, BS_Summ, SC_Summ} = summary_from_binary(HeadObj),
+    {VC_Summ, BS_Summ, SC_Summ, _LMD, _SibBin} = summary_from_binary(HeadObj),
     ?assertMatch(VC1, term_to_binary(VC_Summ)),
     ?assertMatch(100, BS_Summ),
     ?assertMatch(2, SC_Summ).
@@ -2040,10 +2075,10 @@ summary_binary_extract() ->
     Object0 = riak_object:new(B, K, V),
     Object = riak_object:increment_vclock(Object0, a),
     Binary = to_binary(v1, Object),
-    {Clock, Size, SibCount} = summary_from_binary(Binary),
+    {Clock, Size, SibCount, _LMD, _SibBin} = summary_from_binary(Binary),
     ?assertMatch(1, SibCount),
     ?assertMatch(1, length(Clock)),
     ?assertMatch(true, Size > 0),
-    {Clock, Size, SibCount} = summary_from_binary(Object).
+    {Clock, Size, SibCount, undefined, <<>>} = summary_from_binary(Object).
 
 -endif.

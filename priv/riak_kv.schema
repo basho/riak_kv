@@ -44,8 +44,8 @@
 %% When running in native mode, this setting is ignored
 {mapping, "tictacaae_parallelstore", "riak_kv.tictacaae_parallelstore", [
   {datatype, {enum, [leveled_ko, leveled_so]}},
-  {default, leveled_so},
-  {commented, leveled_so}
+  {default, leveled_ko},
+  {commented, leveled_ko}
 ]}.
 
 %% @doc Minimum Rebuild Wait
@@ -73,8 +73,8 @@
 %% only a minimal data set necessary for AAE and monitoring
 {mapping, "tictacaae_storeheads", "riak_kv.tictacaae_storeheads", [
   {datatype, {flag, enabled, disabled}},
-  {default, enabled},
-  {commented, enabled}
+  {default, disabled},
+  {commented, disabled}
 ]}.
 
 %% @doc Frequency to prompt exchange per vnode

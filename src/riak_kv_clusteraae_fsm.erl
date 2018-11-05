@@ -209,7 +209,7 @@
 -record(state, {from :: from(),
                 acc,
                 query_type :: query_types(),
-                start_time :: tuple()}).
+                start_time :: erlang:timestamp()}).
 
 
 -ifdef(TEST).
