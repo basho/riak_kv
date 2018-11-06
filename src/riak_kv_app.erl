@@ -79,6 +79,27 @@ start(_Type, _StartArgs) ->
             ok
     end,
 
+    WorkerPools =
+        case app_helper:get_env(riak_kv, worker_pool_strategy, none) of
+            none ->
+                [];
+            single ->
+                NWPS = app_helper:get_env(riak_kv, node_worker_pool_size),
+                [{node_worker_pool, {riak_kv_worker, NWPS, [], []}}];
+            dscp ->
+                AF1 = app_helper:get_env(riak_kv, af1_worker_pool_size),
+                AF2 = app_helper:get_env(riak_kv, af2_worker_pool_size),
+                AF3 = app_helper:get_env(riak_kv, af3_worker_pool_size),
+                AF4 = app_helper:get_env(riak_kv, af4_worker_pool_size),
+                BE = app_helper:get_env(riak_kv, be_worker_pool_size),
+                [{af1_pool, {riak_kv_worker, AF1, [], []}},
+                    {af2_pool, {riak_kv_worker, AF2, [], []}},
+                    {af3_pool, {riak_kv_worker, AF3, [], []}},
+                    {af4_pool, {riak_kv_worker, AF4, [], []}},
+                    {be_pool, {riak_kv_worker, BE, [], []}}]
+        end,
+                
+
     %% Append defaults for riak_kv buckets to the bucket defaults
     %% TODO: Need to revisit this. Buckets are typically created
     %% by a specific entity; seems lame to append a bunch of unused
@@ -215,11 +236,12 @@ start(_Type, _StartArgs) ->
                 {vnode_module, riak_kv_vnode},
                 {bucket_validator, riak_kv_bucket},
                 {stat_mod, riak_kv_stat},
-                {node_worker_pool, {riak_kv_worker, 1, [], []}},
                 {permissions, [get, put, delete, list_keys, list_buckets,
                                mapreduce, index, get_preflist]}
             ]
-            ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
+            ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]
+        
+            ++ WorkerPools),
 
             ok = riak_api_pb_service:register(?SERVICES),
 

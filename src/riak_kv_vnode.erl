@@ -165,7 +165,8 @@
                 tictac_exchangecount = 0 :: integer(),
                 tictac_deltacount = 0 :: integer(),
                 tictac_startqueue = os:timestamp() :: erlang:timestamp(),
-                tictac_rebuilding = false :: erlang:timestamp()|false
+                tictac_rebuilding = false :: erlang:timestamp()|false,
+                worker_pool_strategy = single :: none|single|dscp
                }).
 
 -type index_op() :: add | remove.
@@ -211,6 +212,23 @@
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
 
 -define(MAX_REBUILD_TIME, 86400).
+
+-define(AF1_QUEUE, af1_pool).
+    %% Assured Forwarding - pool 1
+    %% Not currently used
+-define(AF2_QUEUE, af2_pool).
+    %% Assured Forwarding - pool 2
+    %% Any other handle_coverage that responds queue (e.g. leveled keylisting)
+-define(AF3_QUEUE, af3_pool).
+    %% Assured Forwarding - pool 3
+    %% AAE queries (per-bucket with/without key_range).  AAE queries against
+    %% the cached tree do not use a pool (e.g. n_val queries)
+-define(AF4_QUEUE, af4_pool).
+    %% Assured Forwarding - pool 4
+    %% perational information queries (e.g. object_stats)
+-define(BE_QUEUE, be_pool).
+    %% Best efforts (aka scavenger) pool
+    %% Rebuilds
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -733,6 +751,9 @@ init([Index]) ->
         end,
     EnableTictacAAE = 
         app_helper:get_env(riak_kv, tictacaae_active, passive),
+    WorkerPoolStrategy =
+        app_helper:get_env(riak_kv, worker_pool_strategy),
+
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
             %% Get the backend capabilities
@@ -756,7 +777,8 @@ init([Index]) ->
                            key_buf_size=KeyBufSize,
                            mrjobs=dict:new(),
                            md_cache=MDCache,
-                           md_cache_size=MDCacheSize},
+                           md_cache_size=MDCacheSize,
+                           worker_pool_strategy=WorkerPoolStrategy},
             try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
@@ -1172,7 +1194,8 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
                             {async, {fold, AsyncWork, FinishFun0}, Sender, State0};
                         {queue, DeferrableWork} ->
                             % This work should be sent to the core node_worker_pool
-                            {queue, {fold, DeferrableWork, FinishFun0}, Sender, State0};
+                            {select_queue(?BE_QUEUE, State0), 
+                                {fold, DeferrableWork, FinishFun0}, Sender, State0};
                         _ ->
                             % This work has already been completed by the vnode, which should
                             % have already sent the results using FinishFun
@@ -1523,7 +1546,7 @@ handle_aaefold({merge_tree_range,
     % a background task.
     % TODO: perhaps there is a need for 2 x node_worker_pools to separate 
     % background tasks, from user-initiated tasks that should be throttled
-    {async, {fold, Folder, ReturnFun}, Sender, State};
+    {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({fetch_clocks_range, 
                         Bucket, KeyRange, 
                         SegmentFilter, ModifiedRange},
@@ -1547,7 +1570,7 @@ handle_aaefold({fetch_clocks_range,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{clock, null}]),
-    {async, {fold, Folder, ReturnFun}, Sender, State};
+    {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({find_keys, 
                         Bucket, KeyRange,
                         ModifiedRange,
@@ -1577,10 +1600,7 @@ handle_aaefold({find_keys,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{sibcount, null}]),
-    % As this is an 'operator' task, assumed that this cna be delayed behind
-    % other background tasks (e.g. rebuilds), and so the node_worker_pool is
-    % used
-    {queue, {fold, Folder, ReturnFun}, Sender, State};
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({find_keys, 
                         Bucket, KeyRange,
                         ModifiedRange,
@@ -1610,10 +1630,7 @@ handle_aaefold({find_keys,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{size, null}]),
-    % As this is an 'operator' task, assumed that this can be delayed behind
-    % other background tasks (e.g. rebuilds), and so the node_worker_pool is
-    % used
-    {queue, {fold, Folder, ReturnFun}, Sender, State};
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({object_stats, Bucket, KeyRange, ModifiedRange},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
@@ -1657,10 +1674,7 @@ handle_aaefold({object_stats, Bucket, KeyRange, ModifiedRange},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{sibcount, null}, {size, null}]),
-    % As this is an 'operator' task, assumed that this cna be delayed behind
-    % other background tasks (e.g. rebuilds), and so the node_worker_pool is
-    % used
-    {queue, {fold, Folder, ReturnFun}, Sender, State}.
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State}.
 
 
 -spec aaefold_setrangelimiter(riak_object:bucket(), 
@@ -1793,7 +1807,8 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
             {async, {fold, AsyncWork, FinishFun}, Sender, State};
         {queue, DeferrableWork} ->
             % This work should be sent to the core node_worker_pool
-            {queue, {fold, DeferrableWork, FinishFun}, Sender, State};
+            {select_queue(?AF2_QUEUE, State), 
+                {fold, DeferrableWork, FinishFun}, Sender, State};
         _ ->
             % This work has already been completed by the vnode, which should
             % have already sent the results using FinishFun
@@ -2700,6 +2715,22 @@ do_get_object(Bucket, Key, Mod, ModState, BinFetchFun) ->
                 Else ->
                     Else
             end
+    end.
+
+
+-spec select_queue(riak_core_node_worker_pool:worker_pool(), state()) ->
+                                async|riak_core_node_worker_pool:worker_pool().
+%% @doc
+%% Select the use of node_worker_pool or vnode_worker_pool depending on the
+%% worker pool startegy
+select_queue(DSCPPoolName, State) ->
+    case State#state.worker_pool_strategy of
+        none ->
+            async;
+        single ->
+            node_worker_pool;
+        dscp ->
+            DSCPPoolName
     end.
 
 %% @private

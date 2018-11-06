@@ -95,6 +95,49 @@
   hidden
 ]}.
 
+%% @doc Pool Strategy - should a single node_worker_pool or multiple pools be
+%% used for queueing potentially longer-running "background" queries
+{mapping, "worker_pool_strategy", "riak_kv.worker_pool_strategy", [
+  {datatype, {enum, [none, single, dscp]}},
+  {default, dscp},
+  {commented, dscp}
+]}.
+
+%% @doc Pool Sizes - sizes for individual node_worker_pools
+%% Only relevant if single or dscp strategy chosen.  Set
+%% `node_worker_pool_size` if a `single` pool strategy is being used, or set
+%% `af_worker_pool_size` and `be_worker_pool_size` if a multiple pool strategy
+%% has been chosen.
+%% Separate assured forwarding pools will be used of `af_worker_pool_size` for
+%% informational aae_folds (find_keys, object_stats) and functional folds
+%% (merge_tree_range, fetch_clock_range).  The be_pool is used only for tictac
+%% AAE rebuilds at present 
+{mapping, "node_worker_pool_size", "riak_kv.node_worker_pool_size", [
+  {datatype, integer},
+  {default, 2}
+]}.
+{mapping, "af1_worker_pool_size", "riak_kv.af1_worker_pool_size", [
+  {datatype, integer},
+  {default, 1}
+]}.
+{mapping, "af2_worker_pool_size", "riak_kv.af2_worker_pool_size", [
+  {datatype, integer},
+  {default, 1}
+]}.
+{mapping, "af3_worker_pool_size", "riak_kv.af3_worker_pool_size", [
+  {datatype, integer},
+  {default, 2}
+]}.
+{mapping, "af4_worker_pool_size", "riak_kv.af4_worker_pool_size", [
+  {datatype, integer},
+  {default, 1}
+]}.
+{mapping, "be_worker_pool_size", "riak_kv.be_worker_pool_size", [
+  {datatype, integer},
+  {default, 1}
+]}.
+
+
 %% @doc Whether to allow node to participate in coverage queries.
 %% This is used as a manual switch to stop nodes in incomplete states
 %% (E.g. doing a full partition repair, or node replace) from participating
