@@ -85,18 +85,18 @@ start(_Type, _StartArgs) ->
                 [];
             single ->
                 NWPS = app_helper:get_env(riak_kv, node_worker_pool_size),
-                [{node_worker_pool, {riak_kv_worker, NWPS, [], []}}];
+                [{node_worker_pool, {riak_kv_worker, NWPS, [], [], node_worker_pool}}];
             dscp ->
                 AF1 = app_helper:get_env(riak_kv, af1_worker_pool_size),
                 AF2 = app_helper:get_env(riak_kv, af2_worker_pool_size),
                 AF3 = app_helper:get_env(riak_kv, af3_worker_pool_size),
                 AF4 = app_helper:get_env(riak_kv, af4_worker_pool_size),
                 BE = app_helper:get_env(riak_kv, be_worker_pool_size),
-                [{af1_pool, {riak_kv_worker, AF1, [], []}},
-                    {af2_pool, {riak_kv_worker, AF2, [], []}},
-                    {af3_pool, {riak_kv_worker, AF3, [], []}},
-                    {af4_pool, {riak_kv_worker, AF4, [], []}},
-                    {be_pool, {riak_kv_worker, BE, [], []}}]
+                [{dscp_worker_pool, {riak_kv_worker, AF1, [], [], af1_pool}},
+                    {dscp_worker_pool, {riak_kv_worker, AF2, [], [], af2_pool}},
+                    {dscp_worker_pool, {riak_kv_worker, AF3, [], [], af3_pool}},
+                    {dscp_worker_pool, {riak_kv_worker, AF4, [], [], af4_pool}},
+                    {dscp_worker_pool, {riak_kv_worker, BE, [], [], be_pool}}]
         end,
                 
 
