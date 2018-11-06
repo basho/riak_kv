@@ -78,7 +78,8 @@
          handle_exit/3,
          handle_info/2,
          handle_overload_info/2,
-         ready_to_exit/0]). %% Note: optional function of the behaviour
+         ready_to_exit/0,%% Note: optional function of the behaviour
+         add_vnode_pool/2]). %% Note: optional function of the behaviour
 
 -export([handoff_data_encoding_method/0]).
 -export([set_vnode_forwarding/2]).
@@ -166,7 +167,8 @@
                 tictac_deltacount = 0 :: integer(),
                 tictac_startqueue = os:timestamp() :: erlang:timestamp(),
                 tictac_rebuilding = false :: erlang:timestamp()|false,
-                worker_pool_strategy = single :: none|single|dscp
+                worker_pool_strategy = single :: none|single|dscp,
+                vnode_pool_pid :: undefined|pid()
                }).
 
 -type index_op() :: add | remove.
@@ -337,7 +339,8 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     R = aae_controller:aae_rebuildtrees(AAECntrl, 
                                         Preflists, 
                                         fun preflistfun/2, 
-                                        rebuildtrees_workerfun(Partition),
+                                        rebuildtrees_workerfun(Partition, 
+                                                                State),
                                         true),
     lager:info("AAE Controller started with pid ~w and rebuild state ~w", 
                 [AAECntrl, R]),
@@ -429,12 +432,12 @@ tictac_rebuild(B, K, V) ->
     Clock = riak_object:vclock(V),
     {IndexN, Clock}.
 
--spec rebuildtrees_workerfun(partition()) -> fun().
+-spec rebuildtrees_workerfun(partition(), state()) -> fun().
 %% @doc
 %% A wrapper around the node_worker_pool to provide workers for tictac aae
 %% folds.  As the pool is a named pool started with riak_core, should be safe
 %% to used in init of inidivdual vnodes.
-rebuildtrees_workerfun(Partition) ->
+rebuildtrees_workerfun(Partition, State) ->
     fun(FoldFun, FinishFun) ->
         Sender = self(),
         ReturnFun = tictac_returnfun(Partition, trees),
@@ -443,11 +446,11 @@ rebuildtrees_workerfun(Partition) ->
                 FinishFun(WorkOutput),
                 ReturnFun(ok)
             end,
-        riak_core_node_worker_pool:handle_work(node_worker_pool,
-                                                {fold, 
-                                                    FoldFun, 
-                                                    FinishPlusReturnFun},
-                                                Sender)
+        Pool = select_queue(be_pool, State),
+        riak_core_vnode:queue_work(Pool, 
+                                    {fold, FoldFun, FinishPlusReturnFun},
+                                    Sender,
+                                    State#state.vnode_pool_pid)
     end.
 
 %% @doc Reveal the underlying module state for testing
@@ -1025,7 +1028,7 @@ handle_command({rebuild_complete, store}, _Sender, State) ->
     aae_controller:aae_rebuildtrees(AAECntrl,
                                     Preflists,
                                     fun preflistfun/2, 
-                                    rebuildtrees_workerfun(Partition),
+                                    rebuildtrees_workerfun(Partition, State),
                                     false),
     lager:info("AAE Controller rebuild trees started with pid ~w", [AAECntrl]),
     {noreply, State};
@@ -2163,6 +2166,13 @@ handle_exit(_Pid, Reason, State) ->
 %% have any current ensemble members.
 ready_to_exit() ->
     [] =:= riak_kv_ensembles:local_ensembles().
+
+-spec add_vnode_pool(pid(), state()) -> state().
+%% @doc
+%% Optional Callback. If want to call queue_work, need to know about the
+%% vnode_worker_pool - so should be on state
+add_vnode_pool(PoolPid, State) ->
+    State#state{vnode_pool_pid = PoolPid}.
 
 %% @private
 forward_put({Idx, Node}, Key, Obj, From) ->
