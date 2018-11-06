@@ -108,7 +108,7 @@
         % range, depending on the filter applied
         %
         % Different size trees can be requested.  Smaller tree sizes are more
-        % likely to elad to false negative results, but are more effiecient
+        % likely to lead to false negative results, but are more efficient
         % to calculate and have a reduced load on the network
         % 
         % A segment_filter() may be passed.  For example, if a tree comparison
