@@ -366,7 +366,7 @@ from_object_binary_headless(RobjBin) ->
     {_Clock, Size, SibCount, LastMods, _SibsBin} =
         riak_object:summary_from_binary(RobjBin),
     % TODO: Actually get the index hash
-    {Size, SibCount, 0, LastMods, <<>>}.
+    {Size, SibCount, 0, LastMods, term_to_binary(null)}.
 
 
 -spec determine_aaedata_root(integer()) -> list().
