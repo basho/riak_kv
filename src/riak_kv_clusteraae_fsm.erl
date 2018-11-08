@@ -33,23 +33,7 @@
 
 -export([json_encode_results/2]).
 
--define(TREE_SIZE, 4096).
 -define(EMPTY, <<>>).
--define(MAX_SEGMENT_FILTER_SMALL, 16).
--define(MAX_SEGMENT_FILTER_MEDIUM, 64).
--define(MAX_SEGMENT_FILTER_LARGE, 256).
-    % If the segment list is too large the continuous the list:member/2 check
-    % may be expensive, and a large number of slots may need to be lifted from
-    % disk
-    % Means that if there are 4096 queries required if clusters are fully
-    % divergent - this is not an efficient mechanism for resolving full-sync
-    % between significantly diverged clusters (e.g. o(100K) objects different
-
-
-% TODO - consider further loose limits
-% -define(DEFAULT_LOOSELIMIT, {pervnode_count, 1000}).
-    % Only fetch a 1000 results per vnode by default
-% -type loose_limit() :: {pervnode_count, integer()} | default.
 
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
@@ -234,8 +218,6 @@ init(From={_, _, _}, [Query, Timeout]) ->
                 BucketProps = riak_core_bucket:get_bucket(element(2, Query)),
                 proplists:get_value(n_val, BucketProps)
         end,
-    
-    true = safe_query(Query),
 
     InitAcc =
         case lists:member(QueryType, ?LIST_ACCUMULATE_QUERIES) of
@@ -369,25 +351,6 @@ merge_countinlists(ResultList, AccList) ->
                     lists:ukeysort(1, AccList0),
                     lists:ukeysort(1, ResultList)).
 
-
--spec safe_query(query_definition()) -> boolean().
-%% @doc
-%% Some queries may have a significant impact on the cluster.  In particular
-%% asking for too mnay branch IDs or segment IDs.
-safe_query({fetch_clocks_range, _B, _KR, {segments, SegList, small}, _MR})
-                        when length(SegList) > ?MAX_SEGMENT_FILTER_SMALL ->
-    false;
-safe_query({fetch_clocks_range, _B, _KR, {segments, SegList, medium}, _MR}) 
-                        when length(SegList) > ?MAX_SEGMENT_FILTER_MEDIUM ->
-    false;
-safe_query({fetch_clocks_range, _B, _KR, {segments, SegList, large}, _MR}) 
-                        when length(SegList) > ?MAX_SEGMENT_FILTER_LARGE ->
-    false;
-safe_query({fetch_clocks_nval, _N, SegList}) 
-                        when length(SegList) > ?MAX_SEGMENT_FILTER_LARGE ->
-    false;
-safe_query(_Query) ->
-    true.
 
 %% ===================================================================
 %% EUnit tests
