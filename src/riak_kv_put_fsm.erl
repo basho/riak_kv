@@ -1061,7 +1061,7 @@ coordinate_or_forward(Preflist, State) ->
 
 %% @private selects a coordinating vnode for the put, depending on
 %% locality, mailbox length, etc.
--spec select_coordinator(riak_core_apl:preflist_ann(), local | any, boolean()) ->
+-spec select_coordinator(riak_core_apl:preflist_ann(), local | none, boolean()) ->
                                 {local, preflist_entry()} |
                                 {local, undefined} |
                                 {forward, node()}.
@@ -1085,11 +1085,28 @@ select_coordinator(Preflist, _CoordinatorType=local, true=_MBoxCheck) ->
             end
     end;
 select_coordinator(Preflist, _CoordinatorType=local, false=_MBoxCheck) ->
-    %% No mailbox check, don't change behaviour from pre-gh1661 work
-    {LocalPreflist, _RemotePreflist} = partition_local_remote(Preflist),
-    {local, hd(LocalPreflist)};
-select_coordinator(_Preflist, any=_CoordinatorType, _MBoxCheck) ->
-    %% for `any' type coordinator downstream code expects `undefined',
+    %% No mailbox check, don't change behaviour from pre-gh1661
+
+    %% NOTE: partition_local_remote returns an un-anotated preflist
+    case partition_local_remote(Preflist) of
+        %%  NOTE 2: If local==[] then Remote /= [] as there is always
+        %% at least one entry in the preflist here (see
+        %% coordinate_or_forward above)
+        {[], [SingletonRemote]} ->
+            {_Idx, RemoteNode} = SingletonRemote,
+            {forward, RemoteNode};
+        {[], Remotes} ->
+            {ListPos, _} = random:uniform_s(length(Remotes), os:timestamp()),
+            {_Idx, CoordNode} = lists:nth(ListPos, Remotes),
+            {forward, CoordNode};
+        {LocalPreflist, _Remotes} ->
+            %% NOTE 3: if we've been forwarded to then there will
+            %% always be a local coordinator, it's not a chain of
+            %% never ending forwards.
+            {local, hd(LocalPreflist)}
+    end;
+select_coordinator(_Preflist, _CoordinatorType=none, _MBoxCheck) ->
+    %% for `none' type coordinator downstream code expects `undefined',
     %% no coordinator, no mailbox queues to route around
     {local, undefined}.
 
@@ -1108,8 +1125,8 @@ select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
 %% @private used by select_least_loaded_coordinator/2 to sort mbox
 %% data results
 mbox_data_sort({_, error, error}, {_, error, error}) ->
-    %% @TODO do we use random here, so that a list full of errors
-    %% picks a random node to forward to (as per pre-gh1661 code)?
+    %% We use random here, so that a list full of errors picks a
+    %% random node to forward to (as per pre-gh1661 code)?
     case random:uniform_s(2, os:timestamp()) of
         {1, _} ->
             true;
@@ -1201,14 +1218,14 @@ add_errors_to_mbox_data(Preflist, Acc) ->
               end, Preflist).
 
 %% @private decide if the coordinator has to be a local, causality
-%% advancing vnode, or just any/all at once
--spec get_coordinator_type(options()) -> any | local.
+%% advancing vnode, or no coordinator at all
+-spec get_coordinator_type(options()) -> node | local.
 get_coordinator_type(Options) ->
     case get_option(asis, Options, false) of
         false ->
             local;
         true ->
-            any
+            node
     end.
 
 %% @private used by `coordinate_or_forward' above. Removes `Type' info
