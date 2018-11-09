@@ -31,7 +31,7 @@
          process_results/2,
          finish/2]).
 
--export([json_encode_results/2]).
+-export([json_encode_results/2, hash_function/1]).
 
 -define(EMPTY, <<>>).
 
@@ -54,6 +54,7 @@
 -type bucket() :: riak_object:bucket().
 -type n_val() :: pos_integer().
 -type modified_range() :: {date, non_neg_integer(), non_neg_integer()}.
+-type hash_method() :: pre_hash|{rehash, non_neg_integer()}. 
 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
@@ -85,7 +86,8 @@
         bucket(), key_range(), 
         tree_size(),
         {segments, segment_filter(), tree_size()} | all,
-        modified_range() | all}|
+        modified_range() | all,
+        hash_method()}|
         % Provide the values for a subset of AAE tree branches for the given
         % key range.  This will be a background operation, and the cost of
         % the operation will be in-proportion to the number of keys in the
@@ -108,6 +110,22 @@
         % subset of keys above the low date in the range is small relative to
         % the overall key space in the range - then this will reduce the cost
         % of producing the tree by an order of magnitude.
+        %
+        % There exists the possibility of a hash collision with the 32-bit
+        % hashes use - i.e. the same key in two stores has different values
+        % that both hash to the same hash.  This is a 1 in 4 billion  chance,
+        % for an occurrence of a replication failure - so the risk of this
+        % being a relevant issue depends on the number of replication failures
+        % expected over the lifetime of a cluster pair.
+        %
+        % Hash collisions are probably not a significant risk in the general
+        % context of eventual consistency, however, there is protection
+        % provided through the ability to set the hash algorithm to be used
+        % when hashing the vector clocks to produce the tree.
+        % See `hash_function/1` for implementation details of the options,
+        % which are either:
+        % - pre_hash (use the default pre-calculated hash)
+        % - {rehash, IV} rehash the vector clock concatenated with an integer
     {fetch_clocks_range, 
         bucket(), key_range(), 
         {segments, segment_filter(), tree_size()} | all,
@@ -325,6 +343,19 @@ json_encode_results(merge_tree_range, Tree) ->
     JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
     mochijson2:encode(JsonKeys1).
 
+-spec hash_function(hash_method()) ->
+                                fun((vclock:vclock()) -> non_neg_integer()).
+%% Return a hash function to be applied to the vector clock, to produce the
+%% object hash for the merkle tree.  The pre_hash will use the default
+%% pre-calculated hash of (erlang:phash2(lists:sort(VC)).
+hash_function(pre_hash) ->
+    pre_hash;
+hash_function({rehash, InitialisationVector}) ->
+    fun(VC) ->
+        erlang:phash2({InitialisationVector, lists:sort(VC)})
+    end.
+
+
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
@@ -390,6 +421,17 @@ encode_results_ofsize(TreeSize) ->
     {struct, [{<<"tree">>, ExportedTree}]} = mochijson2:decode(JsonTree),
     ReverseTree = leveled_tictac:import_tree(ExportedTree),
     ?assertMatch([], leveled_tictac:find_dirtyleaves(Tree0, ReverseTree)).
+
+hash_function_test() ->
+    % Check a well formatted version vector is OK
+    VC0 = vclock:fresh(),
+    VC1 = vclock:increment(c, vclock:increment(b, vclock:increment(a, VC0))),
+    HashFun100 = hash_function({rehash, 100}),
+    Hash100 = HashFun100(VC1),
+    HashFun200 = hash_function({rehash, 200}),
+    Hash200 = HashFun200(VC1),
+    ?assertMatch(true, is_integer(HashFun100(VC1))),
+    ?assertMatch(false, Hash100 == Hash200).
 
 -endif.
 
