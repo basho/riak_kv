@@ -344,7 +344,7 @@ json_encode_results(merge_tree_range, Tree) ->
     mochijson2:encode(JsonKeys1).
 
 -spec hash_function(hash_method()) ->
-                                fun((vclock:vclock()) -> non_neg_integer()).
+                        pre_hash|fun((vclock:vclock()) -> non_neg_integer()).
 %% Return a hash function to be applied to the vector clock, to produce the
 %% object hash for the merkle tree.  The pre_hash will use the default
 %% pre-calculated hash of (erlang:phash2(lists:sort(VC)).

@@ -1519,21 +1519,35 @@ handle_aaefold({merge_tree_range,
                         _TreeSize, 
                         SegmentFilter,
                         ModifiedRange,
-                        _HashFunction}, 
+                        HashMethod}, 
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
-    FoldFun = 
-        fun(BF, KF, EFs, TreeAcc) ->
-            {hash, CH} = lists:keyfind(hash, 1, EFs),
-            NullExtractFun = 
-                fun({B0, K0}, V0) -> 
-                    {aae_util:make_binarykey(B0, K0), V0} 
-                end,
-            leveled_tictac:add_kv(TreeAcc, 
-                                    {BF, KF},
-                                    {is_hash, CH}, 
-                                    NullExtractFun)
+    NullExtractFun = 
+        fun({B0, K0}, V0) -> 
+            {aae_util:make_binarykey(B0, K0), V0} 
+        end,
+    {FoldFun, Elements} = 
+        case riak_kv_clusteraae_fsm:hash_function(HashMethod) of
+            pre_hash ->
+                {fun(BF, KF, EFs, TreeAcc) ->
+                        {hash, CH} = lists:keyfind(hash, 1, EFs),
+                        leveled_tictac:add_kv(TreeAcc, 
+                                                {BF, KF},
+                                                {is_hash, CH}, 
+                                                NullExtractFun)
+                    end,
+                    [{hash, null}]};
+            HF ->
+                {fun(BF, KF, EFs, TreeAcc) ->
+                        {clock, VC} = lists:keyfind(clock, 1, EFs),
+                        CH = HF(VC),
+                        leveled_tictac:add_kv(TreeAcc, 
+                                                {BF, KF},
+                                                {is_hash, CH}, 
+                                                NullExtractFun)
+                    end,
+                    [{clock, null}]}
         end,
     WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
     RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
@@ -1546,11 +1560,7 @@ handle_aaefold({merge_tree_range,
                                 false,
                                 WrappedFoldFun, 
                                 InitAcc, 
-                                [{hash, null}]),
-    % These queries are sent to the vnode_worker_pool - as it is not strictly
-    % a background task.
-    % TODO: perhaps there is a need for 2 x node_worker_pools to separate 
-    % background tasks, from user-initiated tasks that should be throttled
+                                Elements),
     {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({fetch_clocks_range, 
                         Bucket, KeyRange, 
