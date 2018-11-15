@@ -1075,10 +1075,19 @@ select_coordinator(Preflist, _CoordinatorType=local, true=_MBoxCheck) ->
 
     case check_mailboxes(LocalPreflist) of
         {true, Entry} ->
+            riak_kv_stat:update(coord_local_unloaded),
             {local, Entry};
         {false, LocalMBoxData} ->
             case check_mailboxes(RemotePreflist) of
                 {true, {_Idx, Remote}} ->
+                    case LocalPreflist of
+                        [] ->
+                            %% there was no local preflist, just a forward
+                            riak_kv_stat:update(coord_redir_unloaded);
+                        _Some ->
+                            %% forwarding 'cos local is loaded
+                            riak_kv_stat:update(coord_redir_loaded_local)
+                    end,
                     {forward, Remote};
                 {false, RemoteMBoxData} ->
                     select_least_loaded_coordinator(LocalMBoxData, RemoteMBoxData)
@@ -1094,10 +1103,12 @@ select_coordinator(Preflist, _CoordinatorType=local, false=_MBoxCheck) ->
         %% coordinate_or_forward above)
         {[], [SingletonRemote]} ->
             {_Idx, RemoteNode} = SingletonRemote,
+            ok = riak_kv_stat:update(coord_redir),
             {forward, RemoteNode};
         {[], Remotes} ->
             {ListPos, _} = random:uniform_s(length(Remotes), os:timestamp()),
             {_Idx, CoordNode} = lists:nth(ListPos, Remotes),
+            ok = riak_kv_stat:update(coord_redir),
             {forward, CoordNode};
         {LocalPreflist, _Remotes} ->
             %% NOTE 3: if we've been forwarded to then there will
@@ -1115,11 +1126,12 @@ select_coordinator(_Preflist, _CoordinatorType=none, _MBoxCheck) ->
                                                          {forward, node()}.
 select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
     [{{_Idx, Node}, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
-    lager:debug("loaded forward"),
+    riak_kv_stat:update(coord_redir_least_loaded),
     {forward, Node};
 select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
     [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
     lager:warning("soft-loaded local coordinator"),
+    riak_kv_stat:update(coord_local_soft_loaded),
     {local, Entry}.
 
 %% @private used by select_least_loaded_coordinator/2 to sort mbox
@@ -1194,11 +1206,12 @@ join_mbox_replies(HowMany, TimeLimit, Acc) ->
             %% shortcut it
             {true, Entry};
         {mbox, {Entry, {soft_loaded, MBox, Limit}}} ->
-            %% Keep waiting @TODO warning? Over 2million in 24h load test!
-            lager:debug("Mailbox for ~p with soft-overload", [Entry]),
+            riak_kv_stat:update(soft_loaded_vnode_mbox),
             join_mbox_replies(HowMany-1, TimeLimit,
                  [{Entry, MBox, Limit} | Acc])
     after TimeOut ->
+            lager:warning("soft-limit mailbox check timeout"),
+            riak_kv_stat:update(vnode_mbox_check_timeout),
             {timeout, Acc}
     end.
 
@@ -1272,7 +1285,6 @@ forward(CoordNode, State) ->
                       [From, RObj, Options2]),
         ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [2],
                 ["prepare", atom2list(CoordNode)]),
-        ok = riak_kv_stat:update(coord_redir),
         monitor_remote_coordinator(UseAckP, MiddleMan,
                                    CoordNode, State)
     catch
