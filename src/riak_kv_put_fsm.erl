@@ -1038,7 +1038,7 @@ coordinate_or_forward([], State=#state{trace=Trace}) ->
 coordinate_or_forward(Preflist, State) ->
     #state{options = Options, n = N, trace=Trace} = State,
     CoordinatorType = get_coordinator_type(Options),
-    MBoxCheck = get_option(mbox_check, Options, true),
+    MBoxCheck = get_soft_limit_option(Options),
 
     case select_coordinator(Preflist, CoordinatorType, MBoxCheck) of
         {local, CoordPLEntry} ->
@@ -1257,6 +1257,20 @@ partition_local_remote({{_Index, Node}=IN, _Type}, {L, R})
     {[IN | L], R};
 partition_local_remote({IN, _Type}, {L, R}) ->
     {L, [IN | R]}.
+
+%% @private get the soft-limit check option, and consult capabilities too.
+get_soft_limit_option(Options) ->
+    %% The logic here is to be as safe as possible. If caps system is
+    %% unavailble, then assume soft-limits are unsupported. If
+    %% capability _is_ available AND supported, then the value will be true
+    SoftLimitSupported = riak_core_capability:get({riak_kv, put_soft_limit}, false),
+    %% both the system (post forward) and the client (via options) can
+    %% turn off soft-limit checking. However, by default, we should
+    %% use them (if supported)
+    SoftLimitedWanted = get_option(mbox_check, Options, SoftLimitSupported),
+    SoftLimitedWanted.
+
+
 
 %% @private the local node is not in the preflist, or is overloaded,
 %% forward to another node
