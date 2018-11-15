@@ -342,8 +342,21 @@ do_update({write_once_put, Microsecs, ObjSize}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, write_once, puts], 1),
     ok = exometer:update([P, ?APP, write_once, puts, time], Microsecs),
-    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram).
-
+    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram);
+do_update(coord_local_unloaded) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_local_unloaded], 1);
+do_update(coord_redir_loaded_local) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_redir_loaded_local], 1);
+do_update(coord_local_soft_loaded) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_local_soft_loaded], 1);
+do_update(coord_redir_unloaded) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_redir_unloaded], 1);
+do_update(coord_redir_least_loaded) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_redir_least_loaded], 1);
+do_update(soft_loaded_vnode_mbox) ->
+    exometer:update([?PFX, ?APP, node, puts, soft_loaded_vnode_mbox], 1);
+do_update(vnode_mbox_check_timeout) ->
+    exometer:update([?PFX, ?APP, node, puts, vnode_mbox_check_timeout], 1).
 
 %% private
 
@@ -640,7 +653,16 @@ stats() ->
      %% node stats: puts
      {[node, puts], spiral, [], [{one, node_puts},
                                  {count, node_puts_total}]},
+
      {[node, puts, coord_redirs], counter, [], [{value,coord_redirs_total}]},
+     {[node, puts, coord_local_unloaded], counter, [], [{value, coord_local_unloaded_total}]},
+     {[node, puts, coord_redir_loaded_local], counter, [], [{value, coord_redir_loaded_local_total}]},
+     {[node, puts, coord_local_soft_loaded], counter, [], [{value, coord_local_soft_loaded_total}]},
+     {[node, puts, coord_redir_unloaded], counter, [], [{value, coord_redir_unloaded_total}]},
+     {[node, puts, coord_redir_least_loaded], counter, [], [{value, coord_redir_least_loaded_total}]},
+     {[node, puts, soft_loaded_vnode_mbox], counter, [], [{value, soft_loaded_vnode_mbox_total}]},
+     {[node, puts, vnode_mbox_check_timeout], counter, [], [{value, vnode_mbox_check_timeout_total}]},
+
      {[node, puts, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, puts, time], histogram, [], [{mean  , node_put_fsm_time_mean},
