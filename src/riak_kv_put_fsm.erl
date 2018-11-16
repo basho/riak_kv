@@ -1319,7 +1319,6 @@ get_timestamp_millis() ->
 -ifdef(TEST).
 
 mbox_data_sort_test() ->
-    ?assert(mbox_data_sort({x, error, error}, {x, error, error})),
     ?assert(mbox_data_sort({x, 1000, 10}, {x, error, error})),
     ?assertNot(mbox_data_sort({x, error, error}, {x, 100, 10})),
     ?assertNot(mbox_data_sort({x, 10, 10}, {x, 1, 10})),
@@ -1339,7 +1338,7 @@ select_least_loaded_coordinator_test() ->
 
 get_coordinator_type_test() ->
     Opts0 = proplists:unfold([asis]),
-    ?assertEqual(any, get_coordinator_type(Opts0)),
+    ?assertEqual(node, get_coordinator_type(Opts0)),
     Opts1 = proplists:unfold([]),
     ?assertEqual(local, get_coordinator_type(Opts1)).
 
