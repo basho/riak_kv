@@ -426,8 +426,9 @@ precommit(timeout, State = #state{precommit = [Hook | Rest],
             process_reply({error, {precommit_fail, Reason}}, State);
         Result ->
             ?DTRACE(Trace, ?C_PUT_FSM_PRECOMMIT, [0], []),
-            {next_state, precommit, State#state{robj = riak_object:apply_updates(Result),
-                                                precommit = Rest}, 0}
+            new_state_timeout(precommit,
+                                State#state{robj = riak_object:apply_updates(Result),
+                                            precommit = Rest})
     end.
 
 %% @private
