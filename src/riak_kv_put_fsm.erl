@@ -83,7 +83,9 @@
         %% `false' by the puts_fsm when it forwards to a new put fsm
         %% i.e. ONLY forward once, when a coordinator is chosen, use
         %% it.
-        {mbox_check, boolean()}.
+        {mbox_check, boolean()} |
+        {counter_op, any()} |
+        {crdt_op, any()}.
 
 -type options() :: [option()].
 
@@ -1233,13 +1235,13 @@ add_errors_to_mbox_data(Preflist, Acc) ->
 
 %% @private decide if the coordinator has to be a local, causality
 %% advancing vnode, or no coordinator at all
--spec get_coordinator_type(options()) -> node | local.
+-spec get_coordinator_type(options()) -> none | local.
 get_coordinator_type(Options) ->
     case get_option(asis, Options, false) of
         false ->
             local;
         true ->
-            node
+            none
     end.
 
 %% @private used by `coordinate_or_forward' above. Removes `Type' info
@@ -1339,7 +1341,7 @@ select_least_loaded_coordinator_test() ->
 
 get_coordinator_type_test() ->
     Opts0 = proplists:unfold([asis]),
-    ?assertEqual(any, get_coordinator_type(Opts0)),
+    ?assertEqual(none, get_coordinator_type(Opts0)),
     Opts1 = proplists:unfold([]),
     ?assertEqual(local, get_coordinator_type(Opts1)).
 
