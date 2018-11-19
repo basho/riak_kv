@@ -574,13 +574,13 @@ postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
     %% take a long time.
     {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
     decode_postcommit(invoke_hook(Hook, ReplyObj), Trace),
-    {next_state, postcommit, StateData#state{postcommit = Rest,
+    new_state_timeout( postcommit, StateData#state{postcommit = Rest,
                                              trace = Trace,
-                                             putcore = UpdPutCore}, 0};
+                                             putcore = UpdPutCore});
 %% still process hooks even if request timed out  
 postcommit(request_timeout, StateData = #state{trace = Trace}) -> 
     ?DTRACE(Trace, ?C_PUT_FSM_POSTCOMMIT, [-3], []),
-    {next_state, postcommit, StateData, 0};
+    new_state_timeout(postcommit, StateData);
 postcommit(Reply, StateData = #state{putcore = PutCore,
                                      trace = Trace}) ->
     case Trace of
@@ -593,7 +593,7 @@ postcommit(Reply, StateData = #state{putcore = PutCore,
     end,
     %% late responses - add to state.  *Does not* recompute finalobj
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
-    {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
+    new_state_timeout(postcommit, StateData#state{putcore = UpdPutCore}).
 
 finish(timeout, StateData = #state{timing = Timing, reply = Reply,
                                    bkey = {Bucket, _Key},
@@ -629,8 +629,7 @@ finish(Reply, StateData = #state{putcore = PutCore,
     end,
     %% late responses - add to state.  *Does not* recompute finalobj
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
-    {next_state, finish, StateData#state{putcore = UpdPutCore}, 0}.
-
+    new_state_timeout(finish, StateData#state{putcore = UpdPutCore}).
 
 %% @private
 handle_event(_Event, _StateName, StateData) ->
@@ -1321,7 +1320,6 @@ get_timestamp_millis() ->
 -ifdef(TEST).
 
 mbox_data_sort_test() ->
-    ?assert(mbox_data_sort({x, error, error}, {x, error, error})),
     ?assert(mbox_data_sort({x, 1000, 10}, {x, error, error})),
     ?assertNot(mbox_data_sort({x, error, error}, {x, 100, 10})),
     ?assertNot(mbox_data_sort({x, 10, 10}, {x, 1, 10})),
