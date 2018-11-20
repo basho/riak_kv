@@ -51,11 +51,7 @@
                         indexes,
                         head,
                         fold_heads,
-                        direct_fetch,
-                        putfsm_pause,
-                        snap_prefold,
-                        segment_accelerate,
-                        leveled]).
+                        snap_prefold]).
 -define(API_VERSION, 1).
 -define(BUCKET_SDG, <<"MD">>).
 -define(KEY_SDG, <<"SHUDOWN_GUID">>).
