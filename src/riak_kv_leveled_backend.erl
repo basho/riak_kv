@@ -57,6 +57,13 @@
 -define(KEY_SDG, <<"SHUDOWN_GUID">>).
 -define(TAG_SDG, o).
 
+-define(PAUSE_TIME, 1).
+    % The time in ms to pause if the leveled_bookie asks for backoff.
+    % Pausing here blocks the vnode (whereas the pause response was defined
+    % originally so that one could signal to slowdown PUTs, whilst still 
+    % accepting HEAD/GET/FOLD requests).  There is no neat way of doing this
+    % so we will back everything off.
+
 -record(state, {bookie :: pid(),
                 reference :: reference(),
                 partition :: integer(),
@@ -204,7 +211,9 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
         ok ->
             {ok, State};
         pause ->
-            % To be changed if back-pressure added to Riak put_fsm
+            lager:warning("Vnode paused for ~w ms to back-off PUT load",
+                            [?PAUSE_TIME]),
+            timer:sleep(?PAUSE_TIME),
             {ok, State}
     end.
 
