@@ -92,13 +92,12 @@ start(_Type, _StartArgs) ->
                 AF3 = app_helper:get_env(riak_kv, af3_worker_pool_size),
                 AF4 = app_helper:get_env(riak_kv, af4_worker_pool_size),
                 BE = app_helper:get_env(riak_kv, be_worker_pool_size),
-                [{dscp_worker_pool, {riak_kv_worker, AF1, [], [], af1_pool}},
-                    {dscp_worker_pool, {riak_kv_worker, AF2, [], [], af2_pool}},
-                    {dscp_worker_pool, {riak_kv_worker, AF3, [], [], af3_pool}},
-                    {dscp_worker_pool, {riak_kv_worker, AF4, [], [], af4_pool}},
-                    {dscp_worker_pool, {riak_kv_worker, BE, [], [], be_pool}}]
+                [{dscp_worker_pool, {riak_kv_worker, AF1, [], [], riak_core_node_worker_pool:af1()}},
+                 {dscp_worker_pool, {riak_kv_worker, AF2, [], [], riak_core_node_worker_pool:af2()}},
+                 {dscp_worker_pool, {riak_kv_worker, AF3, [], [], riak_core_node_worker_pool:af3()}},
+                 {dscp_worker_pool, {riak_kv_worker, AF4, [], [], riak_core_node_worker_pool:af4()}},
+                 {dscp_worker_pool, {riak_kv_worker, BE, [], [], riak_core_node_worker_pool:be()}}]
         end,
-                
 
     %% Append defaults for riak_kv buckets to the bucket defaults
     %% TODO: Need to revisit this. Buckets are typically created
