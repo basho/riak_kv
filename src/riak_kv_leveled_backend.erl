@@ -32,6 +32,7 @@
          is_empty/1,
          status/1,
          data_size/1,
+         hot_backup/2,
          callback/3]).
 
 %% Extended KV Backend API
@@ -67,6 +68,7 @@
 -record(state, {bookie :: pid(),
                 reference :: reference(),
                 partition :: integer(),
+                db_path :: string(),
                 config,
                 compactions_perday :: integer(),
                 valid_hours = [] :: list(integer())}).
@@ -93,7 +95,7 @@ capabilities(_) ->
 capabilities(_, _) ->
     {ok, ?CAPABILITIES}.
 
-%% @doc Start the hanoidb backend
+%% @doc Start the leveled backend
 -spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     DataRoot = app_helper:get_prop_or_env(data_root, Config, leveled),
@@ -130,6 +132,7 @@ start(Partition, Config) ->
                         reference=Ref,
                         partition=Partition,
                         config=Config,
+                        db_path=DataDir,
                         compactions_perday = CRD,
                         valid_hours = ValidHours}};
         {error, Reason} ->
@@ -488,6 +491,22 @@ drop(#state{bookie=Bookie, partition=Partition, config=Config}=_State) ->
 -spec is_empty(state()) -> boolean().
 is_empty(#state{bookie=Bookie}) ->
     leveled_bookie:book_isempty(Bookie, ?RIAK_TAG).
+
+%% @doc Prompt a snapshot function from which a hot backup can be called
+-spec hot_backup(state(), string()) -> {queue, fun()}|{error, term()}.
+hot_backup(#state{bookie=Bookie, partition=Partition, db_path=DBP}, BackupRoot) ->
+    {ok, BackupDir} = get_data_dir(BackupRoot, integer_to_list(Partition)),
+    case BackupDir == DBP of
+        true ->
+            lager:warning("Attempt to backup to own path ~s", [BackupRoot]),
+            {error, invalid_path};
+        false ->
+            % Don't check anything else about the path, as an invalid path
+            % (e.g. one without write permissions will crash the snapshot not
+            % the store
+            {async, BackupFolder} = leveled_bookie:book_hotbackup(Bookie),
+            {queue, fun() -> BackupFolder(BackupDir) end}
+    end.
 
 %% @doc Get the status information for this leveled backend
 -spec status(state()) -> [{atom(), term()}].

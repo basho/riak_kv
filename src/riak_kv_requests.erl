@@ -34,6 +34,7 @@
          new_map_request/3,
          new_vclock_request/1,
          new_aaefold_request/3,
+         new_hotbackup_request/1,
          is_coordinated_put/1,
          get_bucket_key/1,
          get_bucket_keys/1,
@@ -50,6 +51,7 @@
          get_options/1,
          get_initacc/1,
          get_nval/1,
+         get_path/1,
          remove_option/2,
          request_type/1]).
 
@@ -65,6 +67,7 @@
               map_request/0,
               vclock_request/0,
               aaefold_request/0,
+              hotbackup_request/0,
               request/0,
               request_type/0]).
 
@@ -145,6 +148,9 @@
                 init_acc :: any(),
                 n_val :: pos_integer()}).
 
+-record(riak_kv_hotbackup_req_v1,
+            {backup_path :: string()}).
+
 -opaque put_request() :: #riak_kv_put_req_v1{}.
 -opaque get_request() :: #riak_kv_get_req_v1{}.
 -opaque w1c_put_request() :: #riak_kv_w1c_put_req_v1{}.
@@ -157,6 +163,7 @@
 -opaque vclock_request() :: #riak_kv_vclock_req_v1{}.
 -opaque head_request() :: #riak_kv_head_req_v1{}.
 -opaque aaefold_request() :: #riak_kv_aaefold_req_v1{}.
+-opaque hotbackup_request() :: #riak_kv_hotbackup_req_v1{}.
 
 
 -type request() :: put_request()
@@ -170,7 +177,8 @@
                  | map_request()
                  | vclock_request()
                  | head_request()
-                 | aaefold_request().
+                 | aaefold_request()
+                 | hotbackup_request().
 
 -type request_type() :: kv_put_request
                       | kv_get_request
@@ -184,6 +192,7 @@
                       | kv_vclock_request
                       | kv_head_request
                       | kv_aaefold_request
+                      | kv_hotbackup_request
                       | unknown.
 
 -spec request_type(request()) -> request_type().
@@ -201,6 +210,7 @@ request_type(#riak_kv_map_req_v1{})-> kv_map_request;
 request_type(#riak_kv_vclock_req_v1{})-> kv_vclock_request;
 request_type(#riak_kv_head_req_v1{}) -> kv_head_request;
 request_type(#riak_kv_aaefold_req_v1{}) -> kv_aaefold_request;
+request_type(#riak_kv_hotbackup_req_v1{}) -> kv_hotbackup_request;
 request_type(_) -> unknown.
 
 -spec new_put_request(bucket_key(),
@@ -240,6 +250,10 @@ new_listkeys_request(Bucket, ItemFilter, false) ->
                             pos_integer()) -> aaefold_request().
 new_aaefold_request(Query, InitAcc, NVal) ->
     #riak_kv_aaefold_req_v1{qry = Query, init_acc = InitAcc, n_val = NVal}.
+
+-spec new_hotbackup_request(string()) -> hotbackup_request().
+new_hotbackup_request(BackupPath) ->
+    #riak_kv_hotbackup_req_v1{backup_path = BackupPath}.
 
 -spec new_listbuckets_request(item_filter()) -> listbuckets_request().
 new_listbuckets_request(ItemFilter) ->
@@ -374,3 +388,6 @@ set_object(#riak_kv_put_req_v1{}=Req, Object) ->
 remove_option(#riak_kv_put_req_v1{options = Options}=Req, Option) ->
     NewOptions = proplists:delete(Option, Options),
     Req#riak_kv_put_req_v1{options = NewOptions}.
+
+get_path(#riak_kv_hotbackup_req_v1{backup_path = BP}) ->
+    BP.
