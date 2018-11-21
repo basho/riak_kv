@@ -52,7 +52,8 @@
                         indexes,
                         head,
                         fold_heads,
-                        snap_prefold]).
+                        snap_prefold,
+                        hot_backup]).
 -define(API_VERSION, 1).
 -define(BUCKET_SDG, <<"MD">>).
 -define(KEY_SDG, <<"SHUDOWN_GUID">>).

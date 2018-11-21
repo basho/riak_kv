@@ -1454,7 +1454,7 @@ handle_coverage_request(kv_hotbackup_request, Req, _FilterVnodes, Sender,
                     {reply, riak_kv_hotbackup_fsm:bad_request(), State};
                 {queue, BackupFolder} ->
                     FinishFun = 
-                        fun(true) ->
+                        fun(ok) ->
                             Complete = riak_kv_hotbackup_fsm:complete(),
                             riak_core_vnode:reply(Sender, Complete)
                         end,
