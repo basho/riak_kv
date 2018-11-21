@@ -1440,7 +1440,7 @@ handle_coverage_request(kv_aaefold_request, Req, FilterVNodes, Sender, State) ->
                             FilterVNodes, Sender, 
                             State);
 
-handle_coverage_request(hot_backup_request, Req, _FilterVnodes, Sender,
+handle_coverage_request(kv_hotbackup_request, Req, _FilterVnodes, Sender,
                 State=#state{mod=Mod, modstate=ModState}) ->
     % If the backend is hot_backup capability, run the backup via the node
     % worker pool.  Otherwise return not_supported
