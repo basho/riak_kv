@@ -53,12 +53,15 @@
 -type key_range() :: {riak_object:key(), riak_object:key()}|all.
 -type bucket() :: riak_object:bucket().
 -type n_val() :: pos_integer().
+%% dates in modified_range are 32bit integer timestamp of seconds
+%% since unix epoch
 -type modified_range() :: {date, non_neg_integer(), non_neg_integer()}.
 -type hash_method() :: pre_hash|{rehash, non_neg_integer()}. 
 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|find_keys|object_stats.
+
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
     % native mode, or in parallel mode with key_order being used.  
@@ -80,7 +83,7 @@
         % cluster.  This is a background operation, but will have lower 
         % overheads than traditional store folds, subject to the size of the
         % segment filter being small - ideally o(10) or smaller
-    
+
     % Range-based AAE (requiring folds over native/parallel AAE key stores)
     {merge_tree_range, 
         bucket(), key_range(), 
@@ -136,9 +139,7 @@
         % a manageable subset of segments is mismatched.  There is a limit on
         % the number of segments which may be passed (to ensure the query is
         % relatively efficient.
-        % - A modified date filter.  The modified date filter is not efficient
-        % in that all keys in the range must be checked (there is no backend
-        % acceleration to skip blocks which don't contain these keys).
+        % - A modified date filter as in merge_tree_range
         %
         % Care should be taken when using this feature if TictacAAE is running
         % in parallel mode with the leveled_so backend (not the leveled_ko)
@@ -204,12 +205,39 @@
         % use a modified_range().
 
 
--type inbound_api() :: list(query_definition()|integer()).
+%% NOTE: this is a dialyzer ctsat war with the weird init needing a
+%% list in second argument thing. Really the second arg of init should
+%% be a tuple since it expects exactly N elements in order M. Here
+%% we're saying init args are [query_definition(), timeout()]
+-type inbound_api() :: list(query_definition() | timeout()).
+
+-type query_return() :: object_stats() | %% object_stats query
+                        leveled_tictac:tictactree() | %% merge_tree_range
+                        branches() | %% merge_branch
+                        root() | %% merge_root
+                        %% fetch_clocks_range | fetch_clocks_nval |
+                        %% find_keys
+                        list_query_result().
+
+-type branches() :: list(branch()).
+%% level 2 of tree
+-type branch() :: {BranchID::integer(), BranchBin::binary()}.
+%% level1 of the tree
+-type root() :: binary().
+
+-type list_query_result() :: keys_clocks() | keys().
+
+-type keys_clocks() :: list(key_clock()).
+-type key_clock() :: {{riak_object:bucket(), riak_object:key()}, clock()}.
+-type clock() :: binary().
+
+-type keys() :: list({riak_object:bucket(), riak_object:key(), integer()}).
+-type object_stats() :: proplist:proplist().
 
 -export_type([query_definition/0]).
 
 -record(state, {from :: from(),
-                acc,
+                acc :: query_return(),
                 query_type :: query_types(),
                 start_time :: erlang:timestamp()}).
 
