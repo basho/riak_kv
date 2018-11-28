@@ -205,7 +205,7 @@
         % use a modified_range().
 
 
-%% NOTE: this is a dialyzer ctsat war with the weird init needing a
+%% NOTE: this is a dialyzer/start war with the weird init needing a
 %% list in second argument thing. Really the second arg of init should
 %% be a tuple since it expects exactly N elements in order M. Here
 %% we're saying init args are [query_definition(), timeout()]

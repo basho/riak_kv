@@ -69,6 +69,18 @@
          produce_fold_results/2
         ]).
 
+
+-ifdef(TEST).
+-ifdef(EQC).
+-include_lib("eqc/include/eqc.hrl").
+-export([prop_not_malformed/0]).
+-define(NUMTESTS, 1000).
+-define(QC_OUT(P),
+        eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
+-endif.
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
@@ -83,10 +95,10 @@
 %% used for all the different query types that take a filter, only
 %% some values used for some queries.
 -record(filter, {
-                 key_range :: {binary(), binary()} | all,
-                 date_range :: {pos_integer(), pos_integer()} | all,
-                 hash_method :: {rehash, non_neg_integer()} | pre_hash,
-                 segment_filter :: {segments, list(pos_integer()), leveled_tictac:tree_size()} | all
+                 key_range = all :: {binary(), binary()} | all,
+                 date_range = all :: {pos_integer(), pos_integer()} | all,
+                 hash_method = pre_hash :: {rehash, non_neg_integer()} | pre_hash,
+                 segment_filter = all :: {segments, list(pos_integer()), leveled_tictac:tree_size()} | all
                 }).
 
 -type context() :: #ctx{}.
@@ -410,7 +422,7 @@ validate_nval(NVal) ->
                            {invalid, Reason::any()} |
                            {valid, pos_integer()}.
 validate_int(undefined) ->
-    {iintid, undefined};
+    {invalid, undefined};
 validate_int(String) ->
     try
         list_to_integer(String) of
@@ -425,7 +437,7 @@ validate_int(String) ->
 -spec validate_cached_tree_filter(string()) -> {valid, list(non_neg_integer())} |
                                                {invalid, Reason::any()}.
 validate_cached_tree_filter(String) ->
-    try mochijson2:decode(String) of
+    try mochijson2:decode(base64:decode(String)) of
         Filter when is_list(Filter) ->
             %% TODO: should check all are integer?
             {valid, Filter};
@@ -435,11 +447,14 @@ validate_cached_tree_filter(String) ->
             {invalid, String}
     end.
 
--spec validate_range_filter(string()) ->
+
+-spec validate_range_filter(undefined | string()) ->
                                    {valid, filter()} |
                                    {invalid, Reason::any()}.
+validate_range_filter(undefined) ->
+    {valid, #filter{}};
 validate_range_filter(String) ->
-    try mochijson2:decode(String) of
+    try mochijson2:decode(base64:decode(String)) of
         {struct, Filter} ->
             validate_range_filter(Filter, ?FILTER_FIELDS, #filter{});
         Other ->
@@ -470,7 +485,7 @@ validate_filter_field(?SEG_FILT, {struct, SegFiltJson}, Filter) ->
         {valid, TreeSize} ->
             case validate_segment_list(proplists:get_value(<<"segments">>, SegFiltJson)) of
                 {valid, Segments} ->
-                    Filter#filter{segment_filter= {segments, Segments, TreeSize}};
+                    {valid, Filter#filter{segment_filter= {segments, Segments, TreeSize}}};
                 {invalid, Reason} ->
                     {invalid, Reason}
             end;
@@ -487,7 +502,7 @@ validate_filter_field(?KEY_RANGE, {struct, KeyRangeJson}, Filter) ->
     case {proplists:get_value(<<"start">>, KeyRangeJson),
           proplists:get_value(<<"end">>, KeyRangeJson)} of
         {Start, End} when is_binary(Start), is_binary(End) ->
-            Filter#filter{key_range= {Start, End}};
+            {valid, Filter#filter{key_range= {Start, End}}};
         Other ->
             {invalid, {?KEY_RANGE, Other}}
     end;
@@ -504,7 +519,7 @@ validate_filter_field(?DATE_RANGE, {struct, DateRangeJson}, Filter) ->
                           is_integer(End),
                           Start >= 0,
                           End >= 0 ->
-            Filter#filter{date_range= {Start, End}};
+            {valid, Filter#filter{date_range= {Start, End}}};
         Other ->
             {invalid, {?DATE_RANGE, Other}}
     end;
@@ -599,3 +614,240 @@ produce_fold_results(RD, Ctx) ->
 
 encode_results(Results) ->
     mochijson2:encode({struct, Results}).
+
+-ifdef(TEST).
+
+%% basic test that the query is run, and results encoded
+produce_fold_test_() ->
+    {setup,
+     fun() ->
+             meck:new(mock_riakclient, [non_strict])
+     end,
+     fun(_) ->
+             meck:unload(mock_riakclient)
+     end,
+     [
+       ?_test(begin
+                  meck:expect(mock_riakclient, aaefold,
+                              fun(my_fake_query) ->
+                                      [{{{<<"btype">>, <<"b">>}, <<"key">>}, <<"I am a vclock">>}]
+                              end),
+                  Ctx = #ctx{client=mock_riakclient, query=my_fake_query},
+                  Res = ?MODULE:produce_fold_results(fake_rd, Ctx),
+                  ?assertEqual({wat, fake_rd, Ctx}, Res)
+              end)
+     ]
+    }.
+
+-ifdef(EQC).
+
+malformed_request_test_() ->
+    {setup,
+     fun setup_mocks/0,
+     fun teardown_mocks/1,
+     {timeout, 120, ?_assertEqual(true, eqc:quickcheck(eqc:testing_time(50, ?QC_OUT(prop_not_malformed()))))}
+    }.
+
+setup_mocks() ->
+    meck:new(wrq).
+
+teardown_mocks(_) ->
+    meck:unload(wrq).
+
+%% @private happy-path testing for the query types
+prop_not_malformed() ->
+    ?FORALL({Query, Filter}, gen_query(),
+            begin
+                MockReqData = setup_reqdata(Query, Filter),
+                ExpectedQuery = element(1, Query),
+                QueryName = element(1, ExpectedQuery),
+                Ctx = #ctx{bucket_type= <<"default">>},
+                {Res, ResRD, ResCtx} = ?MODULE:malformed_request(MockReqData, Ctx),
+                aggregate([QueryName],
+                          conjunction([{non_malformed, equals(Res, false)},
+                                       {query_equal, equals(ResCtx#ctx.query, ExpectedQuery)},
+                                       {no_resp, equals([], ResRD)}]))
+            end).
+
+gen_query() ->
+    oneof([gen_cached(),
+           gen_find_keys(),
+           gen_object_stats(),
+           gen_merge_tree_range()]).
+
+gen_merge_tree_range() ->
+    ?LET(Bucket, gen_bucket(), gen_merge_tree_range(Bucket)).
+
+gen_merge_tree_range(Bucket) ->
+    ?LET({TreeSize, KeyRange, DateRange, SegmentFilter},
+         {gen_treesize(), gen_keyrange(), gen_daterange(), gen_seg_filter()},
+         begin
+             {TODOQUERY,
+              TODOFILTER
+             }
+         end).
+
+gen_object_stats() ->
+    ?LET(Bucket, gen_bucket(), gen_object_stats(Bucket)).
+
+gen_object_stats(Bucket) ->
+    ?LET({KeyRange, DateRange},
+         {gen_keyrange(),
+          gen_daterange()},
+         begin
+             {BucketPath, BucketPathInfo} = bucket_path(Bucket),
+             {{{object_stats, {<<"default">>, Bucket}, KeyRange, DateRange},
+               ["objectstats"] ++ BucketPath,
+               BucketPathInfo
+              },
+              gen_range_filter([
+                                {?KEY_RANGE, KeyRange},
+                                {?DATE_RANGE, DateRange}
+                               ])
+             }
+         end).
+
+gen_find_keys() ->
+    ?LET({CntOrSize, Bucket}, {choose(1, 100), gen_bucket()},
+         oneof([gen_find_siblings(CntOrSize, Bucket),
+                gen_find_objsize(CntOrSize, Bucket)])).
+
+gen_find_objsize(Size, Bucket) ->
+    gen_find_keys(Size, Bucket, object_size, "objectsizes", "sizes", size).
+
+gen_find_siblings(Cnt, Bucket) ->
+    gen_find_keys(Cnt, Bucket, sibling_count, "siblings", "counts", count).
+
+gen_find_keys(CntOrSize, Bucket, QTag, PathPrefix, PathElem, PathInfoTag) ->
+    CntOrSizeStr = integer_to_list(CntOrSize),
+    ?LET({KeyRange, DateRange},
+         {gen_keyrange(),
+          gen_daterange()},
+         begin
+             {BucketPath, BucketPathInfo} = bucket_path(Bucket),
+             {{{find_keys, {<<"default">>, Bucket}, KeyRange, DateRange, {QTag, CntOrSize}},
+               [PathPrefix] ++ BucketPath ++ [PathElem, CntOrSizeStr],
+               [{PathInfoTag, CntOrSizeStr} | BucketPathInfo]
+              },
+              gen_range_filter([
+                                {?KEY_RANGE, KeyRange},
+                                {?DATE_RANGE, DateRange}
+                               ])
+             }
+         end).
+
+gen_range_filter(Props) ->
+    Filt = lists:foldl(fun filter_element/2, [], Props),
+    {struct, Filt}.
+
+filter_element({Range, all}, Acc) when Range == ?KEY_RANGE;
+                                       Range == ?DATE_RANGE ->
+    Acc;
+filter_element({Range, {Start, End}}, Acc) when Range == ?KEY_RANGE;
+                                                Range == ?DATE_RANGE ->
+    [{Range, {struct, [{<<"start">>, Start},
+                               {<<"end">>, End}]}} | Acc].
+
+bucket_path(Bucket) ->
+    BuckStr = binary_to_list(Bucket),
+    {["buckets", BuckStr],
+     [{bucket, BuckStr}]}.
+
+gen_bucket() ->
+    oneof([<<"bucket1">>, <<"bucket2">>]).
+
+gen_keyrange() ->
+    oneof([all, {<<"key1">>, <<"key99">>}]).
+
+
+gen_daterange() ->
+    oneof([{1543357393, 1543417393},
+           all]).
+
+gen_cached() ->
+    ?LET(NVal, choose(2, 5), gen_cached(NVal)).
+
+gen_cached(NVal) ->
+    oneof([gen_cached_root(NVal),
+           gen_cached_branch(NVal),
+           gen_cached_keysclocks(NVal)
+          ]).
+
+gen_cached_root(NVal) ->
+    NValStr = integer_to_list(NVal),
+    {
+     {{merge_root_nval, NVal},
+      ["cachedtrees", "nvals", NValStr, "root"], %% path tokens
+      [{nval, NValStr}] %% path info mappings
+     },
+     undefined}.
+
+gen_cached_branch(NVal) ->
+    NValStr = integer_to_list(NVal),
+    ?LET(Branches, gen_branch_filter(),
+         {
+          {{merge_branch_nval, NVal, Branches},
+           ["cachedtrees", "nvals", NValStr, "branch"], %% path tokens
+           [{nval, NValStr}] %% path info mappings
+          },
+          Branches}).
+
+gen_cached_keysclocks(NVal) ->
+    NValStr = integer_to_list(NVal),
+    %% NOTE: branches and segments are just lists of ints
+    ?LET(Segs, gen_seg_filter(),
+         {
+          {{fetch_clocks_nval, NVal, Segs},
+           ["cachedtrees", "nvals", NValStr, "keysclocks"], %% path tokens
+           [{nval, NValStr}] %% path info mappings
+          },
+         Segs}).
+
+gen_seg_filter() ->
+    non_empty(list(nat())).
+
+gen_branch_filter() ->
+    non_empty(list(nat())).
+
+encode_filter(undefined) ->
+    undefined;
+encode_filter(all) ->
+    undefined;
+encode_filter({struct, []}) ->
+    undefined;
+encode_filter(Filter) ->
+    base64:encode(list_to_binary(
+                    lists:flatten(mochijson2:encode(Filter)
+                                 ))).
+
+setup_reqdata({_Q, PathTokens, PathInfo}, Filter) ->
+    %% we're changing the expectations per-run
+    (catch teardown_mocks(ok)),
+    setup_mocks(),
+    meck:expect(wrq, path_tokens, fun(_) ->
+                                          PathTokens
+                                  end),
+    meck:expect(wrq, path_info, fun(Name, _) ->
+                                        proplists:get_value(Name, PathInfo)
+                                end),
+    EncodedFilter = encode_filter(Filter),
+    meck:expect(wrq, get_qs_value, fun(?Q_AAEFOLD_FILTER, undefined, _) ->
+                                          EncodedFilter
+                                   end),
+    %% for riak_kv_web_utils
+    meck:expect(wrq, get_req_header, fun("X-Riak-URL-Encoding", _RD) ->
+                                             "off"
+                                     end),
+    %% for malformed, just return message
+    meck:expect(wrq, set_resp_header, fun(Header, Val, RD) ->
+                                              [{Header, Val} | RD]
+                                      end),
+    meck:expect(wrq, set_resp_body, fun(Body, RD) ->
+                                            [{body, lists:flatten(Body)} | RD]
+                                    end),
+    %% the mock req data is a list to accumulate resp-headers
+    [].
+
+-endif.
+
+-endif.

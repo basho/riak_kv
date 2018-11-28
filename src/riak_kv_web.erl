@@ -139,7 +139,7 @@ raw_dispatch(Name) ->
      {["rangetrees"] ++ Prefix ++ ["buckets", bucket, "keysclocks"],
       riak_kv_wm_aaefold, Props},
 
-     {["siblings"] ++ Prefix ++ ["buckets", bucket, "counts", cnt],
+     {["siblings"] ++ Prefix ++ ["buckets", bucket, "counts", count],
       riak_kv_wm_aaefold, Props},
 
      {["objectsizes"] ++ Prefix ++ ["buckets", bucket, "sizes", size],
