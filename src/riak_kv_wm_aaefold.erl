@@ -85,7 +85,7 @@
 -record(filter, {
                  key_range :: {binary(), binary()} | all,
                  date_range :: {pos_integer(), pos_integer()} | all,
-                 hash_method :: {rehash, non_neg_integer()} | prehash,
+                 hash_method :: {rehash, non_neg_integer()} | pre_hash,
                  segment_filter :: {segments, list(pos_integer()), leveled_tictac:tree_size()} | all
                 }).
 
@@ -218,7 +218,7 @@ malformed_cached_tree_request_filter(QType, Filter0, NVal, RD, Ctx) ->
 %% @private validate the request for range tree query and populate
 %% context with query (if valid.)
 -spec malformed_range_tree_request(#wm_reqdata{}, context()) ->
-                                          {boolean, #wm_reqdata{}, context()}.
+                                          {boolean(), #wm_reqdata{}, context()}.
 malformed_range_tree_request(RD, Ctx) ->
     case wrq:path_info(bucket, RD) of
         undefined ->
@@ -396,7 +396,7 @@ malformed_response(MessageFmt, FmtArgs, RD, Ctx) ->
     Ctx}.
 
 %% @private buckets, are they typed, are they not?
--spec query_bucket(context()) -> riak_kv_object:bucket().
+-spec query_bucket(context()) -> riak_object:bucket().
 query_bucket(Ctx) ->
     {Ctx#ctx.bucket_type, Ctx#ctx.bucket}.
 
@@ -435,8 +435,9 @@ validate_cached_tree_filter(String) ->
             {invalid, String}
     end.
 
--spec validate_range_filter(string()) -> {valid, filter()} |
-                                               {invalid, Reason::any()}.
+-spec validate_range_filter(string()) ->
+                                   {valid, filter()} |
+                                   {invalid, Reason::any()}.
 validate_range_filter(String) ->
     try mochijson2:decode(String) of
         {struct, Filter} ->
@@ -477,9 +478,9 @@ validate_filter_field(?SEG_FILT, {struct, SegFiltJson}, Filter) ->
             {invalid, ITS}
     end;
 validate_filter_field(?SEG_FILT, <<"all">>, Filter) ->
-    Filter;
+    {valid, Filter};
 validate_filter_field(?SEG_FILT, undefined, Filter) ->
-    Filter;
+    {valid, Filter};
 validate_filter_field(?SEG_FILT, Other, _Filter) ->
     {invalid, {?SEG_FILT, Other}};
 validate_filter_field(?KEY_RANGE, {struct, KeyRangeJson}, Filter) ->
@@ -491,9 +492,9 @@ validate_filter_field(?KEY_RANGE, {struct, KeyRangeJson}, Filter) ->
             {invalid, {?KEY_RANGE, Other}}
     end;
 validate_filter_field(?KEY_RANGE, <<"all">>, Filter) ->
-    Filter;
+    {valid, Filter};
 validate_filter_field(?KEY_RANGE, undefined, Filter) ->
-    Filter;
+    {valid, Filter};
 validate_filter_field(?KEY_RANGE, Other, _Filter) ->
     {invalid, {?KEY_RANGE, Other}};
 validate_filter_field(?DATE_RANGE, {struct, DateRangeJson}, Filter) ->
@@ -508,15 +509,15 @@ validate_filter_field(?DATE_RANGE, {struct, DateRangeJson}, Filter) ->
             {invalid, {?DATE_RANGE, Other}}
     end;
 validate_filter_field(?DATE_RANGE, <<"all">>, Filter) ->
-    Filter;
+    {valid, Filter};
 validate_filter_field(?DATE_RANGE, undefined, Filter) ->
-    Filter;
+    {valid, Filter};
 validate_filter_field(?DATE_RANGE, Other, _Filter) ->
     {invalid, {?DATE_RANGE, Other}};
 validate_filter_field(?HASH_IV, IV, Filter) when is_integer(IV) andalso IV > -1 ->
-    Filter#filter{hash_method={prehash, IV}};
+    {valid, Filter#filter{hash_method={rehash, IV}}};
 validate_filter_field(?HASH_IV, undefined, Filter) ->
-    Filter;
+    {valid, Filter};
 validate_filter_field(?HASH_IV, Other, _Filter) ->
     {invalid, {?HASH_IV, Other}}.
 
@@ -597,4 +598,4 @@ produce_fold_results(RD, Ctx) ->
     end.
 
 encode_results(Results) ->
-    
+    mochijson2:encode({struct, Results}).

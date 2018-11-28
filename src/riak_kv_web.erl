@@ -145,7 +145,7 @@ raw_dispatch(Name) ->
      {["objectsizes"] ++ Prefix ++ ["buckets", bucket, "sizes", size],
       riak_kv_wm_aaefold, Props},
 
-     {["objectstats"] ++ Prefix ++ ["buckets", bucket,
+     {["objectstats"] ++ Prefix ++ ["buckets", bucket],
       riak_kv_wm_aaefold, Props}
 
     ] || {Prefix, Props} <- Props2 ]).
