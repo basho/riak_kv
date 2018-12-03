@@ -21,11 +21,11 @@
 %% Available operations (NOTE: within square brackets means optional)
 %%
 %% ```
-%% GET /aaetrees/nvals/NVal/root
-%% GET /aaetrees/nvals/NVal/branch?filter
-%% GET /aaetrees/nvals/NVal/keysclocks?filter
-%% GET /aaetrees/[types/Type/]buckets/Bucket/trees/Size?filter
-%% GET /aaetrees/[types/Type/]buckets/Bucket/keysclocks?filter
+%% GET /cachedtrees/nvals/NVal/root
+%% GET /cachedtrees/nvals/NVal/branch?filter
+%% GET /cachedtrees/nvals/NVal/keysclocks?filter
+%% GET /rangetrees/[types/Type/]buckets/Bucket/trees/Size?filter
+%% GET /rangetrees/[types/Type/]buckets/Bucket/keysclocks?filter
 %% GET /siblings/[types/Type/]buckets/Bucket/counts/Cnt?filter
 %% GET /objectsizes/[types/Type/]buckets/Bucket/sizes/Size?filter
 %% GET /objectstats/[types/Type/]buckets/Bucket?filter
@@ -36,23 +36,45 @@
 %%   Run an AAE Fold on the underlying parallel or native AAE store
 %%
 %% The contents of the `filter' URL parameter varies depending on
-%% URL. The `filter' is a set of Key->Value pairs encoded as JSON with
-%% the following possible values:
+%% URL. The `filter' is a set either a list of integers (for
+%% cachedtrees branch and keysclocks) meaninb branches for
+%% cachedtrees/branch and segments for cachedtrees/keysclocks OR
+%% filter is set of Key->Value pairs encoded as JSON with the
+%% following possible values:
+
+
 %% <ul>
-%%   <li><tt>branches=[Integer]</tt><br />
-%%         ONLY on aaetrees/NVal/branch. A list of integers of which
-%%         branches to return (or all if absent)
+%%   <li><tt>key_range=Range</tt><br />
+%%         an object with two keys start=Binary, and end=Binary. Where
+%%         each is a key. Used to limit all of rangetrees, siblings,
+%%         objectsizes and objectstats queries. If this element is
+%%         absent from the filter then ALL keys will be queried
 %%   </li>
-%%   <li><tt>segments=[Integer]</tt><br />
-%%         A list of segment IDs to return data for. Or ALL segments
-%%         if absent
+%%   <li><tt>date_range=Range</tt><br /> an object with two keys
+%%         start=Integer, and end=Integer. Where each is a 32bit unix
+%%         seconds since the epoch timestamp. Used to limit all of
+%%         rangetrees, siblings, objectsizes and objectstats
+%%         queries. If this element is absent from the filter then ALL
+%%         lastmodified will be queried
 %%   </li>
-%%   <li><tt>filter_tree_size=Integer</tt><br />
-%%         not the tree size for this query, but the tree size from
-%%         which the segments in `segments' where requested. This
-%%         means that in the case of aatrees/Bucket/tree you may
-%%         request a tree of size X but with a filter on segments that
-%%         were originally fetched with a tree of size Y
+%%   <li><tt>segment_filter=Object</tt><br />
+%%         rangetrees only
+%%         An object with two keys, segments=array(Integer) an array
+%%         of segment IDs to query. And tree_size= [xxsmall | xsmall |
+%%         small | medium | large | xlarge] not the tree size for this
+%%         query, but the tree size from which the segments in
+%%         `segments' where requested. This means that in the case of
+%%         rangetrees queries you may request a tree of size X but
+%%         with a filter on segments that were originally fetched with
+%%         a tree of size Y. If absent then `all' segments will be queried.
+%%   </li>
+%%   <li><tt>hash_iv=Integer</tt><br />
+%%          rangetrees trees query only
+%%          an integer that is an initialisation vector for the hash
+%%          method for the trees. Useful for avoiding hash collision,
+%%          this IV will be used to initialise the hash function that
+%%          will be used to hash version vectors that go into creating
+%%          the merkle tree. If absent then the default hash fun is used.
 %%   </li>
 %% </ul>
 
@@ -641,6 +663,7 @@ produce_fold_test_() ->
 
 -ifdef(EQC).
 
+%% run the eqc property as an eunit test
 malformed_request_test_() ->
     {setup,
      fun setup_mocks/0,
@@ -654,7 +677,8 @@ setup_mocks() ->
 teardown_mocks(_) ->
     meck:unload(wrq).
 
-%% @private happy-path testing for the query types
+%% @private happy-path testing for the query types. NOTE: only happy
+%% path
 prop_not_malformed() ->
     ?FORALL({Query, Filter}, gen_query(),
             begin
@@ -669,21 +693,73 @@ prop_not_malformed() ->
                                        {no_resp, equals([], ResRD)}]))
             end).
 
+%%%
+%% query generetors
+%%%
+
+%% Pick one of the query types supported by aaefold.  NOTE a `query'
+%% here is two tuple. The first element is a 3-tuple of
+%% expected-query, the tuple we expect to be passed to aae-fold. The
+%% second is the path tokens to return from the wrq mock, the 3rd the
+%% path-info to return from the wrq mock. We return these from the
+%% generator as they depend on generated parameters.  The second
+%% element of the returned 2-tuple is a proplist that can be
+%% mochijson2 encoded. This JSON is what the WM resource works on to
+%% generate the query. It also depends on the generated params. The
+%% property then only checks that given the params in JSON the
+%% resource produces a query that matches the generated query.
 gen_query() ->
     oneof([gen_cached(),
            gen_find_keys(),
            gen_object_stats(),
-           gen_merge_tree_range()]).
+           gen_merge_tree_range(),
+           gen_fetch_clocks_range()]).
+
+%% generate a fetch_clocks_range query
+gen_fetch_clocks_range() ->
+    ?LET(Bucket, gen_bucket(), gen_fetch_clocks_range(Bucket)).
+
+gen_fetch_clocks_range(Bucket) ->
+    ?LET({KeyRange, DateRange, SegmentFilter},
+         {gen_keyrange(),
+          gen_daterange(),
+          gen_segment_filter()},
+         begin
+             {BucketPath, BucketPathInfo} = bucket_path(Bucket),
+             {{{fetch_clocks_range, {<<"default">>, Bucket},
+                KeyRange, SegmentFilter, DateRange},
+               ["rangetrees"] ++ BucketPath ++  ["keysclocks"],
+               BucketPathInfo},
+              gen_range_filter([
+                                {?KEY_RANGE, KeyRange},
+                                {?DATE_RANGE, DateRange},
+                                {?SEG_FILT, SegmentFilter}
+                               ])
+             }
+         end).
 
 gen_merge_tree_range() ->
     ?LET(Bucket, gen_bucket(), gen_merge_tree_range(Bucket)).
 
 gen_merge_tree_range(Bucket) ->
-    ?LET({TreeSize, KeyRange, DateRange, SegmentFilter},
-         {gen_treesize(), gen_keyrange(), gen_daterange(), gen_seg_filter()},
+    ?LET({TreeSize, KeyRange, DateRange, SegmentFilter, HashMethod},
+         {gen_treesize(),
+          gen_keyrange(),
+          gen_daterange(),
+          gen_segment_filter(),
+          gen_hash_method()},
          begin
-             {TODOQUERY,
-              TODOFILTER
+             {BucketPath, BucketPathInfo} = bucket_path(Bucket),
+             {{{merge_tree_range, {<<"default">>, Bucket},
+                KeyRange, TreeSize, SegmentFilter, DateRange, HashMethod},
+               ["rangetrees"] ++ BucketPath ++  ["trees", TreeSize],
+               [{size, atom_to_list(TreeSize)}] ++ BucketPathInfo},
+              gen_range_filter([
+                                {?KEY_RANGE, KeyRange},
+                                {?DATE_RANGE, DateRange},
+                                {?SEG_FILT, SegmentFilter},
+                                {?HASH_IV, HashMethod}
+                               ])
              }
          end).
 
@@ -736,34 +812,6 @@ gen_find_keys(CntOrSize, Bucket, QTag, PathPrefix, PathElem, PathInfoTag) ->
              }
          end).
 
-gen_range_filter(Props) ->
-    Filt = lists:foldl(fun filter_element/2, [], Props),
-    {struct, Filt}.
-
-filter_element({Range, all}, Acc) when Range == ?KEY_RANGE;
-                                       Range == ?DATE_RANGE ->
-    Acc;
-filter_element({Range, {Start, End}}, Acc) when Range == ?KEY_RANGE;
-                                                Range == ?DATE_RANGE ->
-    [{Range, {struct, [{<<"start">>, Start},
-                               {<<"end">>, End}]}} | Acc].
-
-bucket_path(Bucket) ->
-    BuckStr = binary_to_list(Bucket),
-    {["buckets", BuckStr],
-     [{bucket, BuckStr}]}.
-
-gen_bucket() ->
-    oneof([<<"bucket1">>, <<"bucket2">>]).
-
-gen_keyrange() ->
-    oneof([all, {<<"key1">>, <<"key99">>}]).
-
-
-gen_daterange() ->
-    oneof([{1543357393, 1543417393},
-           all]).
-
 gen_cached() ->
     ?LET(NVal, choose(2, 5), gen_cached(NVal)).
 
@@ -803,11 +851,66 @@ gen_cached_keysclocks(NVal) ->
           },
          Segs}).
 
+%%%
+%% param generetors
+%%%
+
+gen_segment_filter() ->
+    ?LET({Segments, TreeSize}, {gen_seg_filter(), gen_treesize()},
+         oneof([{segments, Segments, TreeSize}, all])).
+
+gen_treesize() ->
+    oneof([xxsmall, xsmall, small, medium, large, xlarge]).
+
+gen_hash_method() ->
+    ?LET(IV, nat(),
+         oneof([pre_hash, {rehash, IV}])).
+
+gen_range_filter(Props) ->
+    Filt = lists:foldl(fun gen_filter_element/2, [], Props),
+    {struct, Filt}.
+
+gen_filter_element({Range, all}, Acc) when Range == ?KEY_RANGE;
+                                       Range == ?DATE_RANGE;
+                                       Range == ?SEG_FILT ->
+    Acc;
+gen_filter_element({Range, {Start, End}}, Acc) when Range == ?KEY_RANGE;
+                                                Range == ?DATE_RANGE ->
+    [{Range, {struct, [{<<"start">>, Start},
+                       {<<"end">>, End}]}} | Acc];
+gen_filter_element({?SEG_FILT, {segments, Segs, TreeSize}}, Acc) ->
+    [{?SEG_FILT, {struct, [{<<"tree_size">>, atom_to_list(TreeSize)},
+                           {<<"segments">>, Segs}]}} | Acc];
+gen_filter_element({?HASH_IV, pre_hash}, Acc) ->
+    Acc;
+gen_filter_element({?HASH_IV, {rehash, IV}}, Acc) when is_integer(IV) ->
+    [{?HASH_IV, IV} | Acc].
+
+bucket_path(Bucket) ->
+    BuckStr = binary_to_list(Bucket),
+    {["buckets", BuckStr],
+     [{bucket, BuckStr}]}.
+
+gen_bucket() ->
+    oneof([<<"bucket1">>, <<"bucket2">>]).
+
+gen_keyrange() ->
+    oneof([all, {<<"key1">>, <<"key99">>}]).
+
+
+gen_daterange() ->
+    oneof([{1543357393, 1543417393},
+           all]).
+
 gen_seg_filter() ->
     non_empty(list(nat())).
 
 gen_branch_filter() ->
     non_empty(list(nat())).
+
+%%%%
+%% helpers
+%%%%
 
 encode_filter(undefined) ->
     undefined;
