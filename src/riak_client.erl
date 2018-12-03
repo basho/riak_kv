@@ -37,7 +37,8 @@
 -export([stream_list_buckets/1,stream_list_buckets/2,
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
--export([aae_fold/2, hot_backup/4]).
+-export([aae_fold/2]).
+-export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
 -export([reload_all/2]).
@@ -724,9 +725,9 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
 
 %% @doc
 %% Run a hot backup - returns {ok, true} if successful
--spec hot_backup(string(), pos_integer(), pos_integer(), riak_client())
+-spec hotbackup(string(), pos_integer(), pos_integer(), riak_client())
                                     -> {ok, boolean()}|{error, Err :: term()}.
-hot_backup(BackupPath, DefaultNVal, PlanNVal, {?MODULE, [Node, _ClientId]}) ->
+hotbackup(BackupPath, DefaultNVal, PlanNVal, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
     TimeOut = ?DEFAULT_FOLD_TIMEOUT,
