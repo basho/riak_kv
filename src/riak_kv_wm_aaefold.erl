@@ -611,31 +611,27 @@ resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
     {riak_kv_wm_utils:bucket_type_exists(BType), RD, Ctx}.
 
 -spec produce_fold_results(#wm_reqdata{}, context()) ->
-    {binary(), #wm_reqdata{}, context()}.
+    {any(), #wm_reqdata{}, context()}.
 %% @doc Produce the JSON response to an aae fold
 produce_fold_results(RD, Ctx) ->
     Client = Ctx#ctx.client,
     Query = Ctx#ctx.query,
-
-    %% Do the index lookup...
     case Client:aaefold(Query) of
         {ok, Results} ->
-            JsonResults = encode_results(Results),
+            QueryName = element(1, Query),
+            JsonResults = riak_kv_clusteraae_fsm:json_encode_results(QueryName, Results),
             {JsonResults, RD, Ctx};
         {error, timeout} ->
             {{halt, 503},
-            wrq:set_resp_header("Content-Type", "text/plain",
-                                wrq:append_to_response_body(
-                                io_lib:format("request timed out~n",
-                                                []),
-                                RD)),
-            Ctx};
+             wrq:set_resp_header("Content-Type", "text/plain",
+                                 wrq:append_to_response_body(
+                                   io_lib:format("request timed out~n",
+                                                 []),
+                                   RD)),
+             Ctx};
         {error, Reason} ->
             {{error, Reason}, RD, Ctx}
     end.
-
-encode_results(Results) ->
-    mochijson2:encode({struct, Results}).
 
 -ifdef(TEST).
 

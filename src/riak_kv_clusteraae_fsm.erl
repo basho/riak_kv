@@ -361,7 +361,7 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
 %% External functions
 %% ===================================================================
 
--spec json_encode_results(query_types(), any()) -> iolist().
+-spec json_encode_results(query_types(), query_return()) -> iolist().
 %% @doc
 %% Encode the results of a query in JSON
 %% Expected this will be called from the webmachine module that needs to
@@ -369,7 +369,52 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
 json_encode_results(merge_tree_range, Tree) ->
     ExportedTree = leveled_tictac:export_tree(Tree),
     JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
-    mochijson2:encode(JsonKeys1).
+    mochijson2:encode(JsonKeys1);
+json_encode_results(merge_root_nval, Root) ->
+    RootEnc = base64:encode_to_string(Root),
+    Keys = {struct, [{<<"root">>, RootEnc}]},
+    mochijson2:encode(Keys);
+json_encode_results(merge_branch_nval, Branches) ->
+    Keys = {struct, [{<<"branches">>, [{struct, [{<<"branch-id">>, BranchId},
+                                                 {<<"branch">>, base64:encode_to_string(BranchBin)}]
+                                       } || {BranchId, BranchBin} <- Branches]
+                     }]},
+    mochijson2:encode(Keys);
+json_encode_results(fetch_clocks_nval, KeysNClocks) ->
+    encode_keys_and_clocks(KeysNClocks);
+json_encode_results(fetch_clocks_range, KeysNClocks) ->
+    encode_keys_and_clocks(KeysNClocks);
+json_encode_results(find_keys, Result) ->
+    Keys = {struct, [{<<"results">>, [{struct, [{<<"bucket-type">>, bucket_type(Bucket)},
+                                                {<<"bucket">>, bucket(Bucket)},
+                                                {<<"key">>, Key},
+                                                {<<"value">>, Int}]} || {Bucket, Key, Int} <- Result]}
+                    ]},
+    mochijson2:encode(Keys);
+json_encode_results(object_stats, Stats) ->
+    mochijson2:encode({struct, Stats}).
+
+-spec encode_keys_and_clocks(keys_clocks()) -> iolist().
+encode_keys_and_clocks(KeysNClocks) ->
+    Keys = {struct, [{<<"keys-clocks">>, [{struct, [{<<"bucket-type">>, bucket_type(Bucket)},
+                                                    {<<"bucket">>, bucket(Bucket)},
+                                                    {<<"key">>, Key},
+                                                    {<<"clock">>, base64:encode_to_string(Clock)}]} ||
+                                             {{Bucket, Key}, Clock} <- KeysNClocks]
+                     }]},
+    mochijson2:encode(Keys).
+
+-spec bucket(riak_object:bucket()) -> binary().
+bucket({_Type, Bucket}) ->
+    Bucket;
+bucket(Bucket) when is_binary(Bucket) ->
+    Bucket.
+
+-spec bucket_type(riak_object:bucket()) -> binary().
+bucket_type({Type, _Bucket}) ->
+    Type;
+bucket_type(Bucket) when is_binary(Bucket) ->
+    <<"default">>.
 
 -spec hash_function(hash_method()) ->
                         pre_hash|fun((vclock:vclock()) -> non_neg_integer()).
