@@ -634,29 +634,6 @@ produce_fold_results(RD, Ctx) ->
     end.
 
 -ifdef(TEST).
-
-%% basic test that the query is run, and results encoded
-produce_fold_test_() ->
-    {setup,
-     fun() ->
-             meck:new(mock_riakclient, [non_strict])
-     end,
-     fun(_) ->
-             meck:unload(mock_riakclient)
-     end,
-     [
-       ?_test(begin
-                  meck:expect(mock_riakclient, aaefold,
-                              fun(my_fake_query) ->
-                                      [{{{<<"btype">>, <<"b">>}, <<"key">>}, <<"I am a vclock">>}]
-                              end),
-                  Ctx = #ctx{client=mock_riakclient, query=my_fake_query},
-                  Res = ?MODULE:produce_fold_results(fake_rd, Ctx),
-                  ?assertEqual({wat, fake_rd, Ctx}, Res)
-              end)
-     ]
-    }.
-
 -ifdef(EQC).
 
 %% run the eqc property as an eunit test
