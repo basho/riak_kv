@@ -504,7 +504,7 @@ hot_backup(#state{bookie=Bookie, partition=Partition, db_path=DBP}, BackupRoot) 
         false ->
             % Don't check anything else about the path, as an invalid path
             % (e.g. one without write permissions will crash the snapshot not
-            % the store
+            % the store)
             {async, BackupFolder} = leveled_bookie:book_hotbackup(Bookie),
             {queue, fun() -> BackupFolder(BackupDir) end}
     end.
@@ -556,9 +556,9 @@ get_data_dir(DataRoot, Partition) ->
             {error, Reason}
     end.
 
--spec schedule_journalcompaction(reference(), integer(), integer(), list(integer())) -> reference().
 %% @private
 %% Request a callback in the future to check for journal compaction
+-spec schedule_journalcompaction(reference(), integer(), integer(), list(integer())) -> reference().
 schedule_journalcompaction(Ref, PartitionID, PerDay, ValidHours) when is_reference(Ref) ->
     random:seed(element(3, os:timestamp()),
                     erlang:phash2(self()),
