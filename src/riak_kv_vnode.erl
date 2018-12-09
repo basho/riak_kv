@@ -215,20 +215,20 @@
 
 -define(MAX_REBUILD_TIME, 86400).
 
--define(AF1_QUEUE, af1_pool).
+-define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
     %% Hot backups
--define(AF2_QUEUE, af2_pool).
+-define(AF2_QUEUE, riak_core_node_worker_pool:af2()).
     %% Assured Forwarding - pool 2
     %% Any other handle_coverage that responds queue (e.g. leveled keylisting)
--define(AF3_QUEUE, af3_pool).
+-define(AF3_QUEUE, riak_core_node_worker_pool:af3()).
     %% Assured Forwarding - pool 3
     %% AAE queries (per-bucket with/without key_range).  AAE queries against
     %% the cached tree do not use a pool (e.g. n_val queries)
--define(AF4_QUEUE, af4_pool).
+-define(AF4_QUEUE, riak_core_node_worker_pool:af4()).
     %% Assured Forwarding - pool 4
     %% perational information queries (e.g. object_stats)
--define(BE_QUEUE, be_pool).
+-define(BE_QUEUE, riak_core_node_worker_pool:be()).
     %% Best efforts (aka scavenger) pool
     %% Rebuilds
 
