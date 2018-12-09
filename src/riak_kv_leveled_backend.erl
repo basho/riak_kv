@@ -32,6 +32,7 @@
          is_empty/1,
          status/1,
          data_size/1,
+         hot_backup/2,
          callback/3]).
 
 %% Extended KV Backend API
@@ -51,19 +52,24 @@
                         indexes,
                         head,
                         fold_heads,
-                        direct_fetch,
-                        putfsm_pause,
                         snap_prefold,
-                        segment_accelerate,
-                        leveled]).
+                        hot_backup]).
 -define(API_VERSION, 1).
 -define(BUCKET_SDG, <<"MD">>).
 -define(KEY_SDG, <<"SHUDOWN_GUID">>).
 -define(TAG_SDG, o).
 
+-define(PAUSE_TIME, 1).
+    % The time in ms to pause if the leveled_bookie asks for backoff.
+    % Pausing here blocks the vnode (whereas the pause response was defined
+    % originally so that one could signal to slowdown PUTs, whilst still 
+    % accepting HEAD/GET/FOLD requests).  There is no neat way of doing this
+    % so we will back everything off.
+
 -record(state, {bookie :: pid(),
                 reference :: reference(),
                 partition :: integer(),
+                db_path :: string(),
                 config,
                 compactions_perday :: integer(),
                 valid_hours = [] :: list(integer())}).
@@ -90,7 +96,7 @@ capabilities(_) ->
 capabilities(_, _) ->
     {ok, ?CAPABILITIES}.
 
-%% @doc Start the hanoidb backend
+%% @doc Start the leveled backend
 -spec start(integer(), list()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
     DataRoot = app_helper:get_prop_or_env(data_root, Config, leveled),
@@ -127,6 +133,7 @@ start(Partition, Config) ->
                         reference=Ref,
                         partition=Partition,
                         config=Config,
+                        db_path=DataDir,
                         compactions_perday = CRD,
                         valid_hours = ValidHours}};
         {error, Reason} ->
@@ -208,7 +215,9 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
         ok ->
             {ok, State};
         pause ->
-            % To be changed if back-pressure added to Riak put_fsm
+            lager:warning("Vnode paused for ~w ms to back-off PUT load",
+                            [?PAUSE_TIME]),
+            timer:sleep(?PAUSE_TIME),
             {ok, State}
     end.
 
@@ -484,6 +493,22 @@ drop(#state{bookie=Bookie, partition=Partition, config=Config}=_State) ->
 is_empty(#state{bookie=Bookie}) ->
     leveled_bookie:book_isempty(Bookie, ?RIAK_TAG).
 
+%% @doc Prompt a snapshot function from which a hot backup can be called
+-spec hot_backup(state(), string()) -> {queue, fun()}|{error, term()}.
+hot_backup(#state{bookie=Bookie, partition=Partition, db_path=DBP}, BackupRoot) ->
+    {ok, BackupDir} = get_data_dir(BackupRoot, integer_to_list(Partition)),
+    case BackupDir == DBP of
+        true ->
+            lager:warning("Attempt to backup to own path ~s", [BackupRoot]),
+            {error, invalid_path};
+        false ->
+            % Don't check anything else about the path, as an invalid path
+            % (e.g. one without write permissions will crash the snapshot not
+            % the store)
+            {async, BackupFolder} = leveled_bookie:book_hotbackup(Bookie),
+            {queue, fun() -> BackupFolder(BackupDir) end}
+    end.
+
 %% @doc Get the status information for this leveled backend
 -spec status(state()) -> [{atom(), term()}].
 status(_State) ->
@@ -531,9 +556,9 @@ get_data_dir(DataRoot, Partition) ->
             {error, Reason}
     end.
 
--spec schedule_journalcompaction(reference(), integer(), integer(), list(integer())) -> reference().
 %% @private
 %% Request a callback in the future to check for journal compaction
+-spec schedule_journalcompaction(reference(), integer(), integer(), list(integer())) -> reference().
 schedule_journalcompaction(Ref, PartitionID, PerDay, ValidHours) when is_reference(Ref) ->
     random:seed(element(3, os:timestamp()),
                     erlang:phash2(self()),

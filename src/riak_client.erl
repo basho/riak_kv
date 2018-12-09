@@ -38,6 +38,7 @@
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
 -export([aae_fold/2]).
+-export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
 -export([reload_all/2]).
@@ -721,6 +722,22 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
                                                     [{raw, ReqId, Me},
                                                     [Query, TimeOut]]),
     wait_for_fold_results(ReqId, TimeOut).
+
+%% @doc
+%% Run a hot backup - returns {ok, true} if successful
+-spec hotbackup(string(), pos_integer(), pos_integer(), riak_client())
+                                    -> {ok, boolean()}|{error, Err :: term()}.
+hotbackup(BackupPath, DefaultNVal, PlanNVal, {?MODULE, [Node, _ClientId]}) ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    TimeOut = ?DEFAULT_FOLD_TIMEOUT,
+    riak_kv_hotbackup_fsm_sup:start_hotbackup_fsm(Node,
+                                                    [{raw, ReqId, Me},
+                                                    [BackupPath,
+                                                        {DefaultNVal, PlanNVal},
+                                                        TimeOut]]),
+    wait_for_fold_results(ReqId, TimeOut).
+
 
 %% @spec get_index(Bucket :: binary(),
 %%                 Query :: riak_index:query_def(),

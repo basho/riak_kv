@@ -217,7 +217,7 @@
 
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
-    %% Not currently used
+    %% Hot backups
 -define(AF2_QUEUE, riak_core_node_worker_pool:af2()).
     %% Assured Forwarding - pool 2
     %% Any other handle_coverage that responds queue (e.g. leveled keylisting)
@@ -1438,7 +1438,33 @@ handle_coverage_request(kv_aaefold_request, Req, FilterVNodes, Sender, State) ->
     Nval = riak_kv_requests:get_nval(Req),
     handle_coverage_aaefold(Query, InitAcc, Nval, 
                             FilterVNodes, Sender, 
-                            State).
+                            State);
+
+handle_coverage_request(kv_hotbackup_request, Req, _FilterVnodes, Sender,
+                State=#state{mod=Mod, modstate=ModState}) ->
+    % If the backend is hot_backup capability, run the backup via the node
+    % worker pool.  Otherwise return not_supported
+    BackupPath = riak_kv_requests:get_path(Req),
+    {ok, Caps} = Mod:capabilities(ModState),
+    case lists:member(hot_backup, Caps) of
+        true ->
+            case Mod:hot_backup(ModState, BackupPath) of
+                {error, _Reason} ->
+                    % Assume the backend has logged the reason
+                    {reply, riak_kv_hotbackup_fsm:bad_request(), State};
+                {queue, BackupFolder} ->
+                    FinishFun = 
+                        fun(ok) ->
+                            Complete = riak_kv_hotbackup_fsm:complete(),
+                            riak_core_vnode:reply(Sender, Complete)
+                        end,
+                    {select_queue(?AF1_QUEUE, State),
+                        {fold, BackupFolder, FinishFun},
+                        Sender, State}
+            end;
+        false ->
+            {reply, riak_kv_hotbackup_fsm:not_supported(), State}
+    end.
 
 
 %% @doc Handle a coverage request.

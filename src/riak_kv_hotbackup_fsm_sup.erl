@@ -1,7 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_clusteraae_fsm_sup: supervise the riak_kv cluster aae state
-%% machines.
+%% riak_kv_hotbackup_fsm_sup: supervise the hotbackup state machine.
 %%
 %% Copyright (c) 2007-2011 Basho Technologies, Inc.  All Rights Reserved.
 %%
@@ -23,23 +22,19 @@
 
 %% @doc supervise the riak_kv cluster aae state machine
 
--module(riak_kv_clusteraae_fsm_sup).
+-module(riak_kv_hotbackup_fsm_sup).
 
 -behaviour(supervisor).
 
--export([start_clusteraae_fsm/2]).
+-export([start_hotbackup_fsm/2]).
 -export([start_link/0]).
 -export([init/1]).
 
-start_clusteraae_fsm(Node, Args) ->
-    case supervisor:start_child({?MODULE, Node}, Args) of
-        {ok, Pid} ->
-            ok = riak_kv_stat:update({clusteraae_create, Pid}),
-            {ok, Pid};
-        Error ->
-            ok = riak_kv_stat:update(clusteraae_create_error),
-            Error
-    end.
+start_hotbackup_fsm(Node, Args) ->
+    % No stat is updated on this, there will be a log for every backup instead
+    % of incrementing a stat.  This is not expected to be a regular event that
+    % requires counting
+    supervisor:start_child({?MODULE, Node}, Args).
 
 %% @spec start_link() -> ServerRet
 %% @doc API for starting the supervisor.
@@ -49,9 +44,9 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    ClusterAAEFsmSpec = 
+    HotBackupFsmSpec = 
         {undefined,
-            {riak_core_coverage_fsm, start_link, [riak_kv_clusteraae_fsm]},
-            temporary, 5000, worker, [riak_kv_clusteraae_fsm]},
+            {riak_core_coverage_fsm, start_link, [riak_kv_hotbackup_fsm]},
+            temporary, 5000, worker, [riak_kv_hotbackup_fsm]},
 
-    {ok, {{simple_one_for_one, 10, 10}, [ClusterAAEFsmSpec]}}.
+    {ok, {{simple_one_for_one, 10, 10}, [HotBackupFsmSpec]}}.
