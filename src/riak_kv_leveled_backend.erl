@@ -53,7 +53,8 @@
                         head,
                         fold_heads,
                         snap_prefold,
-                        hot_backup]).
+                        hot_backup,
+                        leveled]).
 -define(API_VERSION, 1).
 -define(BUCKET_SDG, <<"MD">>).
 -define(KEY_SDG, <<"SHUDOWN_GUID">>).
