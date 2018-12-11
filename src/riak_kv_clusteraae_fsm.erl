@@ -167,13 +167,16 @@
         bucket(), key_range(),
         modified_range() | all,
         {sibling_count, pos_integer()}|{object_size, pos_integer()}}|
-        % Find all the objects in the key range that have more than the given 
-        % count of siblings, or are bigger than the given object size.  This 
-        % uses the AAE keystore, and will only discover siblings that have been 
-        % generated and stored within a vnode (which should eventually be all 
-        % siblings given AAE is enabled and if allow_mult is true). If finding
-        % keys by size, then the size is the pre-calculated size stored in the
-        % aae key store as metadata.
+        % Find all the objects in the key range that have more than
+        % the given count of siblings (where {sibling_count, 1} means
+        % find all objects with more than a single,unconflicted
+        % value), or are bigger than the given object size.  This uses
+        % the AAE keystore, and will only discover siblings that have
+        % been generated and stored within a vnode (which should
+        % eventually be all siblings given AAE is enabled and if
+        % allow_mult is true). If finding keys by size, then the size
+        % is the pre-calculated size stored in the aae key store as
+        % metadata.
         %
         % The query returns a list of [{Key, SiblingCount}] tuples or 
         % [{Key, ObjectSize}] tuples depending on the filter requested.  The 
@@ -228,8 +231,7 @@
 -type list_query_result() :: keys_clocks() | keys().
 
 -type keys_clocks() :: list(key_clock()).
--type key_clock() :: {{riak_object:bucket(), riak_object:key()}, clock()}.
--type clock() :: binary().
+-type key_clock() :: {riak_object:bucket(), riak_object:key(), vclock:vclock()}.
 
 -type keys() :: list({riak_object:bucket(), riak_object:key(), integer()}).
 -type object_stats() :: proplist:proplist().
@@ -385,10 +387,7 @@ json_encode_results(fetch_clocks_nval, KeysNClocks) ->
 json_encode_results(fetch_clocks_range, KeysNClocks) ->
     encode_keys_and_clocks(KeysNClocks);
 json_encode_results(find_keys, Result) ->
-    Keys = {struct, [{<<"results">>, [{struct, [{<<"bucket-type">>, bucket_type(Bucket)},
-                                                {<<"bucket">>, bucket(Bucket)},
-                                                {<<"key">>, Key},
-                                                {<<"value">>, Int}]} || {Bucket, Key, Int} <- Result]}
+    Keys = {struct, [{<<"results">>, [{struct, encode_find_key(Key, Int)} || {_Bucket, Key, Int} <- Result]}
                     ]},
     mochijson2:encode(Keys);
 json_encode_results(object_stats, Stats) ->
@@ -396,25 +395,24 @@ json_encode_results(object_stats, Stats) ->
 
 -spec encode_keys_and_clocks(keys_clocks()) -> iolist().
 encode_keys_and_clocks(KeysNClocks) ->
-    Keys = {struct, [{<<"keys-clocks">>, [{struct, [{<<"bucket-type">>, bucket_type(Bucket)},
-                                                    {<<"bucket">>, bucket(Bucket)},
-                                                    {<<"key">>, Key},
-                                                    {<<"clock">>, base64:encode_to_string(Clock)}]} ||
-                                             {{Bucket, Key}, Clock} <- KeysNClocks]
+    Keys = {struct, [{<<"keys-clocks">>,
+                      [{struct, encode_key_and_clock(Bucket, Key, Clock)} || {Bucket, Key, Clock} <- KeysNClocks]
                      }]},
     mochijson2:encode(Keys).
 
--spec bucket(riak_object:bucket()) -> binary().
-bucket({_Type, Bucket}) ->
-    Bucket;
-bucket(Bucket) when is_binary(Bucket) ->
-    Bucket.
+encode_find_key(Key, Value) ->
+    [{<<"key">>, Key},
+     {<<"value">>, Value}].
 
--spec bucket_type(riak_object:bucket()) -> binary().
-bucket_type({Type, _Bucket}) ->
-    Type;
-bucket_type(Bucket) when is_binary(Bucket) ->
-    <<"default">>.
+encode_key_and_clock({Type, Bucket}, Key, Clock) ->
+    [{<<"bucket-type">>, Type},
+     {<<"bucket">>, Bucket},
+     {<<"key">>, Key},
+     {<<"clock">>, base64:encode_to_string(riak_object:encode_vclock(Clock))}];
+encode_key_and_clock(Bucket, Key, Clock) ->
+    [{<<"bucket">>, Bucket},
+     {<<"key">>, Key},
+     {<<"clock">>, base64:encode_to_string(riak_object:encode_vclock(Clock))}].
 
 -spec hash_function(hash_method()) ->
                         pre_hash|fun((vclock:vclock()) -> non_neg_integer()).

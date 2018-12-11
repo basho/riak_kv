@@ -166,7 +166,7 @@ service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
     {boolean(), #wm_reqdata{}, context()}.
 malformed_request(RD, Ctx) ->
     %% determine type of query, and check for each type
-    PathTokens = wrq:path_tokens(RD),
+    PathTokens = path_tokens(RD),
 
     FoldType = riak_kv_wm_utils:maybe_decode_uri(RD, hd(PathTokens)),
 
@@ -197,7 +197,7 @@ malformed_cached_tree_request(RD, Ctx) ->
 -spec malformed_cached_tree_request(pos_integer(), #wm_reqdata{}, context()) ->
                                     {boolean(), #wm_reqdata{}, context()}.
 malformed_cached_tree_request(NVal, RD, Ctx) ->
-    QueryType = riak_kv_wm_utils:maybe_decode_uri(RD, lists:last(wrq:path_tokens(RD))),
+    QueryType = riak_kv_wm_utils:maybe_decode_uri(RD, lists:last(path_tokens(RD))),
     case  QueryType of
         "root" ->
             %% root query, has an nval, all good
@@ -270,7 +270,7 @@ malformed_range_tree_request(RD, Ctx) ->
                                           {boolean(),  #wm_reqdata{}, context()}.
 malformed_range_tree_request(undefined=_TreeSize, RD, Ctx) ->
     %% no tree size, last token _MUST_ be "keysclocks" or it's invalid
-    QueryType = riak_kv_wm_utils:maybe_decode_uri(RD, lists:last(wrq:path_tokens(RD))),
+    QueryType = riak_kv_wm_utils:maybe_decode_uri(RD, lists:last(path_tokens(RD))),
     case QueryType of
         "keysclocks" ->
             Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
@@ -432,7 +432,7 @@ malformed_response(MessageFmt, FmtArgs, RD, Ctx) ->
 %% @private buckets, are they typed, are they not?
 -spec query_bucket(context()) -> riak_object:bucket().
 query_bucket(Ctx) ->
-    {Ctx#ctx.bucket_type, Ctx#ctx.bucket}.
+    riak_kv_wm_utils:maybe_bucket_type(Ctx#ctx.bucket_type, Ctx#ctx.bucket).
 
 -spec validate_nval(undefined | string()) ->
                            {invalid, Reason::any()} |
@@ -616,7 +616,7 @@ resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
 produce_fold_results(RD, Ctx) ->
     Client = Ctx#ctx.client,
     Query = Ctx#ctx.query,
-    case Client:aaefold(Query) of
+    case Client:aae_fold(Query) of
         {ok, Results} ->
             QueryName = element(1, Query),
             JsonResults = riak_kv_clusteraae_fsm:json_encode_results(QueryName, Results),
@@ -633,6 +633,10 @@ produce_fold_results(RD, Ctx) ->
             {{error, Reason}, RD, Ctx}
     end.
 
+-spec path_tokens(#wm_reqdata{}) -> list(string()).
+path_tokens(RD) ->
+    string:tokens(wrq:path(RD), "/").
+
 -ifdef(TEST).
 -ifdef(EQC).
 
@@ -648,7 +652,7 @@ setup_mocks() ->
     meck:new(wrq).
 
 teardown_mocks(_) ->
-    meck:unload(wrq).
+    (catch meck:unload(wrq)).
 
 %% @private happy-path testing for the query types. NOTE: only happy
 %% path
@@ -673,7 +677,7 @@ prop_not_malformed() ->
 %% Pick one of the query types supported by aaefold.  NOTE a `query'
 %% here is two tuple. The first element is a 3-tuple of
 %% expected-query, the tuple we expect to be passed to aae-fold. The
-%% second is the path tokens to return from the wrq mock, the 3rd the
+%% second is the path to return from the wrq mock, the 3rd the
 %% path-info to return from the wrq mock. We return these from the
 %% generator as they depend on generated parameters.  The second
 %% element of the returned 2-tuple is a proplist that can be
@@ -699,7 +703,7 @@ gen_fetch_clocks_range(Bucket) ->
           gen_segment_filter()},
          begin
              {BucketPath, BucketPathInfo} = bucket_path(Bucket),
-             {{{fetch_clocks_range, {<<"default">>, Bucket},
+             {{{fetch_clocks_range, Bucket,
                 KeyRange, SegmentFilter, DateRange},
                ["rangetrees"] ++ BucketPath ++  ["keysclocks"],
                BucketPathInfo},
@@ -723,7 +727,7 @@ gen_merge_tree_range(Bucket) ->
           gen_hash_method()},
          begin
              {BucketPath, BucketPathInfo} = bucket_path(Bucket),
-             {{{merge_tree_range, {<<"default">>, Bucket},
+             {{{merge_tree_range, Bucket,
                 KeyRange, TreeSize, SegmentFilter, DateRange, HashMethod},
                ["rangetrees"] ++ BucketPath ++  ["trees", TreeSize],
                [{size, atom_to_list(TreeSize)}] ++ BucketPathInfo},
@@ -745,7 +749,7 @@ gen_object_stats(Bucket) ->
           gen_daterange()},
          begin
              {BucketPath, BucketPathInfo} = bucket_path(Bucket),
-             {{{object_stats, {<<"default">>, Bucket}, KeyRange, DateRange},
+             {{{object_stats, Bucket, KeyRange, DateRange},
                ["objectstats"] ++ BucketPath,
                BucketPathInfo
               },
@@ -774,7 +778,7 @@ gen_find_keys(CntOrSize, Bucket, QTag, PathPrefix, PathElem, PathInfoTag) ->
           gen_daterange()},
          begin
              {BucketPath, BucketPathInfo} = bucket_path(Bucket),
-             {{{find_keys, {<<"default">>, Bucket}, KeyRange, DateRange, {QTag, CntOrSize}},
+             {{{find_keys, Bucket, KeyRange, DateRange, {QTag, CntOrSize}},
                [PathPrefix] ++ BucketPath ++ [PathElem, CntOrSizeStr],
                [{PathInfoTag, CntOrSizeStr} | BucketPathInfo]
               },
@@ -896,12 +900,23 @@ encode_filter(Filter) ->
                     lists:flatten(mochijson2:encode(Filter)
                                  ))).
 
-setup_reqdata({_Q, PathTokens, PathInfo}, Filter) ->
+to_string(Atom) when is_atom(Atom) ->
+    atom_to_list(Atom);
+to_string(Int) when is_integer(Int)  ->
+    integer_to_list(Int);
+to_string(Bin) when is_binary(Bin) ->
+    binary_to_list(Bin);
+to_string(Str) when is_list(Str) ->
+    Str.
+
+setup_reqdata({_Q, PathTokens0, PathInfo}, Filter) ->
     %% we're changing the expectations per-run
     (catch teardown_mocks(ok)),
     setup_mocks(),
-    meck:expect(wrq, path_tokens, fun(_) ->
-                                          PathTokens
+    PathTokens = [to_string(PathToken) || PathToken <- PathTokens0],
+    Path = "/" ++ string:join(PathTokens, "/"),
+    meck:expect(wrq, path, fun(_) ->
+                                          Path
                                   end),
     meck:expect(wrq, path_info, fun(Name, _) ->
                                         proplists:get_value(Name, PathInfo)
