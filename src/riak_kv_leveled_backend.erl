@@ -113,6 +113,8 @@ start(Partition, Config) ->
     MRL = app_helper:get_prop_or_env(max_run_length, Config, leveled),
     MCP = app_helper:get_prop_or_env(maxrunlength_compactionpercentage, Config, leveled),
     SCP = app_helper:get_prop_or_env(singlefile_compactionpercentage, Config, leveled),
+    TOS = app_helper:get_prop_or_env(snapshot_timeout_short, Config, leveled),
+    TOL = app_helper:get_prop_or_env(snapshot_timeout_long, Config, leveled),
 
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
@@ -125,7 +127,9 @@ start(Partition, Config) ->
                             {compression_point, CMP},
                             {max_run_length, MRL},
                             {maxrunlength_compactionpercentage, MCP},
-                            {singlefile_compactionpercentage, SCP}],
+                            {singlefile_compactionpercentage, SCP},
+                            {snapshot_timeout_short, TOS},
+                            {snapshot_timeout_long, TOL}],
             {ok, Bookie} = leveled_bookie:book_start(StartOpts),
             Ref = make_ref(),
             ValidHours = valid_hours(CLH, CTH),
