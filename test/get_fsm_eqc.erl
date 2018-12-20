@@ -235,7 +235,8 @@ prop_basic_get() ->
                             [{starttime, riak_core_util:moment()},
                              {n, N},
                              {bucket_props, BucketProps},
-                             {preflist2, PL2}]),
+                             {preflist2, PL2},
+                             {request_type, get}]),
 
         process_flag(trap_exit, true),
         ok = riak_kv_test_util:wait_for_pid(GetPid),

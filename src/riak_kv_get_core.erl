@@ -51,6 +51,9 @@
                   notfound_ok :: boolean(),
                   allow_mult :: boolean(),
                   deletedvclock :: boolean(),
+                  %% NOTE: throughout this module it is expected these
+                  %% results in the reverse order to which they are
+                  %% received, fastest last at the end of the list
                   results = [] :: [idxresult()],
                   merged :: {notfound | tombstone | ok,
                              riak_object:riak_object() | undefined},
@@ -97,7 +100,11 @@ update_init(N, PrevGetCore) ->
 head_merge(GetCore) ->
     GetCore#getcore{head_merge = true}.
 
-%% Add a result for a vnode index
+%% Add a result for a vnode index NOTE: in other code downstream
+%% (merge_heads for example) the reverse of the order in which results
+%% arrive is assumed to be preserved in the get core
+%% datastructure. i.e. first arriving at the end of the list, latest
+%% arrival at the head.
 -spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
 add_result(Idx, {ok, RObj}, GetCore) ->
     {Dels, Result} = 
@@ -129,9 +136,10 @@ add_result(Idx, {error, _Reason} = Result, GetCore) ->
         merged = undefined,
         num_fail = GetCore#getcore.num_fail + 1}.
 
-%% Replace a result for a vnode index i.e. when the result had previously
-%% been as a result of a HEAD, and there is now a result from a GET
-%% Ignore any results which were not from the list of updated indexes
+%% Replace a result for a vnode index i.e. when the result had
+%% previously been as a result of a HEAD, and there is now a result
+%% from a GET. It will add any results which were not from the list of
+%% updated indexes with add_result/3
 -spec update_result(non_neg_integer(),
                     result(),
                     list(),
@@ -205,7 +213,7 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
         when NumOK >= R andalso NumPOK >= PR ->
     #getcore{results = Results, allow_mult=AllowMult,
         deletedvclock = DeletedVClock} = GetCore,
-    Merged = head_merge(Results, AllowMult),
+    Merged = merge_heads(Results, AllowMult),
     case Merged of
         {ok, _MergedObj} ->
             {Merged, GetCore#getcore{merged = Merged}}; % {ok, MObj}
@@ -366,8 +374,7 @@ merge(Replies, AllowMult) ->
 %% a backend not supporting HEAD was called, or the operation was an UPDATE),
 %% or body-less objects.
 %%
-
-head_merge(Replies, AllowMult) ->
+merge_heads(Replies, AllowMult) ->
     % Replies should be a list of [{Idx, {ok, RObj}]
     IdxObjs = [{I, {ok, RObj}} || {I, {ok, RObj}} <- Replies],
     % Those that don't pattern match will be not_found
@@ -385,6 +392,7 @@ head_merge(Replies, AllowMult) ->
                             [Idx|Acc]
                     end
                 end,
+
             case lists:foldr(FoldFun, [], FetchIdxObjL) of
                 [] ->
                     merge(BestReplies, AllowMult);
