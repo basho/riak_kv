@@ -53,12 +53,15 @@
 -type key_range() :: {riak_object:key(), riak_object:key()}|all.
 -type bucket() :: riak_object:bucket().
 -type n_val() :: pos_integer().
+%% dates in modified_range are 32bit integer timestamp of seconds
+%% since unix epoch
 -type modified_range() :: {date, non_neg_integer(), non_neg_integer()}.
 -type hash_method() :: pre_hash|{rehash, non_neg_integer()}. 
 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|find_keys|object_stats.
+
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
     % native mode, or in parallel mode with key_order being used.  
@@ -80,7 +83,7 @@
         % cluster.  This is a background operation, but will have lower 
         % overheads than traditional store folds, subject to the size of the
         % segment filter being small - ideally o(10) or smaller
-    
+
     % Range-based AAE (requiring folds over native/parallel AAE key stores)
     {merge_tree_range, 
         bucket(), key_range(), 
@@ -136,9 +139,7 @@
         % a manageable subset of segments is mismatched.  There is a limit on
         % the number of segments which may be passed (to ensure the query is
         % relatively efficient.
-        % - A modified date filter.  The modified date filter is not efficient
-        % in that all keys in the range must be checked (there is no backend
-        % acceleration to skip blocks which don't contain these keys).
+        % - A modified date filter as in merge_tree_range
         %
         % Care should be taken when using this feature if TictacAAE is running
         % in parallel mode with the leveled_so backend (not the leveled_ko)
@@ -166,13 +167,16 @@
         bucket(), key_range(),
         modified_range() | all,
         {sibling_count, pos_integer()}|{object_size, pos_integer()}}|
-        % Find all the objects in the key range that have more than the given 
-        % count of siblings, or are bigger than the given object size.  This 
-        % uses the AAE keystore, and will only discover siblings that have been 
-        % generated and stored within a vnode (which should eventually be all 
-        % siblings given AAE is enabled and if allow_mult is true). If finding
-        % keys by size, then the size is the pre-calculated size stored in the
-        % aae key store as metadata.
+        % Find all the objects in the key range that have more than
+        % the given count of siblings (where {sibling_count, 1} means
+        % find all objects with more than a single,unconflicted
+        % value), or are bigger than the given object size.  This uses
+        % the AAE keystore, and will only discover siblings that have
+        % been generated and stored within a vnode (which should
+        % eventually be all siblings given AAE is enabled and if
+        % allow_mult is true). If finding keys by size, then the size
+        % is the pre-calculated size stored in the aae key store as
+        % metadata.
         %
         % The query returns a list of [{Key, SiblingCount}] tuples or 
         % [{Key, ObjectSize}] tuples depending on the filter requested.  The 
@@ -204,12 +208,38 @@
         % use a modified_range().
 
 
--type inbound_api() :: list(query_definition()|integer()).
+%% NOTE: this is a dialyzer/start war with the weird init needing a
+%% list in second argument thing. Really the second arg of init should
+%% be a tuple since it expects exactly N elements in order M. Here
+%% we're saying init args are [query_definition(), timeout()]
+-type inbound_api() :: list(query_definition() | timeout()).
+
+-type query_return() :: object_stats() | %% object_stats query
+                        leveled_tictac:tictactree() | %% merge_tree_range
+                        branches() | %% merge_branch
+                        root() | %% merge_root
+                        %% fetch_clocks_range | fetch_clocks_nval |
+                        %% find_keys
+                        list_query_result().
+
+-type branches() :: list(branch()).
+%% level 2 of tree
+-type branch() :: {BranchID::integer(), BranchBin::binary()}.
+%% level1 of the tree
+-type root() :: binary().
+
+-type list_query_result() :: keys_clocks() | keys().
+
+-type keys_clocks() :: list(key_clock()).
+-type key_clock() :: {riak_object:bucket(), riak_object:key(), vclock:vclock()}.
+
+-type keys() :: list({riak_object:bucket(), riak_object:key(), integer()}).
+-type object_stats() :: proplist:proplist().
 
 -export_type([query_definition/0]).
 
 -record(state, {from :: from(),
-                acc,
+                acc :: query_return(),
                 query_type :: query_types(),
                 start_time :: erlang:timestamp()}).
 
@@ -333,7 +363,7 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
 %% External functions
 %% ===================================================================
 
--spec json_encode_results(query_types(), any()) -> iolist().
+-spec json_encode_results(query_types(), query_return()) -> iolist().
 %% @doc
 %% Encode the results of a query in JSON
 %% Expected this will be called from the webmachine module that needs to
@@ -341,7 +371,48 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
 json_encode_results(merge_tree_range, Tree) ->
     ExportedTree = leveled_tictac:export_tree(Tree),
     JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
-    mochijson2:encode(JsonKeys1).
+    mochijson2:encode(JsonKeys1);
+json_encode_results(merge_root_nval, Root) ->
+    RootEnc = base64:encode_to_string(Root),
+    Keys = {struct, [{<<"root">>, RootEnc}]},
+    mochijson2:encode(Keys);
+json_encode_results(merge_branch_nval, Branches) ->
+    Keys = {struct, [{<<"branches">>, [{struct, [{<<"branch-id">>, BranchId},
+                                                 {<<"branch">>, base64:encode_to_string(BranchBin)}]
+                                       } || {BranchId, BranchBin} <- Branches]
+                     }]},
+    mochijson2:encode(Keys);
+json_encode_results(fetch_clocks_nval, KeysNClocks) ->
+    encode_keys_and_clocks(KeysNClocks);
+json_encode_results(fetch_clocks_range, KeysNClocks) ->
+    encode_keys_and_clocks(KeysNClocks);
+json_encode_results(find_keys, Result) ->
+    Keys = {struct, [{<<"results">>, [{struct, encode_find_key(Key, Int)} || {_Bucket, Key, Int} <- Result]}
+                    ]},
+    mochijson2:encode(Keys);
+json_encode_results(object_stats, Stats) ->
+    mochijson2:encode({struct, Stats}).
+
+-spec encode_keys_and_clocks(keys_clocks()) -> iolist().
+encode_keys_and_clocks(KeysNClocks) ->
+    Keys = {struct, [{<<"keys-clocks">>,
+                      [{struct, encode_key_and_clock(Bucket, Key, Clock)} || {Bucket, Key, Clock} <- KeysNClocks]
+                     }]},
+    mochijson2:encode(Keys).
+
+encode_find_key(Key, Value) ->
+    [{<<"key">>, Key},
+     {<<"value">>, Value}].
+
+encode_key_and_clock({Type, Bucket}, Key, Clock) ->
+    [{<<"bucket-type">>, Type},
+     {<<"bucket">>, Bucket},
+     {<<"key">>, Key},
+     {<<"clock">>, base64:encode_to_string(riak_object:encode_vclock(Clock))}];
+encode_key_and_clock(Bucket, Key, Clock) ->
+    [{<<"bucket">>, Bucket},
+     {<<"key">>, Key},
+     {<<"clock">>, base64:encode_to_string(riak_object:encode_vclock(Clock))}].
 
 -spec hash_function(hash_method()) ->
                         pre_hash|fun((vclock:vclock()) -> non_neg_integer()).

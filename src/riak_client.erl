@@ -707,18 +707,18 @@ stream_list_buckets(Filter, Timeout, Client, Type,
     {ok, ReqId}.
 
 
--spec aae_fold(riak_kv_clusteraae_fsm:query_definition(), riak_client()) 
-                    -> {ok, any()}|{error, timeout}|{error, Err :: term()}.
 %% @doc
 %%
-%% Run a cluster-wide aae query - which can either access cached aae data 
-%% across the cluster, or fold over ranges of the AAE store (which in the
-%% case of Leveled can be the native AAe store.
+%% Run a cluster-wide AAE query - which can either access cached AAE
+%% data across the cluster, or fold over ranges of the AAE store
+%% (which in the case of Leveled can be the native AAE store.
+-spec aae_fold(riak_kv_clusteraae_fsm:query_definition(), riak_client())
+                    -> {ok, any()}|{error, timeout}|{error, Err :: term()}.
 aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
     TimeOut = ?DEFAULT_FOLD_TIMEOUT,
-    riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node, 
+    riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node,
                                                     [{raw, ReqId, Me},
                                                     [Query, TimeOut]]),
     wait_for_fold_results(ReqId, TimeOut).
