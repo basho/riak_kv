@@ -86,7 +86,7 @@
                 crdt_op :: undefined | true,
                 request_type :: undefined | request_type(),
                 force_aae = false :: boolean(),
-                override_nodes = [] :: list()
+                override_vnodes = [] :: list()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -312,7 +312,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                                    preflist2 = Preflist2,
                                    get_core = GetCore,
                                    request_type = RequestType,
-                                   override_nodes = OverNodes}) ->
+                                   override_vnodes = OverVnodes}) ->
     Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
     TRef = schedule_timeout(Timeout),
     case Trace of
@@ -341,7 +341,7 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
                 FetchList = lists:map(fun(Idx) ->
                                             lists:keyfind(Idx, 1, Preflist)
                                         end,
-                                        OverNodes),
+                                        OverVnodes),
                 riak_kv_vnode:get(FetchList, BKey, ReqId),
                 HO_GetCore = riak_kv_get_core:head_merge(GetCore),
                 StateData0#state{tref=TRef, get_core = HO_GetCore};
@@ -385,7 +385,7 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
             update ->
                 riak_kv_get_core:update_result(Idx,
                                                 VnodeResult,
-                                                StateData#state.override_nodes,
+                                                StateData#state.override_vnodes,
                                                 GetCore);
             _ ->
                 riak_kv_get_core:add_result(Idx, VnodeResult, GetCore)
@@ -396,13 +396,12 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
             % will depend on the getcore object being set to head_merge or not.
             % head_merge is used for updates or heads.
             %
-            % If it is not a get, and head merge is called a fetch return may
+            % If head merge is called a fetch return may
             % be made which is a request to update certain objects in the
             % results with bodies (i.e. by substituting a HEAD request with a
             % GET request for that vnode)
-            case {StateData#state.request_type,
-                    riak_kv_get_core:response(UpdGetCore)} of
-                {R, {{fetch, IdxList}, _}} when R /= get ->
+            case riak_kv_get_core:response(UpdGetCore) of
+                {{fetch, IdxList}, _}  ->
                     % Trigger genuine GETs to each vnode index required to
                     % get a merged view of an object.  Hopefully should be
                     % just one
@@ -410,9 +409,9 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
                                                             UpdGetCore),
                     execute(timeout,
                                 StateData#state{request_type = update,
-                                                override_nodes = IdxList,
+                                                override_vnodes = IdxList,
                                                 get_core = NewGC});
-                {_, {Reply, UpdGetCore2}} ->
+                {Reply, UpdGetCore2} ->
                     StateWithReply = StateData#state{get_core = UpdGetCore2},
                     NewStateData = client_reply(Reply, StateWithReply),
                     update_stats(Reply, NewStateData),

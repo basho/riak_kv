@@ -242,8 +242,11 @@ remove_dominated(Objects) ->
     Del = sets:from_list(ancestors(Objects)),
     sets:to_list(sets:subtract(All, Del)).
 
-%% @doc Take a list of {Idx, {ok, Object}} tuples that have been the result
-%% of HEAD requests or GET requests.
+%% @doc Take a list of {Idx, {ok, Object}} tuples that have been the
+%% result of HEAD requests or GET requests. This list MUST be in the
+%% reverse order that the results are received, so that the hd of the
+%% list is the latest response received, and the last element the
+%% first response received.
 %%
 %% Works out the best answers and returns {IdxObjList, IdxHeadList} where the
 %% IdxHeadList is a list of indexes and headers that may need to be updated to
@@ -258,8 +261,10 @@ find_bestobject(FetchedItems) ->
     % fastest to he HEAD (this may be local).
     PredHeadFun = fun({_Idx, Rsp}) -> not is_head(Rsp) end,
     {Objects, Heads} = lists:partition(PredHeadFun, FetchedItems),
+    %% prefer full objects to heads
     FoldList = Heads ++ Objects,
-    {TailIdx, {ok, TailObject}} = lists:last(FoldList),
+    %% prefer the rightmost (fastest responder)
+    InitialBestAnswer = lists:last(FoldList),
 
     FoldFun =
         fun({Idx, {ok, Obj}}, {IsSibling, BestAnswer}) ->
@@ -286,7 +291,7 @@ find_bestobject(FetchedItems) ->
         end,
 
     case lists:foldr(FoldFun,
-                        {false, {TailIdx, {ok, TailObject}}},
+                        {false, InitialBestAnswer},
                         FoldList) of
         {true, IdxObjList} ->
             lists:partition(PredHeadFun, IdxObjList);
