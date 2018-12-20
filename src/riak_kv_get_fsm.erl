@@ -233,12 +233,14 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                         UpNodes = riak_core_node_watcher:nodes(riak_kv),
                         riak_core_apl:get_apl_ann(DocIdx, N, UpNodes)
                 end,
+            RequestType = get_default_support_request_type(?DEFAULT_RT),
             new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                                 n = N,
                                                 bucket_props=Props,
                                                 preflist2 = Preflist2,
                                                 tracked_bucket = StatTracked,
                                                 crdt_op = CrdtOp,
+                                                request_type=RequestType,
                                                 force_aae = ForceAAE})
     end.
 
@@ -321,15 +323,8 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
         _ ->
             ok
     end,
-    RequestType2 =
-        case RequestType of
-            undefined ->
-                get_default_support_request_type(?DEFAULT_RT);
-            _ ->
-                RequestType
-        end,
     StateData =
-        case RequestType2 of
+        case RequestType of
             head ->
                 % Mark the get_core as head_merge so that when determining the
                 % response in riak_get_core the specific head_merge function
