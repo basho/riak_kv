@@ -168,7 +168,6 @@
               node_confirms,%% integer() - number of physically diverse nodes required in preflist on write
               basic_quorum, %% boolean() - whether to use basic_quorum
               notfound_ok,  %% boolean() - whether to treat notfounds as successes
-              force_aae,    %% boolean() - force and aae exchange within the preflist after the GET
               asis,         %% boolean() - whether to send the put without modifying the vclock
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
@@ -423,7 +422,6 @@ malformed_rw_params(RD, Ctx) ->
                 Res,
                 [{#ctx.basic_quorum, "basic_quorum", "default"},
                  {#ctx.notfound_ok, "notfound_ok", "default"},
-                 {#ctx.force_aae, "force_aae", "false"},
                  {#ctx.asis, "asis", "false"}]).
 
 -spec malformed_rw_param({Idx::integer(), Name::string(), Default::string()},
@@ -996,14 +994,11 @@ decode_vclock_header(RD) ->
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket_type=T, bucket=B, key=K, client=C,
-                    basic_quorum=Quorum, notfound_ok=NotFoundOK, 
-                    force_aae=ForceAAE}) ->
+                    basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
     case riak_kv_wm_utils:bucket_type_exists(T) of
         true ->
-            Options0 = [deletedvclock, 
-                        {basic_quorum, Quorum},
-                        {notfound_ok, NotFoundOK},
-                        {force_aae, ForceAAE}],
+            Options0 = [deletedvclock, {basic_quorum, Quorum},
+                        {notfound_ok, NotFoundOK}],
             Options = make_options(Options0, Ctx),
             Ctx#ctx{doc=C:get(riak_kv_wm_utils:maybe_bucket_type(T,B), K, Options)};
         false ->
