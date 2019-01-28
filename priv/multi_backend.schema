@@ -15,7 +15,7 @@
 %% mechanism that will be used on this node.
 {mapping, "multi_backend.$name.storage_backend", "riak_kv.multi_backend", [
   {default, bitcask},
-  {datatype, {enum, [bitcask, leveldb, memory]}},
+  {datatype, {enum, [bitcask, leveldb, leveled, memory]}},
   hidden
 ]}.
 
@@ -53,6 +53,8 @@
         GenerateSubConfig(Name, "bitcask", [bitcask], riak_kv_bitcask_backend);
       leveldb ->
         GenerateSubConfig(Name, "leveldb", [eleveldb], riak_kv_eleveldb_backend);
+      leveled ->
+        GenerateSubConfig(Name, "leveled", [leveled], riak_kv_leveled_backend);
       memory ->
         GenerateSubConfig(Name, "memory_backend", [riak_kv, memory_backend], riak_kv_memory_backend)
       end,

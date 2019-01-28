@@ -79,6 +79,26 @@ start(_Type, _StartArgs) ->
             ok
     end,
 
+    WorkerPools =
+        case app_helper:get_env(riak_kv, worker_pool_strategy, none) of
+            none ->
+                [];
+            single ->
+                NWPS = app_helper:get_env(riak_kv, node_worker_pool_size),
+                [{node_worker_pool, {riak_kv_worker, NWPS, [], [], node_worker_pool}}];
+            dscp ->
+                AF1 = app_helper:get_env(riak_kv, af1_worker_pool_size),
+                AF2 = app_helper:get_env(riak_kv, af2_worker_pool_size),
+                AF3 = app_helper:get_env(riak_kv, af3_worker_pool_size),
+                AF4 = app_helper:get_env(riak_kv, af4_worker_pool_size),
+                BE = app_helper:get_env(riak_kv, be_worker_pool_size),
+                [{dscp_worker_pool, {riak_kv_worker, AF1, [], [], riak_core_node_worker_pool:af1()}},
+                 {dscp_worker_pool, {riak_kv_worker, AF2, [], [], riak_core_node_worker_pool:af2()}},
+                 {dscp_worker_pool, {riak_kv_worker, AF3, [], [], riak_core_node_worker_pool:af3()}},
+                 {dscp_worker_pool, {riak_kv_worker, AF4, [], [], riak_core_node_worker_pool:af4()}},
+                 {dscp_worker_pool, {riak_kv_worker, BE, [], [], riak_core_node_worker_pool:be()}}]
+        end,
+
     %% Append defaults for riak_kv buckets to the bucket defaults
     %% TODO: Need to revisit this. Buckets are typically created
     %% by a specific entity; seems lame to append a bunch of unused
@@ -202,6 +222,16 @@ start(_Type, _StartArgs) ->
                                           [enabled, disabled],
                                           disabled),
 
+            riak_core_capability:register({riak_kv, get_request_type},
+                                          [head, get],
+                                          get),
+
+            %% is using the vnode proxy mailbox queue estimate as a
+            %% soft-limit supported
+            riak_core_capability:register({riak_kv, put_soft_limit},
+                                          [true, false],
+                                          false),
+
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.
             %% The riak_core_ring_handler blocks until all vnodes have been started
@@ -213,7 +243,9 @@ start(_Type, _StartArgs) ->
                 {permissions, [get, put, delete, list_keys, list_buckets,
                                mapreduce, index, get_preflist]}
             ]
-            ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]),
+            ++ [{health_check, {?MODULE, check_kv_health, []}} || HealthCheckOn]
+        
+            ++ WorkerPools),
 
             ok = riak_api_pb_service:register(?SERVICES),
 

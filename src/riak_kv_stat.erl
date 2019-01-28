@@ -66,6 +66,7 @@ register_stats() ->
 
 unregister_vnode_stats(Index) ->
     unregister_per_index(gets, Index),
+    unregister_per_index(heads, Index),
     unregister_per_index(puts, Index).
 
 %% @spec get_stats() -> proplist()
@@ -129,7 +130,8 @@ init([]) ->
     register_stats(),
     Me = self(),
     State = #state{monitors = [{index, spawn_link(?MODULE, monitor_loop, [index])},
-                               {list, spawn_link(?MODULE, monitor_loop, [list])}],
+                               {list, spawn_link(?MODULE, monitor_loop, [list])},
+                               {clusteraae, spawn_link(?MODULE, monitor_loop, [clusteraae])}],
                    repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
 
@@ -179,6 +181,11 @@ do_update({vnode_get, Idx, USecs}) ->
     ok = exometer:update([P, ?APP, vnode, gets], 1),
     ok = create_or_update([P, ?APP, vnode, gets, time], USecs, histogram),
     do_per_index(gets, Idx, USecs);
+do_update({vnode_head, Idx, USecs}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, vnode, heads], 1),
+    ok = create_or_update([P, ?APP, vnode, heads, time], USecs, histogram),
+    do_per_index(heads, Idx, USecs);
 do_update({vnode_put, Idx, USecs}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, vnode, puts], 1),
@@ -288,6 +295,14 @@ do_update({index_create, Pid}) ->
     ok;
 do_update(index_create_error) ->
     exometer:update([?PFX, ?APP, index, fsm, create, error], 1);
+do_update({clusteraae_create, Pid}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, clusteraae, fsm, create], 1),
+    ok = exometer:update([P, ?APP, clusteraae, fsm, active], 1),
+    add_monitor(clusteraae, Pid),
+    ok;
+do_update(clusteraae_create_error) ->
+    exometer:update([?PFX, ?APP, clusteraae, fsm, create, error], 1);
 do_update({list_create, Pid}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, list, fsm, create], 1),
@@ -327,8 +342,21 @@ do_update({write_once_put, Microsecs, ObjSize}) ->
     P = ?PFX,
     ok = exometer:update([P, ?APP, write_once, puts], 1),
     ok = exometer:update([P, ?APP, write_once, puts, time], Microsecs),
-    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram).
-
+    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram);
+do_update(coord_local_unloaded) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_local_unloaded], 1);
+do_update(coord_redir_loaded_local) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_redir_loaded_local], 1);
+do_update(coord_local_soft_loaded) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_local_soft_loaded], 1);
+do_update(coord_redir_unloaded) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_redir_unloaded], 1);
+do_update(coord_redir_least_loaded) ->
+    exometer:update([?PFX, ?APP, node, puts, coord_redir_least_loaded], 1);
+do_update(soft_loaded_vnode_mbox) ->
+    exometer:update([?PFX, ?APP, node, puts, soft_loaded_vnode_mbox], 1);
+do_update(vnode_mbox_check_timeout) ->
+    exometer:update([?PFX, ?APP, node, puts, vnode_mbox_check_timeout], 1).
 
 %% private
 
@@ -465,6 +493,13 @@ stats() ->
                                            {95    , vnode_get_fsm_time_95},
                                            {99    , vnode_get_fsm_time_99},
                                            {max   , vnode_get_fsm_time_100}]},
+     {[vnode, heads], spiral, [], [{one, vnode_heads},
+                                  {count, vnode_heads_total}]},
+     {[vnode, heads, time], histogram, [], [{mean , vnode_head_fsm_time_mean},
+                                           {median, vnode_head_fsm_time_median},
+                                           {95    , vnode_head_fsm_time_95},
+                                           {99    , vnode_head_fsm_time_99},
+                                           {max   , vnode_head_fsm_time_100}]},
      {[vnode, puts], spiral, [], [{one  , vnode_puts},
                                   {count, vnode_puts_total}]},
      {[vnode, puts, time], histogram, [], [{mean  , vnode_put_fsm_time_mean},
@@ -618,7 +653,16 @@ stats() ->
      %% node stats: puts
      {[node, puts], spiral, [], [{one, node_puts},
                                  {count, node_puts_total}]},
+
      {[node, puts, coord_redirs], counter, [], [{value,coord_redirs_total}]},
+     {[node, puts, coord_local_unloaded], counter, [], [{value, coord_local_unloaded_total}]},
+     {[node, puts, coord_redir_loaded_local], counter, [], [{value, coord_redir_loaded_local_total}]},
+     {[node, puts, coord_local_soft_loaded], counter, [], [{value, coord_local_soft_loaded_total}]},
+     {[node, puts, coord_redir_unloaded], counter, [], [{value, coord_redir_unloaded_total}]},
+     {[node, puts, coord_redir_least_loaded], counter, [], [{value, coord_redir_least_loaded_total}]},
+     {[node, puts, soft_loaded_vnode_mbox], counter, [], [{value, soft_loaded_vnode_mbox_total}]},
+     {[node, puts, vnode_mbox_check_timeout], counter, [], [{value, vnode_mbox_check_timeout_total}]},
+
      {[node, puts, fsm, active], counter},
      {[node, puts, fsm, errors], spiral},
      {[node, puts, time], histogram, [], [{mean  , node_put_fsm_time_mean},
@@ -655,7 +699,7 @@ stats() ->
                                                {99    , node_put_fsm_map_time_99},
                                                {max   , node_put_fsm_map_time_100}]},
 
-     %% index & list{keys,buckets} stats
+     %% index & list{keys,buckets} & clusteraae stats
      {[index, fsm, create], spiral, [], [{one, index_fsm_create}]},
      {[index, fsm, create, error], spiral, [], [{one, index_fsm_create_error}]},
      {[index, fsm, active], counter, [], [{value, index_fsm_active}]},
@@ -664,6 +708,9 @@ stats() ->
      {[list, fsm, create, error], spiral, [], [{one  , list_fsm_create_error},
                                                {count, list_fsm_create_error_total}]},
      {[list, fsm, active], counter, [], [{value, list_fsm_active}]},
+     {[clusteraae, fsm, create], spiral, [], [{one, clusteraae_fsm_create}]},
+     {[clusteraae, fsm, create, error], spiral, [], [{one, clusteraae_fsm_create_error}]},
+     {[clusteraae, fsm, active], counter, [], [{value, clusteraae_fsm_active}]},
 
      %% misc stats
      {mapper_count, counter, [], [{value, executing_mappers}]},

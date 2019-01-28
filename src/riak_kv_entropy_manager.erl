@@ -98,6 +98,9 @@
 -define(DEFAULT_AAE_THROTTLE_LIMITS,
         [{-1,0}, {200,10}, {500,50}, {750,250}, {900,1000}, {1100,5000}]).
 -define(ETS, entropy_manager_ets).
+-define(POKES_PER_TICK, 2).
+
+-export_type([exchange/0]).
 
 %%%===================================================================
 %%% API
@@ -574,8 +577,12 @@ check_lock_type(Type, State) ->
     case Type of
         build->
             do_get_build_token(State);
-        upgrade ->
-            do_get_build_token(State);
+        % upgrade ->
+        %     do_get_build_token(State);
+        % Upgrade doesn't actually do any work, so don't spend a token on it
+        % this reduces the time a cluster spends in lock-down waiting for 
+        % rebuilds to spread through the cluster, and the tokens can be spent 
+        % building these upgraded backends.
         _ ->
             {ok, State}
     end.
@@ -663,8 +670,10 @@ tick(State) ->
     State2 = maybe_reload_hashtrees(Ring, State1),
     State3 = maybe_start_upgrade(Ring, State2),
     State4 = lists:foldl(fun(_,S) ->
-                                 maybe_poke_tree(S)
-                         end, State3, lists:seq(1,10)),
+                                maybe_poke_tree(S)
+                            end, 
+                            State3, 
+                            lists:seq(1, ?POKES_PER_TICK)),
     State5 = maybe_exchange(Ring, State4),
     State5.
 
@@ -970,12 +979,14 @@ maybe_exchange(Ring, State) ->
                     requeue_exchange(LocalIdx, RemoteIdx, IndexN, State2);
                 false ->
                     LocalVN = {LocalIdx, node()},
-                    case start_exchange(LocalVN, {RemoteIdx, IndexN}, Ring, State2) of
-                        {ok, State3} ->
-                            State3;
-                        {_Reason, State3} ->
-                            State3
-                    end
+                    {R, State3} =  start_exchange(LocalVN, 
+                                                    {RemoteIdx, IndexN}, 
+                                                    Ring, 
+                                                    State2),
+                    lager:info("Attempt to start exchange between ~w and ~w" 
+                                    ++ " resulted in ~w",
+                                [IndexN, RemoteIdx, R]),
+                    State3
             end
     end.
 
