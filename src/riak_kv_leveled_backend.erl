@@ -115,6 +115,7 @@ start(Partition, Config) ->
     SCP = app_helper:get_prop_or_env(singlefile_compactionpercentage, Config, leveled),
     TOS = app_helper:get_prop_or_env(snapshot_timeout_short, Config, leveled),
     TOL = app_helper:get_prop_or_env(snapshot_timeout_long, Config, leveled),
+    LOL = app_helper:get_prop_or_env(log_level, Config, leveled),
 
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
@@ -125,6 +126,7 @@ start(Partition, Config) ->
                             {sync_strategy, SYS},
                             {compression_method, CMM},
                             {compression_point, CMP},
+                            {log_level, LOL},
                             {max_run_length, MRL},
                             {maxrunlength_compactionpercentage, MCP},
                             {singlefile_compactionpercentage, SCP},
