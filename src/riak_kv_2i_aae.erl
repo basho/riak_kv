@@ -20,7 +20,7 @@
 
 %% @doc Code related to repairing 2i data.
 -module(riak_kv_2i_aae).
--behaviour(gen_fsm).
+-behaviour(gen_fsm_compat).
 
 -include("riak_kv_wm_raw.hrl").
 
@@ -29,7 +29,7 @@
 -export([first_partition/2, wait_for_aae_pid/2, wait_for_repair/3,
          wait_for_repair/2]).
 
-%% gen_fsm callbacks
+%% gen_fsm_compat callbacks
 -export([init/1,
          handle_event/3,
          handle_sync_event/4,
@@ -103,12 +103,12 @@
 -spec start([integer()], integer()) -> {ok, pid()} | {error, term()}.
 start(Partitions, Speed)
   when Speed >= ?MIN_DUTY_CYCLE, Speed =< ?MAX_DUTY_CYCLE ->
-    Res = gen_fsm:start({local, ?MODULE}, ?MODULE,
+    Res = gen_fsm_compat:start({local, ?MODULE}, ?MODULE,
                         [Partitions, Speed, self()], []),
     case {Res, length(Partitions)} of
         {{ok, _Pid}, 1} ->
             try
-                EarlyAck = gen_fsm:sync_send_all_state_event(?MODULE,
+                EarlyAck = gen_fsm_compat:sync_send_all_state_event(?MODULE,
                                                              early_ack,
                                                              infinity),
                 case EarlyAck of
@@ -128,11 +128,11 @@ start(Partitions, Speed)
 
 %% @doc Will stop any worker process and try to close leveldb databases.
 stop(TimeOut) ->
-    gen_fsm:sync_send_all_state_event(?MODULE, stop, TimeOut).
+    gen_fsm_compat:sync_send_all_state_event(?MODULE, stop, TimeOut).
 
 -spec get_status() -> [{Key :: atom(), Val :: term()}].
 get_status() ->
-    gen_fsm:sync_send_all_state_event(?MODULE, status, infinity).
+    gen_fsm_compat:sync_send_all_state_event(?MODULE, status, infinity).
 
 init([Partitions, Speed, Caller]) ->
     process_flag(trap_exit, true),
@@ -146,7 +146,7 @@ init([Partitions, Speed, Caller]) ->
 maybe_notify(State=#state{reply_to=undefined}, Reply) ->
     State#state{early_reply=Reply};
 maybe_notify(State=#state{reply_to=From}, Reply) ->
-    gen_fsm:reply(From, Reply),
+    gen_fsm_compat:reply(From, Reply),
     State#state{reply_to=undefined}.
 
 first_partition(timeout, State) ->
@@ -162,7 +162,7 @@ next_partition(State=#state{remaining=[]}) ->
 next_partition(State=#state{remaining=[Partition|_]}) ->
     ReqId = make_ref(),
     riak_kv_vnode:request_hashtree_pid(Partition, {fsm, ReqId, self()}),
-    Timer = gen_fsm:send_event_after(?AAE_PID_TIMEOUT, aae_pid_timeout),
+    Timer = gen_fsm_compat:send_event_after(?AAE_PID_TIMEOUT, aae_pid_timeout),
     {next_state, wait_for_aae_pid, State#state{aae_pid_req_id=ReqId,
                                                aae_pid_timer=Timer}}.
 
@@ -178,7 +178,7 @@ wait_for_aae_pid({ReqId, {ok, undefined}},
     wait_for_aae_pid({ReqId, {error, undefined_aae_pid}}, State);
 wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId,
                                                      aae_pid_timer=Timer}) ->
-    _ = gen_fsm:cancel_timer(Timer),
+    _ = gen_fsm_compat:cancel_timer(Timer),
     State2 = State#state{aae_pid_timer=undefined},
     State3 = add_result(#partition_result{status=error, error={no_aae_pid, Err}}, State2),
     State4 = maybe_notify(State3, {error, {no_aae_pid, Err}}),
@@ -189,12 +189,12 @@ wait_for_aae_pid({ReqId, {ok, TreePid}},
                               aae_pid_timer=Timer,
                               remaining=[Partition|_]}) 
   when is_pid(TreePid) ->
-    _ = gen_fsm:cancel_timer(Timer),
+    _ = gen_fsm_compat:cancel_timer(Timer),
     WorkerFun =
     fun() ->
             Res =
             repair_partition(Partition, Speed, ?MODULE, TreePid),
-            gen_fsm:sync_send_event(?MODULE, {repair_result, Res}, infinity),
+            gen_fsm_compat:sync_send_event(?MODULE, {repair_result, Res}, infinity),
             ok
     end,
     Mon = monitor(process, spawn_link(WorkerFun)),
@@ -222,7 +222,7 @@ wait_for_repair({repair_result, Res},
             State
     end,
     demonitor(Mon, [flush]),
-    gen_fsm:reply(From, ok),
+    gen_fsm_compat:reply(From, ok),
     State3 = add_result(Res, State2),
     next_partition(State3#state{worker_monitor=undefined,
                                 worker_status=starting,
@@ -257,7 +257,7 @@ repair_partition(Partition, DutyCycle, From, TreePid) ->
     case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of
         ok ->
             lager:info("Acquired lock on partition ~p", [Partition]),
-            gen_fsm:sync_send_event(From, {lock_acquired, Partition}, infinity),
+            gen_fsm_compat:sync_send_event(From, {lock_acquired, Partition}, infinity),
             lager:info("Repairing indexes in partition ~p", [Partition]),
             case create_index_data_db(Partition, DutyCycle) of
                 {ok, {DBDir, DBRef, IndexDBCount}} ->
@@ -407,7 +407,7 @@ duty_cycle_pause(WaitFactor, StartTime) ->
 %% @doc Async notify this FSM of an update.
 -spec send_event(any()) -> ok.
 send_event(Event) ->
-    gen_fsm:send_event(?MODULE, Event).
+    gen_fsm_compat:send_event(?MODULE, Event).
 
 %% @doc Waiting for 2i data scanning updates and final result.
 wait_for_index_scan(Ref, BatchRef, StartTime, WaitFactor) ->
@@ -559,7 +559,7 @@ get_hashtree_lock(TreePid, Retries) ->
 
 
 %%%===================================================================
-%%% gen_fsm callbacks
+%%% gen_fsm_compat callbacks
 %%%===================================================================
 
 to_simple_partition_result(#partition_result{
@@ -685,7 +685,7 @@ handle_sync_event(stop, From, _StateName, State=#state{open_dbs=DBs}) ->
          _:_ ->
              ok
      end || DB <- DBs],
-    gen_fsm:reply(From, ok),
+    gen_fsm_compat:reply(From, ok),
     {stop, user_request, State}.
 
 terminate(_Reason, _StateName, _State) ->
