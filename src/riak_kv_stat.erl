@@ -858,7 +858,7 @@ leveldb_read_block_errors() ->
             %% technically a call to status is a vnode
             %% operation, so spread the load by picking
             %% a vnode at random.
-            Nth = crypto:rand_uniform(1, length(Indices)),
+            Nth = rand:uniform(length(Indices)),
             Idx = lists:nth(Nth, Indices),
             Status = vnode_status(Idx),
             leveldb_read_block_errors(Status)
