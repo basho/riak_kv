@@ -137,6 +137,7 @@
 -module(riak_kv_stat_bc).
 
 -compile(export_all).
+-compile(nowarn_export_all).
 
 %% @spec produce_stats() -> proplist()
 %% @doc Produce a proplist-formatted view of the current aggregation
