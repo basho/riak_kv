@@ -382,28 +382,26 @@ get_folder(FoldFun, Acc, KeyCount) ->
             fold_anything_fun(FoldFun, Acc, KeyCount)
     end.
 
-key_of_integer(Range, State) ->
-    {N, S} = random:uniform_s(Range, State),
+key_of_integer(Range) ->
+    N = rand:uniform(Range),
     Key = integer_to_list(N) ++ ".1000", %% e.g. "10.1000"
     BKey = list_to_binary(Key),          %% e.g. <<"10.1000">>
-    {BKey, S}.
+    BKey.
 
 value_for_random(VR, Size) ->
     <<VR:(Size*8)>>.
 
 fold_anything_fun(FoldFunc, Acc, KeyCount) ->
     Range = 1000000,
-    KeyState = random:seed0(),
-    ValueState = random:seed0(),
-    all_keys_folder(FoldFunc, Acc, Range, {KeyState, ValueState}, KeyCount).
+    all_keys_folder(FoldFunc, Acc, Range, KeyCount).
 
-all_keys_folder(FoldFunc, Acc, _Range, _S, 0) ->
+all_keys_folder(FoldFunc, Acc, _Range, 0) ->
     FoldFunc(undefined, 0, Acc);
-all_keys_folder(FoldFunc, Acc, Range, {KS,VS}, N) ->
-    {Key,KSS} = key_of_integer(Range, KS),
-    {VR,VSS} = random:uniform_s(255,VS),
+all_keys_folder(FoldFunc, Acc, Range, N) ->
+    Key = key_of_integer(Range),
+    VR = rand:uniform(255),
     Acc1 = FoldFunc(Key, VR, Acc),
-    all_keys_folder(FoldFunc, Acc1, Range, {KSS,VSS}, N-1).
+    all_keys_folder(FoldFunc, Acc1, Range, N-1).
 
 %% @private
 %% Return a function to fold over keys on this backend
