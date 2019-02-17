@@ -19,6 +19,8 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_read_bin_trace_file).
+
+-compile(nowarn_export_all).
 -compile(export_all).
 
 read(Path) ->

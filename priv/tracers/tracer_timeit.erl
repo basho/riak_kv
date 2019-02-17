@@ -19,6 +19,8 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_timeit).
+
+-compile(nowarn_export_all).
 -compile(export_all).
 
 %% @doc Dynamically add timing to MFA.  There are various types of
@@ -43,21 +45,21 @@ timeit(Mod, Fun, Arity, Type) ->
 stop() -> dbg:stop_clear().
 
 trace({trace, Pid, call, {Mod, Fun, _}}, {D, {all, {Count, Max}}}) ->
-    D2 = orddict:store({Pid, Mod, Fun}, now(), D),
+    D2 = orddict:store({Pid, Mod, Fun}, os:timestamp(), D),
     {D2, {all, {Count, Max}}};
 trace({trace, Pid, call, {Mod, Fun, _}},
       {D, {sample, {N, Max}, {M, K, Total}}}) ->
     M2 = M+1,
     Total2 = Total+1,
     if N == M2 ->
-            D2 = orddict:store({Pid, Mod, Fun}, now(), D),
+            D2 = orddict:store({Pid, Mod, Fun}, os:timestamp(), D),
             {D2, {sample, {N, Max}, {0, K, Total2}}};
        true ->
             {D, {sample, {N, Max}, {M2, K, Total2}}}
     end;
 trace({trace, Pid, call, {Mod, Fun, _}},
       {D, {threshold, {Millis, Max}, {Over, Total}}}) ->
-    D2 = orddict:store({Pid, Mod, Fun}, now(), D),
+    D2 = orddict:store({Pid, Mod, Fun}, os:timestamp(), D),
     {D2, {threshold, {Millis, Max}, {Over, Total+1}}};
 
 trace({trace, Pid, return_from, {Mod, Fun, _}, _Result},
@@ -66,7 +68,7 @@ trace({trace, Pid, return_from, {Mod, Fun, _}, _Result},
     case orddict:find(Key, D) of
         {ok, StartTime} ->
             Count2 = Count+1,
-            ElapsedUs = timer:now_diff(now(), StartTime),
+            ElapsedUs = timer:now_diff(os:timestamp(), StartTime),
             ElapsedMs = ElapsedUs/1000,
             io:format(user, "~p:~p:~p: ~p ms\n", [Pid, Mod, Fun, ElapsedMs]),
             if Count2 == Max -> stop();
@@ -82,7 +84,7 @@ trace({trace, Pid, return_from, {Mod, Fun, _}, _Result},
     case orddict:find(Key, D) of
         {ok, StartTime} ->
             K2 = K+1,
-            ElapsedUs = timer:now_diff(now(), StartTime),
+            ElapsedUs = timer:now_diff(os:timestamp(), StartTime),
             ElapsedMs = ElapsedUs/1000,
             io:format(user, "[sample ~p/~p] ~p:~p:~p: ~p ms\n",
                       [K2, Total, Pid, Mod, Fun, ElapsedMs]),
@@ -98,7 +100,7 @@ trace({trace, Pid, return_from, {Mod, Fun, _}, _Result},
     Key = {Pid, Mod, Fun},
     case orddict:find(Key, D) of
         {ok, StartTime} ->
-            ElapsedUs = timer:now_diff(now(), StartTime),
+            ElapsedUs = timer:now_diff(os:timestamp(), StartTime),
             ElapsedMs = ElapsedUs / 1000,
             if ElapsedMs > Millis ->
                     Over2 = Over+1,

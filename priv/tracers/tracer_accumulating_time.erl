@@ -19,7 +19,9 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_accumulating_time).
+
 -compile(export_all).
+-compile(nowarn_export_all).
 
 start(Pid_list, MFA_list, IntervalMS) ->
     dbg:tracer(process, {fun trace/2, new_stats()}),
@@ -46,7 +48,7 @@ trace({trace_ts, Pid, return_from, {Mod, Func, Arity}, _Res, TS}, {Dict}) ->
     DKey = {Pid, MFA},
     Start = case dict:find(DKey, Dict) of
                 {ok, StTime} -> StTime;
-                error        -> now()
+                error        -> os:timestamp()
             end,
     Elapsed = timer:now_diff(TS, Start),
     SumKey = {sum, MFA},
