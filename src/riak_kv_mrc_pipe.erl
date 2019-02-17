@@ -1113,7 +1113,7 @@ compat_fun(_, _, _) ->
 random_constant_hash()->
     %% using now/0 as a randomizer, so that we don't overload just one
     %% riak node with reduce work
-    Random = chash:key_of(now()),
+    Random = chash:key_of(os:timestamp()),
 
     %% the trick here: generate a random hash, then find the first
     %% vnode alive in its preflist, then re-generate a hash that puts
