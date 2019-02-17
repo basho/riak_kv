@@ -23,7 +23,9 @@
 
 -export([ensemble_overview/0,
          ensemble_detail/1]).
+
 -compile(export_all).
+-compile(nowarn_export_all).
 
 -type ensembles() :: [{ensemble_id(), ensemble_info()}].
 -type quorums() :: orddict(ensemble_id(), {leader_id(), boolean(), [peer_id()]}).
