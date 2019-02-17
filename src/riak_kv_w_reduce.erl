@@ -252,18 +252,6 @@ stored_source(Bucket, Key) ->
     {ok, Object} = C:get(Bucket, Key, 1),
     riak_object:get_value(Object).
 
-%% @doc Remove reduce batch size knobs from the `Arg' list, so
-%% mochijson2 doesn't blow up when trying to encode them.
-remove_batch_props(Arg) when is_list(Arg) ->
-    lists:filter(fun(reduce_phase_only_1)         -> false;
-                    ({reduce_phase_only_1,_})     -> false;
-                    ({reduce_phase_batch_size,_}) -> false;
-                    (_)                           -> true
-                 end,
-                 Arg);
-remove_batch_props(Arg) ->
-    Arg.
-
 %% @doc Determine what batch size should be used for this fitting.
 %% Default is 20, but may be overridden by the `Arg' props
 %% `reduce_phase_only_1' and `reduce_phase_batch_size', or the riak_kv
