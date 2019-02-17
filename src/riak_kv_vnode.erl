@@ -298,7 +298,7 @@ local_put(Index, Obj) ->
 local_put(Index, Obj, Options) ->
     BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
     Ref = make_ref(),
-    ReqId = erlang:phash2(erlang:now()),
+    ReqId = erlang:phash2({self(), os:timestamp()}),
     StartTime = riak_core_util:moment(),
     Sender = {raw, Ref, self()},
     put({Index, node()}, BKey, Obj, ReqId, StartTime, Options, Sender),
@@ -309,7 +309,7 @@ local_put(Index, Obj, Options) ->
 
 local_get(Index, BKey) ->
     Ref = make_ref(),
-    ReqId = erlang:phash2(erlang:now()),
+    ReqId = erlang:phash2({self(), os:timestamp()}),
     Sender = {raw, Ref, self()},
     get({Index,node()}, BKey, ReqId, Sender),
     receive
