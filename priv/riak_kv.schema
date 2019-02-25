@@ -138,6 +138,16 @@
 ]}.
 
 
+%% @doc Backend PUT Pause (ms).
+%% If the backend PUT has resulted in a pause request, then how long should
+%% the vnode pause for?  This is measured in ms, and currently only applies
+%% to the leveled backend
+{mapping, "backend_pause_ms", "riak_kv.backend_pause_ms", [
+  {datatype, integer},
+  {default, 10},
+  {commented, 10}
+]}.
+
 %% @doc Whether to allow node to participate in coverage queries.
 %% This is used as a manual switch to stop nodes in incomplete states
 %% (E.g. doing a full partition repair, or node replace) from participating
