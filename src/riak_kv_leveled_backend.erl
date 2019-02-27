@@ -48,9 +48,10 @@
 -endif.
 
 -define(RIAK_TAG, o_rkv).
--define(CAPABILITIES, [async_fold,
-                        indexes,
+-define(CAPABILITIES, [always_v1obj,
                         head,
+                        indexes,
+                        async_fold,
                         fold_heads,
                         snap_prefold,
                         hot_backup,
@@ -89,7 +90,7 @@ api_version() ->
     {ok, ?API_VERSION}.
 
 %% @doc Return the capabilities of the backend.
--spec capabilities(state()) -> {ok, [atom()]}.
+-spec capabilities(state()|undefined) -> {ok, [atom()]}.
 capabilities(_) ->
     {ok, ?CAPABILITIES}.
 
