@@ -3441,7 +3441,7 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
             %% and errors themselves.
             Mod:put_object(Bucket, Key, IndexSpecs, Obj, ModState);
         false ->
-            ObjFmt = riak_core_capability:get({riak_kv, object_format}, v0),
+            ObjFmt = object_format(Mod, ModState),
             EncodedVal = riak_object:to_binary(ObjFmt, Obj),
             BinSize = size(EncodedVal),
             %% Report or fail on large objects
@@ -3471,6 +3471,15 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
 uses_r_object(Mod, ModState, Bucket) ->
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     lists:member(uses_r_object, Capabilities).
+
+object_format(Mod, ModState) ->
+    {ok, Capabilities} = Mod:capabilities(ModState),
+    case lists:member(always_v1obj, Capabilities) of
+        true ->
+            v1;
+        false ->
+            riak_core_capability:get({riak_kv, object_format}, v0)
+    end.
 
 sanitize_bkey({{<<"default">>, B}, K}) ->
     {B, K};
@@ -3991,5 +4000,10 @@ rollover_test_() ->
                end}
              ]}
     }.
+
+always_v1_test() ->
+    % Confirm that the leveled backend will always be a v1 object
+    ObjFmt = object_format(riak_kv_leveled_backend, undefined),
+    ?assertEqual(v1, ObjFmt).
 
 -endif.
