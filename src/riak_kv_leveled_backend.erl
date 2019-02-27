@@ -73,7 +73,8 @@
                 db_path :: string(),
                 config,
                 compactions_perday :: integer(),
-                valid_hours = [] :: list(integer())}).
+                valid_hours = [] :: list(integer()),
+                backend_pause_ms = ?PAUSE_TIME :: non_neg_integer()}).
 
 -type state() :: #state{}.
 
@@ -117,6 +118,8 @@ start(Partition, Config) ->
     TOL = app_helper:get_prop_or_env(snapshot_timeout_long, Config, leveled),
     LOL = app_helper:get_prop_or_env(log_level, Config, leveled),
 
+    BackendPause = app_helper:get_env(riak_kv, backend_pause_ms, ?PAUSE_TIME),
+
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             StartOpts = [{root_path, DataDir},
@@ -142,7 +145,8 @@ start(Partition, Config) ->
                         config=Config,
                         db_path=DataDir,
                         compactions_perday = CRD,
-                        valid_hours = ValidHours}};
+                        valid_hours = ValidHours,
+                        backend_pause_ms = BackendPause}};
         {error, Reason} ->
             lager:error("Failed to start leveled backend: ~p\n",
                             [Reason]),
@@ -204,7 +208,10 @@ put(Bucket, Key, IndexSpecs, Val, #state{bookie=Bookie}=State) ->
         ok ->
             {ok, State};
         pause ->
-            % To be changed if back-pressure added to Riak put_fsm
+            lager:warning("Backend ~w paused for ~w ms in response to put",
+                            [State#state.partition,
+                                State#state.backend_pause_ms]),
+            timer:sleep(State#state.backend_pause_ms),
             {ok, State}
     end.
 
@@ -222,9 +229,9 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
         ok ->
             {ok, State};
         pause ->
-            lager:warning("Vnode paused for ~w ms to back-off PUT load",
-                            [?PAUSE_TIME]),
-            timer:sleep(?PAUSE_TIME),
+            lager:warning("Backend ~w paused for ~w ms in response to delete",
+                            [State#state.partition,
+                                State#state.backend_pause_ms]),
             {ok, State}
     end.
 
