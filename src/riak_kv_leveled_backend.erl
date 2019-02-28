@@ -233,6 +233,7 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
             lager:warning("Backend ~w paused for ~w ms in response to delete",
                             [State#state.partition,
                                 State#state.backend_pause_ms]),
+            timer:sleep(State#state.backend_pause_ms),                 
             {ok, State}
     end.
 
