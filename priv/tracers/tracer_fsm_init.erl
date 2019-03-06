@@ -19,6 +19,8 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_fsm_init).
+
+-compile(nowarn_export_all).
 -compile(export_all).
 
 start() ->

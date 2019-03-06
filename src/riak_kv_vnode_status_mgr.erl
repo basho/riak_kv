@@ -237,7 +237,7 @@ code_change(_OldVsn, State, _Extra) ->
 get_counter_lease(_LeaseSize, Status, 1) ->
     case get_status_item(vnodeid, Status, undefined) of
         undefined ->
-            {VnodeId, Status2} = assign_vnodeid(erlang:now(),
+            {VnodeId, Status2} = assign_vnodeid(os:timestamp(),
                                                 riak_core_nodeid:get(),
                                                 Status),
             {0, 0, VnodeId, Status2};
@@ -283,7 +283,7 @@ get_counter_lease(LeaseSize0, Status, ?VNODE_STATUS_VERSION) ->
 -spec new_id_and_counter(status(), non_neg_integer()) ->
                                 {non_neg_integer(), non_neg_integer(), binary(), status()}.
 new_id_and_counter(Status, LeaseSize) ->
-    {VnodeId, Status2} = assign_vnodeid(erlang:now(),
+    {VnodeId, Status2} = assign_vnodeid(os:timestamp(),
                                         riak_core_nodeid:get(),
                                         Status),
     {0, LeaseSize, VnodeId, orddict:store(counter, LeaseSize, Status2)}.

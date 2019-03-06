@@ -19,6 +19,8 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_merge_and_and_handoff).
+
+-compile(nowarn_export_all).
 -compile(export_all).
 
 start() ->

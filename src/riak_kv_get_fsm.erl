@@ -498,7 +498,7 @@ roll_d100() ->
 -else.
 % technically not a d100 as it has a 0
 roll_d100() ->
-    crypto:rand_uniform(0, 100).
+    rand:uniform(101) - 1.
 -endif.
 
 %% Issue read repairs for any vnodes that are out of date

@@ -51,6 +51,8 @@
 %% 
 
 -module(tracer_func_args).
+
+-compile(nowarn_export_all).
 -compile(export_all).
 
 start(Mod, Func, Arity, RunSeconds) ->

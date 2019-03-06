@@ -298,7 +298,7 @@ local_put(Index, Obj) ->
 local_put(Index, Obj, Options) ->
     BKey = {riak_object:bucket(Obj), riak_object:key(Obj)},
     Ref = make_ref(),
-    ReqId = erlang:phash2(erlang:now()),
+    ReqId = erlang:phash2({self(), os:timestamp()}),
     StartTime = riak_core_util:moment(),
     Sender = {raw, Ref, self()},
     put({Index, node()}, BKey, Obj, ReqId, StartTime, Options, Sender),
@@ -309,7 +309,7 @@ local_put(Index, Obj, Options) ->
 
 local_get(Index, BKey) ->
     Ref = make_ref(),
-    ReqId = erlang:phash2(erlang:now()),
+    ReqId = erlang:phash2({self(), os:timestamp()}),
     Sender = {raw, Ref, self()},
     get({Index,node()}, BKey, ReqId, Sender),
     receive
@@ -774,7 +774,7 @@ handle_command({mapexec_error_noretry, JobId, Err}, _Sender, #state{mrjobs=Jobs}
                    {ok, Job} ->
                        Jobs1 = dict:erase(JobId, Jobs),
                        #mrjob{target=Target} = Job,
-                       gen_fsm:send_event(Target, {mapexec_error_noretry, self(), Err}),
+                       gen_fsm_compat:send_event(Target, {mapexec_error_noretry, self(), Err}),
                        State#state{mrjobs=Jobs1};
                    error ->
                        State
@@ -785,7 +785,7 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                    {ok, Job} ->
                        Jobs1 = dict:erase(JobId, Jobs),
                        #mrjob{target=Target} = Job,
-                       gen_fsm:send_event(Target, {mapexec_reply, Result, self()}),
+                       gen_fsm_compat:send_event(Target, {mapexec_reply, Result, self()}),
                        State#state{mrjobs=Jobs1};
                    error ->
                        State

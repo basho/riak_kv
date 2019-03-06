@@ -19,7 +19,9 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_backend_latency).
+
 -compile(export_all).
+-compile(nowarn_export_all).
 
 start() ->
     start(500).
@@ -136,7 +138,7 @@ trace({trace_ts, Pid, call, {riak_kv_put_fsm, init, _}, TS}, {Dict, LMS}) ->
 trace({trace_ts, Pid, call, {riak_kv_put_fsm, finish, _}, TS}, {Dict, LatencyMS}) ->
     Start = case dict:find({put, Pid}, Dict) of
                 {ok, StTime} -> StTime;
-                error        -> now()
+                error        -> os:timestamp()
             end,
     case timer:now_diff(TS, Start) div 1000 of
         Elapsed when Elapsed > LatencyMS ->
@@ -150,7 +152,7 @@ trace({trace_ts, Pid, call, {riak_kv_get_fsm, init, _}, TS}, {Dict, LMS}) ->
 trace({trace_ts, Pid, call, {riak_kv_get_fsm, finalize, _}, TS}, {Dict, LatencyMS}) ->
     Start = case dict:find({get, Pid}, Dict) of
                 {ok, StTime} -> StTime;
-                error        -> now()
+                error        -> os:timestamp()
             end,
     case timer:now_diff(TS, Start) div 1000 of
         Elapsed when Elapsed > LatencyMS ->
@@ -165,7 +167,7 @@ trace({trace_ts, Pid, return_from, {Mod, Func, _}, _Res, TS}, {Dict, LatencyMS})
     DKey = {Mod, Pid},
     Start = case dict:find(DKey, Dict) of
                 {ok, StTime} -> StTime;
-                error        -> now()
+                error        -> os:timestamp()
             end,
     case timer:now_diff(TS, Start) div 1000 of
         Elapsed when Elapsed > LatencyMS ->

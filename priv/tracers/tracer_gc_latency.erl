@@ -19,6 +19,8 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_gc_latency).
+
+-compile(nowarn_export_all).
 -compile(export_all).
 
 start(LatencyMS) ->

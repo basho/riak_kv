@@ -141,7 +141,6 @@ make_bk(1, Bucket, Key) ->
 %% @doc Start the bitcask backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config0) ->
-    random:seed(erlang:now()),
     {Config, KeyVsn} =
         case app_helper:get_prop_or_env(small_keys, Config0, bitcask) of
             false ->
@@ -584,7 +583,7 @@ schedule_merge(Ref) when is_reference(Ref) ->
     JitterPerc = app_helper:get_env(riak_kv, bitcask_merge_check_jitter,
                                     ?MERGE_CHECK_JITTER),
     Jitter = Interval * JitterPerc,
-    FinalInterval = Interval + trunc(2 * random:uniform() * Jitter - Jitter),
+    FinalInterval = Interval + trunc(2 * rand:uniform() * Jitter - Jitter),
     lager:debug("Scheduling Bitcask merge check in ~pms", [FinalInterval]),
     riak_kv_backend:callback_after(FinalInterval, Ref, merge_check).
 

@@ -19,6 +19,8 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_large4).
+
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -record(r_object, {bucket         = '_',

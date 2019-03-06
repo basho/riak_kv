@@ -19,6 +19,8 @@
 %% -------------------------------------------------------------------
 
 -module(tracer_eleveldb_put_size).
+
+-compile(nowarn_export_all).
 -compile(export_all).
 
 start() ->

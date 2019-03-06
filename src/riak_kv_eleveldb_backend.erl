@@ -108,9 +108,6 @@ capabilities(_, _) ->
 %% @doc Start the eleveldb backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
-    %% Initialize random seed
-    random:seed(now()),
-
     %% Get the data root directory
     DataDir = filename:join(app_helper:get_prop_or_env(data_root, Config, eleveldb),
                             integer_to_list(Partition)),
@@ -584,7 +581,7 @@ init_state(DataRoot, Config) ->
     %% under heavy uniform load...
     WriteBufferMin = config_value(write_buffer_size_min, MergedConfig, 30 * 1024 * 1024),
     WriteBufferMax = config_value(write_buffer_size_max, MergedConfig, 60 * 1024 * 1024),
-    WriteBufferSize = WriteBufferMin + random:uniform(1 + WriteBufferMax - WriteBufferMin),
+    WriteBufferSize = WriteBufferMin + rand:uniform(1 + WriteBufferMax - WriteBufferMin),
 
     %% Update the write buffer size in the merged config and make sure create_if_missing is set
     %% to true
