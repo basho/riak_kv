@@ -19,3 +19,4 @@ erln8.config
 riak_kv.iml
 _build/
 .rebar3/
+rebar.lock
