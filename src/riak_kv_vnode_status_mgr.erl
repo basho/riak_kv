@@ -25,7 +25,7 @@
 -behaviour(gen_server).
 
 -ifdef(TEST).
--compile([export_all]).
+-compile([export_all, nowarn_export_all]).
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -endif.

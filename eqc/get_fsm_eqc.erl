@@ -5,7 +5,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/riak_kv_vnode.hrl").
 
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 -define(DEFAULT_BUCKET_PROPS,
         [{allow_mult, false},
          {chash_keyfun, {riak_core_util, chash_std_keyfun}},

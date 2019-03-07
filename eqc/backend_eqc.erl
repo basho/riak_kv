@@ -216,7 +216,7 @@ fold_objects_fun() ->
     end.
 
 get_partition() ->
-    {MegaSecs, Secs, MicroSecs} = erlang:now(),
+    {MegaSecs, Secs, MicroSecs} = os:timestamp(),
     Partition = integer_to_list(MegaSecs) ++
         integer_to_list(Secs) ++
         integer_to_list(MicroSecs),

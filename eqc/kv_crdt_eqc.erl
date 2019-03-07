@@ -28,7 +28,7 @@
 -include("include/riak_kv_types.hrl").
 -include("src/riak_kv_wm_raw.hrl").
 
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 -define(TAG, 69).
 -define(V1_VERS, 1).

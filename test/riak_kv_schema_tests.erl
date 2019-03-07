@@ -21,7 +21,7 @@
 -module(riak_kv_schema_tests).
 
 -include_lib("eunit/include/eunit.hrl").
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 -define(DEFAULT_ENABLED_JOB_CLASSES, [
     {riak_kv, list_buckets},
@@ -325,17 +325,7 @@ correct_error_handling_by_multibackend_test() ->
         {["multi_backend", "default", "bitcask", "data_root"], "/data/default_bitcask"}
     ],
 
-    DepsPath = get_deps_dir(),
-
-    SchemaPaths = [
-                   "priv/riak_kv.schema",
-                   "priv/multi_backend.schema",
-                   filename:join(DepsPath, "bitcask/priv/bitcask.schema"),
-                   filename:join(DepsPath, "bitcask/priv/bitcask_multi.schema"),
-                   filename:join(DepsPath, "eleveldb/priv/eleveldb.schema"),
-                   filename:join(DepsPath, "eleveldb/priv/eleveldb_multi.schema"),
-                   "test/bad_bitcask_multi.schema"
-                  ],
+    SchemaPaths = schema_paths() ++ [ "test/bad_bitcask_multi.schema" ],
 
     Config = cuttlefish_unit:generate_templated_config(SchemaPaths,
                                                        Conf,
@@ -369,16 +359,7 @@ all_backend_multi_test() ->
 
     ],
 
-    DepsPath = get_deps_dir(),
-
-    SchemaPaths = [
-                   "priv/riak_kv.schema",
-                   "priv/multi_backend.schema",
-                   filename:join(DepsPath, "bitcask/priv/bitcask.schema"),
-                   filename:join(DepsPath, "bitcask/priv/bitcask_multi.schema"),
-                   filename:join(DepsPath, "eleveldb/priv/eleveldb.schema"),
-                   filename:join(DepsPath, "eleveldb/priv/eleveldb_multi.schema")
-                  ],
+    SchemaPaths = schema_paths(),
 
     Config = cuttlefish_unit:generate_templated_config(SchemaPaths,
         Conf, context(), predefined_schema()),
@@ -487,57 +468,24 @@ riak_core_schema(Error) ->
     Error.
 
 riak_core_dir() ->
-    TryDeps = case os:getenv("REBAR_DEPS_DIR") of
-        false ->
-            ["../deps", "../.."];
-        Dir ->
-            [Dir, "../deps"]
-    end,
-    riak_core_dir(TryDeps).
-riak_core_dir([Deps | TryDeps]) ->
-    RCDir   = filename:join(Deps, "riak_core"),
-    Schema  = filename:join([RCDir, "priv", "riak_core.schema"]),
-    % ?debugFmt("Checking ~s and ~s", [RCDir, Schema]),
-    case filelib:is_regular(Schema) of
-        true ->
-            {RCDir, Schema};
-        _ ->
-            riak_core_dir(TryDeps)
-    end;
-riak_core_dir([]) ->
-    {error, enoent}.
+    Dir = get_deps_dir(riak_core),
+    Schema = filename:join([Dir, "priv", "riak_core.schema"]),
+    {Dir, Schema}.
 
-%% NOTE: this is somewhat duplicated/similar to the above
-%% riak_core_dir() stuff, but more general, and used to fix existing
-%% broken tests. When rebar eunit is run it makes cwd
-%% riak_kv/.eunit. rebar knows about the env var REBAR_DEPS_DIR and it
-%% also has the cli option `deps_dir' and they look independent of
-%% each other. Or at least setting both is required in some
-%% situations. The top level riak Makefile can safely set
-%% REBAR_DEPS_DIR to it's own deps directory, which it does. And so in
-%% that case the deps directory is known. If `rebar eunit' is run
-%% locally (in riak_kv) there is no way to tell if riak_kv is part of
-%% a checked out riak deps structure, or a standalone project or
-%% what. In that case, if the user has neglected to inform rebar with
-%% the REBAR_DEPS_DIR variable, then we guess. If ../deps exist we use
-%% that, otherwise we use ../../ It's a bit of a hack. Maybe there is
-%% a way to get at what rebar is doing, but I think rebar3 can better
-%% fix this.
-get_deps_dir() ->
-    case os:getenv("REBAR_DEPS_DIR") of
-        false ->
-            guess_deps_dir();
-        Dir  ->
-            Dir
+get_deps_dir(App) ->
+    case code:lib_dir(App) of
+        {error, _} ->
+            error({not_found, App});
+        Path ->
+            filename:dirname(Path)
     end.
 
-guess_deps_dir() ->
-    case filelib:is_dir("../deps") of
-        true ->
-            "../deps";
-        false ->
-            %% maybe we're in a deps/* situation, worse case tests
-            %% fail, which is what they did before this hack
-            "../../"
-    end.
-
+schema_paths() ->
+   [
+     filename:join(code:priv_dir(riak_kv), "riak_kv.schema"),
+     filename:join(code:priv_dir(riak_kv), "multi_backend.schema"),
+     filename:join(code:priv_dir(bitcask), "bitcask.schema"),
+     filename:join(code:priv_dir(bitcask), "bitcask_multi.schema"),
+     filename:join(code:priv_dir(eleveldb), "eleveldb.schema"),
+     filename:join(code:priv_dir(eleveldb), "eleveldb_multi.schema")
+   ].

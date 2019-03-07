@@ -136,7 +136,7 @@ test_link(ReqId,Bucket,Key,R,Timeout,From,StateProps) ->
     test_link({raw, ReqId, From}, Bucket, Key, [{r, R}, {timeout, Timeout}], StateProps).
 
 test_link(From, Bucket, Key, GetOptions, StateProps) ->
-    gen_fsm:start_link(?MODULE, {test, [From, Bucket, Key, GetOptions], StateProps}, []).
+    gen_fsm_compat:start_link(?MODULE, {test, [From, Bucket, Key, GetOptions], StateProps}, []).
 
 -endif.
 

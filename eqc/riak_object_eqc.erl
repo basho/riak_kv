@@ -26,7 +26,7 @@
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 %% deserializing a binary representation of a riak_object and
 %% reserializing it for the same version should result in the same

@@ -23,7 +23,7 @@
 -module(backend_test_util).
 
 -include_lib("eunit/include/eunit.hrl").
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 standard_test_gen(BackendMod, Config) ->
     {"Basic Backend",
