@@ -32,7 +32,7 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -module(rest_url_encoding_test).
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 url_encoding_test_() ->
     Envs = ["RIAK_TEST_HOST_1", "RIAK_TEST_HTTP_1", "RIAK_TEST_NODE_1",

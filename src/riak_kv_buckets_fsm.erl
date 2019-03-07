@@ -140,6 +140,6 @@ filter_buckets([_|Rest], Type, Acc) ->
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 %% tests should go here at some point.
 -endif.

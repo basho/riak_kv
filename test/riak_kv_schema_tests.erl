@@ -21,7 +21,7 @@
 -module(riak_kv_schema_tests).
 
 -include_lib("eunit/include/eunit.hrl").
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 -define(DEFAULT_ENABLED_JOB_CLASSES, [
     {riak_kv, list_buckets},

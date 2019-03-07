@@ -51,7 +51,7 @@
 -include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
 
 -ifdef(TEST).
--compile([export_all]).
+-compile([export_all, nowarn_export_all]).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
