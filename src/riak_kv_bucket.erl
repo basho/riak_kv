@@ -34,7 +34,7 @@
 -ifdef(TEST).
 -ifdef(EQC).
 -define(TOP_TEST_TYPES, ?V2_TOP_LEVEL_TYPES ++ ?V3_TOP_LEVEL_TYPES).
--compile([export_all]).
+-compile([export_all, nowarn_export_all]).
 -include_lib("eqc/include/eqc.hrl").
 -endif.
 -include_lib("eunit/include/eunit.hrl").

@@ -44,7 +44,7 @@
 -include("include/riak_kv_vnode.hrl").
 -include("../src/riak_kv_wm_raw.hrl").
 
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 -export([postcommit_ok/1]).
 
 -define(REQ_ID, 1234).
@@ -72,7 +72,8 @@ setup() ->
                     %% not been run from the commandline.
                     os:cmd("epmd -daemon"),
                     timer:sleep(100),
-                    TestNode = list_to_atom("putfsmeqc" ++ integer_to_list(element(3, now())) ++ integer_to_list(element(2, now()))),
+                    {_, Sec, MSec} = os:timestamp(),
+                    TestNode = list_to_atom("putfsmeqc" ++ integer_to_list(MSec) ++ integer_to_list(Sec)),
                     {ok, _Pid} = net_kernel:start([TestNode, shortnames]),
                     started
             end,
@@ -101,11 +102,11 @@ setup() ->
                 fun(_Bucket) ->
                         [dvv_enabled]
                 end),
-    %% Check networking/clients are set up 
-    ?_assert(node() /= 'nonode@nohost'),
-    ?_assertEqual(pong, net_adm:ping(node())),
-    {timeout, 60, [?_assertEqual(pang, net_adm:ping('nonode@nohost'))]},
-    ?_assertMatch({ok,_C}, riak:local_client()),
+    %% Check networking/clients are set up
+    ?assert(node() /= 'nonode@nohost'),
+    ?assertEqual(pong, net_adm:ping(node())),
+    ?assertEqual(pang, net_adm:ping('nonode@nohost')),
+    ?assertMatch({ok,_C}, riak:local_client()),
     fun() -> cleanup(State) end.
 
 cleanup(running) ->
@@ -770,16 +771,14 @@ precommit_fail_reason(Obj) -> % Pre-commit fails
                            % javascript hooks
 
 precommit_crash(_Obj) ->
-    Ok = ok,
-    Ok = precommit_crash.
+    error({badmatch, precommit_crash}).
 
 postcommit_ok(Obj) ->
     fsm_eqc_vnode:log_postcommit(Obj),
     ok.
 
 postcommit_crash(_Obj) ->
-    Ok = ok,
-    Ok = postcommit_crash.
+    error({badmatch, postcommit_crash}).
 
 postcommit_fail(_Obj) ->
     fail.

@@ -26,8 +26,8 @@
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
--compile(export_all).
--behaviour(eqc_statem).
+-compile([export_all, nowarn_export_all]).
+
 -export([command/1, initial_state/0, next_state/3,
          precondition/2, postcondition/3]).
 
