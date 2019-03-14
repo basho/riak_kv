@@ -171,24 +171,14 @@ process_stream({ReqId, Error}, ReqId,
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
 %% list buckets clauses.
 process_stream({ReqId, done}, ReqId,
-<<<<<<< HEAD
-               State=#state{req=#'RpbListBucketsReq'{}, req_ctx=ReqId}) ->
-    {done, #'RpbListBucketsResp'{done = 1}, State};
-=======
                State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {done, #rpblistbucketsresp{done = 1}, State};
->>>>>>> parent of 3ce75fa6... WIP
 process_stream({ReqId, {buckets_stream, []}}, ReqId,
                State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, {buckets_stream, Buckets}}, ReqId,
-<<<<<<< HEAD
-               State=#state{req=#'RpbListBucketsReq'{}, req_ctx=ReqId}) ->
-    {reply, #'RpbListBucketsResp'{buckets = Buckets}, State};
-=======
                State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {reply, #rpblistbucketsresp{buckets = Buckets}, State};
->>>>>>> parent of 3ce75fa6... WIP
 process_stream({ReqId, {error, Error}}, ReqId,
                State=#state{ req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
