@@ -52,7 +52,7 @@ init() ->
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) when Code == 33 ->
-    Msg = #'RpbGetBucketKeyPreflistReq'{type =T, bucket =B, key =_Key} =
+    Msg = #rpbgetbucketkeypreflistreq{type =T, bucket =B, key =_Key} =
         riak_pb_codec:decode(Code, Bin),
     Bucket = riak_kv_pb_bucket:bucket_type(T, B),
     {ok, Msg, {"riak_kv.get_preflist", Bucket}}.
@@ -62,17 +62,17 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% Get bucket-key preflist primaries
-process(#'RpbGetBucketKeyPreflistReq'{bucket = <<>>}, State) ->
+process(#rpbgetbucketkeypreflistreq{bucket = <<>>}, State) ->
     {error, "Bucket cannot be zero-length", State};
-process(#'RpbGetBucketKeyPreflistReq'{key = <<>>}, State) ->
+process(#rpbgetbucketkeypreflistreq{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
-process(#'RpbGetBucketKeyPreflistReq'{type = <<>>}, State) ->
+process(#rpbgetbucketkeypreflistreq{type = <<>>}, State) ->
     {error, "Type cannot be zero-length", State};
-process(#'RpbGetBucketKeyPreflistReq'{type=T, bucket=B0, key =K}, State) ->
+process(#rpbgetbucketkeypreflistreq{type=T, bucket=B0, key =K}, State) ->
     B = riak_kv_pb_bucket:maybe_create_bucket_type(T, B0),
     Preflist = riak_core_apl:get_apl_ann_with_pnum({B, K}),
     PbPreflist = riak_pb_kv_codec:encode_apl_ann(Preflist),
-    {reply, #'RpbGetBucketKeyPreflistResp'{preflist=PbPreflist}, State}.
+    {reply, #rpbgetbucketkeypreflistresp{preflist=PbPreflist}, State}.
 
 process_stream(_, _, State) ->
     {ignore, State}.
