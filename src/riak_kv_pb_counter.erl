@@ -69,10 +69,10 @@ decode(Code, Bin) ->
     Msg = riak_pb_codec:decode(Code, Bin),
     %% no special permissions for counters, just get/put
     case Msg of
-        #'RpbCounterGetReq'{bucket=B} ->
+        #rpbcountergetreq{bucket=B} ->
             Bucket = bucket_type(B),
             {ok, Msg, {"riak_kv.get", Bucket}};
-        #'RpbCounterUpdateReq'{bucket=B} ->
+        #rpbcounterupdatereq{bucket=B} ->
             Bucket = bucket_type(B),
             {ok, Msg, {"riak_kv.put", Bucket}}
     end.
@@ -82,7 +82,7 @@ encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
 %% @doc process/2 callback. Handles an incoming request message.
-process(#'RpbCounterGetReq'{bucket=B, key=K, r=R0, pr=PR0,
+process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0,
                           notfound_ok=NFOk, basic_quorum=BQ},
         #state{client=C} = State) ->
     case lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, [])) of
@@ -95,16 +95,16 @@ process(#'RpbCounterGetReq'{bucket=B, key=K, r=R0, pr=PR0,
                            make_option(basic_quorum, BQ)) of
                 {ok, O} ->
                     {{_Ctx, Value}, _} = riak_kv_crdt:value(O, ?V1_COUNTER_TYPE),
-                    {reply, #'RpbCounterGetResp'{value = Value}, State};
+                    {reply, #rpbcountergetresp{value = Value}, State};
                 {error, notfound} ->
-                    {reply, #'RpbCounterGetResp'{}, State};
+                    {reply, #rpbcountergetresp{}, State};
                 {error, Reason} ->
                     {error, {format,Reason}, State}
             end;
         false ->
             {error, {format, "Counters are not supported"}, State}
     end;
-process(#'RpbCounterUpdateReq'{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
+process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=CounterOp,
                              returnvalue=RetVal},
         #state{client=C} = State) ->
     case {allow_mult(B), lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, []))} of
@@ -120,12 +120,12 @@ process(#'RpbCounterUpdateReq'{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0, amount=Co
                            make_option(pw, PW) ++ [{timeout, default_timeout()},
                                                    {retry_put_coordinator_failure, false} | Options]) of
                 ok ->
-                    {reply, #'RpbCounterUpdateResp'{}, State};
+                    {reply, #rpbcounterupdateresp{}, State};
                 {ok, RObj} ->
                     {{_Ctx, Value}, _} = riak_kv_crdt:value(RObj, ?V1_COUNTER_TYPE),
-                    {reply, #'RpbCounterUpdateResp'{value=Value}, State};
+                    {reply, #rpbcounterupdateresp{value=Value}, State};
                 {error, notfound} ->
-                    {reply, #'RpbCounterUpdateResp'{}, State};
+                    {reply, #rpbcounterupdateresp{}, State};
                 {error, Reason} ->
                     {error, {format, Reason}, State}
             end;
