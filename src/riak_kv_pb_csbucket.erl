@@ -63,8 +63,8 @@ decode(Code, Bin) ->
 encode(Message) ->
     {ok, riak_pb_codec:encode(Message)}.
 
-process(Req=#'RpbCSBucketReq'{}, State) ->
-    #'RpbCSBucketReq'{start_key=StartKey,
+process(Req=#rpbcsbucketreq{}, State) ->
+    #rpbcsbucketreq{start_key=StartKey,
                     start_incl=StartIncl, continuation=Continuation,
                     end_key=EndKey, end_incl=EndIncl} = Req,
     Query = riak_index:to_index_query([
@@ -82,7 +82,7 @@ process(Req=#'RpbCSBucketReq'{}, State) ->
 maybe_perform_query({error, Reason}, _Req, State) ->
     {error, {format, Reason}, State};
 maybe_perform_query({ok, Query}, Req, State) ->
-    #'RpbCSBucketReq'{type=T, bucket=B, max_results=MaxResults, timeout=Timeout} = Req,
+    #rpbcsbucketreq{type=T, bucket=B, max_results=MaxResults, timeout=Timeout} = Req,
     #state{client=Client} = State,
     Bucket = maybe_bucket_type(T, B),
     Opts = riak_index:add_timeout_opt(Timeout, [{max_results, MaxResults},
@@ -96,21 +96,21 @@ process_stream({ReqId, done}, ReqId, State=#state{req_id=ReqId,
                                                   req=Req,
                                                   result_count=Count}) ->
     %% Only add the continuation if there may be more results to send
-    #'RpbCSBucketReq'{max_results=MaxResults} = Req,
+    #rpbcsbucketreq{max_results=MaxResults} = Req,
     Resp = case is_integer(MaxResults) andalso Count >= MaxResults of
-               true -> #'RpbCSBucketResp'{done=1, continuation=Continuation};
-               false -> #'RpbCSBucketResp'{done=1}
+               true -> #rpbcsbucketresp{done=1, continuation=Continuation};
+               false -> #rpbcsbucketresp{done=1}
            end,
     {done, Resp, State};
 process_stream({ReqId, {results, []}}, ReqId, State=#state{req_id=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, {results, Results0}}, ReqId, State=#state{req_id=ReqId, req=Req, result_count=Count}) ->
-    #'RpbCSBucketReq'{max_results=MaxResults, bucket=Bucket} = Req,
+    #rpbcsbucketreq{max_results=MaxResults, bucket=Bucket} = Req,
     Count2 = length(Results0) + Count,
     %% results are {o, Key, Binary} where binary is a riak object
     Continuation = make_continuation(MaxResults, lists:last(Results0), Count2),
     Results = [encode_result(Bucket, {K, V}) || {o, K, V} <- Results0],
-    {reply, #'RpbCSBucketResp'{objects=Results},
+    {reply, #rpbcsbucketresp{objects=Results},
      State#state{continuation=Continuation, result_count=Count2}};
 process_stream({ReqId, Error}, ReqId, State=#state{req_id=ReqId}) ->
     {error, {format, Error}, State#state{req_id=undefined}};
@@ -121,8 +121,8 @@ encode_result(B, {K, V}) ->
     RObj = riak_object:from_binary(B, K, V),
     Contents = riak_pb_kv_codec:encode_contents(riak_object:get_contents(RObj)),
     VClock = pbify_rpbvc(riak_object:vclock(RObj)),
-    GetResp = #'RpbGetResp'{vclock=VClock, content=Contents},
-    #'RpbIndexObject'{key=K, object=GetResp}.
+    GetResp = #rpbgetresp{vclock=VClock, content=Contents},
+    #rpbindexobject{key=K, object=GetResp}.
 
 pbify_rpbvc(Vc) ->
     riak_object:encode_vclock(Vc).

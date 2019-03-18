@@ -71,13 +71,13 @@ decode(Code, Bin) ->
 handle_decoded(rpblistbucketsreq = Msg) ->
     %% backwards compat
     {ok, Msg, {"riak_kv.list_buckets", <<"default">>}};
-handle_decoded(#'RpbListBucketsReq'{} = Msg) ->
-    Type = convert_type(Msg#'RpbListBucketsReq'.type),
+handle_decoded(#rpblistbucketsreq{} = Msg) ->
+    Type = convert_type(Msg#rpblistbucketsreq.type),
     {ok, Msg, {"riak_kv.list_buckets", Type}};
-handle_decoded(#'RpbListKeysReq'{} = Msg) ->
-    Type = convert_type(Msg#'RpbListKeysReq'.type),
+handle_decoded(#rpblistkeysreq{} = Msg) ->
+    Type = convert_type(Msg#rpblistkeysreq.type),
     {ok, Msg, {"riak_kv.list_keys", {Type,
-                                     Msg#'RpbListKeysReq'.bucket}}}.
+                                     Msg#rpblistkeysreq.bucket}}}.
 
 %% @doc encode/1 callback. Encodes an outgoing response message.
 encode(Message) ->
@@ -86,7 +86,7 @@ encode(Message) ->
 
 %% this should remain for backwards compatibility
 process(rpblistbucketsreq, State) ->
-    process(#'RpbListBucketsReq'{stream = false}, State);
+    process(#rpblistbucketsreq{stream = false}, State);
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(Req, State) ->
@@ -108,17 +108,17 @@ determine_accept_and_report_job_disposition(Class) ->
         Accept, Class, ?MODULE, process, ?LINE, protobuf),
     Accept.
 
-determine_class_and_listing(#'RpbListBucketsReq'{stream = true}) ->
+determine_class_and_listing(#rpblistbucketsreq{stream = true}) ->
     {{riak_kv, stream_list_buckets}, buckets};
 %% Protobuf does _not_ set optional booleans to `false` per the spec.
 %% Therefore, if it's not explicitly `true` it must be `false`.
-determine_class_and_listing(#'RpbListBucketsReq'{stream = _Stream}) ->
+determine_class_and_listing(#rpblistbucketsreq{stream = _Stream}) ->
     {{riak_kv, list_buckets}, buckets};
-determine_class_and_listing(#'RpbListKeysReq'{}) ->
+determine_class_and_listing(#rpblistkeysreq{}) ->
     %% at present list-keys always streams
     {{riak_kv, stream_list_keys}, keys}.
 
-maybe_stream_list_keys(#'RpbListKeysReq'{type = Type, bucket = B, timeout = T} = Req,
+maybe_stream_list_keys(#rpblistkeysreq{type = Type, bucket = B, timeout = T} = Req,
                        #state{client = Client} = State) ->
     case check_bucket_type(Type) of
         {ok, GoodType} ->
@@ -135,7 +135,7 @@ error_no_bucket_type(Type, State) ->
 error_accept(Class, State) ->
     {error, riak_core_util:job_class_disabled_message(binary, Class), State}.
 
-maybe_do_list_buckets(#'RpbListBucketsReq'{type = Type, timeout = T, stream = S} = Req, State) ->
+maybe_do_list_buckets(#rpblistbucketsreq{type = Type, timeout = T, stream = S} = Req, State) ->
     case check_bucket_type(Type) of
         {ok, GoodType} ->
             do_list_buckets(GoodType, T, S, Req, State);
@@ -147,47 +147,47 @@ maybe_do_list_buckets(#'RpbListBucketsReq'{type = Type, timeout = T, stream = S}
 %% @doc process_stream/3 callback. Handles streaming keys messages and
 %% streaming buckets.
 process_stream({ReqId, done}, ReqId,
-               State=#state{req=#'RpbListKeysReq'{}, req_ctx=ReqId}) ->
-    {done, #'RpbListKeysResp'{done = 1}, State};
+               State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    {done, #rpblistkeysresp{done = 1}, State};
 process_stream({ReqId, From, {keys, []}}, ReqId,
-               State=#state{req=#'RpbListKeysReq'{}, req_ctx=ReqId}) ->
+               State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     _ = riak_kv_keys_fsm:ack_keys(From),
     {ignore, State};
 process_stream({ReqId, {keys, []}}, ReqId,
-               State=#state{req=#'RpbListKeysReq'{}, req_ctx=ReqId}) ->
+               State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, From, {keys, Keys}}, ReqId,
-               State=#state{req=#'RpbListKeysReq'{}, req_ctx=ReqId}) ->
+               State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     _ = riak_kv_keys_fsm:ack_keys(From),
-    {reply, #'RpbListKeysResp'{keys = Keys}, State};
+    {reply, #rpblistkeysresp{keys = Keys}, State};
 process_stream({ReqId, {keys, Keys}}, ReqId,
-               State=#state{req=#'RpbListKeysReq'{}, req_ctx=ReqId}) ->
-    {reply, #'RpbListKeysResp'{keys = Keys}, State};
+               State=#state{req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
+    {reply, #rpblistkeysresp{keys = Keys}, State};
 process_stream({ReqId, {error, Error}}, ReqId,
-               State=#state{ req=#'RpbListKeysReq'{}, req_ctx=ReqId}) ->
+               State=#state{ req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
 process_stream({ReqId, Error}, ReqId,
-               State=#state{ req=#'RpbListKeysReq'{}, req_ctx=ReqId}) ->
+               State=#state{ req=#rpblistkeysreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
 %% list buckets clauses.
 process_stream({ReqId, done}, ReqId,
-               State=#state{req=#'RpbListBucketsReq'{}, req_ctx=ReqId}) ->
-    {done, #'RpbListBucketsResp'{done = 1}, State};
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {done, #rpblistbucketsresp{done = 1}, State};
 process_stream({ReqId, {buckets_stream, []}}, ReqId,
-               State=#state{req=#'RpbListBucketsReq'{}, req_ctx=ReqId}) ->
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {ignore, State};
 process_stream({ReqId, {buckets_stream, Buckets}}, ReqId,
-               State=#state{req=#'RpbListBucketsReq'{}, req_ctx=ReqId}) ->
-    {reply, #'RpbListBucketsResp'{buckets = Buckets}, State};
+               State=#state{req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
+    {reply, #rpblistbucketsresp{buckets = Buckets}, State};
 process_stream({ReqId, {error, Error}}, ReqId,
-               State=#state{ req=#'RpbListBucketsReq'{}, req_ctx=ReqId}) ->
+               State=#state{ req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}};
 process_stream({ReqId, Error}, ReqId,
-               State=#state{ req=#'RpbListBucketsReq'{}, req_ctx=ReqId}) ->
+               State=#state{ req=#rpblistbucketsreq{}, req_ctx=ReqId}) ->
     {error, {format, Error}, State#state{req = undefined, req_ctx = undefined}}.
 
 
--spec do_list_buckets(binary(), optional(pos_integer()), optional(boolean()), #'RpbListBucketsReq'{}, #state{}) ->
+-spec do_list_buckets(binary(), optional(pos_integer()), optional(boolean()), #rpblistbucketsreq{}, #state{}) ->
                              {reply, tuple(), #state{}} |
                              {error, {format, iodata()}, #state{}}.
 do_list_buckets(Type, Timeout, true, Req, #state{client=C}=State) ->
@@ -196,7 +196,7 @@ do_list_buckets(Type, Timeout, true, Req, #state{client=C}=State) ->
 do_list_buckets(Type, Timeout, _Stream, _Req, #state{client=C}=State) ->
     case C:list_buckets(none, Timeout, Type) of
         {ok, Buckets} ->
-            {reply, #'RpbListBucketsResp'{buckets = Buckets}, State};
+            {reply, #rpblistbucketsresp{buckets = Buckets}, State};
         {error, Reason} ->
             {error, {format, Reason}, State}
     end.
