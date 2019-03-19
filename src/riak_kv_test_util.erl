@@ -201,7 +201,7 @@ setup(TestName, SetupFun) ->
 -spec cleanup(Test::string(), CleanupFun::fun((stop) -> any()), SetupResult::setup | atom()) -> ok.
 cleanup(Test, CleanupFun, setup) ->
     %% Remove existing ring files so we have a fresh ring
-    os:cmd("rm -rf " ++ Test ++ "/ring"),
+    os:cmd("rm -rf " ++ get_test_dir(Test) ++ "/ring"),
     cleanup(Test, CleanupFun, []);
 cleanup(Test, CleanupFun, StartedApps) ->
     Deps = lists:reverse(dep_apps(Test, CleanupFun)),
