@@ -1073,7 +1073,7 @@ select_coordinator(Preflist, _CoordinatorType=local, false=_MBoxCheck) ->
             ok = riak_kv_stat:update(coord_redir),
             {forward, RemoteNode};
         {[], Remotes} ->
-            {ListPos, _} = random:uniform_s(length(Remotes), os:timestamp()),
+            ListPos = rand:uniform(length(Remotes)),
             {_Idx, CoordNode} = lists:nth(ListPos, Remotes),
             ok = riak_kv_stat:update(coord_redir),
             {forward, CoordNode};
@@ -1106,12 +1106,7 @@ select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
 mbox_data_sort({_, error, error}, {_, error, error}) ->
     %% We use random here, so that a list full of errors picks a
     %% random node to forward to (as per pre-gh1661 code)?
-    case random:uniform_s(2, os:timestamp()) of
-        {1, _} ->
-            true;
-        {2, _} ->
-            false
-    end;
+    rand:uniform(2) == 1;
 mbox_data_sort({_, error, error}, {_, _Load, _Limit}) ->
     false;
 mbox_data_sort({_, _LoadA, _LimitA}, {_, error, error}) ->

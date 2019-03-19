@@ -46,12 +46,12 @@
     % default_nval that is greater than the lowest n_val used may have
     % unpredictable results (if the plan n_val is also less than the default
     % n_val)
--type timeout() :: pos_integer().
+-type timeout_ms() :: pos_integer().
     % timeout measured in ms
 -type result() :: complete|not_supported|bad_request.
 -type result_score() :: {result(), non_neg_integer()}.
 
--type inbound_api() :: list(backup_path()|coverage()|timeout()).
+-type inbound_api() :: list(backup_path()|coverage()|timeout_ms()).
 
 
 -record(state, {from :: from(),

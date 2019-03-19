@@ -78,6 +78,7 @@
 
 prop_backend(Backend) ->
     prop_backend(Backend, false).
+
 test(Backend) ->
     test2(property(Backend, false)).
 

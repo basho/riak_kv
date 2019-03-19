@@ -26,7 +26,7 @@
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--compile(export_all).
+-compile([export_all, nowarn_export_all]).
 
 -define(P1, p1).
 -define(REPLICAS, [p2, p3, f1, f2, f3]).
@@ -448,7 +448,7 @@ replica_put(VId, Epoch, {ok, LocalObj}, IncomingObject) ->
 
 %% like vclock:timestamp() but monotinically increasing
 timestamp() ->
-    {A, B, C} = erlang:now(),
+    {A, B, C} = erlang:timestamp(),
     (A*1000000 + B)*1000000 + C.
 
 %% copied from riak_kv_vnode, for shame
