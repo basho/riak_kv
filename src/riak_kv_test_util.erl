@@ -361,13 +361,19 @@ guess_deps_dir() ->
     case filename:rootname(CWD) == CWD of
         true ->
             %% not in .eunit, must be running from console
-            case filelib:is_dir("deps") of
+            case filelib:is_dir("_build/default/lib") of
                 true ->
-                    %% probably a root checkout
-                    "deps/";
+                    %% running as rebar3 from console
+                    "_build/default/lib/";
                 false ->
-                    %% probably part of an applications deps
-                    "../"
+                    case filelib:is_dir("deps") of
+                        true ->
+                            %% probably a root checkout
+                            "deps/";
+                        false ->
+                            %% probably part of an applications deps
+                            "../"
+                    end
             end;
         false ->
             %% probably running in .eunit
