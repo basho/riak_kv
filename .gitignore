@@ -21,3 +21,4 @@ _build/
 .rebar3/
 rebar.lock
 .DS_Store
+src/riak_core_pb.erl
