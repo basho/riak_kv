@@ -622,15 +622,15 @@ valid_hours(LowHour, HighHour) ->
 -ifdef(EQC).
 
 prop_leveled_backend() ->
+    Path = riak_kv_test_util:get_test_dir("leveled-backend"),
     ?SETUP(fun() ->
                    application:load(sasl),
                    application:set_env(sasl, sasl_error_logger, {file, "riak_kv_leveled_backend_eqc_sasl.log"}),
                    error_logger:tty(false),
                    error_logger:logfile({open, "riak_kv_leveled_backend_eqc.log"}),
-                   fun() -> ?_assertCmd("rm -rf test/leveled-backend") end
+                   fun() -> ?assertCmd("rm -rf " ++ Path ++ "/*") end
            end,
-           backend_eqc:prop_backend(?MODULE, false, [{data_root,
-                                                      "test/leveled-backend"}])).
+           backend_eqc:prop_backend(?MODULE, false, [{data_root, Path}])).
 
 -endif. % EQC
 

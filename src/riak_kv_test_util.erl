@@ -34,7 +34,8 @@
          common_setup/1,
          common_setup/2,
          common_cleanup/1,
-         common_cleanup/2]).
+         common_cleanup/2,
+         get_test_dir/1]).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -250,8 +251,9 @@ dep_apps(Test, Extra) ->
     Silencer = fun(load) ->
                        %% Silence logging junk
                        application:set_env(kernel, error_logger, silent),
-                       filelib:ensure_dir(Test ++ "/log/sasl.log"),
-                       application:set_env(sasl, sasl_error_logger, {file, Test++"/log/sasl.log"}),
+                       filelib:ensure_dir(get_test_dir(Test) ++ "/log/sasl.log"),
+                       application:set_env(sasl, sasl_error_logger,
+                                            {file, get_test_dir(Test) ++ "/log/sasl.log"}),
                        error_logger:tty(false);
                   (_) -> ok
                end,
@@ -261,8 +263,12 @@ dep_apps(Test, Extra) ->
                 %% release packaging. These can be overridden by the
                 %% Extra fun.
                 application:set_env(riak_core, ring_creation_size, 64),
-                application:set_env(riak_core, ring_state_dir, Test ++ "/ring"),
-                application:set_env(riak_core, platform_data_dir, Test ++ "/data"),
+                application:set_env(riak_core,
+                                    ring_state_dir,
+                                    get_test_dir(Test) ++ "/ring"),
+                application:set_env(riak_core,
+                                    platform_data_dir,
+                                    get_test_dir(Test) ++ "/data"),
                 application:set_env(riak_core, handoff_port, 0), %% pick a random handoff port
                 %% @TODO this is wrong still as the deps dirs is a
                 %% best guest in `get_deps_dir/0'
@@ -271,8 +277,15 @@ dep_apps(Test, Extra) ->
                 application:set_env(riak_core, schema_dirs, Dirs),
                 application:set_env(lager, handlers, [{lager_file_backend,
                                                        [
-                                                        {Test ++ "/log/debug.log", debug, 10485760, "$D0", 5}]}]),
-                application:set_env(lager, crash_log, Test ++ "/log/crash.log");
+                                                        {get_test_dir(Test)
+                                                            ++ "/log/debug.log",
+                                                        debug,
+                                                        10485760,
+                                                        "$D0",
+                                                        5}]}]),
+                application:set_env(lager,
+                                    crash_log,
+                                    get_test_dir(Test) ++ "/log/crash.log");
            (stop) -> ok;
            (_) -> ok
         end,
@@ -346,6 +359,20 @@ start_app_and_deps(Application, Started) ->
                     [application:stop(App) || App <- Started],
                     {error, Reason}
             end
+    end.
+
+get_test_dir(TestName) ->
+    % This used to be TestName prior to OTP20/rebar3
+    % Now add special case for existence of _build and running as rebar test
+    case filelib:is_dir("_build") of
+        true ->
+            Rebar3TestFolder = "_build/test/" ++ TestName,
+            ok = filelib:ensure_dir(Rebar3TestFolder),
+            Rebar3TestFolder;
+        false ->
+            {ok, CWD} = file:get_cwd(),
+            io:format(user, "_build not available at ~s~n", [CWD]),
+            TestName
     end.
 
 get_deps_dir() ->

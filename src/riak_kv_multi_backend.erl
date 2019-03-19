@@ -620,6 +620,7 @@ backend_can_index_reformat(Mod, ModState) ->
 -ifdef(TEST).
 
 multi_backend_test_() ->
+    BPath = riak_kv_test_util:get_test_dir("bitcask-backend"),
     {foreach,
      fun() ->
              crypto:start(),
@@ -632,14 +633,14 @@ multi_backend_test_() ->
 
              %% Have to do some prep for bitcask
              application:load(bitcask),
-             ?assertCmd("rm -rf test/bitcask-backend"),
-             application:set_env(bitcask, data_root, "test/bitcask-backend"),
+             ?assertCmd("rm -rf " ++ BPath ++ "/*"),
+             application:set_env(bitcask, data_root, BPath),
 
              [P1, P2]
      end,
      fun([P1, P2]) ->
              crypto:stop(),
-             ?assertCmd("rm -rf test/bitcask-backend"),
+             ?assertCmd("rm -rf " ++ BPath ++ "/*"),
              unlink(P1),
              unlink(P2),
              catch exit(P1, kill),
@@ -771,14 +772,17 @@ async_fold_config() ->
 %% Check extra callback messages are ignored by backends
 extra_callback_test() ->
     %% Have to do some prep for bitcask
+    BPath = riak_kv_test_util:get_test_dir("bitcask-backend"),
+    EPath = riak_kv_test_util:get_test_dir("eleveldb-backend"),
+
     application:load(bitcask),
-    ?assertCmd("rm -rf test/bitcask-backend"),
-    application:set_env(bitcask, data_root, "test/bitcask-backend"),
+    ?assertCmd("rm -rf " ++ BPath ++ "/*"),
+    application:set_env(bitcask, data_root, BPath),
 
     %% Have to do some prep for eleveldb
     application:load(eleveldb),
-    ?assertCmd("rm -rf test/eleveldb-backend"),
-    application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
+    ?assertCmd("rm -rf " ++ EPath ++ "/*"),
+    application:set_env(eleveldb, data_root, EPath),
 
     %% Start up multi backend
     Config = [{storage_backend, riak_kv_multi_backend},
