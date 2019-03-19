@@ -37,6 +37,8 @@
 -export([stream_list_buckets/1,stream_list_buckets/2,
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
+-export([aae_fold/2]).
+-export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
 -export([reload_all/2]).
@@ -49,6 +51,7 @@
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
 -define(DEFAULT_TIMEOUT, 60000).
+-define(DEFAULT_FOLD_TIMEOUT, 3600000).
 -define(DEFAULT_ERRTOL, 0.00003).
 
 %% TODO: This type needs to be better specified and validated against
@@ -130,6 +133,7 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
         _ ->
             ok
     end.
+
 
 %% @spec get(riak_object:bucket(), riak_object:key(), options(), riak_client()) ->
 %%       {ok, riak_object:riak_object()} |
@@ -702,6 +706,39 @@ stream_list_buckets(Filter, Timeout, Client, Type,
                                                              true, Type]]),
     {ok, ReqId}.
 
+
+%% @doc
+%%
+%% Run a cluster-wide AAE query - which can either access cached AAE
+%% data across the cluster, or fold over ranges of the AAE store
+%% (which in the case of Leveled can be the native AAE store.
+-spec aae_fold(riak_kv_clusteraae_fsm:query_definition(), riak_client())
+                    -> {ok, any()}|{error, timeout}|{error, Err :: term()}.
+aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    TimeOut = ?DEFAULT_FOLD_TIMEOUT,
+    riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node,
+                                                    [{raw, ReqId, Me},
+                                                    [Query, TimeOut]]),
+    wait_for_fold_results(ReqId, TimeOut).
+
+%% @doc
+%% Run a hot backup - returns {ok, true} if successful
+-spec hotbackup(string(), pos_integer(), pos_integer(), riak_client())
+                                    -> {ok, boolean()}|{error, Err :: term()}.
+hotbackup(BackupPath, DefaultNVal, PlanNVal, {?MODULE, [Node, _ClientId]}) ->
+    Me = self(),
+    ReqId = mk_reqid(),
+    TimeOut = ?DEFAULT_FOLD_TIMEOUT,
+    riak_kv_hotbackup_fsm_sup:start_hotbackup_fsm(Node,
+                                                    [{raw, ReqId, Me},
+                                                    [BackupPath,
+                                                        {DefaultNVal, PlanNVal},
+                                                        TimeOut]]),
+    wait_for_fold_results(ReqId, TimeOut).
+
+
 %% @spec get_index(Bucket :: binary(),
 %%                 Query :: riak_index:query_def(),
 %%                 riak_client()) ->
@@ -858,6 +895,18 @@ wait_for_query_results(ReqId, Timeout, Acc) ->
         {ReqId, Error} -> {error, Error}
     after Timeout ->
             {error, timeout}
+    end.
+
+%% @private
+%% @doc
+%% Only final result will be received, so do not expect a separate "done"
+%% response.
+wait_for_fold_results(ReqId, Timeout) ->
+    receive
+        {ReqId, {results, Results}} -> {ok, Results};
+        {ReqId, Error} -> {error, Error}
+    after Timeout ->
+        {error, timeout}
     end.
 
 recv_timeout(Options) ->

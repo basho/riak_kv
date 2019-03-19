@@ -35,7 +35,6 @@
          get_reply_history/0, log_postcommit/1, get_postcommits/0]).
 -export([init/1, 
          active/2, 
-         active/3, 
          handle_event/3,
          handle_sync_event/4, 
          handle_info/3, 
@@ -99,9 +98,16 @@ get_postcommits() ->
 init([]) ->
     {ok, active, #state{}}.
 
-active(?VNODE_REQ{index=Idx,
-                  sender=Sender,
-                  request=?KV_GET_REQ{req_id=ReqId}}, State) ->
+active(?VNODE_REQ{index = Idx,
+                  sender = Sender,
+                  request = Req},
+       State) ->
+    active_handle_request(riak_kv_requests:request_type(Req), Req, Idx, Sender, State).
+
+active_handle_request(GetIshRequest, Req, Idx, Sender, State) when
+      GetIshRequest == kv_get_request orelse
+      GetIshRequest == kv_head_request ->
+    ReqId = riak_kv_requests:get_request_id(Req),
     {Value, State1} = get_data(Idx,State),
     case Value of
         {error, timeout} ->
@@ -120,24 +126,19 @@ active(?VNODE_REQ{index=Idx,
     {next_state, active, State1};
 %% Handle a put request - send the responses prepared by call to
 %% 'set_vput_replies' up until the next 'w' response for a different partition.
-active(?VNODE_REQ{index=Idx,
-                  sender=Sender,
-                  request=?KV_PUT_REQ{req_id=ReqId,
-                                      object = PutObj,
-                                      options = Options}=Msg}, State) ->
+active_handle_request(kv_put_request, Req, Idx, Sender, State) ->
+    ReqId = riak_kv_requests:get_request_id(Req),
+    PutObj = riak_kv_requests:get_object(Req),
+    Options = riak_kv_requests:get_options(Req),
     %% Send up to the next w or timeout message, substituting indices
     State1 = send_vput_replies(State#state.vput_replies, Idx,
                                Sender, ReqId, PutObj, Options, State),
-    {next_state, active, State1#state{put_history=[{Idx,Msg}|State#state.put_history]}};    
-active(?VNODE_REQ{index=Idx, request=?KV_DELETE_REQ{}=Msg}, State) ->
-    {next_state, active, State#state{put_history=[{Idx,Msg}|State#state.put_history]}}.
+    {next_state, active, State1#state{put_history=[{Idx,Req}|State#state.put_history]}};
+active_handle_request(kv_delete_request, Req, Idx, _Sender, State) ->
+    {next_state, active, State#state{put_history=[{Idx,Req}|State#state.put_history]}}.
 
-active(Req=?VNODE_REQ{request=?KV_DELETE_REQ{}},
-            _From, State) ->
-    {next_state, active, NewState} = active(Req, State),
-    {reply, ok, NewState};
-active(_Request, _From, State) ->
-    {stop, bad_request, State}.
+
+
 
 %% @private
 handle_event(_Event, _StateName, StateData) ->
@@ -285,5 +286,9 @@ put_merge(CurObj, UpdObj, Options) ->
     Coord = proplists:get_value(coord, Options, false),
     VnodeId = <<1, 1, 1, 1, 1, 1, 1, 1>>,
     Ts = vclock:timestamp(),
-    {_, ResObj} = riak_kv_vnode:put_merge(Coord, false, CurObj, UpdObj, VnodeId, Ts),
+    %% Since the local vnode never forgets, and never deletes, and
+    %% doesn't support epochs in this test, it is safe to set
+    %% IsNewEpoch to false
+    IsNewEpoch = false,
+    {_, ResObj} = riak_kv_vnode:put_merge(Coord, false, CurObj, UpdObj, {IsNewEpoch, VnodeId}, Ts),
     ResObj.

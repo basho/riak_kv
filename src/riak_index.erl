@@ -68,7 +68,9 @@
 %% @type query_element()   = {eq,    index_field(), index_value()} |
 %%                           {range, index_field(), index_value(), index_value()}
 
--type query_def() :: {ok, term()} | {error, term()} | {term(), {error, term()}}.
+% -type query_def() :: {ok, term()} | {error, term()} | {term(), {error, term()}}.
+% -export_type([query_def/0]).
+-type query_def() :: #riak_kv_index_v3{}|#riak_kv_index_v2{}.
 -export_type([query_def/0]).
 
 -type last_result() :: {value(), key()} | key().
@@ -215,9 +217,9 @@ is_field_match(Key, Suffix) when size(Suffix) < size(Key) ->
     %% suffix.
     Offset = size(Key) - size(Suffix),
     case Key of
-        <<_:Offset/binary, Suffix/binary>> -> 
+        <<_:Offset/binary, Suffix/binary>> ->
             true;
-        _ -> 
+        _ ->
             false
     end;
 is_field_match(_, _) ->

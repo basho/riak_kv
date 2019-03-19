@@ -23,9 +23,9 @@
 %% @doc coordination of Riak PUT requests
 
 -module(riak_kv_put_fsm).
-%-ifdef(TEST).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
-%-endif.
+-endif.
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_types.hrl").
@@ -75,9 +75,25 @@
         %% Some CRDTs and other client operations that cannot tolerate
         %% an automatic retry on the server side; those operations should
         %% use {retry_put_coordinator_failure, false}.
-        {retry_put_coordinator_failure, boolean()}.
+        {retry_put_coordinator_failure, boolean()} |
+        %% When selecting a coordinator, `mbox_check' controls wether
+        %% the vnode mailbox soft-limit is checked. see riak#gh1661
+        %% for details. NOTE: defaults to `true' but will be set to
+        %% `false' by the puts_fsm when it forwards to a new put fsm
+        %% i.e. ONLY forward once, when a coordinator is chosen, use
+        %% it.
+        {mbox_check, boolean()} |
+        {counter_op, any()} |
+        {crdt_op, any()}.
 
 -type options() :: [option()].
+
+-type preflist_entry() :: {Idx::non_neg_integer(), node()}.
+%% the information about vnode mailbox queues used to select a
+%% coordinator
+-type mbox_data() :: [{preflist_entry(),
+                       MBoxSize::error | non_neg_integer(),
+                       MBoxSofLimit:: error | non_neg_integer()}] | [].
 
 -export_type([option/0, options/0, detail/0, detail_info/0]).
 
@@ -88,6 +104,7 @@
                 w :: non_neg_integer(),
                 dw :: non_neg_integer(),
                 pw :: non_neg_integer(),
+                node_confirms :: non_neg_integer(),
                 coord_pl_entry :: {integer(), atom()},
                 preflist2 :: riak_core_apl:preflist_ann(),
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -198,6 +215,8 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
     after StateData#state.coordinator_timeout ->
             exit(MiddleMan, kill),
             Bad = StateData#state.bad_coordinators,
+            lager:warning("timed out waiting for forward-ack, adding ~p to bad coordinators",
+                          [CoordNode]),
             prepare(timeout, StateData#state{bad_coordinators=[CoordNode|Bad]})
     end.
 
@@ -272,113 +291,12 @@ init({test, Args, StateProps}) ->
     {ok, validate, TestStateData}.
 
 %% @private
-prepare(timeout, StateData0 = #state{from = From, robj = RObj,
-                                     bkey = BKey = {Bucket, _Key},
-                                     options = Options,
-                                     trace = Trace,
-                                     bad_coordinators = BadCoordinators}) ->
-    {ok, DefaultProps} = application:get_env(riak_core, 
-                                             default_bucket_props),
-    BucketProps = riak_core_bucket:get_bucket(riak_object:bucket(RObj)),
-    %% typed buckets never fall back to defaults
-    Props = 
-        case is_tuple(Bucket) of
-            false -> 
-                lists:keymerge(1, lists:keysort(1, BucketProps), 
-                               lists:keysort(1, DefaultProps));
-            true ->
-                BucketProps
-        end,
-    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
-    Bucket_N = get_option(n_val, BucketProps),
-    N = case get_option(n_val, Options, false) of
-            false ->
-                Bucket_N;
-            N_val when is_integer(N_val), N_val > 0, N_val =< Bucket_N ->
-                %% don't allow custom N to exceed bucket N
-                N_val;
-            Bad_N ->
-                {error, {n_val_violation, Bad_N}}
-        end,
-    case N of
-        {error, _} = Error ->
-            process_reply(Error, StateData0);
-        _ ->
-            StatTracked = get_option(stat_tracked, BucketProps, false),
-            Preflist2 = 
-                case get_option(sloppy_quorum, Options, true) of
-                    true ->
-                        UpNodes = riak_core_node_watcher:nodes(riak_kv),
-                        riak_core_apl:get_apl_ann(DocIdx, N, 
-                                                  UpNodes -- BadCoordinators);
-                    false ->
-                        Preflist1 =
-                            riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
-                        [X || X = {{_Index, Node}, _Type} <- Preflist1,
-                              not lists:member(Node, BadCoordinators)]
-                end,
-            %% Check if this node is in the preference list so it can coordinate
-            LocalPL = [IndexNode || {{_Index, Node} = IndexNode, _Type} <- Preflist2,
-                                Node == node()],
-            Must = (get_option(asis, Options, false) /= true),
-            case {Preflist2, LocalPL =:= [] andalso Must == true} of
-                {[], _} ->
-                    %% Empty preflist
-                    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-1], 
-                            ["prepare",<<"all nodes down">>]),
-                    process_reply({error, all_nodes_down}, StateData0);
-                {_, true} ->
-                    %% This node is not in the preference list
-                    %% forward on to a random node
-                    {ListPos, _} = rand:uniform(length(Preflist2)),
-                    {{_Idx, CoordNode},_Type} = lists:nth(ListPos, Preflist2),
-                    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [1],
-                            ["prepare", atom2list(CoordNode)]),
-                    try
-                        {UseAckP, Options2} = make_ack_options(
-                                               [{ack_execute, self()}|Options]),
-                        MiddleMan = spawn_coordinator_proc(
-                                      CoordNode, riak_kv_put_fsm, start_link,
-                                      [From,RObj,Options2]),
-                        ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [2],
-                                ["prepare", atom2list(CoordNode)]),
-                        ok = riak_kv_stat:update(coord_redir),
-                        monitor_remote_coordinator(UseAckP, MiddleMan,
-                                                   CoordNode, StateData0)
-                    catch
-                        _:Reason ->
-                            ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
-                                    ["prepare", dtrace_errstr(Reason)]),
-                            lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
-                                        [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
-                            process_reply({error, {coord_handoff_failed, Reason}}, StateData0)
-                    end;
-                _ ->
-                    %% Putting asis, no need to handle locally on a node in the
-                    %% preflist, can coordinate from anywhere
-                    CoordPLEntry = case Must of
-                                    true ->
-                                        hd(LocalPL);
-                                    _ ->
-                                        undefined
-                                end,
-                    CoordPlNode = case CoordPLEntry of
-                                    undefined  -> undefined;
-                                    {_Idx, Nd} -> atom2list(Nd)
-                                end,
-                    %% This node is in the preference list, continue
-                    StartTime = riak_core_util:moment(),
-                    StateData = StateData0#state{n = N,
-                                                bucket_props = Props,
-                                                coord_pl_entry = CoordPLEntry,
-                                                preflist2 = Preflist2,
-                                                starttime = StartTime,
-                                                tracked_bucket = StatTracked},
-                    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0], 
-                            ["prepare", CoordPlNode]),
-                    new_state_timeout(validate, StateData)
-            end
-    end.
+prepare(timeout, State = #state{robj = RObj, options=Options}) ->
+    Bucket = riak_object:bucket(RObj),
+    BucketProps = get_bucket_props(Bucket),
+    StatTracked = get_option(stat_tracked, BucketProps, false),
+    N = get_n_val(Options, BucketProps),
+    get_preflist(N, State#state{tracked_bucket=StatTracked, bucket_props=BucketProps}).
 
 %% @private
 validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
@@ -389,10 +307,12 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                       preflist2 = Preflist2}) ->
     Timeout = get_option(timeout, Options0, ?DEFAULT_TIMEOUT),
     PW0 = get_option(pw, Options0, default),
+    NodeConfirms0 = get_option(node_confirms, Options0, default),
     W0 = get_option(w, Options0, default),
     DW0 = get_option(dw, Options0, default),
 
     PW = riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N),
+    NodeConfirms = riak_kv_util:expand_rw_value(node_confirms, NodeConfirms0, BucketProps, N),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
 
     %% Expand the DW value, but also ensure that DW <= W
@@ -407,7 +327,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
             DW = erlang:max(DW1, 1)
     end,
 
-    IdxType = [{Part, Type} || {{Part, _Node}, Type} <- Preflist2],
+    IdxType = [{Part, Type, Node} || {{Part, Node}, Type} <- Preflist2],
     NumPrimaries = length([x || {_,primary} <- Preflist2]),
     NumVnodes = length(Preflist2),
     MinVnodes = lists:max([1, W, DW, PW]), % always need at least one vnode
@@ -415,11 +335,13 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
     if
         PW =:= error ->
             process_reply({error, {pw_val_violation, PW0}}, StateData0);
+        NodeConfirms =:= error ->
+            process_reply({error, {node_confirms_val_violation, NodeConfirms0}}, StateData0);
         W =:= error ->
             process_reply({error, {w_val_violation, W0}}, StateData0);
         DW =:= error ->
             process_reply({error, {dw_val_violation, DW0}}, StateData0);
-        (W > N) or (DW > N) or (PW > N) ->
+        (W > N) or (DW > N) or (PW > N) or (NodeConfirms > N)->
             process_reply({error, {n_val_violation, N}}, StateData0);
         PW > NumPrimaries ->
             process_reply({error, {pw_val_unsatisfied, PW, NumPrimaries}}, StateData0);
@@ -452,16 +374,15 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                 {[{returnbody,true}], false}
                         end
                 end,
-            PutCore = riak_kv_put_core:init(N, W, PW, DW,
-                                            N-PW+1,  % cannot ever get PW replies
-                                            N-DW+1,  % cannot ever get DW replies
+            PutCore = riak_kv_put_core:init(N, W, PW, NodeConfirms, DW,
                                             AllowMult,
                                             ReturnBody,
                                             IdxType),
             VNodeOpts = handle_options(Options, VNodeOpts0),
             StateData = StateData0#state{n=N,
                                          w=W,
-                                         pw=PW, dw=DW, allowmult=AllowMult,
+                                         pw=PW, node_confirms=NodeConfirms, dw=DW,
+                                         allowmult=AllowMult,
                                          precommit = Precommit,
                                          postcommit = Postcommit,
                                          req_id = ReqId,
@@ -469,7 +390,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                          putcore = PutCore,
                                          vnode_options = VNodeOpts,
                                          timeout = Timeout},
-            ?DTRACE(Trace, ?C_PUT_FSM_VALIDATE, [N, W, PW, DW], []),
+            ?DTRACE(Trace, ?C_PUT_FSM_VALIDATE, [N, W, PW, NodeConfirms, DW], []),
             case Precommit of
                 [] -> % Nothing to run, spare the timing code
                     execute(StateData);
@@ -506,12 +427,13 @@ precommit(timeout, State = #state{precommit = [Hook | Rest],
             process_reply({error, {precommit_fail, Reason}}, State);
         Result ->
             ?DTRACE(Trace, ?C_PUT_FSM_PRECOMMIT, [0], []),
-            {next_state, precommit, State#state{robj = riak_object:apply_updates(Result),
-                                                precommit = Rest}, 0}
+            new_state_timeout(precommit,
+                                State#state{robj = riak_object:apply_updates(Result),
+                                            precommit = Rest})
     end.
 
 %% @private
-execute(State=#state{options = Options, coord_pl_entry = CPL}) ->
+execute(State=#state{options = Options, timeout = Timeout, coord_pl_entry = CPL}) ->
     %% If we are a forwarded coordinator, the originating node is expecting
     %% an ack from us.
     case get_option(ack_execute, Options) of
@@ -520,19 +442,20 @@ execute(State=#state{options = Options, coord_pl_entry = CPL}) ->
         Pid ->
             Pid ! {ack, node(), now_executing}
     end,
+    TRef = schedule_timeout(Timeout),
+    NewState = State#state{tref = TRef},
     case CPL of
         undefined ->
-            execute_remote(State);
+            execute_remote(NewState);
         _ ->
-            execute_local(State)
+            execute_local(NewState)
     end.
 
 %% @private
 %% Send the put coordinating put requests to the local vnode - the returned object
 %% will guarantee a frontier object.
 %% N.B. Not actually a state - here in the source to make reading the flow easier
-execute_local(StateData=#state{robj=RObj, req_id = ReqId,
-                               timeout=Timeout, bkey=BKey,
+execute_local(StateData=#state{robj=RObj, req_id = ReqId, bkey=BKey,
                                coord_pl_entry = {_Index, Node} = CoordPLEntry,
                                vnode_options=VnodeOptions,
                                trace = Trace,
@@ -545,9 +468,8 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId,
             _ ->
                 StateData
         end,
-    TRef = schedule_timeout(Timeout),
     riak_kv_vnode:coord_put(CoordPLEntry, BKey, RObj, ReqId, StartTime, VnodeOptions),
-    StateData2 = StateData1#state{robj = RObj, tref = TRef},
+    StateData2 = StateData1#state{robj = RObj},
     %% Must always wait for local vnode - it contains the object with updated vclock
     %% to use for the remotes. (Ignore optimization for N=1 case for now).
     new_state(waiting_local_vnode, StateData2).
@@ -651,13 +573,13 @@ postcommit(timeout, StateData = #state{postcommit = [Hook | Rest],
     %% take a long time.
     {ReplyObj, UpdPutCore} =  riak_kv_put_core:final(PutCore),
     decode_postcommit(invoke_hook(Hook, ReplyObj), Trace),
-    {next_state, postcommit, StateData#state{postcommit = Rest,
+    new_state_timeout( postcommit, StateData#state{postcommit = Rest,
                                              trace = Trace,
-                                             putcore = UpdPutCore}, 0};
+                                             putcore = UpdPutCore});
 %% still process hooks even if request timed out  
 postcommit(request_timeout, StateData = #state{trace = Trace}) -> 
     ?DTRACE(Trace, ?C_PUT_FSM_POSTCOMMIT, [-3], []),
-    {next_state, postcommit, StateData, 0};
+    new_state_timeout(postcommit, StateData);
 postcommit(Reply, StateData = #state{putcore = PutCore,
                                      trace = Trace}) ->
     case Trace of
@@ -670,7 +592,7 @@ postcommit(Reply, StateData = #state{putcore = PutCore,
     end,
     %% late responses - add to state.  *Does not* recompute finalobj
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
-    {next_state, postcommit, StateData#state{putcore = UpdPutCore}, 0}.
+    new_state_timeout(postcommit, StateData#state{putcore = UpdPutCore}).
 
 finish(timeout, StateData = #state{timing = Timing, reply = Reply,
                                    bkey = {Bucket, _Key},
@@ -706,8 +628,7 @@ finish(Reply, StateData = #state{putcore = PutCore,
     end,
     %% late responses - add to state.  *Does not* recompute finalobj
     UpdPutCore = riak_kv_put_core:add_result(Reply, PutCore),
-    {next_state, finish, StateData#state{putcore = UpdPutCore}, 0}.
-
+    new_state_timeout(finish, StateData#state{putcore = UpdPutCore}).
 
 %% @private
 handle_event(_Event, _StateName, StateData) ->
@@ -724,6 +645,9 @@ handle_info(request_timeout, StateName, StateData) ->
 handle_info({ack, Node, now_executing}, StateName, StateData) ->
     late_put_fsm_coordinator_ack(Node),
     ok = riak_kv_stat:update(late_put_fsm_coordinator_ack),
+    {next_state, StateName, StateData};
+handle_info({mbox, _}, StateName, StateData) ->
+    %% Delayed mailbox size check response, ignore it
     {next_state, StateName, StateData};
 handle_info(_Info, _StateName, StateData) ->
     {stop,badmsg,StateData}.
@@ -1016,3 +940,477 @@ dtrace_errstr(Term) ->
 %% This function is for dbg tracing purposes
 late_put_fsm_coordinator_ack(_Node) ->
     ok.
+
+-spec get_bucket_props(riak_object:bucket()) -> list().
+get_bucket_props(Bucket) ->
+    {ok, DefaultProps} = application:get_env(riak_core,
+                                             default_bucket_props),
+    BucketProps = riak_core_bucket:get_bucket(Bucket),
+    %% typed buckets never fall back to defaults
+    case is_tuple(Bucket) of
+        false ->
+            lists:keymerge(1, lists:keysort(1, BucketProps),
+                           lists:keysort(1, DefaultProps));
+        true ->
+            BucketProps
+    end.
+
+%% @private decide on the N Val for the put request, and error if
+%% there is a violation.
+get_n_val(Options, BucketProps) ->
+    Bucket_N = get_option(n_val, BucketProps),
+    case get_option(n_val, Options, false) of
+        false ->
+            Bucket_N;
+        N_val when is_integer(N_val), N_val > 0, N_val =< Bucket_N ->
+            %% don't allow custom N to exceed bucket N
+            N_val;
+        Bad_N ->
+            {error, {n_val_violation, Bad_N}}
+    end.
+
+%% @private given no n-val violation, generate a preflist.
+get_preflist({error, _Reason}=Err, State) ->
+    process_reply(Err, State);
+get_preflist(N, State) ->
+    #state{bkey = BKey,
+           options = Options,
+           bucket_props=BucketProps,
+           bad_coordinators = BadCoordinators} = State,
+
+    DocIdx = riak_core_util:chash_key(BKey, BucketProps),
+
+    Preflist =
+        case get_option(sloppy_quorum, Options, true) of
+            true ->
+                UpNodes = riak_core_node_watcher:nodes(riak_kv),
+                riak_core_apl:get_apl_ann(DocIdx, N,
+                                          UpNodes -- BadCoordinators);
+            false ->
+                Preflist0 =
+                    riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
+                [X || X = {{_Index, Node}, _Type} <- Preflist0,
+                      not lists:member(Node, BadCoordinators)]
+        end,
+
+    coordinate_or_forward(Preflist, State#state{n=N}).
+
+%% @private if there is a non-empty preflist, select a coordinator, as
+%% needed.
+coordinate_or_forward([], State=#state{trace=Trace}) ->
+    %% Empty preflist
+    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-1],
+            ["prepare",<<"all nodes down">>]),
+    process_reply({error, all_nodes_down}, State);
+coordinate_or_forward(Preflist, State) ->
+    #state{options = Options, n = N, trace=Trace} = State,
+    CoordinatorType = get_coordinator_type(Options),
+    MBoxCheck = get_soft_limit_option(Options),
+
+    case select_coordinator(Preflist, CoordinatorType, MBoxCheck) of
+        {local, CoordPLEntry} ->
+            %% for DTRACE
+            CoordPlNode = case CoordPLEntry of
+                              undefined  -> undefined;
+                              {_Idx, Nd} -> atom2list(Nd)
+                          end,
+            StartTime = riak_core_util:moment(),
+            StateData = State#state{n = N,
+                                    coord_pl_entry = CoordPLEntry,
+                                    preflist2 = Preflist,
+                                    starttime = StartTime},
+            ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0],
+                    ["prepare", CoordPlNode]),
+            new_state_timeout(validate, StateData);
+        {forward, ForwardNode} ->
+            forward(ForwardNode, State)
+    end.
+
+%% @private selects a coordinating vnode for the put, depending on
+%% locality, mailbox length, etc.
+-spec select_coordinator(riak_core_apl:preflist_ann(), local | none, boolean()) ->
+                                {local, preflist_entry()} |
+                                {local, undefined} |
+                                {forward, node()}.
+select_coordinator(Preflist, _CoordinatorType=local, true=_MBoxCheck) ->
+    %% wants local, if there are local entries, check mailbox soft
+    %% limits (see riak#1661) locally first, only checking remote if
+    %% no local-preflist, or local softloaded/not replying.
+
+    %% NOTE:: an annotated preflist goes in, two un-annotated come out
+    {LocalPreflist, RemotePreflist} = partition_local_remote(Preflist),
+
+    case check_mailboxes(LocalPreflist) of
+        {true, Entry} ->
+            riak_kv_stat:update(coord_local_unloaded),
+            {local, Entry};
+        {false, LocalMBoxData} ->
+            case check_mailboxes(RemotePreflist) of
+                {true, {_Idx, Remote}} ->
+                    case LocalPreflist of
+                        [] ->
+                            %% there was no local preflist, just a forward
+                            riak_kv_stat:update(coord_redir_unloaded);
+                        _Some ->
+                            %% forwarding 'cos local is loaded
+                            riak_kv_stat:update(coord_redir_loaded_local)
+                    end,
+                    {forward, Remote};
+                {false, RemoteMBoxData} ->
+                    select_least_loaded_coordinator(LocalMBoxData, RemoteMBoxData)
+            end
+    end;
+select_coordinator(Preflist, _CoordinatorType=local, false=_MBoxCheck) ->
+    %% No mailbox check, don't change behaviour from pre-gh1661
+
+    %% NOTE: partition_local_remote returns an un-anotated preflist
+    case partition_local_remote(Preflist) of
+        %%  NOTE 2: If local==[] then Remote /= [] as there is always
+        %% at least one entry in the preflist here (see
+        %% coordinate_or_forward above)
+        {[], [SingletonRemote]} ->
+            {_Idx, RemoteNode} = SingletonRemote,
+            ok = riak_kv_stat:update(coord_redir),
+            {forward, RemoteNode};
+        {[], Remotes} ->
+            {ListPos, _} = random:uniform_s(length(Remotes), os:timestamp()),
+            {_Idx, CoordNode} = lists:nth(ListPos, Remotes),
+            ok = riak_kv_stat:update(coord_redir),
+            {forward, CoordNode};
+        {LocalPreflist, _Remotes} ->
+            %% NOTE 3: if we've been forwarded to then there will
+            %% always be a local coordinator, it's not a chain of
+            %% never ending forwards.
+            {local, hd(LocalPreflist)}
+    end;
+select_coordinator(_Preflist, _CoordinatorType=none, _MBoxCheck) ->
+    %% for `none' type coordinator downstream code expects `undefined',
+    %% no coordinator, no mailbox queues to route around
+    {local, undefined}.
+
+%% @private @TODO test to find the best strategy
+-spec select_least_loaded_coordinator(list(), list()) -> {local, {pos_integer(), node()}} |
+                                                         {forward, node()}.
+select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
+    [{{_Idx, Node}, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, RemoteMBoxData),
+    riak_kv_stat:update(coord_redir_least_loaded),
+    {forward, Node};
+select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
+    [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
+    lager:warning("soft-loaded local coordinator"),
+    riak_kv_stat:update(coord_local_soft_loaded),
+    {local, Entry}.
+
+%% @private used by select_least_loaded_coordinator/2 to sort mbox
+%% data results
+mbox_data_sort({_, error, error}, {_, error, error}) ->
+    %% We use random here, so that a list full of errors picks a
+    %% random node to forward to (as per pre-gh1661 code)?
+    case random:uniform_s(2, os:timestamp()) of
+        {1, _} ->
+            true;
+        {2, _} ->
+            false
+    end;
+mbox_data_sort({_, error, error}, {_, _Load, _Limit}) ->
+    false;
+mbox_data_sort({_, _LoadA, _LimitA}, {_, error, error}) ->
+    true;
+mbox_data_sort({_, LoadA, _LimitA}, {_, LoadB, _LimitB})   ->
+    %% @TODO should we randomise where load is equal? Or let load take
+    %% care of it (i.e. is we always choose NodeA, it will get a
+    %% longer queue and we will choose NodeB)
+    LoadA =< LoadB.
+
+-define(DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS, 100).
+
+%% @private check the mailboxes for the preflist.
+-spec check_mailboxes(riak_core_apl:preflist()) ->
+                             {true, preflist_entry()} |
+                             {false, mbox_data()}.
+check_mailboxes([]) ->
+    %% shortcut for empty (local)preflist
+    {false, []};
+check_mailboxes(Preflist) ->
+    TimeLimit = get_timestamp_millis() + ?DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS,
+    _ = [check_mailbox(Entry) || Entry <- Preflist],
+    case join_mbox_replies(length(Preflist),
+                           TimeLimit,
+                           []) of
+        {true, Entry} ->
+            {true, Entry};
+        {ok, MBoxData} ->
+            %% all replies in, none are below soft-limit
+            {false, MBoxData};
+        {timeout, MBoxData0} ->
+            lager:warning("Mailbox soft-load poll timout ~p",
+                          [?DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS]),
+            MBoxData = add_errors_to_mbox_data(Preflist, MBoxData0),
+            {false, MBoxData}
+    end.
+
+%% @private cast off to vnode proxy for mailbox size.
+-spec check_mailbox(preflist_entry()) -> ok.
+check_mailbox({Idx, Node}=Entry) ->
+    RegName = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx, Node),
+    riak_core_vnode_proxy:cast(RegName, {mailbox_size, self(), Entry}).
+
+%% @private wait at most `TimeOutMillis' for `HowMany' `{mbox, _}'
+%% replies from riak_core_vnode_proxy. Returns either `Acc' as mbox
+%% data or short-circuits to `{true, Entry}' if any proxy replies
+%% below the soft limit.
+-spec join_mbox_replies(NumReplies::non_neg_integer(),
+                        Timeout::pos_integer(), Acc::mbox_data()) ->
+                               {true, preflist_entry()} |
+                               {timeout, mbox_data()} |
+                               {ok, mbox_data()}.
+join_mbox_replies(0, _TimeLimit, Acc) ->
+    {ok, Acc};
+join_mbox_replies(HowMany, TimeLimit, Acc) ->
+    TimeOut = max(0, TimeLimit - get_timestamp_millis()),
+    receive
+        {mbox, {Entry, {ok, _Mbox, _Limit}}} ->
+            %% shortcut it
+            {true, Entry};
+        {mbox, {Entry, {soft_loaded, MBox, Limit}}} ->
+            riak_kv_stat:update(soft_loaded_vnode_mbox),
+            join_mbox_replies(HowMany-1, TimeLimit,
+                 [{Entry, MBox, Limit} | Acc])
+    after TimeOut ->
+            lager:warning("soft-limit mailbox check timeout"),
+            riak_kv_stat:update(vnode_mbox_check_timeout),
+            {timeout, Acc}
+    end.
+
+%% @private in the case that some preflist entr(y|ies) did not respond
+%% in time, add them to the mbox data result as `error' entries.
+-spec add_errors_to_mbox_data(riak_core_apl:preflist(), mbox_data()) ->
+                                     mbox_data().
+add_errors_to_mbox_data(Preflist, Acc) ->
+    lists:map(fun(Entry) ->
+                      case lists:keyfind(Entry, 1, Acc) of
+                          false ->
+                              lager:warning("Mailbox for ~p did not return in time", [Entry]),
+                              {Entry, error, error};
+                          Res ->
+                              Res
+                      end
+              end, Preflist).
+
+%% @private decide if the coordinator has to be a local, causality
+%% advancing vnode, or no coordinator at all
+-spec get_coordinator_type(options()) -> none | local.
+get_coordinator_type(Options) ->
+    case get_option(asis, Options, false) of
+        false ->
+            local;
+        true ->
+            none
+    end.
+
+%% @private used by `coordinate_or_forward' above. Removes `Type' info
+%% from preflist entries and splits a preflist into local and remote.
+-spec partition_local_remote(riak_core_apl:preflist_ann()) ->
+                                    {riak_core_apl:preflist(),
+                                     riak_core_apl:preflist()}.
+partition_local_remote(Preflist) ->
+    lists:foldl(fun partition_local_remote/2,
+                {[], []},
+                Preflist).
+
+%% @private fold fun for `partition_local_remote/1'
+partition_local_remote({{_Index, Node}=IN, _Type}, {L, R})
+  when Node == node() ->
+    {[IN | L], R};
+partition_local_remote({IN, _Type}, {L, R}) ->
+    {L, [IN | R]}.
+
+%% @private get the soft-limit check option, and consult capabilities too.
+get_soft_limit_option(Options) ->
+    %% The logic here is to be as safe as possible. If caps system is
+    %% unavailble, then assume soft-limits are unsupported. If
+    %% capability _is_ available AND supported, then the value will be true
+    SoftLimitSupported = riak_core_capability:get({riak_kv, put_soft_limit}, false),
+    %% both the system (post forward) and the client (via options) can
+    %% turn off soft-limit checking. However, by default, we should
+    %% use them (if supported)
+    SoftLimitedWanted = get_option(mbox_check, Options, SoftLimitSupported),
+    SoftLimitedWanted.
+
+
+
+%% @private the local node is not in the preflist, or is overloaded,
+%% forward to another node
+forward(CoordNode, State) ->
+    #state{trace=Trace,
+           options=Options,
+           from=From,
+           robj=RObj,
+           bkey=BKey} = State,
+    %% This node is not in the preference list, or it's too loaded,
+    %% forward on to (a less loaded?) node
+
+    ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [1],
+            ["prepare", atom2list(CoordNode)]),
+    try
+        {UseAckP, Options2} = make_ack_options(
+                                [
+                                 %% don't check mbox at new fsm, we
+                                 %% picked the "best"
+                                 {mbox_check, false},
+                                 %% ack forwarder
+                                 {ack_execute, self()}
+                                 | Options]),
+        MiddleMan = spawn_coordinator_proc(
+                      CoordNode, riak_kv_put_fsm, start_link,
+                      [From, RObj, Options2]),
+        ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [2],
+                ["prepare", atom2list(CoordNode)]),
+        monitor_remote_coordinator(UseAckP, MiddleMan,
+                                   CoordNode, State)
+    catch
+        _:Reason ->
+            ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
+                    ["prepare", dtrace_errstr(Reason)]),
+            lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
+                        [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
+            process_reply({error, {coord_handoff_failed, Reason}}, State)
+    end.
+
+-spec get_timestamp_millis() -> pos_integer().
+get_timestamp_millis() ->
+  {Mega, Sec, Micro} = os:timestamp(),
+  (Mega*1000000 + Sec)*1000 + round(Micro/1000).
+
+-ifdef(TEST).
+
+mbox_data_sort_test() ->
+    ?assert(mbox_data_sort({x, 1000, 10}, {x, error, error})),
+    ?assertNot(mbox_data_sort({x, error, error}, {x, 100, 10})),
+    ?assertNot(mbox_data_sort({x, 10, 10}, {x, 1, 10})),
+    ?assert(mbox_data_sort({x, 10, 10}, {x, 10, 10})),
+    ?assert(mbox_data_sort({x, 1, 10}, {x, 10, 10})).
+
+select_least_loaded_coordinator_test() ->
+    MBoxData = [{{0, nodex}, 100, 10},
+                {{1919191919, nodey}, 10, 10},
+                {{91829, nodez}, error, error},
+                {{100, nodea}, 1, 10},
+                {{90, nodeb}, error, error},
+                {{182, c}, 10001, 10}],
+    ?assertEqual({local, {100, nodea}}, select_least_loaded_coordinator(MBoxData, [])),
+    ?assertEqual({forward, nodea}, select_least_loaded_coordinator([], MBoxData)),
+    ?assertEqual({local, {100, nodea}}, select_least_loaded_coordinator(MBoxData, MBoxData)).
+
+get_coordinator_type_test() ->
+    Opts0 = proplists:unfold([asis]),
+    ?assertEqual(none, get_coordinator_type(Opts0)),
+    Opts1 = proplists:unfold([]),
+    ?assertEqual(local, get_coordinator_type(Opts1)).
+
+get_bucket_props_test_() ->
+    BucketProps = [{bprop1, bval1},
+                   {bprop2, bval2},
+                   {prop2, bval9},
+                   {prop1, val1}],
+    DefaultProps = [{prop1, val1},
+                    {prop2, val2},
+                    {prop3, val3}],
+    {setup, fun() ->
+                    DefPropsOrig = application:get_env(riak_core,
+                                                       default_bucket_props),
+                    application:set_env(riak_core,
+                                        default_bucket_props,
+                                        DefaultProps),
+
+                    meck:new(riak_core_bucket),
+                    meck:expect(riak_core_bucket, get_bucket,
+                                fun(_) ->
+                                        BucketProps
+                                end),
+
+                    DefPropsOrig
+            end,
+     fun(DefPropsOrig) ->
+             application:set_env(riak_core,
+                                 default_bucket_props,
+                                 DefPropsOrig),
+             meck:unload(riak_core_bucket)
+
+     end,
+     [{"untyped bucket",
+       ?_test(
+          begin
+              Bucket = <<"bucket">>,
+              %% amazing, not a ukeymerge
+              Props = get_bucket_props(Bucket),
+              %% i.e. a merge with defaults
+              ?assertEqual([
+                            {bprop1,bval1},
+                            {bprop2,bval2},
+                            {prop1,val1},
+                            {prop1,val1},
+                            {prop2,bval9},
+                            {prop2,val2},
+                            {prop3,val3}
+                           ], Props)
+          end)
+      },
+      {"typed bucket",
+       ?_test(
+          begin
+              Bucket = {<<"type">>, <<"bucket">>},
+              Props = get_bucket_props(Bucket),
+              %% i.e. no merge with defaults
+              ?assertEqual(BucketProps, Props)
+          end
+         )
+      }
+     ]}.
+
+partition_local_remote_test() ->
+    Node = node(),
+    PL1 = [
+           {{0, 'node0'}, primary},
+           {{1, Node}, fallback},
+           {{2, 'node1'}, primary}
+          ],
+    ?assertEqual({
+                   [{1, Node}],
+                   [{2, 'node1'},
+                    {0, 'node0'}]
+                 }, partition_local_remote(PL1)),
+
+    PL2 = [
+           {{0, 'node0'}, primary},
+           {{1, Node}, fallback},
+           {{2, Node}, primary},
+           {{3, 'node0'}, fallback}
+          ],
+
+    ?assertEqual({
+                   [{2, Node},
+                    {1, Node}],
+                   [{3, 'node0'},
+                    {0, 'node0'}]
+                 }, partition_local_remote(PL2)),
+    ?assertEqual({[], []}, partition_local_remote([])),
+    ?assertEqual({[], [{3, 'node0'},
+                       {0, 'node0'}]}, partition_local_remote([
+                                                               {{0, 'node0'}, primary},
+                                                               {{3, 'node0'}, fallback}
+                                                              ])),
+    ?assertEqual({[{1, Node}], []}, partition_local_remote([
+                                                            {{1, Node}, primary}
+                                                           ])).
+
+get_n_val_test() ->
+    Opts0 = [],
+    BProps = [{n_val, 3}, {other, props}],
+    ?assertEqual(3, get_n_val(Opts0, BProps)),
+    Opts1 = [{n_val, 1}],
+    ?assertEqual(1, get_n_val(Opts1, BProps)),
+    Opts2 = [{n_val, 4}],
+    ?assertEqual({error, {n_val_violation, 4}}, get_n_val(Opts2, BProps)).
+
+-endif.

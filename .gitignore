@@ -20,4 +20,4 @@ riak_kv.iml
 _build/
 .rebar3/
 rebar.lock
-src/riak_core_pb.erl
+.DS_Store
