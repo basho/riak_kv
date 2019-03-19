@@ -105,6 +105,25 @@ test_with_options(Backend, Ops) when is_list(Ops) ->
     TestingTime = proplists:get_value(testing_time, Ops, ?TEST_SECONDS),
     test2(property(Backend, Volatile, Config, Cleanup, TestingTime)).
 
+
+property(Backend) ->
+    property(Backend, false).
+
+property(Backend, Volatile) ->
+    property(Backend, Volatile, []).
+
+property(Backend, Volatile, Config) ->
+    property(Backend, Volatile, Config, fun(BeState,_Olds) ->
+                catch(Backend:stop(BeState)) end).
+
+property(Backend, Volatile, Config, Cleanup) ->
+    property(Backend, Volatile, Config, Cleanup, ?TEST_SECONDS).
+
+property(Backend, Volatile, Config, Cleanup, NumSeconds) ->
+    eqc:testing_time(NumSeconds,
+                     prop_backend(Backend, Volatile, Config, Cleanup)).
+
+
 cleanup_fun(Backend) ->
     fun(BeState,_Olds) -> catch(Backend:stop(BeState)) end.
 

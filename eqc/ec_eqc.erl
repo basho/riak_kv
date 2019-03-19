@@ -27,7 +27,7 @@ eqc_test_() ->
              meck:unload(riak_core_bucket)
      end,
      [
-      {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop()))))}
+      {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop_ec()))))}
      ]}.
 
 %% TODO: 
@@ -53,10 +53,10 @@ test() ->
     teardown().
 
 test(N) ->
-    quickcheck(numtests(N, prop())).
+    quickcheck(numtests(N, prop_ec())).
 
 check() ->
-    check(prop(), current_counterexample()).
+    check(prop_ec(), current_counterexample()).
 
 -define(B, <<"b">>).
 -define(K, <<"k">>).
