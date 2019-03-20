@@ -227,7 +227,7 @@ prop_basic_get() ->
                                                                  {n, N},
                                                                  {bucket_props, BucketProps},
                                                                  {preflist2, PL2},
-                                                                 {requets_type, get}]),
+                                                                 {request_type, get}]),
 
                        process_flag(trap_exit, true),
                        ok = riak_kv_test_util:wait_for_pid(GetPid),
