@@ -630,7 +630,23 @@ prop_leveled_backend() ->
                    error_logger:logfile({open, "riak_kv_leveled_backend_eqc.log"}),
                    fun() -> ?assertCmd("rm -rf " ++ Path ++ "/*") end
            end,
-           backend_eqc:prop_backend(?MODULE, false, [{data_root, Path}])).
+           backend_eqc:prop_backend(?MODULE,
+                                    false,
+                                    [{data_root, Path},
+                                        {cache_size, 100},
+                                        {penciller_cache_size, 1000},
+                                        {sync_strategy, none},
+                                        {compression_method, native},
+                                        {compression_point, on_receipt},
+                                        {compaction_runs_perday, 1},
+                                        {compaction_low_hour, 1},
+                                        {compaction_top_hour, 23},
+                                        {max_run_length, 2},
+                                        {maxrunlength_compactionpercentage, 70.0},
+                                        {singlefile_compactionpercentage, 50.0},
+                                        {snapshot_timeout_short, 900},
+                                        {snapshot_timeout_long, 3600},
+                                        {log_level, error}])).
 
 -endif. % EQC
 
