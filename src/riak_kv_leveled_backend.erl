@@ -625,9 +625,11 @@ prop_leveled_backend() ->
     Path = riak_kv_test_util:get_test_dir("leveled-backend"),
     ?SETUP(fun() ->
                    application:load(sasl),
-                   application:set_env(sasl, sasl_error_logger, {file, "riak_kv_leveled_backend_eqc_sasl.log"}),
+                   application:set_env(sasl,
+                                        sasl_error_logger,
+                                        {file, Path ++ "/riak_kv_leveled_backend_eqc_sasl.log"}),
                    error_logger:tty(false),
-                   error_logger:logfile({open, "riak_kv_leveled_backend_eqc.log"}),
+                   error_logger:logfile({open, Path ++ "/riak_kv_leveled_backend_eqc.log"}),
                    fun() -> ?assertCmd("rm -rf " ++ Path ++ "/*") end
            end,
            backend_eqc:prop_backend(?MODULE,

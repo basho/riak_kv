@@ -42,11 +42,12 @@
 
 setup() ->
     %% Shut logging up - too noisy.
+    Path = riak_kv_test_util:get_test_dir("get_fsm_eqc"),
     application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "get_fsm_eqc_sasl.log"}),
+    application:set_env(sasl, sasl_error_logger, {file, Path ++ "/get_fsm_eqc_sasl.log"}),
     application:set_env(riak_kv, fsm_trace_enabled, true),
     error_logger:tty(false),
-    error_logger:logfile({open, "get_fsm_eqc.log"}),
+    error_logger:logfile({open, Path ++ "/get_fsm_eqc.log"}),
 
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),

@@ -65,6 +65,7 @@
 
 setup() ->
     %% Start net_kernel - hopefully can remove this after FSM is purified..
+    Path = riak_kv_test_util:get_test_dir("put_fsm_eqc"),
     State = case net_kernel:stop() of
                 {error, not_allowed} ->
                     running;
@@ -80,10 +81,10 @@ setup() ->
             end,
     %% Shut logging up - too noisy.
     application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "put_fsm_eqc_sasl.log"}),
+    application:set_env(sasl, sasl_error_logger, {file, Path ++ "/put_fsm_eqc_sasl.log"}),
     application:set_env(riak_kv, fsm_trace_enabled, true),
     error_logger:tty(false),
-    error_logger:logfile({open, "put_fsm_eqc.log"}),
+    error_logger:logfile({open, Path ++ "/put_fsm_eqc.log"}),
 
     %% Exometer starts lager.  Therefore, we need start it before lager to ensure
     %% that cconfiguration customizations in this test case are not inadvertantly
@@ -92,7 +93,8 @@ setup() ->
     application:stop(lager),
     application:load(lager),
     application:set_env(lager, handlers,
-                        [{lager_file_backend, [{?LAGER_LOGFILE, info, 10485760,"$D0",5}]}]),
+                        [{lager_file_backend,
+                        [{Path ++ "/" ++ ?LAGER_LOGFILE, info, 10485760,"$D0",5}]}]),
     ok = lager:start(),
 
     %% Start up mock servers and dependencies
