@@ -336,6 +336,16 @@ read_vnode_status(File) ->
         {error, enoent} ->
             %% doesn't exist? same as empty
             {ok, orddict:new()};
+        {error, {_Offset, file_io_server, invalid_unicode}} ->
+            case override_consult(File) of 
+                {ok, [Status]} when is_list(Status) ->
+                    {ok, orddict:from_list(Status)};
+                Er ->
+                    %% "corruption" error, some other posix error, unreadable:
+                    %% Log, and start anew
+                    lager:error("Failed to override_consult vnode-status file ~p ~p", [File, Er]),
+                    {ok, orddict:new()}
+            end;
         Er ->
             %% "corruption" error, some other posix error, unreadable:
             %% Log, and start anew
@@ -345,6 +355,36 @@ read_vnode_status(File) ->
             %% consult threw
             lager:error("Failed to consult vnode-status file ~p ~p ~p", [File, C, T]),
             {ok, orddict:new()}
+    end.
+
+-spec override_consult(file:filename()) -> {ok, list()}.
+%% @private In OTP 20 file will not read unicode written in OTP16 unless we
+%% read it as latin-1
+override_consult(File) ->
+    case file:open(File, [read]) of
+        {ok, Fd} ->
+            R = consult_stream(Fd),
+            _ = file:close(Fd),
+            R;
+        Error ->
+            Error
+    end.
+
+-spec consult_stream(file:io_device()) -> {ok, list()}|{error, any()}.
+%% @private read unicode stream as latin-1
+%% http://erlang.2086793.n4.nabble.com/file-consult-error-1-file-io-server-invalid-unicode-with-pre-r17-files-in-r17-td4712042.html
+consult_stream(Fd) ->
+    _ = epp:set_encoding(Fd, latin1),
+    consult_stream(Fd, 1, []).
+
+consult_stream(Fd, Line, Acc) ->
+    case io:read(Fd, '', Line) of
+	{ok,Term,EndLine} ->
+	    consult_stream(Fd, EndLine, [Term|Acc]);
+	{error,Error,_Line} ->
+	    {error,Error};
+	{eof,_Line} ->
+	    {ok,lists:reverse(Acc)}
     end.
 
 -ifdef(TEST).
