@@ -225,6 +225,9 @@ cleanup(Test, CleanupFun, StartedApps) ->
     %% Stop distributed Erlang
     net_kernel:stop(),
 
+    {ok, Hostname} = inet:gethostname(),
+    os:cmd("rm -rf *@" ++ Hostname),
+
     %% Reset the riak_core vnode_modules
     application:set_env(riak_core, vnode_modules, []),
     ok.

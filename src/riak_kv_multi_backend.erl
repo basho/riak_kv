@@ -736,6 +736,11 @@ prop_multi_backend_async_fold() ->
 setup() ->
     %% Start the ring manager...
     crypto:start(),
+    CDPath = riak_kv_test_util:get_test_dir("core/data"),
+    CLPath = riak_kv_test_util:get_test_dir("core/log"),
+    application:set_env(riak_core, platform_data_dir, CDPath),
+    application:set_env(riak_core, platform_log_dir, CLPath),
+    error_logger:tty(false),
     {ok, P1} = riak_core_ring_events:start_link(),
     {ok, P2} = riak_core_ring_manager:start_link(test),
 

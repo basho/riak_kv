@@ -847,11 +847,12 @@ get_time_ref_count(TimeRef) ->
 
 prop_memory_backend() ->
     ?SETUP(fun() ->
-                   application:load(sasl),
-                   application:set_env(sasl, sasl_error_logger, {file, "riak_kv_memory_backend_eqc_sasl.log"}),
-                   error_logger:tty(false),
-                   error_logger:logfile({open, "riak_kv_memory_backend_eqc.log"}),
-                   fun() ->  os:cmd("rm -rf test/bitcask-backend/*") end
+                Path = riak_kv_test_util:get_test_dir("memory-backend"),
+                application:load(sasl),
+                application:set_env(sasl, sasl_error_logger, {file, Path ++ "riak_kv_memory_backend_eqc_sasl.log"}),
+                error_logger:tty(false),
+                error_logger:logfile({open, Path ++ "riak_kv_memory_backend_eqc.log"}),
+                fun() ->  os:cmd("rm -rf " ++ Path ++ "/*") end
            end,
            backend_eqc:prop_backend(?MODULE, true)).
 -endif. % EQC

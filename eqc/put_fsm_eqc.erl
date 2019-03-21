@@ -117,6 +117,7 @@ cleanup(running) ->
     application:unload(lager),
     meck:unload(riak_core_bucket),
     fsm_eqc_util:cleanup_mock_servers(),
+    os:cmd("rm -rf *putfsmeqc*"),
     ok;
 cleanup(started) ->
     ok = net_kernel:stop(),

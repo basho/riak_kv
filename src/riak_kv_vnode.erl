@@ -3919,7 +3919,7 @@ highest_actor(ActorBase, Obj) ->
 
 -define(MGR, riak_kv_vnode_status_mgr).
 -define(MAX_INT, 4294967295).
--define(DATA_DIR, "riak_kv_vnode_blocking_test").
+-define(DATA_DIR, riak_kv_test_util:get_test_dir("riak_kv_vnode_blocking_test")).
 
 blocking_setup() ->
     application:set_env(riak_core, platform_data_dir, ?DATA_DIR),
