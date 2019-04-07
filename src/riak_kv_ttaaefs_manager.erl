@@ -136,13 +136,16 @@ init([]) ->
         case Scope of
             all ->
                 {NoCheck + AllCheck,
-                    [{no_sync, NoCheck}, {all_sync, AllCheck}]};
+                    [{no_sync, NoCheck}, {all_sync, AllCheck},
+                        {day_sync, 0}, {hour_sync, 0}]};
             bucket ->
                 {NoCheck + AllCheck + HourCheck + DayCheck,
                     [{no_sync, NoCheck}, {all_sync, AllCheck},
-                        {hour_sync, HourCheck}, {day_sync, DayCheck}]};
+                        {day_sync, DayCheck}, {hour_sync, HourCheck}]};
             disabled ->
-                {24, [{no_sync, 24}]} % No sync once an hour if disabled
+                {24, [{no_sync, 24}, {all_sync, 0}, 
+                        {day_sync, 0}, {hour_sync, 0}]}
+                    % No sync once an hour if disabled
         end,
     State2 = State1#state{schedule = Schedule,
                             slice_count = SliceCount,
@@ -269,7 +272,7 @@ code_change(_OldVsn, State, _Extra) ->
 -spec get_slotinfo() -> node_info().
 get_slotinfo() ->
     UpNodes = lists:sort(riak_core_node_watcher:nodes(riak_kv)),
-    NotMe = lists:takewhile(fun(N) -> not N == node() end, UpNodes),
+    NotMe = lists:takewhile(fun(N) -> N /= node() end, UpNodes),
     {length(NotMe) + 1, length(UpNodes)}.
 
 %% @doc
