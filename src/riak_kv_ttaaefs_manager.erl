@@ -62,7 +62,7 @@
                 peer_ip,
                 peer_port,
                 peer_protocol :: http|pb,
-                scope :: bucket_list|all,
+                scope :: bucket|all|disabled,
                 bucket_list :: list()|undefined,
                 nval_list :: list(pos_integer())|undefined,
                 slot_info_fun :: fun(),
@@ -112,44 +112,52 @@ init([]) ->
     State0 = #state{},
     % Get basic coniguration of scope (either all keys for each n_val, or a
     % specific list of buckets)
-    Scope = app_helper:get_env(riak_kv, ttaaefs_scope),
+    Scope = app_helper:get_env(riak_kv, ttaaefs_scope, disabled),
+
     State1 = 
         case Scope of
             all ->
-                NValList = app_helper:get_env(riak_kv, ttaaefs_nvallist),
-                State0#state{scope=all, nval_list=NValList};
-            bucket_list ->
-                BucketList = app_helper:get_env(riak_kv, ttaaefs_bucketlist),
-                State0#state{scope=bucket_list, bucket_list=BucketList}
+                NVal = app_helper:get_env(riak_kv, ttaaefs_nval),
+                State0#state{scope=all, nval_list=[NVal]};
+            bucket ->
+                Bucket = app_helper:get_env(riak_kv, ttaaefs_bucket),
+                Type = app_helper:get_env(riak_kv, ttaaefs_buckettype),
+                BucketT = {list_to_binary(Type), list_to_binary(Bucket)},
+                State0#state{scope=bucket, bucket_list=[BucketT]};
+            disabled ->
+                State0#state{scope = disabled}
         end,
+    NoCheck = app_helper:get_env(riak_kv, ttaaefs_nocheck),
+    AllCheck = app_helper:get_env(riak_kv, ttaaefs_allcheck),
+    HourCheck = app_helper:get_env(riak_kv, ttaaefs_hourcheck),
+    DayCheck = app_helper:get_env(riak_kv, ttaaefs_daycheck),
+
+    {SliceCount, Schedule} = 
+        case Scope of
+            all ->
+                {NoCheck + AllCheck,
+                    [{no_sync, NoCheck}, {all_sync, AllCheck}]};
+            bucket ->
+                {NoCheck + AllCheck + HourCheck + DayCheck,
+                    [{no_sync, NoCheck}, {all_sync, AllCheck},
+                        {hour_sync, HourCheck}, {day_sync, DayCheck}]};
+            disabled ->
+                {24, [{no_sync, 24}]} % No sync once an hour if disabled
+        end,
+    State2 = State1#state{schedule = Schedule,
+                            slice_count = SliceCount,
+                            slot_info_fun = fun get_slotinfo/0},
     
     % Fetch connectivity information for remote cluster
     PeerIP = app_helper:get_env(riak_kv, ttaaefs_peerip),
     PeerPort = app_helper:get_env(riak_kv, ttaaefs_port),
     PeerProtocol = app_helper:get_env(riak_kv, ttaaefs_protocol),
-    State2 = 
-        State1#state{peer_ip = PeerIP,
+    State3 = 
+        State2#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = PeerProtocol},
     
-    NoCheck = app_helper:get_env(riak_kv, ttaaes_nocheck),
-    AllCheck = app_helper:get_env(riak_kv, ttaaes_allcheck),
-    HourCheck = app_helper:get_env(riak_kv, ttaaes_hourcheck),
-    DayCheck = app_helper:get_env(riak_kv, ttaaes_daycheck),
-
-    Schedule = 
-        case Scope of
-            all ->
-                SliceCount = NoCheck + AllCheck,
-                [{no_sync, NoCheck}, {all_sync, AllCheck}];
-            bucket_list ->
-                SliceCount = NoCheck + AllCheck + HourCheck + DayCheck,
-                [{no_sync, NoCheck}, {all_sync, AllCheck},
-                    {hour_sync, HourCheck}, {day_sync, DayCheck}]
-        end,
-    State3 = State2#state{schedule = Schedule,
-                            slice_count = SliceCount,
-                            slot_info_fun = fun get_slotinfo/0},
+    
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
     {ok, State3, ?INITIAL_TIMEOUT}.
 
@@ -178,7 +186,7 @@ handle_cast(all_sync, State) ->
             all ->
                 [H|T] = State#state.nval_list,
                 {H, none, T ++ [H], undefined, full};
-            bucket_list ->
+            bucket->
                 [H|T] = State#state.bucket_list,
                 {range, 
                     {filter, H, all, large, all, all, pre_hash},
@@ -237,7 +245,7 @@ handle_info(timeout, State) ->
                             State#state.slice_set_start,
                             SlotInfoFun(),
                             State#state.slice_count),
-    erlang:send_after(Wait, self(), WorkItem),
+    erlang:send_after(Wait * 1000, self(), WorkItem),
     {noreply, State#state{slice_allocations = RemainingSlices,
                             slice_set_start = ScheduleStartTime}}.
 
@@ -487,9 +495,7 @@ take_next_workitem([NextAlloc|T], Wants,
                         ScheduleStartTime, SlotInfo, SliceCount) ->
     {NodeNumber, NodeCount} = SlotInfo,
     SliceSeconds = ?SECONDS_IN_DAY div SliceCount,
-    SlotSeconds =
-        NodeNumber * (SliceSeconds div NodeCount) 
-        + random:uniform(SliceSeconds),
+    SlotSeconds = (NodeNumber - 1) * (SliceSeconds div NodeCount),
     {SliceNumber, NextAction} = NextAlloc,
     {Mega, Sec, _Micro} = ScheduleStartTime,
     ScheduleSeconds = 

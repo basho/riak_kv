@@ -832,3 +832,102 @@
     {default, enabled},
     {commented, enabled}
 ]}.
+
+
+%% @doc For Tictac full-sync does all data need to be sync'd, or should a 
+%% specific bucket be sync'd (bucket).  Note that in most cases sync
+%% of all data is lower overhead than sync of a subset of data - as cached
+%% AAE trees will be used.
+{mapping, "ttaaefs_scope", "riak_kv.ttaaefs_scope", [
+  {datatype, {enum, [all, bucket, disabled]}},
+  {default, disabled}
+]}.
+
+%% @doc For Tictac bucket-list full-sync which bucket should be sync'd by this
+%% node.
+%% TODO: Allow for a list of buckets
+{mapping, "ttaaefs_bucket", "riak_kv.ttaaefs_bucket", [
+  {datatype, string}
+]}.
+
+%% @doc For Tictac bucket-list full-sync what is the type of the bucket to be
+%% sync'd by this node
+%% TODO: Allow for a list of buckets
+{mapping, "ttaaefs_buckettype", "riak_kv.ttaaefs_buckettype", [
+  {datatype, string},
+  {default, "default"}
+]}.
+
+%% @doc For Tictac all full-sync which NVAL should be sync'd by this node.
+%% TODO: Allow for a list of nvals (perhaps this should always be dynamically 
+%% discovered as all current nvals)
+{mapping, "ttaaefs_nval", "riak_kv.ttaaefs_nval", [
+  {datatype, integer},
+  {default, 3}
+]}.
+
+%% @doc The network address of the peer node in the cluster with which this
+%% node will connect to for full_sync purposes.  If this peer node is
+%% unavailable, then this local node will not perform any full-sync actions,
+%% so alternative peer addresses should eb configured in other nodes.  The
+%% peer address may be a load-balanced IP to avoid this issue.
+{mapping, "ttaaefs_peerip", "riak_kv.ttaaefs_peerip", [
+  {datatype, string},
+  {validators, ["valid_ipaddr"]}
+]}.
+
+{validator,
+  "valid_ipaddr",
+  "must be a valid IP address",
+  fun(AddrString) ->
+    case inet_parse:address(AddrString) of
+      {ok, _} -> true;
+      {error, _} -> false
+    end
+  end}.
+
+%% @doc The port to be used when connecting to the remote peer cluster
+{mapping, "ttaaefs_port", "riak_kv.ttaaefs_port", [
+  {datatype, integer}
+]}.
+
+%% @doc The protocol to be used when conecting to the peer in the remote
+%% cluster.  Could be http or pb (but only http currently being tested)
+%% TODO: Support for SSL?  Support for pb.
+{mapping, "ttaaefs_protocol", "riak_kv.ttaaefs_protocol", [
+  {datatype, {enum, [http, pb]}},
+  {default, http}
+]}.
+
+%% @doc How many times per 24hour period should all the data be checked to
+%% confirm it is fully sync'd
+{mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [
+  {datatype, integer},
+  {default, 100}
+]}.
+
+%% @doc How many times per 24hour period should no data be checked to
+%% confirm it is fully sync'd.  Use nochecks to align the number of checks
+%% done by each node - if each node has the same number of slots, they will
+%% naurally space their checks within the period of the slot.
+{mapping, "ttaaefs_nocheck", "riak_kv.ttaaefs_nocheck", [
+  {datatype, integer},
+  {default, 0}
+]}.
+
+
+%% @doc How many times per 24hour period should the last hours data be checked
+%% to confirm it is fully sync'd.  This is relevant for per-bucket sync scope
+%% only, and will be ignored if all sync is enabled
+{mapping, "ttaaefs_hourcheck", "riak_kv.ttaaefs_hourcheck", [
+  {datatype, integer},
+  {default, 0}
+]}.
+
+%% @doc How many times per 24hour period should the last 24-hours of data be
+%% checked to confirm it is fully sync'd.  This si relevant for per-bucket
+%% sync scope only, and will be ignored if all sync is enabled
+{mapping, "ttaaefs_daycheck", "riak_kv.ttaaefs_hdaycheck", [
+  {datatype, integer},
+  {default, 0}
+]}.

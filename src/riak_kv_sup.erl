@@ -94,6 +94,9 @@ init([]) ->
     EntropyManager = {riak_kv_entropy_manager,
                       {riak_kv_entropy_manager, start_link, []},
                       permanent, 30000, worker, [riak_kv_entropy_manager]},
+    TictacFSManager = {riak_kv_ttaaefs_manager,
+                      {riak_kv_ttaaefs_manager, start_link, []},
+                      permanent, 30000, worker, [riak_kv_ttaaefs_manager]},
 
     EnsemblesKV =  {riak_kv_ensembles,
                     {riak_kv_ensembles, start_link, []},
@@ -105,6 +108,7 @@ init([]) ->
     % Build the process list...
     Processes = lists:flatten([
         EntropyManager,
+        TictacFSManager,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,
