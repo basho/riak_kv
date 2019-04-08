@@ -1100,6 +1100,12 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
             Now = os:timestamp(),
             LoopDuration = 
                 timer:now_diff(Now, State#state.tictac_startqueue),
+            % This log has a different behaviour at startup.  At startup we
+            % will have scheduled the loop without completing any, so the first
+            % iteration of this log will always show exchanges_completed=0
+            % This is normal.  On subsequent runs we expected to see expected
+            % and complete to be aligned (and the loop duration with be about
+            % expected * tictacaae_exchangetick).
             lager:info("Tictac AAE loop completed for partition=~w with "
                             ++ "exchanges expected=~w "
                             ++ "exchanges completed=~w "

@@ -859,9 +859,16 @@
 ]}.
 
 %% @doc For Tictac all full-sync which NVAL should be sync'd by this node.
-%% TODO: Allow for a list of nvals (perhaps this should always be dynamically 
-%% discovered as all current nvals)
-{mapping, "ttaaefs_nval", "riak_kv.ttaaefs_nval", [
+%% This is the `local` nval, as the data in the remote cluster may have an
+%% alternative nval.
+{mapping, "ttaaefs_localnval", "riak_kv.ttaaefs_localnval", [
+  {datatype, integer},
+  {default, 3}
+]}.
+
+%% @doc For Tictac all full-sync which NVAL should be sync'd in the remote
+%% cluster.
+{mapping, "ttaaefs_remotenval", "riak_kv.ttaaefs_remotenval", [
   {datatype, integer},
   {default, 3}
 ]}.

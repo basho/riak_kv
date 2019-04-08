@@ -37,10 +37,10 @@
 -export([start_link/0,
             pause/1,
             resume/1,
-            change_sink/4]).
-
--export([take_next_workitem/5,
-            reply_complete/2]).
+            change_sink/4,
+            set_allsync/3,
+            set_bucketsync/2,
+            process_workitem/3]).
 
 -define(SLICE_COUNT, 100).
 -define(SECONDS_IN_DAY, 86400).
@@ -64,10 +64,12 @@
                 peer_protocol :: http|pb,
                 scope :: bucket|all|disabled,
                 bucket_list :: list()|undefined,
-                nval_list :: list(pos_integer())|undefined,
+                local_nval :: pos_integer()|undefined,
+                remote_nval :: pos_integer()|undefined,
                 slot_info_fun :: fun(),
                 repair_rate = ?REPAIR_RATE :: pos_integer(),
-                slice_count = ?SLICE_COUNT :: pos_integer()
+                slice_count = ?SLICE_COUNT :: pos_integer(),
+                is_paused = false :: boolean()
                 }).
 
 % -type fullsync_state() :: #state{}.
@@ -83,25 +85,51 @@
 -type schedule_wants() :: [schedule_want()].
 -type node_info() :: {pos_integer(), pos_integer()}. % Node and node count
 
+
+-export_type([work_item/0]).
+
 %%%============================================================================
 %%% API
 %%%============================================================================
 
 start_link() ->
-    gen_server:start_link(?MODULE, [], []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    
+%% @doc
+%% Override shcedule and process an individual work_item.  If called from
+%% riak_client an integer ReqID is passed to allow for a response to be
+%% returned.  If using directly from riak attach use no_reply as the request
+%% ID.
+-spec process_workitem(pid(), work_item(), no_reply|integer()) -> ok.
+process_workitem(Pid, WorkItem, ReqID) ->
+    gen_server:cast(Pid, {WorkItem, ReqID, self()}).
 
-reply_complete(Pid, ExchangeID) ->
-    gen_server:cast(Pid, {reply_complete, ExchangeID}).
-
+-spec pause(pid()) -> ok|{error, already_paused}.
 pause(Pid) ->
     gen_server:call(Pid, pause).
 
+-spec resume(pid()) -> ok|{error, not_paused}.
 resume(Pid) ->
     gen_server:call(Pid, resume).
 
+-spec change_sink(pid(), http, string(), integer()) -> ok.
 change_sink(Pid, Protocol, IP, Port) ->
     gen_server:call(Pid, {change_sink, Protocol, IP, Port}).
 
+
+%% @doc
+%% Set the manager to do full sync (e.g. using cached trees).  This will leave
+%% automated sync disabled.  To re-enable the sync use resume/1
+-spec set_allsync(pid(), pos_integer(), pos_integer()) -> ok.
+set_allsync(Pid, LocalNVal, RemoteNVal) ->
+    gen_server:call(Pid, {set_allsync, LocalNVal, RemoteNVal}).
+
+%% @doc
+%% Set the manager to sync or a list of buckets.  This will leave
+%% automated sync disabled.  To re-enable the sync use resume/1
+-spec set_bucketsync(pid(), list(riak_object:bucket())) -> ok.
+set_bucketsync(Pid, BucketList) ->
+    gen_server:call(Pid, {set_bucketsync, BucketList}).
 
 
 %%%============================================================================
@@ -117,8 +145,11 @@ init([]) ->
     State1 = 
         case Scope of
             all ->
-                NVal = app_helper:get_env(riak_kv, ttaaefs_nval),
-                State0#state{scope=all, nval_list=[NVal]};
+                LocalNVal = app_helper:get_env(riak_kv, ttaaefs_localnval),
+                RemoteNVal = app_helper:get_env(riak_kv, ttaaefs_remotenval),
+                State0#state{scope=all,
+                                local_nval = LocalNVal,
+                                remote_nval = RemoteNVal};
             bucket ->
                 Bucket = app_helper:get_env(riak_kv, ttaaefs_bucket),
                 Type = app_helper:get_env(riak_kv, ttaaefs_buckettype),
@@ -165,41 +196,71 @@ init([]) ->
     {ok, State3, ?INITIAL_TIMEOUT}.
 
 handle_call(pause, _From, State) ->
-    PausedSchedule = [{no_sync, State#state.slice_count}],
-    BackupSchedule = State#state.schedule,
-    {reply, ok, State#state{schedule = PausedSchedule,
-                            backup_schedule = BackupSchedule}};
+    case State#state.is_paused of
+        true ->
+            {reply, {error, already_paused}, State};
+        false -> 
+            PausedSchedule = [{no_sync, State#state.slice_count}],
+            BackupSchedule = State#state.schedule,
+            {reply, ok, State#state{schedule = PausedSchedule,
+                                    backup_schedule = BackupSchedule,
+                                    is_paused = true}}
+    end;
 handle_call(resume, _From, State) ->
-    Schedule = State#state.backup_schedule,
-    {reply, ok, State#state{schedule = Schedule}, ?INITIAL_TIMEOUT};
+    case State#state.is_paused of
+        true ->
+            Schedule = State#state.backup_schedule,
+            {reply,
+                ok,
+                State#state{schedule = Schedule, is_paused = false},
+                ?INITIAL_TIMEOUT};
+        false ->
+            {reply, {error, not_paused}, State, ?INITIAL_TIMEOUT}
+    end;
 handle_call({change_sink, Protocol, PeerIP, PeerPort}, _From, State) ->
     State0 = 
         State#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = Protocol},
-    {reply, ok, State0, ?INITIAL_TIMEOUT}.
+    {reply, ok, State0, ?INITIAL_TIMEOUT};
+handle_call({set_allsync, LocalNVal, RemoteNVal}, _From, State) ->
+    {reply,
+        ok,
+        State#state{scope = all,
+                    local_nval = LocalNVal,
+                    remote_nval = RemoteNVal}};
+handle_call({set_bucketsync, BucketList}, _From, State) ->
+    {reply,
+        ok,
+        State#state{scope = all,
+                    bucket_list = BucketList}}.
 
-handle_cast({reply_complete, _ExchangeID}, State) ->
+handle_cast({reply_complete, _ReqID, _Result}, State) ->
+    % Add a stat update in here
     {noreply, State, ?LOOP_TIMEOUT};
-handle_cast(no_sync, State) ->
+handle_cast({no_sync, ReqID, From}, State) ->
+    case ReqID of
+        no_reply ->
+            ok;
+        _ ->
+            From ! {ReqID, {no_sync, 0}}
+    end,
     {noreply, State, ?LOOP_TIMEOUT};
-handle_cast(all_sync, State) ->
-    {ThisNVal, ThisFilter, NextNValList, NextBucketList, Ref} =
+handle_cast({all_sync, ReqID, From}, State) ->
+    {LNVal, RNVal, ThisFilter, NextBucketList, Ref} =
         case State#state.scope of
             all ->
-                [H|T] = State#state.nval_list,
-                {H, none, T ++ [H], undefined, full};
+                {State#state.local_nval, State#state.remote_nval,
+                    none, undefined, full};
             bucket->
                 [H|T] = State#state.bucket_list,
-                {range, 
+                {range, range, 
                     {filter, H, all, large, all, all, pre_hash},
-                    undefined,
                     T ++ [H],
                     partial}
         end,
 
-    ExchangeRef = pid_to_list(self()) ++ atom_to_list(Ref),
-    LocalSendFun = local_sendfun(ThisNVal),
+    LocalSendFun = local_sendfun(LNVal),
     RemoteClient =
         remote_client(State#state.peer_protocol,
                         State#state.peer_ip,
@@ -207,17 +268,23 @@ handle_cast(all_sync, State) ->
     case RemoteClient of
         no_client ->
             {noreply,
-                State#state{nval_list = NextNValList,
-                            bucket_list = NextBucketList},
+                State#state{bucket_list = NextBucketList},
                 ?LOOP_TIMEOUT};
         _ ->
-            RemoteSendFun = remote_sendfun(RemoteClient, ThisNVal),
+            RemoteSendFun = remote_sendfun(RemoteClient, RNVal),
+            ReplyFun = generate_replyfun(ReqID, From),
+            ReqID0 = 
+                case ReqID of
+                    no_reply ->
+                        erlang:phash2({self(), os:timestamp()});
+                    _ ->
+                        ReqID
+                end,
             RepairFun =
                 generate_repairfun(RemoteClient,
-                                    ExchangeRef,
+                                    ReqID0,
                                     State#state.repair_rate),
-            ReplyFun = generate_replyfun(ExchangeRef),
-
+            
             {ok, ExPid, ExID} =
                 aae_exchange:start(Ref,
                                     [{LocalSendFun, all}],
@@ -226,17 +293,16 @@ handle_cast(all_sync, State) ->
                                     ReplyFun,
                                     ThisFilter, []),
             
-            lager:info("Starting full-sync ExchangeRef=~s id=~w pid=~w",
-                            [ExchangeRef, ExID, ExPid]),
+            lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
+                            [ReqID0, ExID, ExPid]),
             
             {noreply,
-                State#state{nval_list = NextNValList,
-                            bucket_list = NextBucketList},
+                State#state{bucket_list = NextBucketList},
                 ?CRASH_TIMEOUT}
     end;
-handle_cast(hour_sync, State) ->
+handle_cast({hour_sync, _ReqID, _From}, State) ->
     {noreply, State, ?CRASH_TIMEOUT};
-handle_cast(day_sync, State) ->
+handle_cast({day_sync, _ReqID, _From}, State) ->
     {noreply, State, ?CRASH_TIMEOUT}.
 
 
@@ -248,9 +314,13 @@ handle_info(timeout, State) ->
                             State#state.slice_set_start,
                             SlotInfoFun(),
                             State#state.slice_count),
-    erlang:send_after(Wait * 1000, self(), WorkItem),
+    erlang:send_after(Wait * 1000, self(), {work_item, WorkItem}),
     {noreply, State#state{slice_allocations = RemainingSlices,
-                            slice_set_start = ScheduleStartTime}}.
+                            slice_set_start = ScheduleStartTime}};
+handle_info({work_item, WorkItem}, State) ->
+    process_workitem(self(), WorkItem, no_reply),
+    {noreply, State}.
+
 
 terminate(normal, _State) ->
     ok.
@@ -386,12 +456,16 @@ local_query({fetch_clocks_range, B, KR, SF, MR}, range) ->
 %% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
-generate_replyfun(ExchangeID) ->
+generate_replyfun(ReqID, From) ->
     Pid = self(),
-    fun({ExchangeState, KeyDeltas}) ->
-        lager:info("ExchangeState=~w Deltas=~w for Exchange with ID=~w",
-                    [ExchangeState, KeyDeltas, ExchangeID]),
-        reply_complete(Pid, ExchangeID)
+    fun(Result) ->
+        case ReqID of
+            no_reply ->
+                ok;
+            _ ->
+                From ! {ReqID, Result}
+        end,
+        gen_server:cast(Pid, {reply_complete, ReqID, Result})
     end.
 
 %% @doc
@@ -409,11 +483,11 @@ generate_replyfun(ExchangeID) ->
 %% the object should be repaired by requeueing.  Requeueing will cause the
 %% object to be re-replicated to all destination clusters (not just a specific
 %% sink cluster)
--spec generate_repairfun(rhc:rhc(), string(), pos_integer()) -> fun().
+-spec generate_repairfun(rhc:rhc(), integer(), pos_integer()) -> fun().
 generate_repairfun(RemoteClient, ExchangeID, RepairsPerSecond) ->
     fun(RepairList) ->
         FoldFun =
-            fun({B, K, SrcVC, SinkVC}, {SourceL, SinkC}) ->
+            fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
                 % The erlify_aae_keyclock will have base64 decoded the clock
                 case vclock:dominates(SinkVC, SrcVC) of
@@ -424,13 +498,13 @@ generate_repairfun(RemoteClient, ExchangeID, RepairsPerSecond) ->
                 end
             end,
         {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
-        lager:info("AAE exchange ~s shows sink ahead for ~w keys", 
+        lager:info("AAE exchange ~w shows sink ahead for ~w keys", 
                     [ExchangeID, SinkDCount]),
-        lager:info("AAE exchange ~s outputs ~w keys to be repaired",
+        lager:info("AAE exchange ~w outputs ~w keys to be repaired",
                     [ExchangeID, length(ToRepair)]),
         C = riak_client:new(node(), undefined),
         requeue_keys(C, RemoteClient, ToRepair, RepairsPerSecond),
-        lager:info("AAE exchange ~s has requeue complete for ~w keys",
+        lager:info("AAE exchange ~w has requeue complete for ~w keys",
                     [ExchangeID, length(ToRepair)])
     end.
 
@@ -471,7 +545,6 @@ requeue_keys(Client, RHC, ToRepair, RepairsPerSecond) ->
             ok
     end,
     requeue_keys(Client, RHC, StillToRepair, RepairsPerSecond).
-
 
 
 %% @doc
