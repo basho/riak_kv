@@ -200,7 +200,9 @@ handle_call(pause, _From, State) ->
         true ->
             {reply, {error, already_paused}, State};
         false -> 
-            PausedSchedule = [{no_sync, State#state.slice_count}],
+            PausedSchedule =
+                [{no_sync, State#state.slice_count}, {all_sync, 0},
+                    {day_sync, 0}, {hour_sync, 0}],
             BackupSchedule = State#state.schedule,
             {reply, ok, State#state{schedule = PausedSchedule,
                                     backup_schedule = BackupSchedule,
@@ -490,11 +492,11 @@ generate_repairfun(RemoteClient, ExchangeID, RepairsPerSecond) ->
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
                 % The erlify_aae_keyclock will have base64 decoded the clock
-                case vclock:dominates(SinkVC, SrcVC) of
+                case vclock_dominates(SinkVC, SrcVC) of
                     true ->
                         {SourceL, SinkC + 1};
                     false ->
-                        [{B, K}|SourceL]
+                        {[{B, K}|SourceL], SinkC}
                 end
             end,
         {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
@@ -508,8 +510,17 @@ generate_repairfun(RemoteClient, ExchangeID, RepairsPerSecond) ->
                     [ExchangeID, length(ToRepair)])
     end.
 
+
+vclock_dominates(none, _SrcVC)  ->
+    false;
+vclock_dominates(_SinkVC, none) ->
+    true;
+vclock_dominates(SinkVC, SrcVC) ->
+    vclock:dominates(SinkVC, SrcVC).
+
+
 %% @doc
-%% requeue the keys, in batches, with a pause at the ned of each batch up to
+%% requeue the keys, in batches, with a pause at the end of each batch up to
 %% The 1s point since the start of the batch 
 -spec requeue_keys(riak_client:riak_client(), rhc:rhc(),
                     list(tuple()), pos_integer()) -> ok.
@@ -526,15 +537,7 @@ requeue_keys(Client, RHC, ToRepair, RepairsPerSecond) ->
     SW = os:timestamp(),
     RequeueFun = 
         fun({B, K}) ->
-            % TODO: should use rt_enqueue here
-            % however, having issues with dialyzer as riak_repl not a dep
-            % the having issues with mismatched deps on riak_kv when it is
-            % For now - be dumb and do a touch
-            case riak_client:get(B, K, Client) of
-                {ok, Obj} ->
-                    % Happy day only for now
-                    rhc:put(RHC, Obj, [asis])
-            end
+            riak_repl_rtenqueue:rt_enqueue(B, K, [], Client)
         end,
     ok = lists:foreach(RequeueFun, lists:usort(SubList)),
     TimeMS = timer:now_diff(os:timestamp(), SW) div 1000,
