@@ -59,9 +59,12 @@
                 slice_set_start = os:timestamp() :: erlang:timestamp(),
                 schedule :: schedule_wants(),
                 backup_schedule :: schedule_wants(),
-                peer_ip,
-                peer_port,
+                peer_ip :: string(),
+                peer_port :: integer(),
                 peer_protocol :: http|pb,
+                local_ip :: string(),
+                local_port :: integer(),
+                local_protocol :: http|pb,
                 scope :: bucket|all|disabled,
                 bucket_list :: list()|undefined,
                 local_nval :: pos_integer()|undefined,
@@ -74,9 +77,9 @@
 
 % -type fullsync_state() :: #state{}.
 
--type remote_client_protocol() :: http.
--type remote_ip() :: string().
--type remote_port() :: pos_integer().
+-type client_protocol() :: http.
+-type client_ip() :: string().
+-type client_port() :: pos_integer().
 -type nval_or_range() :: pos_integer()|range. % Range queries do not have an n-val
 -type work_item() :: no_sync|all_sync|day_sync|hour_sync.
 -type schedule_want() :: {work_item(), non_neg_integer()}.
@@ -184,12 +187,19 @@ init([]) ->
     
     % Fetch connectivity information for remote cluster
     PeerIP = app_helper:get_env(riak_kv, ttaaefs_peerip),
-    PeerPort = app_helper:get_env(riak_kv, ttaaefs_port),
-    PeerProtocol = app_helper:get_env(riak_kv, ttaaefs_protocol),
+    PeerPort = app_helper:get_env(riak_kv, ttaaefs_peerport),
+    PeerProtocol = app_helper:get_env(riak_kv, ttaaefs_peerprotocol),
+    % Fetch connectivity information for local cluster
+    LocalIP = app_helper:get_env(riak_kv, ttaaefs_localip),
+    LocalPort = app_helper:get_env(riak_kv, ttaaefs_localport),
+    LocalProtocol = app_helper:get_env(riak_kv, ttaaefs_localprotocol),
     State3 = 
         State2#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
-                        peer_protocol = PeerProtocol},
+                        peer_protocol = PeerProtocol,
+                        local_ip = LocalIP,
+                        local_port = LocalPort,
+                        local_protocol = LocalProtocol},
     
     
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
@@ -262,18 +272,23 @@ handle_cast({all_sync, ReqID, From}, State) ->
                     partial}
         end,
 
-    LocalSendFun = local_sendfun(LNVal),
     RemoteClient =
-        remote_client(State#state.peer_protocol,
-                        State#state.peer_ip,
-                        State#state.peer_port),
+        init_client(State#state.peer_protocol,
+                    State#state.peer_ip,
+                    State#state.peer_port),
+    LocalClient =
+        init_client(State#state.local_protocol,
+                    State#state.local_ip,
+                    State#state.local_port),
+
     case RemoteClient of
         no_client ->
             {noreply,
                 State#state{bucket_list = NextBucketList},
                 ?LOOP_TIMEOUT};
         _ ->
-            RemoteSendFun = remote_sendfun(RemoteClient, RNVal),
+            RemoteSendFun = generate_sendfun(RemoteClient, RNVal),
+            LocalSendFun = generate_sendfun(LocalClient, LNVal),
             ReplyFun = generate_replyfun(ReqID, From),
             ReqID0 = 
                 case ReqID of
@@ -283,7 +298,8 @@ handle_cast({all_sync, ReqID, From}, State) ->
                         ReqID
                 end,
             RepairFun =
-                generate_repairfun(RemoteClient,
+                generate_repairfun(LocalClient, 
+                                    RemoteClient,
                                     ReqID0,
                                     State#state.repair_rate),
             
@@ -349,11 +365,11 @@ get_slotinfo() ->
 
 %% @doc
 %% Return a function which will send aae_exchange messages to a remote
-%% cluster, and return the response.  The function shouls make an async call
+%% cluster, and return the response.  The function should make an async call
 %% to try and make the remote and local cluster sends happen as close to
 %% parallel as possible. 
--spec remote_sendfun(rhc:rhc(), nval_or_range()) -> fun().
-remote_sendfun(RHC, NVal) ->
+-spec generate_sendfun(rhc:rhc(), nval_or_range()) -> fun().
+generate_sendfun(RHC, NVal) ->
     fun(Msg, all, Colour) ->
         AAE_Exchange = self(),
         ReturnFun = 
@@ -367,9 +383,9 @@ remote_sendfun(RHC, NVal) ->
 
 %% @doc
 %% Make a remote client for connecting to the remote cluster
--spec remote_client(remote_client_protocol(), remote_ip(), remote_port())
+-spec init_client(client_protocol(), client_ip(), client_port())
                                                         -> rhc:rhc()|no_client.
-remote_client(http, IP, Port) ->
+init_client(http, IP, Port) ->
     RHC = rhc:create(IP, Port, "riak", []),
     case rhc:ping(RHC) of
         ok ->
@@ -417,45 +433,6 @@ remote_sender({fetch_clocks_range, B, KR, SF, MR}, RHC, ReturnFun, range) ->
 
 
 %% @doc
-%% Generate the send fun to be used to contact the local (source) cluster
--spec local_sendfun(nval_or_range()) -> fun().
-local_sendfun(NVal) ->
-    RC = riak_client:new(node(), undefined),
-    % We assume as this is the local node, the ping used for the remote client
-    % is unnecessary
-    fun(Msg, all, Colour) ->
-        AAE_Exchange = self(),
-        ReturnFun = 
-            fun(R) -> 
-                aae_exchange:reply(AAE_Exchange, R, Colour)
-            end,
-        Query = local_query(Msg, NVal),
-        SendFun = 
-            fun() ->
-                {ok, R} = riak_client:aae_fold(Query, RC),
-                ReturnFun(R)
-            end,
-        _SpawnedPid = spawn(SendFun),
-        ok
-    end.
-
-%% @doc
-%% Convert the query message from aae_exchange to the format required by the
-%% riak_kv_clusteraae_fsm
--spec local_query(fetch_root|tuple(), nval_or_range()) -> tuple().
-local_query(fetch_root, NVal) ->
-    {merge_root_nval, NVal};
-local_query({fetch_branches, BranchIDs}, NVal) ->
-    {merge_branch_nval, NVal, BranchIDs};
-local_query({fetch_clocks, SegmentIDs}, NVal) ->
-    {fetch_clocks_nval, NVal, SegmentIDs};
-local_query({merge_tree_range, B, KR, TS, SF, MR, HM}, range) ->
-    {merge_tree_range, B, KR, TS, SF, MR, HM};
-local_query({fetch_clocks_range, B, KR, SF, MR}, range) ->
-    {fetch_clocks_range, B, KR, SF, MR}.
-
-
-%% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
 generate_replyfun(ReqID, From) ->
@@ -485,8 +462,9 @@ generate_replyfun(ReqID, From) ->
 %% the object should be repaired by requeueing.  Requeueing will cause the
 %% object to be re-replicated to all destination clusters (not just a specific
 %% sink cluster)
--spec generate_repairfun(rhc:rhc(), integer(), pos_integer()) -> fun().
-generate_repairfun(RemoteClient, ExchangeID, RepairsPerSecond) ->
+-spec generate_repairfun(rhc:rhc(), rhc:rhc(), integer(), pos_integer())
+                                                                    -> fun().
+generate_repairfun(LocalClient, RemoteClient, ExchangeID, RepairsPerSecond) ->
     fun(RepairList) ->
         FoldFun =
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
@@ -504,8 +482,7 @@ generate_repairfun(RemoteClient, ExchangeID, RepairsPerSecond) ->
                     [ExchangeID, SinkDCount]),
         lager:info("AAE exchange ~w outputs ~w keys to be repaired",
                     [ExchangeID, length(ToRepair)]),
-        C = riak_client:new(node(), undefined),
-        requeue_keys(C, RemoteClient, ToRepair, RepairsPerSecond),
+        requeue_keys(LocalClient, RemoteClient, ToRepair, RepairsPerSecond),
         lager:info("AAE exchange ~w has requeue complete for ~w keys",
                     [ExchangeID, length(ToRepair)])
     end.
@@ -522,11 +499,10 @@ vclock_dominates(SinkVC, SrcVC) ->
 %% @doc
 %% requeue the keys, in batches, with a pause at the end of each batch up to
 %% The 1s point since the start of the batch 
--spec requeue_keys(riak_client:riak_client(), rhc:rhc(),
-                    list(tuple()), pos_integer()) -> ok.
-requeue_keys(_Client, _RHC, [], _RepairsPerSecond) ->
+-spec requeue_keys(rhc:rhc(), rhc:rhc(), list(tuple()), pos_integer()) -> ok.
+requeue_keys(_LRC, _RRC, [], _RepairsPerSecond) ->
     ok;
-requeue_keys(Client, RHC, ToRepair, RepairsPerSecond) ->
+requeue_keys(LRC, RRC, ToRepair, RepairsPerSecond) ->
     {SubList, StillToRepair} = 
         case length(ToRepair) > RepairsPerSecond of
             true ->
@@ -536,10 +512,24 @@ requeue_keys(Client, RHC, ToRepair, RepairsPerSecond) ->
         end,
     SW = os:timestamp(),
     RequeueFun = 
-        fun({B, K}) ->
-            riak_repl_rtenqueue:rt_enqueue(B, K, [], Client)
+        fun({B, K}, {Repls, SourceF, SinkF}) ->
+            case rhc:get(LRC, B, K, []) of
+                {ok, RiakCObj} ->
+                    case rhc:put(RRC, RiakCObj, [asis]) of
+                        ok ->
+                            {Repls + 1, SourceF, SinkF};
+                        _ ->
+                            {Repls, SourceF, SinkF + 1}
+                    end;
+                _ ->
+                    {Repls, SourceF + 1, SinkF}
+                end
         end,
-    ok = lists:foreach(RequeueFun, lists:usort(SubList)),
+    {Successes, SrcFailures, SinkFailures} =
+        lists:foldl(RequeueFun, {0, 0, 0}, lists:usort(SubList)),
+    lager:info("Full sync replications=~w " ++ 
+                "with source_failures=~w and sink_failures=~w",
+                [Successes, SrcFailures, SinkFailures]),
     TimeMS = timer:now_diff(os:timestamp(), SW) div 1000,
     case TimeMS < 1000 of
         true ->
@@ -547,7 +537,7 @@ requeue_keys(Client, RHC, ToRepair, RepairsPerSecond) ->
         false ->
             ok
     end,
-    requeue_keys(Client, RHC, StillToRepair, RepairsPerSecond).
+    requeue_keys(LRC, RRC, StillToRepair, RepairsPerSecond).
 
 
 %% @doc

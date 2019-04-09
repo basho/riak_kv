@@ -894,17 +894,40 @@
   end}.
 
 %% @doc The port to be used when connecting to the remote peer cluster
-{mapping, "ttaaefs_port", "riak_kv.ttaaefs_port", [
+{mapping, "ttaaefs_peerport", "riak_kv.ttaaefs_peerport", [
   {datatype, integer}
 ]}.
 
 %% @doc The protocol to be used when conecting to the peer in the remote
 %% cluster.  Could be http or pb (but only http currently being tested)
 %% TODO: Support for SSL?  Support for pb.
-{mapping, "ttaaefs_protocol", "riak_kv.ttaaefs_protocol", [
+{mapping, "ttaaefs_peerprotocol", "riak_kv.ttaaefs_peerprotocol", [
   {datatype, {enum, [http, pb]}},
   {default, http}
 ]}.
+
+%% @doc The network address of the local node in the cluster with which this
+%% node will connect to for full_sync purposes.  The local address may be a
+%% load-balanced IP to avoid this issue.
+{mapping, "ttaaefs_localip", "riak_kv.ttaaefs_localip", [
+  {datatype, string},
+  {default, "127.0.0.1"}, 
+  {validators, ["valid_ipaddr"]}
+]}.
+
+%% @doc The port to be used when connecting to the local cluster
+{mapping, "ttaaefs_localport", "riak_kv.ttaaefs_localport", [
+  {datatype, integer}
+]}.
+
+%% @doc The protocol to be used when conecting to the local
+%% cluster.  Could be http or pb (but only http currently being tested)
+%% TODO: Support for SSL?  Support for pb.
+{mapping, "ttaaefs_localprotocol", "riak_kv.ttaaefs_localprotocol", [
+  {datatype, {enum, [http, pb]}},
+  {default, http}
+]}.
+
 
 %% @doc How many times per 24hour period should all the data be checked to
 %% confirm it is fully sync'd
