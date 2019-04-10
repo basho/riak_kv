@@ -39,7 +39,8 @@
 -export([get_index/4,get_index/3]).
 -export([aae_fold/2]).
 -export([ttaaefs_pause/0, ttaaefs_resume/0,
-            ttaaefs_fullsync/2, ttaaefs_changesink/3,
+            ttaaefs_fullsync/2, ttaaefs_fullsync/3,
+            ttaaefs_setsink/3, ttaaefs_setsource/3,
             ttaaefs_setallsync/2, ttaaefs_setbucketsync/1]).
 -export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
@@ -749,14 +750,37 @@ ttaaefs_resume() ->
 ttaaefs_fullsync(WorkItem, SecsTimeout) ->
     ReqId = mk_reqid(),
     riak_kv_ttaaefs_manager:process_workitem(whereis(riak_kv_ttaaefs_manager),
-                                                WorkItem, ReqId),
+                                                WorkItem,
+                                                ReqId,
+                                                os:timestamp()),
     wait_for_reqid(ReqId, SecsTimeout * 1000).
 
 %% @doc
+%% Intended for tests only
+%% Allows for the view of now to be altered during a test.
+-spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item(), integer(),
+                                                    erlang:timestamp()) -> ok.
+ttaaefs_fullsync(WorkItem, SecsTimeout, Now) ->
+    ReqId = mk_reqid(),
+    riak_kv_ttaaefs_manager:process_workitem(whereis(riak_kv_ttaaefs_manager),
+                                                WorkItem,
+                                                ReqId,
+                                                Now),
+    wait_for_reqid(ReqId, SecsTimeout * 1000).
+
+
+%% @doc
 %% Alter the configuration of the sink for tictac full-sync
--spec ttaaefs_changesink(http, string(), integer()) -> ok.
-ttaaefs_changesink(Protocol, IP, Port) ->
-    riak_kv_ttaaefs_manager:change_sink(whereis(riak_kv_ttaaefs_manager),
+-spec ttaaefs_setsink(http, string(), integer()) -> ok.
+ttaaefs_setsink(Protocol, IP, Port) ->
+    riak_kv_ttaaefs_manager:set_sink(whereis(riak_kv_ttaaefs_manager),
+                                        Protocol, IP, Port).
+
+%% @doc
+%% Alter the configuration of the source for tictac full-sync
+-spec ttaaefs_setsource(http, string(), integer()) -> ok.
+ttaaefs_setsource(Protocol, IP, Port) ->
+    riak_kv_ttaaefs_manager:set_source(whereis(riak_kv_ttaaefs_manager),
                                         Protocol, IP, Port).
 
 -spec ttaaefs_setallsync(pos_integer(), pos_integer()) -> ok.

@@ -37,10 +37,11 @@
 -export([start_link/0,
             pause/1,
             resume/1,
-            change_sink/4,
+            set_sink/4,
+            set_source/4,
             set_allsync/3,
             set_bucketsync/2,
-            process_workitem/3]).
+            process_workitem/4]).
 
 -define(SLICE_COUNT, 100).
 -define(SECONDS_IN_DAY, 86400).
@@ -75,18 +76,17 @@
                 is_paused = false :: boolean()
                 }).
 
-% -type fullsync_state() :: #state{}.
-
 -type client_protocol() :: http.
 -type client_ip() :: string().
 -type client_port() :: pos_integer().
--type nval_or_range() :: pos_integer()|range. % Range queries do not have an n-val
+-type nval() :: pos_integer()|range. % Range queries do not have an n-val
 -type work_item() :: no_sync|all_sync|day_sync|hour_sync.
 -type schedule_want() :: {work_item(), non_neg_integer()}.
 -type slice() :: pos_integer().
 -type allocation() :: {slice(), work_item()}.
 -type schedule_wants() :: [schedule_want()].
 -type node_info() :: {pos_integer(), pos_integer()}. % Node and node count
+-type ttaaefs_state() :: #state{}.
 
 
 -export_type([work_item/0]).
@@ -102,10 +102,13 @@ start_link() ->
 %% Override shcedule and process an individual work_item.  If called from
 %% riak_client an integer ReqID is passed to allow for a response to be
 %% returned.  If using directly from riak attach use no_reply as the request
-%% ID.
--spec process_workitem(pid(), work_item(), no_reply|integer()) -> ok.
-process_workitem(Pid, WorkItem, ReqID) ->
-    gen_server:cast(Pid, {WorkItem, ReqID, self()}).
+%% ID.  The fourth element of the input should be an erlang timestamp
+%% representing now - but may be altered to something in the past or future in
+%% tests.
+-spec process_workitem(pid(), work_item(), no_reply|integer(),
+                                                    erlang:timestamp()) -> ok.
+process_workitem(Pid, WorkItem, ReqID, Now) ->
+    gen_server:cast(Pid, {WorkItem, ReqID, self(), Now}).
 
 -spec pause(pid()) -> ok|{error, already_paused}.
 pause(Pid) ->
@@ -115,10 +118,13 @@ pause(Pid) ->
 resume(Pid) ->
     gen_server:call(Pid, resume).
 
--spec change_sink(pid(), http, string(), integer()) -> ok.
-change_sink(Pid, Protocol, IP, Port) ->
-    gen_server:call(Pid, {change_sink, Protocol, IP, Port}).
+-spec set_sink(pid(), http, string(), integer()) -> ok.
+set_sink(Pid, Protocol, IP, Port) ->
+    gen_server:call(Pid, {set_sink, Protocol, IP, Port}).
 
+-spec set_source(pid(), http, string(), integer()) -> ok.
+set_source(Pid, Protocol, IP, Port) ->
+    gen_server:call(Pid, {set_source, Protocol, IP, Port}).
 
 %% @doc
 %% Set the manager to do full sync (e.g. using cached trees).  This will leave
@@ -229,11 +235,17 @@ handle_call(resume, _From, State) ->
         false ->
             {reply, {error, not_paused}, State, ?INITIAL_TIMEOUT}
     end;
-handle_call({change_sink, Protocol, PeerIP, PeerPort}, _From, State) ->
+handle_call({set_sink, Protocol, PeerIP, PeerPort}, _From, State) ->
     State0 = 
         State#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = Protocol},
+    {reply, ok, State0, ?INITIAL_TIMEOUT};
+handle_call({set_source, Protocol, PeerIP, PeerPort}, _From, State) ->
+    State0 = 
+        State#state{local_ip = PeerIP,
+                        local_port = PeerPort,
+                        local_protocol = Protocol},
     {reply, ok, State0, ?INITIAL_TIMEOUT};
 handle_call({set_allsync, LocalNVal, RemoteNVal}, _From, State) ->
     {reply,
@@ -244,7 +256,7 @@ handle_call({set_allsync, LocalNVal, RemoteNVal}, _From, State) ->
 handle_call({set_bucketsync, BucketList}, _From, State) ->
     {reply,
         ok,
-        State#state{scope = all,
+        State#state{scope = bucket,
                     bucket_list = BucketList}}.
 
 handle_cast({reply_complete, _ReqID, _Result}, State) ->
@@ -258,20 +270,105 @@ handle_cast({no_sync, ReqID, From}, State) ->
             From ! {ReqID, {no_sync, 0}}
     end,
     {noreply, State, ?LOOP_TIMEOUT};
-handle_cast({all_sync, ReqID, From}, State) ->
-    {LNVal, RNVal, ThisFilter, NextBucketList, Ref} =
+handle_cast({all_sync, ReqID, From, _Now}, State) ->
+    {LNVal, RNVal, Filter, NextBucketList, Ref} =
         case State#state.scope of
             all ->
                 {State#state.local_nval, State#state.remote_nval,
                     none, undefined, full};
-            bucket->
+            bucket ->
                 [H|T] = State#state.bucket_list,
                 {range, range, 
                     {filter, H, all, large, all, all, pre_hash},
                     T ++ [H],
                     partial}
         end,
+    {State0, Timeout} =
+        sync_clusters(From, ReqID, LNVal, RNVal, Filter,
+                        NextBucketList, Ref, State),
+    {noreply, State0, Timeout};
+handle_cast({hour_sync, ReqID, From, Now}, State) ->
+    case State#state.scope of
+        all ->
+            lager:warning("Invalid work_item=hour_sync for Scope=all"),
+            {noreply, State, ?INITIAL_TIMEOUT};
+        bucket ->
+            [H|T] = State#state.bucket_list,
+            {MegaSecs, Secs, _MicroSecs} = Now,
+            UpperTime = MegaSecs * 1000000  + Secs,
+            LowerTime = UpperTime - 60 * 60,
+            % Note that the tree size is amended as well as the time range.
+            % The bigger the time range, the bigger the tree.  Bigger trees
+            % are less efficient when there is little change, but can more
+            % accurately reflect bigger changes (with less fasle positives).
+            Filter =
+                {filter, H, all, small, all,
+                {LowerTime, UpperTime}, pre_hash},
+            NextBucketList = T ++ [H],
+            {State0, Timeout} =
+                sync_clusters(From, ReqID, range, range, Filter,
+                                NextBucketList, partial, State),
+            {noreply, State0, Timeout}
+    end;
+handle_cast({day_sync, ReqID, From, Now}, State) ->
+    case State#state.scope of
+        all ->
+            lager:warning("Invalid work_item=day_sync for Scope=all"),
+            {noreply, State, ?INITIAL_TIMEOUT};
+        bucket ->
+            [H|T] = State#state.bucket_list,
+            {MegaSecs, Secs, _MicroSecs} = Now,
+            UpperTime = MegaSecs * 1000000  + Secs,
+            LowerTime = UpperTime - 60 * 60 * 24,
+            % Note that the tree size is amended as well as the time range.
+            % The bigger the time range, the bigger the tree.  Bigger trees
+            % are less efficient when there is little change, but can more
+            % accurately reflect bigger changes (with less fasle positives).
+            Filter =
+                {filter, H, all, medium, all,
+                {LowerTime, UpperTime}, pre_hash},
+            NextBucketList = T ++ [H],
+            {State0, Timeout} =
+                sync_clusters(From, ReqID, range, range, Filter,
+                                NextBucketList, partial, State),
+            {noreply, State0, Timeout}
+    end.
 
+
+handle_info(timeout, State) ->
+    SlotInfoFun = State#state.slot_info_fun,
+    {WorkItem, Wait, RemainingSlices, ScheduleStartTime} = 
+        take_next_workitem(State#state.slice_allocations,
+                            State#state.schedule,
+                            State#state.slice_set_start,
+                            SlotInfoFun(),
+                            State#state.slice_count),
+    erlang:send_after(Wait * 1000, self(), {work_item, WorkItem}),
+    {noreply, State#state{slice_allocations = RemainingSlices,
+                            slice_set_start = ScheduleStartTime}};
+handle_info({work_item, WorkItem}, State) ->
+    process_workitem(self(), WorkItem, no_reply, os:timestamp()),
+    {noreply, State}.
+
+
+terminate(normal, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+
+%%%============================================================================
+%%% Internal functions
+%%%============================================================================
+
+
+%% @doc
+%% Sync two clusters - return an updated loop state and a timeout
+-spec sync_clusters(pid(), integer()|no_reply,
+                nval(), nval(), tuple(), list(), full|partial,
+                ttaaefs_state()) -> {ttaaefs_state(), pos_integer()}.
+sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
     RemoteClient =
         init_client(State#state.peer_protocol,
                     State#state.peer_ip,
@@ -283,8 +380,7 @@ handle_cast({all_sync, ReqID, From}, State) ->
 
     case RemoteClient of
         no_client ->
-            {noreply,
-                State#state{bucket_list = NextBucketList},
+            {State#state{bucket_list = NextBucketList},
                 ?LOOP_TIMEOUT};
         _ ->
             RemoteSendFun = generate_sendfun(RemoteClient, RNVal),
@@ -309,47 +405,14 @@ handle_cast({all_sync, ReqID, From}, State) ->
                                     [{RemoteSendFun, all}],
                                     RepairFun,
                                     ReplyFun,
-                                    ThisFilter, []),
+                                    Filter, []),
             
             lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
                             [ReqID0, ExID, ExPid]),
             
-            {noreply,
-                State#state{bucket_list = NextBucketList},
+            {State#state{bucket_list = NextBucketList},
                 ?CRASH_TIMEOUT}
-    end;
-handle_cast({hour_sync, _ReqID, _From}, State) ->
-    {noreply, State, ?CRASH_TIMEOUT};
-handle_cast({day_sync, _ReqID, _From}, State) ->
-    {noreply, State, ?CRASH_TIMEOUT}.
-
-
-handle_info(timeout, State) ->
-    SlotInfoFun = State#state.slot_info_fun,
-    {WorkItem, Wait, RemainingSlices, ScheduleStartTime} = 
-        take_next_workitem(State#state.slice_allocations,
-                            State#state.schedule,
-                            State#state.slice_set_start,
-                            SlotInfoFun(),
-                            State#state.slice_count),
-    erlang:send_after(Wait * 1000, self(), {work_item, WorkItem}),
-    {noreply, State#state{slice_allocations = RemainingSlices,
-                            slice_set_start = ScheduleStartTime}};
-handle_info({work_item, WorkItem}, State) ->
-    process_workitem(self(), WorkItem, no_reply),
-    {noreply, State}.
-
-
-terminate(normal, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-
-%%%============================================================================
-%%% Internal functions
-%%%============================================================================
+    end.
 
 
 %% @doc
@@ -368,7 +431,7 @@ get_slotinfo() ->
 %% cluster, and return the response.  The function should make an async call
 %% to try and make the remote and local cluster sends happen as close to
 %% parallel as possible. 
--spec generate_sendfun(rhc:rhc(), nval_or_range()) -> fun().
+-spec generate_sendfun(rhc:rhc(), nval()) -> fun().
 generate_sendfun(RHC, NVal) ->
     fun(Msg, all, Colour) ->
         AAE_Exchange = self(),
@@ -398,7 +461,7 @@ init_client(http, IP, Port) ->
 
 %% @doc
 %% Translate aae_Exchange messages into riak erlang http client requests
--spec remote_sender(any(), rhc:rhc(), fun(), nval_or_range()) -> fun().
+-spec remote_sender(any(), rhc:rhc(), fun(), nval()) -> fun().
 remote_sender(fetch_root, RHC, ReturnFun, NVal) ->
     fun() ->
         {ok, {root, Root}}
@@ -419,22 +482,33 @@ remote_sender({fetch_clocks, SegmentIDs}, RHC, ReturnFun, NVal) ->
     end;
 remote_sender({merge_tree_range, B, KR, TS, SF, MR, HM},
                     RHC, ReturnFun, range) ->
+    SF0 = format_segment_filter(SF),
     fun() ->
         {ok, {tree, Tree}}
-            = rhc:aae_range_tree(RHC, B, KR, TS, SF, MR, HM),
-        ReturnFun(Tree)
+            = rhc:aae_range_tree(RHC, B, KR, TS, SF0, MR, HM),
+        ReturnFun(leveled_tictac:import_tree(Tree))
     end;
-remote_sender({fetch_clocks_range, B, KR, SF, MR}, RHC, ReturnFun, range) ->
+remote_sender({fetch_clocks_range, B0, KR, SF, MR}, RHC, ReturnFun, range) ->
+    SF0 = format_segment_filter(SF),
     fun() ->
         {ok, {keysclocks, KeysClocks}}
-            = rhc:aae_range_clocks(RHC, B, KR, SF, MR),
-        ReturnFun(KeysClocks)
+            = rhc:aae_range_clocks(RHC, B0, KR, SF0, MR),
+        ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end, KeysClocks))
     end.
 
+%% @doc
+%% The segment filter as produced by aae_exchange has a different format to
+%% thann the one expected by the riak http erlang client - so that conflict
+%% is resolved here
+format_segment_filter(all) ->
+    all;
+format_segment_filter({segments, SegList, TreeSize}) ->
+    {SegList, TreeSize}.
 
 %% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
+-spec generate_replyfun(integer()|no_reply, pid()) -> fun().
 generate_replyfun(ReqID, From) ->
     Pid = self(),
     fun(Result) ->
@@ -442,6 +516,7 @@ generate_replyfun(ReqID, From) ->
             no_reply ->
                 ok;
             _ ->
+                % Reply to riak_client
                 From ! {ReqID, Result}
         end,
         gen_server:cast(Pid, {reply_complete, ReqID, Result})
