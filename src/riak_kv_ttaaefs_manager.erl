@@ -415,7 +415,7 @@ remote_sender({fetch_clocks, SegmentIDs}, RHC, ReturnFun, NVal) ->
     fun() ->
         {ok, {keysclocks, KeysClocks}}
             = rhc:aae_fetch_clocks(RHC, NVal, SegmentIDs),
-        ReturnFun(KeysClocks)
+        ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end, KeysClocks))
     end;
 remote_sender({merge_tree_range, B, KR, TS, SF, MR, HM},
                     RHC, ReturnFun, range) ->
@@ -493,12 +493,13 @@ vclock_dominates(none, _SrcVC)  ->
 vclock_dominates(_SinkVC, none) ->
     true;
 vclock_dominates(SinkVC, SrcVC) ->
-    vclock:dominates(SinkVC, SrcVC).
+    vclock:dominates(riak_object:decode_vclock(SinkVC),
+                        riak_object:decode_vclock(SrcVC)).
 
 
 %% @doc
 %% requeue the keys, in batches, with a pause at the end of each batch up to
-%% The 1s point since the start of the batch 
+%% The 1s point since the start of the batch
 -spec requeue_keys(rhc:rhc(), rhc:rhc(), list(tuple()), pos_integer()) -> ok.
 requeue_keys(_LRC, _RRC, [], _RepairsPerSecond) ->
     ok;
