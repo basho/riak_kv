@@ -38,10 +38,7 @@
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
 -export([aae_fold/2]).
--export([ttaaefs_pause/0, ttaaefs_resume/0,
-            ttaaefs_fullsync/2, ttaaefs_fullsync/3,
-            ttaaefs_setsink/3, ttaaefs_setsource/3,
-            ttaaefs_setallsync/2, ttaaefs_setbucketsync/1]).
+-export([ttaaefs_fullsync/2, ttaaefs_fullsync/3]).
 -export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
@@ -729,18 +726,6 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
 
 
 %% @doc
-%% Pause Tictac AAE full-sync on this node (only)
--spec ttaaefs_pause() -> ok.
-ttaaefs_pause() ->
-    riak_kv_ttaaefs_manager:pause(whereis(riak_kv_ttaaefs_manager)).
-
-%% @doc
-%% Resume Tictac AAE full-sync on this node (only)
--spec ttaaefs_resume() -> ok.
-ttaaefs_resume() ->
-    riak_kv_ttaaefs_manager:resume(whereis(riak_kv_ttaaefs_manager)).
-
-%% @doc
 %% Prompt a full-sync based on the current configuration, and using either
 %% - null_sync (a no op)
 %% - all_sync (sync over all time - only permissible sync if not bucket-based)
@@ -749,7 +734,7 @@ ttaaefs_resume() ->
 -spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item(), integer()) -> ok.
 ttaaefs_fullsync(WorkItem, SecsTimeout) ->
     ReqId = mk_reqid(),
-    riak_kv_ttaaefs_manager:process_workitem(whereis(riak_kv_ttaaefs_manager),
+    riak_kv_ttaaefs_manager:process_workitem(riak_kv_ttaaefs_manager,
                                                 WorkItem,
                                                 ReqId,
                                                 os:timestamp()),
@@ -762,36 +747,13 @@ ttaaefs_fullsync(WorkItem, SecsTimeout) ->
                                                     erlang:timestamp()) -> ok.
 ttaaefs_fullsync(WorkItem, SecsTimeout, Now) ->
     ReqId = mk_reqid(),
-    riak_kv_ttaaefs_manager:process_workitem(whereis(riak_kv_ttaaefs_manager),
+    riak_kv_ttaaefs_manager:process_workitem(riak_kv_ttaaefs_manager,
                                                 WorkItem,
                                                 ReqId,
                                                 Now),
     wait_for_reqid(ReqId, SecsTimeout * 1000).
 
 
-%% @doc
-%% Alter the configuration of the sink for tictac full-sync
--spec ttaaefs_setsink(http, string(), integer()) -> ok.
-ttaaefs_setsink(Protocol, IP, Port) ->
-    riak_kv_ttaaefs_manager:set_sink(whereis(riak_kv_ttaaefs_manager),
-                                        Protocol, IP, Port).
-
-%% @doc
-%% Alter the configuration of the source for tictac full-sync
--spec ttaaefs_setsource(http, string(), integer()) -> ok.
-ttaaefs_setsource(Protocol, IP, Port) ->
-    riak_kv_ttaaefs_manager:set_source(whereis(riak_kv_ttaaefs_manager),
-                                        Protocol, IP, Port).
-
--spec ttaaefs_setallsync(pos_integer(), pos_integer()) -> ok.
-ttaaefs_setallsync(LocalNVal, RemoteNVal) ->
-    riak_kv_ttaaefs_manager:set_allsync(whereis(riak_kv_ttaaefs_manager),
-                                        LocalNVal, RemoteNVal).
-
--spec ttaaefs_setbucketsync(list(riak_object:bucket())) -> ok.
-ttaaefs_setbucketsync(BucketList) ->
-    riak_kv_ttaaefs_manager:set_bucketsync(whereis(riak_kv_ttaaefs_manager),
-                                            BucketList).
 
 
 %% @doc

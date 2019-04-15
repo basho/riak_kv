@@ -105,38 +105,38 @@ start_link() ->
 %% ID.  The fourth element of the input should be an erlang timestamp
 %% representing now - but may be altered to something in the past or future in
 %% tests.
--spec process_workitem(pid(), work_item(), no_reply|integer(),
+-spec process_workitem(pid()|atom(), work_item(), no_reply|integer(),
                                                     erlang:timestamp()) -> ok.
 process_workitem(Pid, WorkItem, ReqID, Now) ->
     gen_server:cast(Pid, {WorkItem, ReqID, self(), Now}).
 
--spec pause(pid()) -> ok|{error, already_paused}.
+-spec pause(pid()|atom()) -> ok|{error, already_paused}.
 pause(Pid) ->
     gen_server:call(Pid, pause).
 
--spec resume(pid()) -> ok|{error, not_paused}.
+-spec resume(pid()|atom()) -> ok|{error, not_paused}.
 resume(Pid) ->
     gen_server:call(Pid, resume).
 
--spec set_sink(pid(), http, string(), integer()) -> ok.
+-spec set_sink(pid()|atom(), http, string(), integer()) -> ok.
 set_sink(Pid, Protocol, IP, Port) ->
     gen_server:call(Pid, {set_sink, Protocol, IP, Port}).
 
--spec set_source(pid(), http, string(), integer()) -> ok.
+-spec set_source(pid()|atom(), http, string(), integer()) -> ok.
 set_source(Pid, Protocol, IP, Port) ->
     gen_server:call(Pid, {set_source, Protocol, IP, Port}).
 
 %% @doc
 %% Set the manager to do full sync (e.g. using cached trees).  This will leave
 %% automated sync disabled.  To re-enable the sync use resume/1
--spec set_allsync(pid(), pos_integer(), pos_integer()) -> ok.
+-spec set_allsync(pid()|atom(), pos_integer(), pos_integer()) -> ok.
 set_allsync(Pid, LocalNVal, RemoteNVal) ->
     gen_server:call(Pid, {set_allsync, LocalNVal, RemoteNVal}).
 
 %% @doc
 %% Set the manager to sync or a list of buckets.  This will leave
 %% automated sync disabled.  To re-enable the sync use resume/1
--spec set_bucketsync(pid(), list(riak_object:bucket())) -> ok.
+-spec set_bucketsync(pid()|atom, list(riak_object:bucket())) -> ok.
 set_bucketsync(Pid, BucketList) ->
     gen_server:call(Pid, {set_bucketsync, BucketList}).
 
@@ -206,7 +206,6 @@ init([]) ->
                         local_ip = LocalIP,
                         local_port = LocalPort,
                         local_protocol = LocalProtocol},
-    
     
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
     {ok, State3, ?INITIAL_TIMEOUT}.
@@ -334,7 +333,6 @@ handle_cast({day_sync, ReqID, From, Now}, State) ->
             {noreply, State0, Timeout}
     end.
 
-
 handle_info(timeout, State) ->
     SlotInfoFun = State#state.slot_info_fun,
     {WorkItem, Wait, RemainingSlices, ScheduleStartTime} = 
@@ -349,7 +347,6 @@ handle_info(timeout, State) ->
 handle_info({work_item, WorkItem}, State) ->
     process_workitem(self(), WorkItem, no_reply, os:timestamp()),
     {noreply, State}.
-
 
 terminate(normal, _State) ->
     ok.
@@ -476,9 +473,15 @@ remote_sender({fetch_branches, BranchIDs}, RHC, ReturnFun, NVal) ->
     end;
 remote_sender({fetch_clocks, SegmentIDs}, RHC, ReturnFun, NVal) ->
     fun() ->
-        {ok, {keysclocks, KeysClocks}}
-            = rhc:aae_fetch_clocks(RHC, NVal, SegmentIDs),
-        ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end, KeysClocks))
+        case rhc:aae_fetch_clocks(RHC, NVal, SegmentIDs) of
+            {ok, {keysclocks, KeysClocks}} ->
+                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
+                            KeysClocks));
+            {error, Error} ->
+                lager:warning("Error of ~w in fetch_clocks response",
+                                [Error]),
+                ReturnFun({error, Error})
+        end
     end;
 remote_sender({merge_tree_range, B, KR, TS, SF, MR, HM},
                     RHC, ReturnFun, range) ->
@@ -541,6 +544,7 @@ generate_replyfun(ReqID, From) ->
                                                                     -> fun().
 generate_repairfun(LocalClient, RemoteClient, ExchangeID, RepairsPerSecond) ->
     fun(RepairList) ->
+        lager:info("Repaire to list of length ~w", [length(RepairList)]),
         FoldFun =
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
@@ -591,7 +595,10 @@ requeue_keys(LRC, RRC, ToRepair, RepairsPerSecond) ->
         fun({B, K}, {Repls, SourceF, SinkF}) ->
             case rhc:get(LRC, B, K, []) of
                 {ok, RiakCObj} ->
-                    case rhc:put(RRC, RiakCObj, [asis]) of
+                    ReplOpts = [asis, 
+                                disable_hooks,
+                                {update_last_modified, false}],
+                    case rhc:put(RRC, RiakCObj, ReplOpts) of
                         ok ->
                             {Repls + 1, SourceF, SinkF};
                         _ ->
