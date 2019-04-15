@@ -593,18 +593,29 @@ requeue_keys(LRC, RRC, ToRepair, RepairsPerSecond) ->
     SW = os:timestamp(),
     RequeueFun = 
         fun({B, K}, {Repls, SourceF, SinkF}) ->
-            case rhc:get(LRC, B, K, []) of
+            ReplOpts = [asis, 
+                        disable_hooks,
+                        {update_last_modified, false}],
+            case rhc:get(LRC, B, K, [deletedvclock]) of
                 {ok, RiakCObj} ->
-                    ReplOpts = [asis, 
-                                disable_hooks,
-                                {update_last_modified, false}],
                     case rhc:put(RRC, RiakCObj, ReplOpts) of
                         ok ->
                             {Repls + 1, SourceF, SinkF};
                         _ ->
                             {Repls, SourceF, SinkF + 1}
                     end;
-                _ ->
+                {error, {notfound, Vclock}} ->
+                    % If we have a notfound with a vector clock then this is
+                    % a delete to be replicated
+                    case rhc:delete(RRC, B, K, [{vclock, Vclock}|ReplOpts]) of
+                        ok ->
+                            {Repls + 1, SourceF, SinkF};
+                        _ ->
+                            {Repls, SourceF, SinkF + 1}
+                    end;
+                E ->
+                    lager:warning("SrcError ~w when attempting object fetch",
+                                    [E]),
                     {Repls, SourceF + 1, SinkF}
                 end
         end,
