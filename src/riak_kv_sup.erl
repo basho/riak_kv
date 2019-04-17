@@ -97,6 +97,9 @@ init([]) ->
     TictacFSManager = {riak_kv_ttaaefs_manager,
                       {riak_kv_ttaaefs_manager, start_link, []},
                       permanent, 30000, worker, [riak_kv_ttaaefs_manager]},
+    ReplRTQSrc = {riak_kv_replrtq_src,
+                      {riak_kv_replrtq_src, start_link, []},
+                      permanent, 30000, worker, [riak_kv_replrtq_src]},
 
     EnsemblesKV =  {riak_kv_ensembles,
                     {riak_kv_ensembles, start_link, []},
@@ -109,6 +112,7 @@ init([]) ->
     Processes = lists:flatten([
         EntropyManager,
         TictacFSManager,
+        ReplRTQSrc,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,

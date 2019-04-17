@@ -835,27 +835,36 @@
 
 
 %% @doc For Tictac full-sync does all data need to be sync'd, or should a 
-%% specific bucket be sync'd (bucket).  Note that in most cases sync
-%% of all data is lower overhead than sync of a subset of data - as cached
-%% AAE trees will be used.
+%% specific bucket be sync'd (bucket), or a specific bucket type (type). 
+%% Note that in most cases sync of all data is lower overhead than sync of
+%% a subset of data - as cached AAE trees will be used.
+%% TODO: type is not yet implemented.  
 {mapping, "ttaaefs_scope", "riak_kv.ttaaefs_scope", [
-  {datatype, {enum, [all, bucket, disabled]}},
+  {datatype, {enum, [all, bucket, type, disabled]}},
   {default, disabled}
 ]}.
 
-%% @doc For Tictac bucket-list full-sync which bucket should be sync'd by this
+%% @doc for tictac full-sync what registered queue name on this cluster should
+%% be use for passing references to data which needs to be replicated for AAE
+%% full-sync.  This queue name must be defined as a
+%% `riak_kv.replq<n>_queuename`, but need not be exlusive to full-sync (i.e. a
+%% real-time replication queue may be used as well)
+{mapping, "ttaaefs_queuename", "riak_kv.ttaaefs_queuename", [
+  {datatype, atom},
+  {default, q1_ttaaefs}
+]}.
+
+%% @doc For Tictac bucket full-sync which bucket should be sync'd by this
 %% node.
-%% TODO: Allow for a list of buckets
-{mapping, "ttaaefs_bucket", "riak_kv.ttaaefs_bucket", [
+{mapping, "ttaaefs_bucketname", "riak_kv.ttaaefs_bucketname", [
   {datatype, string}
 ]}.
 
-%% @doc For Tictac bucket-list full-sync what is the type of the bucket to be
-%% sync'd by this node
-%% TODO: Allow for a list of buckets
+%% @doc For Tictac type full-sync which bucket type hould be sync'd by this
+%% node.
+%% TODO: type is not yet implemented.  
 {mapping, "ttaaefs_buckettype", "riak_kv.ttaaefs_buckettype", [
-  {datatype, string},
-  {default, "default"}
+  {datatype, string}
 ]}.
 
 %% @doc For Tictac all full-sync which NVAL should be sync'd by this node.
@@ -906,29 +915,6 @@
   {default, http}
 ]}.
 
-%% @doc The network address of the local node in the cluster with which this
-%% node will connect to for full_sync purposes.  The local address may be a
-%% load-balanced IP to avoid this issue.
-{mapping, "ttaaefs_localip", "riak_kv.ttaaefs_localip", [
-  {datatype, string},
-  {default, "127.0.0.1"}, 
-  {validators, ["valid_ipaddr"]}
-]}.
-
-%% @doc The port to be used when connecting to the local cluster
-{mapping, "ttaaefs_localport", "riak_kv.ttaaefs_localport", [
-  {datatype, integer}
-]}.
-
-%% @doc The protocol to be used when conecting to the local
-%% cluster.  Could be http or pb (but only http currently being tested)
-%% TODO: Support for SSL?  Support for pb.
-{mapping, "ttaaefs_localprotocol", "riak_kv.ttaaefs_localprotocol", [
-  {datatype, {enum, [http, pb]}},
-  {default, http}
-]}.
-
-
 %% @doc How many times per 24hour period should all the data be checked to
 %% confirm it is fully sync'd
 {mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [
@@ -945,7 +931,6 @@
   {default, 0}
 ]}.
 
-
 %% @doc How many times per 24hour period should the last hours data be checked
 %% to confirm it is fully sync'd.  This is relevant for per-bucket sync scope
 %% only, and will be ignored if all sync is enabled
@@ -961,3 +946,114 @@
   {datatype, integer},
   {default, 0}
 ]}.
+
+%% @doc Disable or enable real-time replication using the replq mechanism.
+%% This real-time replication is independent of any riak_repl configuration -
+%% unexpected events may occur is both forms of real-time replication are
+%% concurrently configured.
+%% Running with replq disabled will prevent any PUTs co-ordinated on this node
+%% from being queued for a remote cluster.  However, it will not prevent this
+%% node as acting as a source for replication updates pormpted by a Tictac AAE
+%% exchange or a aae_fold.
+%% TODO: Add support for this being enabled.
+{mapping, "replq_src", "riak_kv.replq_src", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc replq queue count - the number of queues (between 0 and 4 to be
+%% pre-configured for replq real-time replictaion activity from this node)
+{mapping, "replq_queuecount", "riak_kv.replq_queuecount", [
+  {datatype, integer},
+  {default, 1},
+  {commented, 4}
+]}.
+
+%% @doc Limit the size of replication queues (for a queue and priority)
+{mapping, "replq_queuelimit", "riak_kv.replq_queuelimit", [
+  {datatype, integer},
+  {default, 100000}
+]}.
+
+%% @doc There are up to four real-time replq queues which can be configured, 
+%% although more may be added by scripted changes once the node is active.
+%% For each queue - there should be a queue name, and a filter defined.
+%% The queue name should be a string, and at least one should match any queue
+%% name defined in `riak_kv.ttaaefs_queuename` if Tictac AAE is to be used.
+{mapping, "replq1_queuename", "riak_kv.replq1_queuename", [
+  {datatype, atom},
+  {default, q1_ttaaefs}
+]}.
+
+%% @doc Queue name for second queue
+{mapping, "replq2_queuename", "riak_kv.replq2_queuename", [
+  {datatype, atom},
+  {commented, cluster_two}
+]}.
+
+%% @doc Queue name for third queue
+{mapping, "replq3_queuename", "riak_kv.replq3_queuename", [
+  {datatype, atom},
+  {commented, cluster_three}
+]}.
+
+%% @doc Queue name for fourth queue
+{mapping, "replq4_queuename", "riak_kv.replq4_queuename", [
+  {datatype, atom},
+  {commented, cluster_four}
+]}.
+
+%% @doc filter type for first queue.  The filter can be defined as `any` or
+%% bucketname, or buckettype depending on whether real-time inputs will be
+%% filtered by bucket name or type (or if all will be allowed).  The filter
+%% is only applied to real-time notifications of PUTs co-ordinated on this
+%% node (the filter will be ignored if full-sync uses this queue).
+{mapping, "replq1_filtertype", "riak_kv.replq1_filtertype", [
+  {datatype, {enum, [any, bucketname, buckettype]}},
+  {default, any}
+]}.
+
+%% @doc Filter type for second queue
+{mapping, "replq2_filtertype", "riak_kv.replq2_filtertype", [
+  {datatype, {enum, [any, bucketname, buckettype]}},
+  {commented, any}
+]}.
+
+%% @doc Filter type for third queue
+{mapping, "replq3_filtertype", "riak_kv.replq3_filtertype", [
+  {datatype, {enum, [any, bucketname, buckettype]}},
+  {commented, any}
+]}.
+
+%% @doc Filter type for fourth queue
+{mapping, "replq4_filtertype", "riak_kv.replq4_filtertype", [
+  {datatype, {enum, [any, bucketname, buckettype]}},
+  {commented, any}
+]}.
+
+%% @doc filter name for first queue if it has been defined to match a bucket
+%% name or type (will be ignored for `all` filter type)
+{mapping, "replq1_filtername", "riak_kv.replq1_filtername", [
+  {datatype, string},
+  {commented, "bucket1"}
+]}.
+
+%% @doc filter name for second queue
+{mapping, "replq2_filtername", "riak_kv.replq2_filtername", [
+  {datatype, string},
+  {commented, "bucket2"}
+]}.
+
+%% @doc filter name for third queue
+{mapping, "replq3_filtername", "riak_kv.replq3_filtername", [
+  {datatype, string},
+  {commented, "bucket3"}
+]}.
+
+%% @doc filter name for fourth queue
+{mapping, "replq4_filtername", "riak_kv.replq4_filtername", [
+  {datatype, string},
+  {commented, "bucket4"}
+]}.
+
