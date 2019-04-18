@@ -209,15 +209,15 @@ init({test, Args, StateProps}) ->
 %% @private
 queue_fetch(timeout, StateData) ->
     {queue_name, QueueName} = StateData#state.bkey,
-    case riak_kv_replrtq_src:popfrom_rtq(repl_kv_replrtq_src, QueueName) of
+    case riak_kv_replrtq_src:popfrom_rtq(riak_kv_replrtq_src, QueueName) of
         queue_empty ->
             {raw, ReqID, Pid} = StateData#state.from,
-            Msg = {ReqID, queue_empty},
+            Msg = {ReqID, {ok, queue_empty}},
             Pid ! Msg,
             {stop, normal, StateData};
         {Bucket, Key, _ExpectedClock, to_fetch} ->
             Timing = riak_kv_fsm_timing:add_timing(prepare, []),
-            {ok,
+            {next_state,
                 prepare,
                 StateData#state{bkey = {Bucket, Key}, timing = Timing},
                 0};

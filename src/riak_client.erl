@@ -198,12 +198,13 @@ push(RObj, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
             ReapOptions = [{r, 1}],
             case node() of
                 Node ->
-                    riak_kv_get_fsm:start({raw, ReqId, Me}, B, K, ReapOptions);
+                    riak_kv_get_fsm:start({raw, ReapReqId, Me},
+                                            B, K, ReapOptions);
                 _ ->
                     % Still using the deprecated `start_link' alias for 
                     %`start' here, in case the remote node is pre-2.2:
                     proc_lib:spawn_link(Node, riak_kv_get_fsm, start_link,
-                                        [{raw, ReqId, Me},
+                                        [{raw, ReapReqId, Me},
                                         B, K, ReapOptions])
             end,
             wait_for_reqid(ReapReqId, Timeout),

@@ -258,10 +258,10 @@ handle_call({popfrom_rtq, QueueName}, _From, State) ->
                         lists:keyreplace(QueueName, 1,
                                             State#state.queue_map,
                                             {QueueName, Queue0}),
-                    {reply, empty, State#state{queue_map = QueueMap0}}
+                    {reply, queue_empty, State#state{queue_map = QueueMap0}}
             end;
         false ->
-            {reply, empty, State}
+            {reply, queue_empty, State}
     end;
 handle_call({register_rtq, QueueName, QueueFilter}, _From, State) ->
     QFilter = State#state.queue_filtermap,
@@ -493,7 +493,7 @@ basic_singlequeue_test() ->
     lists:foreach(fun(_I) -> popfrom_rtq(P,?QN1) end, lists:seq(1, 17)),
     {?TB3, <<30:32/integer>>, _VC30, to_fetch} = popfrom_rtq(P, ?QN1),
     ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(P, ?QN1)),
-    ?assertMatch(empty, popfrom_rtq(P, ?QN1)),
+    ?assertMatch(queue_empty, popfrom_rtq(P, ?QN1)),
     ok = replrtq_ttaefs(P, ?QN1, lists:reverse(Grp5)),
     ?assertMatch({?QN1, {0, 10, 0}}, length_rtq(P, ?QN1)),
     {?TB2, <<41:32/integer>>, _VC41, to_fetch} = popfrom_rtq(P, ?QN1),
@@ -546,7 +546,7 @@ basic_multiqueue_test() ->
     
     ?assertMatch(ok, delist_rtq(P, ?QN1)),
     ?assertMatch(false, length_rtq(P, ?QN1)),
-    ?assertMatch(empty, popfrom_rtq(P, ?QN1)),
+    ?assertMatch(queue_empty, popfrom_rtq(P, ?QN1)),
 
     Grp6A = lists:map(GenB6, lists:seq(71, 80)),
     lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp6A),
@@ -564,7 +564,7 @@ basic_multiqueue_test() ->
     
     % Re-register queue, but should now be empty
     ?assertMatch(true, register_rtq(P, ?QN1, {bucketname, ?TB3})),
-    ?assertMatch(empty, popfrom_rtq(P, ?QN1)),
+    ?assertMatch(queue_empty, popfrom_rtq(P, ?QN1)),
     ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(P, ?QN1)),
 
     % Add more onto the queue, confirm we can pop an element off it still
@@ -609,7 +609,7 @@ basic_multiqueue_test() ->
     % and if something which isn't defined is resumed
     ?assertMatch(false, resume_rtq(P, ?QN5)),
     % An undefined queue is also empty
-    ?assertMatch(empty, popfrom_rtq(P, ?QN5)),
+    ?assertMatch(queue_empty, popfrom_rtq(P, ?QN5)),
     % An undefined queue will not be suspended
     ?assertMatch(false, suspend_rtq(P, ?QN5)).
 
