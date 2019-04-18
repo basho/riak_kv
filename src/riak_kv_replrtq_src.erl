@@ -45,7 +45,7 @@
             register_rtq/3,
             delist_rtq/2,
             suspend_rtq/2,
-            activate_rtq/2,
+            resume_rtq/2,
             length_rtq/2,
             popfrom_rtq/2]).
 
@@ -65,6 +65,8 @@
     % Real-time replication will tail-drop when over the limit, whereas batch
     % replication queues will prompt a pause in the process queueing the
     % repl references
+-define(LOG_TIMER_SECONDS, 30).
+    % Log the queue sizes every 30 seconds
 
 -record(state,  {
             queue_filtermap = [] :: list(queue_filtermap()),
@@ -181,9 +183,9 @@ suspend_rtq(Ref, QueueName) ->
 %% @doc
 %% Where a queue has been suspended, allow again for new updates to be added
 %% to the queue.  A null operation if the queue is not suspended.
--spec activate_rtq(ref(), queue_name()) -> boolean().
-activate_rtq(Ref, QueueName) ->
-    gen_server:call(Ref, {activate_rtq, QueueName}, infinity).
+-spec resume_rtq(ref(), queue_name()) -> boolean().
+resume_rtq(Ref, QueueName) ->
+    gen_server:call(Ref, {resume_rtq, QueueName}, infinity).
 
 %% @doc
 %% Return the {fold_lengrh, aae_length, put_length} to show the length of the
@@ -205,6 +207,7 @@ popfrom_rtq(Ref, QueueName) ->
 %%%============================================================================
 
 init([]) ->
+    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_queue),
     {ok, #state{}}.
 
 handle_call({rtq_ttaaefs, QueueName, ReplEntries}, _From, State) ->
@@ -266,7 +269,7 @@ handle_call({register_rtq, QueueName, QueueFilter}, _From, State) ->
     QCount = State#state.queue_countmap,
     case lists:keyfind(QueueName, 1, QFilter) of
         {QueueName, _, _} ->
-            lager:warning("Attempt to register queue alreayd present ~w",
+            lager:warning("Attempt to register queue already present ~w",
                             [QueueName]),
             {reply, false, State};
         false ->
@@ -293,7 +296,7 @@ handle_call({suspend_rtq, QueueName}, _From, State) ->
         false ->
             {reply, false, State}
     end;
-handle_call({activate_rtq, QueueName}, _From, State) ->
+handle_call({resume_rtq, QueueName}, _From, State) ->
     case lists:keyfind(QueueName, 1, State#state.queue_filtermap) of
         {QueueName, Filter, _} ->
             QF0 = lists:keyreplace(QueueName, 1, State#state.queue_filtermap,
@@ -315,7 +318,14 @@ handle_cast({rtq_coordput, ReplEntry}, State) ->
     {noreply, State#state{queue_map = QueueMap,
                             queue_countmap = QueueCountMap}}.
 
-handle_info(_Msg, State)->
+handle_info(log_queue, State) ->
+    LogFun = 
+        fun({QueueName, {P1Q, P2Q, P3Q}}) ->
+            lager:info("QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
+                        [QueueName, P1Q, P2Q, P3Q])
+        end,
+    lists:foreach(LogFun, State#state.queue_countmap),
+    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_queue),
     {noreply, State}.
 
 terminate(normal, _State) ->
@@ -415,8 +425,12 @@ bulkaddto_queue(ReplEntries, P, QueueName,
             {false, QueueMap, QueueCountMap}
     end.
 
+%% @doc
+%% Update the count after an item has been fetched from the queue.  The
+%% queue is trusted to have given up an item based on priority correctly.
 -spec update_counts(queue_length()) -> queue_length().
 update_counts({0, 0, 0}) ->
+    % Not possible!  Dare we let it crash?
     {0, 0, 0};
 update_counts({P1, 0, 0}) ->
     {P1 - 1, 0, 0};
@@ -542,6 +556,9 @@ basic_multiqueue_test() ->
     ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(P, ?QN3)),
     ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(P, ?QN4)),
 
+    % Prompt the log, and the process doesn't crash
+    P ! log_queue,
+
     % Delisting a non-existent queue doens't cause an error
     ?assertMatch(ok, delist_rtq(P, ?QN1)),
     
@@ -578,8 +595,8 @@ basic_multiqueue_test() ->
     ?assertMatch(true, suspend_rtq(P, ?QN1)),
     ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(P, ?QN1)),
 
-    % Reactivate and can continue to pop, but also now write
-    ?assertMatch(true, activate_rtq(P, ?QN1)),
+    % Resume and can continue to pop, but also now write
+    ?assertMatch(true, resume_rtq(P, ?QN1)),
     {?TB3, <<74:32/integer>>, _VC74, to_fetch} = popfrom_rtq(P, ?QN1),
     ?assertMatch({?QN1, {0, 0, 6}}, length_rtq(P, ?QN1)),
     lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp6B),
@@ -587,10 +604,10 @@ basic_multiqueue_test() ->
     {?TB3, <<75:32/integer>>, _VC75, to_fetch} = popfrom_rtq(P, ?QN1),
     ?assertMatch({?QN1, {0, 10, 15}}, length_rtq(P, ?QN1)),
     
-    % Shrug your shoulders if it is activated twice
-    ?assertMatch(true, activate_rtq(P, ?QN1)),
-    % and if something which isn't defined is activated
-    ?assertMatch(false, activate_rtq(P, ?QN5)),
+    % Shrug your shoulders if it is resumed twice
+    ?assertMatch(true, resume_rtq(P, ?QN1)),
+    % and if something which isn't defined is resumed
+    ?assertMatch(false, resume_rtq(P, ?QN5)),
     % An undefined queue is also empty
     ?assertMatch(empty, popfrom_rtq(P, ?QN5)),
     % An undefined queue will not be suspended
