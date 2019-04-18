@@ -915,6 +915,13 @@
   {default, http}
 ]}.
 
+%% @doc queue name to be used as the source queue for replication of variances
+%% discovered via a Tictac AAE exchange.  Must match a replq<n>_queuename
+{mapping, "ttaaefs_queuename", "riak_kv.ttaaefs_queuename", [
+  {datatype, atom},
+  {default, q1_ttaaefs}
+]}.
+
 %% @doc How many times per 24hour period should all the data be checked to
 %% confirm it is fully sync'd
 {mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [

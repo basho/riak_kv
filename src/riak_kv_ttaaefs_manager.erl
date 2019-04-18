@@ -54,7 +54,6 @@
 -define(CRASH_TIMEOUT, 3600 * 1000).
     % Assume that an exchange has crashed if not response received in this
     % interval, to allow exchanges to be re-scheduled.
--define(REPAIR_RATE, 100).
 
 -record(state, {slice_allocations = [] :: list(allocation()),
                 slice_set_start = os:timestamp() :: erlang:timestamp(),
@@ -70,8 +69,8 @@
                 bucket_list :: list()|undefined,
                 local_nval :: pos_integer()|undefined,
                 remote_nval :: pos_integer()|undefined,
+                queue_name :: riak_kv_replrtq_src:queue_name(),
                 slot_info_fun :: fun(),
-                repair_rate = ?REPAIR_RATE :: pos_integer(),
                 slice_count = ?SLICE_COUNT :: pos_integer(),
                 is_paused = false :: boolean()
                 }).
@@ -199,13 +198,18 @@ init([]) ->
     LocalIP = app_helper:get_env(riak_kv, ttaaefs_localip),
     LocalPort = app_helper:get_env(riak_kv, ttaaefs_localport),
     LocalProtocol = app_helper:get_env(riak_kv, ttaaefs_localprotocol),
+
+    % Queue name to be used for AAE exchanges on this cluster
+    SrcQueueName = app_helper:get_env(riak_kv, ttaaefs_queuename),
+
     State3 = 
         State2#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = PeerProtocol,
                         local_ip = LocalIP,
                         local_port = LocalPort,
-                        local_protocol = LocalProtocol},
+                        local_protocol = LocalProtocol,
+                        queue_name = SrcQueueName},
     
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
     {ok, State3, ?INITIAL_TIMEOUT}.
@@ -390,11 +394,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                     _ ->
                         ReqID
                 end,
-            RepairFun =
-                generate_repairfun(LocalClient, 
-                                    RemoteClient,
-                                    ReqID0,
-                                    State#state.repair_rate),
+            RepairFun = generate_repairfun(ReqID0, State#state.queue_name),
             
             {ok, ExPid, ExID} =
                 aae_exchange:start(Ref,
@@ -540,11 +540,10 @@ generate_replyfun(ReqID, From) ->
 %% the object should be repaired by requeueing.  Requeueing will cause the
 %% object to be re-replicated to all destination clusters (not just a specific
 %% sink cluster)
--spec generate_repairfun(rhc:rhc(), rhc:rhc(), integer(), pos_integer())
-                                                                    -> fun().
-generate_repairfun(LocalClient, RemoteClient, ExchangeID, RepairsPerSecond) ->
+-spec generate_repairfun(integer(), riak_kv_replrtq_src:queue_name()) -> fun().
+generate_repairfun(ExchangeID, QueueName) ->
     fun(RepairList) ->
-        lager:info("Repaire to list of length ~w", [length(RepairList)]),
+        lager:info("Repair to list of length ~w", [length(RepairList)]),
         FoldFun =
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
@@ -553,7 +552,7 @@ generate_repairfun(LocalClient, RemoteClient, ExchangeID, RepairsPerSecond) ->
                     true ->
                         {SourceL, SinkC + 1};
                     false ->
-                        {[{B, K}|SourceL], SinkC}
+                        {[{B, K, SrcVC, to_fetch}|SourceL], SinkC}
                 end
             end,
         {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
@@ -561,7 +560,9 @@ generate_repairfun(LocalClient, RemoteClient, ExchangeID, RepairsPerSecond) ->
                     [ExchangeID, SinkDCount]),
         lager:info("AAE exchange ~w outputs ~w keys to be repaired",
                     [ExchangeID, length(ToRepair)]),
-        requeue_keys(LocalClient, RemoteClient, ToRepair, RepairsPerSecond),
+        riak_kv_replrtq_src:replrtq_ttaefs(repl_kv_replrtq_src,
+                                            QueueName,
+                                            ToRepair),
         lager:info("AAE exchange ~w has requeue complete for ~w keys",
                     [ExchangeID, length(ToRepair)])
     end.
@@ -574,64 +575,6 @@ vclock_dominates(_SinkVC, none) ->
 vclock_dominates(SinkVC, SrcVC) ->
     vclock:dominates(riak_object:decode_vclock(SinkVC),
                         riak_object:decode_vclock(SrcVC)).
-
-
-%% @doc
-%% requeue the keys, in batches, with a pause at the end of each batch up to
-%% The 1s point since the start of the batch
--spec requeue_keys(rhc:rhc(), rhc:rhc(), list(tuple()), pos_integer()) -> ok.
-requeue_keys(_LRC, _RRC, [], _RepairsPerSecond) ->
-    ok;
-requeue_keys(LRC, RRC, ToRepair, RepairsPerSecond) ->
-    {SubList, StillToRepair} = 
-        case length(ToRepair) > RepairsPerSecond of
-            true ->
-                lists:split(RepairsPerSecond, ToRepair);
-            false ->
-                {ToRepair, []}
-        end,
-    SW = os:timestamp(),
-    RequeueFun = 
-        fun({B, K}, {Repls, SourceF, SinkF}) ->
-            ReplOpts = [asis, 
-                        disable_hooks,
-                        {update_last_modified, false}],
-            case rhc:get(LRC, B, K, [deletedvclock]) of
-                {ok, RiakCObj} ->
-                    case rhc:put(RRC, RiakCObj, ReplOpts) of
-                        ok ->
-                            {Repls + 1, SourceF, SinkF};
-                        _ ->
-                            {Repls, SourceF, SinkF + 1}
-                    end;
-                {error, {notfound, Vclock}} ->
-                    % If we have a notfound with a vector clock then this is
-                    % a delete to be replicated
-                    case rhc:delete(RRC, B, K, [{vclock, Vclock}|ReplOpts]) of
-                        ok ->
-                            {Repls + 1, SourceF, SinkF};
-                        _ ->
-                            {Repls, SourceF, SinkF + 1}
-                    end;
-                E ->
-                    lager:warning("SrcError ~w when attempting object fetch",
-                                    [E]),
-                    {Repls, SourceF + 1, SinkF}
-                end
-        end,
-    {Successes, SrcFailures, SinkFailures} =
-        lists:foldl(RequeueFun, {0, 0, 0}, lists:usort(SubList)),
-    lager:info("Full sync replications=~w " ++ 
-                "with source_failures=~w and sink_failures=~w",
-                [Successes, SrcFailures, SinkFailures]),
-    TimeMS = timer:now_diff(os:timestamp(), SW) div 1000,
-    case TimeMS < 1000 of
-        true ->
-            timer:sleep(1000 - TimeMS);
-        false ->
-            ok
-    end,
-    requeue_keys(LRC, RRC, StillToRepair, RepairsPerSecond).
 
 
 %% @doc

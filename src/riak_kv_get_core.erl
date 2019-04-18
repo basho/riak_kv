@@ -203,7 +203,7 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK, head_merge = 
         ok ->
             Merged; % {ok, MObj}
         tombstone when DeletedVClock ->
-            {error, {deleted, riak_object:vclock(MObj)}};
+            {error, {deleted, riak_object:vclock(MObj), MObj}};
         _ -> % tombstone or notfound or expired
             {error, notfound}
     end,
@@ -218,7 +218,7 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
         {ok, _MergedObj} ->
             {Merged, GetCore#getcore{merged = Merged}}; % {ok, MObj}
         {tombstone, MObj} when DeletedVClock ->
-            {{error, {deleted, riak_object:vclock(MObj)}},
+            {{error, {deleted, riak_object:vclock(MObj), MObj}},
                 GetCore#getcore{merged = Merged}};
         {fetch, IdxList} ->
             % A list of vnode indexes to be fetched from using a GET request

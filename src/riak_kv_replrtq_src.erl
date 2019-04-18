@@ -101,7 +101,7 @@
 -type queue_countmap() :: {queue_name(), queue_length()}.
 -type queue_map() :: {queue_name(), pqueue()}.
 
-
+-export_type([repl_entry/0, queue_name/0]).
 
 %%%============================================================================
 %%% API

@@ -30,7 +30,8 @@
 -export([start/6, start_link/6, start/4, start_link/4]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([prepare/2,
+-export([queue_fetch/2,
+            prepare/2,
             validate/2,
             execute/2,
             waiting_vnode_r/2,
@@ -74,7 +75,8 @@
                 get_core :: riak_kv_get_core:getcore(),
                 timeout :: infinity | pos_integer(),
                 tref    :: reference(),
-                bkey :: {riak_object:bucket(), riak_object:key()},
+                bkey :: {riak_object:bucket(), riak_object:key()}|
+                        {queue_name, riak_kv_replrtq_src:queue_name()},
                 bucket_props,
                 startnow :: {non_neg_integer(), non_neg_integer(), non_neg_integer()},
                 get_usecs :: non_neg_integer(),
@@ -86,7 +88,8 @@
                 crdt_op :: undefined | true,
                 request_type :: undefined | request_type(),
                 force_aae = false :: boolean(),
-                override_vnodes = [] :: list()
+                override_vnodes = [] :: list(),
+                return_tombstone = false :: boolean()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -115,7 +118,10 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 %%                             in some failure cases.
 %% {notfound_ok, boolean()}  - Count notfound reponses as successful.
 %% {timeout, pos_integer() | infinity} -  Timeout for vnode responses
--spec start({raw, req_id(), pid()}, binary(), binary(), options()) -> {ok, pid()} | {error, any()}.
+-spec start({raw, req_id(), pid()},
+            queue_name|binary(), 
+            binary()|riak_kv_replrtq_src:queue_name(),
+            options()) -> {ok, pid()} | {error, any()}.
 start(From, Bucket, Key, GetOptions) ->
     Args = [From, Bucket, Key, GetOptions],
     case sidejob_supervisor:start_child(riak_kv_get_fsm_sj,
@@ -158,6 +164,16 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
+init([From, queue_name, QueueName, Options0]) ->
+    StartNow = os:timestamp(),
+    Options = proplists:unfold(Options0),
+    StateData = #state{from = From,
+                       options = Options,
+                       bkey = {queue_name, QueueName},
+                       timing = riak_kv_fsm_timing:add_timing(prepare, []),
+                       startnow = StartNow,
+                       return_tombstone = true},
+    {ok, queue_fetch, StateData, 0};
 init([From, Bucket, Key, Options0]) ->
     StartNow = os:timestamp(),
     Options = proplists:unfold(Options0),
@@ -188,6 +204,35 @@ init({test, Args, StateProps}) ->
         end,
     TestStateData = lists:foldl(F, StateData, StateProps),
     {ok, validate, TestStateData, 0}.
+
+
+%% @private
+queue_fetch(timeout, StateData) ->
+    {queue_name, QueueName} = StateData#state.bkey,
+    case riak_kv_replrtq_src:popfrom_rtq(repl_kv_replrtq_src, QueueName) of
+        queue_empty ->
+            {raw, ReqID, Pid} = StateData#state.from,
+            Msg = {ReqID, queue_empty},
+            Pid ! Msg,
+            {stop, normal, StateData};
+        {Bucket, Key, _ExpectedClock, to_fetch} ->
+            Timing = riak_kv_fsm_timing:add_timing(prepare, []),
+            {ok,
+                prepare,
+                StateData#state{bkey = {Bucket, Key}, timing = Timing},
+                0};
+        {_Bucket, _Key, _ExpectedClock, {object, _Obj}} ->
+            {raw, ReqID, Pid} = StateData#state.from,
+            Msg = {ReqID, {error, not_yet_implemented}},
+            Pid ! Msg,
+            {stop, normal, StateData};
+        {_Bucket, _Key, _ExpectedClock, {vnode, _VnodeID}} ->
+            {raw, ReqID, Pid} = StateData#state.from,
+            Msg = {ReqID, {error, not_yet_implemented}},
+            Pid ! Msg,
+            {stop, normal, StateData}
+    end.
+
 
 %% @private
 prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
@@ -670,11 +715,28 @@ schedule_timeout(infinity) ->
 schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
-client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid},
+client_reply(Reply0, StateData = #state{from = {raw, ReqId, Pid},
                                        options = Options,
                                        timing = Timing,
                                        trace = Trace}) ->
     NewTiming = riak_kv_fsm_timing:add_timing(reply, Timing),
+
+    % For the fetch style get, the underlying tombstone object needs to be
+    % returned for replication.  However, a normal GET is not expecting that
+    % format - so only return {error, {deleted, VClock}} for backwards
+    % compatability
+    Reply = 
+        case Reply0 of
+            {error, {deleted, TombClock, TombStone}} ->
+                case StateData#state.return_tombstone of
+                    true ->
+                        {ok, {deleted, TombClock, TombStone}};
+                    false ->
+                        {error, {deleted, TombClock}}
+                end;
+            _ ->
+                Reply0
+        end,
     Msg = case get_option(details, Options, false) of
               false ->
                   {ReqId, Reply};
