@@ -48,7 +48,7 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
--export([fetch/3, push/4]).
+-export([fetch/2, push/4]).
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
@@ -138,14 +138,14 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
 
 
 %% @doc Fetch the next item from the replication queue
--spec fetch(riak_kv_replrtq_src:queue_name(), list(), riak_client()) ->
+-spec fetch(riak_kv_replrtq_src:queue_name(), riak_client()) ->
             {ok, riak_object:riak_object()} |
             {ok, queue_empty} |
             {ok, {deleted, vclock:vclock(), riak_object:riak_object()}} |
             {error, timeout} |
             {error, not_yet_implemented} |
             {error, Err :: term()}.
-fetch(QueueName, _Options, {?MODULE, [Node, _ClientId]}) ->
+fetch(QueueName, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
     Options = [deletedvclock, {pr, 1}, {r, 1}],
