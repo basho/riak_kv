@@ -107,12 +107,15 @@ produce_queue_fetch(RD, Ctx) ->
     
 format_response(internal, {ok, queue_empty}, RD, Ctx) ->
     {<<0:8/integer>>, RD, Ctx};
-format_response(internal, {ok, {deleted, _TombClock, RObj}}, RD, Ctx) ->
+format_response(internal, {ok, {deleted, TombClock, RObj}}, RD, Ctx) ->
     SuccessMark = <<1:8/integer>>,
     IsTombstone = <<1:8/integer>>,
     ObjBin = riak_object:to_binary(v1, RObj),
     CRC = erlang:crc32(ObjBin),
+    TombClockBin = term_to_binary(TombClock),
+    TCL = byte_size(TombClockBin),
     {<<SuccessMark/binary, IsTombstone/binary,
+        TCL:32/integer, TombClockBin/binary,
         CRC:32/integer, ObjBin/binary>>, RD, Ctx};
 format_response(internal, {ok, RObj}, RD, Ctx) ->
     SuccessMark = <<1:8/integer>>,
