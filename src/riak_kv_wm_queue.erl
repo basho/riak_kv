@@ -110,19 +110,38 @@ format_response(internal, {ok, queue_empty}, RD, Ctx) ->
 format_response(internal, {ok, {deleted, TombClock, RObj}}, RD, Ctx) ->
     SuccessMark = <<1:8/integer>>,
     IsTombstone = <<1:8/integer>>,
-    ObjBin = riak_object:to_binary(v1, RObj),
-    CRC = erlang:crc32(ObjBin),
+    ObjBin = encode_riakobject(RObj),
     TombClockBin = term_to_binary(TombClock),
     TCL = byte_size(TombClockBin),
     {<<SuccessMark/binary, IsTombstone/binary,
         TCL:32/integer, TombClockBin/binary,
-        CRC:32/integer, ObjBin/binary>>, RD, Ctx};
+        ObjBin/binary>>, RD, Ctx};
 format_response(internal, {ok, RObj}, RD, Ctx) ->
     SuccessMark = <<1:8/integer>>,
     IsTombstone = <<0:8/integer>>,
-    ObjBin = riak_object:to_binary(v1, RObj),
-    CRC = erlang:crc32(ObjBin),
+    ObjBin = encode_riakobject(RObj),
     {<<SuccessMark/binary, IsTombstone/binary,
-        CRC:32/integer, ObjBin/binary>>, RD, Ctx};
+        ObjBin/binary>>, RD, Ctx};
 format_response(internal, {error, Reason}, RD, Ctx) ->
     {{error, Reason}, RD, Ctx}.
+
+encode_riakobject(RObj) ->
+    B = riak_object:bucket(RObj),
+    K = riak_object:key(RObj),
+    KS = byte_size(K),
+    ObjBK =
+        case B of
+            {T, B0} ->
+                TS = byte_size(T),
+                B0S = byte_size(B0),
+                <<TS:32/integer, T/binary, B0S:32/integer, B0/binary,
+                    KS:32/integer, K/binary>>;
+            B0 ->
+                B0S = byte_size(B0),
+                <<0:32/integer, B0S:32/integer, B0/binary,
+                    KS:32/integer, K/binary>>
+        end,
+    ObjBin = riak_object:to_binary(v1, RObj),
+    FullObjBin = <<ObjBK/binary, ObjBin/binary>>,
+    CRC = erlang:crc32(FullObjBin),
+    <<CRC:32/integer, FullObjBin/binary>>. 

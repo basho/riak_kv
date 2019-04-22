@@ -170,9 +170,25 @@ fetch(QueueName, {?MODULE, [Node, _ClientId]}) ->
             {error, too_many_fails} |
             {error, timeout} |
             {error, {n_val_violation, N::integer()}}.
-push(RObj, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
-    B = riak_object:bucket(RObj),
-    K = riak_object:key(RObj),
+push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
+    RObj = 
+        case riak_object:is_robject(RObjMaybeBin) of
+            true ->
+                RObjMaybeBin;
+            false ->
+                case RObjMaybeBin of
+                    <<0:32/integer, BL:32/integer, B:BL/binary,
+                        KL:32/integer, K:KL/binary,
+                        ObjBin/binary>> ->
+                            riak_object:from_binary(B, K, ObjBin);
+                    <<TL:32/integer, T:TL/binary, BL:32/integer, B:BL/binary,
+                        KL:32/integer, K:KL/binary,
+                        ObjBin/binary>> ->
+                            riak_object:from_binary({T, B}, K, ObjBin)
+                end
+        end,
+    Bucket = riak_object:bucket(RObj),
+    Key = riak_object:key(RObj),
     Me = self(),
     ReqId = mk_reqid(),
     Options = [asis, disable_hooks, {update_last_modified, false}],
@@ -199,13 +215,13 @@ push(RObj, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
             case node() of
                 Node ->
                     riak_kv_get_fsm:start({raw, ReapReqId, Me},
-                                            B, K, ReapOptions);
+                                            Bucket, Key, ReapOptions);
                 _ ->
                     % Still using the deprecated `start_link' alias for 
                     %`start' here, in case the remote node is pre-2.2:
                     proc_lib:spawn_link(Node, riak_kv_get_fsm, start_link,
                                         [{raw, ReapReqId, Me},
-                                        B, K, ReapOptions])
+                                        Bucket, Key, ReapOptions])
             end,
             wait_for_reqid(ReapReqId, Timeout),
             R;
