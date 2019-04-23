@@ -100,6 +100,9 @@ init([]) ->
     ReplRTQSrc = {riak_kv_replrtq_src,
                       {riak_kv_replrtq_src, start_link, []},
                       permanent, 30000, worker, [riak_kv_replrtq_src]},
+    ReplRTQSnk = {riak_kv_replrtq_snk,
+                      {riak_kv_replrtq_snk, start_link, []},
+                      permanent, 30000, worker, [riak_kv_replrtq_snk]},
 
     EnsemblesKV =  {riak_kv_ensembles,
                     {riak_kv_ensembles, start_link, []},
@@ -113,6 +116,7 @@ init([]) ->
         EntropyManager,
         TictacFSManager,
         ReplRTQSrc,
+        ReplRTQSnk,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,

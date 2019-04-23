@@ -165,8 +165,9 @@ fetch(QueueName, {?MODULE, [Node, _ClientId]}) ->
 
 %% @doc
 %% Push a replicated object into Riak
--spec push(riak_object:riak_object(), boolean(), list(), riak_client()) ->
-            ok |
+-spec push(riak_object:riak_object()|binary(),
+                boolean(), list(), riak_client()) ->
+            {ok, erlang:timestamp()} |
             {error, too_many_fails} |
             {error, timeout} |
             {error, {n_val_violation, N::integer()}}.
@@ -207,6 +208,8 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
 
     Timeout = recv_timeout(Options),
     R = wait_for_reqid(ReqId, Timeout),
+    LMD = riak_object:get_last_modified( riak_object:get_metadata(RObj)),
+    Reply = {R, LMD},
 
     case IsDeleted of
         true ->
@@ -224,9 +227,9 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
                                         Bucket, Key, ReapOptions])
             end,
             wait_for_reqid(ReapReqId, Timeout),
-            R;
+            Reply;
         false ->
-            R
+            Reply
     end.
 
 
