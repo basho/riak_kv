@@ -50,6 +50,7 @@
 -define(STARTING_DELAYMS, 8).
 -define(MAX_SUCCESS_DELAYMS, 256).
 -define(ON_ERROR_DELAYMS, 65536).
+-define(INACTIVITY_TIMEOUT_MS, 60000).
 
 -record(sink_work, {queue_name :: queue_name(),
                     work_queue = [] :: list(work_item()),
@@ -60,7 +61,8 @@
                     suspended = false :: boolean()}).
 
 
--record(state, {work = [] :: list(sink_work())}).
+-record(state, {work = [] :: list(sink_work()),
+                enabled = false :: boolean()}).
 
 -type queue_name() :: atom().
 -type peer_id() :: pos_integer().
@@ -134,9 +136,9 @@ add_snkqueue(QueueName, Peers, WorkerCount) ->
 
 init([]) ->
     SinkEnabled = app_helper:get_env(riak_kv, replrtq_enablesink, false),
+    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_stats),
     case SinkEnabled of
         true ->
-            erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_stats),
             Sink1 = app_helper:get_env(riak_kv, replrtq_sink1queue, disabled),
             State1 = 
                 case Sink1 of
@@ -187,7 +189,7 @@ init([]) ->
                             [{Snk2QueueName, Snk2W}|State1#state.work],
                         State1#state{work = UpdatedWork}
                 end,
-            {ok, State2};
+            {ok, State2#state{enabled = true}, ?INACTIVITY_TIMEOUT_MS};
         false ->
             {ok, #state{}}
     end.
@@ -209,11 +211,17 @@ handle_call({resume, QueueN}, _From, State) ->
         {QueueN, SinkWork} ->
             SW0 = SinkWork#sink_work{suspended = false},
             W0 = lists:keyreplace(QueueN, 1, State#state.work, {QueueN, SW0}),
+            prompt_work(),
             {reply, ok, State#state{work = W0}}
     end;
 handle_call({remove, QueueN}, _From, State) ->
     W0 = lists:keydelete(QueueN, 1, State#state.work),
-    {reply, ok, State#state{work = W0}};
+    case W0 of
+        [] ->
+            {reply, ok, State#state{work = W0, enabled = false}};
+        _ ->
+            {reply, ok, State#state{work = W0, enabled = true}}
+    end;
 handle_call({add, QueueN, Peers, WorkerCount}, _From, State) ->
     {QueueLength, WorkQueue} = determine_workitems(QueueN, Peers, WorkerCount),
     SnkW =
@@ -222,8 +230,9 @@ handle_call({add, QueueN, Peers, WorkerCount}, _From, State) ->
                     minimum_queue_length = QueueLength,
                     peer_list = Peers,
                     max_worker_count = WorkerCount},
-    W0 = lists:keyreplace(QueueN, 1, State#state.work, {QueueN, SnkW}),
-    {reply, ok, State#state{work = W0}}.
+    W0 = lists:keystore(QueueN, 1, State#state.work, {QueueN, SnkW}),
+    prompt_work(),
+    {reply, ok, State#state{work = W0, enabled = true}}.
 
 
 handle_cast(prompt_work, State) ->
@@ -258,7 +267,7 @@ handle_cast({requeue_work, WorkItem}, State) ->
             % Work profile has changed since this work was requeued
             {noreply, State};
         {QueueName, SinkWork} ->
-            UpdWorkQueue = [{WorkItem}|SinkWork#sink_work.work_queue],
+            UpdWorkQueue = [WorkItem|SinkWork#sink_work.work_queue],
             UpdSW = SinkWork#sink_work{work_queue = UpdWorkQueue},
             UpdWork = lists:keyreplace(QueueName, 1, State#state.work,
                                         {QueueName, UpdSW}),
@@ -266,9 +275,18 @@ handle_cast({requeue_work, WorkItem}, State) ->
             {noreply, State#state{work = UpdWork}}
     end.
 
+handle_info(timeout, State) ->
+    prompt_work(),
+    {noreply, State};
 handle_info(log_stats, State) ->
     erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_stats),
-    SinkWork0 = lists:map(fun log_mapfun/1, State#state.work),
+    SinkWork0 = 
+        case State#state.enabled of
+            true ->
+                lists:map(fun log_mapfun/1, State#state.work);
+            false ->
+                State#state.work
+        end,
     {noreply, State#state{work = SinkWork0}};
 handle_info({prompt_requeue, WorkItem}, State) ->
     requeue_work(WorkItem),
@@ -360,7 +378,7 @@ work(WorkItem) ->
 repl_fetcher(WorkItem) ->
     SW = os:timestamp(),
     try
-        {{QueueName, PeerID}, LocalClient, RemoteClient} = WorkItem,
+        {{QueueName, _PeerID}, LocalClient, RemoteClient} = WorkItem,
         case rhc:fetch(RemoteClient, QueueName) of
             {ok, queue_empty} ->
                 SW0 = os:timestamp(),
@@ -373,7 +391,7 @@ repl_fetcher(WorkItem) ->
                 FetchSplit = timer:now_diff(SW0, SW),
                 done_work(WorkItem, true, {tomb, FetchSplit, ModSplit});
             {ok, RObj} ->
-                {ok, LMD} = riak_client:push(RObj, true, [], LocalClient),
+                {ok, LMD} = riak_client:push(RObj, false, [], LocalClient),
                 SW0 = os:timestamp(),
                 ModSplit = timer:now_diff(SW0, LMD),
                 FetchSplit = timer:now_diff(SW0, SW),
