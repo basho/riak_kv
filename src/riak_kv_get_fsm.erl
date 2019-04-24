@@ -209,7 +209,7 @@ init({test, Args, StateProps}) ->
 %% @private
 queue_fetch(timeout, StateData) ->
     {queue_name, QueueName} = StateData#state.bkey,
-    case riak_kv_replrtq_src:popfrom_rtq(riak_kv_replrtq_src, QueueName) of
+    case riak_kv_replrtq_src:popfrom_rtq(QueueName) of
         queue_empty ->
             {raw, ReqID, Pid} = StateData#state.from,
             Msg = {ReqID, {ok, queue_empty}},

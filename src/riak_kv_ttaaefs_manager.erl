@@ -560,9 +560,7 @@ generate_repairfun(ExchangeID, QueueName) ->
                     [ExchangeID, SinkDCount]),
         lager:info("AAE exchange ~w outputs ~w keys to be repaired",
                     [ExchangeID, length(ToRepair)]),
-        riak_kv_replrtq_src:replrtq_ttaefs(riak_kv_replrtq_src,
-                                            QueueName,
-                                            ToRepair),
+        riak_kv_replrtq_src:replrtq_ttaefs(QueueName, ToRepair),
         lager:info("AAE exchange ~w has requeue complete for ~w keys",
                     [ExchangeID, length(ToRepair)])
     end.

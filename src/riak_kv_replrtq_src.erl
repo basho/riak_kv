@@ -39,15 +39,16 @@
         code_change/3]).
 
 -export([start_link/0,
-            replrtq_aaefold/3,
-            replrtq_ttaefs/3,
-            replrtq_coordput/2,
-            register_rtq/3,
-            delist_rtq/2,
-            suspend_rtq/2,
-            resume_rtq/2,
-            length_rtq/2,
-            popfrom_rtq/2]).
+            replrtq_aaefold/2,
+            replrtq_ttaefs/2,
+            replrtq_coordput/1,
+            register_rtq/2,
+            delist_rtq/1,
+            suspend_rtq/1,
+            resume_rtq/1,
+            length_rtq/1,
+            popfrom_rtq/1,
+            stop/0]).
 
 -define(BACKOFF_PAUSE, 1000).
     % Pause in ms in the case the last addition to the queue took the queue's
@@ -79,7 +80,6 @@
 -type(squeue() :: {queue, [any()], [any()]}).
 -type(pqueue() ::  squeue() | {pqueue, [{priority(), squeue()}]}).
 
--type ref() :: pid()|atom().
 -type queue_name() :: atom().
 -type object_ref() ::
     {object, riak_object:riak_object()}|{vnode, {integer(), atom()}}|to_fetch.
@@ -121,10 +121,12 @@ start_link() ->
 %% Note that it is assumed that the list of repl_entries has been built
 %% efficiently using [Add|L] - so the first added element will be the element
 %% retrieved first from the queue
--spec replrtq_aaefold(ref(), queue_name(), list(repl_entry())) -> ok.
-replrtq_aaefold(Ref, QueueName, ReplEntries) ->
+-spec replrtq_aaefold(queue_name(), list(repl_entry())) -> ok.
+replrtq_aaefold(QueueName, ReplEntries) ->
     % This is a call as we don't want this process to be able to overload the src
-    case gen_server:call(Ref, {rtq_aaefold, QueueName, ReplEntries}, infinity) of
+    case gen_server:call(?MODULE,
+                            {rtq_aaefold, QueueName, ReplEntries},
+                            infinity) of
         pause ->
             timer:sleep(?BACKOFF_PAUSE),
             ok;
@@ -139,10 +141,12 @@ replrtq_aaefold(Ref, QueueName, ReplEntries) ->
 %% higher priority).
 %% This should be use to replicate the outcome of Tictac AAE full-sync
 %% aae_exchange.
--spec replrtq_ttaefs(ref(), queue_name(), list(repl_entry())) -> ok.
-replrtq_ttaefs(Ref, QueueName, ReplEntries) ->
+-spec replrtq_ttaefs(queue_name(), list(repl_entry())) -> ok.
+replrtq_ttaefs(QueueName, ReplEntries) ->
     % This is a call as we don't want this process to be able to overload the src
-    case gen_server:call(Ref, {rtq_ttaaefs, QueueName, ReplEntries}, infinity) of
+    case gen_server:call(?MODULE,
+                            {rtq_ttaaefs, QueueName, ReplEntries},
+                            infinity) of
         pause ->
             timer:sleep(?BACKOFF_PAUSE),
             ok;
@@ -154,53 +158,56 @@ replrtq_ttaefs(Ref, QueueName, ReplEntries) ->
 %% Add a single repl_entry associated with a PUT coordinated on this node. 
 %% Never wait for the response or backoff - replictaion should be asynchronous
 %% and never slow the PUT path on the src cluster.
--spec replrtq_coordput(ref(), repl_entry()) -> ok.
-replrtq_coordput(Ref, ReplEntry) ->
-    gen_server:cast(Ref, {rtq_coordput, ReplEntry}).
+-spec replrtq_coordput(repl_entry()) -> ok.
+replrtq_coordput(ReplEntry) ->
+    gen_server:cast(?MODULE, {rtq_coordput, ReplEntry}).
 
 %% @doc
 %% Setup a queue with a given queuename, whcih will take coordput repl_entries
 %% that pass the given filter.
--spec register_rtq(ref(), queue_name(), queue_filter()) -> boolean().
-register_rtq(Ref, QueueName, QueueFilter) ->
-    gen_server:call(Ref, {register_rtq, QueueName, QueueFilter}, infinity).
+-spec register_rtq(queue_name(), queue_filter()) -> boolean().
+register_rtq(QueueName, QueueFilter) ->
+    gen_server:call(?MODULE, {register_rtq, QueueName, QueueFilter}, infinity).
 
 %% @doc
 %% Remove the registered queue from the configuration, deleting any outstanding
 %% items on the queue
--spec delist_rtq(ref(), queue_name()) -> ok.
-delist_rtq(Ref, QueueName) ->
-    gen_server:call(Ref, {delist_rtq, QueueName}, infinity).
+-spec delist_rtq(queue_name()) -> ok.
+delist_rtq(QueueName) ->
+    gen_server:call(?MODULE, {delist_rtq, QueueName}, infinity).
 
 %% @doc
 %% Suspend a queue form receiving further updates, all attempted updates after
 %% the suspension will be discarded.  The queue will remain listed, and
 %% consumption form the queue may continue
--spec suspend_rtq(ref(), queue_name()) -> boolean().
-suspend_rtq(Ref, QueueName) ->
-    gen_server:call(Ref, {suspend_rtq, QueueName}, infinity).
+-spec suspend_rtq(queue_name()) -> boolean().
+suspend_rtq(QueueName) ->
+    gen_server:call(?MODULE, {suspend_rtq, QueueName}, infinity).
 
 %% @doc
 %% Where a queue has been suspended, allow again for new updates to be added
 %% to the queue.  A null operation if the queue is not suspended.
--spec resume_rtq(ref(), queue_name()) -> boolean().
-resume_rtq(Ref, QueueName) ->
-    gen_server:call(Ref, {resume_rtq, QueueName}, infinity).
+-spec resume_rtq(queue_name()) -> boolean().
+resume_rtq(QueueName) ->
+    gen_server:call(?MODULE, {resume_rtq, QueueName}, infinity).
 
 %% @doc
 %% Return the {fold_lengrh, aae_length, put_length} to show the length of the
 %% queue under each priority for that queue
--spec length_rtq(ref(), queue_name()) -> {queue_name(), queue_length()}|false.
-length_rtq(Ref, QueueName) ->
-    gen_server:call(Ref, {length_rtq, QueueName}).
+-spec length_rtq(queue_name()) -> {queue_name(), queue_length()}|false.
+length_rtq(QueueName) ->
+    gen_server:call(?MODULE, {length_rtq, QueueName}).
 
 %% @doc
 %% Pop an entry from the queue with given queue name.  The entry will be taken
 %% from the hihgest priority queue with entries
--spec popfrom_rtq(ref(), queue_name()) -> repl_entry()|queue_empty.
-popfrom_rtq(Ref, QueueName) ->
-    gen_server:call(Ref, {popfrom_rtq, QueueName}, infinity).
+-spec popfrom_rtq(queue_name()) -> repl_entry()|queue_empty.
+popfrom_rtq(QueueName) ->
+    gen_server:call(?MODULE, {popfrom_rtq, QueueName}, infinity).
 
+-spec stop() -> ok.
+stop() ->
+    gen_server:call(?MODULE, stop).
 
 %%%============================================================================
 %%% gen_server callbacks
@@ -304,7 +311,9 @@ handle_call({resume_rtq, QueueName}, _From, State) ->
             {reply, true, State#state{queue_filtermap = QF0}};
         false ->
             {reply, false, State}
-    end.
+    end;
+handle_call(stop, _From, State) ->
+    {stop, normal, ok, State}.
 
 
 handle_cast({rtq_coordput, ReplEntry}, State) ->
@@ -464,48 +473,49 @@ generate_replentryfun(Bucket) ->
     end.
 
 basic_singlequeue_test() ->
-    {ok, P} = gen_server:start(?MODULE, [], []),
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []),
     Grp1 = lists:map(generate_replentryfun(?TB1), lists:seq(1, 10)),
     Grp2 = lists:map(generate_replentryfun(?TB2), lists:seq(11, 20)),
     Grp3 = lists:map(generate_replentryfun(?TB3), lists:seq(21, 30)),
     Grp4 = lists:map(generate_replentryfun(?TB1), lists:seq(31, 40)),
     Grp5 = lists:map(generate_replentryfun(?TB2), lists:seq(41, 50)),
-    ?assertMatch(true, register_rtq(P, ?QN1, any)),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp1),
-    ok = replrtq_ttaefs(P, ?QN1, lists:reverse(Grp2)),
-    {?TB1, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 10, 9}}, length_rtq(P, ?QN1)),
-    {?TB1, <<2:32/integer>>, _VC2, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 10, 8}}, length_rtq(P, ?QN1)),
-    ok = replrtq_ttaefs(P, ?QN1, lists:reverse(Grp3)),
-    {?TB1, <<3:32/integer>>, _VC3, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 20, 7}}, length_rtq(P, ?QN1)),
-    lists:foreach(fun(_I) -> popfrom_rtq(P,?QN1) end, lists:seq(1, 7)),
-    ?assertMatch({?QN1, {0, 20, 0}}, length_rtq(P, ?QN1)),
-    {?TB2, <<11:32/integer>>, _VC11, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 19, 0}}, length_rtq(P, ?QN1)),
-    lists:foreach(fun(_I) -> popfrom_rtq(P,?QN1) end, lists:seq(1, 9)),
-    {?TB3, <<21:32/integer>>, _VC21, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 9, 0}}, length_rtq(P, ?QN1)),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp4),
-    {?TB1, <<31:32/integer>>, _VC31, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 9, 9}}, length_rtq(P, ?QN1)),
-    lists:foreach(fun(_I) -> popfrom_rtq(P,?QN1) end, lists:seq(1, 17)),
-    {?TB3, <<30:32/integer>>, _VC30, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(P, ?QN1)),
-    ?assertMatch(queue_empty, popfrom_rtq(P, ?QN1)),
-    ok = replrtq_ttaefs(P, ?QN1, lists:reverse(Grp5)),
-    ?assertMatch({?QN1, {0, 10, 0}}, length_rtq(P, ?QN1)),
-    {?TB2, <<41:32/integer>>, _VC41, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 9, 0}}, length_rtq(P, ?QN1)).
+    ?assertMatch(true, register_rtq(?QN1, any)),
+    lists:foreach(fun(RE) -> replrtq_coordput(RE) end, Grp1),
+    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp2)),
+    {?TB1, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 10, 9}}, length_rtq(?QN1)),
+    {?TB1, <<2:32/integer>>, _VC2, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 10, 8}}, length_rtq(?QN1)),
+    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp3)),
+    {?TB1, <<3:32/integer>>, _VC3, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 20, 7}}, length_rtq(?QN1)),
+    lists:foreach(fun(_I) -> popfrom_rtq(?QN1) end, lists:seq(1, 7)),
+    ?assertMatch({?QN1, {0, 20, 0}}, length_rtq(?QN1)),
+    {?TB2, <<11:32/integer>>, _VC11, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 19, 0}}, length_rtq(?QN1)),
+    lists:foreach(fun(_I) -> popfrom_rtq(?QN1) end, lists:seq(1, 9)),
+    {?TB3, <<21:32/integer>>, _VC21, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 9, 0}}, length_rtq(?QN1)),
+    lists:foreach(fun(RE) -> replrtq_coordput(RE) end, Grp4),
+    {?TB1, <<31:32/integer>>, _VC31, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 9, 9}}, length_rtq(?QN1)),
+    lists:foreach(fun(_I) -> popfrom_rtq(?QN1) end, lists:seq(1, 17)),
+    {?TB3, <<30:32/integer>>, _VC30, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
+    ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
+    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp5)),
+    ?assertMatch({?QN1, {0, 10, 0}}, length_rtq(?QN1)),
+    {?TB2, <<41:32/integer>>, _VC41, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 9, 0}}, length_rtq(?QN1)),
+    stop().
 
 
 basic_multiqueue_test() ->
-    {ok, P} = gen_server:start(?MODULE, [], []),
-    ?assertMatch(true, register_rtq(P, ?QN1, any)),
-    ?assertMatch(true, register_rtq(P, ?QN2, {buckettype, ?TT1})),
-    ?assertMatch(true, register_rtq(P, ?QN3, {buckettype, ?TT2})),
-    ?assertMatch(true, register_rtq(P, ?QN4, {bucketname, ?TB1})),
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []),
+    ?assertMatch(true, register_rtq(?QN1, any)),
+    ?assertMatch(true, register_rtq(?QN2, {buckettype, ?TT1})),
+    ?assertMatch(true, register_rtq(?QN3, {buckettype, ?TT2})),
+    ?assertMatch(true, register_rtq(?QN4, {bucketname, ?TB1})),
     
     GenB1 = generate_replentryfun({?TT1, ?TB1}),
     GenB2 = generate_replentryfun({?TT1, ?TB2}),
@@ -520,122 +530,124 @@ basic_multiqueue_test() ->
     Grp5 = lists:map(GenB5, lists:seq(41, 50)),
     Grp6 = lists:map(GenB6, lists:seq(51, 60)),
 
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp1),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp2),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp3),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp4),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp5),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp6),
+    lists:foreach(fun replrtq_coordput/1, Grp1),
+    lists:foreach(fun replrtq_coordput/1, Grp2),
+    lists:foreach(fun replrtq_coordput/1, Grp3),
+    lists:foreach(fun replrtq_coordput/1, Grp4),
+    lists:foreach(fun replrtq_coordput/1, Grp5),
+    lists:foreach(fun replrtq_coordput/1, Grp6),
 
     % filters are applied to coordinated PUT receipts and items
     % are placed on correct queues (and sometimes multiple queues)
-    ?assertMatch({?QN1, {0, 0, 60}}, length_rtq(P, ?QN1)),
-    ?assertMatch({?QN2, {0, 0, 20}}, length_rtq(P, ?QN2)),
-    ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(P, ?QN3)),
-    ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(P, ?QN4)),
+    ?assertMatch({?QN1, {0, 0, 60}}, length_rtq(?QN1)),
+    ?assertMatch({?QN2, {0, 0, 20}}, length_rtq(?QN2)),
+    ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(?QN3)),
+    ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
     
     % Adding a bulk base don an AAE job will be applied to the actual
     % queue regardless of filter
     Grp5A = lists:map(GenB5, lists:seq(61, 70)),
-    ok = replrtq_ttaefs(P, ?QN2, lists:reverse(Grp5A)),
+    ok = replrtq_ttaefs(?QN2, lists:reverse(Grp5A)),
 
-    ?assertMatch({?QN1, {0, 0, 60}}, length_rtq(P, ?QN1)),
-    ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(P, ?QN2)),
-    ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(P, ?QN3)),
-    ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(P, ?QN4)),
+    ?assertMatch({?QN1, {0, 0, 60}}, length_rtq(?QN1)),
+    ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(?QN2)),
+    ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(?QN3)),
+    ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
     
-    ?assertMatch(ok, delist_rtq(P, ?QN1)),
-    ?assertMatch(false, length_rtq(P, ?QN1)),
-    ?assertMatch(queue_empty, popfrom_rtq(P, ?QN1)),
+    ?assertMatch(ok, delist_rtq(?QN1)),
+    ?assertMatch(false, length_rtq(?QN1)),
+    ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
 
     Grp6A = lists:map(GenB6, lists:seq(71, 80)),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp6A),
+    lists:foreach(fun replrtq_coordput/1, Grp6A),
 
-    ?assertMatch(false, length_rtq(P, ?QN1)),
-    ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(P, ?QN2)),
-    ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(P, ?QN3)),
-    ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(P, ?QN4)),
+    ?assertMatch(false, length_rtq(?QN1)),
+    ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(?QN2)),
+    ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(?QN3)),
+    ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
 
     % Prompt the log, and the process doesn't crash
-    P ! log_queue,
+    ?MODULE ! log_queue,
 
     % Delisting a non-existent queue doens't cause an error
-    ?assertMatch(ok, delist_rtq(P, ?QN1)),
+    ?assertMatch(ok, delist_rtq(?QN1)),
     
     % Re-register queue, but should now be empty
-    ?assertMatch(true, register_rtq(P, ?QN1, {bucketname, ?TB3})),
-    ?assertMatch(queue_empty, popfrom_rtq(P, ?QN1)),
-    ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(P, ?QN1)),
+    ?assertMatch(true, register_rtq(?QN1, {bucketname, ?TB3})),
+    ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
+    ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
 
     % Add more onto the queue, confirm we can pop an element off it still
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp6A),
-    ?assertMatch({?QN1, {0, 0, 10}}, length_rtq(P, ?QN1)),
-    {?TB3, <<71:32/integer>>, _VC71, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 0, 9}}, length_rtq(P, ?QN1)),
+    lists:foreach(fun replrtq_coordput/1, Grp6A),
+    ?assertMatch({?QN1, {0, 0, 10}}, length_rtq(?QN1)),
+    {?TB3, <<71:32/integer>>, _VC71, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 0, 9}}, length_rtq(?QN1)),
 
-    ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(P, ?QN2)),
-    ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(P, ?QN3)),
-    ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(P, ?QN4)),
+    ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(?QN2)),
+    ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(?QN3)),
+    ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
     
     % Now suspend the queue, rather than delist it
-    ?assertMatch(true, suspend_rtq(P, ?QN1)),
+    ?assertMatch(true, suspend_rtq(?QN1)),
 
     % Can still pop from the queue whilst suspended
-    {?TB3, <<72:32/integer>>, _VC72, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 0, 8}}, length_rtq(P, ?QN1)),
+    {?TB3, <<72:32/integer>>, _VC72, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 0, 8}}, length_rtq(?QN1)),
     % But don't write to it when suspended
     Grp6B = lists:map(GenB6, lists:seq(81, 90)),
     Grp6C = lists:map(GenB6, lists:seq(91, 100)),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp6B),
-    ok = replrtq_ttaefs(P, ?QN1, lists:reverse(Grp6C)),
-    {?TB3, <<73:32/integer>>, _VC73, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(P, ?QN1)),
+    lists:foreach(fun(RE) -> replrtq_coordput(RE) end, Grp6B),
+    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp6C)),
+    {?TB3, <<73:32/integer>>, _VC73, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(?QN1)),
     
     % No errors if you suspend it twice
-    ?assertMatch(true, suspend_rtq(P, ?QN1)),
-    ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(P, ?QN1)),
+    ?assertMatch(true, suspend_rtq(?QN1)),
+    ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(?QN1)),
 
     % Resume and can continue to pop, but also now write
-    ?assertMatch(true, resume_rtq(P, ?QN1)),
-    {?TB3, <<74:32/integer>>, _VC74, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 0, 6}}, length_rtq(P, ?QN1)),
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp6B),
-    ok = replrtq_ttaefs(P, ?QN1, lists:reverse(Grp6C)),
-    {?TB3, <<75:32/integer>>, _VC75, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 10, 15}}, length_rtq(P, ?QN1)),
+    ?assertMatch(true, resume_rtq(?QN1)),
+    {?TB3, <<74:32/integer>>, _VC74, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 0, 6}}, length_rtq(?QN1)),
+    lists:foreach(fun replrtq_coordput/1, Grp6B),
+    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp6C)),
+    {?TB3, <<75:32/integer>>, _VC75, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 10, 15}}, length_rtq(?QN1)),
     
     % Shrug your shoulders if it is resumed twice
-    ?assertMatch(true, resume_rtq(P, ?QN1)),
+    ?assertMatch(true, resume_rtq(?QN1)),
     % and if something which isn't defined is resumed
-    ?assertMatch(false, resume_rtq(P, ?QN5)),
+    ?assertMatch(false, resume_rtq(?QN5)),
     % An undefined queue is also empty
-    ?assertMatch(queue_empty, popfrom_rtq(P, ?QN5)),
+    ?assertMatch(queue_empty, popfrom_rtq(?QN5)),
     % An undefined queue will not be suspended
-    ?assertMatch(false, suspend_rtq(P, ?QN5)).
+    ?assertMatch(false, suspend_rtq(?QN5)),
+    stop().
 
 limit_coordput_test() ->
-    {ok, P} = gen_server:start(?MODULE, [], []),
-    ?assertMatch(true, register_rtq(P, ?QN1, any)),
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []),
+    ?assertMatch(true, register_rtq(?QN1, any)),
     GenB1 = generate_replentryfun({?TT1, ?TB1}),
     Grp1 = lists:map(GenB1, lists:seq(1, 100000)),
 
-    lists:foreach(fun(RE) -> replrtq_coordput(P, RE) end, Grp1),
-    ?assertMatch({?QN1, {0, 0, 100000}}, length_rtq(P, ?QN1)),
+    lists:foreach(fun replrtq_coordput/1, Grp1),
+    ?assertMatch({?QN1, {0, 0, 100000}}, length_rtq(?QN1)),
     
     % At the limit so the next addition should be ignored
     NextAddition = GenB1(100001),
-    ok = replrtq_coordput(P, NextAddition),
-    ?assertMatch({?QN1, {0, 0, 100000}}, length_rtq(P, ?QN1)),
+    ok = replrtq_coordput(NextAddition),
+    ?assertMatch({?QN1, {0, 0, 100000}}, length_rtq(?QN1)),
 
     % If we now consume from the queue, the next addition can be made
-    {{?TT1, ?TB1}, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(P, ?QN1),
-    ?assertMatch({?QN1, {0, 0, 99999}}, length_rtq(P, ?QN1)),
-    ok = replrtq_coordput(P, NextAddition),
-    ?assertMatch({?QN1, {0, 0, 100000}}, length_rtq(P, ?QN1)).
+    {{?TT1, ?TB1}, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 0, 99999}}, length_rtq(?QN1)),
+    ok = replrtq_coordput(NextAddition),
+    ?assertMatch({?QN1, {0, 0, 100000}}, length_rtq(?QN1)),
+    stop().
 
 limit_aaefold_test() ->
-    {ok, P} = gen_server:start(?MODULE, [], []),
-    ?assertMatch(true, register_rtq(P, ?QN1, any)),
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []),
+    ?assertMatch(true, register_rtq(?QN1, any)),
     GenB1 = generate_replentryfun({?TT1, ?TB1}),
     Grp1 = lists:map(GenB1, lists:seq(1, 20000)),
     Grp2 = lists:map(GenB1, lists:seq(1, 20000)),
@@ -645,39 +657,40 @@ limit_aaefold_test() ->
     Grp6 = lists:map(GenB1, lists:seq(1, 1000)),
 
     SW1 = os:timestamp(),
-    ok = replrtq_aaefold(P, ?QN1, lists:reverse(Grp1)),
+    ok = replrtq_aaefold(?QN1, lists:reverse(Grp1)),
     _SW2 = os:timestamp(),
-    ok = replrtq_aaefold(P, ?QN1, lists:reverse(Grp2)),
+    ok = replrtq_aaefold(?QN1, lists:reverse(Grp2)),
     SW3 = os:timestamp(),
-    ok = replrtq_aaefold(P, ?QN1, lists:reverse(Grp3)),
+    ok = replrtq_aaefold(?QN1, lists:reverse(Grp3)),
     _SW4 = os:timestamp(),
-    ok = replrtq_aaefold(P, ?QN1, lists:reverse(Grp4)),
+    ok = replrtq_aaefold(?QN1, lists:reverse(Grp4)),
     _SW5 = os:timestamp(),
-    ok = replrtq_aaefold(P, ?QN1, lists:reverse(Grp5)),
+    ok = replrtq_aaefold(?QN1, lists:reverse(Grp5)),
     SW6 = os:timestamp(),
     UnPaused = timer:now_diff(SW3, SW1) div 1000,
     Paused = timer:now_diff(SW6, SW3) div 1000,
     ?assertMatch(true, Paused >= 3000),
     ?assertMatch(true, UnPaused < 2000),
-    ?assertMatch({?QN1, {100000, 0, 0}}, length_rtq(P, ?QN1)),
+    ?assertMatch({?QN1, {100000, 0, 0}}, length_rtq(?QN1)),
 
     % After we are over the limit, new PUTs are paused even though the change
     % is rejected
-    ok = replrtq_aaefold(P, ?QN1, lists:reverse(Grp6)),
+    ok = replrtq_aaefold(?QN1, lists:reverse(Grp6)),
     SW7 = os:timestamp(),
     StillPaused = timer:now_diff(SW7, SW6) div 1000,
     ?assertMatch(true, StillPaused >= 1000),
-    ?assertMatch({?QN1, {100000, 0, 0}}, length_rtq(P, ?QN1)),
+    ?assertMatch({?QN1, {100000, 0, 0}}, length_rtq(?QN1)),
     
     % Unload enough space for an unpaused addition
-    {{?TT1, ?TB1}, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(P, ?QN1),
-    lists:foreach(fun(_I) -> popfrom_rtq(P, ?QN1) end, lists:seq(1, 51000)),
+    {{?TT1, ?TB1}, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(?QN1),
+    lists:foreach(fun(_I) -> popfrom_rtq(?QN1) end, lists:seq(1, 51000)),
     SW8 = os:timestamp(),
-    ok = replrtq_aaefold(P, ?QN1, lists:reverse(Grp6)),
+    ok = replrtq_aaefold(?QN1, lists:reverse(Grp6)),
     SW9 = os:timestamp(),
     NowUnPaused = timer:now_diff(SW9, SW8) div 1000,
     ?assertMatch(true, NowUnPaused < 1000),
-    ?assertMatch({?QN1, {49999, 0, 0}}, length_rtq(P, ?QN1)).
+    ?assertMatch({?QN1, {49999, 0, 0}}, length_rtq(?QN1)),
+    stop().
 
 
 
