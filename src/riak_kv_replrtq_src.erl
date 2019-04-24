@@ -94,7 +94,9 @@
 -type type_filter() :: {buckettype, binary()}.
 -type bucket_filter() :: {bucketname, binary()}.
 -type all_filter() :: any.
--type queue_filter() :: type_filter()|bucket_filter()|all_filter().
+-type blockrtq_filter() :: block_rtq.
+-type queue_filter() ::
+    type_filter()|bucket_filter()|all_filter()|blockrtq_filter().
 -type queue_length() ::
     {non_neg_integer(), non_neg_integer(), non_neg_integer()}.
 -type queue_filtermap() :: {queue_name(), queue_filter(), active|suspended}.

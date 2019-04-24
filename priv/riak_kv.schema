@@ -1016,26 +1016,28 @@
 %% filtered by bucket name or type (or if all will be allowed).  The filter
 %% is only applied to real-time notifications of PUTs co-ordinated on this
 %% node (the filter will be ignored if full-sync uses this queue).
+%% If the queue should block all real-time queue and only be used for aae_fold
+%% or ttaae full-sync exchanges then use block_rtq
 {mapping, "replq1_filtertype", "riak_kv.replq1_filtertype", [
-  {datatype, {enum, [any, bucketname, buckettype]}},
+  {datatype, {enum, [any, bucketname, buckettype, block_rtq]}},
   {default, any}
 ]}.
 
 %% @doc Filter type for second queue
 {mapping, "replq2_filtertype", "riak_kv.replq2_filtertype", [
-  {datatype, {enum, [any, bucketname, buckettype]}},
+  {datatype, {enum, [any, bucketname, buckettype, block_rtq]}},
   {commented, any}
 ]}.
 
 %% @doc Filter type for third queue
 {mapping, "replq3_filtertype", "riak_kv.replq3_filtertype", [
-  {datatype, {enum, [any, bucketname, buckettype]}},
+  {datatype, {enum, [any, bucketname, buckettype, block_rtq]}},
   {commented, any}
 ]}.
 
 %% @doc Filter type for fourth queue
 {mapping, "replq4_filtertype", "riak_kv.replq4_filtertype", [
-  {datatype, {enum, [any, bucketname, buckettype]}},
+  {datatype, {enum, [any, bucketname, buckettype, block_rtq]}},
   {commented, any}
 ]}.
 

@@ -31,6 +31,7 @@
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
 -export([queue_fetch/2,
+            waiting_vnode_fetch/2,
             prepare/2,
             validate/2,
             execute/2,
@@ -95,6 +96,7 @@
 -include("riak_kv_dtrace.hrl").
 
 -define(DEFAULT_TIMEOUT, 60000).
+-define(FETCH_TIMEOUT, 10000).
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
 -define(DEFAULT_RT, head).
@@ -221,18 +223,30 @@ queue_fetch(timeout, StateData) ->
                 prepare,
                 StateData#state{bkey = {Bucket, Key}, timing = Timing},
                 0};
-        {_Bucket, _Key, _ExpectedClock, {object, _Obj}} ->
+        {_Bucket, _Key, _ExpectedClock, {object, Obj}} ->
             {raw, ReqID, Pid} = StateData#state.from,
-            Msg = {ReqID, {error, not_yet_implemented}},
+            Msg = {ReqID, {ok, Obj}},
             Pid ! Msg,
             {stop, normal, StateData};
-        {_Bucket, _Key, _ExpectedClock, {vnode, _VnodeID}} ->
-            {raw, ReqID, Pid} = StateData#state.from,
-            Msg = {ReqID, {error, not_yet_implemented}},
-            Pid ! Msg,
-            {stop, normal, StateData}
+        {Bucket, Key, _ExpectedClock, {vnode, VnodeID}} ->
+            {raw, ReqID, _Pid} = StateData#state.from,
+            riak_kv_vnode:fetch_repl([VnodeID], {Bucket, Key}, ReqID),
+            {next_state, waiting_vnode_fetch, StateData, ?FETCH_TIMEOUT}
     end.
 
+waiting_vnode_fetch({r, {ok, Obj}, _Idx, _ReqId}, StateData) ->
+    {raw, ReqID, Pid} = StateData#state.from,
+    Pid ! {ReqID, {ok, Obj}},
+    {stop, normal, StateData};
+waiting_vnode_fetch(timeout, StateData) ->
+    {raw, ReqID, Pid} = StateData#state.from,
+    Pid ! {ReqID, {error, timeout}},
+    {stop, normal, StateData};
+waiting_vnode_fetch(ErrorResponse, StateData) ->
+    lager:warning("Unexpected response ~w to vnode_fetch", [ErrorResponse]),
+    {raw, ReqID, Pid} = StateData#state.from,
+    Pid ! {ReqID, {error, other}},
+    {stop, normal, StateData}.
 
 %% @private
 prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
