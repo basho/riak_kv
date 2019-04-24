@@ -46,7 +46,9 @@
 -export([repl_fetcher/1]).
 
 -define(LOG_TIMER_SECONDS, 60).
--define(ZERO_STATS, {0, 0, 0, 0}).
+-define(ZERO_STATS, 
+        {{success, 0}, {failure, 0}, {repl_time, 0},
+        {modified_time, 0, 0, 0, 0, 0}}).
 -define(STARTING_DELAYMS, 8).
 -define(MAX_SUCCESS_DELAYMS, 256).
 -define(ON_ERROR_DELAYMS, 65536).
@@ -83,10 +85,17 @@
     %   Peer Listener}
 
 -type queue_stats() ::
-    {non_neg_integer(), non_neg_integer(),
-        non_neg_integer(), non_neg_integer()}.
+    {{success, non_neg_integer()}, {failure, non_neg_integer()},
+        {repl_time, non_neg_integer()}, 
+        {modified_time,
+            non_neg_integer(),
+            non_neg_integer(),
+            non_neg_integer(),
+            non_neg_integer(),
+            non_neg_integer()}}.
     % {Successes, Failures,
-    % Total Repl Completion Time, Total Modified Time variance}
+    % Total Repl Completion Time,
+    % Modified time by bucket - second, minute, hour, day, longer}
 
 -type reply_tuple() ::
     {queue_empty, non_neg_integer()} |
@@ -382,19 +391,19 @@ repl_fetcher(WorkItem) ->
         case rhc:fetch(RemoteClient, QueueName) of
             {ok, queue_empty} ->
                 SW0 = os:timestamp(),
-                EmptyFetchSplit = timer:now_diff(SW0, SW),
+                EmptyFetchSplit = timer:now_diff(SW0, SW) div 1000,
                 done_work(WorkItem, true, {queue_empty, EmptyFetchSplit});
             {ok, {deleted, _TC, RObj}} ->
                 {ok, LMD} = riak_client:push(RObj, true, [], LocalClient),
                 SW0 = os:timestamp(),
-                ModSplit = timer:now_diff(SW0, LMD),
-                FetchSplit = timer:now_diff(SW0, SW),
+                ModSplit = timer:now_diff(SW0, LMD) div 1000,
+                FetchSplit = timer:now_diff(SW0, SW) div 1000,
                 done_work(WorkItem, true, {tomb, FetchSplit, ModSplit});
             {ok, RObj} ->
                 {ok, LMD} = riak_client:push(RObj, false, [], LocalClient),
                 SW0 = os:timestamp(),
-                ModSplit = timer:now_diff(SW0, LMD),
-                FetchSplit = timer:now_diff(SW0, SW),
+                ModSplit = timer:now_diff(SW0, LMD) div 1000,
+                FetchSplit = timer:now_diff(SW0, SW) div 1000,
                 done_work(WorkItem, true, {object, FetchSplit, ModSplit})
         end
     catch
@@ -406,17 +415,49 @@ repl_fetcher(WorkItem) ->
 
 -spec increment_queuestats(queue_stats(), reply_tuple()) -> queue_stats().
 increment_queuestats(QueueStats, ReplyTuple) ->
-    {Success, Failure, ReplTime, ModTime} = QueueStats,
     case ReplyTuple of
         {tomb, FetchSplit, ModSplit} ->
-            {Success + 1, Failure, ReplTime + FetchSplit, ModTime + ModSplit};
+            add_modtime(add_repltime(add_success(QueueStats),
+                            FetchSplit),
+                        ModSplit);
         {object, FetchSplit, ModSplit} ->
-            {Success + 1, Failure, ReplTime + FetchSplit, ModTime + ModSplit};
+            add_modtime(add_repltime(add_success(QueueStats),
+                            FetchSplit),
+                        ModSplit);
         {queue_empty, _TS} ->
             QueueStats;
         _ ->
-            {Success, Failure + 1, ReplTime, ModTime}
+            add_failure(QueueStats)
     end.
+
+mod_split_element(ModSplit) when ModSplit < 1000 ->
+    1;
+mod_split_element(ModSplit) when ModSplit < 60000 ->
+    2;
+mod_split_element(ModSplit) when ModSplit < 3600000 ->
+    3;
+mod_split_element(ModSplit) when ModSplit < 86400000 ->
+    4;
+mod_split_element(_) ->
+    5.
+
+-spec add_success(queue_stats()) -> queue_stats().
+add_success({{success, Success}, F, RT, MT}) ->
+    {{success, Success + 1}, F, RT, MT}.
+
+-spec add_failure(queue_stats()) -> queue_stats().
+add_failure({S, {failure, Failure}, RT, MT}) ->
+    {S, {failure, Failure + 1}, RT, MT}.
+
+-spec add_repltime(queue_stats(), integer()) -> queue_stats().
+add_repltime({S, F, {repl_time, TotalReplTime}, MT}, ReplTime) ->
+    {S, F, {repl_time, TotalReplTime + ReplTime}, MT}.
+
+-spec add_modtime(queue_stats(), integer()) -> queue_stats().
+add_modtime({S, F, RT, MT}, ModTime) ->
+    E = mod_split_element(ModTime) +  1,
+    C = element(E, MT),
+    {S, F, RT, setelement(E, MT, C + 1)}.
 
 -spec adjust_wait(boolean(), reply_tuple(), peer_id(), list(peer_info()))
                                     -> {non_neg_integer(), list(peer_info())}.
@@ -445,10 +486,22 @@ increment_delay(N) ->
 
 -spec log_mapfun(sink_work()) -> sink_work().
 log_mapfun({QueueName, SinkWork}) ->
-    {SC, EC, RT, MT} = SinkWork#sink_work.queue_stats,
-    lager:info("Queue=~w success_count=~w error_count=~w " ++ 
-                " mean_repltime=~s mean_modifieddelta=~s",
-                [QueueName, SC, EC, calc_mean(RT, SC), calc_mean(MT, SC)]),
+    {{success, SC}, {failure, EC},
+        {repl_time, RT},
+        {modified_time, MTS, MTM, MTH, MTD, MTL}}
+        = SinkWork#sink_work.queue_stats,
+    lager:info("Queue=~w success_count=~w error_count=~w" ++ 
+                " mean_repltime=~s" ++ 
+                " lmdin_s=~w lmdin_m=~w lmdin_h=~w lmdin_d=~w lmd_over=~w",
+                [QueueName, SC, EC, calc_mean(RT, SC),
+                    MTS, MTM, MTH, MTD, MTL]),
+    FoldPeerInfoFun =
+        fun({_PeerID, D, IP, Port}, Acc) ->
+            Acc ++ lists:flatten(io_lib:format(" ~s:~w=~w", [IP, Port, D]))
+        end,
+    PeerDelays =
+        lists:foldl(FoldPeerInfoFun, "", SinkWork#sink_work.peer_list),
+    lager:info("Queue=~w has peer delays of~s", [QueueName, PeerDelays]),
     {QueueName, SinkWork#sink_work{queue_stats = ?ZERO_STATS}}.
 
 
@@ -518,7 +571,10 @@ log_dont_blow_test() ->
     QS4 = increment_queuestats(QS3, {error, tcp, closed}),
     QS5 = increment_queuestats(QS4, {no_queue, 100}),
     {queue1, SW2} = log_mapfun({queue1, SW1#sink_work{queue_stats = QS5}}),
-    ?assertMatch(?ZERO_STATS, SW2#sink_work.queue_stats).
+    ?assertMatch(?ZERO_STATS, SW2#sink_work.queue_stats),
+    QSMT1 = add_modtime(?ZERO_STATS, 86400001),
+    QSMT2 = add_modtime(QSMT1, 0),
+    ?assertMatch({modified_time, 1, 0, 0, 0, 1}, element(4, QSMT2)).
 
 
 -endif.
