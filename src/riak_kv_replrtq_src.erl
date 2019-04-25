@@ -18,9 +18,9 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Queue any replictaion changes emitting from thsis node due to
+%% @doc Queue any replictaion changes emitting from this node due to
 %% a PUT being co-ordinated on this node, a full-sync exchange initiated on
-%% this node, or an aae_fold replication fold running on vnodes on this
+%% this node, or an aae_fold replication-fold running on vnodes on this
 %% node.
 
 

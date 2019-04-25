@@ -110,31 +110,55 @@
 -spec start_link() -> {ok, pid()}.
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-    
+
+%% @doc
+%% Manually prompt for any replication work that is queued to be distributed to
+%% available workers.  This should not be necessary in normal operations.
 -spec prompt_work() -> ok.
 prompt_work() ->
     gen_server:cast(?MODULE, prompt_work).
 
+%% @doc
+%% Allows workers to notify the snk that work has been completed, so that the
+%% WorkItem can be requeued for another worker (potentially delayed if this
+%% work had failed or revealed an empty queue).  Expected to be used only by
+%% the spawned snk workers.
 -spec done_work(work_item(), boolean(), reply_tuple()) -> ok.
 done_work(WorkItem, Success, ReplyTuple) ->
     gen_server:cast(?MODULE, {done_work, WorkItem, Success, ReplyTuple}).
 
+%% @doc
+%% Allows a work item to be re-queued.  Used internally.
 -spec requeue_work(work_item()) -> ok. 
 requeue_work(WorkItem) ->
     gen_server:cast(?MODULE, {requeue_work, WorkItem}).
 
+%% @doc
+%% Suspend the activity asociated with a given queue (for all peers)
 -spec suspend_snkqueue(queue_name()) -> ok.
 suspend_snkqueue(QueueName) ->
     gen_server:call(?MODULE, {suspend, QueueName}).
 
+%% @doc
+%% Resume the activity asociated with a given queue (for all peers)
 -spec resume_snkqueue(queue_name()) -> ok.
 resume_snkqueue(QueueName) ->
     gen_server:call(?MODULE, {resume, QueueName}).
 
+%% @doc
+%% Remove temporarily from this process the configuration for a given queue
+%% name.  If the configuration remains in riak.conf, it will be re-introduced
+%% on restart 
 -spec remove_snkqueue(queue_name()) -> ok.
 remove_snkqueue(QueueName) ->
     gen_server:call(?MODULE, {remove, QueueName}).
 
+%% @doc
+%% Add temporarily to this process a configuration to reach a given queue via
+%% a passed-in list of peers, using a given count of workers.
+%% This added-in configuration will not be preserved between process restarts.
+%% This API may be used to support more than the two queue names for which
+%% configuration is permissable via riak.conf.
 -spec add_snkqueue(queue_name(), list(peer_info()), pos_integer()) -> ok.
 add_snkqueue(QueueName, Peers, WorkerCount) ->
     gen_server:call(?MODULE, {add, QueueName, Peers, WorkerCount}).
@@ -336,6 +360,15 @@ tokenise_peers(PeersString) ->
     PeerList.
 
 
+%% @doc
+%% Caluclates the queue of work items and the minimum length of queue to be
+%% kept by the process, in order to deliver the desired number of concurrent
+%% worker processes.
+%% If there are n peers, and a worker count of n * m workers (where m >=1 )
+%% there will be no minimum queue length, and n * m work items.
+%% Else, if there are n peers and a worker count of w (> n), then there will
+%% be an excess (greater than w) work items created, and a minimum queue length
+%% kep to ensure that the number of snk workers are appropriately limited
 -spec determine_workitems(queue_name(), list(peer_info()), pos_integer())
                                     -> {non_neg_integer(), list(work_item())}.
 determine_workitems(QueueName, PeerInfo, WorkerCount) ->
@@ -359,6 +392,10 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
                     lists:seq(1, NumberOfWorkerItems)),
     {length(WorkItems) - WorkerCount, WorkItems}.
 
+%% @doc
+%% For an item of work which has been removed from the work queue, spawn a
+%% snk worker (using the repl_fetcher fun) to manage that item of work.  The
+%% worker must ensure the wortk_item is delivered back on completion.
 -spec do_work(sink_work()) -> sink_work().
 do_work({QueueName, SinkWork}) ->
     WorkQueue = SinkWork#sink_work.work_queue,
@@ -412,7 +449,8 @@ repl_fetcher(WorkItem) ->
             done_work(WorkItem, false, {error, Type, Exception})
     end.
 
-
+%% @doc
+%% Keep some stats on the queues, to be logged out periodically
 -spec increment_queuestats(queue_stats(), reply_tuple()) -> queue_stats().
 increment_queuestats(QueueStats, ReplyTuple) ->
     case ReplyTuple of
@@ -459,6 +497,13 @@ add_modtime({S, F, RT, MT}, ModTime) ->
     C = element(E, MT),
     {S, F, RT, setelement(E, MT, C + 1)}.
 
+%% @doc
+%% Depending on the result of the request, adjust the wit time before this work
+%% item is due to be re-processed.  If the queue is commonly empty, then back
+%% of the workload exponentially, but if it is consistently yielding results
+%% from the queue - the reduce the wait time exponentially tending to 0.
+%% On an error, the wait time should leap to avoid all workers being locked
+%% attempting to communicate with a peer to which requests are timing out.
 -spec adjust_wait(boolean(), reply_tuple(), peer_id(), list(peer_info()))
                                     -> {non_neg_integer(), list(peer_info())}.
 adjust_wait(true, {queue_empty, _T}, PeerID, PeerList) ->
@@ -483,7 +528,12 @@ increment_delay(0) ->
 increment_delay(N) ->
     min(N bsl 1, ?MAX_SUCCESS_DELAYMS).
 
-
+%% @doc
+%% Log details of the replictaion counts and times, and also the current delay
+%% to requeue work items for each peer (consistently low delay may indicate
+%% the need to configure more workers.
+%% At runtime changes to the number of workers can be managed via the
+%% remove_snkqueue/1 and add_snkqueue/3 api.
 -spec log_mapfun(sink_work()) -> sink_work().
 log_mapfun({QueueName, SinkWork}) ->
     {{success, SC}, {failure, EC},

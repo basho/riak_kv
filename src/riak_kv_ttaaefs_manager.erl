@@ -109,18 +109,27 @@ start_link() ->
 process_workitem(WorkItem, ReqID, Now) ->
     gen_server:cast(?MODULE, {WorkItem, ReqID, self(), Now}).
 
+%% @doc
+%% Pause the management of full-sync from this node 
 -spec pause() -> ok|{error, already_paused}.
 pause() ->
     gen_server:call(?MODULE, pause).
 
+%% @doc
+%% Resume the management of full-sync from this node
 -spec resume() -> ok|{error, not_paused}.
 resume() ->
     gen_server:call(?MODULE, resume).
 
+%% @doc
+%% Define the sink port and address to be used for full-sync
 -spec set_sink(http, string(), integer()) -> ok.
 set_sink(Protocol, IP, Port) ->
     gen_server:call(?MODULE, {set_sink, Protocol, IP, Port}).
 
+%% @doc
+%% Define the source port and address to be used for full-sync.  Source would
+%% normally be localhost
 -spec set_source(http, string(), integer()) -> ok.
 set_source(Protocol, IP, Port) ->
     gen_server:call(?MODULE, {set_source, Protocol, IP, Port}).
