@@ -39,6 +39,7 @@
             resume/0,
             set_sink/3,
             set_source/3,
+            set_queuename/1,
             set_allsync/2,
             set_bucketsync/1,
             process_workitem/3]).
@@ -133,6 +134,12 @@ set_sink(Protocol, IP, Port) ->
 -spec set_source(http, string(), integer()) -> ok.
 set_source(Protocol, IP, Port) ->
     gen_server:call(?MODULE, {set_source, Protocol, IP, Port}).
+
+%% @doc
+%% Set the queue name to be used for full-sync jobs on this node
+-spec set_queuename(riak_kv_replrtq_src:queue_name()) -> ok.
+set_queuename(QueueName) ->
+    gen_server:call(?MODULE, {set_queuename, QueueName}).
 
 %% @doc
 %% Set the manager to do full sync (e.g. using cached trees).  This will leave
@@ -253,6 +260,8 @@ handle_call({set_sink, Protocol, PeerIP, PeerPort}, _From, State) ->
                         peer_port = PeerPort,
                         peer_protocol = Protocol},
     {reply, ok, State0, ?INITIAL_TIMEOUT};
+handle_call({set_queuename, QueueName}, _From, State) ->
+    {reply, ok, State#state{queue_name = QueueName}};
 handle_call({set_source, Protocol, PeerIP, PeerPort}, _From, State) ->
     State0 = 
         State#state{local_ip = PeerIP,

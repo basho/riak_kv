@@ -182,14 +182,14 @@ delist_rtq(QueueName) ->
 %% Suspend a queue form receiving further updates, all attempted updates after
 %% the suspension will be discarded.  The queue will remain listed, and
 %% consumption form the queue may continue
--spec suspend_rtq(queue_name()) -> boolean().
+-spec suspend_rtq(queue_name()) -> ok|not_found.
 suspend_rtq(QueueName) ->
     gen_server:call(?MODULE, {suspend_rtq, QueueName}, infinity).
 
 %% @doc
 %% Where a queue has been suspended, allow again for new updates to be added
 %% to the queue.  A null operation if the queue is not suspended.
--spec resume_rtq(queue_name()) -> boolean().
+-spec resume_rtq(queue_name()) -> ok|not_found.
 resume_rtq(QueueName) ->
     gen_server:call(?MODULE, {resume_rtq, QueueName}, infinity).
 
@@ -301,18 +301,18 @@ handle_call({suspend_rtq, QueueName}, _From, State) ->
         {QueueName, Filter, _} ->
             QF0 = lists:keyreplace(QueueName, 1, State#state.queue_filtermap,
                                     {QueueName, Filter, suspended}),
-            {reply, true, State#state{queue_filtermap = QF0}};
+            {reply, ok, State#state{queue_filtermap = QF0}};
         false ->
-            {reply, false, State}
+            {reply, not_found, State}
     end;
 handle_call({resume_rtq, QueueName}, _From, State) ->
     case lists:keyfind(QueueName, 1, State#state.queue_filtermap) of
         {QueueName, Filter, _} ->
             QF0 = lists:keyreplace(QueueName, 1, State#state.queue_filtermap,
                                     {QueueName, Filter, active}),
-            {reply, true, State#state{queue_filtermap = QF0}};
+            {reply, ok, State#state{queue_filtermap = QF0}};
         false ->
-            {reply, false, State}
+            {reply, not_found, State}
     end;
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State}.
@@ -590,7 +590,7 @@ basic_multiqueue_test() ->
     ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
     
     % Now suspend the queue, rather than delist it
-    ?assertMatch(true, suspend_rtq(?QN1)),
+    ?assertMatch(ok, suspend_rtq(?QN1)),
 
     % Can still pop from the queue whilst suspended
     {?TB3, <<72:32/integer>>, _VC72, to_fetch} = popfrom_rtq(?QN1),
@@ -604,11 +604,11 @@ basic_multiqueue_test() ->
     ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(?QN1)),
     
     % No errors if you suspend it twice
-    ?assertMatch(true, suspend_rtq(?QN1)),
+    ?assertMatch(ok, suspend_rtq(?QN1)),
     ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(?QN1)),
 
     % Resume and can continue to pop, but also now write
-    ?assertMatch(true, resume_rtq(?QN1)),
+    ?assertMatch(ok, resume_rtq(?QN1)),
     {?TB3, <<74:32/integer>>, _VC74, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 0, 6}}, length_rtq(?QN1)),
     lists:foreach(fun replrtq_coordput/1, Grp6B),
@@ -617,13 +617,13 @@ basic_multiqueue_test() ->
     ?assertMatch({?QN1, {0, 10, 15}}, length_rtq(?QN1)),
     
     % Shrug your shoulders if it is resumed twice
-    ?assertMatch(true, resume_rtq(?QN1)),
+    ?assertMatch(ok, resume_rtq(?QN1)),
     % and if something which isn't defined is resumed
-    ?assertMatch(false, resume_rtq(?QN5)),
+    ?assertMatch(not_found, resume_rtq(?QN5)),
     % An undefined queue is also empty
     ?assertMatch(queue_empty, popfrom_rtq(?QN5)),
     % An undefined queue will not be suspended
-    ?assertMatch(false, suspend_rtq(?QN5)),
+    ?assertMatch(not_found, suspend_rtq(?QN5)),
     stop().
 
 limit_coordput_test() ->

@@ -135,13 +135,13 @@ requeue_work(WorkItem) ->
 
 %% @doc
 %% Suspend the activity asociated with a given queue (for all peers)
--spec suspend_snkqueue(queue_name()) -> ok.
+-spec suspend_snkqueue(queue_name()) -> ok|not_found.
 suspend_snkqueue(QueueName) ->
     gen_server:call(?MODULE, {suspend, QueueName}).
 
 %% @doc
 %% Resume the activity asociated with a given queue (for all peers)
--spec resume_snkqueue(queue_name()) -> ok.
+-spec resume_snkqueue(queue_name()) -> ok|not_found.
 resume_snkqueue(QueueName) ->
     gen_server:call(?MODULE, {resume, QueueName}).
 
