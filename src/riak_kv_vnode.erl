@@ -2345,7 +2345,7 @@ do_put(Sender, {Bucket, Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                         % This object may be reaped by the vnode before the 
                         % sink attempts to fetch the tombstone from the vnode.
                         % So the tombstone should but placed on the queue
-                        {object, Obj};
+                        {tomb, Obj};
                     false ->
                         case {State#state.repl_cache,
                                 State#state.repl_cache_size} of

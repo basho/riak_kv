@@ -831,8 +831,7 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
 -spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item(), integer()) -> ok.
 ttaaefs_fullsync(WorkItem, SecsTimeout) ->
     ReqId = mk_reqid(),
-    riak_kv_ttaaefs_manager:process_workitem(riak_kv_ttaaefs_manager,
-                                                WorkItem,
+    riak_kv_ttaaefs_manager:process_workitem(WorkItem,
                                                 ReqId,
                                                 os:timestamp()),
     wait_for_reqid(ReqId, SecsTimeout * 1000).
@@ -844,8 +843,7 @@ ttaaefs_fullsync(WorkItem, SecsTimeout) ->
                                                     erlang:timestamp()) -> ok.
 ttaaefs_fullsync(WorkItem, SecsTimeout, Now) ->
     ReqId = mk_reqid(),
-    riak_kv_ttaaefs_manager:process_workitem(riak_kv_ttaaefs_manager,
-                                                WorkItem,
+    riak_kv_ttaaefs_manager:process_workitem(WorkItem,
                                                 ReqId,
                                                 Now),
     wait_for_reqid(ReqId, SecsTimeout * 1000).

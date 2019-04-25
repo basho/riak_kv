@@ -35,13 +35,13 @@
         code_change/3]).
 
 -export([start_link/0,
-            pause/1,
-            resume/1,
-            set_sink/4,
-            set_source/4,
-            set_allsync/3,
-            set_bucketsync/2,
-            process_workitem/4]).
+            pause/0,
+            resume/0,
+            set_sink/3,
+            set_source/3,
+            set_allsync/2,
+            set_bucketsync/1,
+            process_workitem/3]).
 
 -define(SLICE_COUNT, 100).
 -define(SECONDS_IN_DAY, 86400).
@@ -75,6 +75,7 @@
                 is_paused = false :: boolean()
                 }).
 
+-type req_id() :: no_reply|integer().
 -type client_protocol() :: http.
 -type client_ip() :: string().
 -type client_port() :: pos_integer().
@@ -104,40 +105,39 @@ start_link() ->
 %% ID.  The fourth element of the input should be an erlang timestamp
 %% representing now - but may be altered to something in the past or future in
 %% tests.
--spec process_workitem(pid()|atom(), work_item(), no_reply|integer(),
-                                                    erlang:timestamp()) -> ok.
-process_workitem(Pid, WorkItem, ReqID, Now) ->
-    gen_server:cast(Pid, {WorkItem, ReqID, self(), Now}).
+-spec process_workitem(work_item(), req_id(), erlang:timestamp()) -> ok.
+process_workitem(WorkItem, ReqID, Now) ->
+    gen_server:cast(?MODULE, {WorkItem, ReqID, self(), Now}).
 
--spec pause(pid()|atom()) -> ok|{error, already_paused}.
-pause(Pid) ->
-    gen_server:call(Pid, pause).
+-spec pause() -> ok|{error, already_paused}.
+pause() ->
+    gen_server:call(?MODULE, pause).
 
--spec resume(pid()|atom()) -> ok|{error, not_paused}.
-resume(Pid) ->
-    gen_server:call(Pid, resume).
+-spec resume() -> ok|{error, not_paused}.
+resume() ->
+    gen_server:call(?MODULE, resume).
 
--spec set_sink(pid()|atom(), http, string(), integer()) -> ok.
-set_sink(Pid, Protocol, IP, Port) ->
-    gen_server:call(Pid, {set_sink, Protocol, IP, Port}).
+-spec set_sink(http, string(), integer()) -> ok.
+set_sink(Protocol, IP, Port) ->
+    gen_server:call(?MODULE, {set_sink, Protocol, IP, Port}).
 
--spec set_source(pid()|atom(), http, string(), integer()) -> ok.
-set_source(Pid, Protocol, IP, Port) ->
-    gen_server:call(Pid, {set_source, Protocol, IP, Port}).
+-spec set_source(http, string(), integer()) -> ok.
+set_source(Protocol, IP, Port) ->
+    gen_server:call(?MODULE, {set_source, Protocol, IP, Port}).
 
 %% @doc
 %% Set the manager to do full sync (e.g. using cached trees).  This will leave
 %% automated sync disabled.  To re-enable the sync use resume/1
--spec set_allsync(pid()|atom(), pos_integer(), pos_integer()) -> ok.
-set_allsync(Pid, LocalNVal, RemoteNVal) ->
-    gen_server:call(Pid, {set_allsync, LocalNVal, RemoteNVal}).
+-spec set_allsync(pos_integer(), pos_integer()) -> ok.
+set_allsync(LocalNVal, RemoteNVal) ->
+    gen_server:call(?MODULE, {set_allsync, LocalNVal, RemoteNVal}).
 
 %% @doc
 %% Set the manager to sync or a list of buckets.  This will leave
 %% automated sync disabled.  To re-enable the sync use resume/1
--spec set_bucketsync(pid()|atom, list(riak_object:bucket())) -> ok.
-set_bucketsync(Pid, BucketList) ->
-    gen_server:call(Pid, {set_bucketsync, BucketList}).
+-spec set_bucketsync(list(riak_object:bucket())) -> ok.
+set_bucketsync(BucketList) ->
+    gen_server:call(?MODULE, {set_bucketsync, BucketList}).
 
 
 %%%============================================================================
@@ -349,7 +349,7 @@ handle_info(timeout, State) ->
     {noreply, State#state{slice_allocations = RemainingSlices,
                             slice_set_start = ScheduleStartTime}};
 handle_info({work_item, WorkItem}, State) ->
-    process_workitem(self(), WorkItem, no_reply, os:timestamp()),
+    process_workitem(WorkItem, no_reply, os:timestamp()),
     {noreply, State}.
 
 terminate(normal, _State) ->
@@ -513,7 +513,6 @@ format_segment_filter({segments, SegList, TreeSize}) ->
 %% update the stats for Tictac AAE full-syncs
 -spec generate_replyfun(integer()|no_reply, pid()) -> fun().
 generate_replyfun(ReqID, From) ->
-    Pid = self(),
     fun(Result) ->
         case ReqID of
             no_reply ->
@@ -522,7 +521,7 @@ generate_replyfun(ReqID, From) ->
                 % Reply to riak_client
                 From ! {ReqID, Result}
         end,
-        gen_server:cast(Pid, {reply_complete, ReqID, Result})
+        gen_server:cast(?MODULE, {reply_complete, ReqID, Result})
     end.
 
 %% @doc

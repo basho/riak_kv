@@ -82,7 +82,7 @@
 
 -type queue_name() :: atom().
 -type object_ref() ::
-    {object, riak_object:riak_object()}|{vnode, {integer(), atom()}}|to_fetch.
+    {tomb, riak_object:riak_object()}|{vnode, {integer(), atom()}}|to_fetch.
 -type repl_entry() ::
     {riak_object:bucket(), riak_object:key(), vclock:vclock(), object_ref()}.
     % Normally the repl_entry will not include the object to save space on the

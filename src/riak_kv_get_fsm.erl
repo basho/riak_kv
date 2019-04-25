@@ -90,7 +90,8 @@
                 request_type :: undefined | request_type(),
                 force_aae = false :: boolean(),
                 override_vnodes = [] :: list(),
-                return_tombstone = false :: boolean()
+                return_tombstone = false :: boolean(),
+                expected_fetchclock :: vclock:vclock()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -218,26 +219,43 @@ queue_fetch(timeout, StateData) ->
             Pid ! Msg,
             {stop, normal, StateData};
         {Bucket, Key, _ExpectedClock, to_fetch} ->
+            % Do a full fetch with default n and r.  Assume the answer returned
+            % is the best answer, so no need to compare with the expected
+            % answer
             Timing = riak_kv_fsm_timing:add_timing(prepare, []),
             {next_state,
                 prepare,
                 StateData#state{bkey = {Bucket, Key}, timing = Timing},
                 0};
-        {_Bucket, _Key, _ExpectedClock, {object, Obj}} ->
+        {_Bucket, _Key, ExpectedClock, {tomb, Obj}} ->
+            % A tombstone was queued - so there is no need to fetch
             {raw, ReqID, Pid} = StateData#state.from,
-            Msg = {ReqID, {ok, Obj}},
+            Msg = {ReqID, {ok, {deleted, ExpectedClock, Obj}}},
             Pid ! Msg,
             {stop, normal, StateData};
-        {Bucket, Key, _ExpectedClock, {vnode, VnodeID}} ->
+        {Bucket, Key, ExpectedClock, {vnode, VnodeID}} ->
+            % Attempt to re-fetch from the specific vnode that queued the
+            % request
             {raw, ReqID, _Pid} = StateData#state.from,
             riak_kv_vnode:fetch_repl([VnodeID], {Bucket, Key}, ReqID),
-            {next_state, waiting_vnode_fetch, StateData, ?FETCH_TIMEOUT}
+            {next_state,
+                waiting_vnode_fetch,
+                StateData#state{expected_fetchclock = ExpectedClock},
+                ?FETCH_TIMEOUT}
     end.
 
 waiting_vnode_fetch({r, {ok, Obj}, _Idx, _ReqId}, StateData) ->
-    {raw, ReqID, Pid} = StateData#state.from,
-    Pid ! {ReqID, {ok, Obj}},
-    {stop, normal, StateData};
+    ExpectedClock = StateData#state.expected_fetchclock,
+    case riak_object:vclock(Obj) of
+        ExpectedClock ->
+            {raw, ReqID, Pid} = StateData#state.from,
+            Pid ! {ReqID, {ok, Obj}},
+            {stop, normal, StateData};
+        _ ->
+            % if not as expected replication has been superceded so
+            % discard and take another from queue
+            {next_state, queue_fetch, StateData, 0}
+    end;
 waiting_vnode_fetch(timeout, StateData) ->
     {raw, ReqID, Pid} = StateData#state.from,
     Pid ! {ReqID, {error, timeout}},
