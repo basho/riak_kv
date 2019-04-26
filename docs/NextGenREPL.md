@@ -2,7 +2,7 @@
 
 ## Replication History
 
-Replication in Riak has an interesting history, going through multiple periods of reinvention, was hidden from public view as a closed-source add-on for many years.  The code is now open-source, and the `riak_repl` codebase amounts to over 22K lines of code, which can be run in multiple different modes of operation.  There are many ways in which you can configure replication, but all methods have hidden caveats and non-functional challenges.
+Replication in Riak has an interesting history, going through multiple periods of reinvention, was hidden from public view as a closed-source add-on for many years.  The code is now open-source, and the [`riak_repl`](https://github.com/basho/riak_repl) codebase amounts to over 22K lines of code, which can be run in multiple different modes of operation.  There are many ways in which you can configure replication, but all methods have hidden caveats and non-functional challenges.
 
 In its most up-to-date incarnation, prior to the end of Basho, the final implementation of MDC replication involved:
 
@@ -10,11 +10,11 @@ In its most up-to-date incarnation, prior to the end of Basho, the final impleme
 
 - A key-listing full-synchronisation feature that would allow for reconciliation between clusters - that had significant resource overheads, and in large clusters would take many hours to complete.
 
-- An AAE-based full-synchronisation mechanism that could be run with substantially lower overheads, and in shorter time, than the key-listing full-sync mechanism - but which would frequently fail (in some cases impacting the availability of the cluster on which it was run).
+- An AAE-based full-synchronisation mechanism that could be run with substantially lower overheads, and in shorter time, than the key-listing full-sync mechanism - but which would frequently fail (in some cases impacting the availability of the cluster on which it was run).  Note that the AAE-based full-sync was never released by basho other than as a *technical preview*.
 
 These replication mechanisms had some further limitations:
 
-- `riak_repl` could not be reliably used to replicate between clusters of different ring-sizes - meaning that data migrations necessary for customers with ring-size expansion needs had to be handled by bespoke customer application planning and logic (following the deprecation of the unreliable ring-resizing feature).
+- `riak_repl` could not be reliably used to replicate between clusters of [different ring-sizes](https://docs.riak.com/riak/kv/2.2.3/using/reference/v3-multi-datacenter/architecture/index.html#restrictions) - meaning that data migrations necessary for customers with ring-size expansion needs had to be handled by bespoke customer application planning and logic (following the deprecation of the unreliable ring-resizing feature).
 
 - `riak_repl` could only be used for complete replication between clusters, partial replication rules (e.g. replicating an individual bucket or bucket-type) could not be configured.  Paradoxically although only complete replication could be configured, some types of data could not be replicated, so partial replication may be the unexpected outcome of configuring total replication.
 
@@ -26,11 +26,11 @@ These replication mechanisms had some further limitations:
 
 The starting point for enhancing replication was to consider an improved full-sync solution: one that can reconcile between clusters quickly, reliably and at low resource cost.  With an improved full-sync solution, the real-time replication solution can be significantly simplified - as it may discard deltas in some failure scenarios protected by the knowledge that eventual consistency will be maintained in a timely manner through the full-sync process.   
 
-The building block for an efficient full-sync solution is the `kv_index_tictactree` project.  This is intended to provide an alternative to Riak's hashtree anti-entropy mechanism (and the source of the functionality of its AAE-based full-synchronisation service).  However, in features it differs from the current Riak hashtree solution in that:
+The building block for an efficient full-sync solution is the [`kv_index_tictactree`](https://github.com/martinsumner/kv_index_tictactree) project.  This is intended to provide an alternative to Riak's [`hashtree`](https://github.com/basho/riak_core/blob/develop-2.9/src/hashtree.erl) anti-entropy mechanism (and the source of the functionality of its AAE-based full-synchronisation service).  However, in features it differs from the current Riak hashtree solution in that:
 
 - It is designed to be always on and available, even during tree rebuilds and exchanges - so need to request locks, or wait for locks before completing a process.
 
-- The merkle trees generated are mergeable by design, and can be built incrementally (without requiring first a full list of keys and hashes to be produced ahead of the tree build).  This allows for cluster-wide trees to be created through coverage queries, so that clusters with different internal structures can be compared.  Also trees can be efficiently created dynamically via folds over key-ordered stores.
+- The [merkle trees](https://en.wikipedia.org/wiki/Merkle_tree) generated are mergeable by design, and can be built incrementally (without requiring first a full list of keys and hashes to be produced ahead of the tree build).  This allows for cluster-wide trees to be created through coverage queries, so that clusters with different internal structures can be compared.  Also trees can be efficiently created dynamically via folds over key-ordered stores.
 
 - The supporting key-store is key-ordered, but accelerated for lookups by hashtree (merkle tree) structure, meaning that it can be used for key-range and by-bucket queries as we well as providing supporting for hashtree-related queries.
 
@@ -38,7 +38,7 @@ The building block for an efficient full-sync solution is the `kv_index_tictactr
 
 - The supporting key-store contains causal context information, not just hashes, allowing for genuine comparison between differences and appropriately targeted anti-entropy action.
 
-The `kv-kv_index_tictactree` process was introduced as part of Riak 2.9.0, where it is primarily used for intra-cluster entropy protection.  In Riak 2.9.1 this can now be used in an automated and efficient way for inter-cluster reconciliation and repair.
+The `kv_index_tictactree` process was introduced as part of Riak 2.9.0, where it is primarily used for intra-cluster entropy protection.  In Riak 2.9.1 this can now be used in an automated and efficient way for inter-cluster reconciliation and repair.
 
 With an efficient and flexible anti-entropy inter-cluster reconciliation mechanism, that supports frequent running - a simpler real-time replication solution is possible.  Characteristics of this simplified real-time solution are:
 
@@ -74,7 +74,7 @@ The overall solution produced using these concepts, now supports the following f
 
 Each node in `riak_kv` starts three processes that manage the inter-cluster replication:
 
-- `riak_kv_ttaaefs_manager`
+- [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
 
  -  There is a single actor on each node that manages the full-sync reconciliation workload configured for that node.  This actor is a manager for full-sync replication using Tictac Active Anti-Entropy (that is to say the intra-cluster AAE feature delivered using using `riak_kv_index_tictactree` as part of the 2.9.0 release of Riak).
 
@@ -88,7 +88,7 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
  - The administrator may at run-time suspend or resume the regular running of full-sync operations on any given node via the `riak_kv_ttaaefs_manager`.
 
-- `riak_kv_replrtq_src`
+- [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)
 
  - There is a single actor on each node that manages the queuing of replication object references to be consumed from other clusters. This actor runs a configurable number of priority queues, which contain pointers to data which is required to be consumed by different remote clusters.
 
@@ -106,7 +106,7 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
  - The administrator may at run-time suspend or resume the publishing of data to specific queues via the `riak_kv_replrtq_src`.
 
-- `riak_kv_replrtq_snk`
+- [`riak_kv_replrtq_snk`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_snk.erl)
 
  - There is a single actor on each node that manages the process of consuming from queues on the `riak_kv_replrtq_src` on remote clusters.
 
