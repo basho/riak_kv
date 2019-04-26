@@ -2,7 +2,7 @@
 
 ## Replication History
 
-Replication in Riak has an interesting history, going through multiple periods of reinvention, was hidden from public view as a closed-source add-on for many years.  The code is now open-source, and the [`riak_repl`](https://github.com/basho/riak_repl) codebase amounts to over 22K lines of code, which can be run in multiple different modes of operation.  There are many ways in which you can configure replication, but all methods have hidden caveats and non-functional challenges.
+Replication in Riak has an interesting history, going through multiple periods of reinvention, whilst being hidden from public view as a closed-source add-on for many years.  The code is now open-source, and the [`riak_repl`](https://github.com/basho/riak_repl) codebase amounts to over 22K lines of code, which can be run in multiple different modes of operation.  There are many ways in which you can configure replication, but all methods have hidden caveats and non-functional challenges.
 
 In its most up-to-date incarnation, prior to the end of Basho, the final implementation of MDC replication involved:
 
@@ -46,17 +46,17 @@ With an efficient and flexible anti-entropy inter-cluster reconciliation mechani
 
 * Leader-free replication, although with greater requirement on configuration by the operator to manage redundancy within the setup via scripting `riak.conf` files.
 
-* By default replication queues contain pointers to objects only, and separate caching of recently replicated objects (in some cases), to allow for longer queues to be supported by default (i.e higher bounds on bounded queues).
+* By default replication queues contain pointers to objects only, stripped of their values, to allow for longer queues to be supported by default (i.e higher bounds on bounded queues) - as the queues need not consider the cost of storing the full size of the object.  There is a distributed cache, bounded in size, of recently changed objects - so the when a reference is fetched from the queue its value can normally be filled-in efficiently.
 
-* Priority-based queueing - so that admin-driven replication activity (e.g. for service transition or data migration), full-sync reconciliation and real-time replication activity can be separately prioritised.
+* Priority-based queueing - so that admin-driven replication activity (e.g. for service transition or data migration), full-sync reconciliation and real-time replication activity can be separately prioritised - with real-time replication given the highest absolute priority.
 
 The overall solution produced using these concepts, now supports the following features:
 
 * Replication between clusters with different ring-sizes and different n-vals, with both real-time and full-sync replication support;
 
-* Full-sync reconciliation between clusters containing the same data in less than 1 minute where all data is to be compared, and equivalent time periods if just some data is to be compared for a recent time period.
+* Full-sync reconciliation between clusters containing the same data in less than 1 minute where all data is to be compared, and equivalent reconciliation times if just a bucket or key range is to be compared to validate inter-cluster consistency of recent modifications only.
 
-* Support for transition operations to expand by splitting different buckets into different clusters.
+* Support for transition operations.  For example it is common when a cluster becomes very large, to improve efficiency by migrating one or more buckets onto a new cluster.  The new replication provides assistance to the process of managing such a data migration safely.
 
 * Many-to-many cluster replication, with both independent configuration and independent operation of different inter-cluster relationships (e.g. Cluster A and Cluster B can be aggressively have all data kept in sync, whereas Cluster C can be concurrently have part of the data set kept in sync with Cluster A and B with a lazier and less resource-intensive synchronisation strategy).
 
@@ -66,15 +66,15 @@ The overall solution produced using these concepts, now supports the following f
 
 * Generally lower-latency real-time replication as replication is now triggered following completion of the PUT co-ordinator, not waiting for the post-commit stage (e.g. when 1 nodes has completed the PUT, not waiting for 'enough' nodes to have completed the PUT).
 
-* Real-time replication and full-sync replication of objects in the write-once path.
+* Real-time replication and full-sync replication of objects in the write-once path - which had previously been restricted to [full-sync support](https://docs.riak.com/riak/kv/2.2.3/developing/app-guide/write-once/).
 
 ## Next Generation Replication - How it Works
 
 ### Replication Actors
 
-Each node in `riak_kv` starts three processes that manage the inter-cluster replication:
+Each node in `riak_kv` starts three processes that manage the inter-cluster replication.  A tictac AAE full-sync manager, a replication queue source manager, and a replication queue sink manager.  All processes are started by default (whether or not replication is enabled), but will only play an active role should replication be configured.  Further details on the processes involved:
 
-* [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
+*  __Tictac AAE Full-Sync Manager__ - [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
 
   *  There is a single actor on each node that manages the full-sync reconciliation workload configured for that node.  This actor is a manager for full-sync replication using Tictac Active Anti-Entropy (that is to say the intra-cluster AAE feature delivered using using `riak_kv_index_tictactree` as part of the 2.9.0 release of Riak).
 
@@ -84,35 +84,37 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
   * Ensuring the cluster AAE workload is distributed across nodes with sufficient diversity to ensure correct operation under failure is an administrator responsibility - work is not re-distributed between nodes in response to failure on either the local or remote cluster.  There must be other nodes already configured to share that workload.
 
+  * Each node can only full-sync with one other cluster (via the one peer node.  If the cluster needs to full-sync with more than one cluster, then the administrator should ensure different nodes have the necessary different configurations to achieve this.
+
   * Scheduling of work to minimise concurrency of reconciliation operations is managed by this actor using a simple, coordination-free mechanism.
 
   * The administrator may at run-time suspend or resume the regular running of full-sync operations on any given node via the `riak_kv_ttaaefs_manager`.
 
-* [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)
+* __Replication Queue Source-Side Manager__ [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)
 
   * There is a single actor on each node that manages the queuing of replication object references to be consumed from other clusters. This actor runs a configurable number of priority queues, which contain pointers to data which is required to be consumed by different remote clusters.
 
-  * The general pattern is that each delta within a cluster will be published by once via `riak_kv_replrtq_src` on a node local to the discovery of the change.  Each queue which is a source of updates will have multiple consumers spread across multiple sink nodes on the receiving cluster - where each sink-side node's consumers are being managed by a `riak_kv_replrtq_snk` process on that node.  The [publish and consume topology](https://github.com/russelldb/rabl/blob/master/docs/many-2-many-2.png) is based on that successfully tested in the [rabl riak replication add-on](https://github.com/russelldb/rabl/blob/master/docs/introducing.md).
+  * The general pattern is that each delta within a cluster will be published once via the `riak_kv_replrtq_src` on a node local to the discovery of the change.  Each queue which is a source of updates will have multiple consumers spread across multiple sink nodes on the receiving cluster - where each sink-side node's consumers are being managed by a `riak_kv_replrtq_snk` process on that node.  The [publish and consume topology](https://github.com/russelldb/rabl/blob/master/docs/many-2-many-2.png) is based on that successfully tested in the [rabl riak replication add-on](https://github.com/russelldb/rabl/blob/master/docs/introducing.md).
 
-  * Real-time replication changes (i.e. PUTs that have just been co-ordinated on this node within the cluster), are sent to the `riak_kv_replrtq_src` as either references (e.g. Bucket, Key, Clock and co-ordinating vnode) or whole objects in the case of tombstones.  These are the highest priority items to be queued, and are placed on *every queue* whose data filtering rules are matched by the object (e.g. data filtering could be "any", a specific bucket, or a specific bucket type).
+  * __Real-time replication__ changes (i.e. PUTs that have just been co-ordinated on this node within the cluster), are sent to the `riak_kv_replrtq_src` as either references (e.g. Bucket, Key, Clock and co-ordinating vnode) or whole objects in the case of tombstones.  These are the highest priority items to be queued, and are placed on __every queue whose data filtering rules are matched__ by the object (e.g. data filtering could be "any", a specific bucket, or a specific bucket type).
 
-  * Changes identified by AAE full-sync replication processes run by the `riak_kv_ttaaefs` manager on the local node are sent to the `riak_kv_replrtq_src` as references, and queued as the second highest priority.  These changes are queued only on *a single queue*, defined within the configuration of `riak_kv_ttaaefs_manager`.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object.
+  * Changes identified by __AAE full-sync replication__ processes run by the `riak_kv_ttaaefs` manager on the local node are sent to the `riak_kv_replrtq_src` as references, and queued as the second highest priority.  These changes are queued only on __a single queue defined within the configuration__ of `riak_kv_ttaaefs_manager`.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object.
 
-  * Changes identified by AAE fold operations for administrator initiated transition or repair operations (e.g. fold over a bucket or key-range, or for a given range of modified dates), are sent to the `riak_kv_replrtq_src` to be queued as the lowest priority onto *a single queue* defined by the administrator when initiating the AAE fold operation.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object - and are only the changes discovered through the fold running on vnodes local to this node.
+  * Changes identified by __AAE fold operations__ for administrator initiated transition or repair operations (e.g. fold over a bucket or key-range, or for a given range of modified dates), are sent to the `riak_kv_replrtq_src` to be queued as the lowest priority onto __a single queue defined by the administrator when initiating the AAE fold operation__.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object - and are only the changes discovered through the fold running on vnodes local to this node.
 
   * Should the local node fail, all undelivered object references will be dropped.
 
   * The queues are provided using the existing `riak_core_priority_queue` module in Riak.
 
-  * The administrator may at run-time suspend or resume the publishing of data to specific queues via the `riak_kv_replrtq_src`.
+  * The administrator may at run-time suspend or resume the publishing of data to specific queues via the `riak_kv_replrtq_src` process.
 
-* [`riak_kv_replrtq_snk`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_snk.erl)
+* __Replication Queue Sink-Side Manager__ [`riak_kv_replrtq_snk`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_snk.erl)
 
   * There is a single actor on each node that manages the process of consuming from queues on the `riak_kv_replrtq_src` on remote clusters.
 
   * The `riak_kv_replrtq_snk` can be configured to consume from up to two queues, across an open-ended number of peers.  For instance if each node on Cluster A maintains a queue named `cluster_c_full`, and each node on Cluster B maintains a queue named `cluster_c_partial` - then `riak_kv_replrtq_snk` can be configured to consume from the `cluster_c_full` from every node in Cluster A and from `cluster_c_partial` from every node in Cluster B.
 
-  * The `riak_kv_replrtq_snk` manages a finite number of workers for consuming from remote peers.  The `riak_kv_replrtq_snk` tracks the results of work in order to back-off slightly from peers regularly not returning results to consume requests (in favour of those peers indicating a backlog by regularly returning results).  The `riak_kv_replrtq_snk` tracks the results of work in order to back-off severely from those peers returning errors (so as not to lock too many workers consuming from unreachable nodes).
+  * The `riak_kv_replrtq_snk` manages a finite number of workers for consuming from remote peers.  The `riak_kv_replrtq_snk` tracks the results of work in order to back-off slightly from peers regularly not returning results to consume requests (in favour of those peers indicating a backlog by regularly returning results).  The `riak_kv_replrtq_snk` also tracks the results of work in order to back-off severely from those peers returning errors (so as not to lock too many workers consuming from unreachable nodes).
 
   * The administrator may at run-time suspend or resume the consuming of data from specific queues or peers via the `riak_kv_replrtq_snk`.
 
@@ -128,6 +130,18 @@ TODO - bsparrow style walkthrough
 ### Notes on Configuration and Operation
 
 TODO
+
+* [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
+
+  * https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L837-L955
+
+* [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)
+
+  * https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L957-L1067
+
+* [`riak_kv_replrtq_snk`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_snk.erl)
+
+  * https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L1069-L1125
 
 ### Frequently Asked Questions
 

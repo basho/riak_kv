@@ -949,7 +949,7 @@
 %% @doc How many times per 24hour period should the last 24-hours of data be
 %% checked to confirm it is fully sync'd.  This si relevant for per-bucket
 %% sync scope only, and will be ignored if all sync is enabled
-{mapping, "ttaaefs_daycheck", "riak_kv.ttaaefs_hdaycheck", [
+{mapping, "ttaaefs_daycheck", "riak_kv.ttaaefs_daycheck", [
   {datatype, integer},
   {default, 0}
 ]}.
