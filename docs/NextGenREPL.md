@@ -76,15 +76,15 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
 * __Tictac AAE Full-Sync Manager__ - [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
 
-  *  There is a single actor on each node that manages the full-sync reconciliation workload configured for that node.  This actor is a manager for full-sync replication using Tictac Active Anti-Entropy (that is to say the intra-cluster AAE feature delivered using using `riak_kv_index_tictactree` as part of the 2.9.0 release of Riak).
+  * There is a single actor on each node that manages the full-sync reconciliation workload configured for that node.  
 
-  * Each node is configured with a peer node at a cluster with which this cluster is to exchange cluster-wide hashtrees in order to reconcile the two data sets, and to push updates missing for that remote cluster to the local `riak_kv_replrtq_src` for distribution to that remote cluster.
+  * Each node is configured with the details of a peer node at a remote cluster.  Each manager is responsible for controlling cluster-wide hashtree exchanges between the local node and the peer node, and to prompt any repairs required across the cluster (not just on this node).  The information is exchanged between the peers, but that information represents the data across the whole cluster,  Necessary repairs are prompted through the replication queue source-side manager `riak_kv_replrtq_src`.
 
   * Each node is configured with a schedule to determine how frequently this manager will run its reconcile and repair operations.
 
-  * Ensuring the cluster AAE workload is distributed across nodes with sufficient diversity to ensure correct operation under failure is an administrator responsibility - work is not re-distributed between nodes in response to failure on either the local or remote cluster.  There must be other nodes already configured to share that workload.
+  * It is is an administrator responsibility to ensure the cluster AAE workload is distributed across nodes with sufficient diversity to ensure correct operation under failure.  Work is not re-distributed between nodes in response to failure on either the local or remote cluster, so there must be other nodes already configured to share that workload to continue operation under failure conditions.
 
-  * Each node can only full-sync with one other cluster (via the one peer node.  If the cluster needs to full-sync with more than one cluster, then the administrator should ensure different nodes have the necessary different configurations to achieve this.
+  * Each node can only full-sync with one other cluster (via the one peer node).  If the cluster needs to full-sync with more than one cluster, then the administrator should ensure different nodes have the necessary different configurations to achieve this.
 
   * Scheduling of work to minimise concurrency of reconciliation operations is managed by this actor using a simple, coordination-free mechanism.
 
@@ -92,17 +92,21 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
 * __Replication Queue Source-Side Manager__ [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)
 
-  * There is a single actor on each node that manages the queuing of replication object references to be consumed from other clusters. This actor runs a configurable number of priority queues, which contain pointers to data which is required to be consumed by different remote clusters.
+  * There is a single actor on each node that manages the queueing of replication object references to be consumed from other clusters. This actor runs a configurable number of queues, which contain pointers to data which is required to be consumed by different remote clusters.
 
   * The general pattern is that each delta within a cluster will be published once via the `riak_kv_replrtq_src` on a node local to the discovery of the change.  Each queue which is a source of updates will have multiple consumers spread across multiple sink nodes on the receiving cluster - where each sink-side node's consumers are being managed by a `riak_kv_replrtq_snk` process on that node.  The [publish and consume topology](https://github.com/russelldb/rabl/blob/master/docs/many-2-many-2.png) is based on that successfully tested in the [rabl riak replication add-on](https://github.com/russelldb/rabl/blob/master/docs/introducing.md).
 
-  * __Real-time replication__ changes (i.e. PUTs that have just been co-ordinated on this node within the cluster), are sent to the `riak_kv_replrtq_src` as either references (e.g. Bucket, Key, Clock and co-ordinating vnode) or whole objects in the case of tombstones.  These are the highest priority items to be queued, and are placed on __every queue whose data filtering rules are matched__ by the object (e.g. data filtering could be "any", a specific bucket, or a specific bucket type).
+  * Queues may have data filtering rules to restrict what changes are distributed via that queue.  The filters can restrict replication to a specific bucket, or bucket type, or allow for any change to be published to that queue.
+
+  * __Real-time replication__ changes (i.e. PUTs that have just been co-ordinated on this node within the cluster), are sent to the `riak_kv_replrtq_src` as either references (e.g. Bucket, Key, Clock and co-ordinating vnode) or whole objects in the case of tombstones.  These are the highest priority items to be queued, and are placed on __every queue whose data filtering rules are matched__ by the object.
 
   * Changes identified by __AAE full-sync replication__ processes run by the `riak_kv_ttaaefs` manager on the local node are sent to the `riak_kv_replrtq_src` as references, and queued as the second highest priority.  These changes are queued only on __a single queue defined within the configuration__ of `riak_kv_ttaaefs_manager`.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object.
 
   * Changes identified by __AAE fold operations__ for administrator initiated transition or repair operations (e.g. fold over a bucket or key-range, or for a given range of modified dates), are sent to the `riak_kv_replrtq_src` to be queued as the lowest priority onto __a single queue defined by the administrator when initiating the AAE fold operation__.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object - and are only the changes discovered through the fold running on vnodes local to this node.
 
   * Should the local node fail, all undelivered object references will be dropped.
+
+  * Queues are bounded, with limits set separately for each priority.  Items are consumed from the queue in strict priority order.  So a backlog of non-real-time replication events cannot cause a backlog or failure in real-time events.
 
   * The queues are provided using the existing `riak_core_priority_queue` module in Riak.
 
