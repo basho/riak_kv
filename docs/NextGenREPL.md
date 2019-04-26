@@ -74,7 +74,7 @@ The overall solution produced using these concepts, now supports the following f
 
 Each node in `riak_kv` starts three processes that manage the inter-cluster replication.  A tictac AAE full-sync manager, a replication queue source manager, and a replication queue sink manager.  All processes are started by default (whether or not replication is enabled), but will only play an active role should replication be configured.  Further details on the processes involved:
 
-*  __Tictac AAE Full-Sync Manager__ - [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
+* __Tictac AAE Full-Sync Manager__ - [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
 
   *  There is a single actor on each node that manages the full-sync reconciliation workload configured for that node.  This actor is a manager for full-sync replication using Tictac Active Anti-Entropy (that is to say the intra-cluster AAE feature delivered using using `riak_kv_index_tictactree` as part of the 2.9.0 release of Riak).
 
