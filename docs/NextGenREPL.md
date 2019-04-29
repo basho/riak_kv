@@ -2,7 +2,7 @@
 
 ## Replication History
 
-Replication in Riak has an interesting history, going through multiple periods of reinvention, whilst being hidden from public view as a closed-source add-on for many years.  The code is now open-source, and the [`riak_repl`](https://github.com/basho/riak_repl) codebase amounts to over 22K lines of code, which can be run in multiple different modes of operation.  There are many ways in which you can configure replication, but all methods have hidden caveats and non-functional challenges.
+Replication in Riak has an interesting history, going through multiple stages of reinvention, whilst being hidden from public view as a closed-source add-on for many years.  The code is now open-source, and the [`riak_repl`](https://github.com/basho/riak_repl) codebase amounts to over 22K lines of code, which can be run in multiple different modes of operation.  There are many ways in which you can configure replication, but all methods have hidden caveats and non-functional challenges.
 
 In its most up-to-date incarnation, prior to the end of Basho, the final implementation of MDC replication involved:
 
@@ -123,13 +123,56 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
   * The administrator may at run-time suspend or resume the consuming of data from specific queues or peers via the `riak_kv_replrtq_snk`.
 
 
-### Real-time Replication - Step by Step
+### Real-time Replication - Notes on implementation
 
-TODO - bsparrow style walkthrough
+Previous replication implementations initiate replication through a post-commit hook.  Post-commit hooks are fired from the `riak_kv_put_fsm` after "enough" responses have been received from other vnodes (based on n, w, dw and pw values for the PUT).  Without enough responses, the replication hook is not fired (although the client should receive an error and retry - and that eventually should fire the hook).
+
+In implementing the new replication solution, the point of firing off replication has been changed to the point that the co-ordinated PUT is completed.  So the replication of the PUT to the clusters may occur in parallel to the replication of the PUT to other nodes in the source cluster.  This is the first opportunity where sufficient information is known (e.g. the updated vector clock), and should help control the size of the time-window of inconsistency between the clusters.
+
+Replication is fired within the `riak_kv_vnode` `do_put/7`.  Once the put to the backend has been completed, and the reply sent back to the `riak_kv_put_fsm`, on condition of the vnode being a co-ordinator of the put, the following work is done:
+
+- The object reference to be replicated is determined, this is the type of reference to be placed on the replication queue.  
+
+  - If the object is now a tombstone, the whole object is used as the replication reference (due to the small size of the object, and the need to avoid race conditions with reaping activity if `delete_mode` is not `keep` - the cluster may not be able to fetch the tombstone to replicate in the future).
+
+  - If no `repl_cache` has been configured, the flag `to_fetch` replaces the object - to indicate that the object must be fetched via a standard `riak_kv_get_fsm` process. Configuration of the repl_cache is set using `riak_kv.enable_repl_cache`.
+
+  - If the `repl_cache` is enabled (through configuration), the object is placed in an ets table local to the vnode that acts as a cache of recently coordinated PUTs, and a reference to the vnode ID is used as a replication reference.  The ets table is fixed in size by the configuration item `riak_kv.repl_cache_size`.
+
+- The `{Bucket, Key, Clock, ObjectReference}` is then cast to the `riak_kv_replrtq_src`.  This cast will occur for all coordinated PUTs even if no replication is enabled - if replication is not enabled, then the `riak_kv_replrtq_src` will discard the event.
+
+The reference now needs to be handled by the `riak_kv_replrtq_src`.  It has a simple task list:
+
+- Assign a priority to the replication event depending on what prompted the replication (e.g. highest priority to real-time events received from co-ordinator vnodes).
+
+- Add the reference to the tail of the every matching queue based on priority.  Each queue is configured to either match `any` replication event, no events (using the configuration `block_rtq`), or a subset of events (using either a bucket `type` filter or a `bucket` filter).
+
+In order to replicate the object, it must now be fetched from the queue by a sink.  A sink-side cluster should have multiple consumers, on multiple nodes, consuming form each node in the source-side cluster.  These workers are handed work items by the `riak_kv_replrtq_src`, with the IP/Port of a remote node and the name of a queue to consume from - and the worker should initiate a `fetch` to that destination on receipt of such a work item.
+
+One receipt of the `fetch` request the source node should:
+
+- Initiate a `riak_kv_get_fsm`, passing `{queuename, QueueName}` in place of `{Bucket, Key}`.
+
+- The GET FSM should go directly into the `queue_fetch` state, and try and fetch the next replication reference from the given queue name via the `riak_kv_replrtq_src`.
+
+  - If the fetch from the queue returns `queue_empty` this is relayed back to the sink-side worker, and ultimately the `riak_kv_replrtq_snk` which may then slow down the pace at which fetch requests are sent to this node/queue combination.
+
+  - If the fetch returns an actual tombstone object, this is relayed back to the sink worker.
+
+  - If the fetch returns a replication reference with the flag `to_fetch`, the `riak_kv_get_fsm` will continue down its standard path, and fetch the object which the will be returned to the sink worker.
+
+  - If the fetch returns a replication reference with a vnode reference (to indicate a potentially cached object), a `fetch_repl` request will be cast to the specific vnode (the original co-ordinator), and the `riak_kv_get_fsm` should transition to the `waiting_vnode_fetch`.  The vnode on receipt of a `fetch_repl` request should try and receive the object from the cache, and otherwise return the object from a backend GET.  The response will then be sent back to the `riak_kv_get_fsm` and relayed back to the sink worker.
+
+- If a successful fetch is relayed back to the sink worker it will replicate the PUT using a local `riak_client:push/4`.  The push will complete a PUT of the object on the sink cluster - using a `riak_kv_put_fsm` with appropriate options (e.g. `asis`, `disable-hooks`).
+
+  - The code within the `riak_client:push/4` follows the behaviour of the existing `riak_repl` on receipt of a replicated object.
+
+- If the fetch and push request fails, the sink worker will report this back tot he `riak_kv_replrtq_snk` which should delay further requests to that node/queue so as to avoid rapidly locking sink workers up communicating to a failing node.
+
 
 ### Full-Sync Reconciliation and Repair - Step by Step
 
-TODO - bsparrow style walkthrough
+TODO - walkthrough
 
 ### Notes on Configuration and Operation
 
@@ -188,3 +231,28 @@ TODO - potential questions below
 *Will this replication approach work with Riak's strong consistency module `riak_ensemble`?*
 
 ...
+
+
+### Outstanding TODO
+
+*Can we prove that crashing the riak_kv_replrtq_src will not crash all the riak_kv_vnode processes on the node.  If so, should the repl work be moved back to the riak_kv_put_fsm?*
+
+Some advantages of using a vnode - src cannot be overloaded by unbalanced sending of load into the cluster, load between src will be distributed in line with hash/ring.
+
+Small distributed caches seems intuitively to be efficient, a good use of riak capability, and avoids the cache becoming a bottleneck.
+
+*Extend the replication support to the write once path by implementing it within the riak_kv_w1c_worker.  Initial thoughts are that the push on the repl side should not use the write once path*
+
+...
+
+*If hooks are not used any more for replication, should disable_hooks still be passed in as an option on replicated PUTs*
+
+...
+
+*Volume and performance tests*
+
+...
+
+*Further riak_test tests*
+
+typed buckets, replication filters, replicating CRDTs

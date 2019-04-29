@@ -844,6 +844,25 @@
   {default, disabled}
 ]}.
 
+%% @doc Will there be a replication cache kept at each vnode for recently
+%% coordianted PUTs.  The cache is only used for real-time replication so
+%% should be disabled if replication is to be disabled.  Real-time replication
+%% can still operate without the cache, though replication latency may be
+%% higher
+{maping, "enable_repl_cache", "riak_kv.enable_repl_cache", [
+    {datatype, {integer}},
+    {default, 256}
+]}.
+
+%% @doc Where the repl_cache is enabled, what should be the size of the cache
+%% in terms of number of entries at each vnode.
+{maping, "repl_cache_size", "rak_kv.repl_cache_size", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+
 %% @doc for tictac full-sync what registered queue name on this cluster should
 %% be use for passing references to data which needs to be replicated for AAE
 %% full-sync.  This queue name must be defined as a
