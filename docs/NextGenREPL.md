@@ -172,7 +172,25 @@ On receipt of the `fetch` request the source node should:
 
 ### Full-Sync Reconciliation and Repair - Step by Step
 
-TODO - walkthrough
+The `riak_kv_ttaaefs_manager` controls the full-sync replication activity of a node.  Each node is configured with a single peer with which it is to run full-sync checks and repairs, assuming that across the cluster sufficient peers to sufficient clusters have been configured to complete the overall work necessary for that cluster.  Ensuring this is an administrator responsibility, it is not something determined automatically by Riak.
+
+The `riak_kv_ttaaefs_manager` is a source side process.   It will not attempt to repair any discovered discrepancies where the remote cluster is ahead of the local cluster - the job of the process is to ensure that a remote cluster is up-to-date with the changes which have occurred in the local cluster.
+
+The `riak_kv_ttaaefs_manager` has a schedule of work obtained from the configuration.  The schedule has wants, the number of times per day that it is desired that this manager will:
+
+- Reconcile changes across all the whole cluster over all time;
+
+- Skip work for a schedule slot and do nothing;
+
+- Reconcile changes that have occurred in the past hour;
+
+- Reconcile changes that have occurred in the past day.
+
+On startup, the manager looks at these wants and provides a random distribution of work across slots.  The day is divided into slots evenly distributed so there is a slot for each want in the schedule.  It will run work for the slot at an offset from the start of the slot, based on the place this node has in the sorted list of currently active nodes.  So if each node is configured with the same total number of wants, work will be synchronised to have limited overlapping work within the cluster.
+
+When, on a node, a scheduled piece of work comes due, the `riak_kv_ttaaefs_manager` will start an `aae_exchange` to run the work between the two clusters (using the peer configuration to reach the remote cluster).  Once the work is finished, it will schedule the next piece of work - unless the start time for the next piece of work has already passed, in which case that work is skipped.  When all the work in the schedule is complete, a new schedule is calculated from the wants.
+
+When starting an `aae_exchange` the `riak_kv_ttaaefs_manager` must pass in a repair function.  This function will compare clocks from identified discrepancies, and where the source cluster is ahead of the sink, send the `{Bucket, Key, Clock, to_fetch}` tuple to a configured queue name on `riak_kv_replrtq_src`.  These queued entries will then be replicated through being fetched by the `riak_kv_replrtq_snk` workers, although this will only occur when there is no higher priority work to replicate i.e. real-time replication events prompted by locally co-ordinated PUTs.
 
 ### Notes on Configuration and Operation
 
@@ -180,15 +198,15 @@ TODO
 
 * [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
 
-  * https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L837-L955
+  * [Schema](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L837-L974)
 
 * [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)
 
-  * https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L957-L1067
+  * [Schema](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L976-L1086)
 
 * [`riak_kv_replrtq_snk`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_snk.erl)
 
-  * https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L1069-L1125
+  * [Schema](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L1088-L1144)
 
 ### Frequently Asked Questions
 
