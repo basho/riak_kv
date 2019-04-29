@@ -4,15 +4,15 @@
 
 Replication in Riak has an interesting history, going through multiple stages of reinvention, whilst being hidden from public view as a closed-source add-on for many years.  The code is now open-source, and the [`riak_repl`](https://github.com/basho/riak_repl) codebase amounts to over 22K lines of code, which can be run in multiple different modes of operation.  There are many ways in which you can configure replication, but all methods have hidden caveats and non-functional challenges.
 
-In its most up-to-date incarnation, prior to the end of Basho, the final implementation of MDC replication involved:
+In the final implementation of replication prior to the end of Basho, the replication services were based on:
 
-* A real-time replication solution which tried to reliably (i.e. handling failure and back-pressure) queue updates from one cluster to another;
+* A real-time replication solution which tried to reliably (i.e. handling failure and back-pressure) queue and send updates from one cluster to another;
 
 * A key-listing full-synchronisation feature that would allow for reconciliation between clusters - that had significant resource overheads, and in large clusters would take many hours to complete.
 
 * An AAE-based full-synchronisation mechanism that could be run with substantially lower overheads, and in shorter time, than the key-listing full-sync mechanism - but which would frequently fail (in some cases impacting the availability of the cluster on which it was run).  Note that the AAE-based full-sync was never released by basho other than as a *technical preview*.
 
-These replication mechanisms had some further limitations:
+These replication mechanisms had some key limitations:
 
 * `riak_repl` could not be reliably used to replicate between clusters of [different ring-sizes](https://docs.riak.com/riak/kv/2.2.3/using/reference/v3-multi-datacenter/architecture/index.html#restrictions) - meaning that data migrations necessary for customers with ring-size expansion needs had to be handled by bespoke customer application planning and logic (following the deprecation of the unreliable ring-resizing feature).
 
@@ -30,13 +30,13 @@ The building block for an efficient full-sync solution is the [`kv_index_tictact
 
 * It is designed to be always on and available, even during tree rebuilds and exchanges - so need to request locks, or wait for locks before completing a process.
 
-* The [merkle trees](https://en.wikipedia.org/wiki/Merkle_tree) generated are mergeable by design, and can be built incrementally (without requiring first a full list of keys and hashes to be produced ahead of the tree build).  This allows for cluster-wide trees to be created through coverage queries, so that clusters with different internal structures can be compared.  Also trees can be efficiently created dynamically via folds over key-ordered stores.
+* The [merkle trees](https://en.wikipedia.org/wiki/Merkle_tree) generated are mergeable by design, and can be built incrementally (without requiring first a full list of keys and hashes to be produced ahead of the tree build).  This allows for cluster-wide trees to be created through coverage queries, so that clusters with different internal structures can be compared.
 
-* The supporting key-store is key-ordered, but accelerated for lookups by hashtree (merkle tree) structure, meaning that it can be used for key-range and by-bucket queries as we well as providing supporting for hashtree-related queries.
+* The supporting key-store is key-ordered, but accelerated for lookups by hashtree (merkle tree) structure, meaning that it can be used for key-range and by-bucket queries as we well as servicing hashtree-related queries.
 
 * The supporting key-store is accelerated for query by modified date, so it is possible to build dynamic trees not just for key ranges or buckets, but also for ranges of modified times e.g. resolve entropy issues in objects sent in the past hour.
 
-* The supporting key-store contains causal context information, not just hashes, allowing for genuine comparison between differences and appropriately targeted anti-entropy action.
+* The supporting key-store contains causal context information, not just hashes, allowing for genuine comparison between differences and targeted anti-entropy action.
 
 The `kv_index_tictactree` process was introduced as part of Riak 2.9.0, where it is primarily used for intra-cluster entropy protection.  In Riak 2.9.1 this can now be used in an automated and efficient way for inter-cluster reconciliation and repair.
 
@@ -78,7 +78,7 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
   * There is a single actor on each node that manages the full-sync reconciliation workload configured for that node.  
 
-  * Each node is configured with the details of a peer node at a remote cluster.  Each manager is responsible for controlling cluster-wide hashtree exchanges between the local node and the peer node, and to prompt any repairs required across the cluster (not just on this node).  The information is exchanged between the peers, but that information represents the data across the whole cluster,  Necessary repairs are prompted through the replication queue source-side manager `riak_kv_replrtq_src`.
+  * Each node is configured with the details of a peer node at a remote cluster.  Each manager is responsible for controlling cluster-wide hashtree exchanges between the local node and the peer node, and to prompt any repairs required across the cluster (not just on this node).  The information is exchanged between the peers, but that information represents the data across the whole cluster.  Necessary repairs are prompted through the replication queue source-side manager `riak_kv_replrtq_src`.
 
   * Each node is configured with a schedule to determine how frequently this manager will run its reconcile and repair operations.
 
@@ -123,9 +123,9 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
   * The administrator may at run-time suspend or resume the consuming of data from specific queues or peers via the `riak_kv_replrtq_snk`.
 
 
-### Real-time Replication - Notes on implementation
+### Real-time Replication - Step by Step
 
-Previous replication implementations initiate replication through a post-commit hook.  Post-commit hooks are fired from the `riak_kv_put_fsm` after "enough" responses have been received from other vnodes (based on n, w, dw and pw values for the PUT).  Without enough responses, the replication hook is not fired (although the client should receive an error and retry - and that eventually should fire the hook).
+Previous replication implementations initiate replication through a post-commit hook.  Post-commit hooks are fired from the `riak_kv_put_fsm` after "enough" responses have been received from other vnodes (based on n, w, dw and pw values for the PUT).  Without enough responses, the replication hook is not fired, although the client should receive an error and retry, a process of retrying that eventually may fire the hook.
 
 In implementing the new replication solution, the point of firing off replication has been changed to the point that the co-ordinated PUT is completed.  So the replication of the PUT to the clusters may occur in parallel to the replication of the PUT to other nodes in the source cluster.  This is the first opportunity where sufficient information is known (e.g. the updated vector clock), and should help control the size of the time-window of inconsistency between the clusters.
 
@@ -135,7 +135,7 @@ Replication is fired within the `riak_kv_vnode` `do_put/7`.  Once the put to the
 
   - If the object is now a tombstone, the whole object is used as the replication reference (due to the small size of the object, and the need to avoid race conditions with reaping activity if `delete_mode` is not `keep` - the cluster may not be able to fetch the tombstone to replicate in the future).
 
-  - If no `repl_cache` has been configured, the flag `to_fetch` replaces the object - to indicate that the object must be fetched via a standard `riak_kv_get_fsm` process. Configuration of the repl_cache is set using `riak_kv.enable_repl_cache`.
+  - If no `repl_cache` has been configured, the flag `to_fetch` replaces the object - to indicate that the object must be fetched via a standard `riak_kv_get_fsm` process. Configuration of the `repl_cache` is set using `riak_kv.enable_repl_cache`.
 
   - If the `repl_cache` is enabled (through configuration), the object is placed in an ets table local to the vnode that acts as a cache of recently coordinated PUTs, and a reference to the vnode ID is used as a replication reference.  The ets table is fixed in size by the configuration item `riak_kv.repl_cache_size`.
 
@@ -145,11 +145,11 @@ The reference now needs to be handled by the `riak_kv_replrtq_src`.  It has a si
 
 - Assign a priority to the replication event depending on what prompted the replication (e.g. highest priority to real-time events received from co-ordinator vnodes).
 
-- Add the reference to the tail of the every matching queue based on priority.  Each queue is configured to either match `any` replication event, no events (using the configuration `block_rtq`), or a subset of events (using either a bucket `type` filter or a `bucket` filter).
+- Add the reference to the tail of the __every__ matching queue based on priority.  Each queue is configured to either match `any` replication event, no events (using the configuration `block_rtq`), or a subset of events (using either a bucket `type` filter or a `bucket` filter).
 
 In order to replicate the object, it must now be fetched from the queue by a sink.  A sink-side cluster should have multiple consumers, on multiple nodes, consuming form each node in the source-side cluster.  These workers are handed work items by the `riak_kv_replrtq_src`, with the IP/Port of a remote node and the name of a queue to consume from - and the worker should initiate a `fetch` to that destination on receipt of such a work item.
 
-One receipt of the `fetch` request the source node should:
+On receipt of the `fetch` request the source node should:
 
 - Initiate a `riak_kv_get_fsm`, passing `{queuename, QueueName}` in place of `{Bucket, Key}`.
 
@@ -159,15 +159,15 @@ One receipt of the `fetch` request the source node should:
 
   - If the fetch returns an actual tombstone object, this is relayed back to the sink worker.
 
-  - If the fetch returns a replication reference with the flag `to_fetch`, the `riak_kv_get_fsm` will continue down its standard path, and fetch the object which the will be returned to the sink worker.
+  - If the fetch returns a replication reference with the flag `to_fetch`, the `riak_kv_get_fsm` will continue down the standard path os states starting with `prepare`, and fetch the object which the will be returned to the sink worker.
 
-  - If the fetch returns a replication reference with a vnode reference (to indicate a potentially cached object), a `fetch_repl` request will be cast to the specific vnode (the original co-ordinator), and the `riak_kv_get_fsm` should transition to the `waiting_vnode_fetch`.  The vnode on receipt of a `fetch_repl` request should try and receive the object from the cache, and otherwise return the object from a backend GET.  The response will then be sent back to the `riak_kv_get_fsm` and relayed back to the sink worker.
+  - If the fetch returns a replication reference with a vnode reference (to indicate a potentially cached object), a `fetch_repl` request will be cast to the specific vnode (the original co-ordinator), and the `riak_kv_get_fsm` should transition to the `waiting_vnode_fetch`.  The vnode on receipt of a `fetch_repl` request should try and retrieve the object from the cache, and otherwise return the object from a backend GET.  The response will then be sent back to the `riak_kv_get_fsm` and relayed back to the sink worker.
 
 - If a successful fetch is relayed back to the sink worker it will replicate the PUT using a local `riak_client:push/4`.  The push will complete a PUT of the object on the sink cluster - using a `riak_kv_put_fsm` with appropriate options (e.g. `asis`, `disable-hooks`).
 
   - The code within the `riak_client:push/4` follows the behaviour of the existing `riak_repl` on receipt of a replicated object.
 
-- If the fetch and push request fails, the sink worker will report this back tot he `riak_kv_replrtq_snk` which should delay further requests to that node/queue so as to avoid rapidly locking sink workers up communicating to a failing node.
+- If the fetch and push request fails, the sink worker will report this back to the `riak_kv_replrtq_snk` which should delay further requests to that node/queue so as to avoid rapidly locking sink workers up communicating to a failing node.
 
 
 ### Full-Sync Reconciliation and Repair - Step by Step
@@ -256,3 +256,29 @@ Small distributed caches seems intuitively to be efficient, a good use of riak c
 *Further riak_test tests*
 
 typed buckets, replication filters, replicating CRDTs
+
+*Location of the cache - is having a cache at each vnode the right thing*
+
+The location of the cache for fetching could be:
+
+- The vnode (as currently implemented);
+
+- The `riak_kv_replrtq_src`;
+
+- Another named process on the node (e.g. a `riak_kv_replrtq_cache`);
+
+- A public ets table.
+
+The reasons for choosing the vnode:
+
+- Less worry about contention over access to the cache being a bottleneck;
+
+- No overhead in serializing the object to cast it to the cache at PUT time - minimise extension of vnode delay for PUT.
+
+*Add stats gathered at src/snk into riak stats*
+
+...
+
+*AAE Fold implementation*
+
+...
