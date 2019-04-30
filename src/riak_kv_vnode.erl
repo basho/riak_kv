@@ -232,7 +232,8 @@
     %% the cached tree do not use a pool (e.g. n_val queries)
 -define(AF4_QUEUE, riak_core_node_worker_pool:af4()).
     %% Assured Forwarding - pool 4
-    %% perational information queries (e.g. object_stats)
+    %% operational information queries (e.g. object_stats).  Replication folds
+    %% for transition
 -define(BE_QUEUE, riak_core_node_worker_pool:be()).
     %% Best efforts (aka scavenger) pool
     %% Rebuilds
@@ -1667,6 +1668,42 @@ handle_aaefold({fetch_clocks_range,
                                 InitAcc, 
                                 [{clock, null}]),
     {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({repl_keys_range,
+                        Bucket, KeyRange,
+                        ModifiedRange,
+                        QueueName},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, Acc) ->
+            {clock, VV} = lists:keyfind(clock, 1, EFs),
+            % Use to_fetch in the repl entry rather than vnode ID, as we want
+            % to avoid bombarding a single vnode with GET requests. Also this
+            % entry will not be in the vnode repl_cache
+            RE = {BF, KF, VV, to_fetch},
+            {AccL, Count, QueueName, BatchSize} = Acc,
+            case Count rem BatchSize of
+                0 ->
+                    ok = riak_kv_replrtq_src:replrtq_aaefold(QueueName, AccL),
+                    {[RE], Count + 1, QueueName, BatchSize};
+                _ ->
+                    {[RE|AccL], Count + 1, QueueName, BatchSize}
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} = 
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                all,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{clock, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({find_keys, 
                         Bucket, KeyRange,
                         ModifiedRange,

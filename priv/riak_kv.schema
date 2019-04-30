@@ -849,14 +849,14 @@
 %% should be disabled if replication is to be disabled.  Real-time replication
 %% can still operate without the cache, though replication latency may be
 %% higher
-{maping, "enable_repl_cache", "riak_kv.enable_repl_cache", [
-    {datatype, {integer}},
+{mapping, "enable_repl_cache", "riak_kv.enable_repl_cache", [
+    {datatype, integer},
     {default, 256}
 ]}.
 
 %% @doc Where the repl_cache is enabled, what should be the size of the cache
 %% in terms of number of entries at each vnode.
-{maping, "repl_cache_size", "rak_kv.repl_cache_size", [
+{mapping, "repl_cache_size", "rak_kv.repl_cache_size", [
     {datatype, {flag, enabled, disabled}},
     {default, disabled},
     {commented, enabled}

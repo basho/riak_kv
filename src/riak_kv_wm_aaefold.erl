@@ -173,6 +173,7 @@ malformed_request(RD, Ctx) ->
     case FoldType of
         "cachedtrees" -> malformed_cached_tree_request(RD, Ctx);
         "rangetrees" -> malformed_range_tree_request(RD, Ctx);
+        "rangerepl" -> malformed_range_repl_request(RD, Ctx);
         "siblings" -> malformed_find_keys_request({sibling_count, count}, RD, Ctx);
         "objectsizes" -> malformed_find_keys_request({object_size, size}, RD, Ctx);
         "objectstats" -> malformed_object_stats_request(RD, Ctx)
@@ -385,6 +386,54 @@ malformed_find_keys_request({QType, _UrlArg}, {valid, QArg}, RD, Ctx) ->
                     },
             {false, RD,
              Ctx#ctx{query = Query}}
+    end.
+
+
+%% @private validate and parse a range repl request
+%% Needs a bucket, queue_name as minimum - plus also maybe a key range and a
+%% date range
+-spec malformed_range_repl_request(#wm_reqdata{},
+                                    context()) ->
+                                        {boolean(), #wm_reqdata{}, context()}.
+malformed_range_repl_request(RD, Ctx) ->
+    case wrq:path_info(bucket, RD) of
+        undefined ->
+            malformed_response("Bucket required", [], RD, Ctx);
+        Bucket0 ->
+            Bucket = erlang:list_to_binary(
+                       riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
+                      ),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            QN0 = wrq:get_qs_value(?Q_AAEFOLD_QUEUENAME, undefined, RD),
+            malformed_range_repl_request(Filter0, QN0, RD, Ctx#ctx{bucket=Bucket})
+    end.
+
+-spec malformed_range_repl_request(undefined | string(),
+                                    undefined | string(),
+                                    #wm_reqdata{},
+                                    context()) ->
+                                        {boolean(), #wm_reqdata{}, context()}.
+malformed_range_repl_request(Filter0, QN0, RD, Ctx) ->
+    case validate_range_filter(Filter0) of
+        {invalid, Reason} ->
+            malformed_response("Invalid range filter ~p",
+                               [Reason],
+                               RD,
+                               Ctx);
+        {valid, Filter} ->
+            case QN0 of
+                undefined ->
+                    malformed_response("Queue Name required", [], RD, Ctx);
+                _ ->
+                    QN = list_to_atom(QN0),
+                    QBucket = query_bucket(Ctx),
+                    Query = {repl_keys_range,
+                                QBucket,
+                                Filter#filter.key_range,
+                                Filter#filter.date_range,
+                                QN},
+                    {false, RD, Ctx#ctx{query= Query}}
+            end
     end.
 
 %% @private validate and populate the object stats query

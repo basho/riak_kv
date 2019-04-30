@@ -6,33 +6,33 @@ Replication in Riak has an interesting history, going through multiple stages of
 
 In the final implementation of replication prior to the end of Basho, the replication services were based on:
 
-* A real-time replication solution which tried to reliably (i.e. handling failure and back-pressure) queue and send updates from one cluster to another;
+* A real-time replication solution which tries to reliably (i.e. handling failure and back-pressure) queue and send updates from one cluster to another;
 
-* A key-listing full-synchronisation feature that would allow for reconciliation between clusters - that had significant resource overheads, and in large clusters would take many hours to complete.
+* A key-listing full-synchronisation feature allows for reconciliation between clusters - that has significant resource overheads, and in large clusters will take many hours to complete.
 
-* An AAE-based full-synchronisation mechanism that could be run with substantially lower overheads, and in shorter time, than the key-listing full-sync mechanism - but which would frequently fail (in some cases impacting the availability of the cluster on which it was run).  Note that the AAE-based full-sync was never released by basho other than as a *technical preview*.
+* An alternative full-synchronisation service that reuses the intra-cluster active anti-entropy feature.  The AAE-based full-sync is much more efficient than key-listing full-sync, but will frequently fail (in some cases impacting the availability of the cluster on which it was run).  Note that the AAE-based full-sync was never released by basho other than as a *technical preview*.
 
 These replication mechanisms had some key limitations:
 
-* `riak_repl` could not be reliably used to replicate between clusters of [different ring-sizes](https://docs.riak.com/riak/kv/2.2.3/using/reference/v3-multi-datacenter/architecture/index.html#restrictions) - meaning that data migrations necessary for customers with ring-size expansion needs had to be handled by bespoke customer application planning and logic (following the deprecation of the unreliable ring-resizing feature).
+* `riak_repl` cannot be reliably used to replicate between clusters of [different ring-sizes](https://docs.riak.com/riak/kv/2.2.3/using/reference/v3-multi-datacenter/architecture/index.html#restrictions) - meaning that data migrations necessary for customers with ring-size expansion needs had to be handled by bespoke customer application planning and logic (following the deprecation of the unreliable ring-resizing feature).
 
-* `riak_repl` could only be used for complete replication between clusters, partial replication rules (e.g. replicating an individual bucket or bucket-type) could not be configured.  Paradoxically although only complete replication could be configured, some types of data could not be replicated, so partial replication may be the unexpected outcome of configuring total replication.
+* `riak_repl` can only be used for complete replication between clusters, partial replication rules (e.g. replicating an individual bucket or bucket-type) cannot be configured.  Paradoxically although only complete replication can be configured, some types of data could not be replicated, so partial replication may be the unexpected outcome of configuring total replication.
 
-* `riak_repl` led to unnecessary bi-directional replication, with full-sync replication only able to tell differences between sites and not consider causal context, meaning that out-of-date data would potentially be needlessly sent to a more up-to-date cluster.
+* `riak_repl` leads to unnecessary bi-directional replication, with full-sync replication only able to tell differences between sites and not consider causal context, meaning that out-of-date data may potentially be needlessly sent to a more up-to-date cluster.
 
-* The partial reliability of real-time replication generated complexity, delay in replication, and failures in operation - but the reliability was necessary due to the limited reliability and high cost of full-sync replication.
+* The partial reliability of real-time replication generated complexity, delays in replication, and failures in operation - but the reliability is necessary due to the limited reliability and high cost of full-sync replication.
 
 ## Concept of an Enhanced Replication Solution
 
 The starting point for enhancing replication was to consider an improved full-sync solution: one that can reconcile between clusters quickly, reliably and at low resource cost.  With an improved full-sync solution, the real-time replication solution can be significantly simplified - as it may discard deltas in some failure scenarios protected by the knowledge that eventual consistency will be maintained in a timely manner through the full-sync process.   
 
-The building block for an efficient full-sync solution is the [`kv_index_tictactree`](https://github.com/martinsumner/kv_index_tictactree) project.  This is intended to provide an alternative to Riak's [`hashtree`](https://github.com/basho/riak_core/blob/develop-2.9/src/hashtree.erl) anti-entropy mechanism (and the source of the functionality of its AAE-based full-synchronisation service).  However, in features it differs from the current Riak hashtree solution in that:
+The building block for an efficient full-sync solution is the [`kv_index_tictactree`](https://github.com/martinsumner/kv_index_tictactree) project.  This is intended to provide an alternative to Riak's [`hashtree`](https://github.com/basho/riak_core/blob/develop-2.9/src/hashtree.erl) anti-entropy mechanism, for both intra-cluster and inter-cluster reconciliation and repair.  The features of kv_index_hashtree differs from the current Riak hashtree solution in that:
 
-* It is designed to be always on and available, even during tree rebuilds and exchanges - so need to request locks, or wait for locks before completing a process.
+* It is designed to be always on and available, even during tree rebuilds and exchanges - so need to request, wait-for and retain locks to complete anti-entropy processes.
 
-* The [merkle trees](https://en.wikipedia.org/wiki/Merkle_tree) generated are mergeable by design, and can be built incrementally (without requiring first a full list of keys and hashes to be produced ahead of the tree build).  This allows for cluster-wide trees to be created through coverage queries, so that clusters with different internal structures can be compared.
+* The [merkle trees](https://en.wikipedia.org/wiki/Merkle_tree) generated are mergeable by design, and can be built incrementally (without requiring first a full list of keys and hashes to be produced ahead of the tree build).  This allows for cluster-wide trees to be created through coverage queries.  Clusters with different internal structures can then be compared, even where cache trees within the cluster are aligned with those structures.
 
-* The supporting key-store is key-ordered, but accelerated for lookups by hashtree (merkle tree) structure, meaning that it can be used for key-range and by-bucket queries as we well as servicing hashtree-related queries.
+* The supporting key-store is ordered by key and not arranged according to the hashtree structure of the merkle trees. The implementation does have acceleration for lookups by hashtree structure though, meaning that it can be used for key-range and by-bucket queries but still serve hashtree related queries with sufficient efficiency.
 
 * The supporting key-store is accelerated for query by modified date, so it is possible to build dynamic trees not just for key ranges or buckets, but also for ranges of modified times e.g. resolve entropy issues in objects sent in the past hour.
 
@@ -46,7 +46,7 @@ With an efficient and flexible anti-entropy inter-cluster reconciliation mechani
 
 * Leader-free replication, although with greater requirement on configuration by the operator to manage redundancy within the setup via scripting `riak.conf` files.
 
-* By default replication queues contain pointers to objects only, stripped of their values, to allow for longer queues to be supported by default (i.e higher bounds on bounded queues) - as the queues need not consider the cost of storing the full size of the object.  There is a distributed cache, bounded in size, of recently changed objects - so the when a reference is fetched from the queue its value can normally be filled-in efficiently.
+* By default replication queues contain pointers to objects only, stripped of their values, to allow for longer queues to be supported by default (i.e higher bounds on bounded queues) - as the queues need not consider the cost of storing the full size of the object.  There is a distributed cache, bounded in size, of recently changed objects.  This cache means that when a reference is fetched from the queue its value can normally be filled-in efficiently.
 
 * Priority-based queueing - so that admin-driven replication activity (e.g. for service transition or data migration), full-sync reconciliation and real-time replication activity can be separately prioritised - with real-time replication given the highest absolute priority.
 
@@ -62,9 +62,9 @@ The overall solution produced using these concepts, now supports the following f
 
 * Failure management of replication handled within existing `riak_kv` processes (e.g. through automatic adjustment of coverage plans), not through repl-specific leadership negotiation.
 
-* A smaller simpler repl code base (less than 2K lines of code), with fewer moving parts to monitor, and delivered as an integrated part of `riak_kv`.
+* A smaller simpler repl codebase (less than 2K lines of code), with fewer moving parts to monitor, and delivered as an integrated part of `riak_kv`.
 
-* Generally lower-latency real-time replication as replication is now triggered following completion of the PUT co-ordinator, not waiting for the post-commit stage (e.g. when 1 nodes has completed the PUT, not waiting for 'enough' nodes to have completed the PUT).
+* Generally lower-latency real-time replication as replication is now triggered following completion of the PUT co-ordinator, not waiting for the post-commit stage (e.g. when 1 node has completed the PUT, not waiting for 'enough' nodes to have completed the PUT).
 
 * Real-time replication and full-sync replication of objects in the write-once path - which had previously been restricted to [full-sync support](https://docs.riak.com/riak/kv/2.2.3/developing/app-guide/write-once/).
 
@@ -300,3 +300,7 @@ The reasons for choosing the vnode:
 *AAE Fold implementation*
 
 ...
+
+*Provide support for non-utf8 keys*
+
+Need to write pb api for services.  HTTP API will blow up on a non-utf8 bucket or key (true for all services, not just repl)
