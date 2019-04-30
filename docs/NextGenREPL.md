@@ -8,7 +8,7 @@ In the final implementation of replication prior to the end of Basho, the replic
 
 * A real-time replication solution which tries to reliably (i.e. handling failure and back-pressure) queue and send updates from one cluster to another;
 
-* A key-listing full-synchronisation feature allows for reconciliation between clusters - that has significant resource overheads, and in large clusters will take many hours to complete.
+* A key-listing full-synchronisation feature which allows for reconciliation between clusters - that has significant resource overheads, and in large clusters will take many hours to complete.
 
 * An alternative full-synchronisation service that reuses the intra-cluster active anti-entropy feature.  The AAE-based full-sync is much more efficient than key-listing full-sync, but will frequently fail (in some cases impacting the availability of the cluster on which it was run).  Note that the AAE-based full-sync was never released by basho other than as a *technical preview*.
 
@@ -16,7 +16,7 @@ These replication mechanisms had some key limitations:
 
 * `riak_repl` cannot be reliably used to replicate between clusters of [different ring-sizes](https://docs.riak.com/riak/kv/2.2.3/using/reference/v3-multi-datacenter/architecture/index.html#restrictions) - meaning that data migrations necessary for customers with ring-size expansion needs had to be handled by bespoke customer application planning and logic (following the deprecation of the unreliable ring-resizing feature).
 
-* `riak_repl` can only be used for complete replication between clusters, partial replication rules (e.g. replicating an individual bucket or bucket-type) cannot be configured.  Paradoxically although only complete replication can be configured, some types of data could not be replicated, so partial replication may be the unexpected outcome of configuring total replication.
+* `riak_repl` can only be used for complete replication between clusters, partial replication rules (e.g. replicating an individual bucket or bucket-type) cannot be configured.  Paradoxically although only complete replication can be configured, some types of data cannot be replicated, so partial replication may be the unexpected outcome of configuring total replication.
 
 * `riak_repl` leads to unnecessary bi-directional replication, with full-sync replication only able to tell differences between sites and not consider causal context, meaning that out-of-date data may potentially be needlessly sent to a more up-to-date cluster.
 
@@ -36,7 +36,7 @@ The building block for an efficient full-sync solution is the [`kv_index_tictact
 
 * The supporting key-store is accelerated for query by modified date, so it is possible to build dynamic trees not just for key ranges or buckets, but also for ranges of modified times e.g. resolve entropy issues in objects sent in the past hour.
 
-* The supporting key-store contains causal context information, not just hashes, allowing for genuine comparison between differences and targeted anti-entropy action.
+* The supporting key-store contains causal context information, not just hashes, allowing for genuine comparison between differences and targeted anti-entropy recovery action.
 
 The `kv_index_tictactree` process was introduced as part of Riak 2.9.0, where it is primarily used for intra-cluster entropy protection.  In Riak 2.9.1 this can now be used in an automated and efficient way for inter-cluster reconciliation and repair.
 
@@ -44,7 +44,7 @@ With an efficient and flexible anti-entropy inter-cluster reconciliation mechani
 
 * No acks required of fetches from the queue, no need to failover queues between nodes during cluster-change events: the system can let it fail, and address resultant entropy through full-sync reconciliation.
 
-* Leader-free replication, although with greater requirement on configuration by the operator to manage redundancy within the setup via scripting `riak.conf` files.
+* Leader-free replication, although with greater requirement on configuration by the operator to manage redundancy within the setup via `riak.conf`.
 
 * By default replication queues contain pointers to objects only, stripped of their values, to allow for longer queues to be supported by default (i.e higher bounds on bounded queues) - as the queues need not consider the cost of storing the full size of the object.  There is a distributed cache, bounded in size, of recently changed objects.  This cache means that when a reference is fetched from the queue its value can normally be filled-in efficiently.
 
@@ -84,7 +84,7 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
   * It is is an administrator responsibility to ensure the cluster AAE workload is distributed across nodes with sufficient diversity to ensure correct operation under failure.  Work is not re-distributed between nodes in response to failure on either the local or remote cluster, so there must be other nodes already configured to share that workload to continue operation under failure conditions.
 
-  * Each node can only full-sync with one other cluster (via the one peer node).  If the cluster needs to full-sync with more than one cluster, then the administrator should ensure different nodes have the necessary different configurations to achieve this.
+  * Each node can only full-sync with one other cluster (via the one peer node).  If the cluster needs to full-sync with more than one cluster, then the administrator should ensure different nodes have the different configurations necessary to achieve this.
 
   * Scheduling of work to minimise concurrency of reconciliation operations is managed by this actor using a simple, coordination-free mechanism.
 
@@ -259,6 +259,10 @@ Some advantages of using a vnode - src cannot be overloaded by unbalanced sendin
 
 Small distributed caches seems intuitively to be efficient, a good use of riak capability, and avoids the cache becoming a bottleneck.
 
+*riak_kv_replrtq_src needs to pick-up config at startup*
+
+Currently ignoring riak.conf and only configured via attach.
+
 *Extend the replication support to the write once path by implementing it within the riak_kv_w1c_worker.  Initial thoughts are that the push on the repl side should not use the write once path*
 
 ...
@@ -299,8 +303,12 @@ The reasons for choosing the vnode:
 
 *AAE Fold implementation*
 
-...
+Added on 30/4.  New test https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_aaefold.erl
 
 *Provide support for non-utf8 keys*
 
 Need to write pb api for services.  HTTP API will blow up on a non-utf8 bucket or key (true for all services, not just repl)
+
+*Upgrade ibrowse to handle connection pooling*
+
+...
