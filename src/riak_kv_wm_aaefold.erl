@@ -403,9 +403,15 @@ malformed_range_repl_request(RD, Ctx) ->
             Bucket = erlang:list_to_binary(
                        riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
                       ),
-            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
-            QN0 = wrq:get_qs_value(?Q_AAEFOLD_QUEUENAME, undefined, RD),
-            malformed_range_repl_request(Filter0, QN0, RD, Ctx#ctx{bucket=Bucket})
+            case wrq:path_info(queuename, RD) of
+                undefined ->
+                    malformed_response("Queue Name required", [], RD, Ctx);
+                QN0 ->
+                    Filter0 =
+                        wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+                    malformed_range_repl_request(Filter0, QN0,
+                                                    RD, Ctx#ctx{bucket=Bucket})
+            end
     end.
 
 -spec malformed_range_repl_request(undefined | string(),
@@ -421,19 +427,14 @@ malformed_range_repl_request(Filter0, QN0, RD, Ctx) ->
                                RD,
                                Ctx);
         {valid, Filter} ->
-            case QN0 of
-                undefined ->
-                    malformed_response("Queue Name required", [], RD, Ctx);
-                _ ->
-                    QN = list_to_atom(QN0),
-                    QBucket = query_bucket(Ctx),
-                    Query = {repl_keys_range,
-                                QBucket,
-                                Filter#filter.key_range,
-                                Filter#filter.date_range,
-                                QN},
-                    {false, RD, Ctx#ctx{query= Query}}
-            end
+            QN = list_to_atom(QN0),
+            QBucket = query_bucket(Ctx),
+            Query = {repl_keys_range,
+                        QBucket,
+                        Filter#filter.key_range,
+                        Filter#filter.date_range,
+                        QN},
+            {false, RD, Ctx#ctx{query= Query}}
     end.
 
 %% @private validate and populate the object stats query
