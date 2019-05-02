@@ -148,7 +148,7 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
 fetch(QueueName, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
-    Options = [deletedvclock, {pr, 1}, {r, 1}],
+    Options = [deletedvclock, {pr, 1}, {r, 1}, {notfound_ok, false}],
     case node() of
         Node ->
             riak_kv_get_fsm:start({raw, ReqId, Me},
