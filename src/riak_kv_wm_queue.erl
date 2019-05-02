@@ -123,7 +123,11 @@ format_response(internal, {ok, RObj}, RD, Ctx) ->
     {<<SuccessMark/binary, IsTombstone/binary,
         ObjBin/binary>>, RD, Ctx};
 format_response(internal, {error, Reason}, RD, Ctx) ->
-    {{error, Reason}, RD, Ctx}.
+    lager:warning("Fetch error ~w", [Reason]),
+    {{error, Reason}, RD, Ctx};
+format_response(internal, UnexpectedResponse, RD, Ctx) ->
+    lager:warning("Fetch unexpected ~w", [UnexpectedResponse]),
+    {{error, unexpected}, RD, Ctx}.
 
 encode_riakobject(RObj) ->
     B = riak_object:bucket(RObj),

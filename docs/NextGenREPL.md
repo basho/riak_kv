@@ -221,7 +221,6 @@ TODO - potential questions below
 
 ...
 
-
 *In this future will this mean there is 1 way of doing replication in Riak, or n + 1 ways?*
 
 ...
@@ -310,5 +309,13 @@ Added on 30/4.  New test https://github.com/nhs-riak/riak_test/blob/mas-i1691-tt
 Need to write pb api for services.  HTTP API will blow up on a non-utf8 bucket or key (true for all services, not just repl)
 
 *Upgrade ibrowse to handle connection pooling*
+
+...
+
+*Allow for ssl support in replication*
+
+...
+
+*External data format to be supported in fetch i.e. a fetch that would return a GET response, not a specific internal riak repl format*
 
 ...
