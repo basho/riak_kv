@@ -96,7 +96,7 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
   * The general pattern is that each delta within a cluster will be published once via the `riak_kv_replrtq_src` on a node local to the discovery of the change.  Each queue which is a source of updates will have multiple consumers spread across multiple sink nodes on the receiving cluster - where each sink-side node's consumers are being managed by a `riak_kv_replrtq_snk` process on that node.  The [publish and consume topology](https://github.com/russelldb/rabl/blob/master/docs/many-2-many-2.png) is based on that successfully tested in the [rabl riak replication add-on](https://github.com/russelldb/rabl/blob/master/docs/introducing.md).
 
-  * Queues may have data filtering rules to restrict what changes are distributed via that queue.  The filters can restrict replication to a specific bucket, or bucket type, or allow for any change to be published to that queue.
+  * Queues may have data filtering rules to restrict what changes are distributed via that queue.  The filters can restrict replication to a specific bucket, or bucket type, a bucket name prefix or allow for any change to be published to that queue.
 
   * __Real-time replication__ changes (i.e. PUTs that have just been co-ordinated on this node within the cluster), are sent to the `riak_kv_replrtq_src` as either references (e.g. Bucket, Key, Clock and co-ordinating vnode) or whole objects in the case of tombstones.  These are the highest priority items to be queued, and are placed on __every queue whose data filtering rules are matched__ by the object.
 
@@ -319,3 +319,9 @@ Need to write pb api for services.  HTTP API will blow up on a non-utf8 bucket o
 *External data format to be supported in fetch i.e. a fetch that would return a GET response, not a specific internal riak repl format*
 
 ...
+
+*Add prefix support for filters on source queue.  Maybe add bucketname_exc and bucketname_inc to allow "all but bucket name" as well as "none but bucket name"*
+
+...
+
+*Add validation functions for tokenised inputs (peer list on rpel sink, queue definitions on repl source). Startup should fail due to invalid config*

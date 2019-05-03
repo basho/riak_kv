@@ -973,117 +973,37 @@
   {default, 0}
 ]}.
 
-%% @doc Disable or enable real-time replication using the replq mechanism.
-%% This real-time replication is independent of any riak_repl configuration -
-%% unexpected events may occur is both forms of real-time replication are
-%% concurrently configured.
-%% Running with replq disabled will prevent any PUTs co-ordinated on this node
-%% from being queued for a remote cluster.  However, it will not prevent this
-%% node as acting as a source for replication updates pormpted by a Tictac AAE
-%% exchange or a aae_fold.
-%% TODO: Add support for this being enabled.
-{mapping, "replq_src", "riak_kv.replq_src", [
-    {datatype, {flag, enabled, disabled}},
-    {default, disabled},
-    {commented, enabled}
-]}.
 
-%% @doc replq queue count - the number of queues (between 0 and 4 to be
-%% pre-configured for replq real-time replictaion activity from this node)
-{mapping, "replq_queuecount", "riak_kv.replq_queuecount", [
-  {datatype, integer},
-  {default, 1},
-  {commented, 4}
-]}.
-
-%% @doc Limit the size of replication queues (for a queue and priority)
-{mapping, "replq_queuelimit", "riak_kv.replq_queuelimit", [
+%% @doc Limit the size of replication queues (for a queue and priority, i.e.
+%% each priority on each queue will have this as the limit)
+{mapping, "replrtq_srcqueuelimit", "riak_kv.replrtq_srcqueuelimit", [
   {datatype, integer},
   {default, 100000}
 ]}.
 
-%% @doc There are up to four real-time replq queues which can be configured, 
-%% although more may be added by scripted changes once the node is active.
-%% For each queue - there should be a queue name, and a filter defined.
-%% The queue name should be a string, and at least one should match any queue
-%% name defined in `riak_kv.ttaaefs_queuename` if Tictac AAE is to be used.
-{mapping, "replq1_queuename", "riak_kv.replq1_queuename", [
-  {datatype, atom},
-  {default, q1_ttaaefs}
+%% @doc Queue definitions
+%% Queues shoudl be defined using a pipe '|' delimited string, of two
+%% colon ':' delimited elements.  The first part of each queue definition is
+%% the ascii name of the queue, the second part indicated the filter to be
+%% applied which should be either:
+%% - any (all real-time modifications to be replicated via this queue)
+%% - block_rtq (no real-time modifications to be replicated)
+%% - bucketname.<name_of_bucket>
+%% - bucketprefix.<prefix_for_bucket>
+%% - buckettype.<name_of_type>
+%% The latter three options allow for specific buckets to be supported by the
+%% queue, or only buckets with certain prefixes, or for just buckets of a given
+%% type.
+%% If a list of buckets or types need to be supported, then either multiple
+%% queues need to be defined, or non-persistent extended definitions can be
+%% made at runtime used the riak_kv_replrtq_src API.
+%% Example configurtaion might be:
+%% cluster_a:any|cluster_b:block_rtq|cluster_c:bucketprefix.user
+{mapping, "replrtq_srcqueues", "riak_kv.replrtq_srcqueues", [
+    {datatype, string},
+    {default, "qi_ttaaefs:block_rtq"}
 ]}.
 
-%% @doc Queue name for second queue
-{mapping, "replq2_queuename", "riak_kv.replq2_queuename", [
-  {datatype, atom},
-  {commented, cluster_two}
-]}.
-
-%% @doc Queue name for third queue
-{mapping, "replq3_queuename", "riak_kv.replq3_queuename", [
-  {datatype, atom},
-  {commented, cluster_three}
-]}.
-
-%% @doc Queue name for fourth queue
-{mapping, "replq4_queuename", "riak_kv.replq4_queuename", [
-  {datatype, atom},
-  {commented, cluster_four}
-]}.
-
-%% @doc filter type for first queue.  The filter can be defined as `any` or
-%% bucketname, or buckettype depending on whether real-time inputs will be
-%% filtered by bucket name or type (or if all will be allowed).  The filter
-%% is only applied to real-time notifications of PUTs co-ordinated on this
-%% node (the filter will be ignored if full-sync uses this queue).
-%% If the queue should block all real-time queue and only be used for aae_fold
-%% or ttaae full-sync exchanges then use block_rtq
-{mapping, "replq1_filtertype", "riak_kv.replq1_filtertype", [
-  {datatype, {enum, [any, bucketname, buckettype, block_rtq]}},
-  {default, any}
-]}.
-
-%% @doc Filter type for second queue
-{mapping, "replq2_filtertype", "riak_kv.replq2_filtertype", [
-  {datatype, {enum, [any, bucketname, buckettype, block_rtq]}},
-  {commented, any}
-]}.
-
-%% @doc Filter type for third queue
-{mapping, "replq3_filtertype", "riak_kv.replq3_filtertype", [
-  {datatype, {enum, [any, bucketname, buckettype, block_rtq]}},
-  {commented, any}
-]}.
-
-%% @doc Filter type for fourth queue
-{mapping, "replq4_filtertype", "riak_kv.replq4_filtertype", [
-  {datatype, {enum, [any, bucketname, buckettype, block_rtq]}},
-  {commented, any}
-]}.
-
-%% @doc filter name for first queue if it has been defined to match a bucket
-%% name or type (will be ignored for `all` filter type)
-{mapping, "replq1_filtername", "riak_kv.replq1_filtername", [
-  {datatype, string},
-  {commented, "bucket1"}
-]}.
-
-%% @doc filter name for second queue
-{mapping, "replq2_filtername", "riak_kv.replq2_filtername", [
-  {datatype, string},
-  {commented, "bucket2"}
-]}.
-
-%% @doc filter name for third queue
-{mapping, "replq3_filtername", "riak_kv.replq3_filtername", [
-  {datatype, string},
-  {commented, "bucket3"}
-]}.
-
-%% @doc filter name for fourth queue
-{mapping, "replq4_filtername", "riak_kv.replq4_filtername", [
-  {datatype, string},
-  {commented, "bucket4"}
-]}.
 
 %% @doc There are up to two replication queues which can be configured, 
 %% from which this node will act as a sink - i.e. consume from these queues

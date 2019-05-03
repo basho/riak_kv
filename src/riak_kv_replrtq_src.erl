@@ -93,10 +93,12 @@
     % a vnode as part of the operation that PULLs from the queue.
 -type type_filter() :: {buckettype, binary()}.
 -type bucket_filter() :: {bucketname, binary()}.
+-type prefix_filter() :: {bucketprefix, binary(), pos_integer()}.
 -type all_filter() :: any.
 -type blockrtq_filter() :: block_rtq.
 -type queue_filter() ::
-    type_filter()|bucket_filter()|all_filter()|blockrtq_filter().
+    type_filter()|bucket_filter()|all_filter()|
+        blockrtq_filter()|prefix_filter().
 -type queue_length() ::
     {non_neg_integer(), non_neg_integer(), non_neg_integer()}.
 -type queue_filtermap() :: {queue_name(), queue_filter(), active|suspended}.
@@ -165,7 +167,7 @@ replrtq_coordput(ReplEntry) ->
     gen_server:cast(?MODULE, {rtq_coordput, ReplEntry}).
 
 %% @doc
-%% Setup a queue with a given queuename, whcih will take coordput repl_entries
+%% Setup a queue with a given queuename, which will take coordput repl_entries
 %% that pass the given filter.
 -spec register_rtq(queue_name(), queue_filter()) -> boolean().
 register_rtq(QueueName, QueueFilter) ->
@@ -194,7 +196,7 @@ resume_rtq(QueueName) ->
     gen_server:call(?MODULE, {resume_rtq, QueueName}, infinity).
 
 %% @doc
-%% Return the {fold_lengrh, aae_length, put_length} to show the length of the
+%% Return the {fold_length, aae_length, put_length} to show the length of the
 %% queue under each priority for that queue
 -spec length_rtq(queue_name()) -> {queue_name(), queue_length()}|false.
 length_rtq(QueueName) ->
@@ -216,8 +218,24 @@ stop() ->
 %%%============================================================================
 
 init([]) ->
+    QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
+    QFM = tokenise_queuedefn(QueueDefnString),
+    MapToQM = 
+        fun({QueueName, _QF, _QA}) ->
+            {QueueName, riak_core_priority_queue:new()}
+        end,
+    MaptoQC =
+        fun({QueueName, _QF, _QA}) ->
+            {QueueName, {0, 0, 0}}
+        end,
+    QM = lists:map(MapToQM, QFM),
+    QC = lists:map(MaptoQC, QFM),
+    QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
     erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_queue),
-    {ok, #state{}}.
+    {ok, #state{queue_filtermap = QFM,
+                queue_map = QM,
+                queue_countmap = QC,
+                queue_limit = QL}}.
 
 handle_call({rtq_ttaaefs, QueueName, ReplEntries}, _From, State) ->
     {ApproachingLimit, QueueMap, QueueCountMap} =
@@ -367,6 +385,22 @@ find_queues({T, Bucket}, [{QN, {bucketname, Bucket}, _}|Rest], ActiveQueues) ->
     find_queues({T, Bucket}, Rest, [QN|ActiveQueues]);
 find_queues({Type, B}, [{QN, {buckettype, Type}, _}|Rest], ActiveQueues) ->
     find_queues({Type, B}, Rest, [QN|ActiveQueues]);
+find_queues({T, Bucket},
+            [{QN, {bucketprefix, Prefix, PS}, _}|Rest], ActiveQueues) ->
+    case Bucket of
+        <<Prefix:PS/binary, _R/binary>> ->
+            find_queues({T, Bucket}, Rest, [QN|ActiveQueues]);
+        _ ->
+            find_queues({T, Bucket}, Rest, ActiveQueues)
+    end;
+find_queues(Bucket,
+            [{QN, {bucketprefix, Prefix, PS}, _}|Rest], ActiveQueues) ->
+    case Bucket of
+        <<Prefix:PS/binary, _R/binary>> ->
+            find_queues(Bucket, Rest, [QN|ActiveQueues]);
+        _ ->
+            find_queues(Bucket, Rest, ActiveQueues)
+    end;
 find_queues(Bucket, [_H|Rest], ActiveQueues) ->
     find_queues(Bucket, Rest, ActiveQueues).
 
@@ -450,7 +484,49 @@ update_counts({P1, P2, 0}) ->
 update_counts({P1, P2, P3}) ->
     {P1, P2, P3 - 1}.
 
-
+%% @doc convert the toeknised string of queue definitions into actual queue
+%% tokenised string expected to be of form:
+% "queuename:filter_type\filter_defn|queuename:filter_type\filter_defn etc"
+-spec tokenise_queuedefn(string()) -> list(queue_filtermap()).
+tokenise_queuedefn(QueueDefnString) ->
+    QueueStrings = string:tokens(QueueDefnString, "|"),
+    SplitQueueDefnFun = 
+        fun(QueueString, Acc) ->
+            case string:tokens(QueueString, ":") of
+                [QueueName, QueueFilter] ->
+                    case string:tokens(QueueFilter, ".") of
+                        ["any"] ->
+                            [{list_to_atom(QueueName), any, active}|Acc];
+                        ["block_rtq"] ->
+                            [{list_to_atom(QueueName), block_rtq, active}|Acc];
+                        ["bucketname", BucketName] ->
+                            [{list_to_atom(QueueName),
+                                {bucketname, list_to_binary(BucketName)},
+                                active}|Acc];
+                        ["bucketprefix", Prefix] ->
+                            [{list_to_atom(QueueName),
+                                {bucketprefix,
+                                    list_to_binary(Prefix),
+                                    byte_size(list_to_binary(Prefix))},
+                                active}|Acc];
+                        ["buckettype", Type] ->
+                            [{list_to_atom(QueueName),
+                                {buckettype, list_to_binary(Type)},
+                                active}|Acc];
+                        Unexpected ->
+                            lager:warning(
+                                "Unsupported queue definition ~w ignored",
+                                [Unexpected]),
+                            Acc
+                    end;
+                Unexpected ->
+                    lager:warning(
+                                "Unsupported queue definition ~w ignored",
+                                [Unexpected]),
+                    Acc
+            end
+        end,
+    lists:foldl(SplitQueueDefnFun, [], QueueStrings).
 
 %%%============================================================================
 %%% Test
@@ -546,7 +622,7 @@ basic_multiqueue_test() ->
     ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(?QN3)),
     ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
     
-    % Adding a bulk base don an AAE job will be applied to the actual
+    % Adding a bulk based on an AAE job will be applied to the actual
     % queue regardless of filter
     Grp5A = lists:map(GenB5, lists:seq(61, 70)),
     ok = replrtq_ttaefs(?QN2, lists:reverse(Grp5A)),
@@ -694,6 +770,17 @@ limit_aaefold_test() ->
     ?assertMatch({?QN1, {49999, 0, 0}}, length_rtq(?QN1)),
     stop().
 
+parse_queuedefinition_test() ->
+    Str1 = "cluster_a:bucketprefix.user|cluster_b:any|" ++
+            "cluster_c:buckettype.repl|cluster_d:bucketname,wrongdelim|" ++
+            "cluster_e.bucketname.name",
+    QFM = tokenise_queuedefn(Str1),
+    ?assertMatch([cluster_a, cluster_b],
+                    find_queues(<<"userdetails">>, QFM, [])),
+    ?assertMatch([cluster_a, cluster_b],
+                    find_queues({<<"type">>, <<"userdetails">>}, QFM, [])),
+    ?assertMatch([cluster_a, cluster_b, cluster_c],
+                    find_queues({<<"repl">>, <<"userdetails">>}, QFM, [])).
 
 
 
