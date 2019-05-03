@@ -1004,6 +1004,12 @@
     {default, "qi_ttaaefs:block_rtq"}
 ]}.
 
+%% @doc Enable this node to act as a sink and consume from a src cluster
+{mapping, "replrtq_enablesink", "riak_kv.replrtq_enablesink", [
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
+]}.
+
 
 %% @doc There are up to two replication queues which can be configured, 
 %% from which this node will act as a sink - i.e. consume from these queues

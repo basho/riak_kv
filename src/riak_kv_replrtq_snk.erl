@@ -169,7 +169,6 @@ add_snkqueue(QueueName, Peers, WorkerCount) ->
 
 init([]) ->
     SinkEnabled = app_helper:get_env(riak_kv, replrtq_enablesink, false),
-    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_stats),
     case SinkEnabled of
         true ->
             Sink1 = app_helper:get_env(riak_kv, replrtq_sink1queue, disabled),
@@ -310,6 +309,7 @@ handle_cast({requeue_work, WorkItem}, State) ->
 
 handle_info(timeout, State) ->
     prompt_work(),
+    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_stats),
     {noreply, State};
 handle_info(log_stats, State) ->
     erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_stats),
