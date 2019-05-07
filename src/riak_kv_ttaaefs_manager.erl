@@ -56,7 +56,7 @@
     % interval, to allow exchanges to be re-scheduled.
 
 -record(state, {slice_allocations = [] :: list(allocation()),
-                slice_set_start = os:timestamp() :: erlang:timestamp(),
+                slice_set_start :: erlang:timestamp(),
                 schedule :: schedule_wants(),
                 backup_schedule :: schedule_wants(),
                 peer_ip :: string(),
@@ -619,9 +619,14 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
     NewAllocations = choose_schedule(Wants),
     % Should be 24 hours after ScheduleStartTime - so add 24 hours to
     % ScheduleStartTime
-    {Mega, Sec, _Micro} = ScheduleStartTime,
-    Seconds = Mega * 1000 + Sec + 86400,
-    RevisedStartTime = {Seconds div 1000, Seconds rem 1000, 0},
+    RevisedStartTime = 
+        case ScheduleStartTime of
+            undefined ->
+                os:timestamp();
+            {Mega, Sec, _Micro} ->
+                Seconds = Mega * 1000 + Sec + 86400,
+                {Seconds div 1000, Seconds rem 1000, 0}
+        end,
     take_next_workitem(NewAllocations, Wants,
                         RevisedStartTime, SlotInfo, SliceCount);
 take_next_workitem([NextAlloc|T], Wants,

@@ -260,7 +260,8 @@ Small distributed caches seems intuitively to be efficient, a good use of riak c
 
 *riak_kv_replrtq_src needs to pick-up config at startup*
 
-Currently ignoring riak.conf and only configured via attach.
+Add with new test - https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_ttaaefs_autoall.erl
+
 
 *Extend the replication support to the write once path by implementing it within the riak_kv_w1c_worker.  Initial thoughts are that the push on the repl side should not use the write once path*
 
@@ -277,6 +278,9 @@ Currently ignoring riak.conf and only configured via attach.
 *Further riak_test tests*
 
 typed buckets, replication filters, replicating CRDTs
+
+https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_rtq_autotypes.erl
+https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_rtq_autocrdt.erl
 
 *Location of the cache - is having a cache at each vnode the right thing*
 
@@ -322,6 +326,6 @@ Need to write pb api for services.  HTTP API will blow up on a non-utf8 bucket o
 
 *Add prefix support for filters on source queue.  Maybe add bucketname_exc and bucketname_inc to allow "all but bucket name" as well as "none but bucket name"*
 
-...
+Added.  New test https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_rtq_autotypes.erl
 
 *Add validation functions for tokenised inputs (peer list on rpel sink, queue definitions on repl source). Startup should fail due to invalid config*
