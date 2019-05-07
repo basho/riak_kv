@@ -38,7 +38,6 @@
             pause/0,
             resume/0,
             set_sink/3,
-            set_source/3,
             set_queuename/1,
             set_allsync/2,
             set_bucketsync/1,
@@ -63,9 +62,6 @@
                 peer_ip :: string(),
                 peer_port :: integer(),
                 peer_protocol :: http|pb,
-                local_ip :: string(),
-                local_port :: integer(),
-                local_protocol :: http|pb,
                 scope :: bucket|all|disabled,
                 bucket_list :: list()|undefined,
                 local_nval :: pos_integer()|undefined,
@@ -127,13 +123,6 @@ resume() ->
 -spec set_sink(http, string(), integer()) -> ok.
 set_sink(Protocol, IP, Port) ->
     gen_server:call(?MODULE, {set_sink, Protocol, IP, Port}).
-
-%% @doc
-%% Define the source port and address to be used for full-sync.  Source would
-%% normally be localhost
--spec set_source(http, string(), integer()) -> ok.
-set_source(Protocol, IP, Port) ->
-    gen_server:call(?MODULE, {set_source, Protocol, IP, Port}).
 
 %% @doc
 %% Set the queue name to be used for full-sync jobs on this node
@@ -210,11 +199,7 @@ init([]) ->
     PeerIP = app_helper:get_env(riak_kv, ttaaefs_peerip),
     PeerPort = app_helper:get_env(riak_kv, ttaaefs_peerport),
     PeerProtocol = app_helper:get_env(riak_kv, ttaaefs_peerprotocol),
-    % Fetch connectivity information for local cluster
-    LocalIP = app_helper:get_env(riak_kv, ttaaefs_localip),
-    LocalPort = app_helper:get_env(riak_kv, ttaaefs_localport),
-    LocalProtocol = app_helper:get_env(riak_kv, ttaaefs_localprotocol),
-
+    
     % Queue name to be used for AAE exchanges on this cluster
     SrcQueueName = app_helper:get_env(riak_kv, ttaaefs_queuename),
 
@@ -222,9 +207,6 @@ init([]) ->
         State2#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = PeerProtocol,
-                        local_ip = LocalIP,
-                        local_port = LocalPort,
-                        local_protocol = LocalProtocol,
                         queue_name = SrcQueueName},
     
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
@@ -262,12 +244,6 @@ handle_call({set_sink, Protocol, PeerIP, PeerPort}, _From, State) ->
     {reply, ok, State0, ?INITIAL_TIMEOUT};
 handle_call({set_queuename, QueueName}, _From, State) ->
     {reply, ok, State#state{queue_name = QueueName}};
-handle_call({set_source, Protocol, PeerIP, PeerPort}, _From, State) ->
-    State0 = 
-        State#state{local_ip = PeerIP,
-                        local_port = PeerPort,
-                        local_protocol = Protocol},
-    {reply, ok, State0, ?INITIAL_TIMEOUT};
 handle_call({set_allsync, LocalNVal, RemoteNVal}, _From, State) ->
     {reply,
         ok,
@@ -392,10 +368,6 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
         init_client(State#state.peer_protocol,
                     State#state.peer_ip,
                     State#state.peer_port),
-    LocalClient =
-        init_client(State#state.local_protocol,
-                    State#state.local_ip,
-                    State#state.local_port),
 
     case RemoteClient of
         no_client ->
@@ -403,7 +375,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                 ?LOOP_TIMEOUT};
         _ ->
             RemoteSendFun = generate_sendfun(RemoteClient, RNVal),
-            LocalSendFun = generate_sendfun(LocalClient, LNVal),
+            LocalSendFun = generate_sendfun(local, LNVal),
             ReplyFun = generate_replyfun(ReqID, From),
             ReqID0 = 
                 case ReqID of
@@ -446,15 +418,22 @@ get_slotinfo() ->
 %% cluster, and return the response.  The function should make an async call
 %% to try and make the remote and local cluster sends happen as close to
 %% parallel as possible. 
--spec generate_sendfun(rhc:rhc(), nval()) -> fun().
-generate_sendfun(RHC, NVal) ->
+-spec generate_sendfun(rhc:rhc()|local, nval()) -> fun().
+generate_sendfun(SendClient, NVal) ->
     fun(Msg, all, Colour) ->
         AAE_Exchange = self(),
         ReturnFun = 
             fun(R) -> 
                 aae_exchange:reply(AAE_Exchange, R, Colour)
             end,
-        SendFun = remote_sender(Msg, RHC, ReturnFun, NVal),
+        SendFun = 
+            case SendClient of
+                local ->
+                    C = riak_client:new(node(), undefined),
+                    local_sender(Msg, C, ReturnFun, NVal);
+                RHC ->
+                    remote_sender(Msg, RHC, ReturnFun, NVal)
+            end,
         _SpawnedPid = spawn(SendFun),
         ok
     end.
@@ -473,6 +452,40 @@ init_client(http, IP, Port) ->
                             [IP, Port, Error]),
             no_client
     end.
+
+
+-spec local_sender(any(), riak_client:riak_client(), fun(), nval()) -> fun().
+local_sender(fetch_root, C, ReturnFun, NVal) ->
+    fun() ->
+        {ok, R} =
+            riak_client:aae_fold({merge_root_nval, NVal}, C),
+        ReturnFun(R)
+    end;
+local_sender({fetch_branches, BranchIDs}, C, ReturnFun, NVal) ->
+    fun() ->
+        {ok, R} =
+            riak_client:aae_fold({merge_branch_nval, NVal, BranchIDs}, C),
+        ReturnFun(R)
+    end;
+local_sender({fetch_clocks, SegmentIDs}, C, ReturnFun, NVal) ->
+    fun() ->
+        {ok, R} =
+            riak_client:aae_fold({fetch_clocks_nval, NVal, SegmentIDs}, C),
+        ReturnFun(R)
+    end;
+local_sender({merge_tree_range, B, KR, TS, SF, MR, HM}, C, ReturnFun, range) ->
+    fun() ->
+        {ok, R} =
+            riak_client:aae_fold({merge_tree_range, B, KR, TS, SF, MR, HM}, C),
+        ReturnFun(R)
+    end;
+local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, range) ->
+    fun() ->
+        {ok, R} =
+            riak_client:aae_fold({fetch_clocks_range, B0, KR, SF, MR}, C),
+        ReturnFun(R)
+    end.
+
 
 %% @doc
 %% Translate aae_Exchange messages into riak erlang http client requests
@@ -588,8 +601,7 @@ vclock_dominates(none, _SrcVC)  ->
 vclock_dominates(_SinkVC, none) ->
     true;
 vclock_dominates(SinkVC, SrcVC) ->
-    vclock:dominates(riak_object:decode_vclock(SinkVC),
-                        riak_object:decode_vclock(SrcVC)).
+    vclock:dominates(riak_object:decode_vclock(SinkVC), SrcVC).
 
 
 %% @doc
