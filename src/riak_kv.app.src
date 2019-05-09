@@ -17,7 +17,9 @@
                   riak_pipe,
                   riak_dt,
                   riak_pb,
-                  sext
+                  sext,
+                  leveled,
+                  kv_index_tictactree
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},
