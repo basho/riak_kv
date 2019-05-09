@@ -20,3 +20,8 @@ riak_kv.iml
 _build/
 .rebar3/
 rebar.lock
+.DS_Store
+src/riak_core_pb.erl
+*@*
+undefined
+log/crash.log

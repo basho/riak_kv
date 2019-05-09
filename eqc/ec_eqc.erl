@@ -10,6 +10,54 @@
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
+%%====================================================================
+%% eunit test
+%%====================================================================
+
+eqc_test_() ->
+    {setup,
+     fun() ->
+             meck:new(riak_core_bucket),
+             meck:expect(riak_core_bucket, get_bucket,
+                         fun(_Bucket) ->
+                                 [dvv_enabled]
+                         end)
+     end,
+     fun(_) ->
+             meck:unload(riak_core_bucket)
+     end,
+     [
+      {timeout, 300000, ?_assertEqual(true, quickcheck(numtests(1000, ?QC_OUT(prop_ec()))))}
+     ]}.
+
+%% TODO: 
+%% Change put to use per-node vclock.
+%% Convert put core to require response from the coordinating node.
+
+setup() ->
+    meck:new(riak_core_bucket),
+    meck:expect(riak_core_bucket, get_bucket,
+                fun(_Bucket) ->
+                        [dvv_enabled]
+                end).
+
+teardown() ->
+    meck:unload(riak_core_bucket).
+  
+
+%% FSM scheduler EQC test.
+
+test() ->
+    setup(),
+    test(100),
+    teardown().
+
+test(N) ->
+    quickcheck(numtests(N, prop_ec())).
+
+check() ->
+    check(prop_ec(), current_counterexample()).
+
 -define(B, <<"b">>).
 -define(K, <<"k">>).
 
@@ -685,13 +733,12 @@ get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
 put_fsm_proc(ReqId, #params{n = N, w = W, dw = DW}) ->
     AllowMult = true,
     ReturnBody = false,
-    PutCore = riak_kv_put_core:init(N, W, DW,
+    NodeConfirms = 0,
+    PutCore = riak_kv_put_core:init(N, W, DW, NodeConfirms,
                                     DW, %% SLF hack
-                                    N-W+1,   % cannot ever get W replies
-                                    N-DW+1,  % cannot ever get DW replies
                                     AllowMult,
                                     ReturnBody,
-                                    [{Idx, primary} || Idx <- lists:seq(1, N)] %% SLF hack
+                                    [{Idx, primary, node1 } || Idx <- lists:seq(1, N)] %% SLF hack
 ),
     #proc{name = {put_fsm, ReqId}, handler = put_fsm, procst = #putfsmst{putcore = PutCore}}.
 

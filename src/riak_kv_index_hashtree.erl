@@ -76,6 +76,7 @@
 -type hashtree() :: hashtree:hashtree().
 -type update_callback() :: fun(() -> term()).
 -type version() :: legacy | non_neg_integer().
+-type delete_item() :: {binary(), binary()}|{object, {binary(), binary()}}.
 
 -record(state, {index,
                 vnode_pid,
@@ -129,13 +130,13 @@ async_insert(Items, _Opts, Tree) when Tree =:= undefined; Items =:= [] ->
 async_insert(Items=[_|_], Opts, Tree) ->
     gen_server:cast(Tree, {insert, Items, Opts}).
 
--spec delete([{binary(), binary()}], pid()) -> ok.
+-spec delete([delete_item()], pid()) -> ok.
 delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
 delete(Items=[{_Id, _Key}|_], Tree) ->
     catch gen_server:call(Tree, {delete, Items}, infinity).
 
--spec async_delete({binary(), binary()}|[{binary(), binary()}], pid()) -> ok.
+-spec async_delete(delete_item()|[delete_item()], pid()) -> ok.
 async_delete(Items, Tree) when Tree =:= undefined; Items =:= [] ->
     ok;
 async_delete(Items=[{_Id, _Key}|_], Tree) ->
@@ -583,15 +584,12 @@ load_built(#state{trees=Trees}) ->
 
 %% Generate a hash value for a `riak_object'
 -spec hash_object({riak_object:bucket(), riak_object:key()},
-                  riak_object_t2b() | riak_object:riak_object(),
-                  version()) -> binary().
-hash_object({Bucket, Key}, RObj0, Version) ->
+                    riak_object_t2b() | 
+                        riak_object:riak_object() | riak_object:proxy_object(),
+                    version()) -> binary().
+hash_object({Bucket, Key}, RObj, Version) ->
     try
-        RObj = case riak_object:is_robject(RObj0) of
-            true -> RObj0;
-            false -> riak_object:from_binary(Bucket, Key, RObj0)
-        end,
-        riak_object:hash(RObj, Version)
+        riak_object:hash(Bucket, Key, RObj, Version)
     catch _:_ ->
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)
@@ -611,25 +609,39 @@ hash_index_data(IndexData) when is_list(IndexData) ->
 %% If `HasIndexTree` is true, also update the index spec tree.
 -spec fold_keys(index(), pid(), partition(), boolean()) -> ok.
 fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
+    Version = get_version(HashtreePid),
     FoldFun = fold_fun(HashtreePid, HasIndexTree),
     {Limit, Wait} = get_build_throttle(),
-    Req = riak_core_util:make_fold_req(FoldFun,
-                                       {0, {Limit, Wait}}, false,
-                                       [aae_reconstruction,
-                                        {iterator_refresh, true}]),
-    Result = riak_core_vnode_master:sync_command({Partition, node()},
-                                        Req,
-                                        riak_kv_vnode_master, infinity),
+    lager:info("Making fold request to reconstruct AAE tree idx=~p"
+                            ++ " with version ~w", 
+                [Partition, Version]),
+    Opts = 
+        case Version of 
+            legacy ->
+                [aae_reconstruction, {iterator_refresh, true}];
+            _ ->
+                [aae_reconstruction, {iterator_refresh, true}, fold_heads]
+        end,
+    Req =
+        riak_core_util:make_fold_req(FoldFun, {0, {Limit, Wait}}, false, Opts),
+    Result =
+        riak_core_vnode_master:sync_command({Partition, node()},
+                                            Req,
+                                            riak_kv_vnode_master,
+                                            infinity),
     handle_fold_keys_result(Result, HashtreePid, Index).
 
 
 %% The accumulator in the fold is the number of bytes hashed
 %% modulo the "build limit" size. If we get an int back, everything is ok
-handle_fold_keys_result({Result, {_Limit, _Delay}}, HashtreePid, Index) when is_integer(Result) ->
-    lager:info("Finished AAE tree build: ~p", [Index]),
+handle_fold_keys_result({Result, {Limit, Delay}}, HashtreePid, Index) 
+                                                when is_integer(Result) ->
+    lager:info("Finished AAE tree build idx=~p limit ~w delay ~w", 
+                    [Index, Limit, Delay]),
     gen_server:cast(HashtreePid, build_finished);
 handle_fold_keys_result(Result, HashtreePid, Index) ->
-    lager:error("Failed to build hashtree for index ~p. Result was: ~p", [Index, Result]),
+    lager:error("Failed to build hashtree for idx=~p. Result was: ~p", 
+                    [Index, Result]),
     gen_server:cast(HashtreePid, build_failed).
 
 get_build_throttle() ->
@@ -971,9 +983,13 @@ do_compare(Id, Remote, AccFun, Acc, From, State) ->
 
 -spec do_poke(state()) -> state().
 do_poke(State) ->
-    State1 = maybe_rebuild(maybe_expire(State)),
-    State2 = maybe_build(State1),
-    State3 = maybe_upgrade(State2),
+    % If we need to upgrade - do this.  If there's a rebuild, the effort will
+    % be wasted, as the next task will be to upgrade and this will wipe the
+    % rebult store clear anyway (straight after going to all that effort of
+    % rebuilding it).
+    State1 = maybe_upgrade(State),
+    State2 = maybe_rebuild(maybe_expire(State1)),
+    State3 = maybe_build(State2),
     State3.
 
 -spec maybe_upgrade(state()) -> state().

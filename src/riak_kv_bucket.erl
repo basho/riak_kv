@@ -291,6 +291,7 @@ validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when  QProp =:= r
     end;
 validate([{QProp, MaybeQ}=Prop | T], ValidProps, Errors) when QProp =:= dw
                                                               orelse QProp =:= pw
+                                                              orelse QProp =:= node_confirms
                                                               orelse QProp =:= pr ->
     case is_opt_quorum(MaybeQ) of
         true ->

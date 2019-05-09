@@ -257,11 +257,11 @@ send_vnodes([], Proxies, _Bucket, _Key, _EncodedVal, _ReqId) ->
     Proxies;
 send_vnodes([{{Idx, Node}, Type}|Rest], Proxies, Bucket, Key, EncodedVal, ReqId) ->
     {Proxy, NewProxies} = get_proxy(Idx, Proxies),
-    Message = ?KV_W1C_PUT_REQ{bkey={Bucket, Key}, encoded_obj=EncodedVal, type=Type},
+    Message = riak_kv_requests:new_w1c_put_request({Bucket, Key}, EncodedVal, Type),
     gen_fsm_compat:send_event(
-        {Proxy, Node},
-        riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
-    ),
+            {Proxy, Node},
+            riak_core_vnode_master:make_request(Message, {raw, ReqId, self()}, Idx)
+        ),
     send_vnodes(Rest, NewProxies, Bucket, Key, EncodedVal, ReqId).
 
 
