@@ -55,8 +55,10 @@ raw_dispatch() ->
 raw_dispatch(Name) ->
     APIv2Props = [{bucket_type, <<"default">>}, {api_version, 2}|raw_props(Name)],
     Props1 = [{bucket_type, <<"default">>}, {api_version, 1}|raw_props(Name)],
-    Props2 = [ {["types", bucket_type], [{api_version, 3}|raw_props(Name)]},
-               {[], APIv2Props}],
+    Props2 = [
+              {["types", bucket_type], [{api_version, 3} | raw_props(Name)]},
+              {[], APIv2Props}
+             ],
 
     [
      %% OLD API, remove in v2.2
@@ -119,7 +121,32 @@ raw_dispatch(Name) ->
       riak_kv_wm_link_walker, Props},
 
      {Prefix ++ ["buckets", bucket, "index", field, '*'],
-      riak_kv_wm_index, Props}
+      riak_kv_wm_index, Props},
+
+     %% AAE fold URLs
+     {["cachedtrees", "nvals", nval, "root"],
+      riak_kv_wm_aaefold, Props},
+
+     {["cachedtrees", "nvals", nval, "branch"],
+      riak_kv_wm_aaefold, Props},
+
+     {["cachedtrees", "nvals", nval, "keysclocks"],
+      riak_kv_wm_aaefold, Props},
+
+     {["rangetrees"] ++ Prefix ++ ["buckets", bucket, "trees", size],
+      riak_kv_wm_aaefold, Props},
+
+     {["rangetrees"] ++ Prefix ++ ["buckets", bucket, "keysclocks"],
+      riak_kv_wm_aaefold, Props},
+
+     {["siblings"] ++ Prefix ++ ["buckets", bucket, "counts", count],
+      riak_kv_wm_aaefold, Props},
+
+     {["objectsizes"] ++ Prefix ++ ["buckets", bucket, "sizes", size],
+      riak_kv_wm_aaefold, Props},
+
+     {["objectstats"] ++ Prefix ++ ["buckets", bucket],
+      riak_kv_wm_aaefold, Props}
 
     ] || {Prefix, Props} <- Props2 ]).
 

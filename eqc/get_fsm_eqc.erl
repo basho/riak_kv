@@ -42,11 +42,12 @@
 
 setup() ->
     %% Shut logging up - too noisy.
+    Path = riak_kv_test_util:get_test_dir("get_fsm_eqc"),
     application:load(sasl),
-    application:set_env(sasl, sasl_error_logger, {file, "get_fsm_eqc_sasl.log"}),
+    application:set_env(sasl, sasl_error_logger, {file, Path ++ "/get_fsm_eqc_sasl.log"}),
     application:set_env(riak_kv, fsm_trace_enabled, true),
     error_logger:tty(false),
-    error_logger:logfile({open, "get_fsm_eqc.log"}),
+    error_logger:logfile({open, Path ++ "/get_fsm_eqc.log"}),
 
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
@@ -226,7 +227,8 @@ prop_basic_get() ->
                                                                 [{starttime, riak_core_util:moment()},
                                                                  {n, N},
                                                                  {bucket_props, BucketProps},
-                                                                 {preflist2, PL2}]),
+                                                                 {preflist2, PL2},
+                                                                 {request_type, get}]),
 
                        process_flag(trap_exit, true),
                        ok = riak_kv_test_util:wait_for_pid(GetPid),
@@ -432,11 +434,15 @@ check_info([{vnode_errors, _Errors} | Rest], State) ->
 %% happen when all read repairs are complete.
 
 check_repair(Objects, RepairH, H, RRAbort) ->
-    Actual = [ Part || {Part, ?KV_PUT_REQ{}} <- RepairH ],
+    Actual = [ Part ||
+               {Part, Req} <- RepairH,
+                 riak_kv_requests:request_type(Req) == kv_put_request ],
     Heads  = merge_heads([ Lineage || {_, {ok, Lineage}} <- H ]),
     RepairObject  = (catch build_merged_object(Heads, Objects)),
     Expected =expected_repairs(H,RRAbort),
-    RepairObjects = [ Obj || {_Idx, ?KV_PUT_REQ{object=Obj}} <- RepairH ],
+    RepairObjects = [ riak_kv_requests:get_object(Req) ||
+                        {_Idx, Req} <- RepairH,
+                        riak_kv_requests:request_type(Req) == kv_put_request],
     conjunction(
         [{puts, equals(lists:sort(Expected), lists:sort(Actual))},
          {sanity, equals(length(RepairObjects), length(Actual))},
@@ -448,7 +454,8 @@ check_repair(Objects, RepairH, H, RRAbort) ->
 
 
 check_delete(Objects, RepairH, H, PerfectPreflist) ->
-    Deletes  = [ Part || {Part, ?KV_DELETE_REQ{}} <- RepairH ],
+    Deletes = [Part || {Part, Req} <- RepairH,
+                       riak_kv_requests:request_type(Req) == kv_delete_request],
 
     %% Should get deleted if all vnodes returned the same object
     %% and a perfect preflist and the object is deleted

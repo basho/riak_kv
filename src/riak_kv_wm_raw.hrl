@@ -73,3 +73,7 @@
 -define(Q_2I_PAGINATION_SORT, "pagination_sort").
 -define(Q_RESULTS,  "results").
 -define(Q_RETURNVALUE, "returnvalue").
+-define(Q_2I_MAPFOLD, "mapfold").
+-define(Q_MF_MAPFOLDMOD, "mapfoldmod").
+-define(Q_MF_MAPFOLDOPTS, "mapfoldoptions").
+-define(Q_AAEFOLD_FILTER, "filter").

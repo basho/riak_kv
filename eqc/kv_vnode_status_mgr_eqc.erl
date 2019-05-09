@@ -78,7 +78,8 @@ prop_monotonic() ->
             begin
                 ets:new(vnode_status, [named_table, set]),
                 ets:new(vnodeids, [named_table, set]),
-                {ok, Pid} = riak_kv_vnode_status_mgr:start_link(self(), 1, true),
+                TestPath = riak_kv_test_util:get_test_dir("status_mgr_eqc"),
+                {ok, Pid} = riak_kv_vnode_status_mgr:test_link(self(), 1, true, TestPath),
                 {ok, {ID, _Counter, _Lease}} = riak_kv_vnode_status_mgr:get_vnodeid_and_counter(Pid, 1),
                 true =  ets:insert(vnode_status, {status, 1, 1, Pid}),
                 true = ets:insert(vnodeids, {ID}),
