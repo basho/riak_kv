@@ -67,7 +67,7 @@
 
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold, indexes, index_reformat, size,
-        iterator_refresh]).
+        iterator_refresh, snap_prefold]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: eleveldb:db_ref(),
@@ -388,16 +388,31 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     FoldFun = fold_keys_fun(FoldKeysFun, Limiter),
     FoldOpts1 = [{first_key, FirstKey} | FoldOpts],
     ExtraFold = not FixedIdx orelse WriteLegacyIdx,
-    KeyFolder =
+    Itr =
+        case lists:member(snap_prefold, Opts) of
+            true ->
+                lager:info("Snapping database for deferred query"),
+                {ok, Itr0} = eleveldb:iterator(Ref, FoldOpts1, keys_only),
+                Itr0;
+            false ->
+                not_snapped
+        end,
+	KeyFolder =
         fun() ->
             %% Do the fold. ELevelDB uses throw/1 to break out of a fold...
             AccFinal =
-                       try
-                           eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1)
-                       catch
-                           {break, BrkResult} ->
-                               BrkResult
-                       end,
+                try
+                    case Itr of
+                        not_snapped ->
+                            eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1);
+                        _ ->
+                            lager:info("Deferred fold initiated on previous snap"),
+                            eleveldb:do_fold(Itr, FoldFun, Acc, FoldOpts1)
+                    end
+                catch
+                    {break, BrkResult} ->
+                        BrkResult
+                end,
             case ExtraFold of
                 true ->
                     legacy_key_fold(Ref, FoldFun, AccFinal, FoldOpts1, Limiter);
@@ -407,7 +422,12 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
         end,
     case lists:member(async_fold, Opts) of
         true ->
-            {async, KeyFolder};
+            case Itr of
+                not_snapped ->
+                    {async, KeyFolder};
+                _ ->
+                    {queue, KeyFolder}
+            end;
         false ->
             {ok, KeyFolder()}
     end.
@@ -481,11 +501,19 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{fold_opts=FoldOpts,
             false -> [];
             Tuple -> [Tuple]
         end,
+    
+    StandardObjectFold = 
+        case lists:keyfind(standard_object_fold, 1, Opts) of    
+            {standard_object_fold, Bool} ->
+                Bool;
+            false ->
+                false
+        end,
 
     %% Set up the fold...
     FirstKey = to_first_key(Limiter),
     FoldOpts1 = IteratorRefresh ++ [{first_key, FirstKey} | FoldOpts],
-    FoldFun = fold_objects_fun(FoldObjectsFun, Limiter),
+    FoldFun = fold_objects_fun(FoldObjectsFun, Limiter, StandardObjectFold),
 
     ObjectFolder =
         fun() ->
@@ -807,20 +835,27 @@ fold_keys_fun(FoldKeysFun, {index, Bucket, V1Q}) ->
 
 %% @private
 %% Return a function to fold over the objects on this backend
-fold_objects_fun(FoldObjectsFun, {index, FilterBucket, Q=?KV_INDEX_Q{}}) ->
+fold_objects_fun(FoldObjectsFun, 
+                    {index, FilterBucket, Q=?KV_INDEX_Q{}}, 
+                    StObjFold) ->
     %% 2I query on $key or $bucket field with return_body
     fun({StorageKey, Value}, Acc) ->
             ObjectKey = from_object_key(StorageKey),
             case riak_index:object_key_in_range(ObjectKey, FilterBucket, Q) of
                 {true, {Bucket, Key}} ->
-                    FoldObjectsFun(Bucket, {o, Key, Value}, Acc);
+                    case StObjFold of   
+                        true ->
+                            FoldObjectsFun(Bucket, Key, Value, Acc);
+                        false ->
+                            FoldObjectsFun(Bucket, {o, Key, Value}, Acc)
+                    end;
                 {skip, _BK} ->
                     Acc;
                 _ ->
                     throw({break, Acc})
             end
     end;
-fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
+fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}, _StObjFold) ->
     fun({StorageKey, Value}, Acc) ->
             case from_object_key(StorageKey) of
                 {Bucket, Key} when Bucket == FilterBucket ->
@@ -831,7 +866,7 @@ fold_objects_fun(FoldObjectsFun, {bucket, FilterBucket}) ->
                     throw({break, Acc})
             end
     end;
-fold_objects_fun(FoldObjectsFun, undefined) ->
+fold_objects_fun(FoldObjectsFun, undefined, _StObjFold) ->
     fun({StorageKey, Value}, Acc) ->
             case from_object_key(StorageKey) of
                 {Bucket, Key} ->
@@ -922,21 +957,24 @@ to_md_key(Key) ->
 %% ===================================================================
 -ifdef(TEST).
 
+
 simple_test_() ->
-    ?assertCmd("rm -rf test/eleveldb-backend"),
-    application:set_env(eleveldb, data_root, "test/eleveldb-backend"),
+    Path = riak_kv_test_util:get_test_dir("eleveldb-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
+    application:set_env(eleveldb, data_root, Path),
     backend_test_util:standard_test_gen(?MODULE, []).
 
 custom_config_test_() ->
-    ?assertCmd("rm -rf test/eleveldb-backend"),
-    application:set_env(eleveldb, data_root, ""),
-    backend_test_util:standard_test_gen(?MODULE, [{data_root, "test/eleveldb-backend"}]).
+    Path = riak_kv_test_util:get_test_dir("eleveldb-backend"),
+    ?assertCmd("rm -rf " ++ Path ++ "/*"),
+    application:set_env(eleveldb, data_root, Path),
+    backend_test_util:standard_test_gen(?MODULE, [{data_root, Path}]).
 
 retry_test_() ->
     {spawn, [fun retry/0, fun retry_fail/0]}.
 
 retry() ->
-    Root = "/tmp/eleveldb_retry_test",
+    Root = riak_kv_test_util:get_test_dir("eleveldb_retry_test"),
     try
         {ok, State1} = start(42, [{data_root, Root}]),
         Me = self(),
@@ -987,7 +1025,7 @@ retry() ->
     end.
 
 retry_fail() ->
-    Root = "/tmp/eleveldb_fail_retry_test",
+    Root = riak_kv_test_util:get_test_dir("eleveldb_fail_retry_test"),
     try
         application:set_env(riak_kv, eleveldb_open_retries, 3), % 3 times, 1ms a time
         application:set_env(riak_kv, eleveldb_open_retry_delay, 1),
@@ -1031,15 +1069,15 @@ retry_fail() ->
 
 -ifdef(EQC).
 prop_eleveldb_backend() ->
+    Path = riak_kv_test_util:get_test_dir("eleveldb-backend"),
     ?SETUP(fun() ->
                    application:load(sasl),
-                   application:set_env(sasl, sasl_error_logger, {file, "riak_kv_eleveldb_backend_eqc_sasl.log"}),
+                   application:set_env(sasl, sasl_error_logger, {file, Path ++ "/riak_kv_eleveldb_backend_eqc_sasl.log"}),
                    error_logger:tty(false),
-                   error_logger:logfile({open, "riak_kv_eleveldb_backend_eqc.log"}),
-                   fun() -> ?_assertCmd("rm -rf test/eleveldb-backend") end
+                   error_logger:logfile({open, Path ++ "/riak_kv_eleveldb_backend_eqc.log"}),
+                   fun() -> ?_assertCmd("rm -rf " ++ Path ++ "/*") end
            end,
-           backend_eqc:prop_backend(?MODULE, false, [{data_root,
-                                                      "test/eleveldb-backend"}])).
+           backend_eqc:prop_backend(?MODULE, false, [{data_root, Path}])).
 
 
 -endif. % EQC

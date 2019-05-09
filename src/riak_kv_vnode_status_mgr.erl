@@ -33,7 +33,16 @@
 -endif.
 
 %% API
--export([start_link/3, get_vnodeid_and_counter/2, lease_counter/2, clear_vnodeid/1, status/1, stop/1]).
+-export([start_link/3, 
+        get_vnodeid_and_counter/2,
+        lease_counter/2,
+        clear_vnodeid/1,
+        status/1,
+        stop/1]).
+
+-ifdef(EQC).
+-export([test_link/4]).
+-endif.
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -59,7 +68,8 @@
 -type status() :: orddict:orddict().
 -type init_args() :: {VnodePid :: pid(),
                       LeaseSize :: non_neg_integer(),
-                      UseEpochCounter :: boolean()}.
+                      UseEpochCounter :: boolean(),
+                      Path :: string()|undefined}.
 -type blocking_req() :: clear | {vnodeid, LeaseSize :: non_neg_integer()}.
 
 
@@ -76,11 +86,19 @@
 %% @doc
 %% Starts the server
 %%
+%% test_link/4 to be used only in tests in order to override the path
+%%
 %% @end
 %%--------------------------------------------------------------------
--spec start_link(pid(), non_neg_integer(), boolean()) -> {ok, pid()} | {error, term()}.
+-spec start_link(pid(), non_neg_integer(), boolean())
+                                            -> {ok, pid()} | {error, term()}.
 start_link(VnodePid, Index, UseEpochCounter) ->
-    gen_server:start_link(?MODULE, {VnodePid, Index, UseEpochCounter}, []).
+    gen_server:start_link(?MODULE, {VnodePid, Index, UseEpochCounter, undefined}, []).
+
+-spec test_link(pid(), non_neg_integer(), boolean(), string())
+                                            -> {ok, pid()} | {error, term()}.
+test_link(VnodePid, Index, UseEpochCounter, Path) ->
+    gen_server:start_link(?MODULE, {VnodePid, Index, UseEpochCounter, Path}, []).
 
 %%--------------------------------------------------------------------
 %% @doc You can't ever have a `LeaseSize' greater than the maximum 32
@@ -148,9 +166,9 @@ stop(Pid) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec init(Args :: init_args()) -> {ok, #state{}}.
-init({VnodePid, Index, UseEpochCounter}) ->
+init({VnodePid, Index, UseEpochCounter, Path}) ->
     Version = version(UseEpochCounter),
-    StatusFilename = vnode_status_filename(Index),
+    StatusFilename = vnode_status_filename(Index, Path),
     {ok, #state{status_file=StatusFilename,
                 index=Index,
                 vnode_pid=VnodePid,
@@ -302,9 +320,15 @@ get_status_item(Item, Status, Default) ->
 
 %% @private generate a file name for the vnode status, and ensure the
 %% path to exists.
--spec vnode_status_filename(non_neg_integer()) -> file:filename().
-vnode_status_filename(Index) ->
-    P_DataDir = app_helper:get_env(riak_core, platform_data_dir),
+-spec vnode_status_filename(non_neg_integer(), string()|undefined) -> file:filename().
+vnode_status_filename(Index, Path) ->
+    P_DataDir = 
+        case Path of
+            undefined ->
+                app_helper:get_env(riak_core, platform_data_dir);
+            Path ->
+                Path
+        end,
     VnodeStatusDir = app_helper:get_env(riak_kv, vnode_status,
                                         filename:join(P_DataDir, "kv_vnode")),
     Filename = filename:join(VnodeStatusDir, integer_to_list(Index)),
@@ -336,6 +360,16 @@ read_vnode_status(File) ->
         {error, enoent} ->
             %% doesn't exist? same as empty
             {ok, orddict:new()};
+        {error, {_Offset, file_io_server, invalid_unicode}} ->
+            case override_consult(File) of 
+                {ok, [Status]} when is_list(Status) ->
+                    {ok, orddict:from_list(Status)};
+                Er ->
+                    %% "corruption" error, some other posix error, unreadable:
+                    %% Log, and start anew
+                    lager:error("Failed to override_consult vnode-status file ~p ~p", [File, Er]),
+                    {ok, orddict:new()}
+            end;
         Er ->
             %% "corruption" error, some other posix error, unreadable:
             %% Log, and start anew
@@ -345,6 +379,36 @@ read_vnode_status(File) ->
             %% consult threw
             lager:error("Failed to consult vnode-status file ~p ~p ~p", [File, C, T]),
             {ok, orddict:new()}
+    end.
+
+-spec override_consult(file:filename()) -> {ok, list()}.
+%% @private In OTP 20 file will not read unicode written in OTP16 unless we
+%% read it as latin-1
+override_consult(File) ->
+    case file:open(File, [read]) of
+        {ok, Fd} ->
+            R = consult_stream(Fd),
+            _ = file:close(Fd),
+            R;
+        Error ->
+            Error
+    end.
+
+-spec consult_stream(file:io_device()) -> {ok, list()}|{error, any()}.
+%% @private read unicode stream as latin-1
+%% http://erlang.2086793.n4.nabble.com/file-consult-error-1-file-io-server-invalid-unicode-with-pre-r17-files-in-r17-td4712042.html
+consult_stream(Fd) ->
+    _ = epp:set_encoding(Fd, latin1),
+    consult_stream(Fd, 1, []).
+
+consult_stream(Fd, Line, Acc) ->
+    case io:read(Fd, '', Line) of
+	{ok,Term,EndLine} ->
+	    consult_stream(Fd, EndLine, [Term|Acc]);
+	{error,Error,_Line} ->
+	    {error,Error};
+	{eof,_Line} ->
+	    {ok,lists:reverse(Acc)}
     end.
 
 -ifdef(TEST).
@@ -415,48 +479,54 @@ assign_vnodeid_restart_earlier_ts_test() ->
 vnode_status_test_() ->
     {setup,
      fun() ->
-             filelib:ensure_dir("kv_vnode_status_test/.test"),
-             ?cmd("chmod u+rwx kv_vnode_status_test"),
-             ?cmd("rm -rf kv_vnode_status_test"),
-             application:set_env(riak_kv, vnode_status, "kv_vnode_status_test"),
-             ok
+            TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
+            filelib:ensure_dir(TestPath ++ "/.test"),
+            ?cmd("chmod u+rwx " ++ TestPath),
+            ?cmd("rm -rf " ++ TestPath),
+            application:set_env(riak_kv, vnode_status, TestPath),
+            ok
      end,
      fun(_) ->
-             application:unset_env(riak_kv, vnode_status),
-             ?cmd("chmod u+rwx kv_vnode_status_test"),
-             ?cmd("rm -rf kv_vnode_status_test"),
-             ok
+            TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
+            application:unset_env(riak_kv, vnode_status),
+            ?cmd("chmod u+rwx " ++ TestPath),
+            ?cmd("rm -rf " ++ TestPath),
+            ok
      end,
      [?_test(begin % initial create failure
-                 ?cmd("rm -rf kv_vnode_status_test || true"),
-                 ?cmd("mkdir kv_vnode_status_test"),
-                 ?cmd("chmod -w kv_vnode_status_test"),
-                 Index = 0,
-                 File = vnode_status_filename(Index),
-                 try
-                     write_vnode_status(orddict:new(), File, ?VNODE_STATUS_VERSION)
-                 catch _Err:{badmatch, Reason} ->
-                         ?assertEqual({error, eacces}, Reason)
-                 end
+                TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
+                ?cmd("rm -rf " ++ TestPath ++ " || true"),
+                ?cmd("mkdir " ++ TestPath),
+                ?cmd("chmod -w " ++ TestPath),
+                Index = 0,
+                File = vnode_status_filename(Index, TestPath),
+                try
+                    write_vnode_status(orddict:new(), File, ?VNODE_STATUS_VERSION)
+                catch _Err:{badmatch, Reason} ->
+                        ?assertEqual({error, eacces}, Reason)
+                end
              end),
       ?_test(begin % create successfully
-                 ?cmd("chmod +w kv_vnode_status_test"),
-                 Index = 0,
-                 File = vnode_status_filename(Index),
-                 ?assertEqual(ok, write_vnode_status([{created, true}], File, ?VNODE_STATUS_VERSION))
+                TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
+                ?cmd("chmod +w " ++ TestPath),
+                Index = 0,
+                File = vnode_status_filename(Index, TestPath),
+                ?assertEqual(ok, write_vnode_status([{created, true}], File, ?VNODE_STATUS_VERSION))
              end),
       ?_test(begin % update successfully
-                 Index = 0,
-                 File = vnode_status_filename(Index),
-                 {ok, [{created, true}, {version, 2}]} = read_vnode_status(File),
-                 ?assertEqual(ok, write_vnode_status([{updated, true}], File, ?VNODE_STATUS_VERSION))
+                TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
+                Index = 0,
+                File = vnode_status_filename(Index, TestPath),
+                {ok, [{created, true}, {version, 2}]} = read_vnode_status(File),
+                ?assertEqual(ok, write_vnode_status([{updated, true}], File, ?VNODE_STATUS_VERSION))
              end),
       ?_test(begin % update failure
-                 ?cmd("chmod 000 kv_vnode_status_test/0"),
-                 ?cmd("chmod 500 kv_vnode_status_test"),
-                 Index = 0,
-                 File = vnode_status_filename(Index),
-                 ?assertEqual({ok, []},  read_vnode_status(File))
+                TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
+                ?cmd("chmod 000 " ++ TestPath ++ "/0"),
+                ?cmd("chmod 500 " ++ TestPath),
+                Index = 0,
+                File = vnode_status_filename(Index, TestPath),
+                ?assertEqual({ok, []},  read_vnode_status(File))
              end)
 
      ]}.
@@ -469,7 +539,7 @@ vnode_status_test_() ->
         eqc:on_output(fun(Str, Args) ->
                               io:format(user, Str, Args) end, P)).
 
--define(TEST_FILE, "vnode_status_test.file").
+-define(TEST_FILE, "kv_vnode_status_eqc/vnode_status_test.file").
 -define(VALID_STATUS, [{vnodeid, <<"vnodeid123">>}]).
 %% note this was generated by a r16, and will be written in the r16
 %% style of io_lib:format("~p.", [?R16_STATUS]).
@@ -481,14 +551,16 @@ vnode_status_test_() ->
 %% ~p. in `write_vnode_status/3' for an example of _why_ this test).
 prop_any_bin_consult() ->
     ?SETUP(fun() ->
-                   file:delete(?TEST_FILE),
-                   fun() -> file:delete(?TEST_FILE) end
+                TestFile = riak_kv_test_util:get_test_dir(?TEST_FILE),
+                file:delete(TestFile),
+                fun() -> file:delete(TestFile) end
            end,
            ?FORALL(Bin, binary(),
                    begin
-                       Status = [{version, 1}, {vnodeid, Bin}],
-                       ok = write_vnode_status(Status, ?TEST_FILE, 1),
-                       equals({ok, Status}, read_vnode_status(?TEST_FILE))
+                        TestFile = riak_kv_test_util:get_test_dir(?TEST_FILE),
+                        Status = [{version, 1}, {vnodeid, Bin}],
+                        ok = write_vnode_status(Status, TestFile, 1),
+                        equals({ok, Status}, read_vnode_status(TestFile))
                    end)).
 
 %% @private regardless of the contents of the vnode status file, we
@@ -497,50 +569,56 @@ prop_any_bin_consult() ->
 %% a blank status.
 prop_any_file_status() ->
     ?SETUP(fun() ->
-                   file:delete(?TEST_FILE),
-                   fun() -> file:delete(?TEST_FILE) end
+                TestFile = riak_kv_test_util:get_test_dir(?TEST_FILE),
+                file:delete(TestFile),
+                fun() -> file:delete(TestFile) end
            end,
            ?FORALL({Type, _StatusFile},
                    ?LET(Type, oneof([r16, valid, absent, corrupt]), {Type, gen_status_file(Type)}),
                    begin
-                       {ok, Status} = read_vnode_status(?TEST_FILE),
+                    TestFile = riak_kv_test_util:get_test_dir(?TEST_FILE),
+                    {ok, Status} = read_vnode_status(TestFile),
 
-                       case Type of
-                           valid ->
-                               %% There is a vnodeid
-                               is_binary(orddict:fetch(vnodeid, Status));
-                           r16 ->
-                               %% There is a vnodeid
-                               is_binary(orddict:fetch(vnodeid, Status));
-                           corrupt ->
-                               %% empty
-                               is_list(Status) andalso equals(error, orddict:find(vnodeid, Status));
-                           absent ->
-                               %% empty
-                               is_list(Status) andalso equals(error, orddict:find(vnodeid, Status))
-                       end
+                    case Type of
+                        valid ->
+                            %% There is a vnodeid
+                            is_binary(orddict:fetch(vnodeid, Status));
+                        r16 ->
+                            %% There is a vnodeid
+                            is_binary(orddict:fetch(vnodeid, Status));
+                        corrupt ->
+                            %% empty
+                            is_list(Status) andalso equals(error, orddict:find(vnodeid, Status));
+                        absent ->
+                            %% empty
+                            is_list(Status) andalso equals(error, orddict:find(vnodeid, Status))
+                    end
                    end)).
+
+
+gen_status_file(Type) ->
+    gen_status_file(riak_kv_test_util:get_test_dir(?TEST_FILE), Type).
 
 %% @private generate the file on disk TBQH, this might be fine as a
 %% straight up eunit tests, given how little random there really is
 %% here for quickcheck
-gen_status_file(r16) ->
-    ok = riak_core_util:replace_file(?TEST_FILE, io_lib:format("~p.", [?R16_STATUS])),
-    ?TEST_FILE;
-gen_status_file(absent) ->
-    file:delete(?TEST_FILE),
-    ?TEST_FILE;
-gen_status_file(corrupt) ->
+gen_status_file(TestFile, r16) ->
+    ok = riak_core_util:replace_file(TestFile, io_lib:format("~p.", [?R16_STATUS])),
+    TestFile;
+gen_status_file(TestFile, absent) ->
+    file:delete(TestFile),
+    TestFile;
+gen_status_file(TestFile, corrupt) ->
     ?LET(Bin, binary(),
         begin
-            file:write_file(?TEST_FILE, Bin),
-            ?TEST_FILE
+            file:write_file(TestFile, Bin),
+            TestFile
         end);
-gen_status_file(valid) ->
+gen_status_file(TestFile, valid) ->
     ?LET(VnodeId, binary(),
          begin
-             ok = write_vnode_status([{vnodeid, VnodeId}], ?TEST_FILE, 1),
-             ?TEST_FILE
+            ok = write_vnode_status([{vnodeid, VnodeId}], TestFile, 1),
+            TestFile
          end).
 -endif.
 

@@ -25,11 +25,145 @@
   end
 }.
 
+{mapping, "tictacaae_active", "riak_kv.tictacaae_active", [
+  {datatype, {enum, [active, passive]}},
+  {default, passive}
+]}.
+
+%% @doc A path under which aae data files will be stored.
+{mapping, "tictacaae_dataroot", "riak_kv.tictacaae_dataroot", [
+  {default, "$(platform_data_dir)/tictac_aae"},
+  {datatype, directory}
+]}.
+
+%% @doc Parallel key store type
+%% When running in parallel mode, which will be the default if the backend does
+%% not support native tictac aae (i.e. is not leveled), what type of parallel 
+%% key store should be kept - leveled_ko (leveled and key-ordered), or 
+%% leveled_so (leveled and segment ordered).
+%% When running in native mode, this setting is ignored
+{mapping, "tictacaae_parallelstore", "riak_kv.tictacaae_parallelstore", [
+  {datatype, {enum, [leveled_ko, leveled_so]}},
+  {default, leveled_ko},
+  {commented, leveled_ko}
+]}.
+
+%% @doc Minimum Rebuild Wait
+%% The minimum number of hours to wait between rebuilds.  Default value is 2 
+%% weeks
+{mapping, "tictacaae_rebuildwait", "riak_kv.tictacaae_rebuildwait", [
+  {datatype, integer},
+  {default, 336}
+]}.
+
+%% @doc Maximum Rebuild Delay
+%% The number of seconds which represents the length of the period in which the
+%% next rebuild will be scheduled.  So if all vnodes are scheduled to rebuild 
+%% at the same time, they will actually rebuild randomly between 0 an this 
+%% value (in seconds) after the rebuild time. Default value is 4 days
+{mapping, "tictacaae_rebuilddelay", "riak_kv.tictacaae_rebuilddelay", [
+  {datatype, integer},
+  {default, 345600}
+]}.
+
+%% @doc Store heads in parallel key stores
+%% If running a parallel key store, the whole "head" object may be stored to 
+%% allow for fold_heads queries to be run against the parallel store.  
+%% Alternatively, the cost of the paralle key store can be reduced by storing 
+%% only a minimal data set necessary for AAE and monitoring
+{mapping, "tictacaae_storeheads", "riak_kv.tictacaae_storeheads", [
+  {datatype, {flag, enabled, disabled}},
+  {default, disabled},
+  {commented, disabled}
+]}.
+
+%% @doc Frequency to prompt exchange per vnode
+%% The number of milliseconds which the vnode must wait between self-pokes to
+%% maybe prompt the next exchange. Default is 2 minutes.  
+{mapping, "tictacaae_exchangetick", "riak_kv.tictacaae_exchangetick", [
+  {datatype, integer},
+  {default, 120000},
+  hidden
+]}.
+
+%% @doc Frequency to prompt rebuild check per vnode
+%% The number of milliseconds which the vnode must wait between self-pokes to
+%% maybe prompt the next rebuild. Default is 30 minutes.  
+{mapping, "tictacaae_rebuildtick", "riak_kv.tictacaae_rebuildtick", [
+  {datatype, integer},
+  {default, 1800000},
+  hidden
+]}.
+
+%% @doc Pool Strategy - should a single node_worker_pool or multiple pools be
+%% used for queueing potentially longer-running "background" queries
+{mapping, "worker_pool_strategy", "riak_kv.worker_pool_strategy", [
+  {datatype, {enum, [none, single, dscp]}},
+  {default, dscp},
+  {commented, dscp}
+]}.
+
+%% @doc Pool Sizes - sizes for individual node_worker_pools
+%% Only relevant if single or dscp strategy chosen.  Set
+%% `node_worker_pool_size` if a `single` pool strategy is being used, or set
+%% `af_worker_pool_size` and `be_worker_pool_size` if a multiple pool strategy
+%% has been chosen.
+%% Separate assured forwarding pools will be used of `af_worker_pool_size` for
+%% informational aae_folds (find_keys, object_stats) and functional folds
+%% (merge_tree_range, fetch_clock_range).  The be_pool is used only for tictac
+%% AAE rebuilds at present 
+{mapping, "node_worker_pool_size", "riak_kv.node_worker_pool_size", [
+  {datatype, integer},
+  {default, 2}
+]}.
+{mapping, "af1_worker_pool_size", "riak_kv.af1_worker_pool_size", [
+  {datatype, integer},
+  {default, 1}
+]}.
+{mapping, "af2_worker_pool_size", "riak_kv.af2_worker_pool_size", [
+  {datatype, integer},
+  {default, 1}
+]}.
+{mapping, "af3_worker_pool_size", "riak_kv.af3_worker_pool_size", [
+  {datatype, integer},
+  {default, 2}
+]}.
+{mapping, "af4_worker_pool_size", "riak_kv.af4_worker_pool_size", [
+  {datatype, integer},
+  {default, 1}
+]}.
+{mapping, "be_worker_pool_size", "riak_kv.be_worker_pool_size", [
+  {datatype, integer},
+  {default, 1}
+]}.
+
+
+%% @doc Backend PUT Pause (ms).
+%% If the backend PUT has resulted in a pause request, then how long should
+%% the vnode pause for?  This is measured in ms, and currently only applies
+%% to the leveled backend
+{mapping, "backend_pause_ms", "riak_kv.backend_pause_ms", [
+  {datatype, integer},
+  {default, 10},
+  {commented, 10}
+]}.
+
+%% @doc Whether to allow node to participate in coverage queries.
+%% This is used as a manual switch to stop nodes in incomplete states
+%% (E.g. doing a full partition repair, or node replace) from participating
+%% in coverage queries, as their information may be incomplete (e.g. 2i
+%% issues seen in these circumstances).
+{mapping, "participate_in_coverage", "riak_core.participate_in_coverage", [
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled},
+    {commented, enabled}
+]}.
+
 %% @doc Specifies the storage engine used for Riak's key-value data
 %% and secondary indexes (if supported).
 {mapping, "storage_backend", "riak_kv.storage_backend", [
   {default, {{storage_backend}} },
-  {datatype, {enum, [bitcask, leveldb, memory, multi, prefix_multi]}}
+  {datatype, {enum, [bitcask, leveldb, leveled, memory, multi, prefix_multi]}}
 ]}.
 
 {translation,
@@ -39,6 +173,7 @@
     case Setting of
       bitcask -> riak_kv_bitcask_backend;
       leveldb -> riak_kv_eleveldb_backend;
+      leveled -> riak_kv_leveled_backend;
       memory -> riak_kv_memory_backend;
       multi -> riak_kv_multi_backend;
       prefix_multi -> riak_kv_multi_prefix_backend;
@@ -294,6 +429,8 @@
 %% on disk.
 %% * 0: Original erlang:term_to_binary format. Higher space overhead.
 %% * 1: New format for more compact storage of small values.
+%% If using the leveled backend object_format 1 will always be used, when
+%% persisting data into the backend - even if 0 has been configured here
 {mapping, "object.format", "riak_kv.object_format", [
   {default, 1},
   {datatype, [{integer, 1}, {integer, 0}]}

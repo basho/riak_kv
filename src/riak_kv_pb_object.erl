@@ -217,6 +217,7 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
                    return_head=ReturnHead, timeout=Timeout, asis=AsIs,
                    n_val=N_val, sloppy_quorum=SloppyQuorum,
+                   node_confirms=NodeConfirms0,
                    if_none_match=NoneMatch},
         #state{client=C} = State) ->
 
@@ -238,6 +239,7 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
     W = decode_quorum(W0),
     DW = decode_quorum(DW0),
     PW = decode_quorum(PW0),
+    NodeConfirms = decode_quorum(NodeConfirms0),
     B = maybe_bucket_type(T, B0),
     Options = case ReturnBody of
                   1 -> [returnbody];
@@ -254,7 +256,8 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                    _ ->
                        Options
                end,
-    case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW}, 
+    case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW},
+                                {node_confirms, NodeConfirms},
                                 {timeout, Timeout}, {asis, AsIs},
                                 {n_val, N_val},
                                 {sloppy_quorum, SloppyQuorum}]) ++ Options2) of

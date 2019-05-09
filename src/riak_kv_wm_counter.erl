@@ -57,7 +57,7 @@
 %%                              `r' quorum if true. Default is the bucket default, if absent.</dd>
 %%    </dl>
 %%
-%%   == Quorum values (r/pr/w/pw/dw) ==
+%%   == Quorum values (r/pr/w/pw/node_confirms/dw) ==
 %%     <dl>
 %%       <dt>default</dt><dd>Whatever the bucket default is. This is the value used
 %%                          for any absent value.</dd>
@@ -98,6 +98,7 @@
               rw,           %% integer() - rw-value for deletes
               pr,           %% integer() - number of primary nodes required in preflist on read
               pw,           %% integer() - number of primary nodes required in preflist on write
+              node_confirms,%% integer() - number of physical nodes required in preflist on write
               basic_quorum, %% boolean() - whether to use basic_quorum
               notfound_ok,  %% boolean() - whether to treat notfounds as successes
               prefix,       %% string() - prefix for resource uris
@@ -236,6 +237,7 @@ malformed_rw_params(RD, Ctx) ->
                  {#ctx.w, "w", "default"},
                  {#ctx.dw, "dw", "default"},
                  {#ctx.pw, "pw", "default"},
+                 {#ctx.node_confirms, "node_confirms", "default"},
                  {#ctx.pr, "pr", "default"}]),
     lists:foldl(fun malformed_boolean_param/2,
                 Res,
@@ -306,7 +308,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
         true ->
             Doc = riak_kv_crdt:new(B, K, ?V1_COUNTER_TYPE),
             Options = [{counter_op, CounterOp}] ++ return_value(RD),
-            case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw},
+            case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {node_confirms, Ctx#ctx.node_confirms},
                              {timeout, 60000}, {retry_put_coordinator_failure, false} |
                                    Options]) of
                 {error, Reason} ->
@@ -374,7 +376,7 @@ handle_common_error(Reason, RD, Ctx) ->
                         RD)),
                 Ctx};
         {error, {n_val_violation, N}} ->
-            Msg = io_lib:format("Specified w/dw/pw values invalid for bucket"
+            Msg = io_lib:format("Specified w/dw/pw/node_confirms values invalid for bucket"
                 " n value of ~p~n", [N]),
             {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, allow_mult_false} ->
@@ -406,6 +408,10 @@ handle_common_error(Reason, RD, Ctx) ->
                 Ctx};
         {error, {pw_val_unsatisfied, Requested, Returned}} ->
             Msg = io_lib:format("PW-value unsatisfied: ~p/~p~n", [Returned,
+                    Requested]),
+            {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
+        {error, {node_confirms_val_unsatisfied, Requested, Returned}} ->
+            Msg = io_lib:format("node_confirms-value unsatisfied: ~p/~p~n", [Returned,
                     Requested]),
             {{halt, 503}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, Err} ->

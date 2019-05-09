@@ -32,13 +32,13 @@
 
 -record(state,{vnodes=[] :: [binary()], %% Sort of like the ring, upto N*2 vnodeids
                vnode_data=[] :: [{VNodeID :: binary(),
-                                  riak_object:object(),
+                                  riak_object:riak_object(),
                                   dvvset:dvvset(),
                                   Timestamp :: pos_integer()}],
                                  %% The data, duplicated values for vnodes
                                  %% Newest at the head of the list.
                                  %% Prepend only data 'cos symbolic / dynamic state.
-               last_get=undefined :: undefined | {undefined | riak_object:object(), undefined | dvvset:dvvset()},
+               last_get=undefined :: undefined | {undefined | riak_object:riak_object(), undefined | dvvset:dvvset()},
                                  %% Stash the last `get' result so we can use it to put later
                n=0 :: integer(), %% Generated NVal
                r=0 :: integer(), %% Generated R quorum

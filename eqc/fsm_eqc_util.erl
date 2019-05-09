@@ -185,7 +185,7 @@ cycle(Zs, N, []) ->
     cycle(Zs, N, Zs).
 
 start_mock_servers() ->
-
+    Path = riak_kv_test_util:get_test_dir("fsm_util"),
     %% Start new core_vnode based EQC FSM test mock
     case whereis(fsm_eqc_vnode) of
         undefined -> ok;
@@ -199,7 +199,7 @@ start_mock_servers() ->
     application:start(crypto),
     exometer:start(),
     riak_kv_stat:register_stats(),
-    riak_core_metadata_manager:start_link([{data_dir, "fsm_eqc_test_data"}]),
+    riak_core_metadata_manager:start_link([{data_dir, Path ++ "/fsm_eqc_test_data"}]),
     riak_core_ring_events:start_link(),
     riak_core_ring_manager:start_link(test),
     riak_core_node_watcher_events:start_link(),
