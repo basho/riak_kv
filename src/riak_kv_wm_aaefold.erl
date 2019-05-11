@@ -118,7 +118,7 @@
 %% some values used for some queries.
 -record(filter, {
                  key_range = all :: {binary(), binary()} | all,
-                 date_range = all :: {pos_integer(), pos_integer()} | all,
+                 date_range = all :: {date, pos_integer(), pos_integer()} | all,
                  hash_method = pre_hash :: {rehash, non_neg_integer()} | pre_hash,
                  segment_filter = all :: {segments, list(pos_integer()), leveled_tictac:tree_size()} | all
                 }).
@@ -541,7 +541,7 @@ validate_filter_field(?DATE_RANGE, {struct, DateRangeJson}, Filter) ->
                           is_integer(End),
                           Start >= 0,
                           End >= 0 ->
-            {valid, Filter#filter{date_range= {Start, End}}};
+            {valid, Filter#filter{date_range= {date, Start, End}}};
         Other ->
             {invalid, {?DATE_RANGE, Other}}
     end;
