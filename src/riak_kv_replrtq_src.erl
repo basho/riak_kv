@@ -73,7 +73,8 @@
             queue_filtermap = [] :: list(queue_filtermap()),
             queue_countmap = [] :: list(queue_countmap()),
             queue_map = [] :: list(queue_map()),
-            queue_limit = ?QUEUE_LIMIT :: pos_integer()
+            queue_limit = ?QUEUE_LIMIT :: pos_integer(),
+            log_frequency_in_ms = ?LOG_TIMER_SECONDS * 1000 :: pos_integer()
 }).
 
 -type(priority() :: integer()).
@@ -231,11 +232,13 @@ init([]) ->
     QM = lists:map(MapToQM, QFM),
     QC = lists:map(MaptoQC, QFM),
     QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
-    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_queue),
+    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency, ?LOG_TIMER_SECONDS * 1000),
+    erlang:send_after(LogFreq, self(), log_queue),
     {ok, #state{queue_filtermap = QFM,
                 queue_map = QM,
                 queue_countmap = QC,
-                queue_limit = QL}}.
+                queue_limit = QL,
+                log_frequency_in_ms = LogFreq}}.
 
 handle_call({rtq_ttaaefs, QueueName, ReplEntries}, _From, State) ->
     {ApproachingLimit, QueueMap, QueueCountMap} =
@@ -354,7 +357,7 @@ handle_info(log_queue, State) ->
                         [QueueName, P1Q, P2Q, P3Q])
         end,
     lists:foreach(LogFun, State#state.queue_countmap),
-    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_queue),
+    erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),
     {noreply, State}.
 
 terminate(normal, _State) ->
