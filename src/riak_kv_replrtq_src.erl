@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_replrt1_src: Source of replication updates from this node
+%% riak_kv_replrtq_src: Source of replication updates from this node
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -484,9 +484,9 @@ update_counts({P1, P2, 0}) ->
 update_counts({P1, P2, P3}) ->
     {P1, P2, P3 - 1}.
 
-%% @doc convert the toeknised string of queue definitions into actual queue
+%% @doc convert the tokenised string of queue definitions into actual queue
 %% tokenised string expected to be of form:
-% "queuename:filter_type\filter_defn|queuename:filter_type\filter_defn etc"
+% "queuename:filter_type.filter_defn|queuename:filter_type.filter_defn etc"
 -spec tokenise_queuedefn(string()) -> list(queue_filtermap()).
 tokenise_queuedefn(QueueDefnString) ->
     QueueStrings = string:tokens(QueueDefnString, "|"),
