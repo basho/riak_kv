@@ -922,7 +922,7 @@ setup_reqdata({_Q, PathTokens0, PathInfo}, Filter) ->
                                         proplists:get_value(Name, PathInfo)
                                 end),
     EncodedFilter = encode_filter(Filter),
-    meck:expect(wrq, get_qs_value, fun(?Q_AAEFOLD_FILTER, undefined, _) ->
+    meck:expect(wrq, get_qs_value, fun(?Q_AAEFOLD_FILTER, _) ->
                                           EncodedFilter
                                    end),
     %% for riak_kv_web_utils

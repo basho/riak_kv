@@ -67,7 +67,7 @@
 -record(p_object, {
             r_object :: riak_object(),
             proxy :: tuple(),
-            size :: integer()}).
+            size = 0 :: integer()}).
 
 -opaque riak_object() :: #r_object{}.
 -opaque proxy_object() :: #p_object{}.
@@ -204,8 +204,6 @@ equal_contents([C1|R1],[C2|R2]) ->
 %%       the other objects in Objects, and can safely be discarded from the list
 %%       without losing data.
 -spec ancestors([riak_object()]) -> [riak_object()].
-ancestors(pure_baloney_to_fool_dialyzer) ->
-    [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
     [ O2 || O1 <- Objects, O2 <- Objects, strict_descendant(O1, O2) ].
 
@@ -1106,12 +1104,7 @@ approximate_size(Vsn, Obj=#r_object{bucket=Bucket,key=Key,vclock=VClock}) ->
 %% return 0
 -spec proxy_size(proxy_object()) -> integer().
 proxy_size(Obj) ->
-    case Obj#p_object.size of
-        undefined ->
-            0;
-        S ->
-            S
-    end.
+    Obj#p_object.size.
 
 contents_size(Vsn, Contents) ->
     lists:sum([metadata_size(Vsn, MD) + value_size(Val) || {MD, Val} <- Contents]).
