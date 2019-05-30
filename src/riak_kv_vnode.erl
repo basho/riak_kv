@@ -243,8 +243,8 @@
                   bkey :: {binary(), binary()},
                   robj :: term(),
                   index_specs=[] :: [{index_op(), binary(), index_value()}],
-                  reqid :: non_neg_integer(),
-                  bprops :: riak_kv_bucket:props(),
+                  reqid :: non_neg_integer() | undefined,
+                  bprops :: riak_kv_bucket:props() | undefined,
                   starttime :: non_neg_integer(),
                   prunetime :: undefined| non_neg_integer(),
                   readrepair=false :: boolean(),
@@ -2573,10 +2573,12 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             %% to the desired version, to reformat, all we need to do
             %% is submit a new write
             PutArgs = #putargs{hash_ops = update,
-                               returnbody=false,
-                               bkey=BKey,
-                               reqid=undefined,
-                               index_specs=[]},
+                               returnbody = false,
+                               bkey = BKey,
+                               index_specs = [],
+                               coord = false,
+                               lww = false,
+                               starttime = riak_Core_util:moment()},
             case perform_put({true, {RObj, unchanged_no_old_object}}, State, PutArgs) of
                 {{fail, _, Reason}, UpdState}  ->
                     Reply = {error, Reason};

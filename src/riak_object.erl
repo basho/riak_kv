@@ -303,7 +303,7 @@ find_bestobject(FetchedItems) ->
     end.
 
 
--spec is_head(any()) -> boolean().
+-spec is_head({ok, riak_object()}|riak_object()) -> boolean().
 %% @private Check if an object is simply a head response
 is_head({ok, #r_object{contents=Contents}}) ->
     C0 = lists:nth(1, Contents),
@@ -947,8 +947,7 @@ index_specs(Obj) ->
 %% indexes with the indexes specified in the object passed as the
 %% second parameter. If there are siblings only the unique new
 %% indexes are added.
--spec diff_index_specs('undefined' | riak_object(),
-                       'undefined' | riak_object()) ->
+-spec diff_index_specs(undefined | riak_object(), undefined | riak_object()) ->
     [{index_op(), binary(), index_value()}].
 diff_index_specs(Obj, OldObj) ->
     OldIndexes = index_data(OldObj),
@@ -978,7 +977,7 @@ diff_specs_core(AllIndexSet, OldIndexSet) ->
 
 %% @doc Get a list of {Index, Value} tuples from the
 %% metadata of an object.
--spec index_data(riak_object()) -> [{binary(), index_value()}].
+-spec index_data(riak_object() | undefined) -> [{binary(), index_value()}].
 index_data(undefined) ->
     [];
 index_data(Obj) ->
