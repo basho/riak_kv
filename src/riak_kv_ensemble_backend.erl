@@ -42,7 +42,7 @@
                 proxy     :: atom(),
                 proxy_ref :: reference(),
                 vnode_ref :: reference(),
-                async     :: pid()}).
+                async     :: pid() | undefined}).
 
 -type obj()    :: riak_object:riak_object().
 -type state()  :: #state{}.

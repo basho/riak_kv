@@ -91,7 +91,8 @@
 init(Props) ->
     {ok, #ctx{
        riak=proplists:get_value(riak, Props),
-       bucket_type=proplists:get_value(bucket_type, Props)
+       bucket_type=proplists:get_value(bucket_type, Props),
+       max_results=all % may be refined once params evaluated
       }}.
 
 

@@ -3361,45 +3361,18 @@ object_info({Bucket, _Key}=BKey) ->
 handoff_data_encoding_method() ->
     riak_core_capability:get({riak_kv, handoff_data_encoding}, encode_zlib).
 
-%% Decode a binary object. We first try to interpret the data as a "new format" object which indicates
-%% its encoding method, but if that fails we use the legacy zlib and protocol buffer decoding:
+%% Decode a binary object. Assumes data is in new format, legacy no longer 
+%% format supported
 decode_binary_object(BinaryObject) ->
-    try binary_to_term(BinaryObject) of
-        { Method, BinObj } ->
-                                case Method of
-                                    encode_raw  -> {B, K, Val} = BinObj,
-                                                   BKey = {B, K},
-                                                   {BKey, Val};
-
-                                    _           -> lager:error("Invalid handoff encoding ~p", [Method]),
-                                                   throw(invalid_handoff_encoding)
-                                end;
-
-        _                   ->  lager:error("Request to decode invalid handoff object"),
-                                throw(invalid_handoff_object)
-
-    %% An exception means we have a legacy handoff object:
-    catch
-        _:_                 -> do_zlib_decode(BinaryObject)
-    end.
-
-do_zlib_decode(BinaryObject) ->
-    DecodedObject = zlib:unzip(BinaryObject),
-    PBObj = riak_core_pb:decode_riakobject_pb(DecodedObject),
-    BKey = {PBObj#'RiakObject_PB'.bucket,PBObj#'RiakObject_PB'.key},
-    {BKey, PBObj#'RiakObject_PB'.val}.
+    {encode_raw, BinObj} = binary_to_term(BinaryObject),
+    {B, K, Val} = BinObj,
+    BKey = {B, K},
+    {BKey, Val}.
 
 encode_binary_object(Bucket, Key, Value) ->
-    Method = handoff_data_encoding_method(),
-
-    case Method of
-        encode_raw  -> EncodedObject = { Bucket, Key, iolist_to_binary(Value) },
-                       return_encoded_binary_object(Method, EncodedObject);
-
-        %% zlib encoding is a special case, we return the legacy format:
-        encode_zlib -> PBEncodedObject = riak_core_pb:encode_riakobject_pb(#'RiakObject_PB'{bucket=Bucket, key=Key, val=Value}),
-                       zlib:zip(PBEncodedObject)
-    end.
+    encode_raw = handoff_data_encoding_method(),
+    EncodedObject = { Bucket, Key, iolist_to_binary(Value) },
+    return_encoded_binary_object(encode_raw, EncodedObject).
 
 %% Return objects in a consistent form:
 return_encoded_binary_object(Method, EncodedObject) ->
