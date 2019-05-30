@@ -318,7 +318,7 @@ is_head({ok, #p_object{}}) ->
 is_head(Obj) ->
     is_head({ok, Obj}).
 
-
+-spec spoof_getdeletedobject(riak_object()) -> riak_object().
 %% @doc
 %% If an object has been confirmed as deleted by riak_util:is_x_deleted, then
 %% any head_only contents can be uplifted to a GET-equivalent by swapping the
