@@ -19,7 +19,8 @@
                   riak_pb,
                   sext,
                   leveled,
-                  kv_index_tictactree
+                  kv_index_tictactree,
+                  gen_fsm_compat
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},
