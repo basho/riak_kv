@@ -153,7 +153,7 @@
                 handoff_target :: node(),
                 handoffs_rejected = 0 :: integer(),
                 forward :: node() | [{integer(), node()}],
-                hashtrees :: pid(),
+                hashtrees :: pid() | undefined,
                 upgrade_hashtree = false :: boolean(),
                 md_cache :: ets:tab(),
                 md_cache_size :: pos_integer(),

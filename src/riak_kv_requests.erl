@@ -293,6 +293,7 @@ new_vclock_request(BKeys) ->
 is_coordinated_put(#riak_kv_put_req_v1{options=Options}) ->
     proplists:get_value(coord, Options, false).
 
+-spec get_bucket_key(request()) -> bucket_key().
 get_bucket_key(#riak_kv_get_req_v1{bkey = BKey}) ->
     BKey;
 get_bucket_key(#riak_kv_head_req_v1{bkey = BKey}) ->
@@ -331,7 +332,8 @@ get_item_filter(#riak_kv_index_req_v1{item_filter = ItemFilter}) ->
 get_item_filter(#riak_kv_index_req_v2{item_filter = ItemFilter}) ->
     ItemFilter.
 
--spec get_ack_backpressure(listkeys_request()) -> UseAckBackpressure::boolean().
+-spec get_ack_backpressure(listkeys_request()|index_request())
+                            -> UseAckBackpressure::boolean().
 get_ack_backpressure(#riak_kv_listkeys_req_v3{}) ->
     false;
 get_ack_backpressure(#riak_kv_listkeys_req_v4{}) ->
@@ -353,6 +355,7 @@ get_query(#riak_kv_aaefold_req_v1{qry = Query}) ->
 get_encoded_obj(#riak_kv_w1c_put_req_v1{encoded_obj = EncodedObj}) ->
     EncodedObj.
 
+-spec get_object(put_request()) -> object().
 get_object(#riak_kv_put_req_v1{object = Object}) ->
     Object.
 
@@ -376,18 +379,23 @@ get_request_id(#riak_kv_head_req_v1{req_id = ReqId}) ->
 get_request_id(#riak_kv_get_req_v1{req_id = ReqId}) ->
     ReqId.
 
+-spec get_start_time(put_request()) -> start_time().
 get_start_time(#riak_kv_put_req_v1{start_time = StartTime}) ->
     StartTime.
 
+-spec get_options(put_request()) -> request_options().
 get_options(#riak_kv_put_req_v1{options = Options}) ->
     Options.
 
+-spec set_object(put_request(), object()) -> put_request().
 set_object(#riak_kv_put_req_v1{}=Req, Object) ->
     Req#riak_kv_put_req_v1{object = Object}.
 
+-spec remove_option(put_request(), any()) -> put_request().
 remove_option(#riak_kv_put_req_v1{options = Options}=Req, Option) ->
     NewOptions = proplists:delete(Option, Options),
     Req#riak_kv_put_req_v1{options = NewOptions}.
 
+-spec get_path(hotbackup_request()) -> string().
 get_path(#riak_kv_hotbackup_req_v1{backup_path = BP}) ->
     BP.
