@@ -254,7 +254,7 @@ malformed_boolean_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
     end.
 
 malformed_timeout_param({Result, RD, Ctx}) ->
-    case wrq:get_qs_value("timeout", undefined, RD) of
+    case wrq:get_qs_value("timeout", RD) of
         undefined ->
             {Result, RD, Ctx};
         TimeoutStr when is_list(TimeoutStr) ->

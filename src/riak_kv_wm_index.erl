@@ -82,8 +82,6 @@
          }).
 -type context() :: #ctx{}.
 
--define(ALL_2I_RESULTS, all).
-
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_index.hrl").
@@ -181,15 +179,15 @@ malformed_request(RD, Ctx) ->
     Args2 = [list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, X)) || X <- Args1],
     ReturnTerms0 = wrq:get_qs_value(?Q_2I_RETURNTERMS, "false", RD),
     ReturnTerms1 = normalize_boolean(string:to_lower(ReturnTerms0)),
-    Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, undefined, RD),
+    Continuation = wrq:get_qs_value(?Q_2I_CONTINUATION, RD),
     PgSort0 = wrq:get_qs_value(?Q_2I_PAGINATION_SORT, RD),
     PgSort = case PgSort0 of
         undefined -> undefined;
         _ -> normalize_boolean(string:to_lower(PgSort0))
     end,
-    MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, ?ALL_2I_RESULTS, RD),
-    TermRegex = wrq:get_qs_value(?Q_2I_TERM_REGEX, undefined, RD),
-    Timeout0 =  wrq:get_qs_value("timeout", undefined, RD),
+    MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, RD),
+    TermRegex = wrq:get_qs_value(?Q_2I_TERM_REGEX, RD),
+    Timeout0 =  wrq:get_qs_value("timeout", RD),
     {Start, End} = case {IndexField, Args2} of
                        {<<"$bucket">>, _} -> {undefined, undefined};
                        {_, []} -> {undefined, undefined};
@@ -316,7 +314,7 @@ validate_timeout(Str) ->
             {error, Str}
     end.
 
-validate_max(all) ->
+validate_max(undefined) ->
     {true, all};
 validate_max(N) when is_list(N) ->
     try
