@@ -189,7 +189,10 @@ to_version(_Version, HllSet) ->
 stats(HllSet) ->
     [{S, stat(S, HllSet)} || S <- ?STATS].
 
--spec stat(stat(), hllset()) -> byte() | precision() | undefined.
+-spec stat(stat(), hllset()) -> number() | undefined.
+%% spec is more precisely byte() 1..255 or precision() 4..16 - however dialyzer
+%% does not recognise this as being more precise than number() - hence number()
+%% used in the actual spec
 stat(bytes, HllSet) ->
     hyper:bytes(HllSet);
 stat(precision, HllSet) ->
