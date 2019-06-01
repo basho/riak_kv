@@ -80,7 +80,7 @@ start_callouts(#{config := Config} = S, _Args) ->
              pp_queuedefs(maps:get(replrtq_srcqueue, Config))),
     ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_srcqueuelimit, ?WILDCARD],
              maps:get(replrtq_srcqueuelimit, Config)),
-    ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_logfrequency, ?WILDCARD], 50).
+    ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_logfrequency, ?WILDCARD], 500000).  %% lager not defined and crashes if called
 
 start_next(S, Value, _Args) ->
     Queues = [ {Name, #{}} ||
@@ -152,26 +152,14 @@ coordput(Entry) ->
     riak_kv_replrtq_src:replrtq_coordput(Entry).
 
 coordput_next(S, _Value, [{Bucket, _, _, _} = Entry]) ->
-    Prio = 3, %% coordinated put has prio 3
-    Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
+    Prio = 3,  %% coordinated put has prio 3
+    ApplicableQueues = applicable_queues(S, Prio, Bucket),
     Queues = maps:get(priority_queues, S, #{}),
-    QueueDefs =  maps:get(replrtq_srcqueue, maps:get(config, S)),
-    %% if filter matches and limit is not reached
-    ApplicableQueues =
-        [ Name || {Name, any} <- QueueDefs] ++
-        [ Name || {Name, {bucketname, Word}} <- QueueDefs,   is_equal(Bucket, Word) ] ++
-        [ Name || {Name, {bucketprefix, Word}} <- QueueDefs, is_prefix(Bucket, Word) ] ++
-        [ Name || {Name, {buckettype, Word}} <- QueueDefs,   is_tuple(Bucket), string:equal(element(1, Bucket), Word) ],
     NewQueues =
         lists:foldl(fun(QueueName, Acc) ->
                             PQueues = maps:get(QueueName, Acc),
                             PQueue = maps:get(Prio, PQueues, []),
-                            case length(PQueue) < Limit of
-                                true ->
-                                    Acc#{QueueName => PQueues#{Prio => PQueue ++ [Entry]}};
-                                false ->
-                                    Acc
-                            end
+                            Acc#{QueueName => PQueues#{Prio => PQueue ++ [Entry]}}
                     end, Queues, ApplicableQueues),
     S#{priority_queues => NewQueues}.
 
@@ -244,6 +232,21 @@ pp_queuedef({Name, {Filter, Arg}}) ->
     lists:concat([Name, ":", Filter, ".", Arg]);
 pp_queuedef({Name, Filter}) ->
     lists:concat([Name, ":", Filter]).
+
+applicable_queues(S, Priority, Bucket) ->
+    QueueDefs =  maps:get(replrtq_srcqueue, maps:get(config, S)),
+    Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
+    Queues = maps:get(priority_queues, S, #{}),
+    %% if filter matches and limit is not reached
+    ApplicableQueues =
+        [ Name || {Name, any} <- QueueDefs] ++
+        [ Name || {Name, {bucketname, Word}} <- QueueDefs,   is_equal(Bucket, Word) ] ++
+        [ Name || {Name, {bucketprefix, Word}} <- QueueDefs, is_prefix(Bucket, Word) ] ++
+        [ Name || {Name, {buckettype, Word}} <- QueueDefs,   is_tuple(Bucket), string:equal(element(1, Bucket), Word) ],
+    lists:filter(fun(QueueName) ->
+                         PQueues = maps:get(QueueName, Queues),
+                         length(maps:get(Priority, PQueues, [])) < Limit
+                    end, ApplicableQueues).
 
 %% Tricky unicode issues
 %% This might be privacy issue. Assume there is a unicode string that one searches for
