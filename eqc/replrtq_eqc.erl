@@ -313,12 +313,17 @@ prop_repl() ->
 %% -- API-spec ---------------------------------------------------------------
 api_spec() ->
     #api_spec{ language = erlang, mocking = eqc_mocking,
-               modules = [ app_helper_spec() ] }.
+               modules = [ app_helper_spec(), lager_spec() ] }.
 
 app_helper_spec() ->
     #api_module{ name = app_helper, fallback = undefined,
                  functions =
                      [  #api_fun{ name = get_env, arity = 3, matched = all, fallback = false} ] }.
+
+lager_spec() ->
+    #api_module{ name = lager, fallback = undefined,
+                 functions =
+                     [  #api_fun{ name = warning, arity = 2, matched = all, fallback = false} ] }.
 
 %% This is a pure data structure, no need to mock it, rather use it
 priority_queue_spec() ->
