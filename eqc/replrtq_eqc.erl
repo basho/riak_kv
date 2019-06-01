@@ -281,7 +281,36 @@ resume_rtq_post(S, [Name], Res) ->
         ok -> maps:is_key(Name, Queues)
     end.
 
+%% --- Operation: pop_rtq ---
+pop_rtq_pre(S) ->
+    maps:is_key(pid, S).
 
+pop_rtq_args(_S) ->
+    [elements(queuenames())].
+
+pop_rtq(Name) ->
+    riak_kv_replrtq_src:popfrom_rtq(Name).
+
+pop_rtq_next(S, _Value, [Name]) ->
+    Queues = maps:get(priority_queues, S),
+    case maps:get(Name, Queues, undefined) of
+        undefined -> S;
+        PQueue ->
+            {_, NewPQueue} = queue_pop_highest(PQueue),
+            S#{priority_queues => Queues#{Name => NewPQueue}}
+    end.
+
+pop_rtq_post(S, [Name], Res) ->
+    Queues = maps:get(priority_queues, S),
+    case maps:get(Name, Queues, undefined) of
+        undefined -> eq(queue_empty, Res);  %% This is weird., rather not_found as in other API calls
+        PQueue ->
+            case queue_pop_highest(PQueue) of
+                {empty, _} -> eq(Res, queue_empty);
+                {{{T, B}, K, V, Obj}, _} -> eq(Res, {{list_to_binary(T), list_to_binary(B)}, K, V, Obj});
+                {{B, K, V, Obj}, _} -> eq(Res, {list_to_binary(B), K, V, Obj})
+            end
+    end.
 
 
 %% --- ... more operations
@@ -316,6 +345,17 @@ pp_queuedef({Name, {Filter, Arg}}) ->
     lists:concat([Name, ":", Filter, ".", Arg]);
 pp_queuedef({Name, Filter}) ->
     lists:concat([Name, ":", Filter]).
+
+queue_pop_highest(PQueue) ->
+    case lists:reverse(
+           lists:sort([ {Prio, maps:get(Prio, PQueue)} || Prio <- maps:keys(PQueue),
+                                                        is_integer(Prio),
+                                                        maps:get(Prio, PQueue) =/= []])) of
+        [] -> {empty, PQueue};
+        [{Prio, [E|Rest]}|_] -> {E, PQueue#{Prio => Rest}}
+    end.
+
+
 
 applicable_queues(S, Priority, Bucket) ->
     Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
