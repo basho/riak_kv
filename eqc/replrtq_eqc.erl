@@ -222,6 +222,26 @@ register_rtq_post(S, [Name, _Filter], Res) ->
         false -> maps:is_key(Name, Queues)
     end.
 
+%% --- Operation: delist_rtq ---
+delist_rtq_pre(S) ->
+    maps:is_key(pid, S).
+
+delist_rtq_args(_S) ->
+    [elements(queuenames())].
+
+delist_rtq(Name) ->
+    riak_kv_replrtq_src:delist_rtq(Name).
+
+delist_rtq_next(S, _Value, [Name]) ->
+    Queues = maps:get(priority_queues, S),
+    S#{priority_queues => maps:remove(Name, Queues)}.
+
+delist_rtq_post(_S, [_Name], Res) ->
+    eq(Res, ok).
+
+
+
+
 
 
 %% --- ... more operations
@@ -306,6 +326,7 @@ is_equal(String, Word) ->
 weight(_S, start) -> 1;
 weight(_S, stop)  -> 2;
 weight(_S, crash) -> 1;
+weight(_S, config) -> 1;
 weight(_S, _Cmd) -> 10.
 
 prop_repl() ->
