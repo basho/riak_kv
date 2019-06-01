@@ -191,8 +191,36 @@ lengths_post(S, [QueueName], Res) ->
                       length(maps:get(3, Queue, []))}})
     end.
 
+%% --- Operation: register_rtq ---
+register_rtq_pre(S) ->
+    maps:is_key(pid, S).
+
+register_rtq_args(_S) ->
+    [elements(queuenames()), queuefilter()].
+
+%% API should be changed in SUT, adding the byte_size as part of the call.
+register_rtq(Name, {bucketprefix = Kind, Word}) ->
+    riak_kv_replrtq_src:register_rtq(Name, {Kind, list_to_binary(Word), byte_size(list_to_binary(Word))});
+register_rtq(Name, {Kind, Word}) ->
+    riak_kv_replrtq_src:register_rtq(Name, {Kind, list_to_binary(Word)});
+register_rtq(Name, Kind) ->
+    riak_kv_replrtq_src:register_rtq(Name, Kind).
+
+register_rtq_callouts(_S, [_Name, _]) ->
+    ?OPTIONAL(?CALLOUT(lager, warning, [?WILDCARD, ?WILDCARD], ok)).
 
 
+register_rtq_next(S, _Value, [Name, Filter]) ->
+    Queues = maps:get(priority_queues, S),
+    %% Use merge to create a NOP if queue name already taken
+    S#{priority_queues => maps:merge(#{Name => #{filter => Filter}}, Queues)}.
+
+register_rtq_post(S, [Name, _Filter], Res) ->
+    Queues = maps:get(priority_queues, S),
+    case Res of
+        true -> not maps:is_key(Name, Queues);
+        false -> maps:is_key(Name, Queues)
+    end.
 
 
 
