@@ -43,7 +43,7 @@ config_args(_S) ->
       {replrtq_srcqueuelimit, choose(0,100)}  %% length of each individual queue
      ]].
 
-config_pre(_S, [Config]) ->
+config_pre(_S, [_Config]) ->
     true.
 
 config(Config) ->
@@ -74,7 +74,7 @@ start() ->
     unlink(Pid),
     Pid.
 
-start_callouts(#{config := Config} = S, _Args) ->
+start_callouts(#{config := Config}, _Args) ->
     %% Mocking... in OTP20 app_helper can be replaced and then these can be removed
     ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_srcqueue, ?WILDCARD],
              pp_queuedefs(maps:get(replrtq_srcqueue, Config))),
@@ -83,8 +83,8 @@ start_callouts(#{config := Config} = S, _Args) ->
     ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_logfrequency, ?WILDCARD], 500000).  %% lager not defined and crashes if called
 
 start_next(S, Value, _Args) ->
-    Queues = [ {Name, #{}} ||
-                 {Name, _} <- maps:get(replrtq_srcqueue, maps:get(config, S, #{}), [])],
+    Queues = [ {Name, #{filter => Filter}} ||
+                 {Name, Filter} <- maps:get(replrtq_srcqueue, maps:get(config, S, #{}), [])],
     S#{pid => Value, priority_queues => maps:from_list(Queues)}.
 
 start_post(_S, _Args, Res) ->
@@ -133,23 +133,19 @@ coordput_pre(S) ->
     maps:is_key(pid, S).
 
 coordput_args(S) ->
-    Buckets =
-        [ list_to_binary(Word) ||
-            {_, {_, Word}} <-
-                maps:get(replrtq_srcqueue, maps:get(config, S, #{}), [])] ++ [<<"anything">>],
-    Types =
-        [ list_to_binary(Word) ||
-            {_, {buckettype, Word}} <-
-                maps:get(replrtq_srcqueue, maps:get(config, S, #{}), [])] ++ [<<"type">>],
-    [?LET({Bucket, PostFix}, {weighted_default({10, elements(Buckets)},
-                                               {1, utf8()}),
+    Queues = maps:get(priority_queues, S, #{}),
+    Buckets = Types =
+        [ Word || #{filter := {_, Word}} <- maps:values(Queues) ] ++ ["anything", "type"],
+    [?LET({Bucket, PostFix}, {weighted_default({10, elements(Buckets)}, {1, list(choose($a, $z))}),
                               weighted_default({10, <<>>}, {2, utf8()})},
-          frequency([{10, {<<Bucket/binary, PostFix/binary>>, binary(), vclock, obj_ref}},
-                    {1, {{elements(Types), <<Bucket/binary, PostFix/binary>>}, binary(), vclock, obj_ref}}]))].
+          frequency([{10, {Bucket ++ binary_to_list(PostFix), binary(), vclock, obj_ref}},
+                    {1, {{elements(Types), Bucket ++ binary_to_list(PostFix)}, binary(), vclock, obj_ref}}]))].
 
-coordput(Entry) ->
-    %% Async put in the queue
-    riak_kv_replrtq_src:replrtq_coordput(Entry).
+coordput({{Type, Bucket}, Key, VClock, ObjRef}) ->
+    riak_kv_replrtq_src:replrtq_coordput({{list_to_binary(Type), list_to_binary(Bucket)}, Key, VClock, ObjRef});
+coordput({Bucket, Key, VClock, ObjRef}) ->
+    riak_kv_replrtq_src:replrtq_coordput({list_to_binary(Bucket), Key, VClock, ObjRef}).
+
 
 coordput_next(S, _Value, [{Bucket, _, _, _} = Entry]) ->
     Prio = 3,  %% coordinated put has prio 3
@@ -171,7 +167,7 @@ coordput_post(_S, [_Entry], Res) ->
 %% Suggestion: let length return a map... more future proof.
 %% E.g. #{1 => 12, 2 => 5, 3 => 0}. Or a list with implicit priority [12, 5, 0]
 lengths_pre(S) ->
-    maps:is_key(pid, S) andalso maps:is_key(config, S).
+    maps:is_key(pid, S).
 
 lengths_args(S) ->
     case maps:keys(maps:get(priority_queues, S, #{})) of
@@ -216,11 +212,11 @@ queuenames() ->
 
 queuefilter() ->
     ?LET([Word], noshrink(eqc_erlang_program:words(1)),
-         elements(([any,
-                    block_rtq,   %% Seems not to have any effect
-                    {bucketname, Word},
-                    {bucketprefix, Word},
-                    {buckettype, Word}]))).
+         elements([any,
+                   block_rtq,   %% Seems not to have any effect
+                   {bucketname, Word},
+                   {bucketprefix, Word},
+                   {buckettype, Word}])).
                 %% no fault injection yet: nonsense, {nonsense, Word}.
 
 %% -- Helper functions
@@ -234,9 +230,9 @@ pp_queuedef({Name, Filter}) ->
     lists:concat([Name, ":", Filter]).
 
 applicable_queues(S, Priority, Bucket) ->
-    QueueDefs =  maps:get(replrtq_srcqueue, maps:get(config, S)),
     Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
     Queues = maps:get(priority_queues, S, #{}),
+    QueueDefs = [ {Name, Filter} || {Name, #{filter := Filter}} <- maps:to_list(Queues) ],
     %% if filter matches and limit is not reached
     ApplicableQueues =
         [ Name || {Name, any} <- QueueDefs] ++
@@ -257,16 +253,16 @@ applicable_queues(S, Priority, Bucket) ->
 %% that accent could give additional matches.
 %% But actually, this is not a real issue, one could also serach for any shorter prefix and
 %% then succeed.
-is_prefix(String, Prefix) when is_binary(String) ->
+is_prefix({_Type, String}, Prefix) ->
+    is_prefix(String, Prefix);
+is_prefix(String, Prefix) ->
     %% string:prefix(String, Prefix) =/= nomatch.
     %% If the bucket is a unicode string, then it may happen that
     %% string:prefix returns nomatch, even though the binary bytes are a prefix:
     %% string:prefix(<<108, 97, 219, 159>>, "la") --> nomatch  "la" == <<108,97>>
-    lists:prefix(Prefix, unicode:characters_to_list(String));
-is_prefix({Type, String}, Prefix) ->
-    is_prefix(String, Prefix).
+    lists:prefix(Prefix, String).
 
-is_equal({Type, String}, Word) ->
+is_equal({_Type, String}, Word) ->
     string:equal(String, Word);
 is_equal(String, Word) ->
     string:equal(String, Word).
