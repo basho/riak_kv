@@ -21,16 +21,6 @@
 initial_state() ->
     #{}.
 
-%% -- Common pre-/post-conditions --------------------------------------------
-command_precondition_common(_S, _Cmd) ->
-    true.
-
-precondition_common(_S, _Call) ->
-    true.
-
-%% postcondition_common(S, Call, Res) ->
-%%     eq(Res, return_value(S, Call)). %% Check all return values
-
 %% -- Operations -------------------------------------------------------------
 
 %% --- Operation: config ---
@@ -83,7 +73,7 @@ start_callouts(#{config := Config}, _Args) ->
     ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_logfrequency, ?WILDCARD], 500000).  %% lager not defined and crashes if called
 
 start_next(S, Value, _Args) ->
-    Queues = [ {Name, #{filter => Filter}} ||
+    Queues = [ {Name, #{filter => Filter, status => active}} ||
                  {Name, Filter} <- maps:get(replrtq_srcqueue, maps:get(config, S, #{}), [])],
     S#{pid => Value, priority_queues => maps:from_list(Queues)}.
 
@@ -213,7 +203,8 @@ register_rtq_callouts(_S, [_Name, _]) ->
 register_rtq_next(S, _Value, [Name, Filter]) ->
     Queues = maps:get(priority_queues, S),
     %% Use merge to create a NOP if queue name already taken
-    S#{priority_queues => maps:merge(#{Name => #{filter => Filter}}, Queues)}.
+    S#{priority_queues => maps:merge(#{Name => #{filter => Filter,
+                                                 status => active}}, Queues)}.
 
 register_rtq_post(S, [Name, _Filter], Res) ->
     Queues = maps:get(priority_queues, S),
@@ -240,6 +231,55 @@ delist_rtq_post(_S, [_Name], Res) ->
     eq(Res, ok).
 
 
+%% --- Operation: suspend_rtq ---
+suspend_rtq_pre(S) ->
+    maps:is_key(pid, S).
+
+suspend_rtq_args(_S) ->
+    [elements(queuenames())].
+
+suspend_rtq(Name) ->
+    riak_kv_replrtq_src:suspend_rtq(Name).
+
+suspend_rtq_next(S, _Value, [Name]) ->
+    Queues = maps:get(priority_queues, S),
+    case maps:get(Name, Queues, undefined) of
+        undefined -> S;
+        PQueue ->
+            S#{priority_queues => Queues#{Name => PQueue#{status => suspended}}}
+    end.
+
+suspend_rtq_post(S, [Name], Res) ->
+    Queues = maps:get(priority_queues, S),
+    case Res of
+        not_found -> not maps:is_key(Name, Queues);
+        ok -> maps:is_key(Name, Queues)
+    end.
+
+%% --- Operation: resume_rtq ---
+resume_rtq_pre(S) ->
+    maps:is_key(pid, S).
+
+resume_rtq_args(_S) ->
+    [elements(queuenames())].
+
+resume_rtq(Name) ->
+    riak_kv_replrtq_src:resume_rtq(Name).
+
+resume_rtq_next(S, _Value, [Name]) ->
+    Queues = maps:get(priority_queues, S),
+    case maps:get(Name, Queues, undefined) of
+        undefined -> S;
+        PQueue ->
+            S#{priority_queues => Queues#{Name => PQueue#{status => active}}}
+    end.
+
+resume_rtq_post(S, [Name], Res) ->
+    Queues = maps:get(priority_queues, S),
+    case Res of
+        not_found -> not maps:is_key(Name, Queues);
+        ok -> maps:is_key(Name, Queues)
+    end.
 
 
 
@@ -280,7 +320,7 @@ pp_queuedef({Name, Filter}) ->
 applicable_queues(S, Priority, Bucket) ->
     Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
     Queues = maps:get(priority_queues, S, #{}),
-    QueueDefs = [ {Name, Filter} || {Name, #{filter := Filter}} <- maps:to_list(Queues) ],
+    QueueDefs = [ {Name, Filter} || {Name, #{filter := Filter, status := active}} <- maps:to_list(Queues) ],
     %% if filter matches and limit is not reached
     ApplicableQueues =
         [ Name || {Name, any} <- QueueDefs] ++
