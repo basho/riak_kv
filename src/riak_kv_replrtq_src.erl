@@ -164,8 +164,8 @@ replrtq_ttaefs(QueueName, ReplEntries) ->
 %% Never wait for the response or backoff - replictaion should be asynchronous
 %% and never slow the PUT path on the src cluster.
 -spec replrtq_coordput(repl_entry()) -> ok.
-replrtq_coordput(ReplEntry) ->
-    gen_server:cast(?MODULE, {rtq_coordput, ReplEntry}).
+replrtq_coordput({Bucket, _, _, _} = ReplEntry) when is_binary(Bucket); is_tuple(Bucket) ->
+    gen_server:cast(?MODULE, {rtq_coordput, Bucket, ReplEntry}).
 
 %% @doc
 %% Setup a queue with a given queuename, which will take coordput repl_entries
@@ -339,9 +339,9 @@ handle_call(stop, _From, State) ->
     {stop, normal, ok, State}.
 
 
-handle_cast({rtq_coordput, ReplEntry}, State) ->
+handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
     QueueNames =
-        find_queues(element(1, ReplEntry), State#state.queue_filtermap, []),
+        find_queues(Bucket, State#state.queue_filtermap, []),
     {QueueMap, QueueCountMap} =
         addto_queues(ReplEntry, ?RTQ_PRIORITY,
                         QueueNames,
