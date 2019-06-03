@@ -140,7 +140,10 @@ done(_State) ->
 
 %% Convenience
 
--type bucket_or_filter() :: binary() | {binary(), list()}.
+-type bucket_or_filter() ::
+        binary() | {binary(), binary()} | {binary(), list()} |
+        {{binary(), binary()}, list()}.
+        % Bucket may be typed bucket
 
 %% @doc List the keys from a bucket, and send them as inputs to the
 %%      given pipe.  This starts a new pipe with one fitting
