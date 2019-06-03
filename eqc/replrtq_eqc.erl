@@ -123,13 +123,8 @@ coordput_pre(S) ->
     maps:is_key(pid, S).
 
 coordput_args(S) ->
-    Queues = maps:get(priority_queues, S, #{}),
-    Buckets = Types =
-        [ Word || #{filter := {_, Word}} <- maps:values(Queues) ] ++ ["anything", "type"],
-    [?LET({Bucket, PostFix}, {weighted_default({10, elements(Buckets)}, {1, list(choose($a, $z))}),
-                              weighted_default({10, <<>>}, {2, utf8()})},
-          frequency([{10, {Bucket ++ binary_to_list(PostFix), binary(), vclock, obj_ref}},
-                    {1, {{elements(Types), Bucket ++ binary_to_list(PostFix)}, binary(), vclock, obj_ref}}]))].
+    Queues = maps:get(priority_queues, S),
+    entries_gen(Queues, 1).
 
 coordput({{Type, Bucket}, Key, VClock, ObjRef}) ->
     riak_kv_replrtq_src:replrtq_coordput({{list_to_binary(Type), list_to_binary(Bucket)}, Key, VClock, ObjRef});
@@ -145,12 +140,85 @@ coordput_next(S, _Value, [{Bucket, _, _, _} = Entry]) ->
         lists:foldl(fun(QueueName, Acc) ->
                             PQueues = maps:get(QueueName, Acc),
                             PQueue = maps:get(Prio, PQueues, []),
-                            Acc#{QueueName => PQueues#{Prio => PQueue ++ [Entry]}}
+                            Acc#{QueueName => PQueues#{Prio => add_to_buckets(PQueue,[Entry])}}
                     end, Queues, ApplicableQueues),
     S#{priority_queues => NewQueues}.
 
 coordput_post(_S, [_Entry], Res) ->
     eq(Res, ok).
+
+%% --- Operation: ticktac ---
+tictac_pre(S) ->
+    maps:is_key(pid, S).
+
+tictac_args(S) ->
+    Queues = maps:get(priority_queues, S),
+    [elements(queuenames()),  ?LET(N, nat(), entries_gen(Queues, N))].
+
+tictac(QueueName, Entries) ->
+    RealEntries =
+        lists:map(fun({{Type, Bucket}, Key, VClock, ObjRef}) ->
+                          {{list_to_binary(Type), list_to_binary(Bucket)}, Key, VClock, ObjRef};
+                     ({Bucket, Key, VClock, ObjRef}) ->
+                          {list_to_binary(Bucket), Key, VClock, ObjRef}
+                  end, Entries),
+    riak_kv_replrtq_src:replrtq_ttaefs(QueueName, RealEntries).
+
+tictac_callouts(S, [QueueName, Entries]) ->
+    ?APPLY(put_prio, [2, QueueName, Entries]).
+
+tictac_post(_S, [Name, Entries], Res) ->
+    eq(Res, return_value(S, {call, ?MODULE, tictac, [Name, Entries]})).
+
+put_prio_callouts(S, [Prio, QueueName, Entries]) ->
+    Queues = maps:get(priority_queues, S),
+    Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
+    case maps:get(QueueName, Queues, undefined) of
+        undefined ->
+            ?EMPTY;
+        PQueues ->
+            PQueue = maps:get(Prio, PQueues, []),
+            {Add, _} = lists:split(min(length(Entries), max(0, Limit - length(PQueue))), Entries),
+            %% ?WHEN(length(Entries) >= Limit - length(PQueue),
+            %%       ?CALLOUT(riak_kv_repl_timer, sleep, [?WILDCARD], ok)),
+            ?WHEN(length(uniq(Entries)) =< Limit - length(PQueue),
+                  ?APPLY(add_prio, [Prio, QueueName, Add])),
+            ?RET(if length(uniq(Entries)) < Limit - length(PQueue) -> ok; true -> pause end)
+    end.
+
+add_prio_next(S, _Value, [Prio, QueueName, Entries]) ->
+    Queues = maps:get(priority_queues, S),
+    PQueues = maps:get(QueueName, Queues),
+    PQueue = maps:get(Prio, PQueues, []),
+    S#{priority_queues => Queues#{QueueName => PQueues#{Prio => add_to_buckets(PQueue, Entries)}}}.
+
+%% tictac_process(_S, [Name, Entries]) ->
+%%     worker.
+
+
+%% --- Operation: ticktac ---
+aaefold_pre(S) ->
+    maps:is_key(pid, S).
+
+aaefold_args(S) ->
+    Queues = maps:get(priority_queues, S),
+    [elements(queuenames()),  ?LET(N, nat(), entries_gen(Queues, N))].
+
+aaefold(QueueName, Entries) ->
+    RealEntries =
+        lists:map(fun({{Type, Bucket}, Key, VClock, ObjRef}) ->
+                          {{list_to_binary(Type), list_to_binary(Bucket)}, Key, VClock, ObjRef};
+                     ({Bucket, Key, VClock, ObjRef}) ->
+                          {list_to_binary(Bucket), Key, VClock, ObjRef}
+                  end, Entries),
+    riak_kv_replrtq_src:replrtq_aaefold(QueueName, RealEntries).
+
+aaefold_callouts(_S, [QueueName, Entries]) ->
+    ?APPLY(put_prio, [1, QueueName, Entries]).
+
+aaefold_post(_S, [_Name, _Entries], Res) ->
+    eq(Res, ok).
+
 
 
 %% --- Operation: lengths ---
@@ -160,11 +228,7 @@ lengths_pre(S) ->
     maps:is_key(pid, S).
 
 lengths_args(S) ->
-    case maps:keys(maps:get(priority_queues, S, #{})) of
-        [] -> ["none_existing_queue"];
-        Names ->
-            [elements(Names)]
-    end.
+    [elements(queuenames())].
 
 lengths(QueueName) ->
     riak_kv_replrtq_src:length_rtq(QueueName).
@@ -336,6 +400,15 @@ queuefilter() ->
                    {buckettype, Word}])).
                 %% no fault injection yet: nonsense, {nonsense, Word}.
 
+entries_gen(Queues, N) ->
+    Buckets = Types =
+        [ Word || #{filter := {_, Word}} <- maps:values(Queues) ] ++ ["anything", "type"],
+    vector(N,
+           ?LET({Bucket, PostFix}, {weighted_default({10, elements(Buckets)}, {1, list(choose($a, $z))}),
+                                    weighted_default({10, <<>>}, {2, utf8()})},
+                frequency([{10, {Bucket ++ binary_to_list(PostFix), binary(), vclock, obj_ref}},
+                           {1, {{elements(Types), Bucket ++ binary_to_list(PostFix)}, binary(), vclock, obj_ref}}]))).
+
 %% -- Helper functions
 
 pp_queuedefs(Qds) ->
@@ -395,8 +468,15 @@ is_equal({_Type, String}, Word) ->
 is_equal(String, Word) ->
     string:equal(String, Word).
 
+uniq([]) ->
+    [];
+uniq([H|T]) ->
+    [H | uniq([ E || E<-T, E =/= H])].
 
 
+add_to_buckets(Queue, Entries) ->
+    %% use a fold to replace duplicates, in the right way
+    Queue ++ Entries.
 
 
 %% -- Property ---------------------------------------------------------------
