@@ -765,11 +765,11 @@ limit_aaefold_test() ->
     _SW2 = os:timestamp(),
     ok = replrtq_aaefold(?QN1, lists:reverse(Grp2)),
     SW3 = os:timestamp(),
-    ok = replrtq_aaefold(?QN1, lists:reverse(Grp3)),
+    pause = replrtq_aaefold(?QN1, lists:reverse(Grp3)),
     _SW4 = os:timestamp(),
-    ok = replrtq_aaefold(?QN1, lists:reverse(Grp4)),
+    pause = replrtq_aaefold(?QN1, lists:reverse(Grp4)),
     _SW5 = os:timestamp(),
-    ok = replrtq_aaefold(?QN1, lists:reverse(Grp5)),
+    pause = replrtq_aaefold(?QN1, lists:reverse(Grp5)),
     SW6 = os:timestamp(),
     UnPaused = timer:now_diff(SW3, SW1) div 1000,
     Paused = timer:now_diff(SW6, SW3) div 1000,
@@ -779,7 +779,7 @@ limit_aaefold_test() ->
 
     % After we are over the limit, new PUTs are paused even though the change
     % is rejected
-    ok = replrtq_aaefold(?QN1, lists:reverse(Grp6)),
+    pause = replrtq_aaefold(?QN1, lists:reverse(Grp6)),
     SW7 = os:timestamp(),
     StillPaused = timer:now_diff(SW7, SW6) div 1000,
     ?assertMatch(true, StillPaused >= 1000),
