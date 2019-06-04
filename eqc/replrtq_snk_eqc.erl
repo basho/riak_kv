@@ -142,7 +142,8 @@ fetcher_pre(S, [WorkItem]) ->
     lists:member(WorkItem, workitems(S)).
 
 fetcher(WorkItem) ->
-    riak_kv_replrtq_snk:repl_fetcher(WorkItem).
+    riak_kv_replrtq_snk:repl_fetcher(WorkItem),
+    timer:sleep(10).
 
 fetcher_callouts(_S, [WorkItem]) ->
     ?APPLY(fetchwork, []),
