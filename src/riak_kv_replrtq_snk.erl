@@ -417,6 +417,7 @@ work(WorkItem) ->
     _P = spawn(?MODULE, repl_fetcher, [WorkItem]),
     ok.
 
+%% Should always under all circumstances end with calling done_work
 -spec repl_fetcher(work_item()) -> ok.
 repl_fetcher(WorkItem) ->
     SW = os:timestamp(),
