@@ -156,34 +156,42 @@ tictac_args(S) ->
     [elements(queuenames()),  ?LET(N, nat(), entries_gen(Queues, N))].
 
 tictac(QueueName, Entries) ->
-    RealEntries =
+    ReplEntries =
         lists:map(fun({{Type, Bucket}, Key, VClock, ObjRef}) ->
                           {{list_to_binary(Type), list_to_binary(Bucket)}, Key, VClock, ObjRef};
                      ({Bucket, Key, VClock, ObjRef}) ->
                           {list_to_binary(Bucket), Key, VClock, ObjRef}
                   end, Entries),
-    riak_kv_replrtq_src:replrtq_ttaefs(QueueName, RealEntries).
+    riak_kv_replrtq_src:replrtq_ttaefs(QueueName, ReplEntries, 0).
 
 tictac_callouts(S, [QueueName, Entries]) ->
     ?APPLY(put_prio, [2, QueueName, Entries]).
 
-tictac_post(_S, [Name, Entries], Res) ->
-    eq(Res, return_value(S, {call, ?MODULE, tictac, [Name, Entries]})).
+put_prio_post(S, [Prio, QueueName, Entries], Res) ->
+    Queues = maps:get(priority_queues, S),
+    Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
+    case maps:get(QueueName, Queues, undefined) of
+        #{status := active} = PQueues ->
+            PQueue = maps:get(Prio, PQueues, []),
+            case length(Entries) + length(PQueue) < Limit div 2 of
+                true -> eq(Res, ok);
+                false -> eq(Res, pause)
+            end;
+        _ ->
+            eq(Res, ok)
+    end.
 
+%% More than 50% full is pause
 put_prio_callouts(S, [Prio, QueueName, Entries]) ->
     Queues = maps:get(priority_queues, S),
     Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
     case maps:get(QueueName, Queues, undefined) of
-        undefined ->
-            ?EMPTY;
-        PQueues ->
+        #{status := active} = PQueues ->
             PQueue = maps:get(Prio, PQueues, []),
-            {Add, _} = lists:split(min(length(Entries), max(0, Limit - length(PQueue))), Entries),
-            %% ?WHEN(length(Entries) >= Limit - length(PQueue),
-            %%       ?CALLOUT(riak_kv_repl_timer, sleep, [?WILDCARD], ok)),
-            ?WHEN(length(uniq(Entries)) =< Limit - length(PQueue),
-                  ?APPLY(add_prio, [Prio, QueueName, Add])),
-            ?RET(if length(uniq(Entries)) < Limit - length(PQueue) -> ok; true -> pause end)
+            ?WHEN(length(Entries) + length(PQueue) =< Limit,
+                  ?APPLY(add_prio, [Prio, QueueName, Entries]));
+        _ ->
+            ?EMPTY
     end.
 
 add_prio_next(S, _Value, [Prio, QueueName, Entries]) ->
@@ -205,19 +213,16 @@ aaefold_args(S) ->
     [elements(queuenames()),  ?LET(N, nat(), entries_gen(Queues, N))].
 
 aaefold(QueueName, Entries) ->
-    RealEntries =
+    ReplEntries =
         lists:map(fun({{Type, Bucket}, Key, VClock, ObjRef}) ->
                           {{list_to_binary(Type), list_to_binary(Bucket)}, Key, VClock, ObjRef};
                      ({Bucket, Key, VClock, ObjRef}) ->
                           {list_to_binary(Bucket), Key, VClock, ObjRef}
                   end, Entries),
-    riak_kv_replrtq_src:replrtq_aaefold(QueueName, RealEntries).
+    riak_kv_replrtq_src:replrtq_aaefold(QueueName, ReplEntries, 0).
 
 aaefold_callouts(_S, [QueueName, Entries]) ->
     ?APPLY(put_prio, [1, QueueName, Entries]).
-
-aaefold_post(_S, [_Name, _Entries], Res) ->
-    eq(Res, ok).
 
 
 
@@ -468,15 +473,10 @@ is_equal({_Type, String}, Word) ->
 is_equal(String, Word) ->
     string:equal(String, Word).
 
-uniq([]) ->
-    [];
-uniq([H|T]) ->
-    [H | uniq([ E || E<-T, E =/= H])].
-
 
 add_to_buckets(Queue, Entries) ->
     %% use a fold to replace duplicates, in the right way
-    Queue ++ Entries.
+    Queue ++ lists:reverse(Entries).
 
 
 %% -- Property ---------------------------------------------------------------

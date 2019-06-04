@@ -99,7 +99,7 @@
     % a vnode as part of the operation that PULLs from the queue.
 -type type_filter() :: {buckettype, binary()}.
 -type bucket_filter() :: {bucketname, binary()}.
--type prefix_filter() :: {bucketprefix, binary(), pos_integer()}.
+-type prefix_filter() :: {bucketprefix, binary()}.
 -type all_filter() :: any.
 -type blockrtq_filter() :: block_rtq.
 -type queue_filter() ::
@@ -407,7 +407,8 @@ find_queues({T, Bucket}, [{QN, {bucketname, Bucket}, _}|Rest], ActiveQueues) ->
 find_queues({Type, B}, [{QN, {buckettype, Type}, _}|Rest], ActiveQueues) ->
     find_queues({Type, B}, Rest, [QN|ActiveQueues]);
 find_queues({T, Bucket},
-            [{QN, {bucketprefix, Prefix, PS}, _}|Rest], ActiveQueues) ->
+            [{QN, {bucketprefix, Prefix}, _}|Rest], ActiveQueues) ->
+    PS = byte_size(Prefix),
     case Bucket of
         <<Prefix:PS/binary, _R/binary>> ->
             find_queues({T, Bucket}, Rest, [QN|ActiveQueues]);
@@ -415,7 +416,8 @@ find_queues({T, Bucket},
             find_queues({T, Bucket}, Rest, ActiveQueues)
     end;
 find_queues(Bucket,
-            [{QN, {bucketprefix, Prefix, PS}, _}|Rest], ActiveQueues) ->
+            [{QN, {bucketprefix, Prefix}, _}|Rest], ActiveQueues) ->
+    PS = byte_size(Prefix),
     case Bucket of
         <<Prefix:PS/binary, _R/binary>> ->
             find_queues(Bucket, Rest, [QN|ActiveQueues]);
@@ -531,8 +533,7 @@ tokenise_queuedefn(QueueDefnString) ->
                         ["bucketprefix", Prefix] ->
                             [{list_to_atom(QueueName),
                                 {bucketprefix,
-                                    list_to_binary(Prefix),
-                                    byte_size(list_to_binary(Prefix))},
+                                    list_to_binary(Prefix)},
                                 active}|Acc];
                         ["buckettype", Type] ->
                             [{list_to_atom(QueueName),
