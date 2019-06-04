@@ -50,6 +50,11 @@
             popfrom_rtq/1,
             stop/0]).
 
+-ifdef(TEST).
+-export([ replrtq_aaefold/3,
+          replrtq_ttaefs/3 ]).
+-endif.
+
 -define(BACKOFF_PAUSE, 1000).
     % Pause in ms in the case the last addition to the queue took the queue's
     % size for that priority over the maximum
@@ -126,15 +131,21 @@ start_link() ->
 %% Note that it is assumed that the list of repl_entries has been built
 %% efficiently using [Add|L] - so the first added element will be the element
 %% retrieved first from the queue
--spec replrtq_aaefold(queue_name(), list(repl_entry())) -> ok.
+-spec replrtq_aaefold(queue_name(), list(repl_entry())) -> ok | pause.
 replrtq_aaefold(QueueName, ReplEntries) ->
+    replrtq_aaefold(QueueName, ReplEntries, ?BACKOFF_PAUSE).
+
+-spec replrtq_aaefold(queue_name(), list(repl_entry()), pos_integer()) -> ok | pause.
+%% @hidden
+%% Used for testing if we want to have control over the length of pausing.
+replrtq_aaefold(QueueName, ReplEntries, BackoffPause) ->
     % This is a call as we don't want this process to be able to overload the src
     case gen_server:call(?MODULE,
                             {rtq_aaefold, QueueName, ReplEntries},
                             infinity) of
         pause ->
-            timer:sleep(?BACKOFF_PAUSE),
-            ok;
+            timer:sleep(BackoffPause),
+            pause;
         ok ->
             ok
     end.
@@ -142,25 +153,32 @@ replrtq_aaefold(QueueName, ReplEntries) ->
 %% @doc
 %% Add a list of repl entrys to the real-time queue with the given queue name.
 %% The filter for that queue name will not be checked.
-%% These entries will be added to the queue with priority 2 (higher number is 
+%% These entries will be added to the queue with priority 2 (higher number is
 %% higher priority).
 %% This should be use to replicate the outcome of Tictac AAE full-sync
 %% aae_exchange.
--spec replrtq_ttaefs(queue_name(), list(repl_entry())) -> ok.
+-spec replrtq_ttaefs(queue_name(), list(repl_entry())) -> ok | pause.
 replrtq_ttaefs(QueueName, ReplEntries) ->
+    replrtq_ttaefs(QueueName, ReplEntries,  ?BACKOFF_PAUSE).
+
+
+-spec replrtq_ttaefs(queue_name(), list(repl_entry()), pos_integer()) -> ok | pause.
+%% @hidden
+%% Used for testing if we want to have control over the length of pausing.
+replrtq_ttaefs(QueueName, ReplEntries, BackoffPause) ->
     % This is a call as we don't want this process to be able to overload the src
     case gen_server:call(?MODULE,
                             {rtq_ttaaefs, QueueName, ReplEntries},
                             infinity) of
         pause ->
-            timer:sleep(?BACKOFF_PAUSE),
-            ok;
+            timer:sleep(BackoffPause),
+            pause;
         ok ->
             ok
     end.
 
 %% @doc
-%% Add a single repl_entry associated with a PUT coordinated on this node. 
+%% Add a single repl_entry associated with a PUT coordinated on this node.
 %% Never wait for the response or backoff - replictaion should be asynchronous
 %% and never slow the PUT path on the src cluster.
 -spec replrtq_coordput(repl_entry()) -> ok.
@@ -457,8 +475,7 @@ bulkaddto_queue(ReplEntries, P, QueueName,
             % TODO: Incorporate this step into a riak_core_priority_queue
             % function, rather than have secret knowledge of internals here
             % Secret knowledge includes priority is inversed
-            Adds = {pqueue, [{-P, {queue, ReplEntries, []}}]},
-            Q0 = riak_core_priority_queue:join(Q, Adds),
+            Q0 = riak_core_priority_queue:join(Q, riak_core_priority_queue_from_list(ReplEntries, P)),
             QCM0 =
                 lists:keyreplace(QueueName, 1, QueueCountMap, {QueueName, C0}),
             QM0 =
@@ -472,6 +489,11 @@ bulkaddto_queue(ReplEntries, P, QueueName,
         _ ->
             {false, QueueMap, QueueCountMap}
     end.
+
+riak_core_priority_queue_from_list(Entries, P) ->
+    lists:foldr(fun(Entry, Acc) ->
+                        riak_core_priority_queue:in(Entry, P, Acc)
+                end, riak_core_priority_queue:new(), Entries).
 
 %% @doc
 %% Update the count after an item has been fetched from the queue.  The
