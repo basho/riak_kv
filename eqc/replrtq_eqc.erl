@@ -65,7 +65,6 @@ start() ->
     Pid.
 
 start_callouts(#{config := Config}, _Args) ->
-    %% Mocking... in OTP20 app_helper can be replaced and then these can be removed
     ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_srcqueue, ?WILDCARD],
              pp_queuedefs(maps:get(replrtq_srcqueue, Config))),
     ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_srcqueuelimit, ?WILDCARD],
@@ -113,7 +112,7 @@ crash(Pid) ->
 crash_next(S, Value, [_]) ->
     stop_next(S, Value, []).
 
-crash_post(_S, [_], _Res) ->
+crash_post(_S, [_], _) ->
     true.
 
 
@@ -200,9 +199,6 @@ add_prio_next(S, _Value, [Prio, QueueName, Entries]) ->
     PQueue = maps:get(Prio, PQueues, []),
     S#{priority_queues => Queues#{QueueName => PQueues#{Prio => add_to_buckets(PQueue, Entries)}}}.
 
-%% tictac_process(_S, [Name, Entries]) ->
-%%     worker.
-
 
 %% --- Operation: ticktac ---
 aaefold_pre(S) ->
@@ -257,9 +253,6 @@ register_rtq_pre(S) ->
 register_rtq_args(_S) ->
     [elements(queuenames()), queuefilter()].
 
-%% API should be changed in SUT, adding the byte_size as part of the call.
-register_rtq(Name, {bucketprefix = Kind, Word}) ->
-    riak_kv_replrtq_src:register_rtq(Name, {Kind, list_to_binary(Word), byte_size(list_to_binary(Word))});
 register_rtq(Name, {Kind, Word}) ->
     riak_kv_replrtq_src:register_rtq(Name, {Kind, list_to_binary(Word)});
 register_rtq(Name, Kind) ->
@@ -451,14 +444,6 @@ applicable_queues(S, Priority, Bucket) ->
                     end, ApplicableQueues).
 
 %% Tricky unicode issues
-%% This might be privacy issue. Assume there is a unicode string that one searches for
-%% that only occurs once, but you find many more that clearly are no real matches...
-%% Thus, a patient with a weird character in the name and then many johnssons are returned
-%% as well.
-%% In particular, if someone has a HEBREW ACCENT ETNAHTA in the name, then searching up to
-%% that accent could give additional matches.
-%% But actually, this is not a real issue, one could also serach for any shorter prefix and
-%% then succeed.
 is_prefix({_Type, String}, Prefix) ->
     is_prefix(String, Prefix);
 is_prefix(String, Prefix) ->
@@ -475,7 +460,6 @@ is_equal(String, Word) ->
 
 
 add_to_buckets(Queue, Entries) ->
-    %% use a fold to replace duplicates, in the right way
     Queue ++ lists:reverse(Entries).
 
 
@@ -509,7 +493,6 @@ prop_repl() ->
                     catch riak_kv_replrtq_src:stop(),
                     HasCrashed
             end,
-        %% timer:sleep(500),
         check_command_names(Cmds,
             measure(length, commands_length(Cmds),
                 pretty_commands(?MODULE, Cmds, {H, S, Res},
