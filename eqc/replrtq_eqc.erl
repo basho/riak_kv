@@ -33,9 +33,6 @@ config_args(_S) ->
       {replrtq_srcqueuelimit, choose(0,100)}  %% length of each individual queue
      ]].
 
-config_pre(_S, [_Config]) ->
-    true.
-
 config(Config) ->
     QueueDefs = pp_queuedefs(proplists:get_value(replrtq_srcqueue, Config)),
     application:set_env(riak_kv, replrtq_srcqueue,
@@ -47,9 +44,6 @@ config(Config) ->
 
 config_next(S, _Value, [Config]) ->
     S#{config => maps:from_list(Config)}.
-
-config_post(_S, [_], _Res) ->
-    true.
 
 
 %% --- Operation: start ---
@@ -112,9 +106,6 @@ crash(Pid) ->
 crash_next(S, Value, [_]) ->
     stop_next(S, Value, []).
 
-crash_post(_S, [_], _) ->
-    true.
-
 
 %% --- Operation: coordput ---
 %% Adds the enrty to any queue that it passes the filter for
@@ -163,7 +154,7 @@ tictac(QueueName, Entries) ->
                   end, Entries),
     riak_kv_replrtq_src:replrtq_ttaefs(QueueName, ReplEntries, 0).
 
-tictac_callouts(S, [QueueName, Entries]) ->
+tictac_callouts(_S, [QueueName, Entries]) ->
     ?APPLY(put_prio, [2, QueueName, Entries]).
 
 put_prio_post(S, [Prio, QueueName, Entries], Res) ->
@@ -228,7 +219,7 @@ aaefold_callouts(_S, [QueueName, Entries]) ->
 lengths_pre(S) ->
     maps:is_key(pid, S).
 
-lengths_args(S) ->
+lengths_args(_S) ->
     [elements(queuenames())].
 
 lengths(QueueName) ->
