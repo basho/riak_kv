@@ -56,8 +56,9 @@
                   %% received, fastest last at the end of the list
                   results = [] :: [idxresult()],
                   merged ::
-                    {notfound | tombstone | ok, 
-                            riak_object:riak_object() | undefined} |
+                    {notfound, undefined} |
+                        {tombstone, riak_object:riak_object()} |
+                        {ok, riak_object:riak_object()} |
                         undefined,
                   num_ok = 0 :: non_neg_integer(),
                   num_pok = 0 :: non_neg_integer(),

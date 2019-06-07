@@ -2572,13 +2572,14 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             %% since it is assumed capabilities have been properly set
             %% to the desired version, to reformat, all we need to do
             %% is submit a new write
+            ST = riak_core_util:moment(),
             PutArgs = #putargs{hash_ops = update,
                                returnbody = false,
                                bkey = BKey,
                                index_specs = [],
                                coord = false,
                                lww = false,
-                               starttime = riak_Core_util:moment()},
+                               starttime = ST},
             case perform_put({true, {RObj, unchanged_no_old_object}}, State, PutArgs) of
                 {{fail, _, Reason}, UpdState}  ->
                     Reply = {error, Reason};
