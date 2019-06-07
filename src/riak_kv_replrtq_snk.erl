@@ -57,6 +57,7 @@
 -record(sink_work, {queue_name :: queue_name(),
                     work_queue = [] :: list(work_item()),
                     minimum_queue_length = 0 :: non_neg_integer(),
+                    deferred_queue_length = 0 :: non_neg_integer(),
                     peer_list = [] :: list(peer_info()),
                     max_worker_count = 1 :: pos_integer(),
                     queue_stats = ?ZERO_STATS :: queue_stats(),
@@ -281,14 +282,17 @@ handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
             QS0 = increment_queuestats(QS, ReplyTuple),
             PL = SinkWork#sink_work.peer_list,
             {PW0, PL0} = adjust_wait(Success, ReplyTuple, PeerID, PL),
-            UpdSW = SinkWork#sink_work{peer_list = PL0, queue_stats = QS0},
+            DQL0 = SinkWork#sink_work.deferred_queue_length + 1,
+            UpdSW = SinkWork#sink_work{peer_list = PL0,
+                                        queue_stats = QS0,
+                                        deferred_queue_length = DQL0},
             UpdWork = lists:keyreplace(QueueName, 1, State#state.work,
                                         {QueueName, UpdSW}),
             case PW0 of
                 0 ->
                     requeue_work(WorkItem);
                 W ->
-                    erlang:send_after(W, ?MODULE, {prompt_requeue, WorkItem})
+                    erlang:send_after(W, ?MODULE, {prompt_requeue, WorkItem}) 
             end,
             {noreply, State#state{work = UpdWork}}
     end;
@@ -300,7 +304,9 @@ handle_cast({requeue_work, WorkItem}, State) ->
             {noreply, State};
         {QueueName, SinkWork} ->
             UpdWorkQueue = [WorkItem|SinkWork#sink_work.work_queue],
-            UpdSW = SinkWork#sink_work{work_queue = UpdWorkQueue},
+            DQL = SinkWork#sink_work.deferred_queue_length - 1,
+            UpdSW = SinkWork#sink_work{work_queue = UpdWorkQueue,
+                                        deferred_queue_length = DQL},
             UpdWork = lists:keyreplace(QueueName, 1, State#state.work,
                                         {QueueName, UpdSW}),
             prompt_work(),
@@ -364,21 +370,11 @@ tokenise_peers(PeersString) ->
 %% Caluclates the queue of work items and the minimum length of queue to be
 %% kept by the process, in order to deliver the desired number of concurrent
 %% worker processes.
-%% If there are n peers, and a worker count of n * m workers (where m >=1 )
-%% there will be no minimum queue length, and n * m work items.
-%% Else, if there are n peers and a worker count of w (> n), then there will
-%% be an excess (greater than w) work items created, and a minimum queue length
-%% kep to ensure that the number of snk workers are appropriately limited
+%% The count of work items should allow for all workers to be busy with one
+%% peer yielding work, when all other peers have no work
 -spec determine_workitems(queue_name(), list(peer_info()), pos_integer())
                                     -> {non_neg_integer(), list(work_item())}.
 determine_workitems(QueueName, PeerInfo, WorkerCount) ->
-    NumberOfWorkerItems =
-        case WorkerCount rem length(PeerInfo) of
-            0 ->
-                WorkerCount div length(PeerInfo);
-            _ -> 
-                (WorkerCount div length(PeerInfo)) + 1
-        end,
     MapPeerToWIFun =
         fun({PeerID, _Delay, Host, Port}) ->
             LocalClient = riak_client:new(node(), undefined),
@@ -389,7 +385,7 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
     WorkItems =
         lists:foldl(fun(_I, Acc) -> Acc ++ WorkItems0 end,
                     [],
-                    lists:seq(1, NumberOfWorkerItems)),
+                    lists:seq(1, WorkerCount)),
     {length(WorkItems) - WorkerCount, WorkItems}.
 
 %% @doc
@@ -399,7 +395,8 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
 -spec do_work(sink_work()) -> sink_work().
 do_work({QueueName, SinkWork}) ->
     WorkQueue = SinkWork#sink_work.work_queue,
-    MinQL = SinkWork#sink_work.minimum_queue_length,
+    MinQL = (SinkWork#sink_work.minimum_queue_length - 
+                SinkWork#sink_work.deferred_queue_length),
     IsSuspended = SinkWork#sink_work.suspended,
     case IsSuspended of
         true ->
@@ -576,20 +573,16 @@ determine_workitems_test() ->
     Peer3 = {3, ?STARTING_DELAYMS, "127.0.0.1", 12009},
     WC1 = 5,
     {MQL1, WIL1} = determine_workitems(queue1, [Peer1, Peer2, Peer3], WC1),
-    ?assertMatch(1, MQL1),
-    {value, {{queue1, 1}, _LCA, _RCA}, WIL1A} =
-        lists:keytake({queue1, 1}, 1, WIL1),
-    {value, {{queue1, 1}, _LCB, _RCB}, WIL1B} =
-        lists:keytake({queue1, 1}, 1, WIL1A),
-    WIL1C = lists:map(fun({K, _LC, _RC}) -> K end, WIL1B),
-    ?assertMatch([{queue1, 2}, {queue1, 3}, {queue1, 2}, {queue1, 3}], WIL1C),
+    ?assertMatch(10, MQL1),
+    ?assertMatch(15, length(WIL1)),
+    WIL1A = lists:map(fun({K, _LC, _RC}) -> K end, WIL1),
+    ?assertMatch([{queue1, 1}, {queue1, 2}, {queue1, 3}], lists:sublist(WIL1A, 3)),
     
-    WC2 = 6,
-    {MQL2, WIL2} = determine_workitems(queue1, [Peer1, Peer2, Peer3], WC2),
+    {MQL2, WIL2} = determine_workitems(queue1, [Peer1], WC1),
     ?assertMatch(0, MQL2),
-    WIL1_NoRef = lists:map(fun({K, _LC, _RC}) -> K end, WIL1),
-    WIL2_NoRef = lists:map(fun({K, _LC, _RC}) -> K end, WIL2),
-    ?assertMatch(WIL1_NoRef, WIL2_NoRef).
+    ?assertMatch(5, length(WIL2)),
+    WIL2A = lists:map(fun({K, _LC, _RC}) -> K end, WIL2),
+    ?assertMatch([{queue1, 1}, {queue1, 1}, {queue1, 1}], lists:sublist(WIL2A, 3)).
 
 adjust_wait_test() ->
     NullTS = {0, 0, 0},
