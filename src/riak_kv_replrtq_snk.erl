@@ -413,17 +413,11 @@ do_work({QueueName, SinkWork}) ->
     end.
 
 -spec work(work_item()) -> ok.
--ifndef(EQC).
 work(WorkItem) ->
     %% possibly we need a spawn link here to survive a restart
     %% But we then we need a TRAPEXIT in the server to be immune.
     _P = spawn(?MODULE, repl_fetcher, [WorkItem]),
     ok.
--else.
-work(WorkItem) ->
-    replrtq_mock:work(WorkItem),
-    ok.
--endif.
 
 %% Should always under all circumstances end with calling done_work
 -spec repl_fetcher(work_item()) -> ok.
@@ -510,7 +504,6 @@ add_modtime({S, F, RT, MT}, ModTime) ->
 %% from the queue - the reduce the wait time exponentially tending to 0.
 %% On an error, the wait time should leap to avoid all workers being locked
 %% attempting to communicate with a peer to which requests are timing out.
--ifndef(EQC).
 -spec adjust_wait(boolean(), reply_tuple(), peer_id(), list(peer_info()))
                                     -> {non_neg_integer(), list(peer_info())}.
 adjust_wait(true, {queue_empty, _T}, PeerID, PeerList) ->
@@ -534,12 +527,6 @@ increment_delay(0) ->
     1;
 increment_delay(N) ->
     min(N bsl 1, ?MAX_SUCCESS_DELAYMS).
-
--else.
-adjust_wait(_, _, _, PeerList) ->
-    {replrtq_mock:adjust_wait(), PeerList}.
--endif.
-
 
 
 %% @doc
