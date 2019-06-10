@@ -292,6 +292,7 @@ handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
                 0 ->
                     requeue_work(WorkItem);
                 W ->
+                    prompt_work(),
                     erlang:send_after(W, self(), {prompt_requeue, WorkItem})
             end,
             {noreply, State#state{work = UpdWork}}
