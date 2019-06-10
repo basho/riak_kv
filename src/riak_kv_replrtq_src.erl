@@ -66,8 +66,8 @@
 -define(FLD_PRIORITY, 1).
     % Priority for queueing replication event prompted by an AAE fold (e.g.
     % replicating all keys in a given range, or modified date range)
--define(QUEUE_LIMIT, 100000).  
-    % Maximum size of a queue for a given priority 
+-define(QUEUE_LIMIT, 100000).
+    % Maximum size of a queue for a given priority
     % Real-time replication will tail-drop when over the limit, whereas batch
     % replication queues will prompt a pause in the process queueing the
     % repl references
@@ -123,7 +123,7 @@ start_link() ->
 %% @doc
 %% Add a list of repl entrys to the real-time queue with the given queue name.
 %% The filter for that queue name will not be checked.
-%% These entries will be added to the queue with priority 1 (higher number is 
+%% These entries will be added to the queue with priority 1 (higher number is
 %% higher priority).
 %% This should be used for folds to prompt re-replication (e.g. folds to
 %% replicate all changes within a given modified date range)
@@ -239,7 +239,7 @@ stop() ->
 init([]) ->
     QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
     QFM = tokenise_queuedefn(QueueDefnString),
-    MapToQM = 
+    MapToQM =
         fun({QueueName, _QF, _QA}) ->
             {QueueName, riak_core_priority_queue:new()}
         end,
@@ -369,7 +369,7 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
                             queue_countmap = QueueCountMap}}.
 
 handle_info(log_queue, State) ->
-    LogFun = 
+    LogFun =
         fun({QueueName, {P1Q, P2Q, P3Q}}) ->
             lager:info("QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
                         [QueueName, P1Q, P2Q, P3Q])
@@ -390,7 +390,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%============================================================================
 
 %% @doc
-%% Return the queue names which are active for this bucket 
+%% Return the queue names which are active for this bucket
 -spec find_queues(riak_object:bucket(),
                     list(queue_filtermap()),
                     list(queue_name())) -> list(queue_name()).
@@ -429,7 +429,7 @@ find_queues(Bucket, [_H|Rest], ActiveQueues) ->
 
 
 %% @doc
-%% Add the replication entry to any matching queue (upping the appropriate 
+%% Add the replication entry to any matching queue (upping the appropriate
 %% counter)
 -spec addto_queues(repl_entry(),
                     non_neg_integer(),
@@ -451,7 +451,7 @@ addto_queues(ReplEntry, P, [QueueName|Rest], QueueMap, QueueCountMap, Limit) ->
                 lists:keyreplace(QueueName, 1, QueueCountMap, {QueueName, C0}),
             {QueueName, Q} = lists:keyfind(QueueName, 1, QueueMap),
             Q0 = riak_core_priority_queue:in(ReplEntry, P, Q),
-            QM0 = 
+            QM0 =
                 lists:keyreplace(QueueName, 1, QueueMap, {QueueName, Q0}),
             addto_queues(ReplEntry, P, Rest, QM0, QCM0, Limit)
     end.
@@ -517,7 +517,7 @@ update_counts({P1, P2, P3}) ->
 -spec tokenise_queuedefn(string()) -> list(queue_filtermap()).
 tokenise_queuedefn(QueueDefnString) ->
     QueueStrings = string:tokens(QueueDefnString, "|"),
-    SplitQueueDefnFun = 
+    SplitQueueDefnFun =
         fun(QueueString, Acc) ->
             case string:tokens(QueueString, ":") of
                 [QueueName, QueueFilter] ->
@@ -620,7 +620,7 @@ basic_multiqueue_test() ->
     ?assertMatch(true, register_rtq(?QN2, {buckettype, ?TT1})),
     ?assertMatch(true, register_rtq(?QN3, {buckettype, ?TT2})),
     ?assertMatch(true, register_rtq(?QN4, {bucketname, ?TB1})),
-    
+
     GenB1 = generate_replentryfun({?TT1, ?TB1}),
     GenB2 = generate_replentryfun({?TT1, ?TB2}),
     GenB3 = generate_replentryfun({?TT2, ?TB2}),
@@ -647,7 +647,7 @@ basic_multiqueue_test() ->
     ?assertMatch({?QN2, {0, 0, 20}}, length_rtq(?QN2)),
     ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(?QN3)),
     ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
-    
+
     % Adding a bulk based on an AAE job will be applied to the actual
     % queue regardless of filter
     Grp5A = lists:map(GenB5, lists:seq(61, 70)),
@@ -657,7 +657,7 @@ basic_multiqueue_test() ->
     ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(?QN2)),
     ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(?QN3)),
     ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
-    
+
     ?assertMatch(ok, delist_rtq(?QN1)),
     ?assertMatch(false, length_rtq(?QN1)),
     ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
@@ -675,7 +675,7 @@ basic_multiqueue_test() ->
 
     % Delisting a non-existent queue doens't cause an error
     ?assertMatch(ok, delist_rtq(?QN1)),
-    
+
     % Re-register queue, but should now be empty
     ?assertMatch(true, register_rtq(?QN1, {bucketname, ?TB3})),
     ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
@@ -690,7 +690,7 @@ basic_multiqueue_test() ->
     ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(?QN2)),
     ?assertMatch({?QN3, {0, 0, 10}}, length_rtq(?QN3)),
     ?assertMatch({?QN4, {0, 0, 30}}, length_rtq(?QN4)),
-    
+
     % Now suspend the queue, rather than delist it
     ?assertMatch(ok, suspend_rtq(?QN1)),
 
@@ -704,7 +704,7 @@ basic_multiqueue_test() ->
     ok = replrtq_ttaefs(?QN1, lists:reverse(Grp6C)),
     {?TB3, <<73:32/integer>>, _VC73, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(?QN1)),
-    
+
     % No errors if you suspend it twice
     ?assertMatch(ok, suspend_rtq(?QN1)),
     ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(?QN1)),
@@ -717,7 +717,7 @@ basic_multiqueue_test() ->
     ok = replrtq_ttaefs(?QN1, lists:reverse(Grp6C)),
     {?TB3, <<75:32/integer>>, _VC75, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 10, 15}}, length_rtq(?QN1)),
-    
+
     % Shrug your shoulders if it is resumed twice
     ?assertMatch(ok, resume_rtq(?QN1)),
     % and if something which isn't defined is resumed
@@ -736,7 +736,7 @@ limit_coordput_test() ->
 
     lists:foreach(fun replrtq_coordput/1, Grp1),
     ?assertMatch({?QN1, {0, 0, 100000}}, length_rtq(?QN1)),
-    
+
     % At the limit so the next addition should be ignored
     NextAddition = GenB1(100001),
     ok = replrtq_coordput(NextAddition),
@@ -784,7 +784,7 @@ limit_aaefold_test() ->
     StillPaused = timer:now_diff(SW7, SW6) div 1000,
     ?assertMatch(true, StillPaused >= 1000),
     ?assertMatch({?QN1, {100000, 0, 0}}, length_rtq(?QN1)),
-    
+
     % Unload enough space for an unpaused addition
     {{?TT1, ?TB1}, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(?QN1),
     lists:foreach(fun(_I) -> popfrom_rtq(?QN1) end, lists:seq(1, 51000)),
