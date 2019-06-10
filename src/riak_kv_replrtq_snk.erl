@@ -406,7 +406,7 @@ do_work({QueueName, SinkWork}) ->
                 0 ->
                     {QueueName, SinkWork};
                 _ ->
-                    {Rem, Work} = lists:split(MinQL, WorkQueue),
+                    {Rem, Work} = lists:split(lists:max([0, MinQL]), WorkQueue),
                     lists:foreach(fun work/1, Work),
                     {QueueName, SinkWork#sink_work{work_queue = Rem}}
             end
