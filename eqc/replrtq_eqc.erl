@@ -45,6 +45,9 @@ config(Config) ->
 config_next(S, _Value, [Config]) ->
     S#{config => maps:from_list(Config)}.
 
+config_features(_S, [[{replrtq_srcqueue, QDef}, _]], _Res) ->
+    [QDef].
+
 
 %% --- Operation: start ---
 start_pre(S) ->
@@ -424,6 +427,7 @@ applicable_queues(S, Priority, Bucket) ->
     Queues = maps:get(priority_queues, S, #{}),
     QueueDefs = [ {Name, Filter} || {Name, #{filter := Filter, status := active}} <- maps:to_list(Queues) ],
     %% if filter matches and limit is not reached
+    %% it filters out block_rtq
     ApplicableQueues =
         [ Name || {Name, any} <- QueueDefs] ++
         [ Name || {Name, {bucketname, Word}} <- QueueDefs,   is_equal(Bucket, Word) ] ++
@@ -486,9 +490,10 @@ prop_repl() ->
             end,
         check_command_names(Cmds,
             measure(length, commands_length(Cmds),
+            aggregate(call_features(H),
                 pretty_commands(?MODULE, Cmds, {H, S, Res},
                                 conjunction([{result, Res == ok},
-                                             {alive, not Crashed}]))))
+                                             {alive, not Crashed}])))))
     end))).
 
 
