@@ -259,7 +259,7 @@ handle_call({set_bucketsync, BucketList}, _From, State) ->
 handle_cast({reply_complete, _ReqID, _Result}, State) ->
     % Add a stat update in here
     {noreply, State, ?LOOP_TIMEOUT};
-handle_cast({no_sync, ReqID, From}, State) ->
+handle_cast({no_sync, ReqID, From, _}, State) ->
     case ReqID of
         no_reply ->
             ok;
@@ -297,7 +297,7 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
             % Note that the tree size is amended as well as the time range.
             % The bigger the time range, the bigger the tree.  Bigger trees
             % are less efficient when there is little change, but can more
-            % accurately reflect bigger changes (with less fasle positives).
+            % accurately reflect bigger changes (with less false positives).
             Filter =
                 {filter, H, all, small, all,
                 {LowerTime, UpperTime}, pre_hash},

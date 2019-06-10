@@ -46,7 +46,7 @@
 -export([repl_fetcher/1]).
 
 -define(LOG_TIMER_SECONDS, 60).
--define(ZERO_STATS, 
+-define(ZERO_STATS,
         {{success, 0}, {failure, 0}, {repl_time, 0},
         {modified_time, 0, 0, 0, 0, 0}}).
 -define(STARTING_DELAYMS, 8).
@@ -87,7 +87,7 @@
 
 -type queue_stats() ::
     {{success, non_neg_integer()}, {failure, non_neg_integer()},
-        {repl_time, non_neg_integer()}, 
+        {repl_time, non_neg_integer()},
         {modified_time,
             non_neg_integer(),
             non_neg_integer(),
@@ -130,7 +130,7 @@ done_work(WorkItem, Success, ReplyTuple) ->
 
 %% @doc
 %% Allows a work item to be re-queued.  Used internally.
--spec requeue_work(work_item()) -> ok. 
+-spec requeue_work(work_item()) -> ok.
 requeue_work(WorkItem) ->
     gen_server:cast(?MODULE, {requeue_work, WorkItem}).
 
@@ -149,7 +149,7 @@ resume_snkqueue(QueueName) ->
 %% @doc
 %% Remove temporarily from this process the configuration for a given queue
 %% name.  If the configuration remains in riak.conf, it will be re-introduced
-%% on restart 
+%% on restart
 -spec remove_snkqueue(queue_name()) -> ok.
 remove_snkqueue(QueueName) ->
     gen_server:call(?MODULE, {remove, QueueName}).
@@ -173,7 +173,7 @@ init([]) ->
     case SinkEnabled of
         true ->
             Sink1 = app_helper:get_env(riak_kv, replrtq_sink1queue, disabled),
-            State1 = 
+            State1 =
                 case Sink1 of
                     disabled ->
                         #state{};
@@ -197,7 +197,7 @@ init([]) ->
                         #state{work = [{Snk1QueueName, Snk1W}]}
                 end,
             Sink2 = app_helper:get_env(riak_kv, replrtq_sink2queue, disabled),
-            State2 = 
+            State2 =
                 case Sink2 of
                     disabled ->
                         State1;
@@ -292,7 +292,7 @@ handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
                 0 ->
                     requeue_work(WorkItem);
                 W ->
-                    erlang:send_after(W, ?MODULE, {prompt_requeue, WorkItem}) 
+                    erlang:send_after(W, self(), {prompt_requeue, WorkItem})
             end,
             {noreply, State#state{work = UpdWork}}
     end;
@@ -319,7 +319,7 @@ handle_info(timeout, State) ->
     {noreply, State};
 handle_info(log_stats, State) ->
     erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_stats),
-    SinkWork0 = 
+    SinkWork0 =
         case State#state.enabled of
             true ->
                 lists:map(fun log_mapfun/1, State#state.work);
@@ -357,7 +357,7 @@ calc_mean(Time, Count) ->
 -spec tokenise_peers(string()) -> list(peer_info()).
 tokenise_peers(PeersString) ->
     PeerL0 = string:tokens(PeersString, "|"),
-    SplitHostPortFun = 
+    SplitHostPortFun =
         fun(PeerString, Acc0) ->
             [Host, Port] = string:tokens(PeerString, ":"),
             {{Acc0, ?STARTING_DELAYMS, Host, list_to_integer(Port)}, Acc0 + 1}
@@ -395,7 +395,7 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
 -spec do_work(sink_work()) -> sink_work().
 do_work({QueueName, SinkWork}) ->
     WorkQueue = SinkWork#sink_work.work_queue,
-    MinQL = (SinkWork#sink_work.minimum_queue_length - 
+    MinQL = (SinkWork#sink_work.minimum_queue_length -
                 SinkWork#sink_work.deferred_queue_length),
     IsSuspended = SinkWork#sink_work.suspended,
     case IsSuspended of
@@ -413,10 +413,19 @@ do_work({QueueName, SinkWork}) ->
     end.
 
 -spec work(work_item()) -> ok.
+-ifndef(EQC).
 work(WorkItem) ->
+    %% possibly we need a spawn link here to survive a restart
+    %% But we then we need a TRAPEXIT in the server to be immune.
     _P = spawn(?MODULE, repl_fetcher, [WorkItem]),
     ok.
+-else.
+work(WorkItem) ->
+    replrtq_mock:work(WorkItem),
+    ok.
+-endif.
 
+%% Should always under all circumstances end with calling done_work
 -spec repl_fetcher(work_item()) -> ok.
 repl_fetcher(WorkItem) ->
     SW = os:timestamp(),
@@ -501,6 +510,7 @@ add_modtime({S, F, RT, MT}, ModTime) ->
 %% from the queue - the reduce the wait time exponentially tending to 0.
 %% On an error, the wait time should leap to avoid all workers being locked
 %% attempting to communicate with a peer to which requests are timing out.
+-ifndef(EQC).
 -spec adjust_wait(boolean(), reply_tuple(), peer_id(), list(peer_info()))
                                     -> {non_neg_integer(), list(peer_info())}.
 adjust_wait(true, {queue_empty, _T}, PeerID, PeerList) ->
@@ -525,6 +535,13 @@ increment_delay(0) ->
 increment_delay(N) ->
     min(N bsl 1, ?MAX_SUCCESS_DELAYMS).
 
+-else.
+adjust_wait(_, _, _, PeerList) ->
+    {replrtq_mock:adjust_wait(), PeerList}.
+-endif.
+
+
+
 %% @doc
 %% Log details of the replictaion counts and times, and also the current delay
 %% to requeue work items for each peer (consistently low delay may indicate
@@ -537,8 +554,8 @@ log_mapfun({QueueName, SinkWork}) ->
         {repl_time, RT},
         {modified_time, MTS, MTM, MTH, MTD, MTL}}
         = SinkWork#sink_work.queue_stats,
-    lager:info("Queue=~w success_count=~w error_count=~w" ++ 
-                " mean_repltime=~s" ++ 
+    lager:info("Queue=~w success_count=~w error_count=~w" ++
+                " mean_repltime=~s" ++
                 " lmdin_s=~w lmdin_m=~w lmdin_h=~w lmdin_d=~w lmd_over=~w",
                 [QueueName, SC, EC, calc_mean(RT, SC),
                     MTS, MTM, MTH, MTD, MTL]),
@@ -566,7 +583,7 @@ tokenise_test() ->
         % references not de-duped, allows certain peers to double-up on worker
         % time
     ?assertMatch([Peer1, Peer2, Peer3], tokenise_peers(String1)).
-    
+
 determine_workitems_test() ->
     Peer1 = {1, ?STARTING_DELAYMS, "127.0.0.1", 12008},
     Peer2 = {2, ?STARTING_DELAYMS, "127.0.0.1", 12009},
@@ -577,7 +594,7 @@ determine_workitems_test() ->
     ?assertMatch(15, length(WIL1)),
     WIL1A = lists:map(fun({K, _LC, _RC}) -> K end, WIL1),
     ?assertMatch([{queue1, 1}, {queue1, 2}, {queue1, 3}], lists:sublist(WIL1A, 3)),
-    
+
     {MQL2, WIL2} = determine_workitems(queue1, [Peer1], WC1),
     ?assertMatch(0, MQL2),
     ?assertMatch(5, length(WIL2)),

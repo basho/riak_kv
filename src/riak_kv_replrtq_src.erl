@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_replrt1_src: Source of replication updates from this node
+%% riak_kv_replrtq_src: Source of replication updates from this node
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -50,6 +50,11 @@
             popfrom_rtq/1,
             stop/0]).
 
+-ifdef(TEST).
+-export([ replrtq_aaefold/3,
+          replrtq_ttaefs/3 ]).
+-endif.
+
 -define(BACKOFF_PAUSE, 1000).
     % Pause in ms in the case the last addition to the queue took the queue's
     % size for that priority over the maximum
@@ -73,7 +78,8 @@
             queue_filtermap = [] :: list(queue_filtermap()),
             queue_countmap = [] :: list(queue_countmap()),
             queue_map = [] :: list(queue_map()),
-            queue_limit = ?QUEUE_LIMIT :: pos_integer()
+            queue_limit = ?QUEUE_LIMIT :: pos_integer(),
+            log_frequency_in_ms = ?LOG_TIMER_SECONDS * 1000 :: pos_integer()
 }).
 
 -type(priority() :: integer()).
@@ -93,7 +99,7 @@
     % a vnode as part of the operation that PULLs from the queue.
 -type type_filter() :: {buckettype, binary()}.
 -type bucket_filter() :: {bucketname, binary()}.
--type prefix_filter() :: {bucketprefix, binary(), pos_integer()}.
+-type prefix_filter() :: {bucketprefix, binary()}.
 -type all_filter() :: any.
 -type blockrtq_filter() :: block_rtq.
 -type queue_filter() ::
@@ -125,15 +131,21 @@ start_link() ->
 %% Note that it is assumed that the list of repl_entries has been built
 %% efficiently using [Add|L] - so the first added element will be the element
 %% retrieved first from the queue
--spec replrtq_aaefold(queue_name(), list(repl_entry())) -> ok.
+-spec replrtq_aaefold(queue_name(), list(repl_entry())) -> ok | pause.
 replrtq_aaefold(QueueName, ReplEntries) ->
+    replrtq_aaefold(QueueName, ReplEntries, ?BACKOFF_PAUSE).
+
+-spec replrtq_aaefold(queue_name(), list(repl_entry()), pos_integer()) -> ok | pause.
+%% @hidden
+%% Used for testing if we want to have control over the length of pausing.
+replrtq_aaefold(QueueName, ReplEntries, BackoffPause) ->
     % This is a call as we don't want this process to be able to overload the src
     case gen_server:call(?MODULE,
                             {rtq_aaefold, QueueName, ReplEntries},
                             infinity) of
         pause ->
-            timer:sleep(?BACKOFF_PAUSE),
-            ok;
+            timer:sleep(BackoffPause),
+            pause;
         ok ->
             ok
     end.
@@ -141,30 +153,37 @@ replrtq_aaefold(QueueName, ReplEntries) ->
 %% @doc
 %% Add a list of repl entrys to the real-time queue with the given queue name.
 %% The filter for that queue name will not be checked.
-%% These entries will be added to the queue with priority 2 (higher number is 
+%% These entries will be added to the queue with priority 2 (higher number is
 %% higher priority).
 %% This should be use to replicate the outcome of Tictac AAE full-sync
 %% aae_exchange.
--spec replrtq_ttaefs(queue_name(), list(repl_entry())) -> ok.
+-spec replrtq_ttaefs(queue_name(), list(repl_entry())) -> ok | pause.
 replrtq_ttaefs(QueueName, ReplEntries) ->
+    replrtq_ttaefs(QueueName, ReplEntries,  ?BACKOFF_PAUSE).
+
+
+-spec replrtq_ttaefs(queue_name(), list(repl_entry()), pos_integer()) -> ok | pause.
+%% @hidden
+%% Used for testing if we want to have control over the length of pausing.
+replrtq_ttaefs(QueueName, ReplEntries, BackoffPause) ->
     % This is a call as we don't want this process to be able to overload the src
     case gen_server:call(?MODULE,
                             {rtq_ttaaefs, QueueName, ReplEntries},
                             infinity) of
         pause ->
-            timer:sleep(?BACKOFF_PAUSE),
-            ok;
+            timer:sleep(BackoffPause),
+            pause;
         ok ->
             ok
     end.
 
 %% @doc
-%% Add a single repl_entry associated with a PUT coordinated on this node. 
+%% Add a single repl_entry associated with a PUT coordinated on this node.
 %% Never wait for the response or backoff - replictaion should be asynchronous
 %% and never slow the PUT path on the src cluster.
 -spec replrtq_coordput(repl_entry()) -> ok.
-replrtq_coordput(ReplEntry) ->
-    gen_server:cast(?MODULE, {rtq_coordput, ReplEntry}).
+replrtq_coordput({Bucket, _, _, _} = ReplEntry) when is_binary(Bucket); is_tuple(Bucket) ->
+    gen_server:cast(?MODULE, {rtq_coordput, Bucket, ReplEntry}).
 
 %% @doc
 %% Setup a queue with a given queuename, which will take coordput repl_entries
@@ -231,11 +250,13 @@ init([]) ->
     QM = lists:map(MapToQM, QFM),
     QC = lists:map(MaptoQC, QFM),
     QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
-    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_queue),
+    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency, ?LOG_TIMER_SECONDS * 1000),
+    erlang:send_after(LogFreq, self(), log_queue),
     {ok, #state{queue_filtermap = QFM,
                 queue_map = QM,
                 queue_countmap = QC,
-                queue_limit = QL}}.
+                queue_limit = QL,
+                log_frequency_in_ms = LogFreq}}.
 
 handle_call({rtq_ttaaefs, QueueName, ReplEntries}, _From, State) ->
     {ApproachingLimit, QueueMap, QueueCountMap} =
@@ -336,9 +357,9 @@ handle_call(stop, _From, State) ->
     {stop, normal, ok, State}.
 
 
-handle_cast({rtq_coordput, ReplEntry}, State) ->
+handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
     QueueNames =
-        find_queues(element(1, ReplEntry), State#state.queue_filtermap, []),
+        find_queues(Bucket, State#state.queue_filtermap, []),
     {QueueMap, QueueCountMap} =
         addto_queues(ReplEntry, ?RTQ_PRIORITY,
                         QueueNames,
@@ -354,7 +375,7 @@ handle_info(log_queue, State) ->
                         [QueueName, P1Q, P2Q, P3Q])
         end,
     lists:foreach(LogFun, State#state.queue_countmap),
-    erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_queue),
+    erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),
     {noreply, State}.
 
 terminate(normal, _State) ->
@@ -386,7 +407,8 @@ find_queues({T, Bucket}, [{QN, {bucketname, Bucket}, _}|Rest], ActiveQueues) ->
 find_queues({Type, B}, [{QN, {buckettype, Type}, _}|Rest], ActiveQueues) ->
     find_queues({Type, B}, Rest, [QN|ActiveQueues]);
 find_queues({T, Bucket},
-            [{QN, {bucketprefix, Prefix, PS}, _}|Rest], ActiveQueues) ->
+            [{QN, {bucketprefix, Prefix}, _}|Rest], ActiveQueues) ->
+    PS = byte_size(Prefix),
     case Bucket of
         <<Prefix:PS/binary, _R/binary>> ->
             find_queues({T, Bucket}, Rest, [QN|ActiveQueues]);
@@ -394,7 +416,8 @@ find_queues({T, Bucket},
             find_queues({T, Bucket}, Rest, ActiveQueues)
     end;
 find_queues(Bucket,
-            [{QN, {bucketprefix, Prefix, PS}, _}|Rest], ActiveQueues) ->
+            [{QN, {bucketprefix, Prefix}, _}|Rest], ActiveQueues) ->
+    PS = byte_size(Prefix),
     case Bucket of
         <<Prefix:PS/binary, _R/binary>> ->
             find_queues(Bucket, Rest, [QN|ActiveQueues]);
@@ -454,8 +477,7 @@ bulkaddto_queue(ReplEntries, P, QueueName,
             % TODO: Incorporate this step into a riak_core_priority_queue
             % function, rather than have secret knowledge of internals here
             % Secret knowledge includes priority is inversed
-            Adds = {pqueue, [{-P, {queue, ReplEntries, []}}]},
-            Q0 = riak_core_priority_queue:join(Q, Adds),
+            Q0 = riak_core_priority_queue:join(Q, riak_core_priority_queue_from_list(ReplEntries, P)),
             QCM0 =
                 lists:keyreplace(QueueName, 1, QueueCountMap, {QueueName, C0}),
             QM0 =
@@ -469,6 +491,11 @@ bulkaddto_queue(ReplEntries, P, QueueName,
         _ ->
             {false, QueueMap, QueueCountMap}
     end.
+
+riak_core_priority_queue_from_list(Entries, P) ->
+    lists:foldr(fun(Entry, Acc) ->
+                        riak_core_priority_queue:in(Entry, P, Acc)
+                end, riak_core_priority_queue:new(), Entries).
 
 %% @doc
 %% Update the count after an item has been fetched from the queue.  The
@@ -484,9 +511,9 @@ update_counts({P1, P2, 0}) ->
 update_counts({P1, P2, P3}) ->
     {P1, P2, P3 - 1}.
 
-%% @doc convert the toeknised string of queue definitions into actual queue
+%% @doc convert the tokenised string of queue definitions into actual queue
 %% tokenised string expected to be of form:
-% "queuename:filter_type\filter_defn|queuename:filter_type\filter_defn etc"
+% "queuename:filter_type.filter_defn|queuename:filter_type.filter_defn etc"
 -spec tokenise_queuedefn(string()) -> list(queue_filtermap()).
 tokenise_queuedefn(QueueDefnString) ->
     QueueStrings = string:tokens(QueueDefnString, "|"),
@@ -506,8 +533,7 @@ tokenise_queuedefn(QueueDefnString) ->
                         ["bucketprefix", Prefix] ->
                             [{list_to_atom(QueueName),
                                 {bucketprefix,
-                                    list_to_binary(Prefix),
-                                    byte_size(list_to_binary(Prefix))},
+                                    list_to_binary(Prefix)},
                                 active}|Acc];
                         ["buckettype", Type] ->
                             [{list_to_atom(QueueName),
@@ -739,11 +765,11 @@ limit_aaefold_test() ->
     _SW2 = os:timestamp(),
     ok = replrtq_aaefold(?QN1, lists:reverse(Grp2)),
     SW3 = os:timestamp(),
-    ok = replrtq_aaefold(?QN1, lists:reverse(Grp3)),
+    pause = replrtq_aaefold(?QN1, lists:reverse(Grp3)),
     _SW4 = os:timestamp(),
-    ok = replrtq_aaefold(?QN1, lists:reverse(Grp4)),
+    pause = replrtq_aaefold(?QN1, lists:reverse(Grp4)),
     _SW5 = os:timestamp(),
-    ok = replrtq_aaefold(?QN1, lists:reverse(Grp5)),
+    pause = replrtq_aaefold(?QN1, lists:reverse(Grp5)),
     SW6 = os:timestamp(),
     UnPaused = timer:now_diff(SW3, SW1) div 1000,
     Paused = timer:now_diff(SW6, SW3) div 1000,
@@ -753,7 +779,7 @@ limit_aaefold_test() ->
 
     % After we are over the limit, new PUTs are paused even though the change
     % is rejected
-    ok = replrtq_aaefold(?QN1, lists:reverse(Grp6)),
+    pause = replrtq_aaefold(?QN1, lists:reverse(Grp6)),
     SW7 = os:timestamp(),
     StillPaused = timer:now_diff(SW7, SW6) div 1000,
     ?assertMatch(true, StillPaused >= 1000),
