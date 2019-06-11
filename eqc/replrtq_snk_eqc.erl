@@ -24,16 +24,18 @@ initial_state() ->
 %% -- Operations -------------------------------------------------------------
 
 %% --- Operation: config ---
+
 config_pre(S) ->
-    %% Do not change config while running
-    not maps:is_key(pid, S) andalso not maps:is_key(config, S).
+    not maps:is_key(config, S).
 
 config_args(_S) ->
-    [[{replrtq_enablesink, weighted_default({1, false}, {19, true})},
-      { replrtq_sink1queue, sink_queue_gen()},
-      { replrtq_sink1peers, peers_gen() },
+    [[{ replrtq_enablesink,   weighted_default({1, false}, {19, true})},
+      { replrtq_sink1queue,   sink_queue_gen()},
+      { replrtq_sink1peers,   peers_gen() },
       { replrtq_sink1workers, workers_gen() },
-      { replrtq_sink2queue, disabled}
+      { replrtq_sink2queue,   sink_queue_gen()},
+      { replrtq_sink2peers,   peers_gen() },
+      { replrtq_sink2workers, workers_gen() }
      ]].
 
 config_pre(_, [Config]) ->
@@ -118,11 +120,11 @@ pp_peers(Peers) ->
 pp_peer({Name, Port}) ->
     lists:concat([Name, ":", Port]).
 
-sink_names() ->
-   [ sink1, sink2, a, aa, b, c ].
+queue_names() ->
+   [ queue1, queue2, a, aa, b, c, banana, sledge_hammer ].
 
 sink_queue_gen() ->
-    weighted_default({1, disabled}, {9, elements(sink_names())}).
+    weighted_default({1, disabled}, {9, elements(queue_names())}).
 
 workers_gen() ->
     frequency([{1, 0}, {10, choose(1, 5)}]).
@@ -131,18 +133,17 @@ peers_gen() ->
     ?LET(N, choose(1, 8), peers_gen(N)).
 
 peers_gen(N) ->
-    ?LET(Words, eqc_erlang_program:words(N),
-         [ {{Word, ?LET(P, nat(), P + 8000)}, peer_config_gen()} || Word <- Words]).
+    vector(N, {{url(), ?LET(P, nat(), P + 8000)}, peer_config_gen()}).
+
+url() ->
+    noshrink(
+    ?LET({[Name], Suf}, {eqc_erlang_program:words(1),
+                         elements(["com", "org", "co.uk", "edu", "de"])},
+    return(Name ++ "." ++ Suf))).
 
 peer_config_gen() ->
     {elements([inactive, active]),
      choose(1, 10)}.    %% Response time
-
-workitems(#{sinks := Sinks}) ->
-    lists:foldl(fun({_, #{workitems := Ws}}, Acc) ->
-                        Acc ++ Ws
-                end, [], Sinks).
-
 
 
 %% -- Property ---------------------------------------------------------------
@@ -169,7 +170,7 @@ prop_repl() ->
     begin
         replrtq_snk_monitor:start_link(),
         {H, S, Res} = run_commands(Cmds),
-        Trace = replrtq_snk_monitor:stop(),
+        Traces = replrtq_snk_monitor:stop(),
         Crashed =
             case maps:get(pid, S, undefined) of
                 undefined -> false;
@@ -179,34 +180,47 @@ prop_repl() ->
                     HasCrashed;
                 Other -> {not_pid, Other}
             end,
-        ?WHENFAIL(eqc:format("Trace:\n~p\n", [Trace]),
         check_command_names(Cmds,
             measure(length, commands_length(Cmds),
-            measure(trace, length(Trace),
+            measure(trace, [length(T) || T <- maps:values(Traces)],
                 pretty_commands(?MODULE, Cmds, {H, S, Res},
                                 conjunction([{result, equals(Res, ok)},
-                                             {trace, check_trace(S, Trace)},
-                                             {alive, equals(Crashed, false)}]))))))
+                                             {trace, check_traces(S, Traces)},
+                                             {alive, equals(Crashed, false)}])))))
     end))).
 
-peers(#{sinks := [{_, #{peers := Peers}}]}) ->
-    [ {P, A} || {P, {A, _}} <- Peers ];
-peers(_) -> [].
+get_sink(#{sinks := Sinks}, QueueName) ->
+    proplists:get_value(QueueName, Sinks).
 
-workers(#{sinks := [{_, #{workers := N}}]}) -> N;
-workers(_) -> 0.
+peers(S, Q) ->
+    case get_sink(S, Q) of
+        #{ peers := Peers } -> [ {P, A} || {P, {A, _}} <- Peers ];
+        _                   -> []
+    end.
 
-check_trace(S, Trace) ->
-    Workers    = workers(S),
+workers(S, Q) ->
+    case get_sink(S, Q) of
+        #{ workers := N } -> N;
+        _                 -> []
+    end.
+
+check_traces(S, Traces) ->
+    conjunction([ {QueueName, check_trace(S, QueueName, Trace)}
+                  || {QueueName, Trace} <- maps:to_list(Traces) ]).
+
+check_trace(S, QueueName, Trace) ->
+    Workers    = workers(S, QueueName),
     Concurrent = concurrent_fetches(Trace),
     Max        = lists:max([0 | [N || {_, N} <- Concurrent]]),
     Avg        = weighted_average(Concurrent),
-    AnyActive  = lists:keymember(active, 2, peers(S)),
+    AnyActive  = lists:keymember(active, 2, peers(S, QueueName)),
     measure(idle, if AnyActive -> Workers - Avg; true -> 0 end,
     conjunction([{max_workers, equals(Workers, Max)},
                  {avg_workers,
                     %% Check that the average number of active workers is >= WorkerCount - 1
-                    ?WHENFAIL(eqc:format("Concurrent = ~p\n~.1f < ~p\n", [Concurrent, Avg, Workers - 1]),
+                    ?WHENFAIL(eqc:format("Concurrent =\n~s\n~.1f < ~p\n",
+                                         [[ io_lib:format("  ~p for ~4.1fms\n", [C, T / 1000]) || {T, C} <- Concurrent, T >= 100 ],
+                                          Avg, Workers - 1]),
                         Avg >= Workers - 1 orelse not AnyActive)}])).
 
 weighted_average([]) -> 0;
@@ -227,7 +241,8 @@ concurrent_fetches([E | Trace], T0, N, Acc) ->
             return -> N - 1;
             fetch  -> N + 1
          end,
-    concurrent_fetches(Trace, T1, N1, [{timer:now_diff(T1, T0), N} | Acc]).
+    DT = timer:now_diff(T1, T0),
+    concurrent_fetches(Trace, T1, N1, [{DT, N} || DT > 0] ++ Acc).
 
 %% -- API-spec ---------------------------------------------------------------
 api_spec() ->
