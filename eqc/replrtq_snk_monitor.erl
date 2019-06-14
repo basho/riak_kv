@@ -9,7 +9,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, stop/0, fetch/2, push/4, setup_peers/1]).
+-export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1, setup_peers/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -36,6 +36,12 @@ push(RObj, Bool, List, LocalClient) ->
 setup_peers(Peers) ->
     gen_server:call(?SERVER, {setup_peers, Peers}).
 
+suspend(Queue) ->
+    gen_server:cast(?SERVER, {suspend, Queue}).
+
+resume(Queue) ->
+    gen_server:cast(?SERVER, {resume, Queue}).
+
 %% -- Callbacks --------------------------------------------------------------
 
 init([]) ->
@@ -57,11 +63,17 @@ handle_call({fetch, Client, QueueName}, From, State = #state{ peers = Peers }) -
 handle_call({push, _RObj, _Bool, _List, _LocalClient}, _From, State) ->
     {reply, {ok, os:timestamp()}, State};
 handle_call(stop, _From, State) ->
-    {stop, normal, maps:map(fun(_, T) -> lists:reverse(T) end, State#state.traces), State};
+    State1 = lists:foldl(fun(Q, S) -> add_trace(S, Q, stop) end, State,
+                         maps:keys(State#state.traces)),
+    {stop, normal, maps:map(fun(_, T) -> lists:reverse(T) end, State1#state.traces), State1};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
+handle_cast({suspend, Queue}, State) ->
+    {noreply, add_trace(State, Queue, suspend)};
+handle_cast({resume, Queue}, State) ->
+    {noreply, add_trace(State, Queue, resume)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -85,8 +97,4 @@ code_change(_OldVsn, State, _Extra) ->
 %% -- Internal functions -----------------------------------------------------
 
 add_trace(S = #state{traces = Traces}, QueueName, Event) ->
-    Event1 = case Event of
-                {fetch, Client}  -> {fetch, os:timestamp(), Client};
-                {return, Active} -> {return, os:timestamp(), Active}
-             end,
-    S#state{ traces = Traces#{ QueueName => [Event1 | maps:get(QueueName, Traces, [])] } }.
+    S#state{ traces = Traces#{ QueueName => [{os:timestamp(), Event} | maps:get(QueueName, Traces, [])] } }.
