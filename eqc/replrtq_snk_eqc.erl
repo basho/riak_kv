@@ -60,36 +60,28 @@ config_pre(S) ->
     not maps:is_key(config, S).
 
 config_args(_S) ->
-    [[{ replrtq_enablesink,   weighted_default({1, false}, {19, true})},
-      { replrtq_sink1queue,   sink_queue_gen()},
-      { replrtq_sink1peers,   peers_gen() },
-      { replrtq_sink1workers, workers_gen() },
-      { replrtq_sink2queue,   sink_queue_gen()},
-      { replrtq_sink2peers,   peers_gen() },
-      { replrtq_sink2workers, workers_gen() }
-     ]].
+    [weighted_default({1, disabled}, {19, enabled}),
+     vector(2, sink_gen())].
 
-config_pre(_, [Config]) ->
-    Sink1 = proplists:get_value(replrtq_sink1queue, Config),
-    Sink2 = proplists:get_value(replrtq_sink2queue, Config),
-    Sink1 /= Sink2 orelse Sink1 == disabled.
+config_pre(_, [_Enabled, Sinks]) ->
+    Queues = [ Q || #{queue := Q} <- Sinks, Q /= disabled ],
+    lists:usort(Queues) == lists:sort(Queues).
 
-config(Config) ->
-    Format = fun(replrtq_sink1peers, Peers) -> pp_peers(Peers);
-                (replrtq_sink2peers, Peers) -> pp_peers(Peers);
-                (_, Val) -> Val end,
-    [ application:set_env(riak_kv, Key, Format(Key, Val)) || {Key, Val} <- Config ],
-    Sink1Name = proplists:get_value(replrtq_sink1queue, Config),
-    Sink2Name = proplists:get_value(replrtq_sink2queue, Config),
-    Peers = [ {Peer, Name, Cfg}
-              || {Name, Key} <- [{Sink1Name, replrtq_sink1peers}, {Sink2Name, replrtq_sink2peers}],
-                 Name /= disabled,
-                 {Peer, Cfg} <- proplists:get_value(Key, Config) ],
-    replrtq_snk_monitor:setup_peers(Peers),
+config(Enabled, Sinks) ->
+    application:set_env(riak_kv, replrtq_enablesink, Enabled == enabled),
+    lists:zipwith(fun setup_sink/2, lists:seq(1, length(Sinks)), Sinks),
     ok.
 
-config_next(S, _Value, [Config]) ->
-    S#{config => maps:from_list(Config)}.
+setup_sink(I, #{queue := Q, peers := Peers, workers := N}) ->
+    Key = fun(A) -> list_to_atom(lists:concat(["replrtq_sink", I, A])) end,
+    application:set_env(riak_kv, Key(queue), Q),
+    application:set_env(riak_kv, Key(peers), pp_peers(Peers)),
+    application:set_env(riak_kv, Key(workers), N),
+    replrtq_snk_monitor:add_queue(Q, Peers).
+
+config_next(S, _Value, [Enabled, Sinks]) ->
+    S#{ enabled => Enabled == enabled,
+        config  => Sinks }.
 
 
 %% --- Operation: start ---
@@ -106,34 +98,19 @@ start() ->
     riak_kv_replrtq_snk:prompt_work(),
     Pid.
 
-start_callouts(#{config := Config}, _Args) ->
-    case maps:get(replrtq_enablesink, Config) of
-        false -> ?EMPTY;
-        true  ->
-            ?APPLY(setup_sink, [replrtq_sink1queue, replrtq_sink1peers]),
-            ?APPLY(setup_sink, [replrtq_sink2queue, replrtq_sink2peers])
-    end.
+start_callouts(#{enabled := false}, _Args) -> ?EMPTY;
+start_callouts(#{config := Sinks}, _Args) ->
+    ?SEQ([ ?APPLY(setup_sink, [Sink]) || Sink <- Sinks ]).
 
-setup_sink_callouts(#{config := Config}, [Queue, Peers]) ->
+setup_sink_callouts(_S, [#{queue := disabled}]) -> ?EMPTY;
+setup_sink_callouts(_S, [#{peers := Peers}]) ->
     ?SEQ([ ?CALLOUT(rhc, create, [?WILDCARD, ?WILDCARD, ?WILDCARD, ?WILDCARD], {Host, Port})
-         || maps:get(Queue, Config) /= disabled,
-            {{Host, Port}, _} <- maps:get(Peers, Config)]).
+         || {{Host, Port}, _} <- Peers]).
 
-start_next(#{config := Config} = S, Pid, _Args) ->
-    case maps:get(replrtq_enablesink, Config) of
-        true ->
-            Sinks = [ {maps:get(replrtq_sink1queue, Config),
-                       #{peers => maps:get(replrtq_sink1peers, Config),
-                         workers => maps:get(replrtq_sink1workers, Config)}}
-                    || maps:get(replrtq_sink1queue, Config) =/= disabled ] ++
-                    [ {maps:get(replrtq_sink2queue, Config),
-                       #{peers => maps:get(replrtq_sink2peers, Config),
-                         workers => maps:get(replrtq_sink2workers, Config)}}
-                    || maps:get(replrtq_sink2queue, Config) =/= disabled ],
-            S#{pid => Pid, sinks => Sinks};
-        false ->
-            S#{pid => Pid, sinks => []}
-    end.
+start_next(#{enabled := false} = S, Pid, []) -> S#{ pid => Pid, sinks => #{} };
+start_next(#{config  := Sinks} = S, Pid, _Args) ->
+    S#{pid => Pid,
+       sinks => maps:from_list([ {Q, Sink} || #{queue := Q} = Sink <- Sinks, Q /= disabled ])}.
 
 start_post(_S, _Args, Res) ->
     is_pid(Res) andalso is_process_alive(Res).
@@ -196,6 +173,11 @@ queue_names() ->
 
 sink_queue_gen() ->
     weighted_default({1, disabled}, {9, elements(queue_names())}).
+
+sink_gen() ->
+    #{ queue   => sink_queue_gen(),
+       peers   => peers_gen(),
+       workers => workers_gen() }.
 
 workers_gen() ->
     frequency([{1, 0}, {10, choose(1, 5)}]).

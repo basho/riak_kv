@@ -9,7 +9,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1, setup_peers/1]).
+-export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1, add_queue/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -33,8 +33,8 @@ fetch(Client, QueueName) ->
 push(RObj, Bool, List, LocalClient) ->
     gen_server:call(?SERVER, {push, RObj, Bool, List, LocalClient}).
 
-setup_peers(Peers) ->
-    gen_server:call(?SERVER, {setup_peers, Peers}).
+add_queue(Queue, Peers) ->
+    gen_server:call(?SERVER, {add_queue, Queue, Peers}).
 
 suspend(Queue) ->
     gen_server:cast(?SERVER, {suspend, Queue}).
@@ -47,9 +47,9 @@ resume(Queue) ->
 init([]) ->
     {ok, #state{}}.
 
-handle_call({setup_peers, Peers}, _From, State) ->
-    PeerMap = maps:from_list([{{Peer, Name}, Cfg} || {Peer, Name, Cfg} <- Peers]),
-    {reply, ok, State#state{ peers = PeerMap }};
+handle_call({add_queue, Queue, Peers}, _From, State) ->
+    PeerMap = maps:from_list([{{Peer, Queue}, Cfg} || {Peer, Cfg} <- Peers]),
+    {reply, ok, State#state{ peers = maps:merge(State#state.peers, PeerMap) }};
 handle_call({fetch, Client, QueueName}, From, State = #state{ peers = Peers }) ->
     State1 = add_trace(State, QueueName, {fetch, Client}),
     case maps:get({Client, QueueName}, Peers, undefined) of
