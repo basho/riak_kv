@@ -161,6 +161,27 @@ resume(QueueName) ->
 resume_next(S, _, [QueueName]) ->
     on_sink(S, QueueName, fun(Sink) -> Sink#{suspended => false} end).
 
+%% --- Operation: add ---
+
+add_pre(S) -> maps:is_key(sinks, S).
+
+add_args(_S) -> [sink_gen()].
+
+add_pre(#{sinks := Sinks}, [#{queue := Q}]) ->
+    Q /= disabled andalso
+    not maps:is_key(Q, Sinks).
+
+add(#{queue := Q, peers := Peers, workers := N}) ->
+    PeerInfo = fun({{Host, Port}, _}) -> {Host, 8, Host, Port} end,
+    R = riak_kv_replrtq_snk:add_snkqueue(Q, lists:map(PeerInfo, Peers), N),
+    replrtq_snk_monitor:add_queue(Q, Peers, N),
+    R.
+
+add_callouts(_S, [Sink]) -> ?APPLY(setup_sink, [Sink]).
+
+add_next(#{sinks := Sinks} = S, _V, [#{queue := Q} = Sink]) ->
+  S#{ sinks := Sinks#{ Q => Sink } }.
+
 %% -- Generators -------------------------------------------------------------
 
 %% -- Helper functions
