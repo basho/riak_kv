@@ -173,14 +173,28 @@ add_pre(#{sinks := Sinks}, [#{queue := Q}]) ->
 
 add(#{queue := Q, peers := Peers, workers := N}) ->
     PeerInfo = fun({{Host, Port}, _}) -> {Host, 8, Host, Port} end,
-    R = riak_kv_replrtq_snk:add_snkqueue(Q, lists:map(PeerInfo, Peers), N),
     replrtq_snk_monitor:add_queue(Q, Peers, N),
-    R.
+    riak_kv_replrtq_snk:add_snkqueue(Q, lists:map(PeerInfo, Peers), N).
 
 add_callouts(_S, [Sink]) -> ?APPLY(setup_sink, [Sink]).
 
 add_next(#{sinks := Sinks} = S, _V, [#{queue := Q} = Sink]) ->
   S#{ sinks := Sinks#{ Q => Sink } }.
+
+%% --- remove ---
+
+remove_pre(S) -> maps:is_key(sinks, S).
+
+remove_args(S) -> [maybe_active_queue_gen(S)].
+
+remove(Q) ->
+    R = riak_kv_replrtq_snk:remove_snkqueue(Q),
+    replrtq_snk_monitor:remove_queue(Q),
+    R.
+
+remove_next(#{sinks := Sinks} = S, _, [Q]) ->
+    Removed = maps:get(removed, S, []),
+    S#{sinks := maps:remove(Q, Sinks), removed => [Q | Removed]}.
 
 %% -- Generators -------------------------------------------------------------
 
@@ -235,6 +249,7 @@ peer_config_gen() ->
 %% -- Property ---------------------------------------------------------------
 
 weight(_S, suspend) -> 1;
+weight(_S, remove)  -> 1;
 weight(_S, _Cmd)    -> 5.
 
 prop_repl() ->
@@ -296,7 +311,7 @@ check_trace(QueueName, Peers, Workers, Trace) ->
                               check_suspended(Suspended))}])).
 
 format_concurrent(Xs) ->
-    [ io_lib:format("  ~p for ~4.1fms\n", [C, T / 1000])
+    [ io_lib:format("  ~p for ~5.1fms\n", [C, T / 1000])
       || {T, C} <- Xs, T >= 100 ].
 
 -define(SLACK, 20). %% allow fetches 20µs after suspension
@@ -314,15 +329,15 @@ check_suspended(Chunks) ->
         lists:reverse(Cs) == lists:sort(Cs) end, Chunks).
 
 split_suspended(Xs) ->
-    {suspended_chunks(Xs), [ {W, X} || {W, X, false} <- Xs ]}.
+    {suspended_chunks(Xs), [ {W, X} || {W, X, active} <- Xs ]}.
 
 suspended_chunks(Xs) -> suspended_chunks(Xs, []).
 suspended_chunks([], Acc) ->
     lists:reverse(Acc);
 suspended_chunks(Xs, Acc) ->
-    Susp = fun(S) -> fun({_, _, S1}) -> S == S1 end end,
-    {_, Xs1} = lists:splitwith(Susp(false), Xs),
-    {Ys, Zs} = lists:splitwith(Susp(true), Xs1),
+    Susp = fun(Ss) -> fun({_, _, S}) -> lists:member(S, Ss) end end,
+    {_, Xs1} = lists:splitwith(Susp([active]), Xs),
+    {Ys, Zs} = lists:splitwith(Susp([suspended, removed]), Xs1),
     suspended_chunks(Zs, [[{X, W} || {X, W, _} <- Ys] | Acc]).
 
 weighted_average([]) -> 0;
@@ -332,25 +347,27 @@ weighted_average(Xs) ->
 
 concurrent_fetches([]) -> [];
 concurrent_fetches(Trace = [{T0, _} | _]) ->
-    concurrent_fetches(Trace, T0, 0, false, []).
+    concurrent_fetches(Trace, T0, 0, active, []).
 
 concurrent_fetches([], _, _, _, Acc) ->
     lists:reverse(Acc);
-concurrent_fetches([{T1, E} | Trace], T0, N, Suspended, Acc) ->
+concurrent_fetches([{T1, E} | Trace], T0, N, Status, Acc) ->
     N1 =
         case E of
             {return, _} -> N - 1;
             {fetch, _}  -> N + 1;
              _          -> N
         end,
-    Suspended1 =
+    Status1 =
         case E of
-            suspend -> true;
-            resume  -> false;
-            _       -> Suspended
+            _ when Status == removed -> removed;
+            remove                   -> removed;
+            suspend                  -> suspended;
+            resume                   -> active;
+            _                        -> Status
         end,
     DT = timer:now_diff(T1, T0),
-    concurrent_fetches(Trace, T1, N1, Suspended1, [{DT, N, Suspended} || DT > 0] ++ Acc).
+    concurrent_fetches(Trace, T1, N1, Status1, [{DT, N, Status} || DT > 0] ++ Acc).
 
 %% -- API-spec ---------------------------------------------------------------
 api_spec() ->

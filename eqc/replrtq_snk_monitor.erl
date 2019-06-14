@@ -9,7 +9,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1, add_queue/3]).
+-export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1, add_queue/3, remove_queue/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -37,11 +37,14 @@ push(RObj, Bool, List, LocalClient) ->
 add_queue(Queue, Peers, Workers) ->
     gen_server:call(?SERVER, {add_queue, Queue, Peers, Workers}).
 
+remove_queue(Queue) ->
+    gen_server:call(?SERVER, {remove, Queue}).
+
 suspend(Queue) ->
-    gen_server:cast(?SERVER, {suspend, Queue}).
+    gen_server:call(?SERVER, {suspend, Queue}).
 
 resume(Queue) ->
-    gen_server:cast(?SERVER, {resume, Queue}).
+    gen_server:call(?SERVER, {resume, Queue}).
 
 %% -- Callbacks --------------------------------------------------------------
 
@@ -71,14 +74,16 @@ handle_call(stop, _From, State) ->
                          maps:keys(State#state.traces)),
     Ret = [ final_trace(State1, R) || R <- maps:keys(State1#state.traces) ],
     {stop, normal, Ret, State1};
+handle_call({remove, Queue}, _From, State) ->
+    {reply, ok, add_trace(State, Queue, remove)};
+handle_call({suspend, Queue}, _From, State) ->
+    {reply, ok, add_trace(State, Queue, suspend)};
+handle_call({resume, Queue}, _From, State) ->
+    {reply, ok, add_trace(State, Queue, resume)};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast({suspend, Queue}, State) ->
-    {noreply, add_trace(State, Queue, suspend)};
-handle_cast({resume, Queue}, State) ->
-    {noreply, add_trace(State, Queue, resume)};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
