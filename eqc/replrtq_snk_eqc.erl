@@ -25,7 +25,10 @@ get_sink(#{sinks := Sinks}, QueueName) ->
     maps:get(QueueName, Sinks).
 
 on_sink(S = #{sinks := Sinks}, QueueName, Fun) ->
-    S#{sinks := Sinks#{QueueName => Fun(maps:get(QueueName, Sinks, #{}))}}.
+    case maps:get(QueueName, Sinks, undefined) of
+        undefined -> S;
+        Sink      -> S#{sinks := Sinks#{QueueName => Fun(Sink)}}
+    end.
 
 peers(S, Q) ->
     case get_sink(S, Q) of
@@ -69,7 +72,7 @@ config_pre(_, [_Enabled, Sinks]) ->
 
 config(Enabled, Sinks) ->
     application:set_env(riak_kv, replrtq_enablesink, Enabled == enabled),
-    lists:zipwith(fun setup_sink/2, lists:seq(1, length(Sinks)), Sinks),
+    [ lists:zipwith(fun setup_sink/2, lists:seq(1, length(Sinks)), Sinks) || Enabled == enabled ],
     ok.
 
 setup_sink(I, #{queue := Q, peers := Peers, workers := N}) ->
@@ -77,7 +80,7 @@ setup_sink(I, #{queue := Q, peers := Peers, workers := N}) ->
     application:set_env(riak_kv, Key(queue), Q),
     application:set_env(riak_kv, Key(peers), pp_peers(Peers)),
     application:set_env(riak_kv, Key(workers), N),
-    replrtq_snk_monitor:add_queue(Q, Peers).
+    replrtq_snk_monitor:add_queue(Q, Peers, N).
 
 config_next(S, _Value, [Enabled, Sinks]) ->
     S#{ enabled => Enabled == enabled,
@@ -109,7 +112,7 @@ setup_sink_callouts(_S, [#{peers := Peers}]) ->
 
 start_next(#{enabled := false} = S, Pid, []) -> S#{ pid => Pid, sinks => #{} };
 start_next(#{config  := Sinks} = S, Pid, _Args) ->
-    S#{pid => Pid,
+    S#{pid   => Pid,
        sinks => maps:from_list([ {Q, Sink} || #{queue := Q} = Sink <- Sinks, Q /= disabled ])}.
 
 start_post(_S, _Args, Res) ->
@@ -210,9 +213,6 @@ peer_config_gen() ->
 
 %% -- Property ---------------------------------------------------------------
 
-%% invariant(_S) ->
-%% true.
-
 weight(_S, suspend) -> 1;
 weight(_S, _Cmd)    -> 5.
 
@@ -242,27 +242,25 @@ prop_repl() ->
             end,
         check_command_names(Cmds,
             measure(length, commands_length(Cmds),
-            measure(trace, [length(T) || T <- maps:values(Traces)],
+            measure(trace, [length(T) || {_, _, _, T} <- Traces],
                 pretty_commands(?MODULE, Cmds, {H, S, Res},
                                 conjunction([{result, equals(Res, ok)},
-                                             {trace, check_traces(S, Traces)},
+                                             {trace, check_traces(Traces)},
                                              {alive, equals(Crashed, false)}])))))
     end))).
 
-check_traces(S, Traces) ->
-    conjunction([ {QueueName, check_trace(S, QueueName, Trace)}
-                  || {QueueName, Trace} <- maps:to_list(Traces) ]).
+check_traces(Traces) ->
+    conjunction([ {QueueName, check_trace(QueueName, Peers, Workers, Trace)}
+                  || {QueueName, Peers, Workers, Trace} <- Traces ]).
 
-check_trace(S, QueueName, Trace) ->
-    Workers    = workers(S, QueueName),
+check_trace(QueueName, Peers, Workers, Trace) ->
     Concurrent = concurrent_fetches(Trace),
     {Suspended, Active} = split_suspended(Concurrent),
     Max        = lists:max([0 | [N || {_, N} <- Active ++ Suspended]]),
     Avg        = weighted_average(Active),
     ActiveTime = lists:sum([ T || {T, _} <- Active ]),
-    AnyActive  = lists:keymember(active, 2, peers(S, QueueName)),
+    AnyActive  = lists:keymember(active, 2, Peers),
     ?WHENFAIL(eqc:format("Trace for ~p:\n  ~p\n", [QueueName, Trace]),
-    measure(idle, if AnyActive -> Workers - Avg; true -> 0 end,
     conjunction([{max_workers, equals(Workers, Max)},
                  {avg_workers,
                     %% Check that the average number of active workers is >= WorkerCount - 1
@@ -274,7 +272,7 @@ check_trace(S, QueueName, Trace) ->
                         )},
                  {suspended,
                     ?WHENFAIL(eqc:format("Suspended =\n  ~p\n", [Suspended]),
-                              check_suspended(Suspended))}]))).
+                              check_suspended(Suspended))}])).
 
 format_concurrent(Xs) ->
     [ io_lib:format("  ~p for ~4.1fms\n", [C, T / 1000])

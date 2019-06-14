@@ -9,7 +9,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1, add_queue/2]).
+-export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1, add_queue/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -17,7 +17,8 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {peers = #{}, traces = #{}}).
+-record(state, {queues = [], peers = #{}, traces = #{}}).
+-record(queue, {ref, name, peers, workers}).
 
 %% -- API functions ----------------------------------------------------------
 
@@ -33,8 +34,8 @@ fetch(Client, QueueName) ->
 push(RObj, Bool, List, LocalClient) ->
     gen_server:call(?SERVER, {push, RObj, Bool, List, LocalClient}).
 
-add_queue(Queue, Peers) ->
-    gen_server:call(?SERVER, {add_queue, Queue, Peers}).
+add_queue(Queue, Peers, Workers) ->
+    gen_server:call(?SERVER, {add_queue, Queue, Peers, Workers}).
 
 suspend(Queue) ->
     gen_server:cast(?SERVER, {suspend, Queue}).
@@ -47,25 +48,29 @@ resume(Queue) ->
 init([]) ->
     {ok, #state{}}.
 
-handle_call({add_queue, Queue, Peers}, _From, State) ->
-    PeerMap = maps:from_list([{{Peer, Queue}, Cfg} || {Peer, Cfg} <- Peers]),
-    {reply, ok, State#state{ peers = maps:merge(State#state.peers, PeerMap) }};
+handle_call({add_queue, Queue, Peers, Workers}, _From, State) ->
+    Ref = make_ref(),
+    PeerMap = maps:from_list([{{Peer, Queue}, {Ref, Cfg}} || {Peer, Cfg} <- Peers]),
+    Q = #queue{ref = Ref, name = Queue, peers = Peers, workers = Workers},
+    {reply, ok, State#state{ queues = [Q | State#state.queues],
+                             peers  = maps:merge(State#state.peers, PeerMap) }};
 handle_call({fetch, Client, QueueName}, From, State = #state{ peers = Peers }) ->
     State1 = add_trace(State, QueueName, {fetch, Client}),
     case maps:get({Client, QueueName}, Peers, undefined) of
         undefined       ->
             catch replrtq_mock:error({bad_fetch, Client, QueueName}),
             {reply, error, State};
-        {Active, Delay} ->
+        {_Ref, {Active, Delay}} ->
             erlang:send_after(Delay, self(), {return, From, QueueName, Active}),
             {noreply, State1}
     end;
 handle_call({push, _RObj, _Bool, _List, _LocalClient}, _From, State) ->
     {reply, {ok, os:timestamp()}, State};
 handle_call(stop, _From, State) ->
-    State1 = lists:foldl(fun(Q, S) -> add_trace(S, Q, stop) end, State,
+    State1 = lists:foldl(fun(R, S) -> add_trace(S, R, stop) end, State,
                          maps:keys(State#state.traces)),
-    {stop, normal, maps:map(fun(_, T) -> lists:reverse(T) end, State1#state.traces), State1};
+    Ret = [ final_trace(State1, R) || R <- maps:keys(State1#state.traces) ],
+    {stop, normal, Ret, State1};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -96,5 +101,21 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% -- Internal functions -----------------------------------------------------
 
-add_trace(S = #state{traces = Traces}, QueueName, Event) ->
-    S#state{ traces = Traces#{ QueueName => [{os:timestamp(), Event} | maps:get(QueueName, Traces, [])] } }.
+add_trace(S, undefined, _) -> S;
+add_trace(S = #state{traces = Traces}, Ref, Event) when is_reference(Ref) ->
+    Trace0 = maps:get(Ref, Traces, []),
+    S#state{ traces = Traces#{ Ref => [{os:timestamp(), Event} | Trace0] } };
+add_trace(S, QueueName, Event) ->
+    add_trace(S, get_ref(S, QueueName), Event).
+
+get_ref(#state{queues = Queues}, QueueName) ->
+    case lists:keyfind(QueueName, #queue.name, Queues) of
+        #queue{ref = Ref} when is_reference(Ref) -> Ref;
+        false -> undefined
+    end.
+
+final_trace(#state{ queues = Queues, traces = Traces }, Ref) ->
+    Trace = maps:get(Ref, Traces),
+    #queue{name = Name, peers = Peers, workers = Workers} = lists:keyfind(Ref, #queue.ref, Queues),
+    {Name, Peers, Workers, lists:reverse(Trace)}.
+
