@@ -324,7 +324,7 @@ format_concurrent(Xs) ->
     [ io_lib:format("  ~p for ~5.1fms\n", [C, T / 1000])
       || {T, C} <- Xs, T >= 100 ].
 
--define(SLACK, 20). %% allow fetches 20µs after suspension
+-define(SLACK, 100). %% allow fetches 100µs after suspension
 
 drop_slack(Chunk) -> drop_slack(0, Chunk).
 drop_slack(_, []) -> [];
