@@ -19,6 +19,14 @@
 
 -define(TEST_DURATION, 100). %% milliseconds
 
+%% -- Notes ------------------------------------------------------------------
+
+%% BUG: If you remove a queue and add it again with different peers
+%%      riak_kv_replrtq_snk crashes when work comes back from the removed
+%%      queue. For now disabled reusing queue names:
+
+allow_reusing_queue_names() -> false.
+
 %% -- State ------------------------------------------------------------------
 
 get_sink(#{sinks := Sinks}, QueueName) ->
@@ -167,8 +175,10 @@ add_pre(S) -> maps:is_key(sinks, S).
 
 add_args(_S) -> [sink_gen()].
 
-add_pre(#{sinks := Sinks}, [#{queue := Q}]) ->
+add_pre(#{sinks := Sinks} = S, [#{queue := Q}]) ->
     Q /= disabled andalso
+    (not lists:member(Q, maps:get(removed, S, [])) orelse
+     allow_reusing_queue_names()) andalso
     not maps:is_key(Q, Sinks).
 
 add(#{queue := Q, peers := Peers, workers := N}) ->
