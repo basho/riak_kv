@@ -295,7 +295,7 @@ check_trace(QueueName, Peers, Workers, Trace) ->
     Max        = lists:max([0 | [N || {_, N} <- Active ++ Suspended]]),
     Avg        = weighted_average(Active),
     ActiveTime = lists:sum([ T || {T, _} <- Active ]),
-    AnyActive  = lists:keymember(active, 2, Peers),
+    AnyActive  = lists:any(fun({_, {A, _}}) -> A == active end, Peers),
     ?WHENFAIL(eqc:format("Trace for ~p:\n  ~p\n", [QueueName, Trace]),
     conjunction([{max_workers, equals(Workers, Max)},
                  {avg_workers,
