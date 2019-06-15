@@ -123,6 +123,10 @@ start(Partition, Config) ->
 
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
+            {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+            PartitionCount = chashbin:num_partitions(CHBin),
+            RingIndexInc = chash:ring_increment(PartitionCount),
+            DBid = Partition div RingIndexInc,
             StartOpts = [{root_path, DataDir},
                             {max_journalsize, MJS},
                             {cache_size, BCS},
@@ -131,6 +135,7 @@ start(Partition, Config) ->
                             {compression_method, CMM},
                             {compression_point, CMP},
                             {log_level, LOL},
+                            {database_id, DBid},
                             {max_run_length, MRL},
                             {maxrunlength_compactionpercentage, MCP},
                             {singlefile_compactionpercentage, SCP},
