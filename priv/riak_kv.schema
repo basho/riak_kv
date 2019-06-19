@@ -855,17 +855,29 @@
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this
-%% node.
-{mapping, "ttaaefs_bucketname", "riak_kv.ttaaefs_bucketname", [
-  {datatype, string}
+%% node.  Only ascii string bucket definitions supported (which will be 
+%% converted using list_to_binary). 
+{mapping, "ttaaefs_bucketfilter_name", "riak_kv.ttaaefs_bucketfilter_name", [
+  {datatype, string},
+  {commented, "sample_bucketname"}
 ]}.
 
-%% @doc For Tictac type full-sync which bucket type hould be sync'd by this
-%% node.
-%% TODO: type is not yet implemented.  
+%% @doc For Tictac bucket full-sync what is the bucket type of the bucket name.  
+%% Only ascii string type bucket definitions supported (these
+%% definitions will be converted to binary using list_to_binary)
+{mapping, "ttaaefs_bucketfilter_type", "riak_kv.ttaaefs_bucketfilter_type", [
+  {datatype, string},
+  {commented, "default"}
+]}.
+
+%% @doc For Tictac bucket-type full-sync what is the bucket type to be sync'd.  
+%% Only ascii string type bucket definitions supported (these
+%% definitions will be converted to binary using list_to_binary).
+%% TODO: Type-based filtering is not yet supported
 {mapping, "ttaaefs_buckettype", "riak_kv.ttaaefs_buckettype", [
   {datatype, string}
 ]}.
+
 
 %% @doc For Tictac all full-sync which NVAL should be sync'd by this node.
 %% This is the `local` nval, as the data in the remote cluster may have an
@@ -889,6 +901,7 @@
 %% peer address may be a load-balanced IP to avoid this issue.
 {mapping, "ttaaefs_peerip", "riak_kv.ttaaefs_peerip", [
   {datatype, string},
+  {commented, "127.0.0.1"},
   {validators, ["valid_ipaddr"]}
 ]}.
 
@@ -904,7 +917,8 @@
 
 %% @doc The port to be used when connecting to the remote peer cluster
 {mapping, "ttaaefs_peerport", "riak_kv.ttaaefs_peerport", [
-  {datatype, integer}
+  {datatype, integer},
+  {commented, 8098}
 ]}.
 
 %% @doc The protocol to be used when conecting to the peer in the remote
@@ -1033,7 +1047,8 @@
 %% to in multiple sink node configurations.
 %% The list of peers is tokenised as host:port|host:port etc.
 {mapping, "replrtq_sink1peers", "riak_kv.replrtq_sink1peers", [
-    {datatype, string}
+    {datatype, string},
+    {commented, "127.0.0.1|8098"}
 ]}.
 
 %% @doc For each configured list of queues, and list of peers is required to
@@ -1042,7 +1057,8 @@
 %% to in multiple sink node configurations.
 %% The list of peers is tokenised as host:port|host:port etc.
 {mapping, "replrtq_sink2peers", "riak_kv.replrtq_sink2peers", [
-    {datatype, string}
+    {datatype, string},
+    {commented, "127.0.0.1|8098"}
 ]}.
 
 %% @doc For each configured list of queues, the number of workers to be used

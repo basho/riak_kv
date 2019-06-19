@@ -164,9 +164,24 @@ init([]) ->
                                 local_nval = LocalNVal,
                                 remote_nval = RemoteNVal};
             bucket ->
-                Bucket = app_helper:get_env(riak_kv, ttaaefs_bucket),
-                Type = app_helper:get_env(riak_kv, ttaaefs_buckettype),
-                BucketT = {list_to_binary(Type), list_to_binary(Bucket)},
+                B = app_helper:get_env(riak_kv, ttaaefs_bucketfilter_name),
+                T = app_helper:get_env(riak_kv, ttaaefs_bucketfilter_type),
+                B0 =
+                    case is_binary(B) of 
+                        true ->
+                            B;
+                        false ->
+                            list_to_binary(B)
+                    end,
+                BucketT =
+                    case T of
+                        "default" ->
+                            B0;
+                        T when is_binary(T) ->
+                            {T, B0};
+                        _ ->
+                            {list_to_binary(T), B0}
+                    end,
                 State0#state{scope=bucket, bucket_list=[BucketT]};
             disabled ->
                 State0#state{scope = disabled}
