@@ -39,14 +39,12 @@ config(Config) ->
                         QueueDefs),
     application:set_env(riak_kv, replrtq_srcqueuelimit,
                         proplists:get_value(replrtq_srcqueuelimit, Config)),
+    application:set_env(riak_kv, replrtq_logfrequency, 500000),
     maps:from_list(Config),
     QueueDefs.
 
 config_next(S, _Value, [Config]) ->
     S#{config => maps:from_list(Config)}.
-
-config_features(_S, [[{replrtq_srcqueue, QDef}, _]], _Res) ->
-    [QDef].
 
 
 %% --- Operation: start ---
@@ -60,13 +58,6 @@ start() ->
     {ok, Pid} = riak_kv_replrtq_src:start_link(),
     unlink(Pid),
     Pid.
-
-start_callouts(#{config := Config}, _Args) ->
-    ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_srcqueue, ?WILDCARD],
-             pp_queuedefs(maps:get(replrtq_srcqueue, Config))),
-    ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_srcqueuelimit, ?WILDCARD],
-             maps:get(replrtq_srcqueuelimit, Config)),
-    ?CALLOUT(app_helper, get_env, [riak_kv, replrtq_logfrequency, ?WILDCARD], 500000).  %% lager not defined and crashes if called
 
 start_next(S, Value, _Args) ->
     Queues = [ {Name, #{filter => Filter, status => active}} ||
@@ -252,10 +243,6 @@ register_rtq(Name, {Kind, Word}) ->
 register_rtq(Name, Kind) ->
     riak_kv_replrtq_src:register_rtq(Name, Kind).
 
-register_rtq_callouts(_S, [_Name, _]) ->
-    ?OPTIONAL(?CALLOUT(lager, warning, [?WILDCARD, ?WILDCARD], ok)).
-
-
 register_rtq_next(S, _Value, [Name, Filter]) ->
     Queues = maps:get(priority_queues, S),
     %% Use merge to create a NOP if queue name already taken
@@ -369,14 +356,12 @@ pop_rtq_post(S, [Name], Res) ->
     end.
 
 
-%% --- ... more operations
-
 %% -- Generators -------------------------------------------------------------
 
 %% Generate symbolic and then make string out of it
 queuedef() ->
-    ?LET(QueueNames, sublist(queuenames()),
-        [{QN, queuefilter()} || QN <- QueueNames]).
+    ?LET(Qs, [{QN, queuefilter()} || QN <- queuenames()],
+    sublist(Qs)).
 
 %% Queue names are atoms, only a limited, known subset to choose from
 %% to simplify verification of the filters
@@ -490,10 +475,11 @@ prop_repl() ->
             end,
         check_command_names(Cmds,
             measure(length, commands_length(Cmds),
+            measure(queues, maps:size(maps:get(priority_queues, S, #{})),
             aggregate(call_features(H),
                 pretty_commands(?MODULE, Cmds, {H, S, Res},
                                 conjunction([{result, Res == ok},
-                                             {alive, not Crashed}])))))
+                                             {alive, not Crashed}]))))))
     end))).
 
 
@@ -504,18 +490,13 @@ api_spec() ->
                modules = [ app_helper_spec(), lager_spec() ] }.
 
 app_helper_spec() ->
-    #api_module{ name = app_helper, fallback = undefined,
-                 functions =
-                     [  #api_fun{ name = get_env, arity = 3, matched = all, fallback = false} ] }.
+    #api_module{ name = app_helper, fallback = ?MODULE }.
+
+get_env(riak_kv, Key, Default) ->
+  application:get_env(riak_kv, Key, Default).
 
 lager_spec() ->
-    #api_module{ name = lager, fallback = undefined,
-                 functions =
-                     [  #api_fun{ name = warning, arity = 2, matched = all, fallback = false} ] }.
+    #api_module{ name = lager, fallback = ?MODULE }.
 
-%% This is a pure data structure, no need to mock it, rather use it
-priority_queue_spec() ->
-    #api_module{ name = riak_core_priority_queue, fallback = undefined,
-                 functions =
-                     [  #api_fun{ name = new, arity = 0, matched = all, fallback = false},
-                        #api_fun{ name = in, arity = 3, matched = all, fallback = false}  ] }.
+warning(_, _) -> ok.
+
