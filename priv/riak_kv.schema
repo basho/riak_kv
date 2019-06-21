@@ -1017,62 +1017,33 @@
 ]}.
 
 
-%% @doc There are up to two replication queues which can be configured, 
-%% from which this node will act as a sink - i.e. consume from these queues
-%% any replicated PUTs.
+%% @doc The node can act as a sink for one queue, from an unlimited number
+%% of peers (which may be in more than one cluster).  If the cluster needs
+%% to consume from multiple queues, then this can be achieved via directly
+%% changing replrtq_snk configuration via attach
 %% The queuename should be set to disabled if either of the two replication
 %% queues is not to be configured.  The queue name if it is to be configured
 %% must match a replq<n>_queuename on the source node.
 %% If more than two sink queues are required to be configured, then this
 %% can be achieved through an attach script.
-{mapping, "replrtq_sink1queue", "riak_kv.replrtq_sink1queue", [
+{mapping, "replrtq_sinkqueue", "riak_kv.replrtq_sink1queue", [
   {datatype, atom},
   {default, disabled}
 ]}.
 
-%% @doc There are up to two replication queues which can be configured, 
-%% from which this node will act as a sink - i.e. consume from these queues
-%% any replicatd PUTs.
-%% The queuename should be set to disabled if either of the two replication
-%% queues is not to be configured.  The queue name if it is to be configured
-%% must match a replq<n>_queuename on the source node.
-{mapping, "replrtq_sink2queue", "riak_kv.replrtq_sink2queue", [
-  {datatype, atom},
-  {default, disabled}
-]}.
 
-%% @doc For each configured list of queues, and list of peers is required to
-%% inform the sink node how to reach the src.  All src nodes will need to
-%% have entries consumed - so it is recommended that each src node is referred
-%% to in multiple sink node configurations.
+%% @doc A list of peers is required to inform the sink node how to reach the
+%% src.  All src nodes will need to have entries consumed - so it is
+%% recommended that each src node is referred to in multiple sink node
+%% configurations.
 %% The list of peers is tokenised as host:port|host:port etc.
-{mapping, "replrtq_sink1peers", "riak_kv.replrtq_sink1peers", [
+{mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sink1peers", [
     {datatype, string},
     {commented, "127.0.0.1|8098"}
 ]}.
 
-%% @doc For each configured list of queues, and list of peers is required to
-%% inform the sink node how to reach the src.  All src nodes will need to
-%% have entries consumed - so it is recommended that each src node is referred
-%% to in multiple sink node configurations.
-%% The list of peers is tokenised as host:port|host:port etc.
-{mapping, "replrtq_sink2peers", "riak_kv.replrtq_sink2peers", [
-    {datatype, string},
-    {commented, "127.0.0.1|8098"}
-]}.
-
-%% @doc For each configured list of queues, the number of workers to be used
-%% for that queue must be configured. There must be at least as many workers as
-%% peers.  
-{mapping, "replrtq_sink1workers", "riak_kv.replrtq_sink1workers", [
-    {datatype, integer},
-    {default, 12}
-]}.
-
-%% @doc For each configured list of queues, the number of workers to be used
-%% for that queue must be configured. There must be at least as many workers as
-%% peers.  
-{mapping, "replrtq_sink2workers", "riak_kv.replrtq_sink2workers", [
+%% @doc The number of workers to be used for that queue must be configured.
+{mapping, "replrtq_sinkworkers", "riak_kv.replrtq_sink1workers", [
     {datatype, integer},
     {default, 12}
 ]}.

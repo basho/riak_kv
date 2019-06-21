@@ -172,57 +172,31 @@ init([]) ->
     SinkEnabled = app_helper:get_env(riak_kv, replrtq_enablesink, false),
     case SinkEnabled of
         true ->
-            Sink1 = app_helper:get_env(riak_kv, replrtq_sink1queue, disabled),
+            Sink = app_helper:get_env(riak_kv, replrtq_sinkqueue, disabled),
             State1 =
-                case Sink1 of
+                case Sink of
                     disabled ->
                         #state{};
-                    Snk1QueueName ->
-                        Sink1Peers =
-                            app_helper:get_env(riak_kv, replrtq_sink1peers),
-                        Snk1PeerInfo =
-                            tokenise_peers(Sink1Peers),
-                        Snk1WorkerCount =
-                            app_helper:get_env(riak_kv, replrtq_sink1workers),
-                        {Snk1QueueLength, Snk1WorkQueue} =
-                            determine_workitems(Snk1QueueName,
-                                                Snk1PeerInfo,
-                                                Snk1WorkerCount),
-                        Snk1W =
-                            #sink_work{queue_name = Snk1QueueName,
-                                        work_queue = Snk1WorkQueue,
-                                        minimum_queue_length = Snk1QueueLength,
-                                        peer_list = Snk1PeerInfo,
-                                        max_worker_count = Snk1WorkerCount},
-                        #state{work = [{Snk1QueueName, Snk1W}]}
+                    SnkQueueName ->
+                        SinkPeers =
+                            app_helper:get_env(riak_kv, replrtq_sinkpeers),
+                        SnkPeerInfo =
+                            tokenise_peers(SinkPeers),
+                        SnkWorkerCount =
+                            app_helper:get_env(riak_kv, replrtq_sinkworkers),
+                        {SnkQueueLength, SnkWorkQueue} =
+                            determine_workitems(SnkQueueName,
+                                                SnkPeerInfo,
+                                                SnkWorkerCount),
+                        SnkW =
+                            #sink_work{queue_name = SnkQueueName,
+                                        work_queue = SnkWorkQueue,
+                                        minimum_queue_length = SnkQueueLength,
+                                        peer_list = SnkPeerInfo,
+                                        max_worker_count = SnkWorkerCount},
+                        #state{work = [{SnkQueueName, SnkW}]}
                 end,
-            Sink2 = app_helper:get_env(riak_kv, replrtq_sink2queue, disabled),
-            State2 =
-                case Sink2 of
-                    disabled ->
-                        State1;
-                    Snk2QueueName ->
-                        Sink2Peers =
-                            app_helper:get_env(riak_kv, replrtq_sink2peers),
-                        Snk2PeerInfo =
-                            tokenise_peers(Sink2Peers),
-                        Snk2WorkerCount =
-                            app_helper:get_env(riak_kv, replrtq_sink2workers),
-                        {Snk2QueueLength, Snk2WorkQueue} =
-                            determine_workitems(Snk2QueueName,
-                                                Snk2PeerInfo,
-                                                Snk2WorkerCount),
-                        Snk2W =
-                            #sink_work{queue_name = Snk2QueueName,
-                                        work_queue = Snk2WorkQueue,
-                                        minimum_queue_length = Snk2QueueLength,
-                                        peer_list = Snk2PeerInfo,
-                                        max_worker_count = Snk2WorkerCount},
-                        UpdatedWork =
-                            [{Snk2QueueName, Snk2W}|State1#state.work],
-                        State1#state{work = UpdatedWork}
-                end,
-            {ok, State2#state{enabled = true}, ?INACTIVITY_TIMEOUT_MS};
+            {ok, State1#state{enabled = true}, ?INACTIVITY_TIMEOUT_MS};
         false ->
             {ok, #state{}}
     end.
