@@ -988,7 +988,7 @@
 ]}.
 
 %% @doc Queue definitions
-%% Queues shoudl be defined using a pipe '|' delimited string, of two
+%% Queues should be defined using a pipe '|' delimited string, of two
 %% colon ':' delimited elements.  The first part of each queue definition is
 %% the ascii name of the queue, the second part indicated the filter to be
 %% applied which should be either:
@@ -1005,7 +1005,7 @@
 %% made at runtime used the riak_kv_replrtq_src API.
 %% Example configurtaion might be:
 %% cluster_a:any|cluster_b:block_rtq|cluster_c:bucketprefix.user
-{mapping, "replrtq_srcqueues", "riak_kv.replrtq_srcqueues", [
+{mapping, "replrtq_srcqueue", "riak_kv.replrtq_srcqueue", [
     {datatype, string},
     {default, "qi_ttaaefs:block_rtq"}
 ]}.
@@ -1026,7 +1026,7 @@
 %% must match a replq<n>_queuename on the source node.
 %% If more than two sink queues are required to be configured, then this
 %% can be achieved through an attach script.
-{mapping, "replrtq_sinkqueue", "riak_kv.replrtq_sink1queue", [
+{mapping, "replrtq_sinkqueue", "riak_kv.replrtq_sinkqueue", [
   {datatype, atom},
   {default, disabled}
 ]}.
@@ -1037,13 +1037,13 @@
 %% recommended that each src node is referred to in multiple sink node
 %% configurations.
 %% The list of peers is tokenised as host:port|host:port etc.
-{mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sink1peers", [
+{mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sinkpeers", [
     {datatype, string},
     {commented, "127.0.0.1|8098"}
 ]}.
 
 %% @doc The number of workers to be used for that queue must be configured.
-{mapping, "replrtq_sinkworkers", "riak_kv.replrtq_sink1workers", [
+{mapping, "replrtq_sinkworkers", "riak_kv.replrtq_sinkworkers", [
     {datatype, integer},
     {default, 12}
 ]}.
