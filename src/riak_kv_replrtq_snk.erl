@@ -50,7 +50,7 @@
         {{success, 0}, {failure, 0}, {repl_time, 0},
         {modified_time, 0, 0, 0, 0, 0}}).
 -define(STARTING_DELAYMS, 8).
--define(MAX_SUCCESS_DELAYMS, 256).
+-define(MAX_SUCCESS_DELAYMS, 1024).
 -define(ON_ERROR_DELAYMS, 65536).
 -define(INACTIVITY_TIMEOUT_MS, 60000).
 
@@ -267,7 +267,9 @@ handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
                     requeue_work(WorkItem);
                 W ->
                     prompt_work(),
-                    erlang:send_after(W, self(), {prompt_requeue, WorkItem})
+                    erlang:send_after(random:uniform(W),
+                                        self(),
+                                        {prompt_requeue, WorkItem})
             end,
             {noreply, State#state{work = UpdWork}}
     end;
