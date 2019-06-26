@@ -567,6 +567,7 @@ generate_replyfun(ReqID, From) ->
                 % Reply to riak_client
                 From ! {ReqID, Result}
         end,
+        lager:info("Completed full-sync with result=~w", [Result]),
         gen_server:cast(?MODULE, {reply_complete, ReqID, Result})
     end.
 
