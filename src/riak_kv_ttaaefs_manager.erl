@@ -599,7 +599,12 @@ generate_repairfun(ExchangeID, QueueName) ->
                     true ->
                         {SourceL, SinkC + 1};
                     false ->
-                        {[{B, K, SrcVC, to_fetch}|SourceL], SinkC}
+                        case vclock_dominates(SrcVC, SinkVC) of
+                            true ->
+                                {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
+                            false ->
+                                {SourceL, SinkC}
+                        end
                 end
             end,
         {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
