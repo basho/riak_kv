@@ -48,6 +48,7 @@
             resume_rtq/1,
             length_rtq/1,
             popfrom_rtq/1,
+            waitforpop_rtq/2,
             stop/0]).
 
 -ifdef(TEST).
@@ -73,6 +74,7 @@
     % repl references
 -define(LOG_TIMER_SECONDS, 30).
     % Log the queue sizes every 30 seconds
+-define(CONSUME_DELAY, 1000).
 
 -record(state,  {
             queue_filtermap = [] :: list(queue_filtermap()),
@@ -223,10 +225,25 @@ length_rtq(QueueName) ->
 
 %% @doc
 %% Pop an entry from the queue with given queue name.  The entry will be taken
-%% from the hihgest priority queue with entries
+%% from the highest priority queue with entries
 -spec popfrom_rtq(queue_name()) -> repl_entry()|queue_empty.
 popfrom_rtq(QueueName) ->
     gen_server:call(?MODULE, {popfrom_rtq, QueueName}, infinity).
+
+%% @doc
+%% Wait for N 1 ms loops to see if an object is available on the queue before
+%% potentially returning queue_empty
+-spec waitforpop_rtq(queue_name, non_neg_integer()) -> repl_entry()|queue_empty.
+waitforpop_rtq(QueueName, 0) ->
+    popfrom_rtq(QueueName);
+waitforpop_rtq(QueueName, N) ->
+    case popfrom_rtq(QueueName) of
+        queue_empty ->
+            timer:sleep(?CONSUME_DELAY),
+            waitforpop_rtq(QueueName, N - 1);
+        R ->
+            R
+    end.
 
 -spec stop() -> ok.
 stop() ->
