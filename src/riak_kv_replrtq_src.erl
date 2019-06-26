@@ -74,7 +74,7 @@
     % repl references
 -define(LOG_TIMER_SECONDS, 30).
     % Log the queue sizes every 30 seconds
--define(CONSUME_DELAY, 1000).
+-define(CONSUME_DELAY, 1).
 
 -record(state,  {
             queue_filtermap = [] :: list(queue_filtermap()),
