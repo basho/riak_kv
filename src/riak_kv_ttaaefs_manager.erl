@@ -407,7 +407,8 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                                     [{RemoteSendFun, all}],
                                     RepairFun,
                                     ReplyFun,
-                                    Filter, []),
+                                    Filter, 
+                                    [{transition_pause_ms, 1000}]),
             
             lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
                             [ReqID0, ExID, ExPid]),

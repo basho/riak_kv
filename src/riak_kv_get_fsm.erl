@@ -50,7 +50,7 @@
                   {pr, non_neg_integer()} |    %% Minimum number of primary vnodes participating
                   {basic_quorum, boolean()} |  %% Whether to use basic quorum (return early
                                                %% in some failure cases.
-                  {notfound_ok, boolean()}  |  %% Count notfound reponses as successful.
+                  {notfound_ok, boolean()}  |  %% Count notfound responses as successful.
                   {force_aae, boolean()}    |  %% Force there to be be an AAE exchange for the
                                                %% preflist after the GEt has been completed 
                   {timeout, pos_integer() | infinity} | %% Timeout for vnode responses
