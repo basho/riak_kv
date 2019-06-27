@@ -40,8 +40,6 @@
 
 -export([prompt_readrepair/1]).
 
--define(QUEUE_EMPTY_LOOPS, 8).
-
 -type detail() :: timing |
                   vnodes.
 -type details() :: [detail()].
@@ -103,6 +101,7 @@
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
 -define(DEFAULT_RT, head).
+-define(QUEUE_EMPTY_LOOPS, 8).
 
 %% ===================================================================
 %% Public API

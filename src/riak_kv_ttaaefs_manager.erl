@@ -54,6 +54,8 @@
 -define(CRASH_TIMEOUT, 3600 * 1000).
     % Assume that an exchange has crashed if not response received in this
     % interval, to allow exchanges to be re-scheduled.
+-define(EXCHANGE_PAUSE, 2000).
+    % Pause between stages of the AAE exchange
 
 -record(state, {slice_allocations = [] :: list(allocation()),
                 slice_set_start :: erlang:timestamp(),
@@ -408,7 +410,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                                     RepairFun,
                                     ReplyFun,
                                     Filter, 
-                                    [{transition_pause_ms, 1000}]),
+                                    [{transition_pause_ms, ?EXCHANGE_PAUSE}]),
             
             lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
                             [ReqID0, ExID, ExPid]),
@@ -595,11 +597,12 @@ generate_repairfun(ExchangeID, QueueName) ->
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
                 % The erlify_aae_keyclock will have base64 decoded the clock
-                case vclock_dominates(SinkVC, SrcVC) of
+                SinkVCdecoded = decode_clock(SinkVC),
+                case vclock_dominates(SinkVCdecoded, SrcVC) of
                     true ->
                         {SourceL, SinkC + 1};
                     false ->
-                        case vclock_dominates(SrcVC, SinkVC) of
+                        case vclock_dominates(SrcVC, SinkVCdecoded) of
                             true ->
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
                             false ->
@@ -623,8 +626,12 @@ vclock_dominates(none, _SrcVC)  ->
 vclock_dominates(_SinkVC, none) ->
     true;
 vclock_dominates(SinkVC, SrcVC) ->
-    vclock:dominates(riak_object:decode_vclock(SinkVC), SrcVC).
+    vclock:dominates(SinkVC, SrcVC).
 
+decode_clock(none) ->
+    none;
+decode_clock(EncodedClock) ->
+    riak_object:decode_vclock(EncodedClock).
 
 %% @doc
 %% Take the next work item from the list of allocations, assuming that the
