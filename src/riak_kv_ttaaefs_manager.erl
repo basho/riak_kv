@@ -54,7 +54,7 @@
 -define(CRASH_TIMEOUT, 3600 * 1000).
     % Assume that an exchange has crashed if not response received in this
     % interval, to allow exchanges to be re-scheduled.
--define(EXCHANGE_PAUSE, 2000).
+-define(EXCHANGE_PAUSE, 1000).
     % Pause between stages of the AAE exchange
 
 -record(state, {slice_allocations = [] :: list(allocation()),
