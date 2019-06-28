@@ -591,6 +591,7 @@ generate_replyfun(ReqID, From) ->
 %% sink cluster)
 -spec generate_repairfun(integer(), riak_kv_replrtq_src:queue_name()) -> fun().
 generate_repairfun(ExchangeID, QueueName) ->
+    LogRepairs = app_helper:get_env(riak_kv, ttaaefs_logrepairs, false),
     fun(RepairList) ->
         lager:info("Repair to list of length ~w", [length(RepairList)]),
         FoldFun =
@@ -604,6 +605,13 @@ generate_repairfun(ExchangeID, QueueName) ->
                     false ->
                         case vclock_dominates(SrcVC, SinkVCdecoded) of
                             true ->
+                                case LogRepairs of
+                                    true ->
+                                        lager:info("Repair B=~w K=~w SrcVC=~w SnkVC=~w",
+                                                    [B, K, SrcVC, SinkVCdecoded]);
+                                    false ->
+                                        ok
+                                end,
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
                             false ->
                                 {SourceL, SinkC}

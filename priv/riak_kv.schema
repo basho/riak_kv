@@ -962,6 +962,14 @@
   {default, 0}
 ]}.
 
+%% @doc If Tictac AAE full-sync discovers keys to be repaired, should each key
+%% that is repaired be logged
+{mapping, "ttaaefs_logrepairs", "riak_kv.ttaaefs_logrepairs", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
 %% @doc Will there be a replication cache kept at each vnode for recently
 %% coordianted PUTs.  The cache is only used for real-time replication so
 %% should be disabled if replication is to be disabled.  Real-time replication
