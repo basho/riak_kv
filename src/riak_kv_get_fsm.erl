@@ -91,7 +91,7 @@
                 force_aae = false :: boolean(),
                 override_vnodes = [] :: list(),
                 return_tombstone = false :: boolean(),
-                expected_fetchclock :: vclock:vclock()
+                expected_fetchclock = false :: false | vclock:vclock()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -219,14 +219,16 @@ queue_fetch(timeout, StateData) ->
             Msg = {ReqID, {ok, queue_empty}},
             Pid ! Msg,
             {stop, normal, StateData};
-        {Bucket, Key, _ExpectedClock, to_fetch} ->
+        {Bucket, Key, ExpectedClock, to_fetch} ->
             % Do a full fetch with default n and r.  Assume the answer returned
             % is the best answer, so no need to compare with the expected
             % answer
             Timing = riak_kv_fsm_timing:add_timing(prepare, []),
             {next_state,
                 prepare,
-                StateData#state{bkey = {Bucket, Key}, timing = Timing},
+                StateData#state{bkey = {Bucket, Key},
+                                timing = Timing,
+                                expected_fetchclock = ExpectedClock},
                 0};
         {_Bucket, _Key, ExpectedClock, {tomb, Obj}} ->
             % A tombstone was queued - so there is no need to fetch
@@ -325,7 +327,8 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
 %% @private
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2,
-                                   trace=Trace}) ->
+                                   trace=Trace,
+                                   expected_fetchclock = ExpClock}) ->
     ?DTRACE(Trace, ?C_GET_FSM_VALIDATE, [], ["validate"]),
     AppEnvTimeout = app_helper:get_env(riak_kv, timeout),
     Timeout = case AppEnvTimeout of
@@ -358,7 +361,8 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             DeletedVClock = get_option(deletedvclock, Options, false),
             GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
-                                            DeletedVClock, IdxType),
+                                            DeletedVClock, IdxType,
+                                            ExpClock),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
                                                        req_id = ReqId});
