@@ -174,6 +174,8 @@ fetch(QueueName, {?MODULE, [Node, _ClientId]}) ->
 push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
     RObj = 
         case riak_object:is_robject(RObjMaybeBin) of
+            % May get pushed a riak object, or a riak object as a binary, but
+            % only want to deal with a binary object
             true ->
                 RObjMaybeBin;
             false ->
@@ -192,7 +194,17 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
     Key = riak_object:key(RObj),
     Me = self(),
     ReqId = mk_reqid(),
-    Options = [asis, disable_hooks, {update_last_modified, false}],
+    Options = [asis, disable_hooks, {update_last_modified, false},
+                {w, 1}, {pw, 1}, {dw, 0}, {node_confirms, 1}],
+        % asis - stops the PUT from being re-coordinated
+        % disable_hooks - this makes this compatible with previous repl,
+        % although this may no longer be necessary (no repl hook to disable)
+        % w = 1 - allow for the repl worker to return fast to do more work
+        % pw = 1 - in theory we don't need to wair for primaries, but if this
+        % node cannot access any primaries it would be good to treat this as an
+        % error and punish that peer relationship in the schedule (so that a
+        % snk node with access to primaries will manage more of the
+        % replication)
 
     true = riak_kv_util:is_x_deleted(RObj) == IsDeleted,
 
