@@ -422,7 +422,8 @@ repl_fetcher(WorkItem) ->
         end
     catch
         Type:Exception ->
-            lager:warning("Snk worker failed due to ~w ~w", [Type, Exception]),
+            lager:warning("Snk worker failed due to ~w with trace ~w", 
+                            [Type, erlang:get_stacktrace()]),
             done_work(WorkItem, false, {error, Type, Exception})
     end.
 

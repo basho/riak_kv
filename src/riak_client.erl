@@ -208,7 +208,10 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
 
     Timeout = recv_timeout(Options),
     R = wait_for_reqid(ReqId, Timeout),
-    LMD = riak_object:get_last_modified( riak_object:get_metadata(RObj)),
+    LMD =
+        lists:max(
+            lists:map(fun riak_object:get_last_modified/1, 
+                        riak_object:get_metadatas(RObj))),
     Reply = {R, LMD},
 
     case IsDeleted of

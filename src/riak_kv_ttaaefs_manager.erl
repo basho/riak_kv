@@ -603,17 +603,18 @@ generate_repairfun(ExchangeID, QueueName) ->
                     true ->
                         {SourceL, SinkC + 1};
                     false ->
-                        case vclock_dominates(SrcVC, SinkVCdecoded) of
-                            true ->
-                                case LogRepairs of
-                                    true ->
-                                        lager:info("Repair B=~w K=~w SrcVC=~w SnkVC=~w",
-                                                    [B, K, SrcVC, SinkVCdecoded]);
-                                    false ->
-                                        ok
-                                end,
+                        % If the vector clock in the source is not dominated
+                        % by the sink, then we should replicate if it differs
+                        case {vclock_equal(SrcVC, SinkVCdecoded),
+                                LogRepairs} of
+                            {false, true} ->
+                                lager:info(
+                                    "Repair B=~w K=~w SrcVC=~w SnkVC=~w",
+                                        [B, K, SrcVC, SinkVCdecoded]),
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
-                            false ->
+                            {false, false} ->
+                                {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
+                            {true, _} ->
                                 {SourceL, SinkC}
                         end
                 end
@@ -635,6 +636,13 @@ vclock_dominates(_SinkVC, none) ->
     true;
 vclock_dominates(SinkVC, SrcVC) ->
     vclock:dominates(SinkVC, SrcVC).
+
+vclock_equal(none, _VC1) ->
+    false;
+vclock_equal(_VC0, none) ->
+    false;
+vclock_equal(VC0, VC1) ->
+    vclock:equal(VC0, VC1).
 
 decode_clock(none) ->
     none;
