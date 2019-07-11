@@ -42,7 +42,8 @@
 
 %% API
 -export([start_link/0, get_stats/0,
-         update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1, produce_stats/0,
+         update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1,
+  produce_stats/0, get_values/1, get_app_stats/0, get_stats_status/0, get_stats_info/0,
          leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
@@ -56,13 +57,16 @@
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
--define(PFX, riak_core_stat:prefix()).
+-define(PFX, riak_stat:prefix()).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 register_stats() ->
-    riak_core_stat:register_stats(?APP, stats()).
+  register_stats(stats()).
+
+register_stats(Stats) ->
+  riak_stat:register(?APP, Stats).
 
 unregister_vnode_stats(Index) ->
     unregister_per_index(gets, Index),
@@ -74,10 +78,21 @@ unregister_vnode_stats(Index) ->
 get_stats() ->
     riak_kv_wm_stats:get_stats().
 
+get_values(Path) ->
+  riak_stat:get_app_stats(Path).
+
+get_app_stats() ->
+  riak_stat:get_app_stats(?APP).
+
+get_stats_status() ->
+  riak_stat:get_stats_status(?APP).
+
+get_stats_info() ->
+  riak_stat:get_stats_info(?APP).
 
 %% Creation of a dynamic stat _must_ be serialized.
-register_stat(Name, Type) ->
-    do_register_stat(Name, Type).
+%%register_stat(Name, Type) ->
+%%    do_register_stat(Name, Type).
 %% gen_server:call(?SERVER, {register, Name, Type}).
 
 update(Arg) ->
@@ -114,7 +129,7 @@ active_puts() ->
     counter_value([?PFX, ?APP, node, puts, fsm, active]).
 
 counter_value(Name) ->
-    case exometer:get_value(Name, [value]) of
+    case riak_stat_coordinator:get_datapoint(Name, [value]) of
 	{ok, [{value, N}]} ->
 	    N;
 	_ ->
@@ -134,10 +149,12 @@ init([]) ->
                                {clusteraae, spawn_link(?MODULE, monitor_loop, [clusteraae])}],
                    repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
-
-handle_call({register, Name, Type}, _From, State) ->
-    Rep = do_register_stat(Name, Type),
-    {reply, Rep, State}.
+%%
+%%handle_call({register, Name, Type}, _From, State) ->
+%%    Rep = do_register_stat(Name, Type),
+%%    {reply, Rep, State}.
+handle_call(_Req, _From, State) ->
+  {noreply, State}.
 
 handle_cast({re_register_stat, Arg}, State) ->
     %% To avoid massive message queues
@@ -177,188 +194,183 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @doc Update the given stat
 do_update({vnode_get, Idx, USecs}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, vnode, gets], 1),
-    ok = create_or_update([P, ?APP, vnode, gets, time], USecs, histogram),
-    do_per_index(gets, Idx, USecs);
+  ok = create_or_update([vnode, gets], 1, spiral),
+  ok = create_or_update([vnode, gets, time], USecs, histogram),
+  do_per_index(gets, Idx, USecs);
 do_update({vnode_head, Idx, USecs}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, vnode, heads], 1),
-    ok = create_or_update([P, ?APP, vnode, heads, time], USecs, histogram),
+    ok = create_or_update([vnode, heads], 1, spiral),
+    ok = create_or_update([vnode, heads, time], USecs, histogram),
     do_per_index(heads, Idx, USecs);
 do_update({vnode_put, Idx, USecs}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, vnode, puts], 1),
-    ok = create_or_update([P, ?APP, vnode, puts, time], USecs, histogram),
-    do_per_index(puts, Idx, USecs);
+  ok = create_or_update([vnode, puts], 1, spiral),
+  ok = create_or_update([vnode, puts, time], USecs, histogram),
+  do_per_index(puts, Idx, USecs);
 do_update(vnode_index_refresh) ->
-    P = ?PFX,
-    exometer:update([P, ?APP, vnode, index, refreshes], 1);
+  create_or_update([vnode, index, refreshes], 1, spiral);
 do_update(vnode_index_read) ->
-    P = ?PFX,
-    exometer:update([P, ?APP, vnode, index, reads], 1);
+  create_or_update([vnode, index, reads], 1, spiral);
 do_update({vnode_index_write, PostingsAdded, PostingsRemoved}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, vnode, index, writes], 1),
-    ok = exometer:update([P, ?APP, vnode, index, writes, postings], PostingsAdded),
-    exometer:update([P, ?APP, vnode, index, deletes, postings], PostingsRemoved);
+  update_stats([
+    {[vnode, inedx, writes], 1, spiral},
+    {[vnode, index, writes, postings], PostingsAdded, spiral},
+    {[vnode, index, deletes, postings], PostingsRemoved, spiral}
+  ]);
 do_update({vnode_index_delete, Postings}) ->
-    P = riak_core_stat:prefix(),
-    ok = exometer:update([P, ?APP, vnode, index, deletes], Postings),
-    exometer:update([P, ?APP, vnode, index, deletes, postings], Postings);
+  update_stats([
+    {[vnode, index, deletes], Postings, spiral},
+    {[vnode, index, deletes, postings], Postings, spiral}]);
 do_update({vnode_dt_update, Mod, Micros}) ->
-    P = ?PFX,
-    Type = riak_kv_crdt:from_mod(Mod),
-    ok = create_or_update([P, ?APP, vnode, Type, update], 1, spiral),
-    create_or_update([P, ?APP, vnode, Type, update, time], Micros, histogram);
+  Type = riak_kv_crdt:from_mod(Mod),
+  ok = create_or_update([vnode, Type, update], 1, spiral),
+  create_or_update([vnode, Type, update, time], Micros, histogram);
 do_update({riak_object_merge, undefined, Micros}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, object, merge], 1),
-    exometer:update([P, ?APP, object, merge, time], Micros);
+  update_stats([
+    {[object, merge], 1, spiral},
+    {[object, merge, time], Micros, histogram}]);
 do_update({riak_object_merge, Mod, Micros}) ->
-    P = ?PFX,
-    Type = riak_kv_crdt:from_mod(Mod),
-    ok = create_or_update([P, ?APP, object, Type, merge], 1, spiral),
-    create_or_update([P, ?APP, object, Type, merge, time], Micros, histogram);
+  Type = riak_kv_crdt:from_mod(Mod),
+  ok = create_or_update([object, Type, merge], 1, spiral),
+  create_or_update([object, Type, merge, time], Micros, histogram);
 do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, undefined}) ->
-    P = riak_core_stat:prefix(),
-    ok = exometer:update([P, ?APP, node, gets], 1),
-    ok = exometer:update([P, ?APP, node, gets, time], Microsecs),
-    ok = do_stages([P, ?APP, node, gets, time], Stages),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
+  update_stats([
+    {[node, gets], 1, spiral},
+    {[node, gets, time], Microsecs, histogram}]),
+  ok = do_stages([node, gets, time], Stages),
+  do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined});
 do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, undefined}) ->
-    P = riak_core_stat:prefix(),
-    ok = exometer:update([P, ?APP, node, gets], 1),
-    ok = exometer:update([P, ?APP, node, gets, time], Microsecs),
-    ok = exometer:update([P, ?APP, node, gets, siblings], NumSiblings),
-    ok = exometer:update([P, ?APP, node, gets, objsize], ObjSize),
-    ok = do_stages([P, ?APP, node, gets, time], Stages),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
+  update_stats([
+    {[node, gets], 1, spiral},
+    {[node, gets, time], Microsecs, historgram},
+    {[node, gets, siblings], NumSiblings, histogram},
+    {[node, gets, objsize], ObjSize, histogram}]),
+  ok = do_stages([node, gets, time], Stages),
+  do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize});
 do_update({get_fsm, Bucket, Microsecs, Stages, undefined, undefined, PerBucket, CRDTMod}) ->
-    P = riak_core_stat:prefix(),
-    Type = riak_kv_crdt:from_mod(CRDTMod),
-    ok = create_or_update([P, ?APP, node, gets, Type], 1, spiral),
-    ok = create_or_update([P, ?APP, node, gets, Type, time], Microsecs, histogram),
-    ok = do_stages([P, ?APP, node, gets, Type, time], Stages),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined, Type});
+  Type = riak_kv_crdt:from_mod(CRDTMod),
+  ok = create_or_update([node, gets, Type], 1, spiral),
+  ok = create_or_update([node, gets, Type, time], Microsecs, histogram),
+  ok = do_stages([node, gets, Type, time], Stages),
+  do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, undefined, undefined, Type});
 do_update({get_fsm, Bucket, Microsecs, Stages, NumSiblings, ObjSize, PerBucket, CRDTMod}) ->
-    P = ?PFX,
-    Type = riak_kv_crdt:from_mod(CRDTMod),
-    ok = create_or_update([P, ?APP, node, gets, Type], 1, spiral),
-    ok = create_or_update([P, ?APP, node, gets, Type, time], Microsecs, histogram),
-    ok = create_or_update([P, ?APP, node, gets, Type, siblings], NumSiblings, histogram),
-    ok = create_or_update([P, ?APP, node, gets, Type, objsize], ObjSize, histogram),
-    ok = do_stages([P, ?APP, node, gets, Type, time], Stages),
-    do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type});
-do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, undefined}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, node, puts], 1),
-    ok = exometer:update([P, ?APP, node, puts, time], Microsecs),
-    ok = do_stages([P, ?APP, node, puts, time], Stages),
-    do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
-do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
-    P = ?PFX,
-    Type = riak_kv_crdt:from_mod(CRDTMod),
-    ok = create_or_update([P, ?APP, node, puts, Type], 1, spiral),
-    ok = create_or_update([P, ?APP, node, puts, Type, time], Microsecs, histogram),
-    ok = do_stages([P, ?APP, node, puts, Type, time], Stages),
-    do_put_bucket(PerBucket, {Bucket, Microsecs, Stages, Type});
+  Type = riak_kv_crdt:from_mod(CRDTMod),
+  ok = create_or_update([node, gets, Type], 1, spiral),
+  ok = create_or_update([node, gets, Type, time], Microsecs, histogram),
+  ok = create_or_update([node, gets, Type, siblings], NumSiblings, histogram),
+  ok = create_or_update([node, gets, Type, objsize], ObjSize, histogram),
+  ok = do_stages([node, gets, Type, time], Stages),
+  do_get_bucket(PerBucket, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type});
+do_update({put_fsm_time, Bucket, Microsecs, Stages, PerBucket, undefined}) ->
+  update_stats([
+    {[node, puts], 1, spiral},
+    {[node, puts, time], Microsecs, histogram}]),
+  ok = do_stages([node, puts, time], Stages),
+  do_put_bucket(PerBucket, {Bucket, Microsecs, Stages});
+do_update({put_fsm_time, Bucket, Microsecs, Stages, PerBucket, CRDTMod}) ->
+  Type = riak_kv_crdt:from_mod(CRDTMod),
+  ok = create_or_update([node, puts, Type], 1, spiral),
+  ok = create_or_update([node, puts, Type, time], Microsecs, histogram),
+  ok = do_stages([node, puts, Type, time], Stages),
+  do_put_bucket(PerBucket, {Bucket, Microsecs, Stages, Type});
 do_update({read_repairs, Indices, Preflist}) ->
-    ok = exometer:update([?PFX, ?APP, node, gets, read_repairs], 1),
-    do_repairs(Indices, Preflist);
+  create_or_update([node, gets, read_repairs], 1, spiral),
+  do_repairs(Indices, Preflist);
 do_update(skipped_read_repairs) ->
-    ok = exometer:update([?PFX, ?APP, node, gets, skipped_read_repairs], 1);
+  create_or_update([node, gets, skipped_read_repairs], 1, spiral);
 do_update(coord_redir) ->
-    exometer:update([?PFX, ?APP, node, puts, coord_redirs], 1);
+  create_or_update([node, puts, coord_redirs], 1, counter);
 do_update(mapper_start) ->
-    exometer:update([?PFX, ?APP, mapper_count], 1);
+  create_or_update([mapper_count], 1, counter);
 do_update(mapper_end) ->
-    exometer:update([?PFX, ?APP, mapper_count], -1);
+  create_or_update([mapper_count], -1, counter);
 do_update(precommit_fail) ->
-    exometer:update([?PFX, ?APP, precommit_fail], 1);
+  create_or_update([precommit_fail], 1, counter);
 do_update(postcommit_fail) ->
-    exometer:update([?PFX, ?APP, postcommit_fail], 1);
+  create_or_update([postcommit_fail], 1, counter);
 do_update(write_once_merge) ->
-    exometer:update([?PFX, ?APP, write_once_merge], 1);
+  create_or_update([write_once_merge], 1, counter);
 do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
-    exometer:update([?PFX, ?APP, node, Type, fsm, active], 1);
-do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts  ->
-    exometer:update([?PFX, ?APP, node, Type, fsm, active], -1);
+  create_or_update([node, Type, fsm, active], 1, counter);
+do_update({fsm_exit, Type}) when Type =:= gets; Type =:= puts ->
+  create_or_update([node, Type, fsm, active], -1, counter);
 do_update({fsm_error, Type}) when Type =:= gets; Type =:= puts ->
-    ok = do_update({fsm_exit, Type}),
-    exometer:update([?PFX, ?APP, node, Type, fsm, errors], 1);
+  ok = do_update({fsm_exit, Type}),
+  create_or_update([node, Type, fsm, errors], 1, spiral);
 do_update({index_create, Pid}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, index, fsm, create], 1),
-    ok = exometer:update([P, ?APP, index, fsm, active], 1),
-    add_monitor(index, Pid),
-    ok;
+  update_stats([
+    {[index, fsm, create], 1, spiral},
+    {[index, fsm, active], 1, counter}]),
+  add_monitor(index, Pid),
+  ok;
 do_update(index_create_error) ->
-    exometer:update([?PFX, ?APP, index, fsm, create, error], 1);
+  create_or_update([index, fsm, create, error], 1, spiral);
+
 do_update({clusteraae_create, Pid}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, clusteraae, fsm, create], 1),
-    ok = exometer:update([P, ?APP, clusteraae, fsm, active], 1),
+    update_stats([
+      {[clusteraae, fsm, create], 1, spiral},
+      {[clusteraae, fsm, active], 1, counter}]),
     add_monitor(clusteraae, Pid),
     ok;
 do_update(clusteraae_create_error) ->
-    exometer:update([?PFX, ?APP, clusteraae, fsm, create, error], 1);
+    create_or_update([clusteraae, fsm, create, error], 1, spiral);
+
 do_update({list_create, Pid}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, list, fsm, create], 1),
-    ok = exometer:update([P, ?APP, list, fsm, active], 1),
-    add_monitor(list, Pid),
-    ok;
+  update_stats([
+    {[list, fsm, create], 1, spiral},
+    {[list, fsm, active], 1, counter}]),
+  add_monitor(list, Pid),
+  ok;
 do_update(list_create_error) ->
-    exometer:update([?PFX, ?APP, list, fsm, create, error], 1);
+  create_or_update([list, fsm, create, error], 1, spiral);
 do_update({fsm_destroy, Type}) ->
-    exometer:update([?PFX, ?APP, Type, fsm, active], -1);
+  create_or_update([Type, fsm, active], -1, counter);
 do_update({Type, actor_count, Count}) ->
-    exometer:update([?PFX, ?APP, Type, actor_count], Count);
+  create_or_update([Type, actor_count], Count, histogram);
 do_update({Type, bytes, Bytes}) ->
-    ok = exometer:update([?PFX, ?APP, Type, bytes], Bytes),
-    exometer:update([?PFX, ?APP, Type, bytes, total], Bytes);
+  update_stats([
+    {[Type, bytes], Bytes, spiral},
+    {[Type, bytes, total], Bytes, historgram}]);
 do_update(late_put_fsm_coordinator_ack) ->
-    exometer:update([?PFX, ?APP, late_put_fsm_coordinator_ack], 1);
+  create_or_update([late_put_fsm_coordinator_ack], 1, counter);
 do_update({consistent_get, _Bucket, Microsecs, undefined}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, consistent, gets], 1),
-    ok = exometer:update([P, ?APP, consistent, gets, time], Microsecs);
+  update_stats([
+    {[consistent, gets], 1, spiral},
+    {[consistent, gets, time], Microsecs, histogram}]);
 do_update({consistent_get, _Bucket, Microsecs, ObjSize}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, consistent, gets], 1),
-    ok = exometer:update([P, ?APP, consistent, gets, time], Microsecs),
-    create_or_update([P, ?APP, consistent, gets, objsize], ObjSize, histogram);
+  do_update({consistent_get, _Bucket, Microsecs, undefined}),
+  create_or_update([consistent, gets, objsize], ObjSize, histogram);
 do_update({consistent_put, _Bucket, Microsecs, undefined}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, consistent, puts], 1),
-    ok = exometer:update([P, ?APP, consistent, puts, time], Microsecs);
+  update_stats([
+    {[consistent, puts], 1, spiral},
+    {[consistent, puts, time], Microsecs, histogram}]);
 do_update({consistent_put, _Bucket, Microsecs, ObjSize}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, consistent, puts], 1),
-    ok = exometer:update([P, ?APP, consistent, puts, time], Microsecs),
-    create_or_update([P, ?APP, consistent, puts, objsize], ObjSize, histogram);
+  do_update({consistent_put, _Bucket, Microsecs, undefined}),
+  create_or_update([consistent, puts, objsize], ObjSize, histogram);
 do_update({write_once_put, Microsecs, ObjSize}) ->
-    P = ?PFX,
-    ok = exometer:update([P, ?APP, write_once, puts], 1),
-    ok = exometer:update([P, ?APP, write_once, puts, time], Microsecs),
-    create_or_update([P, ?APP, write_once, puts, objsize], ObjSize, histogram);
+  update_stats([
+    {[write_once, puts], 1, spiral},
+    {[write_once, puts, time], Microsecs, histogram}]),
+  create_or_update([write_once, puts, objsize], ObjSize, histogram);
 do_update(coord_local_unloaded) ->
-    exometer:update([?PFX, ?APP, node, puts, coord_local_unloaded], 1);
+    create_or_update([node, puts, coord_local_unloaded], 1, counter);
 do_update(coord_redir_loaded_local) ->
-    exometer:update([?PFX, ?APP, node, puts, coord_redir_loaded_local], 1);
+    create_or_update([node, puts, coord_redir_loaded_local], 1, counter);
 do_update(coord_local_soft_loaded) ->
-    exometer:update([?PFX, ?APP, node, puts, coord_local_soft_loaded], 1);
+    create_or_update([node, puts, coord_local_soft_loaded], 1, counter);
 do_update(coord_redir_unloaded) ->
-    exometer:update([?PFX, ?APP, node, puts, coord_redir_unloaded], 1);
+    create_or_update([node, puts, coord_redir_unloaded], 1, counter);
 do_update(coord_redir_least_loaded) ->
-    exometer:update([?PFX, ?APP, node, puts, coord_redir_least_loaded], 1);
+    create_or_update([node, puts, coord_redir_least_loaded], 1, counter);
 do_update(soft_loaded_vnode_mbox) ->
-    exometer:update([?PFX, ?APP, node, puts, soft_loaded_vnode_mbox], 1);
+    create_or_update([node, puts, soft_loaded_vnode_mbox], 1, counter);
 do_update(vnode_mbox_check_timeout) ->
-    exometer:update([?PFX, ?APP, node, puts, vnode_mbox_check_timeout], 1).
+    create_or_update([node, puts, vnode_mbox_check_timeout], 1, counter).
 
 %% private
+
+update_stats(Stats) ->
+  lists:foreach(fun({Name, Arg, Type}) ->
+    create_or_update(Name, Arg, Type)
+                end, Stats).
 
 add_monitor(Type, Pid) ->
     gen_server:cast(?SERVER, {monitor, Type, Pid}).
@@ -374,77 +386,73 @@ monitor_loop(Type) ->
 
 %% Per index stats (by op)
 do_per_index(Op, Idx, USecs) ->
-    IdxAtom = list_to_atom(integer_to_list(Idx)),
-    P = riak_core_stat:prefix(),
-    create_or_update([P, ?APP, vnode, Op, IdxAtom], 1, spiral),
-    create_or_update([P, ?APP, vnode, Op, time, IdxAtom], USecs, histogram).
+  IdxAtom = list_to_atom(integer_to_list(Idx)),
+  create_or_update([vnode, Op, IdxAtom], 1, spiral),
+  create_or_update([vnode, Op, time, IdxAtom], USecs, histogram).
 
 unregister_per_index(Op, Idx) ->
-    IdxAtom = list_to_atom(integer_to_list(Idx)),
-    P = riak_core_stat:prefix(),
-    exometer:delete([P, ?APP, vnode, Op, IdxAtom]),
-    exometer:delete([P, ?APP, vnode, Op, time, IdxAtom]).
+  IdxAtom = list_to_atom(integer_to_list(Idx)),
+  riak_stat:unregister(?APP, Op, IdxAtom, vnode),
+  riak_stat:unregister([Op, time], IdxAtom, vnode, ?APP).
 
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
-    ok;
-do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize}=Args) ->
-    P = riak_core_stat:prefix(),
-    case exometer:update([P, ?APP, node, gets, Bucket], 1) of
-        ok ->
-            [exometer:update([P, ?APP, node, gets, Dimension, Bucket], Arg)
-             || {Dimension, Arg} <- [{time, Microsecs},
-                                     {siblings, NumSiblings},
-                                     {objsize, ObjSize}], Arg /= undefined],
-            do_stages([P, ?APP, node, gets, time, Bucket], Stages);
-        {error, not_found} ->
-            exometer:new([P, ?APP, node, gets, Bucket], spiral),
-            [register_stat([P, ?APP, node, gets, Dimension, Bucket], histogram) || Dimension <- [time,
-                                                                                                 siblings,
-                                                                                                 objsize]],
-            do_get_bucket(true, Args)
-    end;
-do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type}=Args) ->
-    P = riak_core_stat:prefix(),
-    case exometer:update([P, ?APP, node, gets, Type, Bucket], 1) of
-	ok ->
-	    [exometer:update([P, ?APP, node, gets, Dimension, Bucket], Arg)
-	     || {Dimension, Arg} <- [{time, Microsecs},
-				     {siblings, NumSiblings},
-				     {objsize, ObjSize}], Arg /= undefined],
-	    do_stages([P, ?APP, node, gets, Type, time, Bucket], Stages);
-	{error, not_found} ->
-	    exometer:new([P, ?APP, node, gets, Type, Bucket], spiral),
-	    [register_stat([P, ?APP, node, gets, Type, Dimension, Bucket], histogram)
-	     || Dimension <- [time, siblings, objsize]],
-	    do_get_bucket(true, Args)
-    end.
+  ok;
+do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize} = Args) ->
+  case create_or_update([node, gets, Bucket], 1, spiral) of
+    ok ->
+      Stats = [{[node, gets, Dimension, Bucket], Arg}
+        || {Dimension, Arg} <- [{time, Microsecs},
+          {siblings, NumSiblings},
+          {objsize, ObjSize}], Arg /= undefined],
+      update_stats(Stats),
+      do_stages([node, gets, time, Bucket], Stages);
+    {error, not_found} ->
+      register_stats([{[node, gets, Bucket], spiral}]),
+      [register_stats({[node, gets, Dimension, Bucket], histogram})
+        || Dimension <- [time, siblings, objsize]],
+      do_get_bucket(true, Args)
+  end;
+do_get_bucket(true, {Bucket, Microsecs, Stages, NumSiblings, ObjSize, Type} = Args) ->
+  case create_or_update([node, gets, Type, Bucket], 1, spiral) of
+    ok ->
+      Stats = [{[node, gets, Dimension, Bucket], Arg}
+        || {Dimension, Arg} <- [{time, Microsecs},
+          {siblings, NumSiblings},
+          {objsize, ObjSize}], Arg /= undefined],
+      update_stats(Stats),
+      do_stages([node, gets, Type, time, Bucket], Stages);
+    {error, not_found} ->
+      register_stats([{[node, gets, Type, Bucket], spiral}]),
+      [register_stats([{[node, gets, Type, Dimension, Bucket], histogram}])
+        || Dimension <- [time, siblings, objsize]],
+      do_get_bucket(true, Args)
+  end.
 
 %% per bucket put_fsm stats
 do_put_bucket(false, _) ->
-    ok;
-do_put_bucket(true, {Bucket, Microsecs, Stages}=Args) ->
-    P = riak_core_stat:prefix(),
-    case exometer:update([P, ?APP, node, puts, Bucket], 1) of
-        ok ->
-            exometer:update([P, ?APP, node, puts, time, Bucket], Microsecs),
-            do_stages([P, ?APP, node, puts, time, Bucket], Stages);
-        {error, _} ->
-            register_stat([P, ?APP, node, puts, Bucket], spiral),
-            register_stat([P, ?APP, node, puts, time, Bucket], histogram),
-            do_put_bucket(true, Args)
-    end;
-do_put_bucket(true, {Bucket, Microsecs, Stages, Type}=Args) ->
-    P = riak_core_stat:prefix(),
-    case exometer:update([P, ?APP, node, puts, Type, Bucket], 1) of
-	ok ->
-	    exometer:update([P, ?APP, node, puts, Type, time, Bucket], Microsecs),
-	    do_stages([P, ?APP, node, puts, Type, time, Bucket], Stages);
-	{error, not_found} ->
-	    register_stat([P, ?APP, node, puts, Type, Bucket], spiral),
-	    register_stat([P, ?APP, node, puts, Type, time, Bucket], histogram),
-	    do_put_bucket(true, Args)
-    end.
+  ok;
+do_put_bucket(true, {Bucket, Microsecs, Stages} = Args) ->
+  case create_or_update([node, puts, Bucket], 1, spiral) of
+    ok ->
+      create_or_update([node, puts, time, Bucket], Microsecs, histogram),
+      do_stages([node, puts, time, Bucket], Stages);
+    {error, _} ->
+      register_stats([
+        {[node, puts, Bucket], spiral},
+        {[node, puts, time, Bucket], histogram}]),
+      do_put_bucket(true, Args)
+  end;
+do_put_bucket(true, {Bucket, Microsecs, Stages, Type} = Args) ->
+  case create_or_update([node, puts, Type, Bucket], 1, Type) of
+    ok ->
+      create_or_update([node, puts, Type, time, Bucket], Microsecs, Type),
+      do_stages([node, puts, Type, time, Bucket], Stages);
+    {error, not_found} ->
+      register_stats([{[node, puts, Type, Bucket], spiral},
+        {[node, puts, Type, time, Bucket], histogram}]),
+      do_put_bucket(true, Args)
+  end.
 
 
 %% Path is list that provides a conceptual path to a stat
@@ -464,13 +472,12 @@ do_stages(Path, [{Stage, Time}|Stages]) ->
 %% The indexes are from get core [{Index, Reason::notfound|outofdate}]
 %% preflist is a preflist of [{{Index, Node}, Type::primary|fallback}]
 do_repairs(Indices, Preflist) ->
-    Pfx = riak_core_stat:prefix(),
     lists:foreach(fun({{Idx, Node}, Type}) ->
                           case proplists:get_value(Idx, Indices) of
                               undefined ->
                                   ok;
                               Reason ->
-                                  create_or_update([Pfx, ?APP, node, gets, read_repairs, Node, Type, Reason], 1, spiral)
+                                  create_or_update([node, gets, read_repairs, Node, Type, Reason], 1, spiral)
                           end
                   end,
                   Preflist).
@@ -478,12 +485,11 @@ do_repairs(Indices, Preflist) ->
 %% for dynamically created / dimensioned stats
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
-    exometer:update_or_create(Name, UpdateVal, Type, []).
+  riak_stat:update(lists:flatten([?PFX, ?APP | [Name]]), UpdateVal, Type).
 
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
 stats() ->
-    Pfx = riak_core_stat:prefix(),
 
     [%% vnode stats
      {[vnode, gets], spiral, [], [{one  , vnode_gets},
@@ -829,57 +835,58 @@ stats() ->
       [], [{ring_members       , ring_members},
            {ring_num_partitions, ring_num_partitions},
            {ring_ownership     , ring_ownership}]}
-     | read_repair_aggr_stats(Pfx)] ++ bc_stats(Pfx).
+      | read_repair_aggr_stats()] ++ bc_stats().
 
-read_repair_aggr_stats(Pfx) ->
-    Spec = fun(Type, Reason) ->
-                   {function,exometer,aggregate,
-                    [ [{{[Pfx,?APP,node,gets,read_repairs,'_',Type,Reason],'_','_'},
-                        [], [true]}], [one,count] ], proplist, [one,count]}
-           end,
-    [
-     {[read_repairs,primary,notfound], Spec(primary, notfound), [],
-      [{one  , read_repairs_primary_notfound_one},
-       {count, read_repairs_primary_notfound_count}]},
-     {[read_repairs,primary,outofdate], Spec(primary, outofdate), [],
-      [{one  , read_repairs_primary_outofdate_one},
-       {count, read_repairs_primary_outofdate_count}]},
-     {[read_repairs,fallback,notfound], Spec(fallback,notfound), [],
-      [{one  , read_repairs_fallback_notfound_one},
-       {count, read_repairs_fallback_notfound_count}]},
-     {[read_repairs,fallback,outofdate], Spec(fallback,outofdate), [],
-      [{one  , read_repairs_fallback_outofdate_one},
-       {count, read_repairs_fallback_outofdate_count}]}
-    ].
+read_repair_aggr_stats() ->
+  Spec = fun(Type, Reason) ->
+    {function, exometer, aggregate,
+      [[{{[?PFX, ?APP, node, gets, read_repairs, '_', Type, Reason], '_', '_'},
+        [], [true]}], [one, count]], proplist, [one, count]}
+         end,
+  [
+    {[read_repairs, primary, notfound], Spec(primary, notfound), [],
+      [{one, read_repairs_primary_notfound_one},
+        {count, read_repairs_primary_notfound_count}]},
+    {[read_repairs, primary, outofdate], Spec(primary, outofdate), [],
+      [{one, read_repairs_primary_outofdate_one},
+        {count, read_repairs_primary_outofdate_count}]},
+    {[read_repairs, fallback, notfound], Spec(fallback, notfound), [],
+      [{one, read_repairs_fallback_notfound_one},
+        {count, read_repairs_fallback_notfound_count}]},
+    {[read_repairs, fallback, outofdate], Spec(fallback, outofdate), [],
+      [{one, read_repairs_fallback_outofdate_one},
+        {count, read_repairs_fallback_outofdate_count}]}
+  ].
 
-bc_stats(Pfx) ->
-    Spec = fun(N, M, F, As) ->
-                   {[Pfx,?APP,bc,N], {function, M, F, As, match, value}, [], [{value, N}]}
-           end,
-    [Spec(N, M, F, As) ||
-        {N, M, F, As} <- [{nodename, erlang, node, []},
-                          {connected_nodes, erlang, nodes, []},
-                          {sys_driver_version, riak_kv_stat_bc, sys_driver_version, []},
-                          {sys_global_heaps_size, ?MODULE, value, [deprecated]},
-                          {sys_heap_type, erlang, system_info, [heap_type]},
-                          {sys_logical_processors, erlang, system_info, [logical_processors]},
-                          {sys_monitor_count, riak_kv_stat_bc, sys_monitor_count, []},
-                          {sys_otp_release, riak_kv_stat_bc, otp_release, []},
-                          {sys_port_count, erlang, system_info, [port_count]},
-                          {sys_process_count, erlang, system_info, [process_count]},
-                          {sys_smp_support, erlang, system_info, [smp_support]},
-                          {sys_system_version, riak_kv_stat_bc, system_version, []},
-                          {sys_system_architecture, riak_kv_stat_bc, system_architecture, []},
-                          {sys_threads_enabled, erlang, system_info, [threads]},
-                          {sys_thread_pool_size, erlang, system_info, [thread_pool_size]},
-                          {sys_wordsize, erlang, system_info, [wordsize]}]].
+bc_stats() ->
+  Spec = fun(N, M, F, As) ->
+    {[?PFX, ?APP, bc, N], {function, M, F, As, match, value}, [], [{value, N}]}
+         end,
+  [Spec(N, M, F, As) ||
+    {N, M, F, As} <- [{nodename, erlang, node, []},
+      {connected_nodes, erlang, nodes, []},
+      {sys_driver_version, riak_kv_stat_bc, sys_driver_version, []},
+      {sys_global_heaps_size, ?MODULE, value, [deprecated]},
+      {sys_heap_type, erlang, system_info, [heap_type]},
+      {sys_logical_processors, erlang, system_info, [logical_processors]},
+      {sys_monitor_count, riak_kv_stat_bc, sys_monitor_count, []},
+      {sys_otp_release, riak_kv_stat_bc, otp_release, []},
+      {sys_port_count, erlang, system_info, [port_count]},
+      {sys_process_count, erlang, system_info, [process_count]},
+      {sys_smp_support, erlang, system_info, [smp_support]},
+      {sys_system_version, riak_kv_stat_bc, system_version, []},
+      {sys_system_architecture, riak_kv_stat_bc, system_architecture, []},
+      {sys_threads_enabled, erlang, system_info, [threads]},
+      {sys_thread_pool_size, erlang, system_info, [thread_pool_size]},
+      {sys_wordsize, erlang, system_info, [wordsize]}]].
+
 
 %% Wrapper for exometer function stats.
 value(V) ->
     V.
 
-do_register_stat(Name, Type) ->
-    exometer:new(Name, Type).
+%%do_register_stat(Name, Type) ->
+%%    exometer:new(Name, Type).
 
 %% @doc produce the legacy blob of stats for display.
 produce_stats() ->
@@ -982,14 +989,14 @@ stat_repair_loop(Dad) ->
 leveldb_rbe_test_() ->
     {foreach,
      fun() ->
-	     exometer:start(),
+	     riak_stat_exometer:start(),
              meck:new(riak_core_ring_manager),
              meck:new(riak_core_ring),
              meck:new(riak_kv_vnode),
              meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, [fake_ring]} end)
      end,
      fun(_) ->
-	     exometer:stop(),
+	     riak_stat_exometer:stop(),
              meck:unload(riak_kv_vnode),
              meck:unload(riak_core_ring),
              meck:unload(riak_core_ring_manager)
@@ -1002,7 +1009,7 @@ leveldb_rbe_test_() ->
     }.
 
 start_exometer_test_env() ->
-    ok = exometer:start(),
+    ok = riak_stat_exometer:start(),
     ok = meck:new(riak_core_ring_manager),
     ok = meck:new(riak_core_ring),
     ok = meck:new(riak_kv_vnode),
@@ -1010,7 +1017,7 @@ start_exometer_test_env() ->
     meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, [fake_ring]} end).
 
 stop_exometer_test_env() ->
-    ok = exometer:stop(),
+    ok = riak_stat_exometer:stop(),
     ok = meck:unload(riak_kv_vnode),
     ok = meck:unload(riak_core_ring),
     meck:unload(riak_core_ring_manager).
@@ -1020,7 +1027,7 @@ create_or_update_histogram_test() ->
     try
         Metric = [riak_kv,put_fsm,counter,time],
         ok = repeat_create_or_update(Metric, 1, histogram, 100),
-        ?assertNotEqual(exometer:get_value(Metric), 0),
+        ?assertNotEqual(riak_stat:get_value(Metric), 0),
         Stats = get_stats(),
         %%lager:info("stats prop list ~s", [Stats]),
         ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0)

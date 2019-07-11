@@ -89,7 +89,7 @@ setup() ->
     %% Exometer starts lager.  Therefore, we need start it before lager to ensure
     %% that cconfiguration customizations in this test case are not inadvertantly
     %% overwritten ...
-    ok = exometer:start(),
+    ok = riak_stat_exometer:start(),
     application:stop(lager),
     application:load(lager),
     application:set_env(lager, handlers,

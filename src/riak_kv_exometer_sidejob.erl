@@ -28,7 +28,7 @@
 
 -module(riak_kv_exometer_sidejob).
 
--behaviour(exometer_entry).
+-behaviour(exometer_entry). %% TODO 25: look into how this works
 
 %% API
 -export([new_entry/3, new_entry/4]).
@@ -48,9 +48,11 @@ new_entry(Name, SjName, AliasPrefix, Opts) ->
     exometer_new(Name, SjName, [{aliases, aliases(AliasPrefix)}|Opts]).
 
 exometer_new(Name, SjName, Opts) ->
-    exometer:re_register(Name, ad_hoc, [{module, ?MODULE},
-				{type, sidejob},
-				{sj_name, SjName}|Opts]).
+  riak_stat:register(riak_kv_exometer_sidejob,
+    [{Name, ad_hoc, Opts, [{sj_name, SjName}, {module, ?MODULE}, {type, sidejob}]}]).
+%%    exometer:re_register(Name, ad_hoc, [{module, ?MODULE},
+%%				{type, sidejob},
+%%				{sj_name, SjName}|Opts]).
 
 aliases(Prefix) ->
     [{DP, join(Prefix, Suffix)}

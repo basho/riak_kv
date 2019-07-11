@@ -92,31 +92,8 @@ get_stats(console) ->
         ++ riak_kv_stat_bc:app_stats().
 
 aliases() ->
-    Grouped = exometer_alias:prefix_foldl(
-                <<>>,
-                fun(Alias, Entry, DP, Acc) ->
-                        orddict:append(Entry, {DP, Alias}, Acc)
-                end, orddict:new()),
-    lists:keysort(
-      1,
-      lists:foldl(
-        fun({K, DPs}, Acc) ->
-                case exometer:get_value(K, [D || {D,_} <- DPs]) of
-                    {ok, Vs} when is_list(Vs) ->
-                        lists:foldr(fun({D,V}, Acc1) ->
-                                            {_,N} = lists:keyfind(D,1,DPs),
-                                            [{N,V}|Acc1]
-                                    end, Acc, Vs);
-                    Other ->
-                        Val = case Other of
-                                  {ok, disabled} -> undefined;
-                                  _ -> 0
-                              end,
-                        lists:foldr(fun({_,N}, Acc1) ->
-                                            [{N,Val}|Acc1]
-                                    end, Acc, DPs)
-                end
-        end, [], orddict:to_list(Grouped))).
+  Grouped = riak_stat_exometer:aliases(prefix_foldl, []),
+  riak_stat_exometer:alias(Grouped). %% TODO 2.1: move this into riak_stat
 
 
 expand_disk_stats([{disk, Stats}]) ->
