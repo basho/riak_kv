@@ -129,7 +129,7 @@ active_puts() ->
     counter_value([?PFX, ?APP, node, puts, fsm, active]).
 
 counter_value(Name) ->
-    case riak_stat_coordinator:get_datapoint(Name, [value]) of
+    case riak_stat:get_value(Name) of
 	{ok, [{value, N}]} ->
 	    N;
 	_ ->
@@ -513,7 +513,7 @@ stats() ->
                                            {95    , vnode_put_fsm_time_95},
                                            {99    , vnode_put_fsm_time_99},
                                            {max   , vnode_put_fsm_time_100}]},
-     {[vnode, index, refreshes], spiral, [], [{one  ,vnode_index_refreshes},
+     {[vnode, index, refreshes], spiral, [], [{one  , vnode_index_refreshes},
                                               {count, vnode_index_refreshes_total}]},
      {[vnode, index, reads], spiral, [], [{one  , vnode_index_reads},
                                           {count, vnode_index_reads_total}]},
