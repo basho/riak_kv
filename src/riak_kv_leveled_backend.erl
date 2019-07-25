@@ -104,6 +104,7 @@ capabilities(_, _) ->
 start(Partition, Config) ->
     DataRoot = app_helper:get_prop_or_env(data_root, Config, leveled),
     MJS = app_helper:get_prop_or_env(journal_size, Config, leveled),
+    MJC = app_helper:get_prop_or_env(journal_objectcount, Config, leveled),
     BCS = app_helper:get_prop_or_env(cache_size, Config, leveled),
     PCS = app_helper:get_prop_or_env(penciller_cache_size, Config, leveled),
     SYS = app_helper:get_prop_or_env(sync_strategy, Config, leveled),
@@ -129,6 +130,7 @@ start(Partition, Config) ->
             DBid = Partition div RingIndexInc,
             StartOpts = [{root_path, DataDir},
                             {max_journalsize, MJS},
+                            {max_journalobjectcount, MJC},
                             {cache_size, BCS},
                             {max_pencillercachesize, PCS},
                             {sync_strategy, SYS},
