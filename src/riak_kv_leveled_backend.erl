@@ -104,6 +104,7 @@ capabilities(_, _) ->
 start(Partition, Config) ->
     DataRoot = app_helper:get_prop_or_env(data_root, Config, leveled),
     MJS = app_helper:get_prop_or_env(journal_size, Config, leveled),
+    MJC = app_helper:get_prop_or_env(journal_objectcount, Config, leveled),
     BCS = app_helper:get_prop_or_env(cache_size, Config, leveled),
     PCS = app_helper:get_prop_or_env(penciller_cache_size, Config, leveled),
     SYS = app_helper:get_prop_or_env(sync_strategy, Config, leveled),
@@ -118,6 +119,7 @@ start(Partition, Config) ->
     TOS = app_helper:get_prop_or_env(snapshot_timeout_short, Config, leveled),
     TOL = app_helper:get_prop_or_env(snapshot_timeout_long, Config, leveled),
     LOL = app_helper:get_prop_or_env(log_level, Config, leveled),
+    PCL = app_helper:get_prop_or_env(ledger_pagecachelevel, Config leveled),
 
     BackendPause = app_helper:get_env(riak_kv, backend_pause_ms, ?PAUSE_TIME),
 
@@ -129,8 +131,10 @@ start(Partition, Config) ->
             DBid = Partition div RingIndexInc,
             StartOpts = [{root_path, DataDir},
                             {max_journalsize, MJS},
+                            {max_journalobjectcount, MJC},
                             {cache_size, BCS},
                             {max_pencillercachesize, PCS},
+                            {ledger_preloadpagecache_level, PCL},
                             {sync_strategy, SYS},
                             {compression_method, CMM},
                             {compression_point, CMP},
