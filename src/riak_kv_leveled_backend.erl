@@ -119,7 +119,7 @@ start(Partition, Config) ->
     TOS = app_helper:get_prop_or_env(snapshot_timeout_short, Config, leveled),
     TOL = app_helper:get_prop_or_env(snapshot_timeout_long, Config, leveled),
     LOL = app_helper:get_prop_or_env(log_level, Config, leveled),
-    PCL = app_helper:get_prop_or_env(ledger_pagecachelevel, Config leveled),
+    PCL = app_helper:get_prop_or_env(ledger_pagecachelevel, Config, leveled),
 
     BackendPause = app_helper:get_env(riak_kv, backend_pause_ms, ?PAUSE_TIME),
 
