@@ -96,7 +96,7 @@
               bucketprops,  %% proplist() - properties of the bucket
               method,       %% atom() - HTTP method for the request
               api_version,  %% non_neg_integer() - old or new http api
-              security     %% security context
+              security      %% security context
              }).
 -type context() :: #ctx{}.
 

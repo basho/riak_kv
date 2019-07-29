@@ -92,8 +92,8 @@ get_stats(console) ->
         ++ riak_kv_stat_bc:app_stats().
 
 aliases() ->
-  Grouped = riak_stat_exometer:aliases(prefix_foldl, []),
-  riak_stat_exometer:alias(Grouped). %% TODO 2.1: move this into riak_stat
+  Grouped = riak_stat_coordinator:aliases(prefix_foldl, []),
+  riak_stat_coordinator:alias(Grouped).
 
 
 expand_disk_stats([{disk, Stats}]) ->
