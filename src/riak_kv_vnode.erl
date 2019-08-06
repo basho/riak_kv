@@ -428,14 +428,14 @@ tictac_returnfun(Partition, RebuildType) ->
     ReturnFun.
 
 
--spec tictac_rebuild(binary(), binary(), riak_object:riak_object()) -> 
+-spec tictac_rebuild(binary(), binary(), binary()) -> 
             {riak_kv_util:index_n(), vclock:vclock()}.
 %% @doc
 %% Return a function that takes [B, K, v] as arguements and converts that into
 %% a {Preflist, Clock} output
 tictac_rebuild(B, K, V) ->
     IndexN = preflistfun(B, K),
-    Clock = riak_object:vclock(V),
+    Clock = element(1, riak_object:summary_from_binary(V)),
     {IndexN, Clock}.
 
 -spec rebuildtrees_workerfun(partition(), state()) -> fun().
@@ -1569,7 +1569,11 @@ handle_coverage_aaefold(Query, InitAcc, Nval,
         end,
     handle_aaefold(Query, InitAcc, Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
-                    State).
+                    State);
+handle_coverage_aaefold(_Q, InitAcc, _Nval, _Filter, Sender, State) ->
+    lager:warning("Attempt to aaefold on vnode with Tictac AAE disabled"),
+    riak_core_vnode:reply(Sender, InitAcc),
+    {noreply, State}.
 
 handle_aaefold({merge_root_nval, Nval}, 
                     _InitAcc, Nval,

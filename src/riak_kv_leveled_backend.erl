@@ -137,6 +137,7 @@ start(Partition, Config) ->
                             {log_level, LOL},
                             {database_id, DBid},
                             {max_run_length, MRL},
+                            {database_id, DBid},
                             {maxrunlength_compactionpercentage, MCP},
                             {singlefile_compactionpercentage, SCP},
                             {snapshot_timeout_short, TOS},
