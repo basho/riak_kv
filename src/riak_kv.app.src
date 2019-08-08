@@ -8,7 +8,6 @@
                   stdlib,
                   sasl,
                   crypto,
-                  riak_stat,
                   riak_api,
                   riak_core,
                   sidejob,
