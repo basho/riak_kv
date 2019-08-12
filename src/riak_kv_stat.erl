@@ -857,7 +857,7 @@ read_repair_aggr_stats() ->
 
 bc_stats() ->
   Spec = fun(N, M, F, As) ->
-    {[?PFX, ?APP, bc, N], {function, M, F, As, match, value}, [], [{value, N}]}
+    {[bc, N], {function, M, F, As, match, value}, [], [{value, N}]}
          end,
   [Spec(N, M, F, As) ||
     {N, M, F, As} <- [{nodename, erlang, node, []},

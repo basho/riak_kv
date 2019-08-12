@@ -48,9 +48,9 @@ new_entry(Name, SjName, AliasPrefix, Opts) ->
     exometer_new(Name, SjName, [{aliases, aliases(AliasPrefix)}|Opts]).
 
 exometer_new(Name, SjName, Opts) ->
-  riak_stat:register(riak_kv_exometer_sidejob,
-    [{Name, ad_hoc, Opts, [{sj_name, SjName}, {module, ?MODULE}, {type, sidejob}]}]).
-%%    exometer:re_register(Name, ad_hoc, [{module, ?MODULE},
+  riak_core_stat_admin:register(riak_kv_exometer_sidejob,
+    [{Name, ad_hoc, [{module, ?MODULE}, {type, sidejob}, {sj_name, SjName} | Opts]}]).
+%%    exometer:re_register(Name, ad_hoc, [{module, ?MODULE}, %% todo make riak_core_stat_admin
 %%				{type, sidejob},
 %%				{sj_name, SjName}|Opts]).
 
