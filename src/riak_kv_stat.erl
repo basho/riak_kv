@@ -43,7 +43,7 @@
 %% API
 -export([start_link/0, get_stats/0,
          update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1,
-  produce_stats/0, get_values/1, get_app_stats/0, get_stats_info/0,
+  produce_stats/0, get_value/1, get_stat/1, get_info/0, aggregate/2,
          leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
@@ -76,21 +76,27 @@ unregister_vnode_stats(Index) ->
 %% @spec get_stats() -> proplist()
 %% @doc Get the current aggregation of stats.
 get_stats() ->
-    riak_kv_wm_stats:get_stats().
+  get_stats(?APP).
 
-get_values(Path) ->
-  riak_core_stat_admin:get_app_stats(Path).
+get_stats(Arg) ->
+  riak_core_stat_admin:get_stats(Arg).
 
-get_app_stats() ->
-  riak_core_stat_admin:get_app_stats(?APP).
+get_stat(Arg) ->
+  riak_core_stat_admin:get_stat(Arg).
 
-get_stats_info() ->
-  riak_core_stat_admin:get_stats_info(?APP).
+get_value(Arg) ->
+  riak_core_stat_admin:get_value(Arg).
+
+get_info() ->
+  riak_core_stat_admin:get_info(?APP).
 
 %% Creation of a dynamic stat _must_ be serialized.
 %%register_stat(Name, Type) ->
 %%    do_register_stat(Name, Type).
 %% gen_server:call(?SERVER, {register, Name, Type}).
+
+aggregate(Stats, DPs) ->
+  riak_core_stat_admin:aggregate(Stats, DPs).
 
 update(Arg) ->
     maybe_dispatch_to_sidejob(erlang:module_loaded(riak_kv_stat_sj), Arg).
@@ -126,7 +132,7 @@ active_puts() ->
     counter_value([?PFX, ?APP, node, puts, fsm, active]).
 
 counter_value(Name) ->
-    case riak_core_stat_admin:get_stat_value(Name) of
+    case get_value(Name) of
 	{ok, [{value, N}]} ->
 	    N;
 	_ ->
