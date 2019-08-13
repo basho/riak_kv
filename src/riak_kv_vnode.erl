@@ -2400,7 +2400,7 @@ do_put(Sender, {Bucket, Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                                 % cache the object.  The cache size across the 
                                 % cluster will be CSz * ring-size so there is
                                 % a reasonable probability of a cache hit if
-                                % the rpel fetch occurs within a few seconds
+                                % the repl fetch occurs within a few seconds
                                 add_to_repl_cache(Tab, Bucket, Key, Obj, CSz),
                                 {vnode, {Idx, node()}}
                         end

@@ -327,7 +327,7 @@ calc_mean(Time, Count) ->
     [Mean] = io_lib:format("~.3f",[Time / Count]),
     Mean.
 
-% @doc convert the toeknised string of peers from the configuration into actual
+% @doc convert the tokenised string of peers from the configuration into actual
 % usable peer information.
 % tokenised string expected to be of form:
 % "192.168.10.1:8098|192.168.10.2:8098 etc"
@@ -344,7 +344,7 @@ tokenise_peers(PeersString) ->
 
 
 %% @doc
-%% Caluclates the queue of work items and the minimum length of queue to be
+%% Calculates the queue of work items and the minimum length of queue to be
 %% kept by the process, in order to deliver the desired number of concurrent
 %% worker processes.
 %% The count of work items should allow for all workers to be busy with one
@@ -476,10 +476,11 @@ add_modtime({S, F, RT, MT}, ModTime) ->
     {S, F, RT, setelement(E, MT, C + 1)}.
 
 %% @doc
-%% Depending on the result of the request, adjust the wit time before this work
-%% item is due to be re-processed.  If the queue is commonly empty, then back
-%% of the workload exponentially, but if it is consistently yielding results
-%% from the queue - the reduce the wait time exponentially tending to 0.
+%% Depending on the result of the request, adjust the wait time before this
+%% work item is due to be re-processed.  If the queue is commonly empty, then
+%% back of the workload exponentially, but if it is consistently yielding
+%% results from the queue - the reduce the wait time exponentially tending to
+%% 0.
 %% On an error, the wait time should leap to avoid all workers being locked
 %% attempting to communicate with a peer to which requests are timing out.
 -spec adjust_wait(boolean(), reply_tuple(), peer_id(), list(peer_info()))

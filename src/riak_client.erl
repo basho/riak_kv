@@ -175,7 +175,7 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
     RObj = 
         case riak_object:is_robject(RObjMaybeBin) of
             % May get pushed a riak object, or a riak object as a binary, but
-            % only want to deal with a binary object
+            % only want to deal with a riak object
             true ->
                 RObjMaybeBin;
             false ->

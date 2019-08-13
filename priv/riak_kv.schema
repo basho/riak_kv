@@ -1047,7 +1047,7 @@
 %% The list of peers is tokenised as host:port|host:port etc.
 {mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sinkpeers", [
     {datatype, string},
-    {commented, "127.0.0.1|8098"}
+    {commented, "127.0.0.1:8098"}
 ]}.
 
 %% @doc The number of workers to be used for that queue must be configured.

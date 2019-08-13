@@ -491,10 +491,8 @@ bulkaddto_queue(ReplEntries, P, QueueName,
             {QueueName, Q} = lists:keyfind(QueueName, 1, QueueMap),
             NewQLength = element(P, C) + length(ReplEntries),
             C0 = setelement(P, C, NewQLength),
-            % TODO: Incorporate this step into a riak_core_priority_queue
-            % function, rather than have secret knowledge of internals here
-            % Secret knowledge includes priority is inversed
-            Q0 = riak_core_priority_queue:join(Q, riak_core_priority_queue_from_list(ReplEntries, P)),
+            QueueAddition = riak_core_priority_queue_from_list(ReplEntries, P),
+            Q0 = riak_core_priority_queue:join(Q, QueueAddition),
             QCM0 =
                 lists:keyreplace(QueueName, 1, QueueCountMap, {QueueName, C0}),
             QM0 =
