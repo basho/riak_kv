@@ -374,6 +374,10 @@ merge(Replies, AllowMult) ->
 %% a backend not supporting HEAD was called, or the operation was an UPDATE),
 %% or body-less objects.
 %%
+-spec merge_heads(list(result()), boolean()) ->
+        {notfound, undefined}|
+        {tombstone, riak_object:riak_object()}|{ok, riak_object:riak_object()}|
+        {fetch, list(non_neg_integer())}.
 merge_heads(Replies, AllowMult) ->
     % Replies should be a list of [{Idx, {ok, RObj}]
     IdxObjs = [{I, {ok, RObj}} || {I, {ok, RObj}} <- Replies],
@@ -387,7 +391,7 @@ merge_heads(Replies, AllowMult) ->
                 [] ->
                     merge(BestReplies, AllowMult);
                 IdxL ->
-                    {fetch, IdxL}
+                    {fetch, lists:map(fun({Idx, _Rsp}) ->  Idx end, IdxL)}
             end
     end.
 
