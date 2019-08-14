@@ -252,6 +252,9 @@ remove_dominated(Objects) ->
 %% IdxHeadList is a list of indexes and headers that may need to be updated to
 %% objects before the merge can be complete, and the IdxObjList is a list of
 %% vnode indexes and objects which are ready to be merged
+-spec find_bestobject(list({non_neg_integer(), {ok, riak_object()}})) -> 
+                        {list({non_neg_integer(), {ok, riak_object()}}),
+                            list({non_neg_integer(), {ok, riak_object()}})}.
 find_bestobject(FetchedItems) ->
     % Find the best object.  Normally we expect this to be a score-draw in
     % terms of vector clock, so in this case 'best' means an object not a
@@ -259,50 +262,91 @@ find_bestobject(FetchedItems) ->
     % the first received (the fastest responder) - as if there is a need
     % for a follow-up fetch, we should prefer the vnode that had responded
     % fastest to he HEAD (this may be local).
-    PredHeadFun = fun({_Idx, Rsp}) -> not is_head(Rsp) end,
-    {Objects, Heads} = lists:partition(PredHeadFun, FetchedItems),
+    ObjNotJustHeadFun = fun({_Idx, Rsp}) -> not is_head(Rsp) end,
+    {Objects, Heads} = lists:partition(ObjNotJustHeadFun, FetchedItems),
     %% prefer full objects to heads
     FoldList = Heads ++ Objects,
-    %% prefer the rightmost (fastest responder)
-    InitialBestAnswer = lists:last(FoldList),
-
+    
+    DescendsFun =
+        fun(ObjClock, DescendsDirection) ->
+            fun({_BestIdxSib, {ok, BestObjSib}}) ->
+                case DescendsDirection of
+                    from_obj ->
+                        vclock:descends(vclock(BestObjSib), ObjClock);
+                    from_best ->
+                        vclock:descends(ObjClock, vclock(BestObjSib))
+                end
+            end
+        end,
+    
     FoldFun =
-        fun({Idx, {ok, Obj}}, {IsSibling, BestAnswer}) ->
-            case IsSibling of
-                true ->
-                    % If there are siblings could be smart about only fetching
-                    % conflicting objects. Will be lazy, though - fetch and
-                    % merge everything if it is a sibling
-                    {true, [{Idx, {ok, Obj}}|BestAnswer]};
-                false ->
-                    {_BestIdx, {ok, BestObj}} = BestAnswer,
-                    case vclock:descends(vclock(BestObj), vclock(Obj)) of
-                        true ->
-                            {false, BestAnswer};
-                        false ->
-                            case vclock:descends(vclock(Obj), vclock(BestObj)) of
-                                true ->
-                                    {false, {Idx, {ok, Obj}}};
-                                false ->
-                                    {true, [{Idx, {ok, Obj}}|[BestAnswer]]}
-                            end
+        % BestAnswers are a list of [{Idx, {ok, Obj}}] there are either the
+        % best answer or a sibling of the best answer,  BestAnswers can also
+        % be undefined at the start of the fold
+        % 
+        % If BestAnswers is undefined the object being folded over must now
+        % be the head of the list of BestAnswers
+        %
+        % If all of the objects in the BestAnswers descend from the comparison
+        % object, then the comparison object does not improve or conflict with
+        % the BestAnswers, so the BestAnswers are unchanged
+        %
+        % Otherwise, if the Comparison Object descends from all the BestAnswers
+        % then the Comparison Object represents a non-conflicting improvement
+        % on the Best answers and becomes the single best answer
+        %
+        % If neither way represents a clean descent, then we consider
+        % Comparison Object to be a sibling of at least one of the BestAnswers 
+        fun({Idx, {ok, Obj}}, BestAnswers) ->
+            case BestAnswers of
+                undefined ->
+                    [{Idx, {ok, Obj}}];
+                _ ->
+                    ObjClock = vclock(Obj),
+                    AllBestAnswersDescendsObj =
+                        lists:all(DescendsFun(ObjClock, from_obj),
+                                    BestAnswers),
+                    ObjDescendsAllBestAnswers =
+                        lists:all(DescendsFun(ObjClock, from_best),
+                                    BestAnswers),
+                    case {AllBestAnswersDescendsObj,
+                            ObjDescendsAllBestAnswers} of
+                        {true, _} ->
+                            BestAnswers;
+                        {false, true} ->
+                            [{Idx, {ok, Obj}}];
+                        {false, false} ->
+                            [{Idx, {ok, Obj}}|BestAnswers]
                     end
             end
         end,
+    
+    %% prefer the rightmost (fastest responder)
+    BestAnswerList = lists:foldr(FoldFun, undefined, FoldList),
 
-    case lists:foldr(FoldFun,
-                        {false, InitialBestAnswer},
-                        FoldList) of
-        {true, IdxObjList} ->
-            lists:partition(PredHeadFun, IdxObjList);
-        {false, {BestIdx, BestObj}} ->
-            case is_head(BestObj) of
-                false ->
-                    {[{BestIdx, BestObj}], []};
-                true ->
-                    {[], [{BestIdx, BestObj}]}
-            end
-    end.
+    % There may still be dominated siblings.  Whther there are dominated
+    % siblings depends on the order that the siblings were discovered.  This
+    % gives variation in behaviour base don order, to make this more
+    % determenistic by removing all dominated siblings with this additional
+    % check
+    DominatedSibCheckFun = 
+        fun({_, {ok, BA_Obj}}) ->
+            not lists:any(fun({_, {ok, CheckObj}}) -> 
+                                vclock:dominates(vclock(CheckObj),
+                                                    vclock(BA_Obj))
+                            end,
+                            BestAnswerList)
+        end,
+    DominantList = lists:filter(DominatedSibCheckFun, BestAnswerList),
+
+    % Return a list of sibling best answers split into two - first a list
+    % where the object has already been fetched, and then a list where the
+    % object it still to be fetched.
+    %
+    % In each list the list should be ordered from R to L i terms of fastest
+    % responder
+    lists:partition(ObjNotJustHeadFun, DominantList).
+
 
 
 -spec is_head(any()) -> boolean().
@@ -1619,9 +1663,8 @@ find_bestobject_reconcile() ->
     Obj2 = riak_object:increment_vclock(UpdO, one_pid),
     Obj3 = riak_object:increment_vclock(UpdO, alt_pid),
     Obj4 = convert_object_to_headonly(B, K, Obj2),
-    Obj5 = convert_object_to_headonly(B, K, Obj3),
-    ?assertMatch({[{1, {ok, Obj1}},
-                        {2, {ok, Obj2}},
+    Obj5 = convert_object_to_headonly(B, K, Obj1),
+    ?assertMatch({[{2, {ok, Obj2}},
                         {3, {ok, Obj3}}],
                     [{4, {ok, Obj4}}]},
                     find_bestobject([{1, {ok, Obj1}},
@@ -1638,13 +1681,29 @@ find_bestobject_reconcile() ->
                                         {1, {ok, Obj1}}])),
     ?assertMatch({[{2, {ok, Obj2}},
                         {3, {ok, Obj3}}],
-                    [{4, {ok, Obj4}},
-                        {5, {ok, Obj5}}]},
-                    find_bestobject([{4, {ok, Obj4}},
+                    []},
+                    find_bestobject([{1, {ok, Obj1}},
                                         {2, {ok, Obj2}},
                                         {3, {ok, Obj3}},
-                                        {5, {ok, Obj5}},
-                                        {1, {ok, Obj1}}])).
+                                        {5, {ok, Obj5}}])),
+    ?assertMatch({[{3, {ok, Obj3}}],
+                    [{4, {ok, Obj4}}]},
+                    find_bestobject([{1, {ok, Obj1}},
+                                        {4, {ok, Obj4}},
+                                        {3, {ok, Obj3}},
+                                        {5, {ok, Obj5}}])),
+                                        
+    Obj6 = riak_object:increment_vclock(Obj2, two_pid),
+
+    ?assertMatch({[{3, {ok, Obj3}}, {6, {ok, Obj6}}], []},
+                    find_bestobject([{3, {ok, Obj3}},
+                                        {6, {ok, Obj6}},
+                                        {2, {ok, Obj2}}])),
+    ?assertMatch({[{3, {ok, Obj3}}, {6, {ok, Obj6}}], []},
+                    find_bestobject([{2, {ok, Obj2}},
+                                        {3, {ok, Obj3}},
+                                        {6, {ok, Obj6}}]))
+    .
 
 
 update_test() ->
