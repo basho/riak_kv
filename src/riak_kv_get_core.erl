@@ -383,17 +383,7 @@ merge_heads(Replies, AllowMult) ->
             {notfound, undefined};
         _ ->
             {BestReplies, FetchIdxObjL} = riak_object:find_bestobject(IdxObjs),
-            FoldFun =
-                fun({Idx, {ok, Obj}}, Acc) ->
-                    case riak_kv_util:is_x_deleted(Obj) of
-                        true ->
-                            Acc;
-                        false ->
-                            [Idx|Acc]
-                    end
-                end,
-
-            case lists:foldr(FoldFun, [], FetchIdxObjL) of
+            case FetchIdxObjL of
                 [] ->
                     merge(BestReplies, AllowMult);
                 IdxL ->

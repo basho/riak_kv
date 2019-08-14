@@ -262,7 +262,7 @@ find_bestobject(FetchedItems) ->
     % the first received (the fastest responder) - as if there is a need
     % for a follow-up fetch, we should prefer the vnode that had responded
     % fastest to he HEAD (this may be local).
-    ObjNotJustHeadFun = fun({_Idx, Rsp}) -> not is_head(Rsp) end,
+    ObjNotJustHeadFun =  fun({_Idx, Rsp}) ->  not is_head(Rsp) end,
     {Objects, Heads} = lists:partition(ObjNotJustHeadFun, FetchedItems),
     %% prefer full objects to heads
     FoldList = Heads ++ Objects,
@@ -368,7 +368,7 @@ is_head(Obj) ->
 %% @doc
 %% If an object has been confirmed as deleted by riak_util:is_x_deleted, then
 %% any head_only contents can be uplifted to a GET-equivalent by swapping the
-%% head_only for an empty value.  There is no need to fetch vales we know must
+%% head_only for an empty value.  There is no need to fetch values we know must
 %% be empty
 spoof_getdeletedobject(Obj) ->
     MapFun =
@@ -1702,8 +1702,7 @@ find_bestobject_reconcile() ->
     ?assertMatch({[{3, {ok, Obj3}}, {6, {ok, Obj6}}], []},
                     find_bestobject([{2, {ok, Obj2}},
                                         {3, {ok, Obj3}},
-                                        {6, {ok, Obj6}}]))
-    .
+                                        {6, {ok, Obj6}}])).
 
 
 update_test() ->
@@ -2059,12 +2058,20 @@ verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
 
 
 head_binary(VC1) ->
+    head_binary(VC1, false).
+
+head_binary(VC1, IsDeleted) ->
+    DelBin = 
+        case IsDeleted of
+            true -> <<1>>;
+            false -> <<0>>
+        end,
     MetaBin =
         <<0:32/integer,
             0:32/integer,
             0:32/integer,
             0:8/integer,
-            <<1>>:1/binary>>,
+            DelBin:1/binary>>,
 
     MetaSize = byte_size(MetaBin),
     SibsBin =
@@ -2085,12 +2092,21 @@ from_binary_headonly_test() ->
     Bucket = <<"B">>,
     Key = <<"K1">>,
     VC1 = term_to_binary(vclock:fresh(a, 3)),
-    RObjBin = head_binary(VC1),
-
+    
+    RObjBin = head_binary(VC1, false),
     RObj = riak_object:from_binary(Bucket, Key, RObjBin),
+
     ?assertMatch(true, is_robject(RObj)),
     ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObj))),
-    ?assertMatch(true, is_head(RObj)).
+    ?assertMatch(true, is_head(RObj)),
+    ?assertMatch(false, riak_kv_util:is_x_deleted(RObj)),
+    
+    RObjBinD = head_binary(VC1, true),
+    RObjD = riak_object:from_binary(Bucket, Key, RObjBinD),
+    ?assertMatch(true, is_robject(RObjD)),
+    ?assertMatch(VC1, term_to_binary(riak_object:vclock(RObjD))),
+    ?assertMatch(true, is_head(RObjD)),
+    ?assertMatch(true, riak_kv_util:is_x_deleted(RObjD)).
 
 
 fetch_value(clone, "JournalKey") ->
