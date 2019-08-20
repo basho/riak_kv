@@ -1115,7 +1115,22 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                     tictac_deltacount = 0,
                                     tictac_startqueue = Now}};
         [{Local, Remote, {DocIdx, N}}|Rest] ->
-            PL = riak_core_apl:get_apl(<<(DocIdx-1):160/integer>>, N, riak_kv),
+            PrimaryOnly =
+                app_helper:get_env(riak_kv, tictacaae_primaryonly, true),
+                % By default TictacAAE exchanges are run only between primary
+                % vnodes, and not between fallback and vnodes.  Changing this
+                % to false will allow fallback vnodes to be populated via AAE,
+                % increasing the workload during failure scenarios, but also
+                % reducing the potential for entropy in long-term failures
+            PlLup = <<(DocIdx-1):160/integer>>,
+            PL =
+                case PrimaryOnly of
+                    true ->
+                        PL0 = riak_core_apl:get_primary_apl(PlLup, N, riak_kv),
+                        [{PIdx, PN} || {{PIdx, PN}, primary} <- PL0];
+                    false ->
+                        riak_core_apl:get_apl(PlLup, N, riak_kv)
+                end,
             case {lists:keyfind(Local, 1, PL), lists:keyfind(Remote, 1, PL)} of
                 {{Local, LN}, {Remote, RN}} ->
                     IndexN = {DocIdx, N},
