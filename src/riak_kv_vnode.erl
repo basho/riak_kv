@@ -1149,7 +1149,8 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                 _ ->
                     lager:warning("Proposed exchange between ~w and ~w " ++ 
                                     "not currently supported within " ++
-                                    "preflist for IndexN=~w",
+                                    "preflist for IndexN=~w possibly due to " ++
+                                    "node failure",
                                     [Local, Remote, {DocIdx, N}])
             end,
             {noreply, State#state{tictac_exchangequeue = Rest}}
