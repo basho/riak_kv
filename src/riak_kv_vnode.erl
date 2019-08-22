@@ -252,6 +252,7 @@
                   crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
                   hash_ops = no_hash_ops
                  }).
+-type putargs() :: #putargs{}.
 
 -spec maybe_create_hashtrees(state()) -> state().
 maybe_create_hashtrees(State) ->
@@ -2306,6 +2307,17 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
 delete_hash(RObj) ->
     erlang:phash2(RObj, 4294967296).
 
+%% @doc
+%% Prepare PUT needs to prepare the correct transition from old object to new
+%% to be performed.  Returns {true, {new_object, old_object}} if an actual PUT
+%% to a new object should be made, or false if the transition does not require
+%% a change before being acknowledged.  {fail, Index, Reason} should be used
+%% where the PUT_FSM needs to be informed of a logical failure.
+-spec prepare_put(state(), putargs()) -> 
+                    {{fail, index(), atom()|tuple()}|
+                            {boolean(),
+                                {riak_object:riak_object(), old_object()}},
+                        putargs(), state()}.
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState},
@@ -2396,11 +2408,30 @@ prepare_put_existing_object(#state{idx =Idx} = State,
         {oldobj, OldObj} ->
             {{false, {OldObj, unchanged_no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
-            AMObj = enforce_allow_mult(NewObj, BProps),
-            IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
-            ObjToStore0 = maybe_prune_vclock(PruneTime, AMObj, BProps),
-            ObjectToStore = maybe_do_crdt_update(Coord, CRDTOp, ActorId, ObjToStore0),
-            determine_put_result(ObjectToStore, OldObj, Idx, PutArgs, State2, IndexSpecs, IndexBackend)
+            case enforce_allow_mult(NewObj, BProps) of
+                {ok, AMObj} ->
+                    IndexSpecs =
+                        get_index_specs(IndexBackend, CacheData, RequiresGet,
+                                        AMObj, OldObj),
+                    ObjToStore0 =
+                        maybe_prune_vclock(PruneTime, AMObj, BProps),
+                    ObjectToStore =
+                        maybe_do_crdt_update(Coord, CRDTOp, ActorId,
+                                                ObjToStore0),
+                    determine_put_result(ObjectToStore, OldObj, Idx, PutArgs,
+                                            State2, IndexSpecs, IndexBackend);
+                {error, Reason} ->
+                    lager:error("Put failure due to ~w with coord=~w " ++
+                                "old_clock=~w input_clock=~w " ++
+                                "for bucket=~w key=~w",
+                                [Reason, Coord,
+                                    riak_object:vclock(OldObj),
+                                    riak_object:vclock(RObj),
+                                    riak_object:bucket(RObj),
+                                    riak_object:key(RObj)]),
+                    lager:error("Put failure occurred with state=~w", [State2]),
+                    {{fail, Idx, Reason}, PutArgs, State2}
+            end
     end.
 
 determine_put_result({error, E}, _, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
@@ -2595,19 +2626,21 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
 %% an object with multiple contents if allow_mult=false for that bucket
 enforce_allow_mult(Obj, BProps) ->
     case proplists:get_value(allow_mult, BProps) of
-        true -> Obj;
+        true -> {ok, Obj};
         _ ->
             case riak_object:get_contents(Obj) of
-                [_] -> Obj;
+                [] ->
+                    {error, empty_contents};
+                [_] ->
+                    {ok, Obj};
                 Mult ->
                     {MD, V} = select_newest_content(Mult),
                     MergedObj = riak_object:set_contents(Obj, [{MD, V}]),
                     case riak_object:is_head(MergedObj) of
                         true ->
-                          lager:error("Merge resulted in head_only object"),
-                          MergedObj;
+                            {error, merge_result_ishead};
                         false ->
-                          MergedObj
+                            {ok, MergedObj}
                     end
             end
     end.
@@ -3100,7 +3133,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                 {oldobj, _} ->
                     {ok, State2};
                 {newobj, NewObj} ->
-                    AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
+                    {ok, AMObj} = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
                     case IndexBackend of
                         true ->
                             IndexSpecs = riak_object:diff_index_specs(AMObj, OldObj);
