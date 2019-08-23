@@ -291,8 +291,10 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
 
 -spec maybe_start_aaecontroller(active|passive, state()) -> state().
 %% @doc
-%% Start an AAE controller if riak_kv has been consfigured to use cached
-%% tictac tree based AAE
+%% Start an AAE controller if riak_kv has been configured to use cached
+%% tictac tree based AAE.  Note that a controller will always start, and
+%% receive updates, even if the vnode is not a primary (and will not be
+%% involved in exchanges).
 maybe_start_aaecontroller(passive, State) ->
     State#state{tictac_aae=false, aae_controller=undefined};
 maybe_start_aaecontroller(active, State=#state{mod=Mod, 
@@ -1118,10 +1120,10 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
             PrimaryOnly =
                 app_helper:get_env(riak_kv, tictacaae_primaryonly, true),
                 % By default TictacAAE exchanges are run only between primary
-                % vnodes, and not between fallback and vnodes.  Changing this
+                % vnodes, and not between fallback vnodes.  Changing this
                 % to false will allow fallback vnodes to be populated via AAE,
                 % increasing the workload during failure scenarios, but also
-                % reducing the potential for entropy in long-term failures
+                % reducing the potential for entropy in long-term failures.
             PlLup = <<(DocIdx-1):160/integer>>,
             PL =
                 case PrimaryOnly of
