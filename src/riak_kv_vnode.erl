@@ -292,8 +292,10 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
 
 -spec maybe_start_aaecontroller(active|passive, state()) -> state().
 %% @doc
-%% Start an AAE controller if riak_kv has been consfigured to use cached
-%% tictac tree based AAE
+%% Start an AAE controller if riak_kv has been configured to use cached
+%% tictac tree based AAE.  Note that a controller will always start, and
+%% receive updates, even if the vnode is not a primary (and will not be
+%% involved in exchanges).
 maybe_start_aaecontroller(passive, State) ->
     State#state{tictac_aae=false, aae_controller=undefined};
 maybe_start_aaecontroller(active, State=#state{mod=Mod, 
@@ -1116,7 +1118,22 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                     tictac_deltacount = 0,
                                     tictac_startqueue = Now}};
         [{Local, Remote, {DocIdx, N}}|Rest] ->
-            PL = riak_core_apl:get_apl(<<(DocIdx-1):160/integer>>, N, riak_kv),
+            PrimaryOnly =
+                app_helper:get_env(riak_kv, tictacaae_primaryonly, true),
+                % By default TictacAAE exchanges are run only between primary
+                % vnodes, and not between fallback vnodes.  Changing this
+                % to false will allow fallback vnodes to be populated via AAE,
+                % increasing the workload during failure scenarios, but also
+                % reducing the potential for entropy in long-term failures.
+            PlLup = <<(DocIdx-1):160/integer>>,
+            PL =
+                case PrimaryOnly of
+                    true ->
+                        PL0 = riak_core_apl:get_primary_apl(PlLup, N, riak_kv),
+                        [{PIdx, PN} || {{PIdx, PN}, primary} <- PL0];
+                    false ->
+                        riak_core_apl:get_apl(PlLup, N, riak_kv)
+                end,
             case {lists:keyfind(Local, 1, PL), lists:keyfind(Remote, 1, PL)} of
                 {{Local, LN}, {Remote, RN}} ->
                     IndexN = {DocIdx, N},
@@ -1135,7 +1152,8 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                 _ ->
                     lager:warning("Proposed exchange between ~w and ~w " ++ 
                                     "not currently supported within " ++
-                                    "preflist for IndexN=~w",
+                                    "preflist for IndexN=~w possibly due to " ++
+                                    "node failure",
                                     [Local, Remote, {DocIdx, N}])
             end,
             {noreply, State#state{tictac_exchangequeue = Rest}}
