@@ -1634,10 +1634,15 @@ find_bestobject_equal_test() ->
                     find_bestobject([{3, {ok, Obj3}},
                                         {2, {ok, Obj2}},
                                         {1, {ok, Obj1}}])),
-    % Shuffle and get same result
+    % Shuffle and get alterate (RH) result
     ?assertMatch({[{2, {ok, Obj2}}], []},
                     find_bestobject([{1, {ok, Obj1}},
                                         {2, {ok, Obj2}},
+                                        {3, {ok, Obj3}}])),
+    % Shuffle and get alterate (RH) result
+    ?assertMatch({[{1, {ok, Obj1}}], []},
+                    find_bestobject([{2, {ok, Obj2}},
+                                        {1, {ok, Obj1}},
                                         {3, {ok, Obj3}}])).
 
 find_bestobject_ancestor() ->
@@ -1694,6 +1699,7 @@ find_bestobject_reconcile() ->
                                         {5, {ok, Obj5}}])),
                                         
     Obj6 = riak_object:increment_vclock(Obj2, two_pid),
+    Hdr6 = convert_object_to_headonly(B, K, Obj6),
 
     ?assertMatch({[{3, {ok, Obj3}}, {6, {ok, Obj6}}], []},
                     find_bestobject([{3, {ok, Obj3}},
@@ -1702,7 +1708,32 @@ find_bestobject_reconcile() ->
     ?assertMatch({[{3, {ok, Obj3}}, {6, {ok, Obj6}}], []},
                     find_bestobject([{2, {ok, Obj2}},
                                         {3, {ok, Obj3}},
-                                        {6, {ok, Obj6}}])).
+                                        {6, {ok, Obj6}}])),
+                                        
+    ?assertMatch({[{6, {ok, Obj6}}], []},
+                    find_bestobject([{2, {ok, Obj2}},
+                                    {4, {ok, Obj4}},
+                                    {6, {ok, Obj6}}])),
+    ?assertMatch({[{7, {ok, Obj6}}], []},
+                    find_bestobject([{2, {ok, Obj2}},
+                                    {4, {ok, Obj4}},
+                                    {6, {ok, Obj6}},
+                                    {7, {ok, Obj6}}])),
+    ?assertMatch({[{7, {ok, Obj6}}], []},
+                    find_bestobject([{2, {ok, Obj2}},
+                                    {4, {ok, Obj4}},
+                                    {6, {ok, Obj6}},
+                                    {7, {ok, Obj6}},
+                                    {8, {ok, Hdr6}}])),
+    
+    Hdr3 = convert_object_to_headonly(B, K, Obj3),
+    ?assertMatch({[{7, {ok, Obj6}}], [{3, {ok, Hdr3}}]},
+                    find_bestobject([{2, {ok, Obj2}},
+                                    {3, {ok, Hdr3}},
+                                    {4, {ok, Obj4}},
+                                    {6, {ok, Obj6}},
+                                    {7, {ok, Obj6}},
+                                    {8, {ok, Hdr6}}])).
 
 
 update_test() ->
