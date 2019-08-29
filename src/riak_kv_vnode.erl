@@ -1324,6 +1324,18 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
+handle_command(report_hashtree_tokens, _Sender, State) ->
+    {reply, get(hashtree_tokens), State};
+handle_command({reset_hashtree_tokens, MinToken, MaxToken}, _Sender, State) ->
+    case MaxToken > MinToken of
+        true ->
+            put(hashtree_tokens,
+                    MinToken + random:uniform(MaxToken - MinToken));
+        _ ->
+            put(hashtree_tokens, MaxToken)
+    end,
+    {reply, ok, State};
+
 handle_command(Req, Sender, State) ->
     handle_request(riak_kv_requests:request_type(Req), Req, Sender, State).
 
