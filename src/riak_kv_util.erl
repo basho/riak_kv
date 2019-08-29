@@ -219,8 +219,8 @@ report_hashtree_tokens() ->
     lists:foldl(ReportTokenFun, {infinity, 0}, OnlinePrimaries).
 
 %% @doc
-%% Rest the hashtree tokens on each online primary to a random integer between
-%% The minimum and maximum amount.
+%% Reset the hashtree tokens on each online primary to a random integer between
+%% the minimum and maximum amount.
 -spec reset_hashtree_tokens(non_neg_integer(), non_neg_integer()) -> ok.
 reset_hashtree_tokens(MinToken, MaxToken) when MaxToken >= MinToken ->
     OnlinePrimaries = riak_core_apl:active_owners(riak_kv),
