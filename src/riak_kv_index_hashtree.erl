@@ -1095,8 +1095,7 @@ maybe_rebuild(State=#state{lock=undefined, built=true, expired=true, index=Index
     case Locked of
         true ->
             State2 = clear_tree(State),
-            lager:info("Sharing lock with ~w to trigger rebuild: ~p",
-                        [Pid, Index]),
+            lager:info("Informing process to trigger rebuild of tree: ~p", [Index]),
             Pid ! {lock, Locked, State2},
             State2#state{built=Pid};
         _ ->
