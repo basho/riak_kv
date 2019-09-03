@@ -258,6 +258,7 @@
                   crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
                   hash_ops = no_hash_ops
                  }).
+-type putargs() :: #putargs{}.
 
 -spec maybe_create_hashtrees(state()) -> state().
 maybe_create_hashtrees(State) ->
@@ -297,8 +298,10 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
 
 -spec maybe_start_aaecontroller(active|passive, state()) -> state().
 %% @doc
-%% Start an AAE controller if riak_kv has been consfigured to use cached
-%% tictac tree based AAE
+%% Start an AAE controller if riak_kv has been configured to use cached
+%% tictac tree based AAE.  Note that a controller will always start, and
+%% receive updates, even if the vnode is not a primary (and will not be
+%% involved in exchanges).
 maybe_start_aaecontroller(passive, State) ->
     State#state{tictac_aae=false, aae_controller=undefined};
 maybe_start_aaecontroller(active, State=#state{mod=Mod, 
@@ -1155,7 +1158,22 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                     tictac_deltacount = 0,
                                     tictac_startqueue = Now}};
         [{Local, Remote, {DocIdx, N}}|Rest] ->
-            PL = riak_core_apl:get_apl(<<(DocIdx-1):160/integer>>, N, riak_kv),
+            PrimaryOnly =
+                app_helper:get_env(riak_kv, tictacaae_primaryonly, true),
+                % By default TictacAAE exchanges are run only between primary
+                % vnodes, and not between fallback vnodes.  Changing this
+                % to false will allow fallback vnodes to be populated via AAE,
+                % increasing the workload during failure scenarios, but also
+                % reducing the potential for entropy in long-term failures.
+            PlLup = <<(DocIdx-1):160/integer>>,
+            PL =
+                case PrimaryOnly of
+                    true ->
+                        PL0 = riak_core_apl:get_primary_apl(PlLup, N, riak_kv),
+                        [{PIdx, PN} || {{PIdx, PN}, primary} <- PL0];
+                    false ->
+                        riak_core_apl:get_apl(PlLup, N, riak_kv)
+                end,
             case {lists:keyfind(Local, 1, PL), lists:keyfind(Remote, 1, PL)} of
                 {{Local, LN}, {Remote, RN}} ->
                     IndexN = {DocIdx, N},
@@ -1174,7 +1192,8 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                 _ ->
                     lager:warning("Proposed exchange between ~w and ~w " ++ 
                                     "not currently supported within " ++
-                                    "preflist for IndexN=~w",
+                                    "preflist for IndexN=~w possibly due to " ++
+                                    "node failure",
                                     [Local, Remote, {DocIdx, N}])
             end,
             {noreply, State#state{tictac_exchangequeue = Rest}}
@@ -1344,6 +1363,18 @@ handle_command({get_index_entries, Opts},
             lager:error("Backend ~p does not support incorrect index query", [Mod]),
             {reply, ignore, State}
     end;
+
+handle_command(report_hashtree_tokens, _Sender, State) ->
+    {reply, get(hashtree_tokens), State};
+handle_command({reset_hashtree_tokens, MinToken, MaxToken}, _Sender, State) ->
+    case MaxToken > MinToken of
+        true ->
+            put(hashtree_tokens,
+                    MinToken + random:uniform(MaxToken - MinToken));
+        _ ->
+            put(hashtree_tokens, MaxToken)
+    end,
+    {reply, ok, State};
 
 handle_command(Req, Sender, State) ->
     handle_request(riak_kv_requests:request_type(Req), Req, Sender, State).
@@ -2443,6 +2474,17 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
 delete_hash(RObj) ->
     erlang:phash2(RObj, 4294967296).
 
+%% @doc
+%% Prepare PUT needs to prepare the correct transition from old object to new
+%% to be performed.  Returns {true, {new_object, old_object}} if an actual PUT
+%% to a new object should be made, or false if the transition does not require
+%% a change before being acknowledged.  {fail, Index, Reason} should be used
+%% where the PUT_FSM needs to be informed of a logical failure.
+-spec prepare_put(state(), putargs()) -> 
+                    {{fail, index(), atom()|tuple()}|
+                            {boolean(),
+                                {riak_object:riak_object(), old_object()}},
+                        putargs(), state()}.
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
                          modstate=ModState},
@@ -2533,11 +2575,23 @@ prepare_put_existing_object(#state{idx =Idx} = State,
         {oldobj, OldObj} ->
             {{false, {OldObj, unchanged_no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
-            AMObj = enforce_allow_mult(NewObj, BProps),
-            IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
-            ObjToStore0 = maybe_prune_vclock(PruneTime, AMObj, BProps),
-            ObjectToStore = maybe_do_crdt_update(Coord, CRDTOp, ActorId, ObjToStore0),
-            determine_put_result(ObjectToStore, OldObj, Idx, PutArgs, State2, IndexSpecs, IndexBackend)
+            case enforce_allow_mult(NewObj, OldObj, BProps) of
+                {ok, AMObj} ->
+                    IndexSpecs =
+                        get_index_specs(IndexBackend, CacheData, RequiresGet,
+                                        AMObj, OldObj),
+                    ObjToStore0 =
+                        maybe_prune_vclock(PruneTime, AMObj, BProps),
+                    ObjectToStore =
+                        maybe_do_crdt_update(Coord, CRDTOp, ActorId,
+                                                ObjToStore0),
+                    determine_put_result(ObjectToStore, OldObj, Idx,
+                                            PutArgs, State2,
+                                            IndexSpecs, IndexBackend);
+                {error, Reason} ->
+                    lager:error("Error on allow_mult ~w", [Reason]),
+                    {{fail, Idx, Reason}, PutArgs, State2}
+            end
     end.
 
 determine_put_result({error, E}, _, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
@@ -2730,23 +2784,48 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
 %% @private
 %% enforce allow_mult bucket property so that no backend ever stores
 %% an object with multiple contents if allow_mult=false for that bucket
-enforce_allow_mult(Obj, BProps) ->
-    case proplists:get_value(allow_mult, BProps) of
-        true -> Obj;
-        _ ->
-            case riak_object:get_contents(Obj) of
-                [_] -> Obj;
-                Mult ->
-                    {MD, V} = select_newest_content(Mult),
-                    MergedObj = riak_object:set_contents(Obj, [{MD, V}]),
-                    case riak_object:is_head(MergedObj) of
-                        true ->
-                          lager:error("Merge resulted in head_only object"),
-                          MergedObj;
-                        false ->
-                          MergedObj
-                    end
-            end
+%% Also provides a double check that the object is safe to store - its contents
+%% must not be empty, it should not be an object head.
+enforce_allow_mult(Obj, OldObj, BProps) ->
+    MergedContents = riak_object:get_contents(Obj),
+    case {proplists:get_value(allow_mult, BProps),
+            MergedContents,
+            riak_object:is_head(Obj)} of
+        {_, [], _} ->
+            % This is a known issue - 
+            % https://github.com/basho/riak_kv/issues/1707
+            % Extra logging added to try and resolve the issue
+            MergedClock = riak_object:vclock(Obj),
+            OldClock = riak_object:vclock(OldObj),
+            Bucket = riak_object:bucket(OldObj),
+            Key = riak_object:key(OldObj),
+            lager:error("Unexpected empty contents after merge"
+                            ++ " object bucket=~w key=~w"
+                            ++ " merged_clock=~w old_clock=~w",
+                            [Bucket, Key, MergedClock, OldClock]),
+            OldValSum =
+                lists:map(fun({D, V}) -> {D, erlang:phash2(V)} end,
+                            riak_object:get_dotted_values(OldObj)),
+            lager:error("Summary of old object values ~w", [OldValSum]),
+            {error, empty_contents};
+        {true, _, false} -> 
+            {ok, Obj};
+        {false, [_], false} ->
+            {ok, Obj};
+        {false, Mult, false} ->
+            {MD, V} = select_newest_content(Mult),
+            {ok, riak_object:set_contents(Obj, [{MD, V}])};
+        {_, _, true} ->
+            % This is not a known issue.  An object head check was added prior
+            % to the fake object check being being uplifted to dominates from
+            % descends.  If this never occurs in 2.9.0, then this check should
+            % be removed in 2.9.1 
+            Bucket = riak_object:bucket(OldObj),
+            Key = riak_object:key(OldObj),
+            lager:error("Unexpected head object after merge"
+                            ++ " object bucket=~w key=~w",
+                            [Bucket, Key]),
+            {error, head_object}
     end.
 
 %% @private
@@ -3237,7 +3316,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                 {oldobj, _} ->
                     {ok, State2};
                 {newobj, NewObj} ->
-                    AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
+                    {ok, AMObj} = enforce_allow_mult(NewObj, OldObj, riak_core_bucket:get_bucket(Bucket)),
                     case IndexBackend of
                         true ->
                             IndexSpecs = riak_object:diff_index_specs(AMObj, OldObj);
