@@ -375,8 +375,13 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
                         HTC = rhc:create(Host, Port, "riak", []),
                         fun(QN) -> rhc:fetch(HTC, QN) end;
                     pb ->
-                        {ok, Pid} = riakc_pb_socket:start(Host, Port),
-                        fun(QN) -> riakc_pb_socket:fetch(Pid, QN) end
+                        fun(QN) ->
+                            {ok, Pid} = riakc_pb_socket:start(Host, Port),
+                            QNB = atom_to_binary(QN, utf8),
+                            R = riakc_pb_socket:fetch(Pid, QNB),
+                            riakc_pb_socket:stop(Pid),
+                            R
+                        end
                 end,
             {{QueueName, PeerID}, LocalClient, RemoteClientFun}
         end,
@@ -386,6 +391,7 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
                     [],
                     lists:seq(1, WorkerCount)),
     {length(WorkItems) - WorkerCount, WorkItems}.
+
 
 %% @doc
 %% For an item of work which has been removed from the work queue, spawn a
@@ -444,8 +450,8 @@ repl_fetcher(WorkItem) ->
         end
     catch
         Type:Exception ->
-            lager:warning("Snk worker failed due to ~w with trace ~w", 
-                            [Type, erlang:get_stacktrace()]),
+            lager:warning("Snk worker failed due to ~w:~w with trace ~w", 
+                            [Type, Exception, erlang:get_stacktrace()]),
             done_work(WorkItem, false, {error, Type, Exception})
     end.
 
@@ -551,7 +557,7 @@ log_mapfun({QueueName, SinkWork}) ->
                 [QueueName, SC, EC, calc_mean(RT, SC),
                     MTS, MTM, MTH, MTD, MTL]),
     FoldPeerInfoFun =
-        fun({_PeerID, D, IP, Port}, Acc) ->
+        fun({_PeerID, D, IP, Port, _P}, Acc) ->
             Acc ++ lists:flatten(io_lib:format(" ~s:~w=~w", [IP, Port, D]))
         end,
     PeerDelays =

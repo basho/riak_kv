@@ -171,12 +171,12 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
 process(#rpbfetchreq{queuename = QueueName}, #state{client=C} = State) ->
     case C:fetch(binary_to_existing_atom(QueueName, utf8)) of
         {ok, queue_empty} ->
-            {reply, #rpbfetchrsp{queue_empty = true}, State};
+            {reply, #rpbfetchresp{queue_empty = true}, State};
         {ok, {deleted, Vclock, RObj}} ->
             EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj),
             CRC32 = erlang:crc32(EncObj),
             {reply,
-                #rpbfetchrsp{queue_empty = false,
+                #rpbfetchresp{queue_empty = false,
                                 deleted = true,
                                 replencoded_object = EncObj,
                                 crc_check = CRC32,
@@ -186,7 +186,7 @@ process(#rpbfetchreq{queuename = QueueName}, #state{client=C} = State) ->
             EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj),
             CRC32 = erlang:crc32(EncObj),
             {reply,
-                #rpbfetchrsp{queue_empty = false,
+                #rpbfetchresp{queue_empty = false,
                                 deleted = false,
                                 replencoded_object = EncObj,
                                 crc_check = CRC32},
