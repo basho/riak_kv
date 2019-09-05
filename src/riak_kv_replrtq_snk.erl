@@ -69,9 +69,13 @@
 
 -type queue_name() :: atom().
 -type peer_id() :: pos_integer().
+-type remote_fun() ::
+    fun((queue_name()) ->
+        {ok, queue_empty}|{ok, {deleted, any(), binary()}}|{ok, binary()}).
+
 
 -type work_item() ::
-    {{queue_name(), peer_id()}, riak_client:riak_client(), rhc:rhc()}.
+    {{queue_name(), peer_id()}, riak_client:riak_client(), remote_fun()}.
     % Identifier for the work item  - and the local and remote clients to use
 
 -type sink_work() ::
@@ -79,11 +83,12 @@
     % Mapping between queue names and the work records
 
 -type peer_info() ::
-    {peer_id(), non_neg_integer(), string(), pos_integer()}.
+    {peer_id(), non_neg_integer(), string(), pos_integer(), http|pb}.
     % {Identifier for Peer,
     %   Next delay to use on work_item in ms,
     %   Peer IP,
-    %   Peer Listener}
+    %   Peer Listener,
+    %   Peer protocol}
 
 -type queue_stats() ::
     {{success, non_neg_integer()}, {failure, non_neg_integer()},
@@ -336,8 +341,17 @@ tokenise_peers(PeersString) ->
     PeerL0 = string:tokens(PeersString, "|"),
     SplitHostPortFun =
         fun(PeerString, Acc0) ->
-            [Host, Port] = string:tokens(PeerString, ":"),
-            {{Acc0, ?STARTING_DELAYMS, Host, list_to_integer(Port)}, Acc0 + 1}
+            {Host, Port, Protocol} =
+                case string:tokens(PeerString, ":") of
+                    [H, P] ->
+                        {H, P, http};
+                    [H, P, "http"] ->
+                        {H, P, http};
+                    [H, P, "pb"] ->
+                        {H, P, pb}
+                end,
+            {{Acc0, ?STARTING_DELAYMS, Host, list_to_integer(Port), Protocol},
+                Acc0 + 1}
         end,
     {PeerList, _Acc} = lists:mapfoldl(SplitHostPortFun, 1, PeerL0),
     PeerList.
@@ -353,10 +367,18 @@ tokenise_peers(PeersString) ->
                                     -> {non_neg_integer(), list(work_item())}.
 determine_workitems(QueueName, PeerInfo, WorkerCount) ->
     MapPeerToWIFun =
-        fun({PeerID, _Delay, Host, Port}) ->
+        fun({PeerID, _Delay, Host, Port, Protocol}) ->
             LocalClient = riak_client:new(node(), undefined),
-            RemoteClient = rhc:create(Host, Port, "riak", []),
-            {{QueueName, PeerID}, LocalClient, RemoteClient}
+            RemoteClientFun = 
+                case Protocol of
+                    http ->
+                        HTC = rhc:create(Host, Port, "riak", []),
+                        fun(QN) -> rhc:fetch(HTC, QN) end;
+                    pb ->
+                        {ok, Pid} = riakc_pb_socket:start(Host, Port),
+                        fun(QN) -> riakc_pb_socket:fetch(Pid, QN) end
+                end,
+            {{QueueName, PeerID}, LocalClient, RemoteClientFun}
         end,
     WorkItems0 = lists:map(MapPeerToWIFun, PeerInfo),
     WorkItems =
@@ -401,8 +423,8 @@ work(WorkItem) ->
 repl_fetcher(WorkItem) ->
     SW = os:timestamp(),
     try
-        {{QueueName, _PeerID}, LocalClient, RemoteClient} = WorkItem,
-        case rhc:fetch(RemoteClient, QueueName) of
+        {{QueueName, _PeerID}, LocalClient, RemoteFun} = WorkItem,
+        case RemoteFun(QueueName) of
             {ok, queue_empty} ->
                 SW0 = os:timestamp(),
                 EmptyFetchSplit = timer:now_diff(SW0, SW) div 1000,
@@ -486,19 +508,22 @@ add_modtime({S, F, RT, MT}, ModTime) ->
 -spec adjust_wait(boolean(), reply_tuple(), peer_id(), list(peer_info()))
                                     -> {non_neg_integer(), list(peer_info())}.
 adjust_wait(true, {queue_empty, _T}, PeerID, PeerList) ->
-    {PeerID, Delay, H, P} = lists:keyfind(PeerID, 1, PeerList),
-    Delay0 = increment_delay(Delay),
-    PeerList0 = lists:keyreplace(PeerID, 1, PeerList, {PeerID, Delay0, H, P}),
+    Peer = lists:keyfind(PeerID, 1, PeerList),
+    Delay0 = increment_delay(element(2, Peer)),
+    PeerList0 =
+        lists:keyreplace(PeerID, 1, PeerList, setelement(2, Peer, Delay0)),
     {Delay0, PeerList0};
 adjust_wait(true, _, PeerID, PeerList) ->
-    {PeerID, Delay, H, P} = lists:keyfind(PeerID, 1, PeerList),
-    Delay0 = Delay bsr 1,
-    PeerList0 = lists:keyreplace(PeerID, 1, PeerList, {PeerID, Delay0, H, P}),
+    Peer = lists:keyfind(PeerID, 1, PeerList),
+    Delay0 = element(2, Peer) bsr 1,
+    PeerList0 =
+        lists:keyreplace(PeerID, 1, PeerList, setelement(2, Peer, Delay0)),
     {Delay0, PeerList0};
 adjust_wait(false, _, PeerID, PeerList) ->
-    {PeerID, _Delay, H, P} = lists:keyfind(PeerID, 1, PeerList),
+    Peer = lists:keyfind(PeerID, 1, PeerList),
     Delay0 = ?ON_ERROR_DELAYMS,
-    PeerList0 = lists:keyreplace(PeerID, 1, PeerList, {PeerID, Delay0, H, P}),
+    PeerList0 =
+        lists:keyreplace(PeerID, 1, PeerList, setelement(2, Peer, Delay0)),
     {Delay0, PeerList0}.
 
 -spec increment_delay(non_neg_integer()) -> non_neg_integer().
@@ -543,17 +568,24 @@ log_mapfun({QueueName, SinkWork}) ->
 
 tokenise_test() ->
     String1 = "127.0.0.1:12008|127.0.0.1:12009|127.0.0.1:12009",
-    Peer1 = {1, ?STARTING_DELAYMS, "127.0.0.1", 12008},
-    Peer2 = {2, ?STARTING_DELAYMS, "127.0.0.1", 12009},
-    Peer3 = {3, ?STARTING_DELAYMS, "127.0.0.1", 12009},
+    Peer1A = {1, ?STARTING_DELAYMS, "127.0.0.1", 12008, http},
+    Peer2A = {2, ?STARTING_DELAYMS, "127.0.0.1", 12009, http},
+    Peer3A = {3, ?STARTING_DELAYMS, "127.0.0.1", 12009, http},
         % references not de-duped, allows certain peers to double-up on worker
         % time
-    ?assertMatch([Peer1, Peer2, Peer3], tokenise_peers(String1)).
+    ?assertMatch([Peer1A, Peer2A, Peer3A], tokenise_peers(String1)),
+    String2 = "127.0.0.1:12008:pb|127.0.0.1:12009:pb|127.0.0.1:12009:pb",
+    Peer1B = {1, ?STARTING_DELAYMS, "127.0.0.1", 12008, pb},
+    Peer2B = {2, ?STARTING_DELAYMS, "127.0.0.1", 12009, pb},
+    Peer3B = {3, ?STARTING_DELAYMS, "127.0.0.1", 12009, pb},
+        % references not de-duped, allows certain peers to double-up on worker
+        % time
+    ?assertMatch([Peer1B, Peer2B, Peer3B], tokenise_peers(String2)).
 
 determine_workitems_test() ->
-    Peer1 = {1, ?STARTING_DELAYMS, "127.0.0.1", 12008},
-    Peer2 = {2, ?STARTING_DELAYMS, "127.0.0.1", 12009},
-    Peer3 = {3, ?STARTING_DELAYMS, "127.0.0.1", 12009},
+    Peer1 = {1, ?STARTING_DELAYMS, "127.0.0.1", 12008, http},
+    Peer2 = {2, ?STARTING_DELAYMS, "127.0.0.1", 12009, http},
+    Peer3 = {3, ?STARTING_DELAYMS, "127.0.0.1", 12009, http},
     WC1 = 5,
     {MQL1, WIL1} = determine_workitems(queue1, [Peer1, Peer2, Peer3], WC1),
     ?assertMatch(10, MQL1),

@@ -130,22 +130,6 @@ format_response(internal, UnexpectedResponse, RD, Ctx) ->
     {{error, unexpected}, RD, Ctx}.
 
 encode_riakobject(RObj) ->
-    B = riak_object:bucket(RObj),
-    K = riak_object:key(RObj),
-    KS = byte_size(K),
-    ObjBK =
-        case B of
-            {T, B0} ->
-                TS = byte_size(T),
-                B0S = byte_size(B0),
-                <<TS:32/integer, T/binary, B0S:32/integer, B0/binary,
-                    KS:32/integer, K/binary>>;
-            B0 ->
-                B0S = byte_size(B0),
-                <<0:32/integer, B0S:32/integer, B0/binary,
-                    KS:32/integer, K/binary>>
-        end,
-    ObjBin = riak_object:to_binary(v1, RObj),
-    FullObjBin = <<ObjBK/binary, ObjBin/binary>>,
+    FullObjBin = riak_object:nextgenrepl_encode(repl_v1, RObj),
     CRC = erlang:crc32(FullObjBin),
     <<CRC:32/integer, FullObjBin/binary>>. 
