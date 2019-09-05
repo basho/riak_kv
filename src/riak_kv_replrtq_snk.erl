@@ -373,13 +373,14 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
                 case Protocol of
                     http ->
                         HTC = rhc:create(Host, Port, "riak", []),
-                        {HTC, fun rhc:fetch/2, Host, Port};
+                        fun(QN) -> rhc:fetch(HTC, QN) end;
                     pb ->
-                        fun(QN, CurrentPid) ->
-                            PBC =
-                                check_current_pbclient(CurrentPid, Host, Port),
+                        fun(QN) ->
+                            {ok, Pid} = riakc_pb_socket:start(Host, Port),
                             QNB = atom_to_binary(QN, utf8),
-                            riakc_pb_socket:fetch(PBC, QNB)
+                            R = riakc_pb_socket:fetch(Pid, QNB),
+                            riakc_pb_socket:stop(Pid),
+                            R
                         end
                 end,
             {{QueueName, PeerID}, LocalClient, RemoteClientFun}
@@ -391,20 +392,6 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
                     lists:seq(1, WorkerCount)),
     {length(WorkItems) - WorkerCount, WorkItems}.
 
-
-check_current_pbclient(Pid, Host, Port) ->
-    case is_pid(Pid) of
-        true ->
-            case is_process_alive(Pid) of
-                true ->
-                    Pid;
-                _ ->
-                    check_current_pbclient(dummy, Host, Port)
-            end;
-        _ ->
-            {ok, NewPid} = riakc_pb_socket:start(Host, Port),
-            NewPid
-    end.
 
 %% @doc
 %% For an item of work which has been removed from the work queue, spawn a
@@ -463,8 +450,8 @@ repl_fetcher(WorkItem) ->
         end
     catch
         Type:Exception ->
-            lager:warning("Snk worker failed due to ~w exception ~w", 
-                            [Type, Exception]),
+            lager:warning("Snk worker failed due to ~w:~w with trace ~w", 
+                            [Type, Exception, erlang:get_stacktrace()]),
             done_work(WorkItem, false, {error, Type, Exception})
     end.
 
