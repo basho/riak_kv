@@ -43,7 +43,7 @@
 %% API
 -export([start_link/0, get_stats/0,
          update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1,
-  produce_stats/0, get_value/1, get_stat/1, get_info/0, aggregate/2,
+  produce_stats/0, get_value/1, get_info/0, aggregate/2,
          leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
@@ -57,7 +57,7 @@
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
--define(PFX, riak_core_stat_admin:prefix()).
+-define(PFX, riak_stat:prefix()).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -66,7 +66,7 @@ register_stats() ->
   register_stats(stats()).
 
 register_stats(Stats) ->
-  riak_core_stat_admin:register(?APP, Stats).
+    riak_stat:register(?APP, Stats).
 
 unregister_vnode_stats(Index) ->
     unregister_per_index(gets, Index),
@@ -79,16 +79,13 @@ get_stats() ->
   get_stats(?APP).
 
 get_stats(Arg) ->
-  riak_core_stat_admin:get_stats(Arg).
-
-get_stat(Arg) ->
-  riak_core_stat_admin:get_stat(Arg).
+    riak_stat:get_stats(Arg).
 
 get_value(Arg) ->
-  riak_core_stat_admin:get_value(Arg).
+    riak_stat:get_value(Arg).
 
 get_info() ->
-  riak_core_stat_admin:get_info(?APP).
+    riak_stat:get_info(?APP).
 
 %% Creation of a dynamic stat _must_ be serialized.
 %%register_stat(Name, Type) ->
@@ -96,7 +93,7 @@ get_info() ->
 %% gen_server:call(?SERVER, {register, Name, Type}).
 
 aggregate(Stats, DPs) ->
-  riak_core_stat_admin:aggregate(Stats, DPs).
+    riak_stat:aggregate(Stats, DPs).
 
 update(Arg) ->
     maybe_dispatch_to_sidejob(erlang:module_loaded(riak_kv_stat_sj), Arg).
@@ -395,8 +392,8 @@ do_per_index(Op, Idx, USecs) ->
 
 unregister_per_index(Op, Idx) ->
   IdxAtom = list_to_atom(integer_to_list(Idx)),
-  riak_core_stat_admin:unregister(?APP, Op, IdxAtom, vnode),
-  riak_core_stat_admin:unregister([Op, time], IdxAtom, vnode, ?APP).
+    riak_stat:unregister(?APP, Op, IdxAtom, vnode),
+    riak_stat:unregister([Op, time], IdxAtom, vnode, ?APP).
 
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
@@ -488,7 +485,7 @@ do_repairs(Indices, Preflist) ->
 %% for dynamically created / dimensioned stats
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
-  riak_core_stat_admin:update(lists:flatten([?PFX, ?APP | [Name]]), UpdateVal, Type).
+    riak_stat:update(lists:flatten([?PFX, ?APP | [Name]]), UpdateVal, Type).
 
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
@@ -992,14 +989,14 @@ stat_repair_loop(Dad) ->
 leveldb_rbe_test_() ->
     {foreach,
      fun() ->
-	     riak_core_stat_exometer:start(),
+	     exometer:start(),
              meck:new(riak_core_ring_manager),
              meck:new(riak_core_ring),
              meck:new(riak_kv_vnode),
              meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, [fake_ring]} end)
      end,
      fun(_) ->
-	     riak_core_stat_exometer:stop(),
+	      exometer:stop(),
              meck:unload(riak_kv_vnode),
              meck:unload(riak_core_ring),
              meck:unload(riak_core_ring_manager)
@@ -1012,7 +1009,7 @@ leveldb_rbe_test_() ->
     }.
 
 start_exometer_test_env() ->
-    ok = riak_core_stat_exometer:start(),
+    ok = exometer:start(),
     ok = meck:new(riak_core_ring_manager),
     ok = meck:new(riak_core_ring),
     ok = meck:new(riak_kv_vnode),
@@ -1020,7 +1017,7 @@ start_exometer_test_env() ->
     meck:expect(riak_core_ring_manager, get_my_ring, fun() -> {ok, [fake_ring]} end).
 
 stop_exometer_test_env() ->
-    ok = riak_core_stat_exometer:stop(),
+    ok = exometer:stop(),
     ok = meck:unload(riak_kv_vnode),
     ok = meck:unload(riak_core_ring),
     meck:unload(riak_core_ring_manager).
@@ -1030,7 +1027,7 @@ create_or_update_histogram_test() ->
     try
         Metric = [riak_kv,put_fsm,counter,time],
         ok = repeat_create_or_update(Metric, 1, histogram, 100),
-        ?assertNotEqual(riak_core_stat_admin:get_stat_value(Metric), 0),
+        ?assertNotEqual(riak_stat_exom:get_value(Metric), 0),
         Stats = get_stats(),
         %%lager:info("stats prop list ~s", [Stats]),
         ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0)
