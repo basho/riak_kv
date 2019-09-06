@@ -72,10 +72,13 @@
 -type remote_fun() ::
     fun((queue_name()) ->
         {ok, queue_empty}|{ok, {deleted, any(), binary()}}|{ok, binary()}).
+-type renew_fun() :: fun(() -> any()).
 
 
 -type work_item() ::
-    {{queue_name(), peer_id()}, riak_client:riak_client(), remote_fun()}.
+    {{queue_name(), peer_id()},
+        riak_client:riak_client(),
+        remote_fun(), renew_fun()}.
     % Identifier for the work item  - and the local and remote clients to use
 
 -type sink_work() ::
@@ -251,7 +254,7 @@ handle_cast(prompt_work, State) ->
     Work0 = lists:map(fun do_work/1, State#state.work),
     {noreply, State#state{work = Work0}};
 handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
-    {{QueueName, PeerID}, _LC, _RC} = WorkItem,
+    {{QueueName, PeerID}, _LC, _RC, _RNCF} = WorkItem,
     case lists:keyfind(QueueName, 1, State#state.work) of
         false ->
             % Work profile has changed since this work was prompted
@@ -279,7 +282,7 @@ handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
             {noreply, State#state{work = UpdWork}}
     end;
 handle_cast({requeue_work, WorkItem}, State) ->
-    {{QueueName, _PeerID}, _LC, _RC} = WorkItem,
+    {{QueueName, _PeerID}, _LC, _RC, _RNCF} = WorkItem,
     case lists:keyfind(QueueName, 1, State#state.work) of
         false ->
             % Work profile has changed since this work was requeued
@@ -369,21 +372,43 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
     MapPeerToWIFun =
         fun({PeerID, _Delay, Host, Port, Protocol}) ->
             LocalClient = riak_client:new(node(), undefined),
-            RemoteClientFun = 
+            InitClientFun = 
                 case Protocol of
                     http ->
-                        HTC = rhc:create(Host, Port, "riak", []),
-                        fun(QN) -> rhc:fetch(HTC, QN) end;
+                        fun() -> rhc:create(Host, Port, "riak", []) end;
                     pb ->
-                        fun(QN) ->
-                            {ok, Pid} = riakc_pb_socket:start(Host, Port),
-                            QNB = atom_to_binary(QN, utf8),
-                            R = riakc_pb_socket:fetch(Pid, QNB),
-                            riakc_pb_socket:stop(Pid),
-                            R
+                        fun() ->
+                            Opts = [{silence_terminate_crash, true}],
+                            case riakc_pb_socket:start(Host, Port, Opts) of 
+                                {ok, PBpid} ->
+                                    PBpid;
+                                _ ->
+                                    no_pid
+                            end
                         end
                 end,
-            {{QueueName, PeerID}, LocalClient, RemoteClientFun}
+            GenClientFun = 
+                case Protocol of
+                    http ->
+                        fun() ->
+                            HTC = InitClientFun(),
+                            fun(QN) -> rhc:fetch(HTC, QN) end
+                        end;
+                    pb ->
+                        fun() ->
+                            PBC = InitClientFun(),
+                            fun(QN) ->
+                                case check_pbc_client(PBC) of
+                                    true ->
+                                        QNB = atom_to_binary(QN, utf8),
+                                        riakc_pb_socket:fetch(PBC, QNB);
+                                    _ ->
+                                        {error, no_pbc_client}
+                                end
+                            end
+                        end
+                end,
+            {{QueueName, PeerID}, LocalClient, GenClientFun(), GenClientFun}
         end,
     WorkItems0 = lists:map(MapPeerToWIFun, PeerInfo),
     WorkItems =
@@ -391,6 +416,11 @@ determine_workitems(QueueName, PeerInfo, WorkerCount) ->
                     [],
                     lists:seq(1, WorkerCount)),
     {length(WorkItems) - WorkerCount, WorkItems}.
+
+check_pbc_client(no_pid) ->
+    false;
+check_pbc_client(PBC) ->
+    is_process_alive(PBC).
 
 
 %% @doc
@@ -428,8 +458,8 @@ work(WorkItem) ->
 -spec repl_fetcher(work_item()) -> ok.
 repl_fetcher(WorkItem) ->
     SW = os:timestamp(),
+    {{QueueName, _PeerID}, LocalClient, RemoteFun, RenewClientFun} = WorkItem,
     try
-        {{QueueName, _PeerID}, LocalClient, RemoteFun} = WorkItem,
         case RemoteFun(QueueName) of
             {ok, queue_empty} ->
                 SW0 = os:timestamp(),
@@ -450,9 +480,10 @@ repl_fetcher(WorkItem) ->
         end
     catch
         Type:Exception ->
-            lager:warning("Snk worker failed due to ~w:~w with trace ~w", 
-                            [Type, Exception, erlang:get_stacktrace()]),
-            done_work(WorkItem, false, {error, Type, Exception})
+            lager:warning("Snk worker failed due to ~w error ~w", 
+                            [Type, Exception]),
+            UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
+            done_work(UpdWorkItem, false, {error, Type, Exception})
     end.
 
 %% @doc
@@ -596,13 +627,13 @@ determine_workitems_test() ->
     {MQL1, WIL1} = determine_workitems(queue1, [Peer1, Peer2, Peer3], WC1),
     ?assertMatch(10, MQL1),
     ?assertMatch(15, length(WIL1)),
-    WIL1A = lists:map(fun({K, _LC, _RC}) -> K end, WIL1),
+    WIL1A = lists:map(fun({K, _LC, _RC, _RNCF}) -> K end, WIL1),
     ?assertMatch([{queue1, 1}, {queue1, 2}, {queue1, 3}], lists:sublist(WIL1A, 3)),
 
     {MQL2, WIL2} = determine_workitems(queue1, [Peer1], WC1),
     ?assertMatch(0, MQL2),
     ?assertMatch(5, length(WIL2)),
-    WIL2A = lists:map(fun({K, _LC, _RC}) -> K end, WIL2),
+    WIL2A = lists:map(fun({K, _LC, _RC, _RNCF}) -> K end, WIL2),
     ?assertMatch([{queue1, 1}, {queue1, 1}, {queue1, 1}], lists:sublist(WIL2A, 3)).
 
 adjust_wait_test() ->
