@@ -193,8 +193,8 @@ malformed_request(RD, Ctx) ->
 %%      string-encoded integer.  Store the integer value
 %%      in context() if so.
 malformed_timeout_param(RD, Ctx) ->
-    case wrq:get_qs_value("timeout", none, RD) of
-        none ->
+    case wrq:get_qs_value("timeout", RD) of
+        undefined ->
             {false, RD, Ctx};
         TimeoutStr ->
             try

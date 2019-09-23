@@ -41,9 +41,9 @@
                 remote      :: vnode(),
                 index_n     :: index_n(),
                 local_tree  :: pid(),
-                remote_tree :: pid(),
+                remote_tree :: pid() | undefined,
                 built       :: non_neg_integer(),
-                timer       :: reference(),
+                timer       :: reference() | undefined,
                 timeout     :: pos_integer()
                }).
 
@@ -293,7 +293,7 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, _Reason}) ->
             BKey = {Bucket, Key},
             repair_consistent(BKey);
         false ->
-            RC:get(Bucket, Key)
+            riak_client:get(Bucket, Key, RC)
     end,
     %% Force vnodes to update AAE tree in case read repair wasn't triggered
     riak_kv_vnode:rehash([LocalVN, RemoteVN], Bucket, Key),

@@ -60,7 +60,8 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
         {R, PR, PassThruOpts} ->
             RealStartTime = riak_core_util:moment(),
             {ok, C} = riak:local_client(),
-            case C:get(Bucket,Key,[{r,R},{pr,PR},{timeout,Timeout}]++PassThruOpts) of
+            GetOpts = [{r,R}, {pr,PR}, {timeout,Timeout}] ++ PassThruOpts,
+            case riak_client:get(Bucket, Key, GetOpts, C) of
                 {ok, OrigObj} ->
                     RemainingTime = Timeout - (riak_core_util:moment() - RealStartTime),
                     delete(ReqId,Bucket,Key,Options,RemainingTime,Client,ClientId,riak_object:vclock(OrigObj));
@@ -83,8 +84,9 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
-            {ok,C} = riak:local_client(ClientId),
-            Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]++PassThruOptions),
+            {ok, C} = riak:local_client(ClientId),
+            PutOpts = [{w,W}, {pw,PW}, {dw, DW}, {timeout,Timeout}] ++ PassThruOptions,
+            Reply = riak_client:put(Tombstone, PutOpts, C),
             Client ! {ReqId, Reply},
             HasCustomN_val = proplists:get_value(n_val, Options) /= undefined,
             case Reply of
@@ -92,7 +94,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
                     ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
-                    Res = C2:get(Bucket, Key, all, AsyncTimeout),
+                    Res = riak_client:get(Bucket, Key, all, AsyncTimeout, C2),
                     ?DTRACE(?C_DELETE_REAPER_GET_DONE, [1], [<<"reap">>]),
                     Res;
                 _ ->

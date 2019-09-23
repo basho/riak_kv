@@ -38,7 +38,7 @@ start_link() ->
 
 -spec(init(Args :: term()) ->
     {ok, {SupFlags :: {RestartStrategy :: supervisor:strategy(),
-        MaxR :: non_neg_integer(), MaxT :: non_neg_integer()},
+        MaxR :: non_neg_integer(), MaxT :: pos_integer()},
         [ChildSpec :: supervisor:child_spec()]
     }}).
 init([]) ->

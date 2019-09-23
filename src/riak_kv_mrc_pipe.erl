@@ -331,7 +331,7 @@ mapred_plan(BucketOrList, Query) ->
                     BucketOrList;
                is_binary(BucketOrList) ->
                     {ok, C} = riak:local_client(),
-                    {ok, Keys} = C:list_keys(BucketOrList),
+                    {ok, Keys} = riak_client:list_keys(BucketOrList, C),
                     [{BucketOrList, Key} || Key <- Keys]
             end,
     [{bkeys, BKeys}|mapred_plan(Query)].
@@ -1045,14 +1045,18 @@ example_setup() ->
 -spec example_setup(pos_integer()) -> ok.
 example_setup(Num) when Num > 0 ->
     {ok, C} = riak:local_client(),
-    C:put(riak_object:new(<<"foo">>, <<"bar">>, <<"what did you expect?">>)),
-    _ = [C:put(riak_object:new(<<"foo">>,
+    riak_client:put(riak_object:new(<<"foo">>, <<"bar">>,
+                                    <<"what did you expect?">>),
+                                    C),
+    _ = [riak_client:put(riak_object:new(<<"foo">>,
                            list_to_binary("bar"++integer_to_list(X)),
-                           list_to_binary("bar val "++integer_to_list(X))))
+                           list_to_binary("bar val "++integer_to_list(X))),
+                            C)
      || X <- lists:seq(1, Num)],
-    _ = [C:put(riak_object:new(<<"foonum">>,
+    _ = [riak_client:put(riak_object:new(<<"foonum">>,
                            list_to_binary("bar"++integer_to_list(X)),
-                           X)) ||
+                           X),
+                           C) ||
         X <- lists:seq(1, Num)],
     ok.
 

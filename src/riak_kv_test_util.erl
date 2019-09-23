@@ -265,6 +265,9 @@ dep_apps(Test, Extra) ->
                 %% Set some missing env vars that are normally part of
                 %% release packaging. These can be overridden by the
                 %% Extra fun.
+                application:set_env(riak_ensemble,
+                                    data_root,
+                                    get_test_dir(Test) ++ "ensemble"),
                 application:set_env(riak_core, ring_creation_size, 64),
                 application:set_env(riak_core,
                                     ring_state_dir,

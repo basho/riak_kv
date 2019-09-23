@@ -16,7 +16,13 @@
                   os_mon,
                   riak_pipe,
                   riak_dt,
-                  riak_pb
+                  riak_pb,
+                  sext,
+                  leveled,
+                  kv_index_tictactree,
+                  gen_fsm_compat,
+                  riak_ensemble,
+                  exometer_core
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},

@@ -347,11 +347,10 @@ fix_incorrect_index_entries(Idx, FixFun, Acc0, FixOpts) ->
         {_,_,ErrorCount}=Res ->
             MarkRes = mark_indexes_reformatted(Idx, ErrorCount, ForUpgrade),
             case MarkRes of
-                error ->
-                    %% there was an error marking the partition as reformatted. treat this like
-                    %% any other error (indicating the need to re-run reformatting)
-                    {element(1, Res), element(2, Res), 1};
-                _ -> Res
+                ok ->
+                    Res;
+                undefined ->
+                    Res
             end
     end.
 
