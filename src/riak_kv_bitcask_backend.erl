@@ -57,7 +57,7 @@
 -define(VERSION_FILE, "version.txt").
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold,size]).
--define(TERMINAL_POSIX_ERRORS, [eacces, erofs, enodev]).
+-define(TERMINAL_POSIX_ERRORS, [eacces, erofs, enodev, enospc]).
 
 %% must not be 131, otherwise will match t2b in error
 %% yes, I know that this is horrible.
