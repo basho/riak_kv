@@ -57,6 +57,7 @@
 -define(VERSION_FILE, "version.txt").
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold,size]).
+-define(TERMINAL_POSIX_ERRORS, [eacces, erofs, enodev]).
 
 %% must not be 131, otherwise will match t2b in error
 %% yes, I know that this is horrible.
@@ -233,6 +234,11 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
         ok ->
             {ok, State};
         {error, Reason} ->
+            lager:warning("Backend put error ~p", [Reason]),
+            % Should crash if the error is a permanent file system error
+            false =
+                is_tuple(Reason) and
+                    lists:member(element(2, Reason), ?TERMINAL_POSIX_ERRORS),
             {error, Reason, State}
     end.
 
