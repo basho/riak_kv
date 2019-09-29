@@ -14,7 +14,7 @@
           ref :: reference(), % the pipe ref (so we don't have to dig)
           pipe :: riak_pipe:pipe(),
           sink :: {pid(), reference()}, % sink and monitor
-          sender :: {pid(), reference()}, % async sender and monitor
-          timer :: {reference(), reference()}, % timeout timer and pipe ref
+          sender :: {pid(), reference()} | undefined, % async sender and monitor
+          timer :: {reference(), reference()} | undefined, % timeout timer and pipe ref
           keeps :: integer()
          }).

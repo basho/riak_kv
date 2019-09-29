@@ -207,7 +207,7 @@ malformed_cached_tree_request(NVal, RD, Ctx) ->
               }};
         Q when Q == "branch";
                Q == "keysclocks" ->
-            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
             malformed_cached_tree_request_filter(list_to_existing_atom(Q), Filter0, NVal, RD, Ctx);
         Other ->
             malformed_response("unkown cached aae tree query ~p",
@@ -273,7 +273,7 @@ malformed_range_tree_request(undefined=_TreeSize, RD, Ctx) ->
     QueryType = riak_kv_wm_utils:maybe_decode_uri(RD, lists:last(path_tokens(RD))),
     case QueryType of
         "keysclocks" ->
-            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
             malformed_range_tree_keysclocks_request(Filter0, RD, Ctx);
         Other ->
             malformed_response("Invalid rangetree aae query ~p",
@@ -286,7 +286,7 @@ malformed_range_tree_request(TreeSize0, RD, Ctx) ->
         {invalid, Reason} ->
             malformed_response("Invalid treesize ~p", [Reason], RD, Ctx);
         {valid, TreeSize} ->
-            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
             malformed_range_tree_request(Filter0, TreeSize, RD, Ctx)
     end.
 
@@ -367,7 +367,7 @@ malformed_find_keys_request({QType, UrlArg}, {invalid, Reason}, RD, Ctx) ->
                        RD,
                        Ctx);
 malformed_find_keys_request({QType, _UrlArg}, {valid, QArg}, RD, Ctx) ->
-    Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+    Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
     case validate_range_filter(Filter0) of
         {invalid, Reason} ->
             malformed_response("Invalid range filter ~p",
@@ -399,7 +399,7 @@ malformed_object_stats_request(RD, Ctx) ->
                        riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
                       ),
             Ctx2 = Ctx#ctx{bucket=Bucket},
-            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
             case validate_range_filter(Filter0) of
                 {invalid, Reason} ->
                     malformed_response("Invalid range filter ~p",
@@ -922,7 +922,7 @@ setup_reqdata({_Q, PathTokens0, PathInfo}, Filter) ->
                                         proplists:get_value(Name, PathInfo)
                                 end),
     EncodedFilter = encode_filter(Filter),
-    meck:expect(wrq, get_qs_value, fun(?Q_AAEFOLD_FILTER, undefined, _) ->
+    meck:expect(wrq, get_qs_value, fun(?Q_AAEFOLD_FILTER, _) ->
                                           EncodedFilter
                                    end),
     %% for riak_kv_web_utils

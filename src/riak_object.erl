@@ -67,7 +67,7 @@
 -record(p_object, {
             r_object :: riak_object(),
             proxy :: tuple(),
-            size :: integer()}).
+            size = 0 :: integer()}).
 
 -opaque riak_object() :: #r_object{}.
 -opaque proxy_object() :: #p_object{}.
@@ -204,8 +204,6 @@ equal_contents([C1|R1],[C2|R2]) ->
 %%       the other objects in Objects, and can safely be discarded from the list
 %%       without losing data.
 -spec ancestors([riak_object()]) -> [riak_object()].
-ancestors(pure_baloney_to_fool_dialyzer) ->
-    [#r_object{vclock = vclock:fresh()}];
 ancestors(Objects) ->
     [ O2 || O1 <- Objects, O2 <- Objects, strict_descendant(O1, O2) ].
 
@@ -305,7 +303,7 @@ find_bestobject(FetchedItems) ->
     end.
 
 
--spec is_head(any()) -> boolean().
+-spec is_head({ok, riak_object()}|riak_object()) -> boolean().
 %% @private Check if an object is simply a head response
 is_head({ok, #r_object{contents=Contents}}) ->
     C0 = lists:nth(1, Contents),
@@ -320,7 +318,7 @@ is_head({ok, #p_object{}}) ->
 is_head(Obj) ->
     is_head({ok, Obj}).
 
-
+-spec spoof_getdeletedobject(riak_object()) -> riak_object().
 %% @doc
 %% If an object has been confirmed as deleted by riak_util:is_x_deleted, then
 %% any head_only contents can be uplifted to a GET-equivalent by swapping the
@@ -949,8 +947,7 @@ index_specs(Obj) ->
 %% indexes with the indexes specified in the object passed as the
 %% second parameter. If there are siblings only the unique new
 %% indexes are added.
--spec diff_index_specs('undefined' | riak_object(),
-                       'undefined' | riak_object()) ->
+-spec diff_index_specs(undefined | riak_object(), undefined | riak_object()) ->
     [{index_op(), binary(), index_value()}].
 diff_index_specs(Obj, OldObj) ->
     OldIndexes = index_data(OldObj),
@@ -980,7 +977,7 @@ diff_specs_core(AllIndexSet, OldIndexSet) ->
 
 %% @doc Get a list of {Index, Value} tuples from the
 %% metadata of an object.
--spec index_data(riak_object()) -> [{binary(), index_value()}].
+-spec index_data(riak_object() | undefined) -> [{binary(), index_value()}].
 index_data(undefined) ->
     [];
 index_data(Obj) ->
@@ -1106,12 +1103,7 @@ approximate_size(Vsn, Obj=#r_object{bucket=Bucket,key=Key,vclock=VClock}) ->
 %% return 0
 -spec proxy_size(proxy_object()) -> integer().
 proxy_size(Obj) ->
-    case Obj#p_object.size of
-        undefined ->
-            0;
-        S ->
-            S
-    end.
+    Obj#p_object.size.
 
 contents_size(Vsn, Contents) ->
     lists:sum([metadata_size(Vsn, MD) + value_size(Val) || {MD, Val} <- Contents]).

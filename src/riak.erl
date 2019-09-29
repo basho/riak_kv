@@ -177,7 +177,7 @@ code_hash() ->
 -define(CLIENT_TEST_KEY, <<"key1">>).
 
 client_test_phase1(Client) ->
-    case Client:get(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY, 1) of
+    case riak_client:get(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY, 1, Client) of
         {ok, Object} ->
             client_test_phase2(Client, Object);
         {error, notfound} ->
@@ -190,7 +190,7 @@ client_test_phase1(Client) ->
 client_test_phase2(Client, Object0) ->
     Now = calendar:universal_time(),
     Object = riak_object:update_value(Object0, Now),
-    case Client:put(Object, 1) of
+    case riak_client:put(Object, 1, Client) of
         ok ->
             client_test_phase3(Client, Now);
         Error ->
@@ -199,7 +199,7 @@ client_test_phase2(Client, Object0) ->
     end.
 
 client_test_phase3(Client, WrittenValue) ->
-    case Client:get(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY, 1) of
+    case riak_client:get(?CLIENT_TEST_BUCKET, ?CLIENT_TEST_KEY, 1, Client) of
         {ok, Object} ->
             case lists:member(WrittenValue, riak_object:get_values(Object)) of
                 true ->

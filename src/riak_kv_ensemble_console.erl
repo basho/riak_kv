@@ -39,7 +39,7 @@
                   metadata    :: async  | sync,
                   ensembles   :: ensembles(),
                   quorums     :: quorums(),
-                  peer_info   :: orddict(peer_id(), peer_info()),
+                  peer_info   :: orddict(peer_id(), peer_info()) | undefined,
                   nodes       :: [node()],
                   ring_ready  :: boolean()
                  }).
@@ -421,14 +421,18 @@ print_variations() ->
     Dev3 = 'dev3@127.0.0.1',
     Dev4 = 'dev4@127.0.0.1',
     Ensembles = [{test,
-                  #ensemble_info{views  = [[{test, Dev1},
+                  #ensemble_info{views = [[{test, Dev1},
                                             {test, Dev2},
-                                            {test, Dev3}]]}
+                                            {test, Dev3}]],
+                                    vsn = {0, 0},
+                                    seq = {0, 0}}
                  },
                  {test2,
-                  #ensemble_info{views  = [[{test2, Dev1},
+                  #ensemble_info{views = [[{test2, Dev1},
                                             {test2, Dev2},
-                                            {test2, Dev3}]]}
+                                            {test2, Dev3}]],
+                                    vsn = {0, 0},
+                                    seq = {0, 0}}
                  }],
     Quorums = [{test, {{test, Dev1},
                        true,
@@ -447,12 +451,16 @@ print_variations() ->
                                              {test, Dev3}],
                                             [{test, Dev1},
                                              {test, Dev2},
-                                             {test, Dev4}]]}
+                                             {test, Dev4}]],
+                                    vsn = {0, 0},
+                                    seq = {0, 0}}
                   },
                   {test2,
                    #ensemble_info{views  = [[{test2, Dev1},
                                              {test2, Dev2},
-                                             {test2, Dev3}]]}
+                                             {test2, Dev3}]],
+                                    vsn = {0, 0},
+                                    seq = {0, 0}}
                   }],
     Details7 = Details5#details{ensembles=Ensembles2, quorums=Quorums},
     ensemble_overview(Details7),

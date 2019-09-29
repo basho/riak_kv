@@ -98,7 +98,7 @@ init_phase({Anon, {Bucket, Key}})
   when Anon =:= strfun ->
     %% lookup source for stored functions only at fitting worker startup
     {ok, C} = riak:local_client(),
-    case C:get(Bucket, Key, 1) of
+    case riak_client:get(Bucket, Key, 1, C) of
         {ok, Object} ->
             case riak_object:get_value(Object) of
                 Source when Anon =:= strfun,
@@ -140,20 +140,12 @@ process(Input, _Last,
         {ok, _NonListResults} ->
             ?T(_FittingDetails, [map, error],
                {error, {non_list_result, Input}}),
-            {ok, State};
-        {forward_preflist, Reason} ->
-            ?T(_FittingDetails, [map], {forward_preflist, Reason}),
-            {forward_preflist, State};
-        {error, Error} ->
-            ?T(_FittingDetails, [map, error], {error, {Error, Input}}),
             {ok, State}
     end.
         
 %% @doc Evaluate the map function.
 -spec map(riak_kv_mrc_pipe:map_query_fun(), term(), term())
-         -> {ok, term()}
-          | {forward_preflist, Reason :: term()}
-          | {error, Reason :: term()}.
+         -> {ok, term()} | {forward_preflist, Reason :: term()}.
 map({modfun, Module, Function}, Arg, Input0) ->
     Input = erlang_input(Input0),
     KeyData = erlang_keydata(Input0),

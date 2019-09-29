@@ -58,12 +58,24 @@
                 acc = [] :: list(result_score()),
                 start_time = os:timestamp() :: erlang:timestamp()}).
 
+-type backup_state() :: #state{}.
+
+-type init_response() ::
+        {riak_kv_requests:hotbackup_request(),
+            all,
+            pos_integer(),
+            pos_integer(),
+            riak_kv,
+            riak_kv_vnode_master,
+            pos_integer(),
+            backup_state()}.
+
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--spec init(from(), inbound_api()) -> tuple().
+-spec init(from(), inbound_api()) -> init_response().
 %% @doc 
 %% Return a tuple containing the ModFun to call per vnode, the number of 
 %% primary preflist vnodes the operation should cover, the service to use to 

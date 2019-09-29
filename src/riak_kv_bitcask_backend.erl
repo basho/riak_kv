@@ -69,7 +69,7 @@
 -define(VERSION_BYTE, ?VERSION_1).
 -define(CURRENT_KEY_TRANS, fun key_transform_to_1/1).
 
--record(state, {ref :: reference(),
+-record(state, {ref :: reference() | undefined,
                 data_dir :: string(),
                 opts :: [{atom(), term()}],
                 partition :: integer(),

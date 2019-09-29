@@ -42,6 +42,10 @@
 -define(LIST_ACCUMULATE_QUERIES,
             [fetch_clocks_nval, fetch_clocks_range, find_keys]).
 
+-record(state, {from :: from(),
+                acc :: query_return(),
+                query_type :: query_types(),
+                start_time :: erlang:timestamp()}).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -236,19 +240,26 @@
 -type keys() :: list({riak_object:bucket(), riak_object:key(), integer()}).
 -type object_stats() :: proplist:proplist().
 
--export_type([query_definition/0]).
+-type query_state() :: #state{}.
 
--record(state, {from :: from(),
-                acc :: query_return(),
-                query_type :: query_types(),
-                start_time :: erlang:timestamp()}).
+-type init_response() ::
+        {riak_kv_requests:aaefold_request(),
+            all,
+            pos_integer(),
+            pos_integer(),
+            riak_kv,
+            riak_kv_vnode_master,
+            pos_integer(),
+            query_state()}.
+
+-export_type([query_definition/0]).
 
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--spec init(from(), inbound_api()) -> tuple().
+-spec init(from(), inbound_api()) -> init_response().
 %% @doc 
 %% Return a tuple containing the ModFun to call per vnode, the number of 
 %% primary preflist vnodes the operation should cover, the service to use to 

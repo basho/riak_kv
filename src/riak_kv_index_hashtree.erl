@@ -304,7 +304,8 @@ init([Index, VNPid, Opts]) ->
                            built=false,
                            use_2i=Use2i,
                            path=Path,
-                           version=Version},
+                           version=Version,
+                           expired = false},
             IndexNs = responsible_preflists(State),
             State2 = init_trees(IndexNs, VNEmpty, State),
             %% If vnode is empty, mark tree as built without performing fold

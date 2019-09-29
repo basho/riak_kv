@@ -88,11 +88,11 @@
 
 -record(state, {data_ref :: ets:tid(),
                 index_ref :: ets:tid(),
-                time_ref :: ets:tid(),
+                time_ref :: ets:tid() | undefined,
                 max_memory :: undefined | integer(),
                 used_memory=0 :: integer(),
                 put_obj_size=0 :: integer(),
-                ttl :: integer()}).
+                ttl :: integer() | undefined}).
 
 -type state() :: #state{}.
 -type config() :: [].

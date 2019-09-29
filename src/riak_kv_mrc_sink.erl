@@ -107,8 +107,8 @@
 
 -record(state, {
           owner :: pid(),
-          builder :: pid(),
-          ref :: reference(),
+          builder :: pid() | undefined,
+          ref :: reference() | undefined,
           results=[] :: [{PhaseId::term(), Results::list()}],
           delayed_acks=[] :: list(),
           logs=[] :: list(),

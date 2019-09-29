@@ -49,8 +49,9 @@
 -define(INDEX_SCAN_TIMEOUT, 300000). % 5 mins, in case fold dies timeout
 -define(INDEX_REFRESH_TIMEOUT, 60000).
 
--type worker_status() :: starting | scanning_indexes | populating_hashtree |
-                         exchanging.
+-type worker_status() :: 
+        not_started |
+        starting | scanning_indexes | populating_hashtree | exchanging.
 
 -type partition_result() :: {Partition :: integer(),
                              {ok,  term()} | {error, term()}}.
@@ -77,7 +78,7 @@
          aae_pid_req_id :: reference() | undefined,
          aae_pid_timer :: reference() | undefined,
          worker_monitor :: reference() | undefined,
-         worker_status :: worker_status(),
+         worker_status = not_started :: worker_status(),
          index_scan_count = 0 :: integer(),
          hashtree_population_count = 0 :: integer(),
          exchange_count = 0 :: integer(),
