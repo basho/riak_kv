@@ -302,15 +302,11 @@ fix_incorrect_index_entries(Idx, FixFun, Acc0, FixOpts) ->
                                    {raw, Ref, self()},
                                    riak_kv_vnode_master),
     case process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, Acc0) of
-        ignore -> Acc0;
+        ignore ->
+                Acc0;
         {_,_,ErrorCount}=Res ->
-            MarkRes = mark_indexes_reformatted(Idx, ErrorCount, ForUpgrade),
-            case MarkRes of
-                ok ->
-                    Res;
-                undefined ->
-                    Res
-            end
+            _ = mark_indexes_reformatted(Idx, ErrorCount, ForUpgrade),
+            Res
     end.
 
 fix_incorrect_index_entry(Idx, ForUpgrade, BadKeys, {Success, Ignore, Error}) ->

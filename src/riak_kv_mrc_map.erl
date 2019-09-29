@@ -145,9 +145,7 @@ process(Input, _Last,
         
 %% @doc Evaluate the map function.
 -spec map(riak_kv_mrc_pipe:map_query_fun(), term(), term())
-         -> {ok, term()}
-          | {forward_preflist, Reason :: term()}
-          | {error, Reason :: term()}.
+         -> {ok, term()} | {forward_preflist, Reason :: term()}.
 map({modfun, Module, Function}, Arg, Input0) ->
     Input = erlang_input(Input0),
     KeyData = erlang_keydata(Input0),

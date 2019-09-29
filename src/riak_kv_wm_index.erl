@@ -186,7 +186,7 @@ malformed_request(RD, Ctx) ->
         undefined -> undefined;
         _ -> normalize_boolean(string:to_lower(PgSort0))
     end,
-    MaxResults0 = wrq:get_qs_value(?Q_2I_MAX_RESULTS, RD),
+    MaxVal = validate_max(wrq:get_qs_value(?Q_2I_MAX_RESULTS, RD)),
     TermRegex = wrq:get_qs_value(?Q_2I_TERM_REGEX, RD),
     Timeout0 =  wrq:get_qs_value("timeout", RD),
     {Start, End} = case {IndexField, Args2} of
@@ -197,7 +197,6 @@ malformed_request(RD, Ctx) ->
                    end,
     IsEqualOp = length(Args1) == 1,
     InternalReturnTerms = not( IsEqualOp orelse IndexField == <<"$field">> ),
-    MaxVal = validate_max(MaxResults0),
     QRes = riak_index:to_index_query(
              [
                 {field, IndexField}, {start_term, Start}, {end_term, End},
@@ -322,8 +321,8 @@ validate_max(N) when is_list(N) ->
         list_to_integer(N) of
         Max when Max > 0  ->
             {true, Max};
-        LessThanZero ->
-            {false, LessThanZero}
+        ZeroOrLess ->
+            {false, ZeroOrLess}
     catch _:_ ->
             {false, N}
     end.
