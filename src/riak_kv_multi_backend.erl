@@ -135,11 +135,6 @@ capabilities(Bucket, State) ->
             capabilities(State)
     end.
 
--spec fetch_bucket_capability(riak_object:bucket(), state()) -> {ok, [atom()]}.
-fetch_bucket_capability(Bucket, State) ->
-    {_Name, Mod, ModState} = get_backend(Bucket, State),
-    Mod:capabilities(ModState).
-
 %% @doc Start the backends
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config) ->
@@ -470,6 +465,14 @@ fixed_index_status(Mod, ModState, Status) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+%% @private
+%% Fetch the capabilities of a backend assocaited with a bucket
+-spec fetch_bucket_capability(riak_object:bucket(), state()) -> {ok, [atom()]}.
+fetch_bucket_capability(Bucket, State) ->
+    {_Name, Mod, ModState} = get_backend(Bucket, State),
+    Mod:capabilities(ModState).
+
 
 %% @private
 %% Given a Bucket name and the State, return the
