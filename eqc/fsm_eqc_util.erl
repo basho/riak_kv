@@ -197,7 +197,7 @@ start_mock_servers() ->
     {ok, _Pid3} = fsm_eqc_vnode:start_link(),
     application:load(riak_core),
     application:start(crypto),
-    riak_stat_exometer:start(),
+    exometer:start(),
     riak_kv_stat:register_stats(),
     riak_core_metadata_manager:start_link([{data_dir, Path ++ "/fsm_eqc_test_data"}]),
     riak_core_ring_events:start_link(),
@@ -212,7 +212,7 @@ cleanup_mock_servers() ->
     riak_kv_test_util:stop_process(riak_core_ring_manager),
     application:stop(folsom),
     application:stop(riak_core),
-    riak_stat_exometer:stop().
+    exometer:stop().
 
 make_options([], Options) ->
     Options;
