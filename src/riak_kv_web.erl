@@ -123,6 +123,8 @@ raw_dispatch(Name) ->
      {Prefix ++ ["buckets", bucket, "index", field, '*'],
       riak_kv_wm_index, Props},
 
+     {Prefix ++ ["new-stats"],
+      riak_stat_wm, Props},
      %% AAE fold URLs
      {["cachedtrees", "nvals", nval, "root"],
       riak_kv_wm_aaefold, Props},
@@ -168,3 +170,5 @@ mapred_props() ->
 
 stats_props() ->
     [{prefix, app_helper:get_env(riak_kv, stats_urlpath, "stats")}].
+
+
