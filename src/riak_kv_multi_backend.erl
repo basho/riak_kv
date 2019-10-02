@@ -135,7 +135,7 @@ capabilities(Bucket, State) ->
             capabilities(State)
     end.
 
--spec fetch_bucket_capability(rika_object:bucket(), state()) -> {ok, [atom()]}.
+-spec fetch_bucket_capability(riak_object:bucket(), state()) -> {ok, [atom()]}.
 fetch_bucket_capability(Bucket, State) ->
     {_Name, Mod, ModState} = get_backend(Bucket, State),
     Mod:capabilities(ModState).
