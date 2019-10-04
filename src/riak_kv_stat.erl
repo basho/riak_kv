@@ -87,11 +87,6 @@ get_value(Arg) ->
 get_info() ->
     riak_stat:get_info(?APP).
 
-%% Creation of a dynamic stat _must_ be serialized.
-%%register_stat(Name, Type) ->
-%%    do_register_stat(Name, Type).
-%% gen_server:call(?SERVER, {register, Name, Type}).
-
 aggregate(Stats, DPs) ->
     riak_stat:aggregate(Stats, DPs).
 
@@ -149,10 +144,7 @@ init([]) ->
                                {clusteraae, spawn_link(?MODULE, monitor_loop, [clusteraae])}],
                    repair_mon = spawn_monitor(fun() -> stat_repair_loop(Me) end)},
     {ok, State}.
-%%
-%%handle_call({register, Name, Type}, _From, State) ->
-%%    Rep = do_register_stat(Name, Type),
-%%    {reply, Rep, State}.
+
 handle_call(_Req, _From, State) ->
   {noreply, State}.
 
@@ -392,8 +384,8 @@ do_per_index(Op, Idx, USecs) ->
 
 unregister_per_index(Op, Idx) ->
   IdxAtom = list_to_atom(integer_to_list(Idx)),
-    riak_stat:unregister(?APP, Op, IdxAtom, vnode),
-    riak_stat:unregister([Op, time], IdxAtom, vnode, ?APP).
+    riak_stat:unregister({Op, IdxAtom, vnode, ?APP}),
+    riak_stat:unregister({[Op, time], IdxAtom, vnode, ?APP}).
 
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
@@ -884,9 +876,6 @@ bc_stats() ->
 %% Wrapper for exometer function stats.
 value(V) ->
     V.
-
-%%do_register_stat(Name, Type) ->
-%%    exometer:new(Name, Type).
 
 %% @doc produce the legacy blob of stats for display.
 produce_stats() ->
