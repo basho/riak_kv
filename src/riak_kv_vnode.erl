@@ -1341,9 +1341,9 @@ handle_request(kv_get_request, Req, Sender, State) ->
 handle_request(kv_head_request, Req, Sender, State) ->
     Mod = State#state.mod,
     ModState = State#state.modstate,
-    BKey = riak_kv_requests:get_bucket_key(Req),
+    {BT, _K} = BKey = riak_kv_requests:get_bucket_key(Req),
     ReqId = riak_kv_requests:get_request_id(Req),
-    {ok, Capabilities} = Mod:capabilities(ModState),
+    {ok, Capabilities} = Mod:capabilities(BT, ModState),
     case maybe_support_head_requests(Capabilities) of
         true ->
             do_head(Sender, BKey, ReqId, State);
@@ -3640,11 +3640,12 @@ maybe_check_md_cache(Table, BKey) ->
 %% Should return {undefined, undefined} if there is no cache to be used or
 %% {not_found, undefined} if the lack of object has been confirmed, or
 %% {VClock, IndexData} if the result is found
-maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, Coord, IsSearchable) ->
+maybefetch_clock_and_indexdata(Table, {BT, _K} = BKey,
+                                Mod, ModState, Coord, IsSearchable) ->
     CacheResult = maybe_check_md_cache(Table, BKey),
     case CacheResult of
         {undefined, undefined} ->
-            {ok, Capabilities} = Mod:capabilities(ModState),
+            {ok, Capabilities} = Mod:capabilities(BT, ModState),
             CanGetHead = maybe_support_head_requests(Capabilities)
                             andalso (not IsSearchable)
                             andalso (not Coord),
