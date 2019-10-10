@@ -851,8 +851,10 @@ gen_filter_element({Range, all}, Acc) when Range == ?KEY_RANGE;
                                        Range == ?DATE_RANGE;
                                        Range == ?SEG_FILT ->
     Acc;
-gen_filter_element({Range, {Start, End}}, Acc) when Range == ?KEY_RANGE;
-                                                Range == ?DATE_RANGE ->
+gen_filter_element({Range, {Start, End}}, Acc) when Range == ?KEY_RANGE ->
+    [{Range, {struct, [{<<"start">>, Start},
+                       {<<"end">>, End}]}} | Acc];
+gen_filter_element({Range, {date, Start, End}}, Acc) when Range == ?DATE_RANGE ->
     [{Range, {struct, [{<<"start">>, Start},
                        {<<"end">>, End}]}} | Acc];
 gen_filter_element({?SEG_FILT, {segments, Segs, TreeSize}}, Acc) ->
@@ -876,7 +878,7 @@ gen_keyrange() ->
 
 
 gen_daterange() ->
-    oneof([{1543357393, 1543417393},
+    oneof([{date, 1543357393, 1543417393},
            all]).
 
 gen_seg_filter() ->

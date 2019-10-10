@@ -130,10 +130,7 @@ start(Partition, Config) ->
 
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
-            {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
-            PartitionCount = chashbin:num_partitions(CHBin),
-            RingIndexInc = chash:ring_increment(PartitionCount),
-            DBid = Partition div RingIndexInc,
+            DBid = generate_partition_identity(Partition),
             StartOpts = [{root_path, DataDir},
                             {max_journalsize, MJS},
                             {max_journalobjectcount, MJC},
@@ -628,6 +625,18 @@ valid_hours(LowHour, HighHour) when LowHour > HighHour ->
 valid_hours(LowHour, HighHour) ->
     lists:seq(LowHour, HighHour).
 
+-ifdef(EQC).
+    generate_partition_identity(_Partition) ->
+        0.
+-else.
+    generate_partition_identity(Partition) ->
+        {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+        PartitionCount = chashbin:num_partitions(CHBin),
+        RingIndexInc = chash:ring_increment(PartitionCount),
+        Partition div RingIndexInc.
+-endif.
+
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -662,7 +671,8 @@ prop_leveled_backend() ->
                                         {singlefile_compactionpercentage, 50.0},
                                         {snapshot_timeout_short, 900},
                                         {snapshot_timeout_long, 3600},
-                                        {log_level, error}])).
+                                        {log_level, error},
+                                        {journal_objectcount, 100}])).
 
 -endif. % EQC
 
