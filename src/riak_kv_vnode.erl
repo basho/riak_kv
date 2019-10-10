@@ -1315,7 +1315,7 @@ handle_command({reset_hashtree_tokens, MinToken, MaxToken}, _Sender, State) ->
     case MaxToken > MinToken of
         true ->
             put(hashtree_tokens,
-                    MinToken + random:uniform(MaxToken - MinToken));
+                    MinToken + rand:uniform(MaxToken - MinToken));
         _ ->
             put(hashtree_tokens, MaxToken)
     end,
