@@ -1,0 +1,157 @@
+#!/usr/bin/env bash
+
+set -o errexit
+set -o nounset
+
+declare -r debug='false'
+declare -r tmpfile_file="/tmp/publish.$$.tmpfiles"
+
+function make_temp_file
+{
+    local template="${1:-publish.$$.XXXXXX}"
+    if [[ $template != *XXXXXX ]]
+    then
+        template="$template.XXXXXX"
+    fi
+    local tmp=$(mktemp -t "$template")
+    echo "$tmp" >> "$tmpfile_file"
+    echo "$tmp"
+}
+
+function now
+{
+    date '+%Y-%m-%d %H:%M:%S'
+}
+
+function pwarn
+{
+    echo "$(now) [warning]: $@" 1>&2
+}
+
+function perr
+{
+    echo "$(now) [error]: $@" 1>&2
+}
+
+function pinfo
+{
+    echo "$(now) [info]: $@"
+}
+
+function pdebug
+{
+    if [[ $debug == 'true' ]]
+    then
+        echo "$(now) [debug]: $@"
+    fi
+}
+
+function errexit
+{
+    perr "$@"
+    exit 1
+}
+
+function onexit
+{
+    if [[ -f $tmpfile_file ]]
+    then
+        for tmpfile in $(< $tmpfile_file)
+        do
+            pdebug "removing temp file $tmpfile"
+            rm -f $tmpfile
+        done
+        rm -f $tmpfile_file
+    fi
+}
+
+function gh_publish {
+    if [[ -z $version_string ]]
+    then
+        errexit 'gh_publish: version_string required'
+    fi
+
+    # NB: we use a X.Y.Z.N tag
+    local -r release_json="{
+        \"tag_name\" : \"$version_string\",
+        \"name\" : \"Riak PB  $version_string\",
+        \"body\" : \"riak_pb $version_string\nhttps://github.com/basho/riak_pb/blob/master/RELNOTES.md\",
+        \"draft\" : false,
+        \"prerelease\" : $is_prerelease
+    }"
+
+    pdebug "Release JSON: $release_json"
+
+    local curl_content_file="$(make_temp_file)"
+    local curl_stdout_file="$(make_temp_file)"
+    local curl_stderr_file="$(make_temp_file)"
+
+    curl -4so $curl_content_file -w '%{http_code}' -XPOST \
+        -H "Authorization: token $(< $github_api_key_file)" -H 'Content-type: application/json' \
+        'https://api.github.com/repos/basho/riak_pb/releases' -d "$release_json" 1> "$curl_stdout_file" 2> "$curl_stderr_file"
+    if [[ $? != 0 ]]
+    then
+        errexit "curl error exited with code: '$?' see '$curl_stderr_file'"
+    fi
+
+    local -i curl_rslt="$(< $curl_stdout_file)"
+    if (( curl_rslt == 422 ))
+    then
+        pwarn "Release in GitHub already exists! (http code: '$curl_rslt')"
+        curl -4so $curl_content_file -w '%{http_code}' -XGET \
+            -H "Authorization: token $(< $github_api_key_file)" -H 'Content-type: application/json' \
+            "https://api.github.com/repos/basho/riak_pb/releases/tags/$version_string" 1> "$curl_stdout_file" 2> "$curl_stderr_file"
+        if [[ $? != 0 ]]
+        then
+            errexit "curl error exited with code: '$?' see '$curl_stderr_file'"
+        fi
+    elif (( curl_rslt != 201 ))
+    then
+        errexit "Creating release in GitHub failed with http code '$curl_rslt'"
+    fi
+}
+
+trap onexit EXIT
+
+declare -r version_string="${1:-unknown}"
+
+if [[ ! $version_string =~ ^[0-9].[0-9].[0-9](.[0-9])?(-[a-z]+[0-9]+)?$ ]]
+then
+    errexit 'first argument must be valid version string in X.Y.Z.N format'
+fi
+
+is_prerelease='false'
+if [[ $version_string =~ ^[0-9].[0-9].[0-9](.[0-9])?-[a-z]+[0-9]+$ ]]
+then
+    pinfo "publishing pre-release version: $version_string"
+    is_prerelease='true'
+else
+    pinfo "publishing version $version_string"
+fi
+
+declare -r current_branch="$(git rev-parse --abbrev-ref HEAD)"
+
+if [[ $debug == 'false' && $is_prerelease == 'false' && $current_branch != 'master' ]]
+then
+    errexit 'publish must be run on master branch'
+fi
+
+declare -r github_api_key_file="$HOME/.ghapi"
+if [[ ! -s $github_api_key_file ]]
+then
+    errexit "please save your GitHub API token in $github_api_key_file"
+fi
+
+# Validate commands
+if ! hash curl 2>/dev/null
+then
+    errexit "'curl' must be in your PATH"
+fi
+
+validate=${2:-''}
+if [[ $validate == 'validate' ]]
+then
+    exit 0
+fi
+
+gh_publish

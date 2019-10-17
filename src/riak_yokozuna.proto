@@ -1,0 +1,79 @@
+/* -------------------------------------------------------------------
+**
+** riak_yokozuna.proto: Protocol buffers for Yokozuna
+**
+** Copyright (c) 2013 Basho Technologies, Inc.  All Rights Reserved.
+**
+** This file is provided to you under the Apache License,
+** Version 2.0 (the "License"); you may not use this file
+** except in compliance with the License.  You may obtain
+** a copy of the License at
+**
+**   http://www.apache.org/licenses/LICENSE-2.0
+**
+** Unless required by applicable law or agreed to in writing,
+** software distributed under the License is distributed on an
+** "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+** KIND, either express or implied.  See the License for the
+** specific language governing permissions and limitations
+** under the License.
+**
+** -------------------------------------------------------------------
+*/
+
+/*
+** Revision: 2.0
+*/
+
+// java package specifiers
+option java_package = "com.basho.riak.protobuf";
+option java_outer_classname = "RiakYokozunaPB";
+
+// Index queries
+
+message RpbYokozunaIndex {
+    required bytes name   =  1;  // Index name
+    optional bytes schema =  2;  // Schema name
+    optional uint32 n_val =  3;  // N value
+}
+
+// GET request - If a name is given, return matching index, else return all
+message RpbYokozunaIndexGetReq {
+    optional bytes name  =  1;  // Index name
+}
+
+message RpbYokozunaIndexGetResp {
+    repeated RpbYokozunaIndex index  =  1;
+}
+
+// PUT request - Create a new index
+message RpbYokozunaIndexPutReq {
+    required RpbYokozunaIndex index  =  1;
+    optional uint32 timeout          =  2; // Timeout value
+}
+
+// DELETE request - Remove an index
+message RpbYokozunaIndexDeleteReq {
+    required bytes name  =  1;  // Index name
+}
+
+// Schema queries
+
+message RpbYokozunaSchema {
+    required bytes name    =  1;  // Index name
+    optional bytes content =  2;  // Schema data
+}
+
+// PUT request - create or potentially update a new schema
+message RpbYokozunaSchemaPutReq {
+    required RpbYokozunaSchema schema =  1;
+}
+
+// GET request - Return matching schema by name
+message RpbYokozunaSchemaGetReq {
+    required bytes name  =  1;  // Schema name
+}
+
+message RpbYokozunaSchemaGetResp {
+  required RpbYokozunaSchema schema =  1;
+}

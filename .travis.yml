@@ -1,0 +1,5 @@
+language: erlang
+notifications:
+  email: ci@basho.com
+otp_release:
+  - 20.0

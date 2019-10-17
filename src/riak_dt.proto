@@ -1,0 +1,287 @@
+/* -------------------------------------------------------------------
+**
+** riak_dt.proto: Protocol buffers for Riak data structures/types
+**
+** Copyright (c) 2013 Basho Technologies, Inc.  All Rights Reserved.
+**
+** This file is provided to you under the Apache License,
+** Version 2.0 (the "License"); you may not use this file
+** except in compliance with the License.  You may obtain
+** a copy of the License at
+**
+**   http://www.apache.org/licenses/LICENSE-2.0
+**
+** Unless required by applicable law or agreed to in writing,
+** software distributed under the License is distributed on an
+** "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+** KIND, either express or implied.  See the License for the
+** specific language governing permissions and limitations
+** under the License.
+**
+** -------------------------------------------------------------------
+*/
+
+/*
+** Revision: 2.2.0
+*/
+
+// Java package specifiers
+option java_package = "com.basho.riak.protobuf";
+option java_outer_classname = "RiakDtPB";
+
+/*
+ * =============== DATA STRUCTURES =================
+ */
+
+/*
+ * Field names in maps are composed of a binary identifier and a type.
+ * This is so that two clients can create fields with the same name
+ * but different types, and they converge independently.
+ */
+message MapField {
+    /*
+     * The types that can be stored in a map are limited to counters,
+     * sets, registers, flags, and maps.
+     */
+    enum MapFieldType {
+        COUNTER  = 1;
+        SET      = 2;
+        REGISTER = 3;
+        FLAG     = 4;
+        MAP      = 5;
+    }
+
+    required bytes        name = 1;
+    required MapFieldType type = 2;
+}
+
+
+/*
+ * An entry in a map is a pair of a field-name and value. The type
+ * defined in the field determines which value type is expected.
+ */
+message MapEntry {
+    required MapField field = 1;
+    optional sint64   counter_value  = 2;
+    repeated bytes    set_value      = 3;
+    optional bytes    register_value = 4;
+    optional bool     flag_value     = 5;
+    repeated MapEntry map_value      = 6;
+}
+
+/*
+ * =============== FETCH =================
+ */
+
+/*
+ * The equivalent of KV's "RpbGetReq", results in a DtFetchResp. The
+ * request-time options are limited to ones that are relevant to
+ * structured data-types.
+ */
+message DtFetchReq {
+    // The identifier: bucket, key and bucket-type
+    required bytes bucket = 1;
+    required bytes key    = 2;
+    required bytes type  = 3;
+
+    // Request options
+    optional uint32 r             =  4;
+    optional uint32 pr            =  5;
+    optional bool   basic_quorum  =  6;
+    optional bool   notfound_ok   =  7;
+    optional uint32 timeout       =  8;
+    optional bool   sloppy_quorum =  9;  // Experimental, may change/disappear
+    optional uint32 n_val         = 10;  // Experimental, may change/disappear
+
+    // For read-only requests or context-free operations, you can set
+    // this to false to reduce the size of the response payload.
+    optional bool include_context = 11 [default=true];
+}
+
+
+/*
+ * The value of the fetched data type. If present in the response,
+ * then empty values (sets, maps) should be treated as such.
+ */
+message DtValue {
+    optional sint64   counter_value = 1;
+    repeated bytes    set_value     = 2;
+    repeated MapEntry map_value     = 3;
+    /* We return an estimated cardinality of the Hyperloglog set
+     * on fetch.
+     */
+    optional uint64   hll_value     = 4;
+    repeated bytes    gset_value    = 5;
+}
+
+
+/*
+ * The response to a "Fetch" request. If the `include_context` option
+ * is specified, an opaque "context" value will be returned along with
+ * the user-friendly data. When sending an "Update" request, the
+ * client should send this context as well, similar to how one would
+ * send a vclock for KV updates. The `type` field indicates which
+ * value type to expect. When the `value` field is missing from the
+ * message, the client should interpret it as a "not found".
+ */
+message DtFetchResp {
+    enum DataType {
+        COUNTER = 1;
+        SET     = 2;
+        MAP     = 3;
+        HLL     = 4;
+        GSET    = 5;
+    }
+
+    optional bytes    context = 1;
+    required DataType type    = 2;
+    optional DtValue  value   = 3;
+}
+
+/*
+ * =============== UPDATE =================
+ */
+
+/*
+ * An operation to update a Counter, either on its own or inside a
+ * Map. The `increment` field can be positive or negative. When absent,
+ * the meaning is an increment by 1.
+ */
+message CounterOp {
+    optional sint64 increment = 1;
+}
+
+/*
+ * An operation to update a Set, either on its own or inside a Map.
+ * Set members are opaque binary values, you can only add or remove
+ * them from a Set.
+ */
+message SetOp {
+    repeated bytes adds    = 1;
+    repeated bytes removes = 2;
+}
+
+/*
+ * An operation to update a GSet, on its own.
+ * GSet members are opaque binary values, you can only add
+ * them to a Set.
+ */
+message GSetOp {
+    repeated bytes adds    = 1;
+}
+
+/*
+ * An operation to update a Hyperloglog Set, a top-level DT.
+ * You can only add to a HllSet.
+ */
+message HllOp {
+    repeated bytes adds    = 1;
+}
+
+/*
+ * An operation to be applied to a value stored in a Map -- the
+ * contents of an UPDATE operation. The operation field that is
+ * present depends on the type of the field to which it is applied.
+ */
+message MapUpdate {
+    /*
+     * Flags only exist inside Maps and can only be enabled or
+     * disabled, and there are no arguments to the operations.
+     */
+    enum FlagOp {
+        ENABLE  = 1;
+        DISABLE = 2;
+    }
+
+    required MapField  field       = 1;
+
+    optional CounterOp counter_op  = 2;
+    optional SetOp     set_op      = 3;
+
+    /*
+     * There is only one operation on a register, which is to set its
+     * value, therefore the "operation" is the new value.
+     */
+    optional bytes     register_op = 4;
+    optional FlagOp    flag_op     = 5;
+    optional MapOp     map_op      = 6;
+
+}
+
+/*
+ * An operation to update a Map. All operations apply to individual
+ * fields in the Map.
+ */
+message MapOp {
+    /*
+     *  REMOVE removes a field and value from the Map.
+     * UPDATE applies type-specific
+     * operations to the values stored in the Map.
+     */
+    repeated MapField  removes = 1;
+    repeated MapUpdate updates = 2;
+}
+
+/*
+ * A "union" type for update operations. The included operation
+ * depends on the datatype being updated.
+ */
+message DtOp {
+    optional CounterOp counter_op = 1;
+    optional SetOp     set_op     = 2;
+    optional MapOp     map_op     = 3;
+    /* Adding values to a hyperloglog (set) is just like adding values
+     * to a set.
+     */
+    optional HllOp     hll_op     = 4;
+    optional GSetOp    gset_op    = 5;
+}
+
+/*
+ * The equivalent of KV's "RpbPutReq", results in an empty response or
+ * "DtUpdateResp" if `return_body` is specified, or the key is
+ * assigned by the server. The request-time options are limited to
+ * ones that are relevant to structured data-types.
+ */
+message DtUpdateReq {
+    // The identifier
+    required bytes bucket = 1;
+    optional bytes key    = 2; // missing key results in server-assigned key, like KV
+    required bytes type   = 3; // bucket type, not data-type (but the data-type is constrained per bucket-type)
+
+    // Opaque update-context
+    optional bytes context = 4;
+
+    // The operations
+    required DtOp  op = 5;
+
+    // Request options
+    optional uint32 w               =  6;
+    optional uint32 dw              =  7;
+    optional uint32 pw              =  8;
+    optional bool   return_body     =  9 [default=false];
+    optional uint32 timeout         = 10;
+    optional bool   sloppy_quorum   = 11;  // Experimental, may change/disappear
+    optional uint32 n_val           = 12;  // Experimental, may change/disappear
+    optional bool   include_context = 13 [default=true]; // When return_body is true, should the context be returned too?
+    optional uint32 node_confirms = 14; // Distinct phycical node quorum
+}
+
+
+/*
+ * The equivalent of KV's "RpbPutResp", contains the assigned key if
+ * it was assigned by the server, and the resulting value and context
+ * if return_body was set.
+ */
+message DtUpdateResp {
+    // The key, if assigned by the server
+    optional bytes    key           = 1;
+
+    // The opaque update context and value, if return_body was set.
+    optional bytes    context       = 2;
+    optional sint64   counter_value = 3;
+    repeated bytes    set_value     = 4;
+    repeated MapEntry map_value     = 5;
+    optional uint64   hll_value     = 6;
+    repeated bytes    gset_value    = 7;
+}
