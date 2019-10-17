@@ -1,0 +1,15 @@
+ebin/riak_dt.app
+*.beam
+.eunit
+deps/*
+*~
+dev/*
+doc/*
+rel/riak_dt
+data/*
+.qc/*
+.eqc-info
+current_counterexample.eqc
+.rebar/
+.rebar3/
+_build/
