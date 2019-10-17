@@ -1,0 +1,26 @@
+
+// Get Request - retrieve bucket/key
+message RpbReplGetReq {
+    required bytes bucket = 1;
+    required bytes key = 2;
+    required bytes cluster_id = 3;
+    optional uint32 r = 4;
+    optional uint32 pr = 5;
+    optional bool basic_quorum = 6;
+    optional bool notfound_ok = 7;
+    optional bytes if_modified = 8;     // fail if the supplied vclock does not match
+    optional bool head = 9;             // return everything but the value
+    optional bool deletedvclock = 10;   // return the tombstone's vclock, if applicable
+    optional bool sloppy_quorum = 11;   // Experimental, may change/disappear
+    optional uint32 n_val = 12;         // Experimental, may change/disappear
+}
+
+// Get Cluster Id request
+message RpbReplGetClusterIdReq {
+}
+
+// Get Cluster Id response
+message RpbReplGetClusterIdResp {
+    required bytes cluster_id = 1;
+}
+
