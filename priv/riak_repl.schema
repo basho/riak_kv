@@ -1,0 +1,171 @@
+%%-*- mode: erlang -*-
+%% Replication config
+
+%% @doc Path (relative or absolute) to the working directory for the
+%% replication process
+{mapping, "mdc.data_root", "riak_repl.data_root", [
+    {default, "{{repl_data_root}}"}
+]}.
+
+%% @doc The cluster manager will listen for connections from remote
+%% clusters on this ip and port. Every node runs one cluster manager,
+%% but only the cluster manager running on the cluster_leader will
+%% service requests. This can change as nodes enter and leave the
+%% cluster. The value is a combination of an IP address (**not
+%% hostname**) followed by a port number
+{mapping, "mdc.cluster_manager", "riak_core.cluster_mgr", [
+    {default, {"{{cluster_manager_ip}}", {{cluster_manager_port}} }},
+    {datatype, ip}
+]}.
+
+%% @doc The hard limit of fullsync workers that will be running on the
+%% source side of a cluster across all nodes on that cluster for a
+%% fullsync to a sink cluster. This means if one has configured
+%% fullsync for two different clusters, both with a
+%% max_fssource_cluster of 5, 10 fullsync workers can be in
+%% progress. Only affects nodes on the source cluster on which this
+%% parameter is defined via the configuration file or command line
+{mapping, "mdc.max_fssource_cluster", "riak_repl.max_fssource_cluster", [
+    {datatype, integer},
+    {default, 5}
+]}.
+
+%% @doc Limits the number of fullsync workers that will be running on
+%% each individual node in a source cluster. This is a hard limit for
+%% all fullsyncs enabled; additional fullsync configurations will not
+%% increase the number of fullsync workers allowed to run on any node.
+%% Only affects nodes on the source cluster on which this parameter is
+%% defined via the configuration file or command line
+{mapping, "mdc.max_fssource_node", "riak_repl.max_fssource_node", [
+    {datatype, integer},
+    {default, 1}
+]}.
+
+%% @doc Limits the number of "soft_exist" that the fullsynce
+%% coordinator will handle before failing a partition from
+%% fullsync. The soft_retries is per-fullsync, not per-partition.
+%% Only affects nodes on the source cluster on which this parameter is
+%% defined via the configuration file
+{mapping, "mdc.max_fssource_soft_retries", "riak_repl.max_fssource_soft_retries", [
+    {datatype, integer},
+    {default, 100}
+]}.
+
+%% @doc Adds a retry wait time. To be used in conjunction with
+%% soft_retries. When a partition fails to fullsync with a soft_exit,
+%% it is added to a queue to be retried. The retry wait time is the
+%% minimum amount of time to elapse before a fullsync is re-attempted
+%% on that partition. An example of usage: If the remote partition's
+%% AAE tree is being re-built it can take many minutes, even
+%% hours. There is no point in rapidly re-trying the same partition
+%% `max_fssource_soft_retries' times in rapid
+%% succession. fssource_retry_wait * max_fssource_soft_retries is the
+%% maximum amount of time that can pass before fullsync discards a
+%% partition.
+{mapping, "mdc.fssource_retry_wait", "riak_repl.fssource_retry_wait", [
+    {datatype, {duration, s}},
+    {default, "60s"}
+]}.
+
+%% @doc Limits the number of fullsync workers allowed to run on each
+%% individual node in a sink cluster. This is a hard limit for all
+%% fullsync sources interacting with the sink cluster. Thus, multiple
+%% simultaneous source connections to the sink cluster will have to
+%% share the sink node's number of maximum connections. Only affects
+%% nodes on the sink cluster on which this parameter is defined via
+%% the configuration file or command line.
+{mapping, "mdc.max_fssink_node", "riak_repl.max_fssink_node", [
+    {datatype, integer},
+    {default, 1}
+]}.
+
+%% @doc Whether to initiate a fullsync on initial connection from the
+%% secondary cluster
+{mapping, "mdc.fullsync_on_connect", "riak_repl.fullsync_on_connect", [
+    {datatype, {enum, [true, false]}},
+    {default, true}
+]}.
+
+%% @doc a single integer value representing the duration to wait in
+%% minutes between fullsyncs, or a list of {clustername,
+%% time_in_minutes} pairs for each sink participating in fullsync
+%% replication.
+{mapping, "mdc.fullsync_interval.$cluster_name", "riak_repl.fullsync_interval", [
+    {datatype, {duration, ms}},
+    {include_default, "all"},
+    {commented, "30m"}
+]}.
+
+{translation,
+ "riak_repl.fullsync_interval",
+ fun(Conf) ->
+    Minute = fun(Millis) -> Millis div 60000 end,
+    FullSyncIntervals = cuttlefish_variable:filter_by_prefix("mdc.fullsync_interval", Conf),
+    case proplists:get_value(["mdc", "fullsync_interval", "all"], FullSyncIntervals) of
+        undefined ->
+            [ {list_to_atom(Name), Minute(Value)} || {["mdc", "fullsync_interval", Name], Value} <- FullSyncIntervals];
+        X -> Minute(X)
+    end
+ end}.
+
+%% @doc The maximum size the realtime replication queue can grow to
+%% before new objects are dropped. Defaults to 100MB. Dropped objects
+%% will need to be replication with a fullsync.
+{mapping, "mdc.rtq_max_bytes", "riak_repl.rtq_max_bytes", [
+    {datatype, bytesize},
+    {default, "100MB"}
+]}.
+
+%% @doc Enable Riak CS proxy_get and block filter.
+{mapping, "mdc.proxy_get", "riak_repl.proxy_get", [
+    {datatype, {enum, [on, off]}},
+    {default, off}
+]}.
+
+{translation,
+ "riak_repl.proxy_get",
+ fun(Conf) ->
+    case cuttlefish:conf_get("mdc.proxy_get", Conf) of
+        on -> enabled;
+        off -> disabled;
+        _ -> disabled
+    end
+ end}.
+
+%% @doc A heartbeat message is sent from the source to the sink every
+%% heartbeat_interval. Setting heartbeat_interval to undefined
+%% disables the realtime heartbeat. This feature is only available in
+%% Riak Enterprise 1.3.2+.
+{mapping, "mdc.realtime.heartbeat_interval", "riak_repl.rt_heartbeat_interval", [
+    {datatype, {duration, s}},
+    {default, "15s"}
+]}.
+
+%% @doc If a heartbeat response is not received in
+%% rt_heartbeat_timeout seconds, then the source connection exits and
+%% will be re-established.  This feature is only available in Riak
+%% Enterprise 1.3.2+.
+{mapping, "mdc.realtime.heartbeat_timeout", "riak_repl.rt_heartbeat_timeout", [
+    {datatype, {duration, s}},
+    {default, "15s"}
+]}.
+
+%% @doc By default, fullsync replication will try to coordinate with other
+%% riak subsystems that may be contending for the same resources. This will help
+%% to prevent system response degradation under times of heavy load from multiple
+%% background tasks. To disable background coordination, set this parameter to false.
+%% Enterprise 2.0+.
+{mapping, "mdc.fullsync.use_bg_manager", "riak_repl.fullsync_use_background_manager", [
+    {datatype, {enum, [true, false]}},
+    {level, advanced},
+    {default, false}
+]}.
+
+%% @doc How frequently the stats for fullsync source processes should be
+%% gathered. Requests for fullsync status always returned the most recently
+%% gathered data, and thus can be at most as old as this value.
+{mapping, "mdc.fullsync.stat_refresh_interval", "riak_repl.fullsync_stat_refresh_interval", [
+    {datatype, {duration, ms}},
+    {commented, "1m"}
+]}.
+

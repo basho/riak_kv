@@ -1,0 +1,55 @@
+% -*- mode: erlang -*-
+{application,
+ riak_repl,
+ [{description,  "Enterprise replication for Riak"},
+  {id,           "riak_repl"},
+  {vsn,          git},
+  {applications, [kernel,
+                  stdlib,
+                  sasl,
+                  crypto,
+                  ssl,
+                  ebloom,
+                  riak_core,
+                  riak_kv,
+                  riak_api,
+                  ranch,
+                  gen_fsm_compat]},
+  {registered,   [riak_repl_connector_sup,
+                  riak_repl_leader,
+                  riak_repl_stats,
+                  riak_rep_sup]},
+  {mod,          {riak_repl_app, []}},
+  {env,          [
+                  %% milliseconds to wait after checking all listeners
+                  {client_retry_timeout, 30000},
+                  %% milliseconds to wait for successfull connect
+                  {client_connect_timeout, 15000},
+
+                  {fullsync_on_connect, true},
+                  % minutes
+                  {fullsync_interval, 360},
+                  {data_root, "data/riak_repl"},
+                  {merkle_bufsize, 1048576},
+                  %% bytes
+                  {server_max_pending, 5},
+                  {client_ack_frequency, 5},
+                  {queue_size, 104857600},
+                  {fullsync_strategies, [keylist]},
+                  {min_get_workers, 5},
+                  {max_get_workers, 100},
+                  {min_put_workers, 5},
+                  {max_put_workers, 100},
+                  %% whether to issue gets directly against the vnode
+                  {vnode_gets, true},
+                  %% How many fullsync diff objects to send before needing an
+                  %% ACK from the client. Setting this too high will clog your
+                  %% TCP buffers.
+                  {diff_batch_size, 100},
+		  %% Exometer bootstrap
+		  {exometer_folsom_monitor,
+		   [{riak_core_connection_mgr_stats, riak_core_exo_monitor},
+		    {riak_repl_stats, riak_core_exo_monitor}
+		   ]}
+                 ]}
+]}.

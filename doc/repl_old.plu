@@ -1,0 +1,142 @@
+Replication Message Sequence Chart(s)
+C.Tilt
+26-July-2012
+
+Scope
+-----
+There are three protocols now. The original (Andy Gross) is now called syncV1.
+Next, there was a refactor for Riak 1.1 (Andrew Thompson) that pulled apart the real-time and full-sync protocols into separate files and made it somewhat pluggable. Recently, there was an optimization to use Bloom filters in the fold operation (Andrew T.) to allow the GETs to proceed in disk-order to aliviate disk
+seeking overhead. [Note: this was a symptom of sorting the hashed key/value list
+to enable a difference generator; but, the sorted list was no longer in disk
+order and caused wild head seek thrash on spinning media.]
+
+The message sequences shown here are examples of the Bloom-filtered protocol,
+which as of this writing has not shipped yet (not scheduled for 1.2, but more
+likely a point release after being vetted by AT&T and possibly others).
+
+There are notes in the header of riak_repl_keylist_server.erl about
+replication's strategy. This document is an attempt to diagram it's design and
+implemenation at the message level.
+
+Terminology
+----------
+s,server := the "listener" side. listens for connections from client "sites"
+c,client := the "site" side. makes a connection to the server.
+
+[<process-name>] := identifies a concurrent process
+* := process is created
+X := process exited
+(<state-name>) := state the process is currently in.
+(-) :=  the process remains in the same state ("-" means current).
+
+Full-sync
+--------
+Either client or server can initiate the full-sync. If something on the server
+does, it sends a "start" to the client to tell it to begin full-sync. So either
+way, the show starts when the clients engages. For this MSC, we show what
+happens once the client starts full-sync.
+
+
+@startuml repl_old.png
+box "Listener on\nprimary cluster"
+    participant "s:key-lister"
+    participant server
+end box
+box "Site on\nbackup cluster" #LightBlue
+    participant client
+    participant "c:key-lister"
+end box
+
+note over server: (wait_for_partition)
+note over client: (wait_for_fullsync)
+
+[->server : start
+note over server #FFAAAA: Do all nodes\nsupport Bloom?
+alt YES
+
+    server -> client : start_fullsync
+    note over client #FFAAAA: P..PP = build partition list
+    client -> client : continue
+
+    note over client: (request_partition)
+    client -> server: {partition,P}
+    client -> "c:key-lister": spawn(make_keylist)
+    activate "c:key-lister"
+    "c:key-lister" -> client: {ok,Reg}
+    note over "c:key-lister" #FFAAAA
+         build Keylist
+         sort Keylist
+         N = number of keys
+    end note
+    "c:key-lister"->client: {keylist_built,N}
+    destroy "c:key-lister"
+
+    server -> "s:key-lister": spawn(make_keylist)
+    activate "s:key-lister"
+    "s:key-lister" -> server: {ok,Reg}
+    note over server: (build_keylist)
+    note over "s:key-lister" #FFAAAA
+         build Keylist
+         sort Keylist
+         N = number of keys
+    end note
+    "s:key-lister" -> server: {keylist_built,N}
+    destroy "s:key-lister"
+
+    server -> client: {kl_exchange, P}
+    note over server: (wait_keylist)
+
+    client -> client: continue
+
+    note over client: (send_keylist)
+    loop N % 1000
+        loop 1000 times
+            client -> server: {kl_hunk, KeyData}
+            client -> client: continue
+        end loop
+        client -> server: kl_wait
+        ...wait for ack from server...
+        server -> client: kl_ack
+        client -> client: continue
+    end loop
+    client -> server: kl_eof
+    note over client: (wait_ack)
+
+    'server spawns the differencer helper
+    server -> "s:key-lister": spawn(diff_stream)
+    activate "s:key-lister"
+    "s:key-lister" -> server: {ok,Reg}
+    note over server: (diff_keylist)
+    loop keys in Keylist
+         loop for diff_batch_size keys
+             "s:key-lister" -> server: {merkle_diff,{K,B}}
+             server -> client : {fs_diff_obj, Obj}
+        end loop
+        "s:key-lister" -> server: diff_paused
+
+        note over server #FFAAAA: did server receive\nprevious diff_ack?
+        alt YES
+            server -> client: diff_ack
+            server -> "s:key-lister": diff_resume
+        else NO
+            note over "s:key-lister" #FFAAAA: wait for resume
+            client -> server: diff_ack
+            server -> client: diff_ack
+            server -> "s:key-lister": diff_resume
+        end
+
+    end loop
+    "s:key-lister" -> server: diff_done
+    destroy "s:key-lister"
+
+    server -> client: diff_done
+    note over server: "(wait_for_partition)"
+
+    'This partition is finished! Do the next partition
+    note over client: "(request_partition)"
+    client -> client: continue
+else NO
+     note over server: (-)
+end
+
+@enduml

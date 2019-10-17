@@ -1,0 +1,17 @@
+ebin/*.beam
+ebin/*.app
+deps
+.eunit
+.eqc-info
+.qc/
+current_counterexample.eqc
+erl_crash.dump
+repl_leader_eqc_data/
+.local_dialyzer_plt
+tags
+dialyzer_unhandled_warnings
+dialyzer_warnings
+.rebar/
+_build/
+rebar.lock
+.DS_Store
