@@ -96,25 +96,6 @@
 -export([put_merge/6]). %% For fsm_eqc_vnode
 -endif.
 
-%% N.B. The ?INDEX macro should be called any time the object bytes on
-%% disk are modified.
--ifdef(TEST).
-%% Use values so that test compile doesn't give 'unused vars' warning.
--define(INDEX(A,B,C), _=element(1,{{_A1, _A2} = A,B,C}), ok).
--define(INDEX_BIN(A,B,C,D,E), _=element(1,{A,B,C,D,E}), ok).
--define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), _=element(1, {BProps}), false).
--else.
--define(INDEX(Objects, Reason, Partition), yz_kv:index(Objects, Reason, Partition)).
--define(INDEX_BIN(Bucket, Key, Obj, Reason, Partition), yz_kv:index_binary(Bucket, Key, Obj, Reason, Partition)).
--define(IS_SEARCH_ENABLED_FOR_BUCKET(BProps), yz_kv:is_search_enabled_for_bucket(BProps)).
--endif.
-
--ifdef(TEST).
--define(YZ_SHOULD_HANDOFF(X), true).
--else.
--define(YZ_SHOULD_HANDOFF(X), yz_kv:should_handoff(X)).
--endif.
-
 -record(mrjob, {cachekey :: term(),
                 bkey :: term(),
                 reqid :: term(),
@@ -137,6 +118,8 @@
           %% Has a lease been requested but not granted yet
           leasing = false :: boolean()
          }).
+
+-type update_hook() :: module() | undefined.
 
 -record(state, {idx :: partition(),
                 mod :: module(),
@@ -168,7 +151,8 @@
                 tictac_startqueue = os:timestamp() :: erlang:timestamp(),
                 tictac_rebuilding = false :: erlang:timestamp()|false,
                 worker_pool_strategy = single :: none|single|dscp,
-                vnode_pool_pid :: undefined|pid()
+                vnode_pool_pid :: undefined|pid(),
+                update_hook :: update_hook()
                }).
 
 -type index_op() :: add | remove.
@@ -252,6 +236,7 @@
                   crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
                   hash_ops = no_hash_ops
                  }).
+-type putargs() :: #putargs{}.
 
 -spec maybe_create_hashtrees(state()) -> state().
 maybe_create_hashtrees(State) ->
@@ -291,8 +276,10 @@ maybe_create_hashtrees(true, State=#state{idx=Index, upgrade_hashtree=Upgrade,
 
 -spec maybe_start_aaecontroller(active|passive, state()) -> state().
 %% @doc
-%% Start an AAE controller if riak_kv has been consfigured to use cached
-%% tictac tree based AAE
+%% Start an AAE controller if riak_kv has been configured to use cached
+%% tictac tree based AAE.  Note that a controller will always start, and
+%% receive updates, even if the vnode is not a primary (and will not be
+%% involved in exchanges).
 maybe_start_aaecontroller(passive, State) ->
     State#state{tictac_aae=false, aae_controller=undefined};
 maybe_start_aaecontroller(active, State=#state{mod=Mod, 
@@ -422,14 +409,14 @@ tictac_returnfun(Partition, RebuildType) ->
     ReturnFun.
 
 
--spec tictac_rebuild(binary(), binary(), riak_object:riak_object()) -> 
+-spec tictac_rebuild(binary(), binary(), binary()) -> 
             {riak_kv_util:index_n(), vclock:vclock()}.
 %% @doc
 %% Return a function that takes [B, K, v] as arguements and converts that into
 %% a {Preflist, Clock} output
 tictac_rebuild(B, K, V) ->
     IndexN = preflistfun(B, K),
-    Clock = riak_object:vclock(V),
+    Clock = element(1, riak_object:summary_from_binary(V)),
     {IndexN, Clock}.
 
 -spec rebuildtrees_workerfun(partition(), state()) -> fun().
@@ -781,7 +768,8 @@ init([Index]) ->
                            mrjobs=dict:new(),
                            md_cache=MDCache,
                            md_cache_size=MDCacheSize,
-                           worker_pool_strategy=WorkerPoolStrategy},
+                           worker_pool_strategy=WorkerPoolStrategy,
+                           update_hook=update_hook()},
             try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
@@ -1115,7 +1103,22 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                     tictac_deltacount = 0,
                                     tictac_startqueue = Now}};
         [{Local, Remote, {DocIdx, N}}|Rest] ->
-            PL = riak_core_apl:get_apl(<<(DocIdx-1):160/integer>>, N, riak_kv),
+            PrimaryOnly =
+                app_helper:get_env(riak_kv, tictacaae_primaryonly, true),
+                % By default TictacAAE exchanges are run only between primary
+                % vnodes, and not between fallback vnodes.  Changing this
+                % to false will allow fallback vnodes to be populated via AAE,
+                % increasing the workload during failure scenarios, but also
+                % reducing the potential for entropy in long-term failures.
+            PlLup = <<(DocIdx-1):160/integer>>,
+            PL =
+                case PrimaryOnly of
+                    true ->
+                        PL0 = riak_core_apl:get_primary_apl(PlLup, N, riak_kv),
+                        [{PIdx, PN} || {{PIdx, PN}, primary} <- PL0];
+                    false ->
+                        riak_core_apl:get_apl(PlLup, N, riak_kv)
+                end,
             case {lists:keyfind(Local, 1, PL), lists:keyfind(Remote, 1, PL)} of
                 {{Local, LN}, {Remote, RN}} ->
                     IndexN = {DocIdx, N},
@@ -1134,7 +1137,8 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                 _ ->
                     lager:warning("Proposed exchange between ~w and ~w " ++ 
                                     "not currently supported within " ++
-                                    "preflist for IndexN=~w",
+                                    "preflist for IndexN=~w possibly due to " ++
+                                    "node failure",
                                     [Local, Remote, {DocIdx, N}])
             end,
             {noreply, State#state{tictac_exchangequeue = Rest}}
@@ -1305,6 +1309,18 @@ handle_command({get_index_entries, Opts},
             {reply, ignore, State}
     end;
 
+handle_command(report_hashtree_tokens, _Sender, State) ->
+    {reply, get(hashtree_tokens), State};
+handle_command({reset_hashtree_tokens, MinToken, MaxToken}, _Sender, State) ->
+    case MaxToken > MinToken of
+        true ->
+            put(hashtree_tokens,
+                    MinToken + rand:uniform(MaxToken - MinToken));
+        _ ->
+            put(hashtree_tokens, MaxToken)
+    end,
+    {reply, ok, State};
+
 handle_command(Req, Sender, State) ->
     handle_request(riak_kv_requests:request_type(Req), Req, Sender, State).
 
@@ -1325,9 +1341,9 @@ handle_request(kv_get_request, Req, Sender, State) ->
 handle_request(kv_head_request, Req, Sender, State) ->
     Mod = State#state.mod,
     ModState = State#state.modstate,
-    BKey = riak_kv_requests:get_bucket_key(Req),
+    {BT, _K} = BKey = riak_kv_requests:get_bucket_key(Req),
     ReqId = riak_kv_requests:get_request_id(Req),
-    {ok, Capabilities} = Mod:capabilities(ModState),
+    {ok, Capabilities} = Mod:capabilities(BT, ModState),
     case maybe_support_head_requests(Capabilities) of
         true ->
             do_head(Sender, BKey, ReqId, State);
@@ -1349,7 +1365,7 @@ handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
         {error, Reason, UpModState} ->
             {reply, ?KV_W1C_PUT_REPLY{reply={error, Reason}, type=ReplicaType}, State#state{modstate=UpModState}}
     end;
-handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false}) ->
+handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false, update_hook=UpdateHook}) ->
     {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),
     EncodedVal = riak_kv_requests:get_encoded_obj(Req),
     ReplicaType = riak_kv_requests:get_replica_type(Req),
@@ -1362,7 +1378,7 @@ handle_request(kv_w1c_put_request, Req, _Sender, State=#state{async_put=false}) 
             aae_update(Bucket, Key, use_binary, assumed_no_old_object, EncodedVal, State),
                 % Write once path - and so should be a new object.  If not this
                 % is an application fault
-            ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+            maybe_update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
             update_vnode_stats(vnode_put, Idx, StartTS),
             {reply, ?KV_W1C_PUT_REPLY{reply=ok, type=ReplicaType}, State#state{modstate=UpModState}};
         {error, Reason, UpModState} ->
@@ -1513,7 +1529,11 @@ handle_coverage_aaefold(Query, InitAcc, Nval,
         end,
     handle_aaefold(Query, InitAcc, Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
-                    State).
+                    State);
+handle_coverage_aaefold(_Q, InitAcc, _Nval, _Filter, Sender, State) ->
+    lager:warning("Attempt to aaefold on vnode with Tictac AAE disabled"),
+    riak_core_vnode:reply(Sender, InitAcc),
+    {noreply, State}.
 
 handle_aaefold({merge_root_nval, Nval}, 
                     _InitAcc, Nval,
@@ -1931,9 +1951,9 @@ do_request_hash(_, _) ->
 
 
 
-handoff_starting({_HOType, TargetNode}=_X, State=#state{handoffs_rejected=RejectCount}) ->
+handoff_starting({_HOType, TargetNode}=HandoffDest, State=#state{handoffs_rejected=RejectCount, update_hook=UpdateHook}) ->
     MaxRejects = app_helper:get_env(riak_kv, handoff_rejected_max, 6),
-    case MaxRejects =< RejectCount orelse ?YZ_SHOULD_HANDOFF(_X) of
+    case MaxRejects =< RejectCount orelse maybe_should_handoff(UpdateHook, HandoffDest) of
         true ->
             {true, State#state{in_handoff=true, handoff_target=TargetNode}};
         false ->
@@ -2048,11 +2068,11 @@ terminate(_Reason, #state{idx=Idx,
     ok.
 
 handle_info({{w1c_async_put, From, Type, Bucket, Key, EncodedVal, StartTS} = _Context, Reply},
-            State=#state{idx=Idx}) ->
+            State=#state{idx=Idx, update_hook=UpdateHook}) ->
     aae_update(Bucket, Key, use_binary, assumed_no_old_object, EncodedVal, State),
         % Write once path - and so should be a new object.  If not this
         % is an application fault
-    ?INDEX_BIN(Bucket, Key, EncodedVal, put, Idx),
+    maybe_update_binary(UpdateHook, Bucket, Key, EncodedVal, put, Idx),
     riak_core_vnode:reply(From, ?KV_W1C_PUT_REPLY{reply=Reply, type=Type}),
     update_vnode_stats(vnode_put, Idx, StartTS),
     {ok, State};
@@ -2276,9 +2296,14 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
 
+-spec do_backend_delete(
+    {riak_core_bucket:bucket(), riak_object:key()},
+    riak_object:riak_object(), #state{}
+) -> #state{}.
 do_backend_delete(BKey, RObj, State = #state{idx = Idx,
                                              mod = Mod,
-                                             modstate = ModState}) ->
+                                             modstate = ModState,
+                                             update_hook = UpdateHook}) ->
     %% object is a tombstone or all siblings are tombstones
     %% Calculate the index specs to remove...
     %% JDM: This should just be a tombstone by this point, but better
@@ -2289,7 +2314,7 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
     {Bucket, Key} = BKey,
     case Mod:delete(Bucket, Key, IndexSpecs, ModState) of
         {ok, UpdModState} ->
-            ?INDEX({RObj, no_old_object}, delete, Idx),
+            maybe_update(UpdateHook, {RObj, no_old_object}, delete, Idx),
             aae_delete(Bucket, Key, RObj, State),
             maybe_cache_evict(BKey, State),
             update_index_delete_stats(IndexSpecs),
@@ -2302,9 +2327,21 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
 delete_hash(RObj) ->
     erlang:phash2(RObj, 4294967296).
 
+%% @doc
+%% Prepare PUT needs to prepare the correct transition from old object to new
+%% to be performed.  Returns {true, {new_object, old_object}} if an actual PUT
+%% to a new object should be made, or false if the transition does not require
+%% a change before being acknowledged.  {fail, Index, Reason} should be used
+%% where the PUT_FSM needs to be informed of a logical failure.
+-spec prepare_put(state(), putargs()) -> 
+                    {{fail, index(), atom()|tuple()}|
+                            {boolean(),
+                                {riak_object:riak_object(), old_object()}},
+                        putargs(), state()}.
 prepare_put(State=#state{vnodeid=VId,
                          mod=Mod,
-                         modstate=ModState},
+                         modstate=ModState,
+                         update_hook=UpdateHook},
             PutArgs=#putargs{bkey={Bucket, _Key},
                              lww=LWW,
                              coord=Coord,
@@ -2316,7 +2353,7 @@ prepare_put(State=#state{vnodeid=VId,
     %% no need to incur additional get. Otherwise, we need to read the
     %% old object to know how the indexes have changed.
     IndexBackend = is_indexed_backend(Mod, Bucket, ModState),
-    IsSearchable = ?IS_SEARCH_ENABLED_FOR_BUCKET(BProps),
+    IsSearchable = maybe_requires_existing_object(UpdateHook, BProps),
     SkipReadBeforeWrite = LWW andalso (not IndexBackend) andalso (not IsSearchable),
     case SkipReadBeforeWrite of
         true ->
@@ -2392,11 +2429,23 @@ prepare_put_existing_object(#state{idx =Idx} = State,
         {oldobj, OldObj} ->
             {{false, {OldObj, unchanged_no_old_object}}, PutArgs, State2};
         {newobj, NewObj} ->
-            AMObj = enforce_allow_mult(NewObj, BProps),
-            IndexSpecs = get_index_specs(IndexBackend, CacheData, RequiresGet, AMObj, OldObj),
-            ObjToStore0 = maybe_prune_vclock(PruneTime, AMObj, BProps),
-            ObjectToStore = maybe_do_crdt_update(Coord, CRDTOp, ActorId, ObjToStore0),
-            determine_put_result(ObjectToStore, OldObj, Idx, PutArgs, State2, IndexSpecs, IndexBackend)
+            case enforce_allow_mult(NewObj, OldObj, BProps) of
+                {ok, AMObj} ->
+                    IndexSpecs =
+                        get_index_specs(IndexBackend, CacheData, RequiresGet,
+                                        AMObj, OldObj),
+                    ObjToStore0 =
+                        maybe_prune_vclock(PruneTime, AMObj, BProps),
+                    ObjectToStore =
+                        maybe_do_crdt_update(Coord, CRDTOp, ActorId,
+                                                ObjToStore0),
+                    determine_put_result(ObjectToStore, OldObj, Idx,
+                                            PutArgs, State2,
+                                            IndexSpecs, IndexBackend);
+                {error, Reason} ->
+                    lager:error("Error on allow_mult ~w", [Reason]),
+                    {{fail, Idx, Reason}, PutArgs, State2}
+            end
     end.
 
 determine_put_result({error, E}, _, Idx, PutArgs, State, _IndexSpecs, _IndexBackend) ->
@@ -2537,13 +2586,14 @@ actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
 actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFlag,
            State=#state{idx=Idx,
                         mod=Mod,
-                        modstate=ModState}) ->
+                        modstate=ModState,
+                        update_hook=UpdateHook}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
             aae_update(Bucket, Key, Obj, OldObj, EncodedVal, State),
             maybe_cache_object(BKey, Obj, State),
-            ?INDEX({Obj, maybe_old_object(OldObj)}, put, Idx),
+            maybe_update(UpdateHook, {Obj, maybe_old_object(OldObj)}, put, Idx),
             Reply = case RB of
                 true ->
                     {dw, Idx, Obj, ReqID};
@@ -2592,23 +2642,48 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
 %% @private
 %% enforce allow_mult bucket property so that no backend ever stores
 %% an object with multiple contents if allow_mult=false for that bucket
-enforce_allow_mult(Obj, BProps) ->
-    case proplists:get_value(allow_mult, BProps) of
-        true -> Obj;
-        _ ->
-            case riak_object:get_contents(Obj) of
-                [_] -> Obj;
-                Mult ->
-                    {MD, V} = select_newest_content(Mult),
-                    MergedObj = riak_object:set_contents(Obj, [{MD, V}]),
-                    case riak_object:is_head(MergedObj) of
-                        true ->
-                          lager:error("Merge resulted in head_only object"),
-                          MergedObj;
-                        false ->
-                          MergedObj
-                    end
-            end
+%% Also provides a double check that the object is safe to store - its contents
+%% must not be empty, it should not be an object head.
+enforce_allow_mult(Obj, OldObj, BProps) ->
+    MergedContents = riak_object:get_contents(Obj),
+    case {proplists:get_value(allow_mult, BProps),
+            MergedContents,
+            riak_object:is_head(Obj)} of
+        {_, [], _} ->
+            % This is a known issue - 
+            % https://github.com/basho/riak_kv/issues/1707
+            % Extra logging added to try and resolve the issue
+            MergedClock = riak_object:vclock(Obj),
+            OldClock = riak_object:vclock(OldObj),
+            Bucket = riak_object:bucket(OldObj),
+            Key = riak_object:key(OldObj),
+            lager:error("Unexpected empty contents after merge"
+                            ++ " object bucket=~w key=~w"
+                            ++ " merged_clock=~w old_clock=~w",
+                            [Bucket, Key, MergedClock, OldClock]),
+            OldValSum =
+                lists:map(fun({D, V}) -> {D, erlang:phash2(V)} end,
+                            riak_object:get_dotted_values(OldObj)),
+            lager:error("Summary of old object values ~w", [OldValSum]),
+            {error, empty_contents};
+        {true, _, false} -> 
+            {ok, Obj};
+        {false, [_], false} ->
+            {ok, Obj};
+        {false, Mult, false} ->
+            {MD, V} = select_newest_content(Mult),
+            {ok, riak_object:set_contents(Obj, [{MD, V}])};
+        {_, _, true} ->
+            % This is not a known issue.  An object head check was added prior
+            % to the fake object check being being uplifted to dominates from
+            % descends.  If this never occurs in 2.9.0, then this check should
+            % be removed in 2.9.1 
+            Bucket = riak_object:bucket(OldObj),
+            Key = riak_object:key(OldObj),
+            lager:error("Unexpected head object after merge"
+                            ++ " object bucket=~w key=~w",
+                            [Bucket, Key]),
+            {error, head_object}
     end.
 
 %% @private
@@ -3064,7 +3139,8 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                StateData=#state{mod=Mod,
                                 modstate=ModState,
-                                idx=Idx}) ->
+                                idx=Idx,
+                                update_hook=UpdateHook}) ->
     StartTS = os:timestamp(),
     {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
     IndexBackend = lists:member(indexes, Capabilities),
@@ -3086,7 +3162,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                                 StateData),
                     update_index_write_stats(IndexBackend, IndexSpecs),
                     update_vnode_stats(vnode_put, Idx, StartTS),
-                    ?INDEX({DiffObj2, no_old_object}, handoff, Idx),
+                    maybe_update(UpdateHook, {DiffObj, no_old_object}, handoff, Idx),
                     {ok, State2#state{modstate=UpdModState}};
                 {{error, Reason, UpdModState}, _Val} ->
                     {error, Reason, State2#state{modstate=UpdModState}}
@@ -3099,7 +3175,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                 {oldobj, _} ->
                     {ok, State2};
                 {newobj, NewObj} ->
-                    AMObj = enforce_allow_mult(NewObj, riak_core_bucket:get_bucket(Bucket)),
+                    {ok, AMObj} = enforce_allow_mult(NewObj, OldObj, riak_core_bucket:get_bucket(Bucket)),
                     case IndexBackend of
                         true ->
                             IndexSpecs = riak_object:diff_index_specs(AMObj, OldObj);
@@ -3114,7 +3190,9 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                                         StateData),
                             update_index_write_stats(IndexBackend, IndexSpecs),
                             update_vnode_stats(vnode_put, Idx, StartTS),
-                            ?INDEX({AMObj, maybe_old_object(OldObj)}, handoff, Idx),
+                            maybe_update(UpdateHook,
+                                        {AMObj, maybe_old_object(OldObj)},
+                                        handoff, Idx),
                             {ok, State2#state{modstate=UpdModState}};
                         {{error, Reason, UpdModState}, _Val} ->
                             {error, Reason, State2#state{modstate=UpdModState}}
@@ -3538,11 +3616,12 @@ maybe_check_md_cache(Table, BKey) ->
 %% Should return {undefined, undefined} if there is no cache to be used or
 %% {not_found, undefined} if the lack of object has been confirmed, or
 %% {VClock, IndexData} if the result is found
-maybefetch_clock_and_indexdata(Table, BKey, Mod, ModState, Coord, IsSearchable) ->
+maybefetch_clock_and_indexdata(Table, {BT, _K} = BKey,
+                                Mod, ModState, Coord, IsSearchable) ->
     CacheResult = maybe_check_md_cache(Table, BKey),
     case CacheResult of
         {undefined, undefined} ->
-            {ok, Capabilities} = Mod:capabilities(ModState),
+            {ok, Capabilities} = Mod:capabilities(BT, ModState),
             CanGetHead = maybe_support_head_requests(Capabilities)
                             andalso (not IsSearchable)
                             andalso (not Coord),
@@ -3890,6 +3969,64 @@ highest_actor(ActorBase, Obj) ->
                                  Actors),
     %% get the greatest event for the highest/latest actor
     {Actor, Epoch, riak_object:actor_counter(Actor, Obj)}.
+
+%%
+%% Technical note:  The index_module configuration parameter should contain
+%% a module name which must implement the following functions:
+%%
+%%     - index(object_pair(), write_reason(), p()) -> ok.
+%%     - index_binary(bucket(), key(), binary(), write_reason(), p()) -> ok.
+%%     - is_searchable(riak_kv_bucket:props()) -> boolean().
+%%
+%% The indexing module will be called on puts, deletes, handoff, and
+%% anti-entropy activity.  In the case of puts, if an object is being over-written,
+%% the old object will be passed as the second parameter in the object pair.
+%% The indexing module may use this old object to optimize the update (e.g.,
+%% to handle the special case of sibling writes, which may not map directly to
+%% Riak puts).
+%%
+%% NB. Currently, yokozuna is the only repository that currently
+%% implements this behavior.  C.f., Yokozuna cuttlefish schema, to see
+%% where this configuration is implicitly set.
+%%
+
+-spec update_hook()-> update_hook().
+update_hook() ->
+    app_helper:get_env(riak_kv, update_hook).
+
+-spec maybe_update(update_hook(),
+                    riak_kv_update_hook:object_pair(),
+                    riak_kv_update_hook:update_reason(),
+                    riak_kv_update_hook:partition()) -> ok.
+maybe_update(undefined, _RObjPair, _Reason, _Idx) ->
+    ok;
+maybe_update(UpdateHook, RObjPair, Reason, Idx) ->
+    UpdateHook:update(RObjPair, Reason, Idx).
+
+-spec maybe_update_binary(update_hook(),
+                            riak_core_bucket:bucket(),
+                            riak_object:key(),
+                            binary(),
+                            riak_kv_update_hook:update_reason(),
+                            riak_kv_update_hook:partition()) -> ok.
+maybe_update_binary(undefined, _Bucket, _Key, _Binary, _Reason, _Idx) ->
+    ok;
+maybe_update_binary(UpdateHook, Bucket, Key, Binary, Reason, Idx) ->
+    UpdateHook:update_binary(Bucket, Key, Binary, Reason, Idx).
+
+-spec maybe_requires_existing_object(update_hook(),
+                                        riak_kv_bucket:props()) -> boolean().
+maybe_requires_existing_object(undefined, _BProps) ->
+    false;
+maybe_requires_existing_object(UpdateHook, BProps) ->
+    UpdateHook:requires_existing_object(BProps).
+
+-spec maybe_should_handoff(update_hook(),
+                            riak_kv_update_hook:handoff_dest()) -> boolean().
+maybe_should_handoff(undefined, _HandoffDest) ->
+    true;
+maybe_should_handoff(UpdateHook, HandoffDest) ->
+    UpdateHook:should_handoff(HandoffDest).
 
 -ifdef(TEST).
 

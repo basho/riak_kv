@@ -1033,7 +1033,9 @@ clear_tree(State=#state{index=Index}) ->
     lager:info("Clearing AAE tree: ~p", [Index]),
     IndexNs = responsible_preflists(State),
     State2 = destroy_trees(State),
+    lager:info("Completed destroy of AAE tree: ~p", [Index]),
     State3 = init_trees(IndexNs, true, State2#state{trees=orddict:new()}),
+    lager:info("Completed init of AAE tree: ~p", [Index]),
     State3#state{built=false, expired=false}.
 
 destroy_trees(State) ->
@@ -1094,6 +1096,7 @@ maybe_rebuild(State=#state{lock=undefined, built=true, expired=true, index=Index
     case Locked of
         true ->
             State2 = clear_tree(State),
+            lager:info("Informing process to trigger rebuild of tree: ~p", [Index]),
             Pid ! {lock, Locked, State2},
             State2#state{built=Pid};
         _ ->
