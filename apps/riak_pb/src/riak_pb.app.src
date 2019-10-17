@@ -1,0 +1,11 @@
+{application, riak_pb,
+ [
+  {description, "Riak Protocol Buffers Messages"},
+  {vsn, git},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {env, []}
+ ]}.

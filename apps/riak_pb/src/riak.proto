@@ -1,0 +1,169 @@
+/* -------------------------------------------------------------------
+**
+** riak.proto: Protocol buffers for Riak
+**
+** Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+**
+** This file is provided to you under the Apache License,
+** Version 2.0 (the "License"); you may not use this file
+** except in compliance with the License.  You may obtain
+** a copy of the License at
+**
+**   http://www.apache.org/licenses/LICENSE-2.0
+**
+** Unless required by applicable law or agreed to in writing,
+** software distributed under the License is distributed on an
+** "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+** KIND, either express or implied.  See the License for the
+** specific language governing permissions and limitations
+** under the License.
+**
+** -------------------------------------------------------------------
+*/
+
+/*
+** Revision: 1.4
+*/
+
+// Java package specifiers
+option java_package = "com.basho.riak.protobuf";
+option java_outer_classname = "RiakPB";
+
+
+// Error response - may be generated for any Req
+message RpbErrorResp {
+    required bytes errmsg = 1;
+    required uint32 errcode = 2;
+}
+
+// Get server info request - no message defined, just send RpbGetServerInfoReq message code
+message RpbGetServerInfoResp {
+    optional bytes node = 1;
+    optional bytes server_version = 2;
+}
+
+// Key/value pair - used for user metadata, indexes, search doc fields
+message RpbPair {
+    required bytes key = 1;
+    optional bytes value = 2;
+}
+
+
+// Get bucket properties request
+message RpbGetBucketReq {
+    required bytes bucket = 1;
+    optional bytes type = 2;
+}
+
+// Get bucket properties response
+message RpbGetBucketResp {
+    required RpbBucketProps props = 1;
+}
+
+// Set bucket properties request
+message RpbSetBucketReq {
+    required bytes bucket = 1;
+    required RpbBucketProps props = 2;
+    optional bytes type = 3;
+}
+
+// Set bucket properties response - no message defined, just send
+// RpbSetBucketResp
+
+// Reset bucket properties request
+message RpbResetBucketReq {
+    required bytes bucket = 1;
+    optional bytes type = 2;
+}
+
+// Get bucket properties request
+message RpbGetBucketTypeReq {
+    required bytes type = 1;
+}
+
+// Set bucket properties request
+message RpbSetBucketTypeReq {
+    required bytes type = 1;
+    required RpbBucketProps props = 2;
+}
+
+// Set bucket properties response - no message defined, just send
+// RpbSetBucketResp
+
+// Module-Function pairs for commit hooks and other bucket properties
+// that take functions
+message RpbModFun {
+    required bytes module = 1;
+    required bytes function = 2;
+}
+
+// A commit hook, which may either be a modfun or a JavaScript named
+// function
+message RpbCommitHook {
+    optional RpbModFun modfun = 1;
+    optional bytes name = 2;
+}
+
+// Bucket properties
+message RpbBucketProps {
+    // Declared in riak_core_app
+    optional uint32 n_val = 1;
+    optional bool allow_mult = 2;
+    optional bool last_write_wins = 3;
+    repeated RpbCommitHook precommit = 4;
+    optional bool has_precommit = 5 [default = false];
+    repeated RpbCommitHook postcommit = 6;
+    optional bool has_postcommit = 7 [default = false];
+    optional RpbModFun chash_keyfun = 8;
+
+    // Declared in riak_kv_app
+    optional RpbModFun linkfun = 9;
+    optional uint32 old_vclock = 10;
+    optional uint32 young_vclock = 11;
+    optional uint32 big_vclock = 12;
+    optional uint32 small_vclock = 13;
+    optional uint32 pr = 14;
+    optional uint32 r = 15;
+    optional uint32 w = 16;
+    optional uint32 pw = 17;
+    optional uint32 dw = 18;
+    optional uint32 rw = 19;
+    optional bool basic_quorum = 20;
+    optional bool notfound_ok = 21;
+
+    // Used by riak_kv_multi_backend
+    optional bytes backend = 22;
+
+    // Used by riak_search bucket fixup
+    optional bool search = 23;
+
+    // Used by riak_repl bucket fixup
+    enum RpbReplMode {
+        FALSE = 0;
+        REALTIME = 1;
+        FULLSYNC = 2;
+        TRUE = 3;
+    }
+    optional RpbReplMode repl = 24;
+
+    // Search index
+    optional bytes search_index = 25;
+
+    // KV Datatypes
+    optional bytes datatype = 26;
+
+    // KV strong consistency
+    optional bool consistent = 27;
+
+    // KV fast path
+    optional bool write_once = 28;
+
+    // Hyperlolog DT Precision
+    optional uint32 hll_precision = 29;
+}
+
+// Authentication request
+message RpbAuthReq {
+    required bytes user = 1;
+    required bytes password = 2;
+}

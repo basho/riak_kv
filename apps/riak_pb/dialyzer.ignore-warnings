@@ -1,0 +1,12 @@
+## Generated protobuffs code
+riak_dt_pb.erl
+riak_kv_pb.erl
+riak_pb.erl
+riak_search_pb.erl
+riak_ts_pb.erl
+riak_yokozuna_pb.erl
+## Insufficient typing on record in generated code
+Invalid type specification for function riak_pb_codec:decode_commit_hooks/1. The success typing is ([any()]) -> [{atom(),atom() | [any(),...]} | {'modfun',atom(),atom() | [any(),...]}]
+riak_pb_codec.erl:353: Invalid type specification for function riak_pb_codec:decode_commit_hooks/1. The success typing is ([any()]) -> [{atom(),atom() | [any(),...]} | {'modfun',atom(),atom() | [any(),...]}]
+## Internal calls only pass empty-list, but calls from other libraries pass proplists
+riak_pb_dt_codec.erl:187: The pattern {AtomType, _} can never match the type 'false'

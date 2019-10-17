@@ -1,0 +1,31 @@
+# Erlang
+.eunit/*
+deps/*
+priv/*
+*.o
+ebin/*.beam
+ebin/riak_pb.app
+include/*_pb.hrl
+src/*_pb.erl
+doc/*
+.qc
+.eqc-info
+current_counterexample.eqc
+src/riak_pb_messages.erl
+.local_dialyzer_plt
+dialyzer_unhandled_warnings
+dialyzer_warnings
+.rebar/*
+.rebar3/
+_build/
+
+
+# Java
+target/*
+
+#IntelliJ
+.idea/
+riak_pb.iml
+
+# C
+c/*
