@@ -1,0 +1,9 @@
+language: erlang
+otp_release: R15B01
+notifications:
+  webhooks: http://basho-engbot.herokuapp.com/travis?key=4c4dd6a9a292f8c583482900a81c58f013039282
+  email:
+    - russelldb@basho.com
+    - sean@basho.com
+    - ctilt@basho.com
+    - reid@basho.com

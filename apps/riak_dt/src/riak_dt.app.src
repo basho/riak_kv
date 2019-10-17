@@ -1,0 +1,18 @@
+%% -*- erlang -*-
+{application, riak_dt,
+ [
+  {description, ""},
+  {vsn, git},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  %% @See docs for erlang:term_to_binary/2. Compression can be either
+  %% true | false | integer() when integer() is in a range of 0 - 9. 0
+  %% is the same as false, 6 is the same as true.  The integer
+  %% indicates the level of compression. Higher number means more
+  %% compression, but more time to compress. In tests so far 1 has
+  %% been enough for CRDTs
+  {env, [{binary_compression, 1}]}
+ ]}.
