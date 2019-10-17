@@ -1,0 +1,98 @@
+// A map of the links and monitors among Riak Pipe processes
+
+// This map shows the basic web of monitors and links present in the
+// system when:
+//  - a pipeline "A" is setup with two fittings, "1" and "2"
+//  - a vnode is handling inputs for both of those fittings
+//     (only one vnode is shown, for simplicity in the diagram)
+
+// Edges are colored according to the type of link/monitor (or the
+// special-case link of supervision):
+//   supervises = [color="#009900"];
+//        links = [color="#990000"];
+//     monitors = [color="#000099"];
+
+// Render using Graphviz:
+//    dot -Tpng -oriak_pipe_monitors.png riak_pipe_monitors.dot
+
+// Notes:
+//  - the links from riak_pipe_vnode to riak_pipe_vnode_worker_A* were
+//     put in place before riak_core_vnode supported handle_info; they
+//     should be changed to monitors now
+digraph {
+   // application-immortal processes
+   subgraph apps {
+      rank=min;
+      riak_pipe_sup
+      riak_core_sup
+   }
+   
+   subgraph immortal {
+      {rank=same;
+         riak_pipe_vnode_master
+         riak_pipe_builder_sup
+         riak_pipe_fitting_sup
+         riak_core_vnode_sup}
+
+      // started at application start time
+      riak_pipe_sup -> riak_pipe_vnode_master [color="#009900"];
+      riak_pipe_sup -> riak_pipe_builder_sup [color="#009900"];
+      riak_pipe_sup -> riak_pipe_fitting_sup [color="#009900"];
+
+      // external to pipe
+      riak_core_sup -> riak_core_vnode_sup [color="#009900"];
+   }
+
+   // application-mortal processes
+   // started as vnode requests arrive
+   subgraph mortal {
+      riak_pipe_vnode
+      riak_pipe_vnode_worker_sup
+      
+      riak_core_vnode_sup -> riak_pipe_vnode [color="#009900"];
+      riak_pipe_vnode_master -> riak_pipe_vnode [color="#000099"];
+
+      riak_pipe_vnode -> riak_pipe_vnode_worker_sup [color="#990000"];
+   }
+   
+   // the builder/fitting "meta" processes
+   subgraph pipeline_meta_A {
+      riak_pipe_builder_A
+
+      riak_pipe_fitting_A1
+      riak_pipe_fitting_A2
+
+      // started as pipelines are set up
+      riak_pipe_builder_sup -> riak_pipe_builder_A [color="#009900"];
+
+      riak_pipe_fitting_sup -> riak_pipe_fitting_A1 [color="#009900"];
+      riak_pipe_fitting_sup -> riak_pipe_fitting_A2 [color="#009900"];
+
+      riak_pipe_builder_A -> riak_pipe_fitting_A1 [color="#000099"];
+      riak_pipe_builder_A -> riak_pipe_fitting_A2 [color="#000099"];
+
+      riak_pipe_fitting_A1 -> riak_pipe_builder_A [color="#000099"];
+      riak_pipe_fitting_A2 -> riak_pipe_builder_A [color="#000099"];
+
+      // builder also monitors the process receiving outputs
+      riak_pipe_builder_A -> sink_process_A [color="#000099"];
+   }
+
+   // the processes actually processing inputs
+   subgraph pipeline_A {
+      riak_pipe_vnode_worker_A1
+      riak_pipe_vnode_worker_A2
+
+      riak_pipe_vnode_worker_sup -> riak_pipe_vnode_worker_A1 [color="#009900"];
+      riak_pipe_vnode_worker_sup -> riak_pipe_vnode_worker_A2 [color="#009900"];
+
+      riak_pipe_vnode -> riak_pipe_vnode_worker_A1 [color="#990000"];
+      riak_pipe_vnode -> riak_pipe_vnode_worker_A2 [color="#990000"];
+
+      riak_pipe_vnode -> riak_pipe_fitting_A1 [color="#000099"];
+      riak_pipe_vnode -> riak_pipe_fitting_A2 [color="#000099"];
+
+      riak_pipe_fitting_A1 -> riak_pipe_vnode [color="#000099"];
+      riak_pipe_fitting_A2 -> riak_pipe_vnode [color="#000099"];
+   }
+}
