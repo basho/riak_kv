@@ -87,7 +87,7 @@ setup() ->
     error_logger:logfile({open, Path ++ "/put_fsm_eqc.log"}),
 
     %% Exometer starts lager.  Therefore, we need start it before lager to ensure
-    %% that cconfiguration customizations in this test case are not inadvertantly
+    %% that configuration customizations in this test case are not inadvertantly
     %% overwritten ...
     ok = exometer:start(),
     application:stop(lager),
