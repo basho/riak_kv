@@ -86,22 +86,10 @@ test() ->
     test(100).
 
 test(N) ->
-    fsm_eqc_util:start_mock_servers(),
-    fsm_eqc_util:start_fake_rng(?MODULE),
-    try quickcheck(numtests(N, prop_basic_get()))
-    after
-        fsm_eqc_util:cleanup_mock_servers(),
-        exit(whereis(?MODULE), kill)
-    end.
+    quickcheck(numtests(N, prop_basic_get())).
 
 check() ->
-    fsm_eqc_util:start_mock_servers(),
-    fsm_eqc_util:start_fake_rng(?MODULE),
-    try check(prop_basic_get(), current_counterexample())
-    after
-        fsm_eqc_util:cleanup_mock_servers(),
-        exit(whereis(?MODULE), kill)
-    end.
+    check(prop_basic_get(), current_counterexample()).
 
 %%====================================================================
 %% Generators

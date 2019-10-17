@@ -184,13 +184,7 @@ cycle(Zs, N, []) ->
 start_mock_servers() ->
     Path = riak_kv_test_util:get_test_dir("fsm_util"),
     %% Start new core_vnode based EQC FSM test mock
-    case whereis(fsm_eqc_vnode) of
-        undefined -> ok;
-        Pid2      ->
-            unlink(Pid2),
-            exit(Pid2, shutdown),
-            riak_kv_test_util:wait_for_pid(Pid2)
-    end,
+    riak_kv_test_util:stop_process(fsm_eqc_vnode),
     {ok, _Pid3} = fsm_eqc_vnode:start_link(),
     application:load(riak_core),
     application:start(crypto),
@@ -272,6 +266,7 @@ last_spawn([_Hist|Rest]) ->
 
 
 start_fake_rng(ProcessName) ->
+    riak_kv_test_util:stop_process(ProcessName),
     Pid = spawn_link(?MODULE, fake_rng, [1]),
     register(ProcessName, Pid),
     {ok, Pid}.
