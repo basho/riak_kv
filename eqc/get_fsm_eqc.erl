@@ -140,7 +140,7 @@ is_sibling(Lin1, Lin2) ->
 
 
 vnodegetresps() ->
-    fsm_eqc_util:not_empty(fsm_eqc_util:longer_list(2, vnodegetresp())).
+    non_empty(fsm_eqc_util:longer_list(2, vnodegetresp())).
 
 vnodegetresp() ->
     {fsm_eqc_util:partval(), nodestatus()}.

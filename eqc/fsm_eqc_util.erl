@@ -6,9 +6,6 @@
 -include_lib("eqc/include/eqc.hrl").
 -define(RING_KEY, riak_ring).
 
-not_empty(G) ->
-    ?SUCHTHAT(X, G, X /= [] andalso X /= <<>>).
-
 longer_list(K, G) ->
     ?SIZED(Size, resize(trunc(K*Size), list(resize(Size, G)))).
 
@@ -38,7 +35,7 @@ bkey() ->
      non_blank_string()}. %% key
 
 non_blank_string() ->
-    ?LET(X,not_empty(list(lower_char())), list_to_binary(X)).
+    ?LET(X, [lower_char() | list(lower_char())], list_to_binary(X)).
 
 %% Generate a lower 7-bit ACSII character that should not cause any problems
 %% with utf8 conversion.
@@ -122,7 +119,7 @@ partval() ->
                {1,Shrink(error)}]).
 
 partvals() ->
-    not_empty(fsm_eqc_util:longer_list(2, partval())).
+    non_empty(fsm_eqc_util:longer_list(2, partval())).
 
 %% Generate 5 riak objects with the same bkey
 %%

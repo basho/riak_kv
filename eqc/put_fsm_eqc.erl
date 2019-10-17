@@ -137,7 +137,7 @@ cleanup(started) ->
 %% {notfound|{ok, lineage()}, FirstResp, FirstSeq, SecondResp, SecondSeq}
 
 vnodeputresps() ->
-    fsm_eqc_util:not_empty(fsm_eqc_util:longer_list(2, vnodeputresp())).
+    non_empty(fsm_eqc_util:longer_list(2, vnodeputresp())).
 
 vnodeputresp() ->
     {vputpartval(),
@@ -860,4 +860,3 @@ check_puts_sent(ExpectedPuts, VPutResp) ->
               equals(ExpectedPuts, NumPutReqs)).
 
 -endif. % EQC
-
