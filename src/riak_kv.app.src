@@ -10,6 +10,7 @@
                   crypto,
                   riak_api,
                   riak_core,
+                  riak_repl,
                   sidejob,
                   mochiweb,
                   webmachine,
