@@ -4,7 +4,7 @@
 %% @doc Path (relative or absolute) to the working directory for the
 %% replication process
 {mapping, "mdc.data_root", "riak_repl.data_root", [
-    {default, "{{repl_data_root}}"}
+    {default, "./data/riak_repl"}
 ]}.
 
 %% @doc The cluster manager will listen for connections from remote
@@ -14,7 +14,7 @@
 %% cluster. The value is a combination of an IP address (**not
 %% hostname**) followed by a port number
 {mapping, "mdc.cluster_manager", "riak_core.cluster_mgr", [
-    {default, {"{{cluster_manager_ip}}", {{cluster_manager_port}} }},
+    {default, {"127.0.0.1", 9080 }},
     {datatype, ip}
 ]}.
 

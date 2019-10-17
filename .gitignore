@@ -25,3 +25,4 @@ src/riak_core_pb.erl
 *@*
 undefined
 log/crash.log
+_checkouts/

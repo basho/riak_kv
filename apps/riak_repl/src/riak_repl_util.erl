@@ -3,7 +3,7 @@
 -module(riak_repl_util).
 -author('Andy Gross <andy@basho.com>').
 -include_lib("public_key/include/OTP-PUB-KEY.hrl").
--include_lib("riak_kv/include/riak_kv_vnode.hrl").
+%%-include_lib("riak_kv/include/riak_kv_vnode.hrl").
 -include("riak_repl.hrl").
 
 -ifdef(TEST).
@@ -1040,7 +1040,7 @@ peer_wire_format(Peer) ->
 maybe_get_vnode_lock(SrcPartition) ->
     case riak_core_bg_manager:use_bg_mgr(riak_repl, fullsync_use_background_manager) of
         true  ->
-            Lock = ?KV_VNODE_LOCK(SrcPartition),
+            Lock = {vnode_lock, SrcPartition},
             case riak_core_bg_manager:get_lock(Lock, self(), [{task, repl_fullsync}]) of
                 {ok, _Ref} ->
                     ok;

@@ -162,7 +162,7 @@
 %% @doc Specifies the storage engine used for Riak's key-value data
 %% and secondary indexes (if supported).
 {mapping, "storage_backend", "riak_kv.storage_backend", [
-  {default, {{storage_backend}} },
+  {default, bitcask },
   {datatype, {enum, [bitcask, leveldb, leveled, memory, multi, prefix_multi]}}
 ]}.
 
@@ -327,66 +327,6 @@
 {mapping, "anti_entropy.bloomfilter", "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter", [
   {default, on},
   {datatype, flag},
-  hidden
-]}.
-
-%% @doc How many JavaScript virtual machines are available for
-%% executing map functions.
-{mapping, "javascript.map_pool_size", "riak_kv.map_js_vm_count", [
-  {default, {{map_js_vms}} },
-  {datatype, integer},
-  hidden
-]}.
-
-%% @doc How many JavaScript virtual machines are available for
-%% executing reduce functions.
-{mapping, "javascript.reduce_pool_size", "riak_kv.reduce_js_vm_count", [
-  {default, {{reduce_js_vms}} },
-  {datatype, integer},
-  hidden
-]}.
-
-%% @doc How many JavaScript virtual machines are available for
-%% executing pre-commit hook functions.
-{mapping, "javascript.hook_pool_size", "riak_kv.hook_js_vm_count", [
-  {default, {{hook_js_vms}} },
-  {datatype, integer},
-  hidden
-]}.
-
-%% @doc The maximum amount of memory allocated to each JavaScript
-%% virtual machine.
-{mapping, "javascript.maximum_heap_size", "riak_kv.js_max_vm_mem", [
-  {default, "8MB"},
-  {datatype, bytesize},
-  hidden
-]}.
-
-{translation,
- "riak_kv.js_max_vm_mem",
- fun(Conf) ->
-     cuttlefish_util:ceiling(cuttlefish:conf_get("javascript.maximum_heap_size", Conf) / 1048576)
- end}.
-
-%% @doc The maximum amount of thread stack memory to allocate
-%% to each JavaScript virtual machine.
-{mapping, "javascript.maximum_stack_size", "riak_kv.js_thread_stack", [
-  {default, "16MB"},
-  {datatype, bytesize},
-  hidden
-]}.
-
-{translation,
- "riak_kv.js_thread_stack",
- fun(Conf) ->
-     cuttlefish_util:ceiling(cuttlefish:conf_get("javascript.maximum_stack_size", Conf) / 1048576)
- end}.
-
-%% @doc A directory containing Javascript source files which will be
-%% loaded by Riak when it initializes Javascript VMs.
-{mapping, "javascript.source_dir", "riak_kv.js_source_dir", [
-  {commented, "/tmp/js_source"},
-  {datatype, directory},
   hidden
 ]}.
 
@@ -827,14 +767,6 @@
 
 %% @doc Whether to allow term-based map-reduce.
 {mapping, "cluster.job.riak_kv.map_reduce", "riak_core.job_accept_class", [
-    merge,
-    {datatype, {flag, enabled, disabled}},
-    {default, enabled},
-    {commented, enabled}
-]}.
-
-%% @doc Whether to allow JavaScript map-reduce.
-{mapping, "cluster.job.riak_kv.map_reduce_js", "riak_core.job_accept_class", [
     merge,
     {datatype, {flag, enabled, disabled}},
     {default, enabled},

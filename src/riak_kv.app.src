@@ -8,9 +8,9 @@
                   stdlib,
                   sasl,
                   crypto,
+                  clusterfish,
                   riak_api,
                   riak_core,
-                  riak_repl,
                   sidejob,
                   mochiweb,
                   webmachine,
@@ -22,9 +22,9 @@
                   leveled,
                   kv_index_tictactree,
                   gen_fsm_compat,
-                  riak_ensemble,
                   exometer_core,
-                  hyper
+                  hyper,
+                  riak_ensemble
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},
