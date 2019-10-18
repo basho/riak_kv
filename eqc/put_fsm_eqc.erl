@@ -87,7 +87,7 @@ setup() ->
     error_logger:logfile({open, Path ++ "/put_fsm_eqc.log"}),
 
     %% Exometer starts lager.  Therefore, we need start it before lager to ensure
-    %% that cconfiguration customizations in this test case are not inadvertantly
+    %% that configuration customizations in this test case are not inadvertantly
     %% overwritten ...
     ok = exometer:start(),
     application:stop(lager),
@@ -137,7 +137,7 @@ cleanup(started) ->
 %% {notfound|{ok, lineage()}, FirstResp, FirstSeq, SecondResp, SecondSeq}
 
 vnodeputresps() ->
-    fsm_eqc_util:not_empty(fsm_eqc_util:longer_list(2, vnodeputresp())).
+    non_empty(fsm_eqc_util:longer_list(2, vnodeputresp())).
 
 vnodeputresp() ->
     {vputpartval(),
@@ -860,4 +860,3 @@ check_puts_sent(ExpectedPuts, VPutResp) ->
               equals(ExpectedPuts, NumPutReqs)).
 
 -endif. % EQC
-
