@@ -121,6 +121,17 @@ partval() ->
 partvals() ->
     non_empty(fsm_eqc_util:longer_list(2, partval())).
 
+%% We need monotonic time and erlang:monotonic() is hard to make a "now" tuple of,
+%% since we don't know whether it is negative or positive
+timestamp() ->
+    TS = os:timestamp(),
+    case get(timestamp) of
+        PTS when PTS == undefined; PTS < TS ->
+            put(timestamp, TS), TS;
+        _ -> timestamp()
+    end.
+
+
 %% Generate 5 riak objects with the same bkey
 %%
 riak_objects() ->
@@ -146,7 +157,7 @@ build_riak_obj(B,K,Vc,Val,notombstone) ->
         riak_object:set_vclock(
             riak_object:new(B,K,Val),
                 Vc),
-        [{dict:from_list([{<<"X-Riak-Last-Modified">>, os:timestamp()}]), Val}]);
+        [{dict:from_list([{<<"X-Riak-Last-Modified">>, timestamp()}]), Val}]);
 build_riak_obj(B,K,Vc,Val,tombstone) ->
     Obj = build_riak_obj(B,K,Vc,Val,notombstone),
     add_tombstone(Obj).
