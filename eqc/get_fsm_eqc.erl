@@ -1,3 +1,18 @@
+%% Description
+%%
+%% The test is based on a fixed set of generated objects. These objects are
+%% then used as the randomised answers from vnodes to the get_fsm. The
+%% objects have a deterministic merge order (based on the assumption the
+%% timestamps generated are strictly monotonically increasing) - and so the
+%% test can compare the get_fsm result to the expected result.
+%%
+%% As well as varying the object responses, the GET options and parameters are
+%% mutated to create further scenarios.
+%%
+%% TODO:
+%% The test does not use dotted values at present, or HEAD responses
+%%
+
 -module(get_fsm_eqc).
 
 -ifdef(EQC).
