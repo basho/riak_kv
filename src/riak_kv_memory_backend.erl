@@ -835,7 +835,7 @@ ttl_ets_timeref_leak_get_after_expiry_test() ->
     {ok, State1} = put(Bucket, Key, [], Value, State),
     {ok, #state{time_ref=TimeRef} = State2} = put(Bucket, Key, [], Value, State1),
     ?assertEqual(1, get_time_ref_count(TimeRef)),
-    timer:sleep(timer:seconds(1)),
+    timer:sleep(timer:seconds(1) + 1),
     {error, not_found, _State3} = get(Bucket, Key, State2),
     ?assertEqual(0, get_time_ref_count(TimeRef)).
 
