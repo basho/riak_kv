@@ -83,7 +83,7 @@ prepare() ->
     fsm_eqc_util:start_mock_servers().
 
 test() ->
-    test(100).
+    test(10000).
 
 test(N) ->
     quickcheck(numtests(N, prop_basic_get())).
