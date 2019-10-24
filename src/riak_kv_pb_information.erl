@@ -102,7 +102,7 @@ process_get_preflist_info_req(Req, State) ->
 	end.
 
 get_n_val(undefined, BucketNVal) ->
-	get_prop(n_val, BucketNVal);
+	BucketNVal;
 get_n_val(NVal, BucketNVal) when erlang:is_integer(NVal), NVal > 0, NVal =< BucketNVal ->
 	NVal;
 get_n_val(NVal, _BucketProps) ->
