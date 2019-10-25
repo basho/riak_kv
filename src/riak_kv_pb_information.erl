@@ -97,7 +97,8 @@ process_get_preflist_info_req(Req, State) ->
 		N ->
 			Preflist2 = get_preflist2(SloppyQuorum, DocIdx, N),
 			Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
-			Resp = #rpbgetpreflistinforesp{preflist = Preflist},
+			EncodedPreflist = riak_pb_kv_codec:encode_preflist(Preflist),
+			Resp = #rpbgetpreflistinforesp{preflist = EncodedPreflist},
 			{reply, Resp, State}
 	end.
 
