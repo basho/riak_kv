@@ -6,13 +6,13 @@
 %%% 	following request messages in the original protocol:</p>
 %%%
 %%%		<pre>
-%%%		 210 - RpbGetPreflistReq
+%%%		 210 - RpbGetRingReq
 %%%		</pre>
 %%%
 %%%		<p>This service produces the following responses:</p>
 %%%
 %%%		<pre>
-%%%		 211 - RpbGetPreflistResp
+%%%		 211 - RpbGetRingResp
 %%%		</pre>
 %%% @end
 %%% Created : 22. Oct 2019 15:11
@@ -43,11 +43,9 @@
 -record(state, {}).
 
 -type process_return() :: 	{reply, riak_kv_pb_information_response(), #state{}} |
-{error, string(), #state{}}.
-
--type riak_kv_pb_information_request() :: #rpbgetpreflistinforeq{}.
-
--type riak_kv_pb_information_response() :: #rpbgetpreflistinforesp{}.
+							{error, string(), #state{}}.
+-type riak_kv_pb_information_request() :: #rpbgetringreq{}.
+-type riak_kv_pb_information_response() :: #rpbgetringresp{}.
 
 %%====================================================================
 %% API Functions
@@ -67,8 +65,8 @@ encode(Message) ->
 
 -spec process(Req :: riak_kv_pb_information_request(), State :: #state{}) ->
 	process_return().
-process(Req, State) when erlang:is_record(Req, rpbgetpreflistinforeq) ->
-	process_get_preflist_info_req(Req, State).
+process(Req, State) when erlang:is_record(Req, rpbgetringreq) ->
+	process_get_ring_req(Req, State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
 	{ignore, #state{}}.
@@ -78,47 +76,10 @@ process_stream(_, _, State) ->
 %%====================================================================
 %% Internal Functions
 %%====================================================================
-handle_decode(Message) when erlang:is_record(Message, rpbgetpreflistinforeq) ->
+handle_decode(Message) when erlang:is_record(Message, rpbgetringreq) ->
 	{ok, Message}.
 
-process_get_preflist_info_req(#rpbgetpreflistinforeq{bucket = <<>>}, State) ->
-	{error, "Bucket cannot be zero-length", State};
-process_get_preflist_info_req(#rpbgetpreflistinforeq{key = <<>>}, State) ->
-	{error, "Key cannot be zero-length", State};
-process_get_preflist_info_req(Req, State) ->
-	#rpbgetpreflistinforeq{bucket = Bucket, key = Key, n_val = OptionsNVal, sloppy_quorum = SloppyQuorum} = Req,
-	BucketProps = riak_core_bucket:get_bucket(Bucket),
-	BKey = {Bucket, Key},
-	BucketNVal = get_prop(n_val, BucketProps),
-	DocIdx = riak_core_util:chash_key(BKey, BucketProps),
-	case get_n_val(OptionsNVal, BucketNVal) of
-		{error, {n_val_violation, _BadNVal}} ->
-			{error, "n_val must be an non-negative integer, which doesn't exceed bucket's n_val.", State};
-		N ->
-			Preflist2 = get_preflist2(SloppyQuorum, DocIdx, N),
-			Preflist = [IndexNode || {IndexNode, _Type} <- Preflist2],
-			EncodedPreflist = riak_pb_kv_codec:encode_preflist(Preflist),
-			Resp = #rpbgetpreflistinforesp{preflist = EncodedPreflist},
-			{reply, Resp, State}
-	end.
-
-get_n_val(undefined, BucketNVal) ->
-	BucketNVal;
-get_n_val(NVal, BucketNVal) when erlang:is_integer(NVal), NVal > 0, NVal =< BucketNVal ->
-	NVal;
-get_n_val(NVal, _BucketProps) ->
-	{error, {n_val_violation, NVal}}.
-
-get_preflist2(SloppyQuorum, DocIdx, N) when SloppyQuorum == false ->
-	riak_core_apl:get_primary_apl(DocIdx, N, riak_kv);
-get_preflist2(_SloppyQuorum, DocIdx, N) ->
-	UpNodes = riak_core_node_watcher:nodes(riak_kv),
-	riak_core_apl:get_apl_ann(DocIdx, N, UpNodes).
-
-get_prop(Name, PropsList) ->
-	case lists:keyfind(Name, 1, PropsList) of
-		{_, Val} ->
-			Val;
-		false ->
-			undefined
-	end.
+process_get_ring_req(_Req, State) ->
+	{ok, Ring} = riak_core_ring_manager:get_my_ring(),
+	Resp = riak_pb_kv_codec:encode_ring(Ring),
+	{reply, Resp, State}.
