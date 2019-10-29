@@ -29,6 +29,7 @@
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_types.hrl").
+-include("stacktrace.hrl").
 
 -behaviour(gen_fsm_compat).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
@@ -803,7 +804,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
                     [dtrace_errstr({Mod, Fun, Class, Exception})]),
             ok = riak_kv_stat:update(precommit_fail),
             lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
-                        [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
+                        [Mod,Fun,Class,Exception, ?_current_stacktrace_()]),
             {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
         Obj ->
             try
@@ -843,7 +844,7 @@ decode_postcommit({erlang, {M,F}, Res}, Trace) ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-3],
                     [dtrace_errstr({M, F, Class, Ex})]),
             ok = riak_kv_stat:update(postcommit_fail),
-            Stack = erlang:get_stacktrace(),
+            Stack = ?_current_stacktrace_(),
             lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
                         [M, F, Class, Ex, Stack]),
             ok;
@@ -1263,11 +1264,11 @@ forward(CoordNode, State) ->
         monitor_remote_coordinator(UseAckP, MiddleMan,
                                    CoordNode, State)
     catch
-        _:Reason ->
+        ?_exception_(_, Reason, StackToken) ->
             ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
                     ["prepare", dtrace_errstr(Reason)]),
             lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
-                        [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
+                        [BKey, CoordNode, Reason, ?_get_stacktrace_(StackToken)]),
             process_reply({error, {coord_handoff_failed, Reason}}, State)
     end.
 
