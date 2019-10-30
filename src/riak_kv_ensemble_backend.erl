@@ -195,20 +195,33 @@ tick(_Epoch, _Seq, _Leader, Views, State=#state{id=Id}) ->
     %% TODO: Should this entire function be async?
     {{kv, Idx, N, _}, _} = Id,
     Latest = hd(Views),
-    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
-    {PL, _} = chashbin:itr_pop(N, chashbin:exact_iterator(Idx, CHBin)),
-    %% TODO: Make ensembles/peers use ensemble/peer as actual peer name so this is unneeded
-    Peers = [{{kv, Idx, N, Idx2}, Node} || {Idx2, Node} <- PL],
-    Add = Peers -- Latest,
-    Del = Latest -- Peers,
-    Changes = [{add, Peer} || Peer <- Add] ++ [{del, Peer} || Peer <- Del],
-    case Changes of
-        [] ->
+    {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
+    case riak_core_ring:check_lastgasp(Ring) of
+        true ->
+            %% See https://github.com/basho/riak_core/issues/943
             State;
-        _ ->
-            %% io:format("## ~p~n~p~n~p~n", [Peers, Latest, Changes]),
-            State2 = maybe_async_update(Changes, State),
-            State2
+        false ->
+            {PL, _} = chashbin:itr_pop(N, chashbin:exact_iterator(Idx, CHBin)),
+            %% TODO: Make ensembles/peers use ensemble/peer as actual peer
+            %% name so this is unneeded
+            Peers = [{{kv, Idx, N, Idx2}, Node} || {Idx2, Node} <- PL],
+            Add = Peers -- Latest,
+            Del = Latest -- Peers,
+            Changes =
+                [{add, Peer} || Peer <- Add] ++ [{del, Peer} || Peer <- Del],
+            case Changes of
+                [] ->
+                    State;
+                _ ->
+                    %% io:format("## ~p~n~p~n~p~n", [Peers, Latest, Changes]),
+                    lager:info("Changes ~p prompted by ring update",
+                                [Changes]),
+                    %% See https://github.com/basho/riak_ensemble/issues/129
+                    %% Not sure it is safe to do updates this way, as future
+                    %% ring changes may not take affect due to Vsn mismatches
+                    State2 = maybe_async_update(Changes, State),
+                    State2
+            end
     end.
 
 maybe_async_update(Changes, State=#state{async=Async}) ->
