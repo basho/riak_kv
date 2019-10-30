@@ -44,7 +44,7 @@
 
 -type process_return() :: 	{reply, riak_kv_pb_information_response(), #state{}} |
 							{error, string(), #state{}}.
--type riak_kv_pb_information_request() :: #rpbgetringreq{}.
+-type riak_kv_pb_information_request() :: rpbgetringreq.
 -type riak_kv_pb_information_response() :: #rpbgetringresp{}.
 
 %%====================================================================
@@ -65,7 +65,7 @@ encode(Message) ->
 
 -spec process(Req :: riak_kv_pb_information_request(), State :: #state{}) ->
 	process_return().
-process(Req, State) when erlang:is_record(Req, rpbgetringreq) ->
+process(Req, State) when Req == rpbgetringreq ->
 	process_get_ring_req(Req, State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
@@ -76,7 +76,7 @@ process_stream(_, _, State) ->
 %%====================================================================
 %% Internal Functions
 %%====================================================================
-handle_decode(Message) when erlang:is_record(Message, rpbgetringreq) ->
+handle_decode(Message) when Message == rpbgetringreq ->
 	{ok, Message}.
 
 process_get_ring_req(_Req, State) ->
