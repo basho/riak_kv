@@ -139,7 +139,8 @@ maybe_bootstrap_ensembles() ->
             {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
             IsClaimant = (riak_core_ring:claimant(Ring) == node()),
             IsReady = riak_core_ring:ring_ready(Ring),
-            case IsClaimant and IsReady of
+            IsNotLastGasp = no riak_core_ring:check_lastgasp(Ring),
+            case IsClaimant and IsReady and IsNotLastGasp of
                 true ->
                     bootstrap_preflists(Ring, CHBin);
                 false ->
