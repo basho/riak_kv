@@ -63,11 +63,6 @@
 -define(API_VERSION, 1).
 -define(CAPABILITIES, [async_fold,size]).
 
-%% must not be 131, otherwise will match t2b in error
-%% yes, I know that this is horrible.
--define(VERSION_1, 1).
--define(VERSION_BYTE, ?VERSION_1).
--define(CURRENT_KEY_TRANS, fun key_transform_to_1/1).
 
 -record(state, {ref :: reference() | undefined,
                 data_dir :: string(),
@@ -100,58 +95,13 @@ capabilities(_) ->
 capabilities(_, _) ->
     {ok, ?CAPABILITIES}.
 
-%% @doc Transformation functions for the keys coming off the disk.
-key_transform_to_1(<<?VERSION_1:7, _:1, _Rest/binary>> = Key) ->
-    Key;
-key_transform_to_1(<<131:8,_Rest/bits>> = Key0) ->
-    {Bucket, Key} = binary_to_term(Key0),
-    make_bk(?VERSION_BYTE, Bucket, Key).
 
-key_transform_to_0(<<?VERSION_1:7,_Rest/bits>> = Key0) ->
-    term_to_binary(bk_to_tuple(Key0));
-key_transform_to_0(<<131:8,_Rest/binary>> = Key) ->
-    Key.
-
-bk_to_tuple(<<?VERSION_1:7, HasType:1, Sz:16/integer,
-             TypeOrBucket:Sz/bytes, Rest/binary>>) ->
-    case HasType of
-        0 ->
-            %% no type, first field is bucket
-            {TypeOrBucket, Rest};
-        1 ->
-            %% has a tyoe, extract bucket as well
-            <<BucketSz:16/integer, Bucket:BucketSz/bytes, Key/binary>> = Rest,
-            {{TypeOrBucket, Bucket}, Key}
-    end;
-bk_to_tuple(<<131:8,_Rest/binary>> = BK) ->
-    binary_to_term(BK).
-
-make_bk(0, Bucket, Key) ->
-    term_to_binary({Bucket, Key});
-make_bk(1, {Type, Bucket}, Key) ->
-    TypeSz = size(Type),
-    BucketSz = size(Bucket),
-    <<?VERSION_BYTE:7, 1:1, TypeSz:16/integer, Type/binary,
-      BucketSz:16/integer, Bucket/binary, Key/binary>>;
-make_bk(1, Bucket, Key) ->
-    BucketSz = size(Bucket),
-    <<?VERSION_BYTE:7, 0:1, BucketSz:16/integer,
-     Bucket/binary, Key/binary>>.
 
 %% @doc Start the bitcask backend
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
 start(Partition, Config0) ->
     {Config, KeyVsn} =
-        case app_helper:get_prop_or_env(small_keys, Config0, bitcask) of
-            false ->
-                C0 = proplists:delete(small_keys, Config0),
-                C1 = C0 ++ [{key_transform, fun key_transform_to_0/1}],
-                {C1, 0};
-            _ ->
-                C0 = proplists:delete(small_keys, Config0),
-                C1 = C0 ++ [{key_transform, ?CURRENT_KEY_TRANS}],
-                {C1, ?VERSION_BYTE}
-        end,
+        riak_kv_bitcask_keytransform:get_key_transform_fun(Config0),
 
     %% Get the data root directory
     case app_helper:get_prop_or_env(data_root, Config, bitcask) of
@@ -206,7 +156,7 @@ stop(#state{ref=Ref}) ->
                  {error, not_found, state()} |
                  {error, term(), state()}.
 get(Bucket, Key, #state{ref=Ref, key_vsn=KVers}=State) ->
-    BitcaskKey = make_bk(KVers, Bucket, Key),
+    BitcaskKey = riak_kv_bitcask_keytransform:make_bk(KVers, Bucket, Key),
     case bitcask:get(Ref, BitcaskKey) of
         {ok, Value} ->
             {ok, Value, State};
@@ -232,7 +182,7 @@ get(Bucket, Key, #state{ref=Ref, key_vsn=KVers}=State) ->
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, _IndexSpecs, Val,
     #state{ref=Ref, key_vsn=KeyVsn}=State) ->
-    BitcaskKey = make_bk(KeyVsn, Bucket, PrimaryKey),
+    BitcaskKey = riak_kv_bitcask_keytransform:make_bk(KeyVsn, Bucket, PrimaryKey),
     case bitcask:put(Ref, BitcaskKey, Val) of
         ok ->
             {ok, State};
@@ -248,7 +198,7 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
                     {ok, state()}.
 delete(Bucket, Key, _IndexSpecs,
        #state{ref=Ref, key_vsn=KeyVsn}=State) ->
-    BitcaskKey = make_bk(KeyVsn, Bucket, Key),
+    BitcaskKey = riak_kv_bitcask_keytransform:make_bk(KeyVsn, Bucket, Key),
     ok = bitcask:delete(Ref, BitcaskKey),
     {ok, State}.
 
@@ -509,7 +459,7 @@ check_fcntl() ->
 %% Return a function to fold over the buckets on this backend
 fold_buckets_fun(FoldBucketsFun) ->
     fun(#bitcask_entry{key=BK}, {Acc, BucketSet}) ->
-            {Bucket, _} = bk_to_tuple(BK),
+            {Bucket, _} = riak_kv_bitcask_keytransform:bk_to_tuple(BK),
             case sets:is_element(Bucket, BucketSet) of
                 true ->
                     {Acc, BucketSet};
@@ -523,12 +473,12 @@ fold_buckets_fun(FoldBucketsFun) ->
 %% Return a function to fold over keys on this backend
 fold_keys_fun(FoldKeysFun, undefined) ->
     fun(#bitcask_entry{key=BK}, Acc) ->
-            {Bucket, Key} = bk_to_tuple(BK),
+            {Bucket, Key} = riak_kv_bitcask_keytransform:bk_to_tuple(BK),
             FoldKeysFun(Bucket, Key, Acc)
     end;
 fold_keys_fun(FoldKeysFun, Bucket) ->
     fun(#bitcask_entry{key=BK}, Acc) ->
-            {B, Key} = bk_to_tuple(BK),
+            {B, Key} = riak_kv_bitcask_keytransform:bk_to_tuple(BK),
             case B =:= Bucket of
                 true ->
                     FoldKeysFun(B, Key, Acc);
@@ -541,12 +491,12 @@ fold_keys_fun(FoldKeysFun, Bucket) ->
 %% Return a function to fold over keys on this backend
 fold_objects_fun(FoldObjectsFun, undefined) ->
     fun(BK, Value, Acc) ->
-            {Bucket, Key} = bk_to_tuple(BK),
+            {Bucket, Key} = riak_kv_bitcask_keytransform:bk_to_tuple(BK),
             FoldObjectsFun(Bucket, Key, Value, Acc)
     end;
 fold_objects_fun(FoldObjectsFun, Bucket) ->
     fun(BK, Value, Acc) ->
-            {B, Key} = bk_to_tuple(BK),
+            {B, Key} = riak_kv_bitcask_keytransform:bk_to_tuple(BK),
             case B =:= Bucket of
                 true ->
                     FoldObjectsFun(B, Key, Value, Acc);
