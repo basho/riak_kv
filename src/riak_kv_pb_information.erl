@@ -80,6 +80,9 @@ handle_decode(Message) when Message == rpbgetringreq ->
 	{ok, Message}.
 
 process_get_ring_req(_Req, State) ->
-	{ok, Ring} = riak_core_ring_manager:get_my_ring(),
+	{ok, {_, NodeName, Vclock, ChRing, Meta, ClusterName, Next, Members, Claimant, Seen, Rvsn}} =
+		riak_core_ring_manager:get_my_ring(),
+	Ring = #riak_pb_ring{nodename = NodeName, vclock = Vclock, chring = ChRing, meta = Meta, clustername = ClusterName,
+		next = Next, members = Members, claimant = Claimant, seen = Seen, rvsn = Rvsn},
 	Resp = riak_pb_kv_codec:encode_ring(Ring),
 	{reply, Resp, State}.
