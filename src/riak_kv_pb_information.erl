@@ -44,8 +44,8 @@
 
 -type process_return() :: 	{reply, riak_kv_pb_information_response(), #state{}} |
 							{error, string(), #state{}}.
--type riak_kv_pb_information_request() :: rpbgetringreq.
--type riak_kv_pb_information_response() :: #rpbgetringresp{}.
+-type riak_kv_pb_information_request() :: rpbgetringreq | rpbgetdefaultbucketpropsreq.
+-type riak_kv_pb_information_response() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{}.
 
 %%====================================================================
 %% API Functions
@@ -66,7 +66,9 @@ encode(Message) ->
 -spec process(Req :: riak_kv_pb_information_request(), State :: #state{}) ->
 	process_return().
 process(Req, State) when Req == rpbgetringreq ->
-	process_get_ring_req(Req, State).
+	process_get_ring_req(Req, State);
+process(Req, State) when Req == rpbgetdefaultbucketpropsreq ->
+	process_get_default_bucket_props(Req, State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
 	{ignore, #state{}}.
@@ -85,4 +87,9 @@ process_get_ring_req(_Req, State) ->
 	Ring = #riak_pb_ring{nodename = NodeName, vclock = Vclock, chring = ChRing, meta = Meta, clustername = ClusterName,
 		next = Next, members = Members, claimant = Claimant, seen = Seen, rvsn = Rvsn},
 	Resp = riak_pb_kv_codec:encode_ring(Ring),
+	{reply, Resp, State}.
+
+process_get_default_bucket_props(_Req, State) ->
+	{ok, DefaultBucketPropsList} = application:get_env(riak_core, default_bucket_props),
+	Resp = riak_pb_kv_codec:encode_bucket_props(DefaultBucketPropsList),
 	{reply, Resp, State}.
