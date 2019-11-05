@@ -43,7 +43,7 @@
 %% API
 -export([start_link/0, get_stats/0,
          update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1,
-  produce_stats/0, get_value/1, get_info/0, aggregate/2,
+  produce_stats/0, get_value/1, get_info/0,
          leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
@@ -86,9 +86,6 @@ get_value(Arg) ->
 
 get_info() ->
     riak_stat:get_info(?APP).
-
-aggregate(Stats, DPs) ->
-    riak_stat:aggregate(Stats, DPs).
 
 update(Arg) ->
     maybe_dispatch_to_sidejob(erlang:module_loaded(riak_kv_stat_sj), Arg).
