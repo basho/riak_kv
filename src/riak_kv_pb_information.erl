@@ -79,6 +79,8 @@ process_stream(_, _, State) ->
 %% Internal Functions
 %%====================================================================
 handle_decode(Message) when Message == rpbgetringreq ->
+	{ok, Message};
+handle_decode(Message) when Message == rpbgetdefaultbucketprops ->
 	{ok, Message}.
 
 process_get_ring_req(_Req, State) ->
