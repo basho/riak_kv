@@ -94,15 +94,6 @@ init([]) ->
     EntropyManager = {riak_kv_entropy_manager,
                       {riak_kv_entropy_manager, start_link, []},
                       permanent, 30000, worker, [riak_kv_entropy_manager]},
-    TictacFSManager = {riak_kv_ttaaefs_manager,
-                      {riak_kv_ttaaefs_manager, start_link, []},
-                      permanent, 30000, worker, [riak_kv_ttaaefs_manager]},
-    ReplRTQSrc = {riak_kv_replrtq_src,
-                      {riak_kv_replrtq_src, start_link, []},
-                      permanent, 30000, worker, [riak_kv_replrtq_src]},
-    ReplRTQSnk = {riak_kv_replrtq_snk,
-                      {riak_kv_replrtq_snk, start_link, []},
-                      permanent, 30000, worker, [riak_kv_replrtq_snk]},
 
     EnsemblesKV =  {riak_kv_ensembles,
                     {riak_kv_ensembles, start_link, []},
@@ -114,9 +105,6 @@ init([]) ->
     % Build the process list...
     Processes = lists:flatten([
         EntropyManager,
-        TictacFSManager,
-        ReplRTQSrc,
-        ReplRTQSnk,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,

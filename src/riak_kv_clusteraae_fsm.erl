@@ -38,12 +38,10 @@
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
 -define(RANGE_QUERIES, 
-            [merge_tree_range, fetch_clocks_range, repl_keys_range,
-                find_keys, object_stats]).
+            [merge_tree_range, fetch_clocks_range, find_keys, object_stats]).
 -define(LIST_ACCUMULATE_QUERIES,
             [fetch_clocks_nval, fetch_clocks_range, find_keys]).
 
--define(REPL_BATCH_SIZE, 128).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -62,7 +60,7 @@
 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
-    merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats.
+    merge_tree_range|fetch_clocks_range|find_keys|object_stats.
 
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
@@ -162,19 +160,6 @@
         % complexity curtailing the results (and signalling the results are
         % curtailed).  The main downside of large result sets is network over
         % use.  Perhaps compressing the payload may be a better answer?
-    {repl_keys_range, 
-        bucket(), key_range(), 
-        modified_range() | all,
-        riak_kv_replrtq_src:queue_name()}|
-        % Replicate all the objects in a given key and modified range.  By
-        % sending references to each object to the given queue_name which
-        % should have been pre-configured within the riak_kv_replrtq_src on
-        % each node.
-        % If the queue name is not configured, the work will complete without
-        % any positive outcome.
-        % This is expected to be used when transitioning buckets between
-        % clusters, and also when repairing a cluster from a known outage in
-        % real-time repl (utilising a modified range)
         
 
     % Operational support functions
@@ -235,8 +220,7 @@
                         root() | %% merge_root
                         %% fetch_clocks_range | fetch_clocks_nval |
                         %% find_keys
-                        list_query_result() |
-                        repl_result().
+                        list_query_result().
 
 -type branches() :: list(branch()).
 %% level 2 of tree
@@ -251,10 +235,6 @@
 
 -type keys() :: list({riak_object:bucket(), riak_object:key(), integer()}).
 -type object_stats() :: proplist:proplist().
--type repl_result() :: {list(riak_kv_replrtq_src:repl_entry()),
-                        non_neg_integer(),
-                        riak_kv_replrtq_src:queue_name(),
-                        pos_integer()}.
 
 -export_type([query_definition/0]).
 
@@ -301,8 +281,6 @@ init(From={_, _, _}, [Query, Timeout]) ->
                     merge_tree_range ->
                         TreeSize = element(4, Query),
                         leveled_tictac:new_tree(range_tree, TreeSize);
-                    repl_keys_range ->
-                        {[], 0, element(5, Query), ?REPL_BATCH_SIZE};
                     object_stats ->
                         [{total_count, 0}, 
                             {total_size, 0},
@@ -344,14 +322,6 @@ process_results(Results, State) ->
                         aae_exchange:merge_branches(Results, Acc);
                     merge_tree_range ->
                         leveled_tictac:merge_trees(Results, Acc);
-                    repl_keys_range ->
-                        {ReplEntries, Count, QueueName, RBS} = Results,
-                        riak_kv_replrtq_src:replrtq_aaefold(QueueName,
-                                                            ReplEntries),
-                        % Count is incremented when the ReplEntry is added to
-                        % the list, not when is is pushed to the queue
-                        {_EL, AccCount, QueueName, RBS} = Acc,
-                        {[], AccCount + Count, QueueName, RBS};
                     object_stats ->
                         [{total_count, R_TC}, 
                             {total_size, R_TS},
@@ -416,9 +386,6 @@ json_encode_results(fetch_clocks_nval, KeysNClocks) ->
     encode_keys_and_clocks(KeysNClocks);
 json_encode_results(fetch_clocks_range, KeysNClocks) ->
     encode_keys_and_clocks(KeysNClocks);
-json_encode_results(repl_keys_range, ReplResult) ->
-    R = {struct, [{<<"dispatched_count">>, element(2, ReplResult)}]},
-    mochijson2:encode(R);
 json_encode_results(find_keys, Result) ->
     Keys = {struct, [{<<"results">>, [{struct, encode_find_key(Key, Int)} || {_Bucket, Key, Int} <- Result]}
                     ]},
