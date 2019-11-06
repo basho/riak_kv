@@ -563,7 +563,12 @@ callback(Ref, compact_journal, State) ->
                                         State#state.compactions_perday,
                                         State#state.valid_hours),
              {ok, State}
-    end.
+    end;
+callback(Ref, UnexpectedCallback, State) ->
+    lager:info("Ignoring unexpected callback ~w with ref ~w " ++
+                "may be expected if multi-backend",
+                [UnexpectedCallback, Ref]),
+    {ok, State}.
 
 %% ===================================================================
 %% Internal functions
