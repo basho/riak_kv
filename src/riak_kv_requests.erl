@@ -25,6 +25,7 @@
 -export([new_put_request/5,
          new_get_request/2,
          new_head_request/2,
+         new_fetch_request/2,
          new_w1c_put_request/3,
          new_listkeys_request/3,
          new_listbuckets_request/1,
@@ -58,6 +59,7 @@
 -export_type([put_request/0,
               get_request/0,
               head_request/0,
+              fetch_request/0,
               w1c_put_request/0,
               listkeys_request/0,
               listbuckets_request/0,
@@ -143,6 +145,10 @@
           bkey :: {binary(), binary()},
           req_id :: non_neg_integer()}).
 
+-record(riak_kv_fetch_req_v1, {
+          bkey :: {binary(), binary()},
+          req_id :: non_neg_integer()}).
+
 -record(riak_kv_aaefold_req_v1, 
             {qry :: riak_kv_clusteraae_fsm:query_definition(),
                 init_acc :: any(),
@@ -162,6 +168,7 @@
 -opaque map_request() :: #riak_kv_map_req_v1{}.
 -opaque vclock_request() :: #riak_kv_vclock_req_v1{}.
 -opaque head_request() :: #riak_kv_head_req_v1{}.
+-opaque fetch_request() :: #riak_kv_fetch_req_v1{}.
 -opaque aaefold_request() :: #riak_kv_aaefold_req_v1{}.
 -opaque hotbackup_request() :: #riak_kv_hotbackup_req_v1{}.
 
@@ -177,6 +184,7 @@
                  | map_request()
                  | vclock_request()
                  | head_request()
+                 | fetch_request()
                  | aaefold_request()
                  | hotbackup_request().
 
@@ -191,6 +199,7 @@
                       | kv_map_request
                       | kv_vclock_request
                       | kv_head_request
+                      | kv_fetch_request
                       | kv_aaefold_request
                       | kv_hotbackup_request
                       | unknown.
@@ -209,6 +218,7 @@ request_type(#riak_kv_delete_req_v1{})-> kv_delete_request;
 request_type(#riak_kv_map_req_v1{})-> kv_map_request;
 request_type(#riak_kv_vclock_req_v1{})-> kv_vclock_request;
 request_type(#riak_kv_head_req_v1{}) -> kv_head_request;
+request_type(#riak_kv_fetch_req_v1{}) -> kv_fetch_request;
 request_type(#riak_kv_aaefold_req_v1{}) -> kv_aaefold_request;
 request_type(#riak_kv_hotbackup_req_v1{}) -> kv_hotbackup_request;
 request_type(_) -> unknown.
@@ -232,6 +242,10 @@ new_get_request(BKey, ReqId) ->
 -spec new_head_request(bucket_key(), request_id()) -> head_request().
 new_head_request(BKey, ReqId) ->
     #riak_kv_head_req_v1{bkey = BKey, req_id = ReqId}.
+
+-spec new_fetch_request(bucket_key(), request_id()) -> fetch_request().
+new_fetch_request(BKey, ReqId) ->
+    #riak_kv_fetch_req_v1{bkey = BKey, req_id = ReqId}.
 
 -spec new_w1c_put_request(bucket_key(), encoded_obj(), replica_type()) -> w1c_put_request().
 new_w1c_put_request(BKey, EncodedObj, ReplicaType) ->
@@ -296,6 +310,8 @@ is_coordinated_put(#riak_kv_put_req_v1{options=Options}) ->
 get_bucket_key(#riak_kv_get_req_v1{bkey = BKey}) ->
     BKey;
 get_bucket_key(#riak_kv_head_req_v1{bkey = BKey}) ->
+    BKey;
+get_bucket_key(#riak_kv_fetch_req_v1{bkey = BKey}) ->
     BKey;
 get_bucket_key(#riak_kv_put_req_v1{bkey = BKey}) ->
     BKey;
@@ -372,6 +388,8 @@ get_nval(#riak_kv_aaefold_req_v1{n_val = NVal}) ->
 get_request_id(#riak_kv_put_req_v1{req_id = ReqId}) ->
     ReqId;
 get_request_id(#riak_kv_head_req_v1{req_id = ReqId}) ->
+    ReqId;
+get_request_id(#riak_kv_fetch_req_v1{req_id = ReqId}) ->
     ReqId;
 get_request_id(#riak_kv_get_req_v1{req_id = ReqId}) ->
     ReqId.
