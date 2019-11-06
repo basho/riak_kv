@@ -369,53 +369,55 @@ tokenise_peers(PeersString) ->
 -spec determine_workitems(queue_name(), list(peer_info()), pos_integer())
                                     -> {non_neg_integer(), list(work_item())}.
 determine_workitems(QueueName, PeerInfo, WorkerCount) ->
-    MapPeerToWIFun =
-        fun({PeerID, _Delay, Host, Port, Protocol}) ->
-            LocalClient = riak_client:new(node(), undefined),
-            InitClientFun = 
-                case Protocol of
-                    http ->
-                        fun() -> rhc:create(Host, Port, "riak", []) end;
-                    pb ->
-                        fun() ->
-                            Opts = [{silence_terminate_crash, true}],
-                            case riakc_pb_socket:start(Host, Port, Opts) of 
-                                {ok, PBpid} ->
-                                    PBpid;
-                                _ ->
-                                    no_pid
-                            end
-                        end
-                end,
-            GenClientFun = 
-                case Protocol of
-                    http ->
-                        fun() ->
-                            HTC = InitClientFun(),
-                            fun(QN) -> rhc:fetch(HTC, QN) end
-                        end;
-                    pb ->
-                        fun() ->
-                            PBC = InitClientFun(),
-                            fun(QN) ->
-                                case check_pbc_client(PBC) of
-                                    true ->
-                                        QNB = atom_to_binary(QN, utf8),
-                                        riakc_pb_socket:fetch(PBC, QNB);
-                                    _ ->
-                                        {error, no_pbc_client}
-                                end
-                            end
-                        end
-                end,
-            {{QueueName, PeerID}, LocalClient, GenClientFun(), GenClientFun}
-        end,
-    WorkItems0 = lists:map(MapPeerToWIFun, PeerInfo),
+    WorkItems0 =
+        lists:map(fun map_peer_to_wi_fun/1,
+                    lists:map(fun(PI) -> {QueueName, PI} end,
+                                PeerInfo)),
     WorkItems =
         lists:foldl(fun(_I, Acc) -> Acc ++ WorkItems0 end,
                     [],
                     lists:seq(1, WorkerCount)),
     {length(WorkItems) - WorkerCount, WorkItems}.
+
+
+-spec map_peer_to_wi_fun({queue_name(), peer_info()}) -> work_item().
+map_peer_to_wi_fun({QueueName, PeerInfo}) ->
+    {PeerID, _Delay, Host, Port, Protocol} = PeerInfo,
+    LocalClient = riak_client:new(node(), undefined),
+    GenClientFun = 
+        case Protocol of
+            http ->
+                InitClientFun =
+                    fun() -> rhc:create(Host, Port, "riak", []) end,
+                fun() ->
+                    HTC = InitClientFun(),
+                    fun(QN) -> rhc:fetch(HTC, QN) end
+                end;
+            pb ->
+                InitClientFun =
+                    fun() ->
+                        Opts = [{silence_terminate_crash, true}],
+                        case riakc_pb_socket:start(Host, Port, Opts) of
+                            {ok, PBpid} ->
+                                PBpid;
+                            _ ->
+                                no_pid
+                        end
+                    end,
+                fun() ->
+                    PBC = InitClientFun(),
+                    fun(QN) ->
+                        case check_pbc_client(PBC) of
+                            true ->
+                                QNB = atom_to_binary(QN, utf8),
+                                riakc_pb_socket:fetch(PBC, QNB);
+                            _ ->
+                                {error, no_pbc_client}
+                        end
+                    end
+                end
+        end,
+    {{PeerID, QueueName}, LocalClient, GenClientFun(), GenClientFun}.
 
 check_pbc_client(no_pid) ->
     false;
