@@ -801,7 +801,7 @@ init([Index]) ->
                            md_cache=MDCache,
                            md_cache_size=MDCacheSize,
                            worker_pool_strategy=WorkerPoolStrategy,
-                           update_hook=update_hook()},
+                           update_hook=update_hook(),
                            repl_cache=ReplCache,
                            repl_cache_size=ReplCacheSize},
             try_set_vnode_lock_limit(Index),
