@@ -417,7 +417,7 @@ map_peer_to_wi_fun({QueueName, PeerInfo}) ->
                     end
                 end
         end,
-    {{PeerID, QueueName}, LocalClient, GenClientFun(), GenClientFun}.
+    {{QueueName, PeerID}, LocalClient, GenClientFun(), GenClientFun}.
 
 check_pbc_client(no_pid) ->
     false;
