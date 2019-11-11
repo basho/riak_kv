@@ -415,7 +415,9 @@ pb_encode_results(merge_branch_nval, _QD, Branches) ->
         level_two = L2
     };
 pb_encode_results(fetch_clock_nval, _QD, KeysNClocks) ->
-    lists:map(fun pb_encode_bucketkeyclockvalue/1, KeysNClocks);
+    #rpbaaefoldkeyclockresp{keys_clock = 
+                            lists:map(fun pb_encode_bucketkeyclockvalue/1,
+                                        KeysNClocks)};
 pb_encode_results(merge_tree_range, QD, Tree) ->
     %% TODO:
     %% Using leveled_tictac:export_tree/1 requires unnecessary base64 encoding
@@ -431,9 +433,15 @@ pb_encode_results(merge_tree_range, QD, Tree) ->
         level_two = L2
     };
 pb_encode_results(fetch_clocks_range, _QD, KeysNClocks) ->
-    lists:map(fun pb_encode_bucketkeyclockvalue/1, KeysNClocks);
+    #rpbaaefoldkeyclockresp{keys_clock = 
+                            lists:map(fun pb_encode_bucketkeyclockvalue/1,
+                                        KeysNClocks)};
 pb_encode_results(find_keys, _QD, Results) ->
-    lists:map(fun pb_encode_bucketkeyintegervalue/1, Results);
+    KeyCountMap = 
+        fun({_B, K, V}) ->
+            #rpbkeyscount{tag = K, count = V}
+        end,
+    #rpbaaefoldkeycountresp{keys_count = lists:map(KeyCountMap, Results)};
 pb_encode_results(object_stats, _QD, Results) ->
     {total_count, TC} = lists:keyfind(total_count, 1, Results),
     {total_size, TS} = lists:keyfind(total_size, 1, Results),
@@ -442,31 +450,31 @@ pb_encode_results(object_stats, _QD, Results) ->
     EncodeIdxL =
         fun(Tag) ->
             fun({I, C}) ->
-                #rpbkeycount{tag = atom_to_binary(Tag, unicode),
+                #rpbkeyscount{tag = atom_to_binary(Tag, unicode),
                                 order = I,
                                 count = C}
             end
         end,
     SzL0 = lists:map(EncodeIdxL(sizes), SzL),
     SbL0 = lists:map(EncodeIdxL(siblings), SbL),
-    [#rpbkeycount{tag = atom_to_binary(total_count, unicode), count = TC},
-        #rpbkeycount{tag = atom_to_binary(total_size, unicode), count = TS}]
-        ++ SzL0
-        ++ SbL0.
+    #rpbaaefoldkeycountresp{keys_count = 
+        [#rpbkeyscount{tag = atom_to_binary(total_count, unicode),
+                        count = TC},
+            #rpbkeyscount{tag = atom_to_binary(total_size, unicode),
+                            count = TS}]
+            ++ SzL0
+            ++ SbL0}.
 
 pb_encode_bucketkeyclockvalue({B, K, V}) ->
     pb_encode_bucketkeyvalue({B, K, riak_object:encode_vclock(V)}).
 
-pb_encode_bucketkeyintegervalue({B, K, V}) ->
-    pb_encode_bucketkeyvalue({B, K, integer_to_binary(V)}).
-
 pb_encode_bucketkeyvalue({{T, B}, K, V}) ->
-    #rpbkeysclocks{type = T,
+    #rpbkeysclock{type = T,
                     bucket = B,
                     key = K,
                     value = V};
 pb_encode_bucketkeyvalue({B, K, V}) ->
-    #rpbkeysclocks{bucket = B,
+    #rpbkeysclock{bucket = B,
                     key = K,
                     value = V}.
 
