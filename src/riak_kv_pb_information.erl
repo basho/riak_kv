@@ -44,8 +44,8 @@
 
 -type process_return() :: 	{reply, riak_kv_pb_information_response(), #state{}} |
 							{error, string(), #state{}}.
--type riak_kv_pb_information_request() :: rpbgetringreq | rpbgetdefaultbucketpropsreq.
--type riak_kv_pb_information_response() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{}.
+-type riak_kv_pb_information_request() :: rpbgetringreq | rpbgetdefaultbucketpropsreq | rpbgetchashbinreq.
+-type riak_kv_pb_information_response() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{} | #rpbgetchashbinresp{}.
 
 %%====================================================================
 %% API Functions
@@ -68,7 +68,9 @@ encode(Message) ->
 process(Req, State) when Req == rpbgetringreq ->
 	process_get_ring_req(Req, State);
 process(Req, State) when Req == rpbgetdefaultbucketpropsreq ->
-	process_get_default_bucket_props(Req, State).
+	process_get_default_bucket_props(Req, State);
+process(Req, State) when Req == rpbgetchashbinreq ->
+	process_get_chash_bin_req(Req, State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
 	{ignore, #state{}}.
@@ -78,9 +80,8 @@ process_stream(_, _, State) ->
 %%====================================================================
 %% Internal Functions
 %%====================================================================
-handle_decode(Message) when Message == rpbgetringreq ->
-	{ok, Message};
-handle_decode(Message) when Message == rpbgetdefaultbucketpropsreq ->
+handle_decode(Message) when Message == rpbgetringreq orelse Message == rpbgetdefaultbucketpropsreq orelse
+							Message == rpbgetchashbinreq ->
 	{ok, Message}.
 
 process_get_ring_req(_Req, State) ->
@@ -94,4 +95,10 @@ process_get_ring_req(_Req, State) ->
 process_get_default_bucket_props(_Req, State) ->
 	{ok, DefaultBucketPropsList} = application:get_env(riak_core, default_bucket_props),
 	Resp = riak_pb_kv_codec:encode_bucket_props(DefaultBucketPropsList),
+	{reply, Resp, State}.
+
+process_get_chash_bin_req(_Req, State) ->
+	{ok, ChashBin} = riak_core_ring_manager:get_chash_bin(),
+	EncodedChashBin = erlang:term_to_binary(ChashBin),
+	Resp = #rpbgetchashbinresp{chash_bin = EncodedChashBin},
 	{reply, Resp, State}.
