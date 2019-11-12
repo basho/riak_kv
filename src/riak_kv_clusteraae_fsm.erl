@@ -441,7 +441,8 @@ pb_encode_results(find_keys, _QD, Results) ->
         fun({_B, K, V}) ->
             #rpbkeyscount{tag = K, count = V}
         end,
-    #rpbaaefoldkeycountresp{keys_count = lists:map(KeyCountMap, Results)};
+    #rpbaaefoldkeycountresp{type = <<"find_keys">>, 
+                            keys_count = lists:map(KeyCountMap, Results)};
 pb_encode_results(object_stats, _QD, Results) ->
     {total_count, TC} = lists:keyfind(total_count, 1, Results),
     {total_size, TS} = lists:keyfind(total_size, 1, Results),
@@ -457,13 +458,14 @@ pb_encode_results(object_stats, _QD, Results) ->
         end,
     SzL0 = lists:map(EncodeIdxL(sizes), SzL),
     SbL0 = lists:map(EncodeIdxL(siblings), SbL),
-    #rpbaaefoldkeycountresp{keys_count = 
+    KeysCount = 
         [#rpbkeyscount{tag = atom_to_binary(total_count, unicode),
                         count = TC},
             #rpbkeyscount{tag = atom_to_binary(total_size, unicode),
                             count = TS}]
             ++ SzL0
-            ++ SbL0}.
+            ++ SbL0,
+    #rpbaaefoldkeycountresp{type = <<"stats">>, keys_count = KeysCount}.
 
 pb_encode_bucketkeyclock({B, K, V}) ->
     pb_encode_bucketkeyvalue({B, K, riak_object:encode_vclock(V)}).
