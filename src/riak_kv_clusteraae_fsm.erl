@@ -415,9 +415,9 @@ pb_encode_results(merge_branch_nval, _QD, Branches) ->
         level_two = L2
     };
 pb_encode_results(fetch_clock_nval, _QD, KeysNClocks) ->
-    #rpbaaefoldkeyclockresp{keys_clock = 
-                            lists:map(fun pb_encode_bucketkeyclockvalue/1,
-                                        KeysNClocks)};
+     #rpbaaefoldkeyvalueresp{
+        type = atom_to_binary(clock, unicode),
+        keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
 pb_encode_results(merge_tree_range, QD, Tree) ->
     %% TODO:
     %% Using leveled_tictac:export_tree/1 requires unnecessary base64 encoding
@@ -433,9 +433,9 @@ pb_encode_results(merge_tree_range, QD, Tree) ->
         level_two = L2
     };
 pb_encode_results(fetch_clocks_range, _QD, KeysNClocks) ->
-    #rpbaaefoldkeyclockresp{keys_clock = 
-                            lists:map(fun pb_encode_bucketkeyclockvalue/1,
-                                        KeysNClocks)};
+    #rpbaaefoldkeyvalueresp{
+        type = atom_to_binary(clock, unicode),
+        keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
 pb_encode_results(find_keys, _QD, Results) ->
     KeyCountMap = 
         fun({_B, K, V}) ->
@@ -465,16 +465,16 @@ pb_encode_results(object_stats, _QD, Results) ->
             ++ SzL0
             ++ SbL0}.
 
-pb_encode_bucketkeyclockvalue({B, K, V}) ->
+pb_encode_bucketkeyclock({B, K, V}) ->
     pb_encode_bucketkeyvalue({B, K, riak_object:encode_vclock(V)}).
 
 pb_encode_bucketkeyvalue({{T, B}, K, V}) ->
-    #rpbkeysclock{type = T,
+    #rpbkeysvalue{type = T,
                     bucket = B,
                     key = K,
                     value = V};
 pb_encode_bucketkeyvalue({B, K, V}) ->
-    #rpbkeysclock{bucket = B,
+    #rpbkeysvalue{bucket = B,
                     key = K,
                     value = V}.
 
