@@ -416,7 +416,7 @@ pb_encode_results(merge_branch_nval, _QD, Branches) ->
     };
 pb_encode_results(fetch_clock_nval, _QD, KeysNClocks) ->
      #rpbaaefoldkeyvalueresp{
-        type = atom_to_binary(clock, unicode),
+        response_type = atom_to_binary(clock, unicode),
         keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
 pb_encode_results(merge_tree_range, QD, Tree) ->
     %% TODO:
@@ -434,14 +434,14 @@ pb_encode_results(merge_tree_range, QD, Tree) ->
     };
 pb_encode_results(fetch_clocks_range, _QD, KeysNClocks) ->
     #rpbaaefoldkeyvalueresp{
-        type = atom_to_binary(clock, unicode),
+        response_type = atom_to_binary(clock, unicode),
         keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
 pb_encode_results(find_keys, _QD, Results) ->
     KeyCountMap = 
         fun({_B, K, V}) ->
             #rpbkeyscount{tag = K, count = V}
         end,
-    #rpbaaefoldkeycountresp{type = <<"find_keys">>, 
+    #rpbaaefoldkeycountresp{response_type = <<"find_keys">>, 
                             keys_count = lists:map(KeyCountMap, Results)};
 pb_encode_results(object_stats, _QD, Results) ->
     {total_count, TC} = lists:keyfind(total_count, 1, Results),
@@ -465,7 +465,8 @@ pb_encode_results(object_stats, _QD, Results) ->
                             count = TS}]
             ++ SzL0
             ++ SbL0,
-    #rpbaaefoldkeycountresp{type = <<"stats">>, keys_count = KeysCount}.
+    #rpbaaefoldkeycountresp{response_type = <<"stats">>,
+                            keys_count = KeysCount}.
 
 pb_encode_bucketkeyclock({B, K, V}) ->
     pb_encode_bucketkeyvalue({B, K, riak_object:encode_vclock(V)}).
