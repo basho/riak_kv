@@ -414,7 +414,7 @@ pb_encode_results(merge_branch_nval, _QD, Branches) ->
         level_one = <<>>,
         level_two = L2
     };
-pb_encode_results(fetch_clock_nval, _QD, KeysNClocks) ->
+pb_encode_results(fetch_clocks_nval, _QD, KeysNClocks) ->
      #rpbaaefoldkeyvalueresp{
         response_type = atom_to_binary(clock, unicode),
         keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
@@ -426,7 +426,12 @@ pb_encode_results(merge_tree_range, QD, Tree) ->
         [{<<"level1">>, EncodedL1}, 
             {<<"level2">>, {struct, EncodedL2}}]} =
         leveled_tictac:export_tree(Tree),
-    L2 = lists:map(fun({I, CB}) -> <<I:32/integer, CB/binary>> end, EncodedL2),
+    L2 =
+        lists:map(fun({I, CB}) -> 
+                        CBDecoded = base64:decode(CB),
+                        <<I:32/integer, CBDecoded/binary>>
+                    end,
+                    EncodedL2),
     #rpbaaefoldtreeresp{
         size = element(4, QD),
         level_one = base64:decode(EncodedL1),
