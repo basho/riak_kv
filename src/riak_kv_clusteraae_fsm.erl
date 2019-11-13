@@ -429,7 +429,8 @@ pb_encode_results(merge_tree_range, QD, Tree) ->
     L2 =
         lists:map(fun({I, CB}) -> 
                         CBDecoded = base64:decode(CB),
-                        <<I:32/integer, CBDecoded/binary>>
+                        Iint = binary_to_integer(I), 
+                        <<Iint:32/integer, CBDecoded/binary>>
                     end,
                     EncodedL2),
     #rpbaaefoldtreeresp{
