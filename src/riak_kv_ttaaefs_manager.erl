@@ -381,7 +381,7 @@ code_change(_OldVsn, State, _Extra) ->
                 nval(), nval(), tuple(), list(), full|partial,
                 ttaaefs_state()) -> {ttaaefs_state(), pos_integer()}.
 sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
-    RemoteClient =
+    {RemoteClient, RemoteMod} =
         init_client(State#state.peer_protocol,
                     State#state.peer_ip,
                     State#state.peer_port),
@@ -391,7 +391,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
             {State#state{bucket_list = NextBucketList},
                 ?LOOP_TIMEOUT};
         _ ->
-            RemoteSendFun = generate_sendfun(RemoteClient, RNVal),
+            RemoteSendFun = generate_sendfun({RemoteClient, RemoteMod}, RNVal),
             LocalSendFun = generate_sendfun(local, LNVal),
             ReplyFun = generate_replyfun(ReqID, From),
             ReqID0 = 
@@ -436,7 +436,8 @@ get_slotinfo() ->
 %% cluster, and return the response.  The function should make an async call
 %% to try and make the remote and local cluster sends happen as close to
 %% parallel as possible. 
--spec generate_sendfun(rhc:rhc()|local, nval()) -> fun().
+-spec generate_sendfun({rhc:rhc(), rhc}|{pid(), riakc_pb_socket}|local,
+                        nval()) -> fun().
 generate_sendfun(SendClient, NVal) ->
     fun(Msg, all, Colour) ->
         AAE_Exchange = self(),
@@ -449,8 +450,8 @@ generate_sendfun(SendClient, NVal) ->
                 local ->
                     C = riak_client:new(node(), undefined),
                     local_sender(Msg, C, ReturnFun, NVal);
-                RHC ->
-                    remote_sender(Msg, RHC, ReturnFun, NVal)
+                {Client, Mod} ->
+                    remote_sender(Msg, Client, Mod, ReturnFun, NVal)
             end,
         _SpawnedPid = spawn(SendFun),
         ok
@@ -459,16 +460,28 @@ generate_sendfun(SendClient, NVal) ->
 %% @doc
 %% Make a remote client for connecting to the remote cluster
 -spec init_client(client_protocol(), client_ip(), client_port())
-                                                        -> rhc:rhc()|no_client.
+                    -> {rhc:rhc()|no_client, rhc}|
+                        {pid()|no_client, riakc_pb_socket}.
 init_client(http, IP, Port) ->
     RHC = rhc:create(IP, Port, "riak", []),
     case rhc:ping(RHC) of
         ok ->
-            RHC;
+            {RHC, rhc};
         {error, Error} ->
             lager:warning("Cannot reach remote cluster ~p ~p with error ~p",
                             [IP, Port, Error]),
-            no_client
+            {no_client, rhc}
+    end;
+init_client(pb, IP, Port) ->
+    {ok, Pid} = riakc_pb_socket:start_link(IP, Port, [{auto_reconnect, true}]),
+    try riakc_pb_socket:ping(Pid) of
+        pong ->
+            {Pid, riakc_pb_socket}
+    catch 
+        _Exception:Reason ->
+            lager:warning("Cannot reach remote cluster ~p ~p with error ~p",
+                            [IP, Port, Reason]),
+            {no_client, riakc_pb_socket}
     end.
 
 
@@ -507,22 +520,22 @@ local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, range) ->
 
 %% @doc
 %% Translate aae_Exchange messages into riak erlang http client requests
--spec remote_sender(any(), rhc:rhc(), fun(), nval()) -> fun().
-remote_sender(fetch_root, RHC, ReturnFun, NVal) ->
+-spec remote_sender(any(), rhc:rhc()|pid(), module(), fun(), nval()) -> fun().
+remote_sender(fetch_root, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         {ok, {root, Root}}
-            = rhc:aae_merge_root(RHC, NVal),
+            = Mod:aae_merge_root(Client, NVal),
         ReturnFun(Root)
     end;
-remote_sender({fetch_branches, BranchIDs}, RHC, ReturnFun, NVal) ->
+remote_sender({fetch_branches, BranchIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         {ok, {branches, ListOfBranchResults}}
-            = rhc:aae_merge_branches(RHC, NVal, BranchIDs),
+            = Mod:aae_merge_branches(Client, NVal, BranchIDs),
         ReturnFun(ListOfBranchResults)
     end;
-remote_sender({fetch_clocks, SegmentIDs}, RHC, ReturnFun, NVal) ->
+remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
-        case rhc:aae_fetch_clocks(RHC, NVal, SegmentIDs) of
+        case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs) of
             {ok, {keysclocks, KeysClocks}} ->
                 ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
                             KeysClocks));
@@ -533,18 +546,19 @@ remote_sender({fetch_clocks, SegmentIDs}, RHC, ReturnFun, NVal) ->
         end
     end;
 remote_sender({merge_tree_range, B, KR, TS, SF, MR, HM},
-                    RHC, ReturnFun, range) ->
+                    Client, Mod, ReturnFun, range) ->
     SF0 = format_segment_filter(SF),
     fun() ->
         {ok, {tree, Tree}}
-            = rhc:aae_range_tree(RHC, B, KR, TS, SF0, MR, HM),
+            = Mod:aae_range_tree(Client, B, KR, TS, SF0, MR, HM),
         ReturnFun(leveled_tictac:import_tree(Tree))
     end;
-remote_sender({fetch_clocks_range, B0, KR, SF, MR}, RHC, ReturnFun, range) ->
+remote_sender({fetch_clocks_range, B0, KR, SF, MR},
+                    Client, Mod, ReturnFun, range) ->
     SF0 = format_segment_filter(SF),
     fun() ->
         {ok, {keysclocks, KeysClocks}}
-            = rhc:aae_range_clocks(RHC, B0, KR, SF0, MR),
+            = Mod:aae_range_clocks(Client, B0, KR, SF0, MR),
         ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end, KeysClocks))
     end.
 
