@@ -38,7 +38,6 @@
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
 -export([aae_fold/2]).
--export([ttaaefs_fullsync/2, ttaaefs_fullsync/3]).
 -export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
@@ -48,7 +47,6 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
--export([fetch/2, push/4]).
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
@@ -134,117 +132,6 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
             ok = riak_kv_stat:update({Stat, Bucket, Duration, ObjSize});
         _ ->
             ok
-    end.
-
-
-%% @doc Fetch the next item from the replication queue
--spec fetch(riak_kv_replrtq_src:queue_name(), riak_client()) ->
-            {ok, riak_object:riak_object()} |
-            {ok, queue_empty} |
-            {ok, {deleted, vclock:vclock(), riak_object:riak_object()}} |
-            {error, timeout} |
-            {error, not_yet_implemented} |
-            {error, Err :: term()}.
-fetch(QueueName, {?MODULE, [Node, _ClientId]}) ->
-    Me = self(),
-    ReqId = mk_reqid(),
-    Options = [deletedvclock, {pr, 1}, {r, 1}, {notfound_ok, false}],
-    case node() of
-        Node ->
-            riak_kv_get_fsm:start({raw, ReqId, Me},
-                                    queue_name, QueueName, Options);
-        _ ->
-            %% Still using the deprecated `start_link' alias for `start' here, in
-            %% case the remote node is pre-2.2:
-            proc_lib:spawn_link(Node, riak_kv_get_fsm, start_link,
-                                [{raw, ReqId, Me},
-                                queue_name, QueueName, Options])
-    end,
-    Timeout = recv_timeout(Options),
-    wait_for_reqid(ReqId, Timeout).
-
-%% @doc
-%% Push a replicated object into Riak
--spec push(riak_object:riak_object()|binary(),
-                boolean(), list(), riak_client()) ->
-            {ok, erlang:timestamp()} |
-            {error, too_many_fails} |
-            {error, timeout} |
-            {error, {n_val_violation, N::integer()}}.
-push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
-    RObj = 
-        case riak_object:is_robject(RObjMaybeBin) of
-            % May get pushed a riak object, or a riak object as a binary, but
-            % only want to deal with a riak object
-            true ->
-                RObjMaybeBin;
-            false ->
-                case RObjMaybeBin of
-                    <<0:32/integer, BL:32/integer, B:BL/binary,
-                        KL:32/integer, K:KL/binary,
-                        ObjBin/binary>> ->
-                            riak_object:from_binary(B, K, ObjBin);
-                    <<TL:32/integer, T:TL/binary, BL:32/integer, B:BL/binary,
-                        KL:32/integer, K:KL/binary,
-                        ObjBin/binary>> ->
-                            riak_object:from_binary({T, B}, K, ObjBin)
-                end
-        end,
-    Bucket = riak_object:bucket(RObj),
-    Key = riak_object:key(RObj),
-    Me = self(),
-    ReqId = mk_reqid(),
-    Options = [asis, disable_hooks, {update_last_modified, false},
-                {w, 1}, {pw, 1}, {dw, 0}, {node_confirms, 1}],
-        % asis - stops the PUT from being re-coordinated
-        % disable_hooks - this makes this compatible with previous repl,
-        % although this may no longer be necessary (no repl hook to disable)
-        % w = 1 - allow for the repl worker to return fast to do more work
-        % pw = 1 - in theory we don't need to wair for primaries, but if this
-        % node cannot access any primaries it would be good to treat this as an
-        % error and punish that peer relationship in the schedule (so that a
-        % snk node with access to primaries will manage more of the
-        % replication)
-
-    true = riak_kv_util:is_x_deleted(RObj) == IsDeleted,
-
-    case node() of
-        Node ->
-            riak_kv_put_fsm:start({raw, ReqId, Me}, RObj, Options);
-        _ ->
-            %% Still using the deprecated `start_link' alias for `start'
-            %% here, in case the remote node is pre-2.2:
-            proc_lib:spawn_link(Node, riak_kv_put_fsm, start_link,
-                                [{raw, ReqId, Me}, RObj, Options])
-    end,
-
-    Timeout = recv_timeout(Options),
-    R = wait_for_reqid(ReqId, Timeout),
-    LMD =
-        lists:max(
-            lists:map(fun riak_object:get_last_modified/1, 
-                        riak_object:get_metadatas(RObj))),
-    Reply = {R, LMD},
-
-    case IsDeleted of
-        true ->
-            ReapReqId = mk_reqid(),
-            ReapOptions = [{r, 1}],
-            case node() of
-                Node ->
-                    riak_kv_get_fsm:start({raw, ReapReqId, Me},
-                                            Bucket, Key, ReapOptions);
-                _ ->
-                    % Still using the deprecated `start_link' alias for 
-                    %`start' here, in case the remote node is pre-2.2:
-                    proc_lib:spawn_link(Node, riak_kv_get_fsm, start_link,
-                                        [{raw, ReapReqId, Me},
-                                        Bucket, Key, ReapOptions])
-            end,
-            wait_for_reqid(ReapReqId, Timeout),
-            Reply;
-        false ->
-            Reply
     end.
 
 
@@ -835,36 +722,6 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
                                                     [{raw, ReqId, Me},
                                                     [Query, TimeOut]]),
     wait_for_fold_results(ReqId, TimeOut).
-
-
-%% @doc
-%% Prompt a full-sync based on the current configuration, and using either
-%% - null_sync (a no op)
-%% - all_sync (sync over all time - only permissible sync if not bucket-based)
-%% - hour_sync (sync over past hour, only allowed if bucket-based sync)
-%% - day_sync (sync over past day, only allowed if bucket-based sync)
--spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item(), integer()) -> ok.
-ttaaefs_fullsync(WorkItem, SecsTimeout) ->
-    ReqId = mk_reqid(),
-    riak_kv_ttaaefs_manager:process_workitem(WorkItem,
-                                                ReqId,
-                                                os:timestamp()),
-    wait_for_reqid(ReqId, SecsTimeout * 1000).
-
-%% @doc
-%% Intended for tests only
-%% Allows for the view of now to be altered during a test.
--spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item(), integer(),
-                                                    erlang:timestamp()) -> ok.
-ttaaefs_fullsync(WorkItem, SecsTimeout, Now) ->
-    ReqId = mk_reqid(),
-    riak_kv_ttaaefs_manager:process_workitem(WorkItem,
-                                                ReqId,
-                                                Now),
-    wait_for_reqid(ReqId, SecsTimeout * 1000).
-
-
-
 
 %% @doc
 %% Run a hot backup - returns {ok, true} if successful

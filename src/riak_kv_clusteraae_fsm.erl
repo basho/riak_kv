@@ -26,24 +26,25 @@
 -behaviour(riak_core_coverage_fsm).
 
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_pb/include/riak_kv_pb.hrl").
 
 -export([init/2,
          process_results/2,
          finish/2]).
 
--export([json_encode_results/2, hash_function/1]).
+-export([json_encode_results/2,
+            pb_encode_results/3,
+            hash_function/1]).
 
 -define(EMPTY, <<>>).
 
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
 -define(RANGE_QUERIES, 
-            [merge_tree_range, fetch_clocks_range, repl_keys_range,
-                find_keys, object_stats]).
+            [merge_tree_range, fetch_clocks_range, find_keys, object_stats]).
 -define(LIST_ACCUMULATE_QUERIES,
             [fetch_clocks_nval, fetch_clocks_range, find_keys]).
 
--define(REPL_BATCH_SIZE, 128).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -62,7 +63,7 @@
 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
-    merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats.
+    merge_tree_range|fetch_clocks_range|find_keys|object_stats.
 
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
@@ -162,19 +163,6 @@
         % complexity curtailing the results (and signalling the results are
         % curtailed).  The main downside of large result sets is network over
         % use.  Perhaps compressing the payload may be a better answer?
-    {repl_keys_range, 
-        bucket(), key_range(), 
-        modified_range() | all,
-        riak_kv_replrtq_src:queue_name()}|
-        % Replicate all the objects in a given key and modified range.  By
-        % sending references to each object to the given queue_name which
-        % should have been pre-configured within the riak_kv_replrtq_src on
-        % each node.
-        % If the queue name is not configured, the work will complete without
-        % any positive outcome.
-        % This is expected to be used when transitioning buckets between
-        % clusters, and also when repairing a cluster from a known outage in
-        % real-time repl (utilising a modified range)
         
 
     % Operational support functions
@@ -235,8 +223,7 @@
                         root() | %% merge_root
                         %% fetch_clocks_range | fetch_clocks_nval |
                         %% find_keys
-                        list_query_result() |
-                        repl_result().
+                        list_query_result().
 
 -type branches() :: list(branch()).
 %% level 2 of tree
@@ -251,10 +238,6 @@
 
 -type keys() :: list({riak_object:bucket(), riak_object:key(), integer()}).
 -type object_stats() :: proplist:proplist().
--type repl_result() :: {list(riak_kv_replrtq_src:repl_entry()),
-                        non_neg_integer(),
-                        riak_kv_replrtq_src:queue_name(),
-                        pos_integer()}.
 
 -export_type([query_definition/0]).
 
@@ -301,8 +284,6 @@ init(From={_, _, _}, [Query, Timeout]) ->
                     merge_tree_range ->
                         TreeSize = element(4, Query),
                         leveled_tictac:new_tree(range_tree, TreeSize);
-                    repl_keys_range ->
-                        {[], 0, element(5, Query), ?REPL_BATCH_SIZE};
                     object_stats ->
                         [{total_count, 0}, 
                             {total_size, 0},
@@ -344,14 +325,6 @@ process_results(Results, State) ->
                         aae_exchange:merge_branches(Results, Acc);
                     merge_tree_range ->
                         leveled_tictac:merge_trees(Results, Acc);
-                    repl_keys_range ->
-                        {ReplEntries, Count, QueueName, RBS} = Results,
-                        riak_kv_replrtq_src:replrtq_aaefold(QueueName,
-                                                            ReplEntries),
-                        % Count is incremented when the ReplEntry is added to
-                        % the list, not when is is pushed to the queue
-                        {_EL, AccCount, QueueName, RBS} = Acc,
-                        {[], AccCount + Count, QueueName, RBS};
                     object_stats ->
                         [{total_count, R_TC}, 
                             {total_size, R_TS},
@@ -398,10 +371,6 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
 %% Encode the results of a query in JSON
 %% Expected this will be called from the webmachine module that needs to
 %% generate the response
-json_encode_results(merge_tree_range, Tree) ->
-    ExportedTree = leveled_tictac:export_tree(Tree),
-    JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
-    mochijson2:encode(JsonKeys1);
 json_encode_results(merge_root_nval, Root) ->
     RootEnc = base64:encode_to_string(Root),
     Keys = {struct, [{<<"root">>, RootEnc}]},
@@ -414,17 +383,118 @@ json_encode_results(merge_branch_nval, Branches) ->
     mochijson2:encode(Keys);
 json_encode_results(fetch_clocks_nval, KeysNClocks) ->
     encode_keys_and_clocks(KeysNClocks);
+json_encode_results(merge_tree_range, Tree) ->
+    ExportedTree = leveled_tictac:export_tree(Tree),
+    JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
+    mochijson2:encode(JsonKeys1);
 json_encode_results(fetch_clocks_range, KeysNClocks) ->
     encode_keys_and_clocks(KeysNClocks);
-json_encode_results(repl_keys_range, ReplResult) ->
-    R = {struct, [{<<"dispatched_count">>, element(2, ReplResult)}]},
-    mochijson2:encode(R);
 json_encode_results(find_keys, Result) ->
     Keys = {struct, [{<<"results">>, [{struct, encode_find_key(Key, Int)} || {_Bucket, Key, Int} <- Result]}
                     ]},
     mochijson2:encode(Keys);
 json_encode_results(object_stats, Stats) ->
     mochijson2:encode({struct, Stats}).
+
+
+-spec pb_encode_results(query_types(), query_definition(), query_return())
+                                                                     -> any().
+%% @doc
+%% Encode the results of a query in a Rpb..Res record
+pb_encode_results(merge_root_nval, _QD, Root) ->
+    #rpbaaefoldtreeresp{
+        size = large,
+        level_one = Root,
+        level_two = []
+    };
+pb_encode_results(merge_branch_nval, _QD, Branches) ->
+    L2 = lists:map(fun convert_level2_element/1, Branches),
+    #rpbaaefoldtreeresp{
+        size = large,
+        level_one = <<>>,
+        level_two = L2
+    };
+pb_encode_results(fetch_clocks_nval, _QD, KeysNClocks) ->
+     #rpbaaefoldkeyvalueresp{
+        response_type = atom_to_binary(clock, unicode),
+        keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
+pb_encode_results(merge_tree_range, QD, Tree) ->
+    %% TODO:
+    %% Using leveled_tictac:export_tree/1 requires unnecessary base64 encoding
+    %% and decoding.  Add a leveled_tictac:export_tree_raw fun to avoid this
+    {struct, 
+        [{<<"level1">>, EncodedL1}, 
+            {<<"level2">>, {struct, EncodedL2}}]} =
+        leveled_tictac:export_tree(Tree),
+    L2 =
+        lists:map(fun({I, CB}) -> 
+                        CBDecoded = base64:decode(CB),
+                        Iint = binary_to_integer(I), 
+                        <<Iint:32/integer, CBDecoded/binary>>
+                    end,
+                    EncodedL2),
+    #rpbaaefoldtreeresp{
+        size = element(4, QD),
+        level_one = base64:decode(EncodedL1),
+        level_two = L2
+    };
+pb_encode_results(fetch_clocks_range, _QD, KeysNClocks) ->
+    #rpbaaefoldkeyvalueresp{
+        response_type = atom_to_binary(clock, unicode),
+        keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
+pb_encode_results(find_keys, _QD, Results) ->
+    KeyCountMap = 
+        fun({_B, K, V}) ->
+            #rpbkeyscount{tag = K, count = V}
+        end,
+    #rpbaaefoldkeycountresp{response_type = <<"find_keys">>, 
+                            keys_count = lists:map(KeyCountMap, Results)};
+pb_encode_results(object_stats, _QD, Results) ->
+    {total_count, TC} = lists:keyfind(total_count, 1, Results),
+    {total_size, TS} = lists:keyfind(total_size, 1, Results),
+    {sizes, SzL} = lists:keyfind(sizes, 1, Results),
+    {siblings, SbL} = lists:keyfind(siblings, 1, Results),
+    EncodeIdxL =
+        fun(Tag) ->
+            fun({I, C}) ->
+                #rpbkeyscount{tag = atom_to_binary(Tag, unicode),
+                                order = I,
+                                count = C}
+            end
+        end,
+    SzL0 = lists:map(EncodeIdxL(sizes), SzL),
+    SbL0 = lists:map(EncodeIdxL(siblings), SbL),
+    KeysCount = 
+        [#rpbkeyscount{tag = atom_to_binary(total_count, unicode),
+                        count = TC},
+            #rpbkeyscount{tag = atom_to_binary(total_size, unicode),
+                            count = TS}]
+            ++ SzL0
+            ++ SbL0,
+    #rpbaaefoldkeycountresp{response_type = <<"stats">>,
+                            keys_count = KeysCount}.
+
+pb_encode_bucketkeyclock({B, K, V}) ->
+    pb_encode_bucketkeyvalue({B, K, riak_object:encode_vclock(V)}).
+
+pb_encode_bucketkeyvalue({{T, B}, K, V}) ->
+    #rpbkeysvalue{type = T,
+                    bucket = B,
+                    key = K,
+                    value = V};
+pb_encode_bucketkeyvalue({B, K, V}) ->
+    #rpbkeysvalue{bucket = B,
+                    key = K,
+                    value = V}.
+
+-spec convert_level2_element({non_neg_integer(), binary()}) -> binary().
+%% @doc
+%% Take a L2 tree element from a query result, and convert into a binary
+%% with the actual segment compressed
+convert_level2_element({Index, Bin}) ->
+    CompressedBin = zlib:compress(Bin),
+    <<Index:32/integer, CompressedBin/binary>>.
+
 
 -spec encode_keys_and_clocks(keys_clocks()) -> iolist().
 encode_keys_and_clocks(KeysNClocks) ->

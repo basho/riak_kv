@@ -100,7 +100,6 @@
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
--export([nextgenrepl_encode/2]).
 -export([summary_from_binary/1]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1, is_head/1]).
@@ -1193,27 +1192,6 @@ to_binary_version(Vsn, _B, _K, Obj = #r_object{}) ->
 -spec binary_version(binary()) -> binary_version().
 binary_version(<<131,_/binary>>) -> v0;
 binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
-
-%% @doc Encode for nextgen_repl
--spec nextgenrepl_encode(repl_v1, riak_object()) -> binary().
-nextgenrepl_encode(repl_v1, RObj) ->
-    B = riak_object:bucket(RObj),
-    K = riak_object:key(RObj),
-    KS = byte_size(K),
-    ObjBK =
-        case B of
-            {T, B0} ->
-                TS = byte_size(T),
-                B0S = byte_size(B0),
-                <<TS:32/integer, T/binary, B0S:32/integer, B0/binary,
-                    KS:32/integer, K/binary>>;
-            B0 ->
-                B0S = byte_size(B0),
-                <<0:32/integer, B0S:32/integer, B0/binary,
-                    KS:32/integer, K/binary>>
-        end,
-    ObjBin = riak_object:to_binary(v1, RObj),
-    <<ObjBK/binary, ObjBin/binary>>.
 
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->

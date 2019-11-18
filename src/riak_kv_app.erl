@@ -37,7 +37,7 @@
                    {riak_kv_pb_csbucket, 40, 41}, %%  CS bucket folding support
                    {riak_kv_pb_counter, 50, 53}, %% counter requests
                    {riak_kv_pb_crdt, 80, 83}, %% CRDT requests
-                   {riak_kv_pb_object, 202, 203} %% Object Fetch Request
+                   {riak_kv_pb_aaefold, 210, 222} %% AAE Fold requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 
