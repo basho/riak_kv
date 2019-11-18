@@ -125,7 +125,8 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 schedule_tick() ->
-    erlang:send_after(10000, self(), tick).
+    Tick = app_helper:get_env(riak_core, claimant_tick, 10000),
+    erlang:send_after(Tick, self(), tick).
 
 tick(State) ->
     maybe_bootstrap_ensembles(),
@@ -139,7 +140,8 @@ maybe_bootstrap_ensembles() ->
             {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
             IsClaimant = (riak_core_ring:claimant(Ring) == node()),
             IsReady = riak_core_ring:ring_ready(Ring),
-            case IsClaimant and IsReady of
+            IsNotLastGasp = not riak_core_ring:check_lastgasp(Ring),
+            case IsClaimant and IsReady and IsNotLastGasp of
                 true ->
                     bootstrap_preflists(Ring, CHBin);
                 false ->

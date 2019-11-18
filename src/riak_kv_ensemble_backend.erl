@@ -37,12 +37,16 @@
 
 -include_lib("riak_ensemble/include/riak_ensemble_types.hrl").
 
+-define(STABLE_RING_LEVEL, 20).
+
 -record(state, {ensemble  :: ensemble_id(),
                 id        :: peer_id(),
                 proxy     :: atom(),
                 proxy_ref :: reference(),
                 vnode_ref :: reference(),
-                async     :: pid() | undefined}).
+                async     :: pid() | undefined,
+                last_ring_id :: term() | undefined,
+                stable_ring_count = 0 :: non_neg_integer()}).
 
 -type obj()    :: riak_object:riak_object().
 -type state()  :: #state{}.
@@ -193,23 +197,55 @@ handle_down(Ref, _Pid, Reason, #state{id=Id,
 -spec tick(epoch(), seq(), peer_id(), views(), state()) -> state().
 tick(_Epoch, _Seq, _Leader, Views, State=#state{id=Id}) ->
     %% TODO: Should this entire function be async?
-    {{kv, Idx, N, _}, _} = Id,
-    Latest = hd(Views),
-    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
-    {PL, _} = chashbin:itr_pop(N, chashbin:exact_iterator(Idx, CHBin)),
-    %% TODO: Make ensembles/peers use ensemble/peer as actual peer name so this is unneeded
-    Peers = [{{kv, Idx, N, Idx2}, Node} || {Idx2, Node} <- PL],
-    Add = Peers -- Latest,
-    Del = Latest -- Peers,
-    Changes = [{add, Peer} || Peer <- Add] ++ [{del, Peer} || Peer <- Del],
-    case Changes of
-        [] ->
-            State;
-        _ ->
-            %% io:format("## ~p~n~p~n~p~n", [Peers, Latest, Changes]),
-            State2 = maybe_async_update(Changes, State),
-            State2
+    CurrentRingID = riak_core_ring_manager:get_ring_id(),
+    StableRingCount =
+        case State#state.last_ring_id == CurrentRingID of
+            true ->
+                State#state.stable_ring_count + 1;
+            false ->
+                0
+        end,
+    case StableRingCount == ?STABLE_RING_LEVEL of
+        true ->
+            %% Any changes to the cluster are now stable, and have not been
+            %% acted on by the claimant.  So consider if action is necessary
+            %% here
+            {{kv, Idx, N, _}, _} = Id,
+            Latest = hd(Views),
+            {ok, Ring, CHBin} = riak_core_ring_manager:get_raw_ring_chashbin(),
+            case riak_core_ring:check_lastgasp(Ring) of
+                true ->
+                    %% See https://github.com/basho/riak_core/issues/943
+                    State;
+                false ->
+                    CHBinIter = chashbin:exact_iterator(Idx, CHBin),
+                    {PL, _} = chashbin:itr_pop(N, CHBinIter),
+                    %% TODO: Make ensembles/peers use ensemble/peer as actual peer
+                    %% name so this is unneeded
+                    Peers = [{{kv, Idx, N, Idx2}, Node} || {Idx2, Node} <- PL],
+                    Add = Peers -- Latest,
+                    Del = Latest -- Peers,
+                    Changes =
+                        [{add, Peer} || Peer <- Add]
+                        ++ [{del, Peer} || Peer <- Del],
+                    %% https://github.com/basho/riak_ensemble/issues/129
+                    %% Not sure it is safe to do updates this way, as future
+                    %% ring changes may not take affect due to Vsn mismatches
+                    case Changes of
+                        [] ->
+                            State;
+                        _ ->
+                            lager:info("Changes ~p prompted by ring update",
+                                        [Changes]),
+                            State2 = maybe_async_update(Changes, State),
+                            State2
+                    end
+            end;
+        false ->
+            State#state{last_ring_id = CurrentRingID,
+                        stable_ring_count = StableRingCount}
     end.
+
 
 maybe_async_update(Changes, State=#state{async=Async}) ->
     CurrentAsync = is_pid(Async) andalso is_process_alive(Async),
