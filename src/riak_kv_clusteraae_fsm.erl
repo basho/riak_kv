@@ -26,12 +26,15 @@
 -behaviour(riak_core_coverage_fsm).
 
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("riak_pb/include/riak_kv_pb.hrl").
 
 -export([init/2,
          process_results/2,
          finish/2]).
 
--export([json_encode_results/2, hash_function/1]).
+-export([json_encode_results/2,
+            pb_encode_results/3,
+            hash_function/1]).
 
 -define(EMPTY, <<>>).
 
@@ -368,10 +371,6 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
 %% Encode the results of a query in JSON
 %% Expected this will be called from the webmachine module that needs to
 %% generate the response
-json_encode_results(merge_tree_range, Tree) ->
-    ExportedTree = leveled_tictac:export_tree(Tree),
-    JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
-    mochijson2:encode(JsonKeys1);
 json_encode_results(merge_root_nval, Root) ->
     RootEnc = base64:encode_to_string(Root),
     Keys = {struct, [{<<"root">>, RootEnc}]},
@@ -384,6 +383,10 @@ json_encode_results(merge_branch_nval, Branches) ->
     mochijson2:encode(Keys);
 json_encode_results(fetch_clocks_nval, KeysNClocks) ->
     encode_keys_and_clocks(KeysNClocks);
+json_encode_results(merge_tree_range, Tree) ->
+    ExportedTree = leveled_tictac:export_tree(Tree),
+    JsonKeys1 = {struct, [{<<"tree">>, ExportedTree}]},
+    mochijson2:encode(JsonKeys1);
 json_encode_results(fetch_clocks_range, KeysNClocks) ->
     encode_keys_and_clocks(KeysNClocks);
 json_encode_results(find_keys, Result) ->
@@ -392,6 +395,106 @@ json_encode_results(find_keys, Result) ->
     mochijson2:encode(Keys);
 json_encode_results(object_stats, Stats) ->
     mochijson2:encode({struct, Stats}).
+
+
+-spec pb_encode_results(query_types(), query_definition(), query_return())
+                                                                     -> any().
+%% @doc
+%% Encode the results of a query in a Rpb..Res record
+pb_encode_results(merge_root_nval, _QD, Root) ->
+    #rpbaaefoldtreeresp{
+        size = large,
+        level_one = Root,
+        level_two = []
+    };
+pb_encode_results(merge_branch_nval, _QD, Branches) ->
+    L2 = lists:map(fun convert_level2_element/1, Branches),
+    #rpbaaefoldtreeresp{
+        size = large,
+        level_one = <<>>,
+        level_two = L2
+    };
+pb_encode_results(fetch_clocks_nval, _QD, KeysNClocks) ->
+     #rpbaaefoldkeyvalueresp{
+        response_type = atom_to_binary(clock, unicode),
+        keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
+pb_encode_results(merge_tree_range, QD, Tree) ->
+    %% TODO:
+    %% Using leveled_tictac:export_tree/1 requires unnecessary base64 encoding
+    %% and decoding.  Add a leveled_tictac:export_tree_raw fun to avoid this
+    {struct, 
+        [{<<"level1">>, EncodedL1}, 
+            {<<"level2">>, {struct, EncodedL2}}]} =
+        leveled_tictac:export_tree(Tree),
+    L2 =
+        lists:map(fun({I, CB}) -> 
+                        CBDecoded = base64:decode(CB),
+                        Iint = binary_to_integer(I), 
+                        <<Iint:32/integer, CBDecoded/binary>>
+                    end,
+                    EncodedL2),
+    #rpbaaefoldtreeresp{
+        size = element(4, QD),
+        level_one = base64:decode(EncodedL1),
+        level_two = L2
+    };
+pb_encode_results(fetch_clocks_range, _QD, KeysNClocks) ->
+    #rpbaaefoldkeyvalueresp{
+        response_type = atom_to_binary(clock, unicode),
+        keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
+pb_encode_results(find_keys, _QD, Results) ->
+    KeyCountMap = 
+        fun({_B, K, V}) ->
+            #rpbkeyscount{tag = K, count = V}
+        end,
+    #rpbaaefoldkeycountresp{response_type = <<"find_keys">>, 
+                            keys_count = lists:map(KeyCountMap, Results)};
+pb_encode_results(object_stats, _QD, Results) ->
+    {total_count, TC} = lists:keyfind(total_count, 1, Results),
+    {total_size, TS} = lists:keyfind(total_size, 1, Results),
+    {sizes, SzL} = lists:keyfind(sizes, 1, Results),
+    {siblings, SbL} = lists:keyfind(siblings, 1, Results),
+    EncodeIdxL =
+        fun(Tag) ->
+            fun({I, C}) ->
+                #rpbkeyscount{tag = atom_to_binary(Tag, unicode),
+                                order = I,
+                                count = C}
+            end
+        end,
+    SzL0 = lists:map(EncodeIdxL(sizes), SzL),
+    SbL0 = lists:map(EncodeIdxL(siblings), SbL),
+    KeysCount = 
+        [#rpbkeyscount{tag = atom_to_binary(total_count, unicode),
+                        count = TC},
+            #rpbkeyscount{tag = atom_to_binary(total_size, unicode),
+                            count = TS}]
+            ++ SzL0
+            ++ SbL0,
+    #rpbaaefoldkeycountresp{response_type = <<"stats">>,
+                            keys_count = KeysCount}.
+
+pb_encode_bucketkeyclock({B, K, V}) ->
+    pb_encode_bucketkeyvalue({B, K, riak_object:encode_vclock(V)}).
+
+pb_encode_bucketkeyvalue({{T, B}, K, V}) ->
+    #rpbkeysvalue{type = T,
+                    bucket = B,
+                    key = K,
+                    value = V};
+pb_encode_bucketkeyvalue({B, K, V}) ->
+    #rpbkeysvalue{bucket = B,
+                    key = K,
+                    value = V}.
+
+-spec convert_level2_element({non_neg_integer(), binary()}) -> binary().
+%% @doc
+%% Take a L2 tree element from a query result, and convert into a binary
+%% with the actual segment compressed
+convert_level2_element({Index, Bin}) ->
+    CompressedBin = zlib:compress(Bin),
+    <<Index:32/integer, CompressedBin/binary>>.
+
 
 -spec encode_keys_and_clocks(keys_clocks()) -> iolist().
 encode_keys_and_clocks(KeysNClocks) ->
