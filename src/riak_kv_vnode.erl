@@ -30,6 +30,8 @@
          get/4,
          head/3,
          head/4,
+         fetch_repl/3,
+         fetch_repl/4,
          del/3,
          put/6,
          local_get/2,
@@ -152,7 +154,9 @@
                 tictac_rebuilding = false :: erlang:timestamp()|false,
                 worker_pool_strategy = single :: none|single|dscp,
                 vnode_pool_pid :: undefined|pid(),
-                update_hook :: update_hook()
+                update_hook :: update_hook(),
+                repl_cache :: ets:tab(),
+                repl_cache_size :: integer()
                }).
 
 -type index_op() :: add | remove.
@@ -179,6 +183,7 @@
     % Type for old objects to be passed into hooks
 
 -define(MD_CACHE_BASE, "riak_kv_vnode_md_cache").
+-define(REPL_CACHE_BASE, "riak_kv_vnode_repl_cache").
 -define(DEFAULT_HASHTREE_TOKENS, 90).
 
 %% default value for `counter_lease' in `#counter_state{}'
@@ -211,7 +216,8 @@
     %% the cached tree do not use a pool (e.g. n_val queries)
 -define(AF4_QUEUE, riak_core_node_worker_pool:af4()).
     %% Assured Forwarding - pool 4
-    %% perational information queries (e.g. object_stats)
+    %% operational information queries (e.g. object_stats).  Replication folds
+    %% for transition
 -define(BE_QUEUE, riak_core_node_worker_pool:be()).
     %% Best efforts (aka scavenger) pool
     %% Rebuilds
@@ -532,6 +538,22 @@ head(Preflist, BKey, ReqId, Sender) ->
                                    Sender,
                                    riak_kv_vnode_master).
 
+%% @doc
+%% The fetch_repl request is a request to see if this node has the object in
+%% its cache of recently co-ordinated PUTs
+fetch_repl(Preflist, BKey, ReqId) ->
+    %% Assuming this function is called from a FSM process
+    %% so self() == FSM pid
+    fetch_repl(Preflist, BKey, ReqId, {fsm, undefined, self()}).
+
+fetch_repl(Preflist, BKey, ReqId, Sender) ->
+    Req = riak_kv_requests:new_fetch_request(sanitize_bkey(BKey), ReqId),
+    riak_core_vnode_master:command(Preflist,
+                                   Req,
+                                   Sender,
+                                   riak_kv_vnode_master).
+
+
 del(Preflist, BKey, ReqId) ->
     Req = riak_kv_requests:new_delete_request(sanitize_bkey(BKey), ReqId),
     riak_core_vnode_master:command(Preflist, Req, riak_kv_vnode_master).
@@ -743,6 +765,16 @@ init([Index]) ->
         app_helper:get_env(riak_kv, tictacaae_active, passive),
     WorkerPoolStrategy =
         app_helper:get_env(riak_kv, worker_pool_strategy),
+    
+    EnableReplCache = app_helper:get_env(riak_kv, enable_repl_cache, true),
+    ReplCache =
+        case EnableReplCache of
+            true ->
+                new_repl_cache(VId);
+            false ->
+                undefined
+        end,
+    ReplCacheSize = app_helper:get_env(riak_kv, repl_cache_size, 256),
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
@@ -1090,6 +1122,12 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
             Now = os:timestamp(),
             LoopDuration = 
                 timer:now_diff(Now, State#state.tictac_startqueue),
+            % This log has a different behaviour at startup.  At startup we
+            % will have scheduled the loop without completing any, so the first
+            % iteration of this log will always show exchanges_completed=0
+            % This is normal.  On subsequent runs we expected to see expected
+            % and complete to be aligned (and the loop duration with be about
+            % expected * tictacaae_exchangetick).
             lager:info("Tictac AAE loop completed for partition=~w with "
                             ++ "exchanges expected=~w "
                             ++ "exchanges completed=~w "
@@ -1351,6 +1389,22 @@ handle_request(kv_head_request, Req, Sender, State) ->
             do_head(Sender, BKey, ReqId, State);
         _ ->
             do_get(Sender, BKey, ReqId, State)
+    end;
+handle_request(kv_fetch_request, Req, Sender, State) ->
+    {Bucket, Key} = riak_kv_requests:get_bucket_key(Req),
+    ReqId = riak_kv_requests:get_request_id(Req),
+    CacheResult = 
+        case {State#state.repl_cache, State#state.repl_cache_size} of
+            {undefined, _} ->
+                miss;
+            {Tab, CacheSize} ->
+                fetch_from_repl_cache(Tab, Bucket, Key, CacheSize)
+        end,
+    case CacheResult of
+        {Bucket, Key, Obj} ->
+            {reply, {r, {ok, Obj}, State#state.idx, ReqId}, State};
+        miss ->
+            do_get(Sender, {Bucket, Key}, ReqId, State)
     end;
 %% NB. The following two function clauses discriminate on the async_put State field
 handle_request(kv_w1c_put_request, Req, Sender, State=#state{async_put=true}) ->
@@ -1634,6 +1688,42 @@ handle_aaefold({fetch_clocks_range,
                                 InitAcc, 
                                 [{clock, null}]),
     {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({repl_keys_range,
+                        Bucket, KeyRange,
+                        ModifiedRange,
+                        QueueName},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, Acc) ->
+            {clock, VV} = lists:keyfind(clock, 1, EFs),
+            % Use to_fetch in the repl entry rather than vnode ID, as we want
+            % to avoid bombarding a single vnode with GET requests. Also this
+            % entry will not be in the vnode repl_cache
+            RE = {BF, KF, VV, to_fetch},
+            {AccL, Count, QueueName, BatchSize} = Acc,
+            case Count rem BatchSize of
+                0 ->
+                    riak_kv_replrtq_src:replrtq_aaefold(QueueName, AccL),
+                    {[RE], Count + 1, QueueName, BatchSize};
+                _ ->
+                    {[RE|AccL], Count + 1, QueueName, BatchSize}
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} = 
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                all,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{clock, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({find_keys, 
                         Bucket, KeyRange,
                         ModifiedRange,
@@ -2264,7 +2354,7 @@ do_put(Sender, Request, State) ->
 
 %% @private
 %% upon receipt of a client-initiated put
-do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
+do_put(Sender, {Bucket, Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     BProps =  case proplists:get_value(bucket_props, Options) of
                   undefined ->
                       riak_core_bucket:get_bucket(Bucket);
@@ -2294,6 +2384,51 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
+
+    % Now the reply has been sent, check for replication requirements.  If no
+    % replication is enabled, then the replrtq_coordput/4 request will be
+    % discarded by the riak_kv_replrtq_src
+    case {Coord, Reply} of
+        {true, {dw, Idx, Obj, _ReqID}} ->
+            % This is the co-ordinator of the PUT - so cast this to the repl
+            % sink to check for replication need.
+            % If the replication cache is enabled, then add it to the cache.
+            % Note the Obj should always be present when the PUT is being
+            % coordinated as coordination will prompt the return_body to be
+            % set to true.
+            ObjectFormat =
+                case riak_kv_util:is_x_deleted(Obj) of
+                    true ->
+                        % This object may be reaped by the vnode before the 
+                        % sink attempts to fetch the tombstone from the vnode.
+                        % So the tombstone should but placed on the queue
+                        {tomb, Obj};
+                    false ->
+                        case {State#state.repl_cache,
+                                State#state.repl_cache_size} of
+                            {undefined, _} ->
+                                % this vnode is not keeping a cache, so when
+                                % the sink tries to fetch, it should run a
+                                % normal get_fsm and return the object from any
+                                % suitable vnode
+                                to_fetch;
+                            {Tab, CSz} ->
+                                % cache the object.  The cache size across the 
+                                % cluster will be CSz * ring-size so there is
+                                % a reasonable probability of a cache hit if
+                                % the repl fetch occurs within a few seconds
+                                add_to_repl_cache(Tab, Bucket, Key, Obj, CSz),
+                                {vnode, {Idx, node()}}
+                        end
+                end,
+            riak_kv_replrtq_src:replrtq_coordput({Bucket,
+                                                    Key,
+                                                    riak_object:vclock(Obj),
+                                                    ObjectFormat});
+        _ ->
+            % Only cache co-ordinated PUTs
+            ok
+    end,
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
@@ -3727,6 +3862,25 @@ new_md_cache(VId) ->
     %% ordered set to make sure that the first key is the oldest
     %% term format is {TimeStamp, Key, ValueTuple}
     ets:new(MDCacheName, [ordered_set, {keypos,2}]).
+
+new_repl_cache(VId) ->
+    RCacheName =
+        list_to_atom(?REPL_CACHE_BASE 
+                        ++ integer_to_list(binary:decode_unsigned(VId))),
+    ets:new(RCacheName, [set, private]).
+
+add_to_repl_cache(Tab, Bucket, Key, Obj, CacheSize) ->
+    H = erlang:phash2({Bucket, Key}, CacheSize),
+    ets:insert(Tab, {H, {Bucket, Key, Obj}}).
+
+fetch_from_repl_cache(Tab, Bucket, Key, CacheSize) ->
+    H = erlang:phash2({Bucket, Key}, CacheSize),
+    case ets:lookup(Tab, H) of
+        [{H, {Bucket, Key, Obj}}] ->
+            {Bucket, Key, Obj};
+        _ ->
+            miss
+    end.
 
 %% @private increment the per vnode coordinating put counter,
 %% flushing/leasing if needed

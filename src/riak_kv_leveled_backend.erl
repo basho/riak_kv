@@ -139,6 +139,7 @@ start(Partition, Config) ->
                             {compression_method, CMM},
                             {compression_point, CMP},
                             {log_level, LOL},
+                            {database_id, DBid},
                             {max_run_length, MRL},
                             {database_id, DBid},
                             {maxrunlength_compactionpercentage, MCP},
