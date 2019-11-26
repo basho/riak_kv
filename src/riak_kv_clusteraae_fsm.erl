@@ -475,6 +475,12 @@ pb_encode_results(fetch_clocks_range, _QD, KeysNClocks) ->
     #rpbaaefoldkeyvalueresp{
         response_type = atom_to_binary(clock, unicode),
         keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
+pb_encode_results(repl_keys_range, _QD, ReplResult) ->
+    R = element(2, ReplResult),
+    #rpbaaefoldkeycountresp{response_type = <<"repl_keys">>, 
+                            keys_count =
+                                #rpbkeyscount{tag = <<"dispatched_count">>,
+                                                count = R}};
 pb_encode_results(find_keys, _QD, Results) ->
     KeyCountMap = 
         fun({_B, K, V}) ->
