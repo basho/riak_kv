@@ -33,6 +33,7 @@
          fetch_repl/3,
          fetch_repl/4,
          del/3,
+         reap/3,
          put/6,
          local_get/2,
          local_put/2,
@@ -557,6 +558,21 @@ fetch_repl(Preflist, BKey, ReqId, Sender) ->
 del(Preflist, BKey, ReqId) ->
     Req = riak_kv_requests:new_delete_request(sanitize_bkey(BKey), ReqId),
     riak_core_vnode_master:command(Preflist, Req, riak_kv_vnode_master).
+
+%% @doc
+%% Reap a tombstone, assuming a preflist of UP primaries.
+-spec reap(riak_core_apl:preflist(),
+            {riak_object:bucket(), riak_object:key()},
+            non_neg_integer()) -> ok.
+reap(Preflist, {Bucket, Key}, DeleteHash) ->
+    Req = riak_kv_requests:new_reap_request({Bucket, Key}, DeleteHash),
+    [{Idx, Node}|Rest] = Preflist,
+    %% For the head of the preflist we do this sync, to regulate the pace of
+    %% reaps and help prevent overloading of vnodes.
+    ok = riak_core_vnode_master:sync_command({Idx, Node},
+                                                Req,
+                                                riak_kv_vnode_master),
+    riak_core_vnode_master:command(Rest, Req, riak_kv_vnode_master).
 
 %% Issue a put for the object to the preflist, expecting a reply
 %% to an FSM.
@@ -1456,7 +1472,11 @@ handle_request(kv_delete_request, Req, _Sender, State) ->
     do_delete(BKey, State);
 handle_request(kv_vclock_request, Req, _Sender, State) ->
     BKeys = riak_kv_requests:get_bucket_keys(Req),
-    {reply, do_get_vclocks(BKeys, State), State}.
+    {reply, do_get_vclocks(BKeys, State), State};
+handle_request(kv_reap_request, Req, _Sender, State) ->
+    BKey = riak_kv_requests:get_bucket_key(Req),
+    DeleteHash = riak_kv_requests:get_delete_hash(Req),
+    {reply, ok, final_delete(BKey, DeleteHash, State)}.
 
 
 handle_coverage_request(kv_listkeys_request, Req, FilterVNodes, Sender, State) ->
@@ -2260,18 +2280,8 @@ handle_info({'DOWN', _, _, Pid, _}, State=#state{hashtrees=Pid}) ->
     {ok, State3};
 handle_info({'DOWN', _, _, _, _}, State) ->
     {ok, State};
-handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=ModState}) ->
-    UpdState = case do_get_term(BKey, Mod, ModState) of
-                   {{ok, RObj}, ModState1} ->
-                       case delete_hash(RObj) of
-                           RObjHash ->
-                               do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
-                         _ ->
-                               State#state{modstate=ModState1}
-                       end;
-                   {{error, _}, ModState1} ->
-                       State#state{modstate=ModState1}
-               end,
+handle_info({final_delete, BKey, DeleteHash}, State) ->
+    UpdState = final_delete(BKey, DeleteHash, State),
     {ok, UpdState};
 handle_info({counter_lease, {FromPid, VnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid, vnodeid=VnodeId}) ->
     #state{counter=CounterState} = State,
@@ -2433,6 +2443,29 @@ do_put(Sender, {Bucket, Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
 
+
+%% @doc Remove a tombstone, assuming the state of the object currently in the
+%% store is the same tombstone from when the removal decision was made 
+-spec final_delete({riak_core_bucket:bucket(), riak_object:key()},
+                    non_neg_integer(),
+                    #state{}) -> #state{}.
+final_delete(BKey, DeleteHash, State = #state{mod=Mod, modstate=ModState}) ->
+    case do_get_term(BKey, Mod, ModState) of
+        {{ok, RObj}, ModState1} ->
+            case {riak_kv_util:is_x_deleted(RObj),
+                    riak_object:delete_hash(RObj)} of
+                {true, DeleteHash} ->
+                    do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
+                {IsDeleted, OtherHash} ->
+                    lager:info("Final delete failure " ++
+                                "~p deleted ~w hashes ~w ~w",
+                                [BKey, IsDeleted, DeleteHash, OtherHash]),
+                    State#state{modstate=ModState1}
+            end;
+        {{error, _}, ModState1} ->
+            State#state{modstate=ModState1}
+    end.
+
 -spec do_backend_delete(
     {riak_core_bucket:bucket(), riak_object:key()},
     riak_object:riak_object(), #state{}
@@ -2459,10 +2492,6 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
         {error, _Reason, UpdModState} ->
             State#state{modstate = UpdModState}
     end.
-
-%% Compute a hash of the deleted object
-delete_hash(RObj) ->
-    erlang:phash2(RObj, 4294967296).
 
 %% @doc
 %% Prepare PUT needs to prepare the correct transition from old object to new
@@ -3155,7 +3184,7 @@ do_delete(BKey, State) ->
                         Delay when is_integer(Delay) ->
                             erlang:send_after(Delay, self(),
                                               {final_delete, BKey,
-                                               delete_hash(RObj)}),
+                                               riak_object:delete_hash(RObj)}),
                             %% Nothing checks these messages - will just reply
                             %% del for now until we can refactor.
                             {reply, {del, Idx, del_mode_delayed},

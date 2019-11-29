@@ -32,6 +32,7 @@
          new_index_request/4,
          new_vnode_status_request/0,
          new_delete_request/2,
+         new_reap_request/2,
          new_map_request/3,
          new_vclock_request/1,
          new_aaefold_request/3,
@@ -44,6 +45,7 @@
          get_ack_backpressure/1,
          get_query/1,
          get_object/1,
+         get_delete_hash/1,
          get_encoded_obj/1,
          get_replica_type/1,
          set_object/2,
@@ -66,6 +68,7 @@
               index_request/0,
               vnode_status_request/0,
               delete_request/0,
+              reap_request/0,
               map_request/0,
               vclock_request/0,
               aaefold_request/0,
@@ -133,6 +136,10 @@
           bkey :: bucket_key(),
           req_id :: request_id()}).
 
+-record(riak_kv_reap_req_v1, {
+            bkey :: bucket_key(),
+            delete_hash :: non_neg_integer()}).
+
 -record(riak_kv_map_req_v1, {
           bkey :: bucket_key(),
           qterm :: term(),
@@ -165,6 +172,7 @@
 -opaque index_request() :: #riak_kv_index_req_v1{} | #riak_kv_index_req_v2{}.
 -opaque vnode_status_request() :: #riak_kv_vnode_status_req_v1{}.
 -opaque delete_request() :: #riak_kv_delete_req_v1{}.
+-opaque reap_request() :: #riak_kv_reap_req_v1{}.
 -opaque map_request() :: #riak_kv_map_req_v1{}.
 -opaque vclock_request() :: #riak_kv_vclock_req_v1{}.
 -opaque head_request() :: #riak_kv_head_req_v1{}.
@@ -181,6 +189,7 @@
                  | index_request()
                  | vnode_status_request()
                  | delete_request()
+                 | reap_request()
                  | map_request()
                  | vclock_request()
                  | head_request()
@@ -196,6 +205,7 @@
                       | kv_index_request
                       | kv_vnode_status_request
                       | kv_delete_request
+                      | kv_reap_request
                       | kv_map_request
                       | kv_vclock_request
                       | kv_head_request
@@ -215,6 +225,7 @@ request_type(#riak_kv_index_req_v1{})-> kv_index_request;
 request_type(#riak_kv_index_req_v2{})-> kv_index_request;
 request_type(#riak_kv_vnode_status_req_v1{})-> kv_vnode_status_request;
 request_type(#riak_kv_delete_req_v1{})-> kv_delete_request;
+request_type(#riak_kv_reap_req_v1{}) -> kv_reap_request;
 request_type(#riak_kv_map_req_v1{})-> kv_map_request;
 request_type(#riak_kv_vclock_req_v1{})-> kv_vclock_request;
 request_type(#riak_kv_head_req_v1{}) -> kv_head_request;
@@ -294,6 +305,10 @@ new_vnode_status_request() ->
 -spec new_delete_request(bucket_key(), request_id()) -> delete_request().
 new_delete_request(BKey, ReqID) ->
     #riak_kv_delete_req_v1{bkey=BKey, req_id=ReqID}.
+
+-spec new_reap_request(bucket_key(), non_neg_integer()) -> reap_request().
+new_reap_request(BKey, DeleteHash) ->
+    #riak_kv_reap_req_v1{bkey = BKey, delete_hash = DeleteHash}.
 
 -spec new_map_request(bucket_key(), term(), term()) -> map_request().
 new_map_request(BKey, QTerm, KeyData) ->
@@ -393,6 +408,10 @@ get_request_id(#riak_kv_fetch_req_v1{req_id = ReqId}) ->
     ReqId;
 get_request_id(#riak_kv_get_req_v1{req_id = ReqId}) ->
     ReqId.
+
+-spec get_delete_hash(request()) -> non_neg_integer().
+get_delete_hash(#riak_kv_reap_req_v1{delete_hash = DeleteHash}) ->
+    DeleteHash.
 
 get_start_time(#riak_kv_put_req_v1{start_time = StartTime}) ->
     StartTime.

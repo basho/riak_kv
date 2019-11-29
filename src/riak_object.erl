@@ -108,6 +108,7 @@
 -export([strict_descendant/2, new_actor_epoch/2]).
 -export([find_bestobject/1]).
 -export([spoof_getdeletedobject/1]).
+-export([delete_hash/1]).
 
 -ifdef(TEST).
 -export([convert_object_to_headonly/3]). % Used in unit testing of get_core
@@ -1543,6 +1544,25 @@ decode_vclock(Method, VClock) ->
         _           -> lager:error("Bad vclock encoding method ~p", [Method]),
                        throw(bad_vclock_encoding_method)
     end.
+
+%% @doc Need to hash the object, so that when a final_delete is processed
+%% it can be compared against the current object state to ensure that the
+%% deletion is not of an updated object
+-spec delete_hash(riak_object()|vclock:vclock()) -> non_neg_integer().
+delete_hash(ObjOrClock) ->
+    %% This could be the same as vclock_hash, but kept different should the
+    %% two hashes need to diverge in the future.  Extra collision protection
+    %% from using 2^32 range as with previous riak_kv_vnode:delete_hash/1, but
+    %% this should not be necessary given addition of is_x_deleted check before
+    %% comparison (and changes to vector clocks e.g. addition of epochs) since
+    %% delete_hash/1 was introduced.
+    case is_robject(ObjOrClock) of
+        false ->
+            erlang:phash2(lists:sort(ObjOrClock), 4294967296);
+        _ ->
+            delete_hash(vclock(ObjOrClock))
+    end.
+
 
 -ifdef(TEST).
 

@@ -103,6 +103,9 @@ init([]) ->
     ReplRTQSnk = {riak_kv_replrtq_snk,
                       {riak_kv_replrtq_snk, start_link, []},
                       permanent, 30000, worker, [riak_kv_replrtq_snk]},
+    Reaper = {riak_kv_reaper,
+                {riak_kv_reaper, start_link, []},
+                permanent, 30000, worker, [riak_kv_reaper]},
 
     EnsemblesKV =  {riak_kv_ensembles,
                     {riak_kv_ensembles, start_link, []},
@@ -117,6 +120,7 @@ init([]) ->
         TictacFSManager,
         ReplRTQSrc,
         ReplRTQSnk,
+        Reaper,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,
