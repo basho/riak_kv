@@ -333,6 +333,8 @@ get_bucket_key(#riak_kv_put_req_v1{bkey = BKey}) ->
 get_bucket_key(#riak_kv_w1c_put_req_v1{bkey = BKey}) ->
     BKey;
 get_bucket_key(#riak_kv_delete_req_v1{bkey = BKey}) ->
+    BKey;
+get_bucket_key(#riak_kv_reap_req_v1{bkey = BKey}) ->
     BKey.
 
 -spec get_bucket_keys(vclock_request()) -> [bucket_key()].

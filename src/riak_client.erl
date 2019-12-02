@@ -531,14 +531,21 @@ consistent_delete(Bucket, Key, Options, _Timeout, {?MODULE, [Node, _ClientId]}) 
             ok
     end.
 
+
 -spec reap(riak_object:bucket(), riak_object:key(), riak_client()) 
                                                                 -> boolean().
-reap(Bucket, Key, Client) ->
-    case normal_get(Bucket, Key, [{deletedvclock, true}], Client) of
+reap(Bucket, Key, {?MODULE, [Node, _ClientId]}=Client) ->
+    case normal_get(Bucket, Key, [deletedvclock], Client) of
         {error, {deleted, TombstoneVClock}} ->
             DeleteHash = riak_object:delete_hash(TombstoneVClock),
-            riak_kv_reaper:reap({{Bucket, Key}, DeleteHash});
-        _ ->
+            case node() of
+                Node ->
+                    riak_kv_reaper:direct_reap({{Bucket, Key}, DeleteHash});
+                _ ->
+                    riak_core_util:safe_rpc(Node, riak_kv_reaper, direct_reap,
+                                            [{{Bucket, Key}, DeleteHash}])
+            end;
+        _Unexpected ->
             false
     end.
 

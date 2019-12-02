@@ -45,10 +45,9 @@
             start_job/1,
             request_reap/2,
             request_reap/3,
+            direct_reap/1,
             reap_stats/1,
             stop_job/1]).
-
--export([reap/1]).
 
 -define(QUEUE_LIMIT, 100000).
 -define(LOG_TICK, 300000).
@@ -105,6 +104,10 @@ request_reap(Pid, ReapReference, Priority) ->
 reap_stats(Pid) ->
     gen_server:call(Pid, reap_stats, 5000).
 
+-spec direct_reap(reap_reference()) -> boolean().
+direct_reap(ReapReference) ->
+    gen_server:call(?MODULE, {direct_reap, ReapReference}).
+
 -spec stop_job(pid()) -> ok.
 stop_job(Pid) ->
     gen_server:call(Pid, stop_job, 5000).
@@ -122,6 +125,8 @@ handle_call(reap_stats, _From, State) ->
             State#state.reap_aborts,
             State#state.pqueue_length},
     {reply, Stats, State, 0};
+handle_call({direct_reap, ReapReference}, _From, State) ->
+    {reply, reap(ReapReference), State};
 handle_call(stop_job, _From, State) ->
     {reply, ok, State#state{pending_close = true}, 0}.
 
