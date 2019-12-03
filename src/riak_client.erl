@@ -27,7 +27,7 @@
 -export([new/2]).
 -export([get/3,get/4,get/5]).
 -export([put/2,put/3,put/4,put/5,put/6]).
--export([delete/3,delete/4,delete/5,reap/3]).
+-export([delete/3,delete/4,delete/5,reap/3,reap/4]).
 -export([delete_vclock/4,delete_vclock/5,delete_vclock/6]).
 -export([list_keys/2,list_keys/3,list_keys/4]).
 -export([stream_list_keys/2,stream_list_keys/3,stream_list_keys/4]).
@@ -534,19 +534,24 @@ consistent_delete(Bucket, Key, Options, _Timeout, {?MODULE, [Node, _ClientId]}) 
 
 -spec reap(riak_object:bucket(), riak_object:key(), riak_client()) 
                                                                 -> boolean().
-reap(Bucket, Key, {?MODULE, [Node, _ClientId]}=Client) ->
+reap(Bucket, Key, Client) ->
     case normal_get(Bucket, Key, [deletedvclock], Client) of
         {error, {deleted, TombstoneVClock}} ->
             DeleteHash = riak_object:delete_hash(TombstoneVClock),
-            case node() of
-                Node ->
-                    riak_kv_reaper:direct_reap({{Bucket, Key}, DeleteHash});
-                _ ->
-                    riak_core_util:safe_rpc(Node, riak_kv_reaper, direct_reap,
-                                            [{{Bucket, Key}, DeleteHash}])
-            end;
+            reap(Bucket, Key, DeleteHash, Client);
         _Unexpected ->
             false
+    end.
+
+-spec reap(riak_object:bucket(), riak_object:key(), pos_integer(),
+                                                riak_client()) -> boolean().
+reap(Bucket, Key, DeleteHash, {?MODULE, [Node, _ClientId]}) ->
+    case node() of
+        Node ->
+            riak_kv_reaper:direct_reap({{Bucket, Key}, DeleteHash});
+        _ ->
+            riak_core_util:safe_rpc(Node, riak_kv_reaper, direct_reap,
+                                    [{{Bucket, Key}, DeleteHash}])
     end.
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock(), riak_client()) ->

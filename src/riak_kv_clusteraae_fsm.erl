@@ -47,6 +47,7 @@
             [fetch_clocks_nval, fetch_clocks_range, find_keys, find_tombs]).
 
 -define(REPL_BATCH_SIZE, 128).
+-define(REAP_BATCH_SIZE, 1024).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -67,7 +68,7 @@
     %% it may be periodically required to use an alternate hash.  For this
     %% {rehash, non_neg_integer()} is used whereby the integer concatenated
     %% with the hash
--type reap_method() :: job|local.
+-type reap_method() :: {job, pos_integer()}|local.
     %% When reaping tombstones the reap can either be actioned only by the
     %% a job-specific riak_kv_reaper process started by this FSM.  Or each
     %% fold can send reap requests direct to the local node's riak_kv_reaper
@@ -75,7 +76,8 @@
     %% of reap
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
-    merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats.
+    merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats|
+    find_tombs|reap_tombs.
 
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
@@ -334,7 +336,15 @@ init(From={_, _, _}, [Query, Timeout]) ->
                         [{total_count, 0}, 
                             {total_size, 0},
                             {sizes, []},
-                            {siblings, []}]
+                            {siblings, []}];
+                    reap_tombs ->
+                        case element(6, Query) of
+                            {job, JobID} ->
+                                {ok, Pid} = riak_kv_reaper:start_job(JobID),
+                                {[], 0, Pid};
+                            local ->
+                                {[], 0, local}
+                        end
                 end
         end,
     
@@ -391,7 +401,17 @@ process_results(Results, State) ->
                         [{total_count, R_TC + A_TC}, 
                             {total_size, R_TS + A_TS},
                             {sizes, merge_countinlists(A_SzL, R_SzL)},
-                            {siblings, merge_countinlists(A_SbL, R_SbL)}]
+                            {siblings, merge_countinlists(A_SbL, R_SbL)}];
+                    reap_tombs ->
+                        case Results of
+                            {[], Count, local} ->
+                                {[], element(2, Acc) + Count, local};
+                            {BKDHL, 0, Pid} ->
+                                {[], AccCount, Pid} = Acc,
+                                UpdCount = length(BKDHL) + AccCount,
+                                reap_in_batches(lists:reverse(BKDHL), 0, Pid),
+                                {[], UpdCount, Pid}
+                        end
                 end
         end,
 
@@ -452,6 +472,8 @@ json_encode_results(find_keys, Result) ->
     mochijson2:encode(Keys);
 json_encode_results(find_tombs, Result) ->
     json_encode_results(find_keys, Result);
+json_encode_results(reap_tombs, {[], Count, _JobPid}) ->
+    mochijson2:encode({struct, [{<<"dispatched_count">>, Count}]});
 json_encode_results(object_stats, Stats) ->
     mochijson2:encode({struct, Stats}).
 
@@ -516,6 +538,11 @@ pb_encode_results(find_keys, _QD, Results) ->
                             keys_count = lists:map(KeyCountMap, Results)};
 pb_encode_results(find_tombs, QD, Results) ->
     pb_encode_results(find_keys, QD, Results);
+pb_encode_results(reap_tombs, _QD, {[], Count, _JobPid}) ->
+    #rpbaaefoldkeycountresp{response_type = <<"reap_tombs">>, 
+                            keys_count =
+                                #rpbkeyscount{tag = <<"dispatched_count">>,
+                                                count = Count}};
 pb_encode_results(object_stats, _QD, Results) ->
     {total_count, TC} = lists:keyfind(total_count, 1, Results),
     {total_size, TS} = lists:keyfind(total_size, 1, Results),
@@ -596,6 +623,21 @@ hash_function({rehash, InitialisationVector}) ->
         erlang:phash2({InitialisationVector, lists:sort(VC)})
     end.
 
+
+%% @doc
+%% Send requests to the reaper, but every batch size get the reaper stats (a 
+%% sync operation) to avoid mailbox overload.
+-spec reap_in_batches(list(riak_kv_reaper:reap_reference()),
+                        non_neg_integer(), pid()) -> ok.
+reap_in_batches([], _BatchCount, _Reaper) ->
+    ok;
+reap_in_batches(ReapList, BatchCount, Reaper)
+                                        when BatchCount >= ?REAP_BATCH_SIZE ->
+    _ = riak_kv_reaper:reap_stats(Reaper),
+    reap_in_batches(ReapList, 0, Reaper);
+reap_in_batches([ReapRef|RestReaps], BatchCount, Reaper) ->
+    ok = riak_kv_reaper:request_reap(Reaper, ReapRef, 2),
+    reap_in_batches(RestReaps, BatchCount + 1, Reaper).
 
 %% ===================================================================
 %% Internal functions

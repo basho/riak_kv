@@ -218,7 +218,7 @@
 -define(AF4_QUEUE, riak_core_node_worker_pool:af4()).
     %% Assured Forwarding - pool 4
     %% operational information queries (e.g. object_stats).  Replication folds
-    %% for transition
+    %% for transition.  Reaping operations
 -define(BE_QUEUE, riak_core_node_worker_pool:be()).
     %% Best efforts (aka scavenger) pool
     %% Rebuilds
@@ -1790,6 +1790,45 @@ handle_aaefold({find_tombs,
                 {true, undefined} ->
                     {clock, VV} = lists:keyfind(clock, 1, EFs),
                     [{BF, KF, riak_object:delete_hash(VV)}|TombHashAcc];
+                {false, undefined} ->
+                    TombHashAcc
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                SegmentFilter,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{md, null}, {clock, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({reap_tombs, 
+                        Bucket, KeyRange,
+                        SegmentFilter, ModifiedRange,
+                        ReapMethod},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, TombHashAcc) ->
+            {md, MD} = lists:keyfind(md, 1, EFs),
+            case riak_object:is_aae_object_deleted(MD, false) of
+                {true, undefined} ->
+                    {clock, VV} = lists:keyfind(clock, 1, EFs),
+                    DH = riak_object:delete_hash(VV),
+                    case ReapMethod of
+                        local ->
+                            riak_kv_reaper:request_reap({{BF, KF}, DH}, 2),
+                            NewCount = element(2, TombHashAcc) + 1,
+                            setelement(2, TombHashAcc, NewCount);
+                        {job, _JobID} ->
+                            [{{BF, KF}, DH}|TombHashAcc]
+                    end;
                 {false, undefined} ->
                     TombHashAcc
             end
