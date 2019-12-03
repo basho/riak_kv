@@ -101,7 +101,9 @@
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
 -export([nextgenrepl_encode/2]).
--export([summary_from_binary/1]).
+-export([summary_from_binary/1, aae_from_object_binary/1,
+            get_metadata_from_aae_binary/1, aae_fold_metabin/2,
+            is_aae_object_deleted/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1, is_head/1]).
 -export([update_last_modified/1, update_last_modified/2, get_last_modified/1]).
@@ -1260,11 +1262,10 @@ summary_from_binary(<<131, _Rest/binary>>=ObjBin) ->
     end;
 summary_from_binary(ObjBin) when is_binary(ObjBin) ->
     summary_from_binary(ObjBin, byte_size(ObjBin));
-summary_from_binary(Obj = #r_object{}) ->
+summary_from_binary(Object = #r_object{}) ->
     % Unexpected scenario but included for parity with from_binary
     % Calculating object size is expensive (relatively to other branches)
-    {vclock(Obj), byte_size(to_binary(v1, Obj)), value_count(Obj),
-        undefined, <<>>}.
+    summary_from_binary(to_binary(v1, Object)).
 
 
 -spec summary_from_binary(binary(), integer()) ->
@@ -1288,6 +1289,24 @@ summary_from_binary(ObjBin, ObjSize) ->
         end,
     {binary_to_term(VclockBin), ObjSize, SibCount, LastMods, SibBin}.
 
+%% @doc
+%% Function used to split objects in parallel AAE store
+-spec aae_from_object_binary(boolean()) ->
+        fun((binary()) -> 
+            {integer(), integer(), integer(),
+                list(erlang:timestamp()), binary()}).
+aae_from_object_binary(true) ->
+    fun(ObjBin) ->
+        {_Clock, Size, SibCount, LastMods, SibsBin} =
+            summary_from_binary(ObjBin),
+        {Size, SibCount, 0, LastMods, SibsBin}
+    end;
+aae_from_object_binary(false) ->
+    fun(ObjBin) ->
+        {_Clock, Size, SibCount, LastMods, _SibsBin} =
+            summary_from_binary(ObjBin),
+        {Size, SibCount, 0, LastMods, term_to_binary(null)}
+    end.
 
 
 -spec get_metadata_from_siblings(binary(), integer(),
@@ -1309,6 +1328,82 @@ get_metadata_from_siblings(<<ValLen:32/integer, Rest0/binary>>,
                                 SibCount - 1,
                                 [LastMod|LastMods],
                                 [SibMetaData|SibMDList]).
+
+%% @doc Where sibs_of_binary has been used to create a value-free binary of
+%% an object - reverse it here.
+-spec get_metadata_from_aae_binary(binary()) -> list().
+get_metadata_from_aae_binary(SiblingBinary) ->
+    case binary_to_term(SiblingBinary) of
+        null ->
+            [];
+        ContentList ->
+            lists:map(fun(S) -> S#r_content.metadata end, ContentList)
+    end.
+
+%% @doc
+%% AAE folds need to cope with metadata being returned in native form, only
+%% with and empty value - but also as stored in parallel mode using
+%% get_metadata_from_siblngs
+-spec aae_fold_metabin(binary(), list()) -> list().
+aae_fold_metabin(<<>>, SibMDAcc) ->
+    SibMDAcc;
+aae_fold_metabin(<<0:32/integer, Rest/binary>>, SibMDAcc) ->
+    %% Native mode
+    {SibMetaData, _LastMod, OtherSibs} =
+        sib_of_binary(<<0:32/integer, Rest/binary>>),
+    aae_fold_metabin(OtherSibs, [SibMetaData#r_content.metadata|SibMDAcc]);
+aae_fold_metabin(Bin, _SibMDAcc) ->
+    %% Parallel mode
+    get_metadata_from_aae_binary(Bin).
+
+%% @doc
+%% Given the MD result of an AAE Fold - determine if the object is a Riak
+%% tombstone.  The MD result is subtly different for parallel and native mode
+%% and this is handle within aae_fold_metabin.
+%% Second argument is a boolean to indicate if the applictaion is interested
+%% in processing the metadata after determining the tombstone status - if true
+%% the de-serialised metadata list is returned along with the deleted status.
+-spec is_aae_object_deleted(binary()|list(), boolean()) ->
+                                                {boolean(), list()|undefined}.
+is_aae_object_deleted(<<0:32, _Rest/binary>> = MetaBin, false) ->
+    {is_binary_deleted(MetaBin, true), undefined};
+is_aae_object_deleted(MetaBin, ReturnMD) when is_binary(MetaBin) ->
+    is_aae_object_deleted(aae_fold_metabin(MetaBin, []), ReturnMD);
+is_aae_object_deleted([], ReturnMD) ->
+    case ReturnMD of
+        true ->
+            {false, []};
+        false ->
+            {false, undefined}
+    end;
+is_aae_object_deleted(MDs, ReturnMD) ->
+    PredFun = 
+        fun(M) ->
+            dict:is_key(<<"X-Riak-Deleted">>, M)
+        end,
+    IsDeleted = lists:all(PredFun, MDs),
+    case ReturnMD of
+        true ->
+            {IsDeleted, MDs};
+        false ->
+            {IsDeleted, undefined}
+    end.
+
+%% @doc
+%% In the case that the binary is the native objetc binayr format - can find
+%% if it is deleted by pattern matching the binary, there is no need to process
+%% all the metadata
+-spec is_binary_deleted(binary(), boolean()) -> boolean().
+is_binary_deleted(<<>>, IsDeleted) ->
+    IsDeleted;
+is_binary_deleted(<<ValLen:32/integer, _ValBin:ValLen/binary,
+                    MetaLen:32/integer, MetaBin:MetaLen/binary,
+                    Rest/binary>>, true) ->
+    <<_LMD:12/binary, VTagLen:8/integer, _VTag:VTagLen/binary,
+        Deleted:1/binary-unit:8, _MetaRestBin/binary>> = MetaBin,
+    is_binary_deleted(Rest, Deleted == <<1>>);
+is_binary_deleted(_SibBin, false) ->
+    false.
 
 
 sibs_of_binary(Count,SibsBin) ->
@@ -2225,13 +2320,82 @@ summary_binary_extract() ->
     B = <<"buckets are binaries">>,
     K = <<"keys are binaries">>,
     V = <<"Some Binary Data">>,
-    Object0 = riak_object:new(B, K, V),
-    Object = riak_object:increment_vclock(Object0, a),
-    Binary = to_binary(v1, Object),
-    {Clock, Size, SibCount, _LMD, _SibBin} = summary_from_binary(Binary),
+    ObjectA0 = riak_object:new(B, K, V),
+    ObjectA = riak_object:increment_vclock(ObjectA0, a),
+    Binary = to_binary(v1, ObjectA),
+    {Clock, Size, SibCount, LMD, SibBin} = summary_from_binary(Binary),
     ?assertMatch(1, SibCount),
     ?assertMatch(1, length(Clock)),
     ?assertMatch(true, Size > 0),
-    {Clock, Size, SibCount, undefined, <<>>} = summary_from_binary(Object).
+    {Clock, Size, SibCount, LMD, SibBin} = summary_from_binary(ObjectA),
+    DeletedM = dict:store(<<"X-Riak-Deleted">>, true, dict:new()),
+    ObjectB0 = riak_object:new(B, K, V, DeletedM),
+    ObjectB = riak_object:increment_vclock(ObjectB0, b),
+    {_ClockB, _SizeB, 1, _LMDB, SibBinB} = summary_from_binary(ObjectB),
+    DeletedMDLB = aae_fold_metabin(SibBinB, []),
+    ?assertMatch({true, undefined},
+                    is_aae_object_deleted(DeletedMDLB, false)),
+    ObjectC = merge(ObjectA, ObjectB),
+    {_ClockC, _SizeC, 2, _LMDC, SibBinC} = summary_from_binary(ObjectC),
+    DeletedMDLC = aae_fold_metabin(SibBinC, []),
+    ?assertMatch({false, undefined},
+                    is_aae_object_deleted(DeletedMDLC, false)),
+    ObjectD0 = riak_object:new(B, K, V, DeletedM),
+    ObjectD = riak_object:increment_vclock(ObjectD0, d),
+    ObjectE = merge(ObjectB, ObjectD),
+    {_ClockE, _SizeE, 2, _LMDE, SibBinE} = summary_from_binary(ObjectE),
+    DeletedMDLE = aae_fold_metabin(SibBinE, []),
+    ?assertMatch(true,
+                    element(1, is_aae_object_deleted(DeletedMDLE, true))),
+
+    % Should be able to see is_deleted status straight from binary
+    % although in the case of parallel this will convert
+    ?assertMatch(true, element(1, is_aae_object_deleted(SibBinB, true))),
+    ?assertMatch(false, element(1, is_aae_object_deleted(SibBinC, true))),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(SibBinE, false)),
+    
+    ObjBinA = trim_value_frombinary(to_binary(v1, ObjectA)),
+    ObjBinB = trim_value_frombinary(to_binary(v1, ObjectB)),
+    ObjBinC = trim_value_frombinary(to_binary(v1, ObjectC)),
+    ObjBinD = trim_value_frombinary(to_binary(v1, ObjectD)),
+    ObjBinE = trim_value_frombinary(to_binary(v1, ObjectE)),
+    
+    % Prove that we cna extract metadata - and see is deleted status
+    MDLA = aae_fold_metabin(ObjBinA, []),
+    MDLB = aae_fold_metabin(ObjBinB, []),
+    MDLC = aae_fold_metabin(ObjBinC, []),
+    MDLD = aae_fold_metabin(ObjBinD, []),
+    MDLE = aae_fold_metabin(ObjBinE, []),
+    ?assertMatch({false, undefined}, is_aae_object_deleted(MDLA, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(MDLB, false)),
+    ?assertMatch({false, undefined}, is_aae_object_deleted(MDLC, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(MDLD, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(MDLE, false)),
+    
+    % Should be able to see is_deleted status straight from binary
+    ?assertMatch({false, undefined}, is_aae_object_deleted(ObjBinA, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(ObjBinB, false)),
+    ?assertMatch({false, undefined}, is_aae_object_deleted(ObjBinC, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(ObjBinD, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(ObjBinE, false)),
+    ?assertMatch(false, element(1, is_aae_object_deleted(ObjBinA, true))),
+    ?assertMatch(true, element(1, is_aae_object_deleted(ObjBinB, true))),
+    ?assertMatch(false, element(1, is_aae_object_deleted(ObjBinC, true))),
+    ?assertMatch(true, element(1, is_aae_object_deleted(ObjBinD, true))),
+    ?assertMatch(true, element(1, is_aae_object_deleted(ObjBinE, true))).
+
+
+trim_value_frombinary(<<?MAGIC:8/integer, 1:8/integer,
+                        VclockLen:32/integer, _VclockBin:VclockLen/binary,
+                        _SibCount:32/integer, SibsBin/binary>>) ->
+    trim_values(SibsBin, <<>>).
+
+trim_values(<<>>, AccBin) ->
+    AccBin;
+trim_values(<<ValueLen:32/integer, _ValueBin:ValueLen/binary,
+            MetaLen:32/integer, MetaBin:MetaLen/binary, Rest/binary>>, AccBin) ->
+    trim_values(Rest,
+                <<AccBin/binary,
+                    0:32/integer, MetaLen:32/integer, MetaBin/binary>>).
 
 -endif.

@@ -42,27 +42,37 @@
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
 -define(RANGE_QUERIES, 
             [merge_tree_range, fetch_clocks_range, repl_keys_range,
-                find_keys, object_stats]).
+                find_keys, object_stats, find_tombs, reap_tombs]).
 -define(LIST_ACCUMULATE_QUERIES,
-            [fetch_clocks_nval, fetch_clocks_range, find_keys]).
+            [fetch_clocks_nval, fetch_clocks_range, find_keys, find_tombs]).
 
 -define(REPL_BATCH_SIZE, 128).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
-% Building blocks for supported aae fold query definitions
+%% Building blocks for supported aae fold query definitions
 -type segment_filter() :: list(integer()).
 -type tree_size() :: leveled_tictac:tree_size().
 -type branch_filter() :: list(integer()).
 -type key_range() :: {riak_object:key(), riak_object:key()}|all.
 -type bucket() :: riak_object:bucket().
 -type n_val() :: pos_integer().
-%% dates in modified_range are 32bit integer timestamp of seconds
-%% since unix epoch
 -type modified_range() :: {date, non_neg_integer(), non_neg_integer()}.
--type hash_method() :: pre_hash|{rehash, non_neg_integer()}. 
-
+    %% dates in modified_range are 32bit integer timestamp of seconds
+    %% since unix epoch
+-type hash_method() :: pre_hash|{rehash, non_neg_integer()}.
+    %% clocks are pre-hashed before storage to reduce CPU load for hash
+    %% comparisons.  However, there maye be hash collisions, and in this case
+    %% it may be periodically required to use an alternate hash.  For this
+    %% {rehash, non_neg_integer()} is used whereby the integer concatenated
+    %% with the hash
+-type reap_method() :: job|local.
+    %% When reaping tombstones the reap can either be actioned only by the
+    %% a job-specific riak_kv_reaper process started by this FSM.  Or each
+    %% fold can send reap requests direct to the local node's riak_kv_reaper
+    %% to distribute the load across the cluster and increase parallelistaion
+    %% of reap
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats.
@@ -206,7 +216,7 @@
         % size).  If only interested in the outcom of recent modifications,
         % use a modified_range().
 
-    {object_stats, bucket(), key_range(), modified_range() | all}.
+    {object_stats, bucket(), key_range(), modified_range() | all} |
         % Returns:
         % - the total count of objects in the key range
         % - the accumulated total size of all objects in the range
@@ -224,6 +234,20 @@
         %
         % If only interested in the outcom of recent modifications,
         % use a modified_range().
+
+    {find_tombs, bucket(), key_range(), 
+        {segments, segment_filter(), tree_size()} | all,
+        modified_range() | all} |
+        % Find all tombstones in the range that match the criteria, and
+        % return a list of keys and delete_hashes
+    {reap_tombs, bucket(), key_range(),
+        {segments, segment_filter(), tree_size()} | all,
+        modified_range() | all,
+        reap_method()}.
+        % Reap all the tombstones in the range using either a job-specific
+        % reaper process, or using the process on each node (local to each
+        % vnode fold).  Should return a count of all the tombstones for
+        % which a reap request was made
 
 
 %% NOTE: this is a dialyzer/start war with the weird init needing a
@@ -426,6 +450,8 @@ json_encode_results(find_keys, Result) ->
     Keys = {struct, [{<<"results">>, [{struct, encode_find_key(Key, Int)} || {_Bucket, Key, Int} <- Result]}
                     ]},
     mochijson2:encode(Keys);
+json_encode_results(find_tombs, Result) ->
+    json_encode_results(find_keys, Result);
 json_encode_results(object_stats, Stats) ->
     mochijson2:encode({struct, Stats}).
 
@@ -488,6 +514,8 @@ pb_encode_results(find_keys, _QD, Results) ->
         end,
     #rpbaaefoldkeycountresp{response_type = <<"find_keys">>, 
                             keys_count = lists:map(KeyCountMap, Results)};
+pb_encode_results(find_tombs, QD, Results) ->
+    pb_encode_results(find_keys, QD, Results);
 pb_encode_results(object_stats, _QD, Results) ->
     {total_count, TC} = lists:keyfind(total_count, 1, Results),
     {total_size, TS} = lists:keyfind(total_size, 1, Results),

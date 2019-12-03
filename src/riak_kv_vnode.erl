@@ -317,11 +317,7 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
 
     StoreHead = app_helper:get_env(riak_kv, tictacaae_storeheads),
-    ObjSplitFun = 
-        case StoreHead of
-            true -> fun from_object_binary/1;
-            false -> fun from_object_binary_headless/1
-        end,
+    ObjSplitFun = riak_object:aae_from_object_binary(StoreHead),
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
@@ -359,29 +355,6 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                 aae_controller = AAECntrl,
                 modstate = ModState,
                 tictac_rebuilding = Rebuilding}.
-
-
--spec from_object_binary(binary()) ->
-        {integer(), integer(), integer(), list(erlang:timestamp()), binary()}.
-%% @doc
-%% When folding over objects need to be able to convert from the object into 
-%% a tuple of metadata for the AAE keystore
-from_object_binary(RobjBin) ->
-    {_Clock, Size, SibCount, LastMods, SibsBin} =
-        riak_object:summary_from_binary(RobjBin),
-    % TODO: Actually get the index hash
-    {Size, SibCount, 0, LastMods, SibsBin}.
-
--spec from_object_binary_headless(binary()) ->
-        {integer(), integer(), integer(), list(erlang:timestamp()), binary()}.
-%% @doc
-%% When folding over objects need to be able to convert from the object into 
-%% a tuple of metadata for the AAE keystore
-from_object_binary_headless(RobjBin) ->
-    {_Clock, Size, SibCount, LastMods, _SibsBin} =
-        riak_object:summary_from_binary(RobjBin),
-    % TODO: Actually get the index hash
-    {Size, SibCount, 0, LastMods, term_to_binary(null)}.
 
 
 -spec determine_aaedata_root(integer()) -> list().
@@ -1803,6 +1776,36 @@ handle_aaefold({find_keys,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{size, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({find_tombs, 
+                        Bucket, KeyRange,
+                        SegmentFilter, ModifiedRange},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, TombHashAcc) ->
+            {md, MD} = lists:keyfind(md, 1, EFs),
+            case riak_object:is_aae_object_deleted(MD, false) of
+                {true, undefined} ->
+                    {clock, VV} = lists:keyfind(clock, 1, EFs),
+                    [{BF, KF, riak_object:delete_hash(VV)}|TombHashAcc];
+                {false, undefined} ->
+                    TombHashAcc
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                SegmentFilter,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{md, null}, {clock, null}]),
     {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({object_stats, Bucket, KeyRange, ModifiedRange},
                     InitAcc, _Nval,
