@@ -68,12 +68,14 @@
     %% it may be periodically required to use an alternate hash.  For this
     %% {rehash, non_neg_integer()} is used whereby the integer concatenated
     %% with the hash
--type reap_method() :: {job, pos_integer()}|local.
+-type reap_method() :: {job, pos_integer()}|local|count.
     %% When reaping tombstones the reap can either be actioned only by the
     %% a job-specific riak_kv_reaper process started by this FSM.  Or each
     %% fold can send reap requests direct to the local node's riak_kv_reaper
     %% to distribute the load across the cluster and increase parallelistaion
-    %% of reap
+    %% of reap.  The count reap_method() will perform no reaps - but will
+    %% simply count the matching keys - this is cheaper than runnning
+    %% find_tombs to accumulate/sort a large list for counting. 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats|
@@ -343,7 +345,9 @@ init(From={_, _, _}, [Query, Timeout]) ->
                                 {ok, Pid} = riak_kv_reaper:start_job(JobID),
                                 {[], 0, Pid};
                             local ->
-                                {[], 0, local}
+                                {[], 0, local};
+                            count ->
+                                {[], 0, count}
                         end
                 end
         end,
@@ -406,6 +410,8 @@ process_results(Results, State) ->
                         case Results of
                             {[], Count, local} ->
                                 {[], element(2, Acc) + Count, local};
+                            {[], Count, count} ->
+                                {[], element(2, Acc) + Count, count};
                             {BKDHL, 0, Pid} ->
                                 {[], AccCount, Pid} = Acc,
                                 UpdCount = length(BKDHL) + AccCount,

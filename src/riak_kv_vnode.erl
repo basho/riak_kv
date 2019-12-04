@@ -1826,6 +1826,9 @@ handle_aaefold({reap_tombs,
                             riak_kv_reaper:request_reap({{BF, KF}, DH}, 2),
                             NewCount = element(2, TombHashAcc) + 1,
                             setelement(2, TombHashAcc, NewCount);
+                        count ->
+                            NewCount = element(2, TombHashAcc) + 1,
+                            setelement(2, TombHashAcc, NewCount);
                         {job, _JobID} ->
                             {[{{BF, KF}, DH}|element(1, TombHashAcc)],
                                 element(2, TombHashAcc),

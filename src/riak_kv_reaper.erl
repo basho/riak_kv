@@ -50,7 +50,7 @@
             stop_job/1]).
 
 -define(QUEUE_LIMIT, 100000).
--define(LOG_TICK, 300000).
+-define(LOG_TICK, 60000).
 -define(REDO_TIMEOUT, 2000).
 -define(MAX_BATCH_SIZE, 100).
 
@@ -117,6 +117,7 @@ stop_job(Pid) ->
 %%%============================================================================
 
 init([JobID, ReapFun]) ->
+    erlang:send_after(?LOG_TICK, self(), log_queue),
     {ok, #state{job_id = JobID, reap_fun = ReapFun}, 0}.
 
 handle_call(reap_stats, _From, State) ->
