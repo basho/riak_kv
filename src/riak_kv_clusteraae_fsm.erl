@@ -432,7 +432,14 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     QueryDuration = timer:now_diff(os:timestamp(), State#state.start_time),
     lager:info("Finished aaefold of type=~w with fold_time=~w seconds", 
                 [State#state.query_type, QueryDuration/1000000]),
-    ClientPid ! {ReqId, {results, State#state.acc}},
+    Results =
+        case State#state.query_type of
+            reap_tombs ->
+                element(2, State#state.acc);
+            _Other ->
+                State#state.acc
+        end,
+    ClientPid ! {ReqId, {results, Results}},
     {stop, normal, State}.
 
 
@@ -472,7 +479,7 @@ json_encode_results(find_keys, Result) ->
     mochijson2:encode(Keys);
 json_encode_results(find_tombs, Result) ->
     json_encode_results(find_keys, Result);
-json_encode_results(reap_tombs, {[], Count, _JobPid}) ->
+json_encode_results(reap_tombs, Count) ->
     mochijson2:encode({struct, [{<<"dispatched_count">>, Count}]});
 json_encode_results(object_stats, Stats) ->
     mochijson2:encode({struct, Stats}).
@@ -538,7 +545,7 @@ pb_encode_results(find_keys, _QD, Results) ->
                             keys_count = lists:map(KeyCountMap, Results)};
 pb_encode_results(find_tombs, QD, Results) ->
     pb_encode_results(find_keys, QD, Results);
-pb_encode_results(reap_tombs, _QD, {[], Count, _JobPid}) ->
+pb_encode_results(reap_tombs, _QD, Count) ->
     #rpbaaefoldkeycountresp{response_type = <<"reap_tombs">>, 
                             keys_count =
                                 #rpbkeyscount{tag = <<"dispatched_count">>,

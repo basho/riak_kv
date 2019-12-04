@@ -1827,7 +1827,9 @@ handle_aaefold({reap_tombs,
                             NewCount = element(2, TombHashAcc) + 1,
                             setelement(2, TombHashAcc, NewCount);
                         {job, _JobID} ->
-                            [{{BF, KF}, DH}|TombHashAcc]
+                            {[{{BF, KF}, DH}|element(1, TombHashAcc)],
+                                element(2, TombHashAcc),
+                                element(3, TombHashAcc)}
                     end;
                 {false, undefined} ->
                     TombHashAcc
