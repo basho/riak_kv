@@ -42,12 +42,12 @@
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
 -define(RANGE_QUERIES, 
             [merge_tree_range, fetch_clocks_range, repl_keys_range,
-                find_keys, object_stats, find_tombs, reap_tombs]).
+                find_keys, object_stats, find_tombs, reap_tombs, erase_keys]).
 -define(LIST_ACCUMULATE_QUERIES,
             [fetch_clocks_nval, fetch_clocks_range, find_keys, find_tombs]).
 
 -define(REPL_BATCH_SIZE, 128).
--define(REAP_BATCH_SIZE, 1024).
+-define(DELETE_BATCH_SIZE, 1024).
 
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
@@ -68,18 +68,19 @@
     %% it may be periodically required to use an alternate hash.  For this
     %% {rehash, non_neg_integer()} is used whereby the integer concatenated
     %% with the hash
--type reap_method() :: {job, pos_integer()}|local|count.
-    %% When reaping tombstones the reap can either be actioned only by the
-    %% a job-specific riak_kv_reaper process started by this FSM.  Or each
-    %% fold can send reap requests direct to the local node's riak_kv_reaper
-    %% to distribute the load across the cluster and increase parallelistaion
-    %% of reap.  The count reap_method() will perform no reaps - but will
+-type change_method() :: {job, pos_integer()}|local|count.
+    %% When reaping tombstones (or erasing keys) the reap/erase can either
+    %% be actioned only by a job-specific riak_kv_reaper/eraser process started
+    %% by this FSM.  Or each fold can send reap/delete requests direct to the
+    %% local node's riak_kv_reaper/riak_kv_eraser to distribute the load across
+    %% the cluster and increase parallelistaion of the process.
+    %% The count change_method() will perform no reaps/deletes - but will
     %% simply count the matching keys - this is cheaper than runnning
-    %% find_tombs to accumulate/sort a large list for counting. 
+    %% find_tombs/find_keys to accumulate/sort a large list for counting. 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats|
-    find_tombs|reap_tombs.
+    find_tombs|reap_tombs|erase_keys.
 
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
@@ -236,7 +237,7 @@
         %   {sizes, [{1, 800}, {2, 180}, {3, 20}]}, 
         %   {siblings, [{1, 1000}]}]
         %
-        % If only interested in the outcom of recent modifications,
+        % If only interested in the outcome of recent modifications,
         % use a modified_range().
 
     {find_tombs, bucket(), key_range(), 
@@ -247,11 +248,17 @@
     {reap_tombs, bucket(), key_range(),
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all,
-        reap_method()}.
+        change_method()} |
         % Reap all the tombstones in the range using either a job-specific
         % reaper process, or using the process on each node (local to each
         % vnode fold).  Should return a count of all the tombstones for
         % which a reap request was made
+    {erase_keys, bucket(), key_range(),
+        {segments, segment_filter(), tree_size()} | all,
+        modified_range() | all,
+        change_method()}.
+        % Erase keys using a riak_kv_eraser.  This is of specific use when
+        % expiring keys beyond a certain modified date
 
 
 %% NOTE: this is a dialyzer/start war with the weird init needing a
@@ -348,6 +355,16 @@ init(From={_, _, _}, [Query, Timeout]) ->
                                 {[], 0, local};
                             count ->
                                 {[], 0, count}
+                        end;
+                    erase_keys ->
+                        case element(6, Query) of
+                            {job, JobID} ->
+                                {ok, Pid} = riak_kv_eraser:start_job(JobID),
+                                {[], 0, Pid};
+                            local ->
+                                {[], 0, local};
+                            count ->
+                                {[], 0, count}
                         end
                 end
         end,
@@ -378,14 +395,15 @@ process_results(Results, State) ->
             true ->
                 lists:umerge(Acc, lists:reverse(Results));
             false ->
-                case QueryType of
-                    merge_root_nval ->
+                case {QueryType,
+                        lists:member(QueryType, [reap_tombs, erase_keys])} of
+                    {merge_root_nval, _} ->
                         aae_exchange:merge_root(Results, Acc);
-                    merge_branch_nval ->
+                    {merge_branch_nval, _} ->
                         aae_exchange:merge_branches(Results, Acc);
-                    merge_tree_range ->
+                    {merge_tree_range, _} ->
                         leveled_tictac:merge_trees(Results, Acc);
-                    repl_keys_range ->
+                    {repl_keys_range, _} ->
                         {ReplEntries, Count, QueueName, RBS} = Results,
                         riak_kv_replrtq_src:replrtq_aaefold(QueueName,
                                                             ReplEntries),
@@ -393,7 +411,7 @@ process_results(Results, State) ->
                         % the list, not when is is pushed to the queue
                         {_EL, AccCount, QueueName, RBS} = Acc,
                         {[], AccCount + Count, QueueName, RBS};
-                    object_stats ->
+                    {object_stats, _} ->
                         [{total_count, R_TC}, 
                             {total_size, R_TS},
                             {sizes, R_SzL},
@@ -406,7 +424,7 @@ process_results(Results, State) ->
                             {total_size, R_TS + A_TS},
                             {sizes, merge_countinlists(A_SzL, R_SzL)},
                             {siblings, merge_countinlists(A_SbL, R_SbL)}];
-                    reap_tombs ->
+                    {QT, true} ->
                         case Results of
                             {[], Count, local} ->
                                 {[], element(2, Acc) + Count, local};
@@ -415,7 +433,7 @@ process_results(Results, State) ->
                             {BKDHL, 0, Pid} ->
                                 {[], AccCount, Pid} = Acc,
                                 UpdCount = length(BKDHL) + AccCount,
-                                reap_in_batches(lists:reverse(BKDHL), 0, Pid),
+                                handle_in_batches(QT, lists:reverse(BKDHL), 0, Pid),
                                 {[], UpdCount, Pid}
                         end
                 end
@@ -439,10 +457,22 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     lager:info("Finished aaefold of type=~w with fold_time=~w seconds", 
                 [State#state.query_type, QueryDuration/1000000]),
     Results =
-        case State#state.query_type of
-            reap_tombs ->
-                element(2, State#state.acc);
-            _Other ->
+        case lists:member(State#state.query_type, [reap_tombs, erase_keys]) of
+            true ->
+                {_RL, Count, Worker} = State#state.acc,
+                case is_pid(Worker) of
+                    true ->
+                        case State#state.query_type of
+                            reap_tombs ->
+                                _ = riak_kv_reaper:stop_job(Worker);
+                            erase_keys ->
+                                _ = riak_kv_eraser:stop_job(Worker)
+                        end;
+                    false ->
+                        ok
+                end,    
+                Count;
+            false ->
                 State#state.acc
         end,
     ClientPid ! {ReqId, {results, Results}},
@@ -640,17 +670,30 @@ hash_function({rehash, InitialisationVector}) ->
 %% @doc
 %% Send requests to the reaper, but every batch size get the reaper stats (a 
 %% sync operation) to avoid mailbox overload.
--spec reap_in_batches(list(riak_kv_reaper:reap_reference()),
+-spec handle_in_batches(reap_tombs|erase_keys,
+                        list(riak_kv_reaper:reap_reference())|
+                            list(riak_kv_eraser:delete_reference()),
                         non_neg_integer(), pid()) -> ok.
-reap_in_batches([], _BatchCount, _Reaper) ->
+handle_in_batches(_Type, [], _BatchCount, _Worker) ->
     ok;
-reap_in_batches(ReapList, BatchCount, Reaper)
-                                        when BatchCount >= ?REAP_BATCH_SIZE ->
-    _ = riak_kv_reaper:reap_stats(Reaper),
-    reap_in_batches(ReapList, 0, Reaper);
-reap_in_batches([ReapRef|RestReaps], BatchCount, Reaper) ->
-    ok = riak_kv_reaper:request_reap(Reaper, ReapRef, 2),
-    reap_in_batches(RestReaps, BatchCount + 1, Reaper).
+handle_in_batches(Type, RefList, BatchCount, Worker)
+                                    when BatchCount >= ?DELETE_BATCH_SIZE ->
+    
+    case Type of
+        reap_tombs ->
+            _ = riak_kv_reaper:reap_stats(Worker);
+        erase_keys ->
+            _ = riak_kv_eraser:delete_stats(Worker)
+    end,
+    handle_in_batches(Type, RefList, 0, Worker);
+handle_in_batches(Type, [Ref|RestRefs], BatchCount, Worker) ->
+    case Type of
+        reap_tombs ->
+            ok = riak_kv_reaper:request_reap(Worker, Ref, 2);
+        erase_keys ->
+            ok = riak_kv_eraser:request_delete(Worker, Ref, 2)
+    end,
+    handle_in_batches(Type, RestRefs, BatchCount + 1, Worker).
 
 %% ===================================================================
 %% Internal functions

@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_reaper: Process for queueing and applying reap requests
+%% riak_kv_eraser: Process for queueing and applying delete requests
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -18,16 +18,11 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Queue any reap request originating from this node.  The process will
-%% reap each tombstone one by one, waiting or the reap attempt to be
-%% acknowledged from each vnode - so as to act as a natural throttle on reap
-%% workloads.
-%% Each node should have a singleton reaper initiated at startup.  Should
-%% additional reap capacity be required, then reap jobs could start their own
-%% reapers.
+%% @doc Queue up and act on delete requests, such as delete requests prompted
+%% by aae_folds
 
 
--module(riak_kv_reaper).
+-module(riak_kv_eraser).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -43,10 +38,10 @@
 
 -export([start_link/0,
             start_job/1,
-            request_reap/2,
-            request_reap/3,
-            direct_reap/1,
-            reap_stats/1,
+            request_delete/2,
+            request_delete/3,
+            delete_stats/1,
+            override_redo/1,
             clear_queue/1,
             stop_job/1]).
 
@@ -54,110 +49,129 @@
 -define(LOG_TICK, 60000).
 -define(REDO_TIMEOUT, 2000).
 -define(MAX_BATCH_SIZE, 100).
+-define(DELETE_TIMEOUT, 10000).
 
 -record(state,  {
-            reap_queue = riak_core_priority_queue:new() :: pqueue(),
+            delete_queue = riak_core_priority_queue:new() :: pqueue(),
             pqueue_length = {0, 0} :: queue_length(),
-            reap_attempts = 0 :: non_neg_integer(),
-            reap_aborts = 0 :: non_neg_integer(),
-            job_id :: non_neg_integer(), % can be 0 for named reaper
+            delete_attempts = 0 :: non_neg_integer(),
+            delete_aborts = 0 :: non_neg_integer(),
+            job_id :: non_neg_integer(), % can be 0 for named eraser
             pending_close = false :: boolean(),
             last_tick_time = os:timestamp() :: erlang:timestamp(),
-            reap_fun :: reap_fun()
+            erase_fun :: erase_fun(),
+            redo_deletes = false :: boolean() 
 }).
 
 -type priority() :: integer().
 -type squeue() :: {queue, [any()], [any()]}.
 -type pqueue() ::  squeue() | {pqueue, [{priority(), squeue()}]}.
 -type queue_length() :: {non_neg_integer(), non_neg_integer()}.
--type reap_reference() ::
-    {{riak_object:bucket(), riak_object:key()}, non_neg_integer()}.
+-type delete_reference() ::
+    {{riak_object:bucket(), riak_object:key()}, vclock:vclock()}.
 -type job_id() :: pos_integer().
 
--type reap_stats() :: {non_neg_integer(), non_neg_integer(), queue_length()}.
+-type delete_stats() :: {non_neg_integer(), non_neg_integer(), queue_length()}.
 
--type reap_fun() :: fun((reap_reference()) -> boolean()).
+-type erase_fun() :: fun((delete_reference(), boolean()) -> boolean()).
 
--export_type([reap_reference/0, job_id/0]).
+-export_type([delete_reference/0, job_id/0]).
 
 %%%============================================================================
 %%% API
 %%%============================================================================
 
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [0, fun reap/1], []).
+    DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
+    gen_server:start_link({local, ?MODULE}, ?MODULE,
+                            [0, fun erase/2, DeleteMode], []).
 
--spec start_job(job_id()) -> {ok, pid()}.
 %% @doc
-%% To be used when starting a reaper for a specific workload
+%% To be used when starting a eraser for a specific workload
+-spec start_job(job_id()) -> {ok, pid()}.
 start_job(JobID) ->
-    gen_server:start_link(?MODULE, [JobID, fun reap/1], []).
+    DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
+    gen_server:start_link(?MODULE, [JobID, fun erase/2, DeleteMode], []).
 
--spec request_reap(reap_reference(), priority()) -> ok.
-request_reap(ReapReference, Priority) ->
-    gen_server:cast(?MODULE, {request_reap, ReapReference, Priority}).
+-spec request_delete(delete_reference(), priority()) -> ok.
+request_delete(DelReference, Priority) ->
+    gen_server:cast(?MODULE, {request_delete, DelReference, Priority}).
 
--spec request_reap(pid(), reap_reference(), priority()) -> ok.
-request_reap(Pid, ReapReference, Priority) ->
-    gen_server:cast(Pid, {request_reap, ReapReference, Priority}).
+-spec request_delete(pid(), delete_reference(), priority()) -> ok.
+request_delete(Pid, DelReference, Priority) ->
+    gen_server:cast(Pid, {request_delete, DelReference, Priority}).
 
--spec reap_stats(pid()) -> reap_stats().
-reap_stats(Pid) ->
-    gen_server:call(Pid, reap_stats, infinity).
+-spec delete_stats(pid()) -> delete_stats().
+delete_stats(Pid) ->
+    gen_server:call(Pid, delete_stats, infinity).
 
--spec direct_reap(reap_reference()) -> boolean().
-direct_reap(ReapReference) ->
-    gen_server:call(?MODULE, {direct_reap, ReapReference}).
+%% @doc
+%% If delete_mode is not keep, but it is still preferred to attempt deletes
+%% during unavailbaility of primaries then use override_redo to force this.
+-spec override_redo(boolean()) -> ok.
+override_redo(Redo) ->
+    gen_server:call(?MODULE, {override_redo, Redo}, infinity).
 
--spec clear_queue(pid()|riak_kv_reaper) -> ok.
-clear_queue(Reaper) ->
-    gen_server:call(Reaper, clear_queue, infinity).
+-spec clear_queue(pid()|riak_kv_eraser) -> ok.
+clear_queue(Eraser) ->
+    gen_server:call(Eraser, clear_queue, infinity).
 
 %% @doc
 %% Stop the job once the queue is empty
 -spec stop_job(pid()) -> ok.
 stop_job(Pid) ->
-    gen_server:call(Pid, stop_job, 5000).
+    gen_server:call(Pid, stop_job).
 
 %%%============================================================================
 %%% gen_server callbacks
 %%%============================================================================
 
-init([JobID, ReapFun]) ->
+init([JobID, DelFun, DeleteMode]) ->
     erlang:send_after(?LOG_TICK, self(), log_queue),
-    {ok, #state{job_id = JobID, reap_fun = ReapFun}, 0}.
+    Redo = 
+        case DeleteMode of
+            keep ->
+                %% Tombstones are kept, so a delete attempted during failure
+                %% will eventually happen and not be resurrected.  So if
+                %% primaries are not available no need to defer deletion to
+                %% avoid resurrection of tombstones.
+                false;
+            _ ->
+                true
+        end,
+    {ok, #state{job_id = JobID, erase_fun = DelFun, redo_deletes = Redo}, 0}.
 
-handle_call(reap_stats, _From, State) ->
+handle_call(delete_stats, _From, State) ->
     Stats =
-        {State#state.reap_attempts,
-            State#state.reap_aborts,
+        {State#state.delete_attempts,
+            State#state.delete_aborts,
             State#state.pqueue_length},
     {reply, Stats, State, 0};
-handle_call({direct_reap, ReapReference}, _From, State) ->
-    {reply, reap(ReapReference), State, 0};
+handle_call({override_redo, Redo}, _From, State) ->
+    {reply, ok, State#state{redo_deletes = Redo}, 0};
 handle_call(clear_queue, _From, State) ->
     {reply,
         ok,
-        State#state{reap_queue = riak_core_priority_queue:new(),
+        State#state{delete_queue = riak_core_priority_queue:new(),
                     pqueue_length = {0, 0}},
         0};
 handle_call(stop_job, _From, State) ->
     {reply, ok, State#state{pending_close = true}, 0}.
 
-handle_cast({request_reap, ReapReference, Priority}, State) ->
+handle_cast({request_delete, DelReference, Priority}, State) ->
 
     UpdQL =
         setelement(Priority,
                     State#state.pqueue_length,
                     element(Priority, State#state.pqueue_length) + 1),
     UpdQ =
-        riak_core_priority_queue:in(ReapReference,
+        riak_core_priority_queue:in(DelReference,
                                     Priority,
-                                    State#state.reap_queue),
-    {noreply, State#state{pqueue_length = UpdQL, reap_queue = UpdQ}, 0}.
+                                    State#state.delete_queue),
+    {noreply, State#state{pqueue_length = UpdQL, delete_queue = UpdQ}, 0}.
 
 handle_info(timeout, State) ->
-    ReapFun = State#state.reap_fun,
+    DelFun = State#state.erase_fun,
     case State#state.pqueue_length of
         {0, 0} ->
             case State#state.pending_close of
@@ -170,45 +184,45 @@ handle_info(timeout, State) ->
         {RedoQL, 0} ->
             %% Work a single item on the redo queue, and no immediate timeout
             %% if it aborts
-            case riak_core_priority_queue:out(State#state.reap_queue) of
-                {{value, ReapRef}, Q0} ->
-                    case ReapFun(ReapRef) of
+            case riak_core_priority_queue:out(State#state.delete_queue) of
+                {{value, DelRef}, Q0} ->
+                    case DelFun(DelRef, State#state.redo_deletes) of
                         true ->
-                            AT0 = State#state.reap_attempts + 1,
+                            AT0 = State#state.delete_attempts + 1,
                             QL0 = {RedoQL - 1, 0},
                             {noreply,
-                                State#state{reap_queue = Q0, 
-                                            reap_attempts = AT0,
+                                State#state{delete_queue = Q0, 
+                                            delete_attempts = AT0,
                                             pqueue_length = QL0},
                                 0};
                         false ->
-                            AB0 = State#state.reap_aborts + 1,
-                            Q1 = riak_core_priority_queue:in(ReapRef, 1, Q0),
+                            AB0 = State#state.delete_aborts + 1,
+                            Q1 = riak_core_priority_queue:in(DelRef, 1, Q0),
                             {noreply,
-                                State#state{reap_queue = Q1, 
-                                            reap_aborts = AB0},
+                                State#state{delete_queue = Q1, 
+                                            delete_aborts = AB0},
                                 ?REDO_TIMEOUT}
                     end;
                 {empty, Q0} ->
                     %% This shoudn't happen - must have miscalulated
                     %% queue lengths
                     {noreply,
-                        State#state{reap_queue = Q0,
+                        State#state{delete_queue = Q0,
                                     pqueue_length = {0, 0}},
                         0}
             end;
-        {RedoQL, ReapQL} ->
-            %% Work a batch of items from the reap queue before yielding
-            BatchSize = min(ReapQL, ?MAX_BATCH_SIZE),
+        {RedoQL, DeleteQL} ->
+            %% Work a batch of items from the erase queue before yielding
+            BatchSize = min(DeleteQL, ?MAX_BATCH_SIZE),
             BatchFun =
                 fun(_X, {Q, AT, AB}) ->
                     case riak_core_priority_queue:out(Q) of
-                        {{value, ReapRef}, Q0} ->
-                            case ReapFun(ReapRef) of
+                        {{value, DelRef}, Q0} ->
+                            case DelFun(DelRef, State#state.redo_deletes) of
                                 true ->
                                     {Q0, AT + 1, AB};
                                 false ->
-                                    ok = request_reap(self(), ReapRef, 1),
+                                    ok = request_delete(self(), DelRef, 1),
                                     {Q0, AT, AB + 1}
                             end;
                         {empty, Q0} ->
@@ -218,26 +232,26 @@ handle_info(timeout, State) ->
                 end,
             {UpdQ, AT0, AB0} =
                 lists:foldl(BatchFun,
-                            {State#state.reap_queue,
-                                State#state.reap_attempts,
-                                State#state.reap_aborts},
+                            {State#state.delete_queue,
+                                State#state.delete_attempts,
+                                State#state.delete_aborts},
                             lists:seq(1, BatchSize)),
             {noreply,
-                State#state{reap_queue = UpdQ,
-                            reap_attempts = AT0,
-                            reap_aborts = AB0,
-                            pqueue_length = {RedoQL, ReapQL - BatchSize}},
+                State#state{delete_queue = UpdQ,
+                            delete_attempts = AT0,
+                            delete_aborts = AB0,
+                            pqueue_length = {RedoQL, DeleteQL - BatchSize}},
                 0}
     end;
 handle_info(log_queue, State) ->
-    lager:info("Reaper Job ~w has queue lengths ~w " ++
-                    " reap_attempts=~w reap_aborts=~w ",
+    lager:info("Eraser job ~w has queue lengths ~w " ++ 
+                    "delete_attempts=~w delete_aborts=~w ",
                 [State#state.job_id,
                     State#state.pqueue_length,
-                    State#state.reap_attempts,
-                    State#state.reap_aborts]),
+                    State#state.delete_attempts,
+                    State#state.delete_aborts]),
     erlang:send_after(?LOG_TICK, self(), log_queue),
-    {noreply, State#state{reap_attempts = 0, reap_aborts = 0}, 0}.
+    {noreply, State#state{delete_attempts = 0, delete_aborts = 0}, 0}.
 
 
 terminate(normal, _State) ->
@@ -252,23 +266,30 @@ code_change(_OldVsn, State, _Extra) ->
 %%%============================================================================
 
 %% @doc
-%% If all primaries are up try and reap the tombstone.  The reap may fail, but
-%% we will not redo - redo is only to handle the failire related to unavailable
-%% primaries
--spec reap(reap_reference()) -> boolean().
-reap({{Bucket, Key}, DeleteHash}) ->
+%% Try and delete the key.  If Redo is true, this should only be attempted if
+%% all primaries are up 
+-spec erase(delete_reference(), boolean()) -> boolean().
+erase({{Bucket, Key}, VectorClock}, true) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     {n_val, N} = lists:keyfind(n_val, 1, BucketProps),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
     case length(PrefList) of
         N ->
-            PL0 = lists:map(fun({Target, primary}) -> Target end, PrefList),
-            ok = riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
+            riak_kv_delete:delete(eraser,
+                                    Bucket, Key, 
+                                    [], ?DELETE_TIMEOUT, undefined, eraser,
+                                    VectorClock),
             true;
         _ ->
             false
-    end.
+    end;
+erase({{Bucket, Key}, VectorClock}, false) ->
+    riak_kv_delete:delete(eraser,
+                            Bucket, Key, 
+                            [], ?DELETE_TIMEOUT, undefined, eraser,
+                            VectorClock),
+    true.
 
 
 %%%============================================================================
@@ -277,43 +298,45 @@ reap({{Bucket, Key}, DeleteHash}) ->
 
 -ifdef(TEST).
 
-start_test(JobID, ReapFun) ->
-    gen_server:start_link(?MODULE, [JobID, ReapFun], []).
+start_test(JobID, DelFun) ->
+    gen_server:start_link(?MODULE, [JobID, DelFun, immediate], []).
 
 
-test_1inNreapfun(N) ->
-    fun(ReapRef) ->
-        case erlang:phash2({ReapRef, os:timestamp()}) rem N of
+test_1inNdeletefun(N) ->
+    fun(DelRef, _Redo) ->
+        case erlang:phash2({DelRef, os:timestamp()}) rem N of
             0 -> false;
             _ -> true
         end
     end.
 
-test_100reap(_ReapRef) ->
+test_100delete(_DelRef, _Redo) ->
     true.
 
-standard_reaper_test_() ->
-    {timeout, 30, fun standard_reaper_tester/0}.
+standard_eraser_test_() ->
+    {timeout, 30, fun standard_eraser_tester/0}.
 
-failure_reaper_test_() ->
-    {timeout, 60, fun somefail_reaper_tester/0}.
+failure_eraser_test_() ->
+    {timeout, 60, fun somefail_eraser_tester/0}.
 
-standard_reaper_tester() ->
+standard_eraser_tester() ->
     NumberOfRefs = 1000,
-    {ok, P} = start_test(1, fun test_100reap/1),
+    {ok, P} = start_test(1, fun test_100delete/2),
     B = {<<"type1">>, <<"B1">>},
     RefList =
-        lists:map(fun(X) -> {{B, term_to_binary(X)}, erlang:phash2(X)} end,
+        lists:map(fun(X) ->
+                        {{B, term_to_binary(X)}, vclock:fresh(test, X)}
+                    end,
                     lists:seq(1, NumberOfRefs)),
     spawn(fun() ->
-                lists:foreach(fun(R) -> request_reap(P, R, 2) end, RefList)
+                lists:foreach(fun(R) -> request_delete(P, R, 2) end, RefList)
             end),
     WaitFun = 
         fun(Sleep, Done) ->
             case Done of
                 false ->
                     timer:sleep(Sleep),
-                    {AT, AB, L} = reap_stats(P),
+                    {AT, AB, L} = delete_stats(P),
                     case AT of
                         NumberOfRefs ->
                             ?assertMatch(0, AB),
@@ -331,28 +354,30 @@ standard_reaper_tester() ->
     timer:sleep(100),
     ?assertMatch(false, is_process_alive(P)).
 
-somefail_reaper_tester() ->
-    somefail_reaper_tester(4),
-    somefail_reaper_tester(16),
-    somefail_reaper_tester(64).
+somefail_eraser_tester() ->
+    somefail_eraser_tester(4),
+    somefail_eraser_tester(16),
+    somefail_eraser_tester(64).
 
 
-somefail_reaper_tester(N) ->
+somefail_eraser_tester(N) ->
     NumberOfRefs = 1000,
-    {ok, P} = start_test(1, test_1inNreapfun(N)),
+    {ok, P} = start_test(1, test_1inNdeletefun(N)),
     B = {<<"type1">>, <<"B1">>},
     RefList =
-        lists:map(fun(X) -> {{B, term_to_binary(X)}, erlang:phash2(X)} end,
+        lists:map(fun(X) ->
+                        {{B, term_to_binary(X)}, vclock:fresh(test, X)}
+                    end,
                     lists:seq(1, NumberOfRefs)),
     spawn(fun() ->
-                lists:foreach(fun(R) -> request_reap(P, R, 2) end, RefList)
+                lists:foreach(fun(R) -> request_delete(P, R, 2) end, RefList)
             end),
     WaitFun = 
         fun(Sleep, Done) ->
             case Done of
                 false ->
                     timer:sleep(Sleep),
-                    {AT, AB, {RedoQL, ReapQL}} = reap_stats(P),
+                    {AT, AB, {RedoQL, DelQL}} = delete_stats(P),
                     case (AT + AB >= NumberOfRefs) of
                         true ->
                             ?assertMatch(true, AB > 0),
@@ -360,7 +385,7 @@ somefail_reaper_tester(N) ->
                             ?assertMatch(true, AT > AB),
                             ?assertMatch(true, RedoQL >= 0),
                             ?assertMatch(NumberOfRefs, AT + RedoQL),
-                            ?assertMatch(0, ReapQL),
+                            ?assertMatch(0, DelQL),
                             true;
                         false ->
                             false

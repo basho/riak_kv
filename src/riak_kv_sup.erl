@@ -106,6 +106,9 @@ init([]) ->
     Reaper = {riak_kv_reaper,
                 {riak_kv_reaper, start_link, []},
                 permanent, 30000, worker, [riak_kv_reaper]},
+    Eraser = {riak_kv_eraser,
+                {riak_kv_eraser, start_link, []},
+                permanent, 30000, worker, [riak_kv_eraser]},
 
     EnsemblesKV =  {riak_kv_ensembles,
                     {riak_kv_ensembles, start_link, []},
@@ -121,6 +124,7 @@ init([]) ->
         ReplRTQSrc,
         ReplRTQSnk,
         Reaper,
+        Eraser,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,

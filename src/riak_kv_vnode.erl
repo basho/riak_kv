@@ -1851,6 +1851,54 @@ handle_aaefold({reap_tombs,
                                 InitAcc, 
                                 [{md, null}, {clock, null}]),
     {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({erase_keys, 
+                        Bucket, KeyRange,
+                        SegmentFilter, ModifiedRange,
+                        DeleteMethod},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, EraseKeyAcc) ->
+            {md, MD} = lists:keyfind(md, 1, EFs),
+            %% This might be a tombstone, and what to avoid simply creating an
+            %% update tombstone
+            %% If storeheads is false, then will not check for tombstone. In
+            %% this case fetch_clocks may be used, and an external get/delete
+            %% be called
+            case riak_object:is_aae_object_deleted(MD, false) of
+                {true, undefined} ->
+                    EraseKeyAcc;
+                {false, undefined} ->
+                    {clock, VV} = lists:keyfind(clock, 1, EFs),
+                    case DeleteMethod of
+                        local ->
+                            riak_kv_eraser:request_delete({{BF, KF}, VV}, 2),
+                            NewCount = element(2, EraseKeyAcc) + 1,
+                            setelement(2, EraseKeyAcc, NewCount);
+                        count ->
+                            NewCount = element(2, EraseKeyAcc) + 1,
+                            setelement(2, EraseKeyAcc, NewCount);
+                        {job, _JobID} ->
+                            {[{{BF, KF}, VV}|element(1, EraseKeyAcc)],
+                                element(2, EraseKeyAcc),
+                                element(3, EraseKeyAcc)}
+                    end
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                SegmentFilter,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{md, null}, {clock, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({object_stats, Bucket, KeyRange, ModifiedRange},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
