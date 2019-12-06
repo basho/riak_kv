@@ -412,7 +412,7 @@ map_peer_to_wi_fun({QueueName, PeerInfo}) ->
                                 QNB = atom_to_binary(QN, utf8),
                                 riakc_pb_socket:fetch(PBC, QNB);
                             _ ->
-                                {error, no_pbc_client}
+                                {error, no_client}
                         end
                     end
                 end
@@ -478,14 +478,22 @@ repl_fetcher(WorkItem) ->
                 SW0 = os:timestamp(),
                 ModSplit = timer:now_diff(SW0, LMD) div 1000,
                 FetchSplit = timer:now_diff(SW0, SW) div 1000,
-                done_work(WorkItem, true, {object, FetchSplit, ModSplit})
+                done_work(WorkItem, true, {object, FetchSplit, ModSplit});
+            {error, no_client} ->
+                UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
+                done_work(UpdWorkItem, false, {error, no_client, no_client});
+            {error, Bin} when is_binary(Bin) ->
+                lager:warning("Snk worker failed due to remote exception ~p",
+                                [binary_to_list(Bin)]),
+                UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
+                done_work(UpdWorkItem, false, {error, remote_error, remote_error})
         end
     catch
         Type:Exception ->
             lager:warning("Snk worker failed due to ~w error ~w", 
                             [Type, Exception]),
-            UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
-            done_work(UpdWorkItem, false, {error, Type, Exception})
+            UpdWorkItem0 = setelement(3, WorkItem, RenewClientFun()),
+            done_work(UpdWorkItem0, false, {error, Type, Exception})
     end.
 
 %% @doc

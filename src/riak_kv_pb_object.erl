@@ -169,7 +169,13 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
     end;
 
 process(#rpbfetchreq{queuename = QueueName}, #state{client=C} = State) ->
-    case C:fetch(binary_to_existing_atom(QueueName, utf8)) of
+    Result = 
+        try
+            C:fetch(binary_to_existing_atom(QueueName, utf8))
+        catch _:badarg ->
+            {error, queue_not_defined}
+        end,
+    case Result of
         {ok, queue_empty} ->
             {reply, #rpbfetchresp{queue_empty = true}, State};
         {ok, {deleted, Vclock, RObj}} ->
