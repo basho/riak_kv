@@ -243,7 +243,7 @@ level_stats() ->
 %% The CSEs are only interested in aggregations of Type and Reason
 %% which are elements 6 and 7 in the key.
 read_repair_stats() ->
-    Pfx = riak_core_stat:prefix(),
+    Pfx = riak_stat:prefix(),
     aggregate(read_repairs, [Pfx, riak_kv, node, gets, read_repairs, '_', '_', '_'], [7,8]).
 
 %% TODO generalise for riak_core_stat_q
@@ -252,7 +252,7 @@ read_repair_stats() ->
 %% produces a flat list of `BaseName_NameOfFieldAtIndex[_count]'
 %% to fit in with the existing naming convention in the legacy stat blob
 aggregate(BaseName, Query, Fields) ->
-    Stats = exometer:get_values(Query),
+    Stats = riak_kv_stat:get_values(Query),
     Aggregates = do_aggregate(Stats, Fields),
     FlatStats = flatten_aggregate_stats(BaseName, Aggregates),
     lists:flatten(FlatStats).
