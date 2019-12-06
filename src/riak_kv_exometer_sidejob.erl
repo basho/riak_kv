@@ -28,7 +28,7 @@
 
 -module(riak_kv_exometer_sidejob).
 
--behaviour(exometer_entry). %% TODO 25: look into how this works
+-behaviour(exometer_entry). 
 
 %% API
 -export([new_entry/3, new_entry/4]).
