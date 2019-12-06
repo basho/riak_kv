@@ -95,6 +95,8 @@
          mark_indexes_fixed/2,
          fixed_index_status/1]).
 
+-export([head/3]).
+
 -ifdef(TEST).
 -ifdef(TEST_IN_RIAK_KV).
 -include_lib("eunit/include/eunit.hrl").
@@ -270,6 +272,23 @@ get(Bucket, Key, State) ->
             NewState = update_backend_state(Name, Module, NewSubState, State),
             {error, Reason, NewState}
     end.
+
+%% @doc Retrieve an object from the leveled backend as a binary
+-spec head(riak_object:bucket(), riak_object:key(), state()) ->
+                 {ok, any(), state()} |
+                 {ok, not_found, state()} |
+                 {error, term(), state()}.
+head(Bucket, Key, State) ->
+    {Name, Module, SubState} = get_backend(Bucket, State),
+    case Module:head(Bucket, Key, SubState) of
+        {ok, Value, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {ok, Value, NewState};
+        {error, Reason, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {error, Reason, NewState}
+    end.
+
 
 %% @doc Insert an object with secondary index
 %% information into the kv backend

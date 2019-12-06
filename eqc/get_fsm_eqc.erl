@@ -1,3 +1,18 @@
+%% Description
+%%
+%% The test is based on a fixed set of generated objects. These objects are
+%% then used as the randomised answers from vnodes to the get_fsm. The
+%% objects have a deterministic merge order (based on the assumption the
+%% timestamps generated are strictly monotonically increasing) - and so the
+%% test can compare the get_fsm result to the expected result.
+%%
+%% As well as varying the object responses, the GET options and parameters are
+%% mutated to create further scenarios.
+%%
+%% TODO:
+%% The test does not use dotted values at present, or HEAD responses
+%%
+
 -module(get_fsm_eqc).
 
 -ifdef(EQC).
@@ -83,25 +98,13 @@ prepare() ->
     fsm_eqc_util:start_mock_servers().
 
 test() ->
-    test(100).
+    test(10000).
 
 test(N) ->
-    fsm_eqc_util:start_mock_servers(),
-    fsm_eqc_util:start_fake_rng(?MODULE),
-    try quickcheck(numtests(N, prop_basic_get()))
-    after
-        fsm_eqc_util:cleanup_mock_servers(),
-        exit(whereis(?MODULE), kill)
-    end.
+    quickcheck(numtests(N, prop_basic_get())).
 
 check() ->
-    fsm_eqc_util:start_mock_servers(),
-    fsm_eqc_util:start_fake_rng(?MODULE),
-    try check(prop_basic_get(), current_counterexample())
-    after
-        fsm_eqc_util:cleanup_mock_servers(),
-        exit(whereis(?MODULE), kill)
-    end.
+    check(prop_basic_get(), current_counterexample()).
 
 %%====================================================================
 %% Generators
@@ -140,7 +143,7 @@ is_sibling(Lin1, Lin2) ->
 
 
 vnodegetresps() ->
-    fsm_eqc_util:not_empty(fsm_eqc_util:longer_list(2, vnodegetresp())).
+    non_empty(fsm_eqc_util:longer_list(2, vnodegetresp())).
 
 vnodegetresp() ->
     {fsm_eqc_util:partval(), nodestatus()}.

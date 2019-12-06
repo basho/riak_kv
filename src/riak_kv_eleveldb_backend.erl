@@ -70,7 +70,7 @@
         iterator_refresh, snap_prefold]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
--record(state, {ref :: eleveldb:db_ref(),
+-record(state, {ref :: eleveldb:db_ref() | undefined,
                 data_root :: string(),
                 open_opts = [],
                 config :: config(),

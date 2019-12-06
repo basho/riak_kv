@@ -112,11 +112,11 @@
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
 
--record(state, {acc :: list(),
-                inacc :: list(),
-                delay :: integer(),
-                delay_max :: integer(),
-                p :: riak_pipe_vnode:partition(),
+-record(state, {acc = [] :: list(),
+                inacc = [] :: list(),
+                delay :: integer() | undefined,
+                delay_max :: integer() | undefined,
+                p :: riak_pipe_vnode:partition() | undefined,
                 fd :: riak_pipe_fitting:details()}).
 -opaque state() :: #state{}.
 -export_type([state/0]).
@@ -249,7 +249,7 @@ no_input_run_reduce_once() ->
 -spec stored_source(binary(), binary()) -> binary().
 stored_source(Bucket, Key) ->
     {ok, C} = riak:local_client(),
-    {ok, Object} = C:get(Bucket, Key, 1),
+    {ok, Object} = riak_client:get(Bucket, Key, 1, C),
     riak_object:get_value(Object).
 
 %% @doc Determine what batch size should be used for this fitting.

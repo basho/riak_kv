@@ -481,7 +481,12 @@ settings() ->
 maybe_reload_hashtrees(Ring, State) ->
     case lists:member(riak_kv, riak_core_node_watcher:services(node())) of
         true ->
-            reload_hashtrees(Ring, State);
+            case riak_core_ring:check_lastgasp(Ring) of
+                true ->
+                    State;
+                false ->
+                    reload_hashtrees(Ring, State)
+            end;
         false ->
             State
     end.

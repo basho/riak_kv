@@ -109,6 +109,7 @@ capabilities(_, _) ->
 start(Partition, Config) ->
     DataRoot = app_helper:get_prop_or_env(data_root, Config, leveled),
     MJS = app_helper:get_prop_or_env(journal_size, Config, leveled),
+    MJC = app_helper:get_prop_or_env(journal_objectcount, Config, leveled),
     BCS = app_helper:get_prop_or_env(cache_size, Config, leveled),
     PCS = app_helper:get_prop_or_env(penciller_cache_size, Config, leveled),
     SYS = app_helper:get_prop_or_env(sync_strategy, Config, leveled),
@@ -123,20 +124,25 @@ start(Partition, Config) ->
     TOS = app_helper:get_prop_or_env(snapshot_timeout_short, Config, leveled),
     TOL = app_helper:get_prop_or_env(snapshot_timeout_long, Config, leveled),
     LOL = app_helper:get_prop_or_env(log_level, Config, leveled),
+    PCL = app_helper:get_prop_or_env(ledger_pagecachelevel, Config, leveled),
 
     BackendPause = app_helper:get_env(riak_kv, backend_pause_ms, ?PAUSE_TIME),
 
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
+            DBid = generate_partition_identity(Partition),
             StartOpts = [{root_path, DataDir},
                             {max_journalsize, MJS},
+                            {max_journalobjectcount, MJC},
                             {cache_size, BCS},
                             {max_pencillercachesize, PCS},
+                            {ledger_preloadpagecache_level, PCL},
                             {sync_strategy, SYS},
                             {compression_method, CMM},
                             {compression_point, CMP},
                             {log_level, LOL},
                             {max_run_length, MRL},
+                            {database_id, DBid},
                             {maxrunlength_compactionpercentage, MCP},
                             {singlefile_compactionpercentage, SCP},
                             {snapshot_timeout_short, TOS},
@@ -558,7 +564,12 @@ callback(Ref, compact_journal, State) ->
                                         State#state.compactions_perday,
                                         State#state.valid_hours),
              {ok, State}
-    end.
+    end;
+callback(Ref, UnexpectedCallback, State) ->
+    lager:info("Ignoring unexpected callback ~w with ref ~w " ++
+                "may be expected if multi-backend",
+                [UnexpectedCallback, Ref]),
+    {ok, State}.
 
 %% ===================================================================
 %% Internal functions
@@ -614,6 +625,18 @@ valid_hours(LowHour, HighHour) when LowHour > HighHour ->
 valid_hours(LowHour, HighHour) ->
     lists:seq(LowHour, HighHour).
 
+-ifdef(EQC).
+    generate_partition_identity(_Partition) ->
+        0.
+-else.
+    generate_partition_identity(Partition) ->
+        {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+        PartitionCount = chashbin:num_partitions(CHBin),
+        RingIndexInc = chash:ring_increment(PartitionCount),
+        Partition div RingIndexInc.
+-endif.
+
+
 %% ===================================================================
 %% EUnit tests
 %% ===================================================================
@@ -648,7 +671,8 @@ prop_leveled_backend() ->
                                         {singlefile_compactionpercentage, 50.0},
                                         {snapshot_timeout_short, 900},
                                         {snapshot_timeout_long, 3600},
-                                        {log_level, error}])).
+                                        {log_level, error},
+                                        {journal_objectcount, 100}])).
 
 -endif. % EQC
 

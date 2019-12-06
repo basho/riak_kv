@@ -88,11 +88,11 @@
 
 -record(state, {data_ref :: ets:tid(),
                 index_ref :: ets:tid(),
-                time_ref :: ets:tid(),
+                time_ref :: ets:tid() | undefined,
                 max_memory :: undefined | integer(),
                 used_memory=0 :: integer(),
                 put_obj_size=0 :: integer(),
-                ttl :: integer()}).
+                ttl :: integer() | undefined}).
 
 -type state() :: #state{}.
 -type config() :: [].
@@ -835,7 +835,7 @@ ttl_ets_timeref_leak_get_after_expiry_test() ->
     {ok, State1} = put(Bucket, Key, [], Value, State),
     {ok, #state{time_ref=TimeRef} = State2} = put(Bucket, Key, [], Value, State1),
     ?assertEqual(1, get_time_ref_count(TimeRef)),
-    timer:sleep(timer:seconds(1)),
+    timer:sleep(timer:seconds(1) + 1),
     {error, not_found, _State3} = get(Bucket, Key, State2),
     ?assertEqual(0, get_time_ref_count(TimeRef)).
 

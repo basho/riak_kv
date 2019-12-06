@@ -29,6 +29,7 @@
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_types.hrl").
+-include("stacktrace.hrl").
 
 -behaviour(gen_fsm_compat).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
@@ -100,25 +101,26 @@
 -record(state, {from :: {raw, integer(), pid()},
                 robj :: riak_object:riak_object(),
                 options=[] :: options(),
-                n :: pos_integer(),
-                w :: non_neg_integer(),
-                dw :: non_neg_integer(),
-                pw :: non_neg_integer(),
-                node_confirms :: non_neg_integer(),
-                coord_pl_entry :: {integer(), atom()},
-                preflist2 :: riak_core_apl:preflist_ann(),
+                n :: pos_integer() | undefined,
+                w :: non_neg_integer() | undefined,
+                dw :: non_neg_integer() | undefined,
+                pw :: non_neg_integer() | undefined,
+                node_confirms :: non_neg_integer() | undefined,
+                coord_pl_entry :: {integer(), atom()} | undefined,
+                preflist2 :: riak_core_apl:preflist_ann() | undefined,
                 bkey :: {riak_object:bucket(), riak_object:key()},
-                req_id :: pos_integer(),
-                starttime :: pos_integer(), % start time to send to vnodes
-                timeout :: pos_integer()|infinity,
-                tref    :: reference(),
+                req_id :: pos_integer()  | undefined,
+                starttime = riak_core_util:moment()
+                        :: pos_integer(), % start time to send to vnodes
+                timeout = infinity :: pos_integer()|infinity,
+                tref :: reference() | undefined,
                 vnode_options=[] :: list(),
-                returnbody :: boolean(),
-                allowmult :: boolean(),
+                returnbody = false :: boolean(),
+                allowmult = true :: boolean(),
                 precommit=[] :: list(),
                 postcommit=[] :: list(),
-                bucket_props:: list(),
-                putcore :: riak_kv_put_core:putcore(),
+                bucket_props :: list() | undefined,
+                putcore :: riak_kv_put_core:putcore() | undefined,
                 put_usecs :: undefined | non_neg_integer(),
                 timing = [] :: [{atom(), {non_neg_integer(), non_neg_integer(),
                                           non_neg_integer()}}],
@@ -802,7 +804,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
                     [dtrace_errstr({Mod, Fun, Class, Exception})]),
             ok = riak_kv_stat:update(precommit_fail),
             lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
-                        [Mod,Fun,Class,Exception, erlang:get_stacktrace()]),
+                        [Mod,Fun,Class,Exception, ?_current_stacktrace_()]),
             {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
         Obj ->
             try
@@ -842,7 +844,7 @@ decode_postcommit({erlang, {M,F}, Res}, Trace) ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-3],
                     [dtrace_errstr({M, F, Class, Ex})]),
             ok = riak_kv_stat:update(postcommit_fail),
-            Stack = erlang:get_stacktrace(),
+            Stack = ?_current_stacktrace_(),
             lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
                         [M, F, Class, Ex, Stack]),
             ok;
@@ -1014,11 +1016,9 @@ coordinate_or_forward(Preflist, State) ->
                               undefined  -> undefined;
                               {_Idx, Nd} -> atom2list(Nd)
                           end,
-            StartTime = riak_core_util:moment(),
             StateData = State#state{n = N,
                                     coord_pl_entry = CoordPLEntry,
-                                    preflist2 = Preflist,
-                                    starttime = StartTime},
+                                    preflist2 = Preflist},
             ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [0],
                     ["prepare", CoordPlNode]),
             new_state_timeout(validate, StateData);
@@ -1264,11 +1264,11 @@ forward(CoordNode, State) ->
         monitor_remote_coordinator(UseAckP, MiddleMan,
                                    CoordNode, State)
     catch
-        _:Reason ->
+        ?_exception_(_, Reason, StackToken) ->
             ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
                     ["prepare", dtrace_errstr(Reason)]),
             lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
-                        [BKey, CoordNode, Reason, erlang:get_stacktrace()]),
+                        [BKey, CoordNode, Reason, ?_get_stacktrace_(StackToken)]),
             process_reply({error, {coord_handoff_failed, Reason}}, State)
     end.
 

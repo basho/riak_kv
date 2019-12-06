@@ -142,6 +142,7 @@
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 -include("riak_kv_mrc_sink.hrl").
 -include("riak_kv_index.hrl").
+-include("stacktrace.hrl").
 
 -export_type([map_query_fun/0,
               reduce_query_fun/0,
@@ -331,7 +332,7 @@ mapred_plan(BucketOrList, Query) ->
                     BucketOrList;
                is_binary(BucketOrList) ->
                     {ok, C} = riak:local_client(),
-                    {ok, Keys} = C:list_keys(BucketOrList),
+                    {ok, Keys} = riak_client:list_keys(BucketOrList, C),
                     [{BucketOrList, Key} || Key <- Keys]
             end,
     [{bkeys, BKeys}|mapred_plan(Query)].
@@ -685,8 +686,8 @@ send_inputs(Pipe, {modfun, Mod, Fun, Arg} = Modfun, Timeout) ->
         Other ->
             Other
     catch
-        X:Y ->
-            {Modfun, X, Y, erlang:get_stacktrace()}
+        ?_exception_(X, Y, StackToken) ->
+            {Modfun, X, Y, ?_get_stacktrace_(StackToken)}
     end.
 
 %% decide whether yokozuna or riak_search should be used for
@@ -1045,14 +1046,18 @@ example_setup() ->
 -spec example_setup(pos_integer()) -> ok.
 example_setup(Num) when Num > 0 ->
     {ok, C} = riak:local_client(),
-    C:put(riak_object:new(<<"foo">>, <<"bar">>, <<"what did you expect?">>)),
-    _ = [C:put(riak_object:new(<<"foo">>,
+    riak_client:put(riak_object:new(<<"foo">>, <<"bar">>,
+                                    <<"what did you expect?">>),
+                                    C),
+    _ = [riak_client:put(riak_object:new(<<"foo">>,
                            list_to_binary("bar"++integer_to_list(X)),
-                           list_to_binary("bar val "++integer_to_list(X))))
+                           list_to_binary("bar val "++integer_to_list(X))),
+                            C)
      || X <- lists:seq(1, Num)],
-    _ = [C:put(riak_object:new(<<"foonum">>,
+    _ = [riak_client:put(riak_object:new(<<"foonum">>,
                            list_to_binary("bar"++integer_to_list(X)),
-                           X)) ||
+                           X),
+                           C) ||
         X <- lists:seq(1, Num)],
     ok.
 

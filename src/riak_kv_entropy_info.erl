@@ -59,9 +59,9 @@
 -type exchange_info() :: #exchange_info{}.
 
 -record(index_info, {build_time    :: t_now(),
-                     repaired      :: simple_stat(),
-                     exchanges     = orddict:new() :: orddict(exchange_id(), exchange_info()),
-                     last_exchange :: exchange_id()}).
+                     repaired :: simple_stat() | undefined,
+                     exchanges = orddict:new() :: orddict(exchange_id(), exchange_info()),
+                     last_exchange :: exchange_id() | undefined}).
 
 -type index_info() :: #index_info{}.
 

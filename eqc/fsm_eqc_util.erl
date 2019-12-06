@@ -6,9 +6,6 @@
 -include_lib("eqc/include/eqc.hrl").
 -define(RING_KEY, riak_ring).
 
-not_empty(G) ->
-    ?SUCHTHAT(X, G, X /= [] andalso X /= <<>>).
-
 longer_list(K, G) ->
     ?SIZED(Size, resize(trunc(K*Size), list(resize(Size, G)))).
 
@@ -38,7 +35,7 @@ bkey() ->
      non_blank_string()}. %% key
 
 non_blank_string() ->
-    ?LET(X,not_empty(list(lower_char())), list_to_binary(X)).
+    ?LET(X, [lower_char() | list(lower_char())], list_to_binary(X)).
 
 %% Generate a lower 7-bit ACSII character that should not cause any problems
 %% with utf8 conversion.
@@ -122,7 +119,18 @@ partval() ->
                {1,Shrink(error)}]).
 
 partvals() ->
-    not_empty(fsm_eqc_util:longer_list(2, partval())).
+    non_empty(fsm_eqc_util:longer_list(2, partval())).
+
+%% We need monotonic time and erlang:monotonic() is hard to make a "now" tuple of,
+%% since we don't know whether it is negative or positive
+timestamp() ->
+    TS = os:timestamp(),
+    case get(timestamp) of
+        PTS when PTS == undefined; PTS < TS ->
+            put(timestamp, TS), TS;
+        _ -> timestamp()
+    end.
+
 
 %% Generate 5 riak objects with the same bkey
 %%
@@ -149,7 +157,7 @@ build_riak_obj(B,K,Vc,Val,notombstone) ->
         riak_object:set_vclock(
             riak_object:new(B,K,Val),
                 Vc),
-        [{dict:from_list([{<<"X-Riak-Last-Modified">>, os:timestamp()}]), Val}]);
+        [{dict:from_list([{<<"X-Riak-Last-Modified">>, timestamp()}]), Val}]);
 build_riak_obj(B,K,Vc,Val,tombstone) ->
     Obj = build_riak_obj(B,K,Vc,Val,notombstone),
     add_tombstone(Obj).
@@ -187,13 +195,7 @@ cycle(Zs, N, []) ->
 start_mock_servers() ->
     Path = riak_kv_test_util:get_test_dir("fsm_util"),
     %% Start new core_vnode based EQC FSM test mock
-    case whereis(fsm_eqc_vnode) of
-        undefined -> ok;
-        Pid2      ->
-            unlink(Pid2),
-            exit(Pid2, shutdown),
-            riak_kv_test_util:wait_for_pid(Pid2)
-    end,
+    riak_kv_test_util:stop_process(fsm_eqc_vnode),
     {ok, _Pid3} = fsm_eqc_vnode:start_link(),
     application:load(riak_core),
     application:start(crypto),
@@ -275,6 +277,7 @@ last_spawn([_Hist|Rest]) ->
 
 
 start_fake_rng(ProcessName) ->
+    riak_kv_test_util:stop_process(ProcessName),
     Pid = spawn_link(?MODULE, fake_rng, [1]),
     register(ProcessName, Pid),
     {ok, Pid}.

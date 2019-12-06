@@ -33,6 +33,8 @@
 -export([init/1, handle_event/3, handle_sync_event/4, handle_info/3,
          terminate/3, code_change/4]).
 
+-include("stacktrace.hrl").
+
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
 -type vnode() :: {index(), node()}.
@@ -41,9 +43,9 @@
                 remote      :: vnode(),
                 index_n     :: index_n(),
                 local_tree  :: pid(),
-                remote_tree :: pid(),
+                remote_tree :: pid() | undefined,
                 built       :: non_neg_integer(),
-                timer       :: reference(),
+                timer       :: reference() | undefined,
                 timeout     :: pos_integer()
                }).
 
@@ -293,7 +295,7 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, _Reason}) ->
             BKey = {Bucket, Key},
             repair_consistent(BKey);
         false ->
-            RC:get(Bucket, Key)
+            riak_client:get(Bucket, Key, RC)
     end,
     %% Force vnodes to update AAE tree in case read repair wasn't triggered
     riak_kv_vnode:rehash([LocalVN, RemoteVN], Bucket, Key),
@@ -418,9 +420,9 @@ fold_disk_log(eof, _Fun, Acc, _DiskLog) ->
 fold_disk_log({Cont, Terms}, Fun, Acc, DiskLog) ->
     Acc2 = try
                lists:foldl(Fun, Acc, Terms)
-    catch X:Y ->
+    catch ?_exception_(X, Y, StackToken) ->
             lager:error("~s:fold_disk_log: caught ~p ~p @ ~p\n",
-                        [?MODULE, X, Y, erlang:get_stacktrace()]),
+                        [?MODULE, X, Y, ?_get_stacktrace_(StackToken)]),
             Acc
     end,
     fold_disk_log(disk_log:chunk(DiskLog, Cont), Fun, Acc2, DiskLog).
