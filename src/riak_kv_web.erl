@@ -151,6 +151,16 @@ raw_dispatch(Name) ->
      {["objectstats"] ++ Prefix ++ ["buckets", bucket],
       riak_kv_wm_aaefold, Props},
 
+     {["tombs"] ++ Prefix ++ ["buckets", bucket],
+      riak_kv_wm_aaefold, Props},
+    
+     {["reap"] ++ Prefix ++ ["buckets", bucket],
+      riak_kv_wm_aaefold, Props},
+
+     {["erase"] ++ Prefix ++ ["buckets", bucket],
+      riak_kv_wm_aaefold, Props},
+
+
     %% Repl queue fetch URL
 
     {["queuename", queuename],

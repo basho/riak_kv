@@ -120,7 +120,8 @@
                  key_range = all :: {binary(), binary()} | all,
                  date_range = all :: {date, pos_integer(), pos_integer()} | all,
                  hash_method = pre_hash :: {rehash, non_neg_integer()} | pre_hash,
-                 segment_filter = all :: {segments, list(pos_integer()), leveled_tictac:tree_size()} | all
+                 segment_filter = all :: {segments, list(pos_integer()), leveled_tictac:tree_size()} | all,
+                 change_method = count :: {job, pos_integer()}|local|count
                 }).
 
 -type context() :: #ctx{}.
@@ -130,8 +131,10 @@
 -define(KEY_RANGE, <<"key_range">>).
 -define(DATE_RANGE, <<"date_range">>).
 -define(HASH_IV, <<"hash_iv">>).
+-define(CHANGE_METHOD, <<"change_method">>).
 
--define(FILTER_FIELDS, [?SEG_FILT, ?KEY_RANGE, ?DATE_RANGE, ?HASH_IV]).
+-define(FILTER_FIELDS,
+        [?SEG_FILT, ?KEY_RANGE, ?DATE_RANGE, ?HASH_IV, ?CHANGE_METHOD]).
 
 
 %% @doc Initialize this resource.
@@ -176,7 +179,10 @@ malformed_request(RD, Ctx) ->
         "rangerepl" -> malformed_range_repl_request(RD, Ctx);
         "siblings" -> malformed_find_keys_request({sibling_count, count}, RD, Ctx);
         "objectsizes" -> malformed_find_keys_request({object_size, size}, RD, Ctx);
-        "objectstats" -> malformed_object_stats_request(RD, Ctx)
+        "objectstats" -> malformed_object_stats_request(RD, Ctx);
+        "tombs" -> malformed_find_tombs_request(RD, Ctx);
+        "reap" -> malformed_reap_tombs_request(RD, Ctx);
+        "erase" -> malformed_erase_keys_request(RD, Ctx)
     end.
 
 %% @private check that we can parse out a valid cached tree aae fold
@@ -388,6 +394,98 @@ malformed_find_keys_request({QType, _UrlArg}, {valid, QArg}, RD, Ctx) ->
              Ctx#ctx{query = Query}}
     end.
 
+
+-spec malformed_find_tombs_request(#wm_reqdata{}, context()) ->
+                                        {boolean(), #wm_reqdata{}, context()}.
+malformed_find_tombs_request(RD, Ctx) ->
+    case wrq:path_info(bucket, RD) of
+        undefined ->
+            malformed_response("Bucket required", [], RD, Ctx);
+        Bucket0 ->
+            Bucket = erlang:list_to_binary(
+                       riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
+                      ),
+            Ctx2 = Ctx#ctx{bucket=Bucket},
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            case validate_range_filter(Filter0) of
+                {invalid, Reason} ->
+                    malformed_response("Invalid range filter ~p",
+                                       [Reason],
+                                       RD,
+                                       Ctx2);
+                {valid, Filter} ->
+                    QBucket = query_bucket(Ctx2),
+                    Query =
+                        {find_tombs,
+                            QBucket,
+                            Filter#filter.key_range,
+                            Filter#filter.segment_filter,
+                            Filter#filter.date_range},
+                    {false, RD, Ctx2#ctx{query= Query}}
+            end
+    end.
+
+-spec malformed_reap_tombs_request(#wm_reqdata{}, context()) ->
+                                        {boolean(), #wm_reqdata{}, context()}.
+malformed_reap_tombs_request(RD, Ctx) ->
+    case wrq:path_info(bucket, RD) of
+        undefined ->
+            malformed_response("Bucket required", [], RD, Ctx);
+        Bucket0 ->
+            Bucket = erlang:list_to_binary(
+                       riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
+                      ),
+            Ctx2 = Ctx#ctx{bucket=Bucket},
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            case validate_range_filter(Filter0) of
+                {invalid, Reason} ->
+                    malformed_response("Invalid range filter ~p",
+                                       [Reason],
+                                       RD,
+                                       Ctx2);
+                {valid, Filter} ->
+                    QBucket = query_bucket(Ctx2),
+                    Query =
+                        {reap_tombs,
+                            QBucket,
+                            Filter#filter.key_range,
+                            Filter#filter.segment_filter,
+                            Filter#filter.date_range,
+                            Filter#filter.change_method},
+                    {false, RD, Ctx2#ctx{query= Query}}
+            end
+    end.
+
+-spec malformed_erase_keys_request(#wm_reqdata{}, context()) ->
+                                        {boolean(), #wm_reqdata{}, context()}.
+malformed_erase_keys_request(RD, Ctx) ->
+    case wrq:path_info(bucket, RD) of
+        undefined ->
+            malformed_response("Bucket required", [], RD, Ctx);
+        Bucket0 ->
+            Bucket = erlang:list_to_binary(
+                       riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
+                      ),
+            Ctx2 = Ctx#ctx{bucket=Bucket},
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            case validate_range_filter(Filter0) of
+                {invalid, Reason} ->
+                    malformed_response("Invalid range filter ~p",
+                                       [Reason],
+                                       RD,
+                                       Ctx2);
+                {valid, Filter} ->
+                    QBucket = query_bucket(Ctx2),
+                    Query =
+                        {erase_keys,
+                            QBucket,
+                            Filter#filter.key_range,
+                            Filter#filter.segment_filter,
+                            Filter#filter.date_range,
+                            Filter#filter.change_method},
+                    {false, RD, Ctx2#ctx{query= Query}}
+            end
+    end.
 
 %% @private validate and parse a range repl request
 %% Needs a bucket, queue_name as minimum - plus also maybe a key range and a
@@ -606,7 +704,22 @@ validate_filter_field(?HASH_IV, IV, Filter) when is_integer(IV) andalso IV > -1 
 validate_filter_field(?HASH_IV, undefined, Filter) ->
     {valid, Filter};
 validate_filter_field(?HASH_IV, Other, _Filter) ->
-    {invalid, {?HASH_IV, Other}}.
+    {invalid, {?HASH_IV, Other}};
+validate_filter_field(?CHANGE_METHOD, <<"count">>, Filter) ->
+    {valid, Filter#filter{change_method=count}};
+validate_filter_field(?CHANGE_METHOD, <<"local">>, Filter) ->
+    {valid, Filter#filter{change_method=local}};
+validate_filter_field(?CHANGE_METHOD, {struct, JobJson}, Filter) ->
+    case proplists:get_value(<<"job_id">>, JobJson) of
+        JobID when is_integer(JobID), JobID > 0 ->
+            {valid, Filter#filter{change_method={job, JobID}}};
+        Other ->
+            {invalid, {?CHANGE_METHOD, Other}}
+    end;
+validate_filter_field(?CHANGE_METHOD, undefined, Filter) ->
+    {valid, Filter};
+validate_filter_field(?CHANGE_METHOD, Other, _Filter) ->
+    {invalid, {?CHANGE_METHOD, Other}}.
 
 -spec validate_segment_list(any()) ->
                                    {valid, list()} |
