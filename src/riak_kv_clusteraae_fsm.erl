@@ -517,6 +517,8 @@ json_encode_results(find_tombs, Result) ->
     json_encode_results(find_keys, Result);
 json_encode_results(reap_tombs, Count) ->
     mochijson2:encode({struct, [{<<"dispatched_count">>, Count}]});
+json_encode_results(erase_keys, Count) ->
+    mochijson2:encode({struct, [{<<"dispatched_count">>, Count}]});
 json_encode_results(object_stats, Stats) ->
     mochijson2:encode({struct, Stats}).
 
@@ -583,6 +585,11 @@ pb_encode_results(find_tombs, QD, Results) ->
     pb_encode_results(find_keys, QD, Results);
 pb_encode_results(reap_tombs, _QD, Count) ->
     #rpbaaefoldkeycountresp{response_type = <<"reap_tombs">>, 
+                            keys_count =
+                                #rpbkeyscount{tag = <<"dispatched_count">>,
+                                                count = Count}};
+pb_encode_results(erase_keys, _QD, Count) ->
+    #rpbaaefoldkeycountresp{response_type = <<"erase_keys">>, 
                             keys_count =
                                 #rpbkeyscount{tag = <<"dispatched_count">>,
                                                 count = Count}};
