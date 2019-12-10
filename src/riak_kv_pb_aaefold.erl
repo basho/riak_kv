@@ -209,7 +209,10 @@ process(#rpbaaefoldobjectstatsreq{type = T,
                                     KR = case IsKR of true -> {SK, EK}; false -> all end,
     MR = case IsModR of true -> {date, LMS, LME}; false -> all end,
     Query = {object_stats, maybe_bucket_type(T, B), KR, MR},
-    process_query(Query, State).
+    process_query(Query, State);
+process(#rpbaaefoldlistbucketsreq{n_val = N}, State) ->
+    N0 = case is_integer(N) and (N > 0) of true -> N; false -> 1 end,
+    process_query({list_buckets, N0}, State).
 
 
 

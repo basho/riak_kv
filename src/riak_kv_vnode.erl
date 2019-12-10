@@ -1942,6 +1942,12 @@ handle_aaefold({object_stats, Bucket, KeyRange, ModifiedRange},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{sibcount, null}, {size, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({list_buckets, Nval}, 
+                    _InitAcc, Nval,
+                    _IndexNs, _Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    {async, Folder} = aae_controller:aae_bucketlist(Cntrl),
     {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State}.
 
 

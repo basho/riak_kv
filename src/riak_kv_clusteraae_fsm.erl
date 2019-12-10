@@ -39,12 +39,14 @@
 -define(EMPTY, <<>>).
 
 -define(NVAL_QUERIES, 
-            [merge_root_nval, merge_branch_nval, fetch_clocks_nval]).
+            [merge_root_nval, merge_branch_nval, fetch_clocks_nval,
+                list_buckets]).
 -define(RANGE_QUERIES, 
             [merge_tree_range, fetch_clocks_range, repl_keys_range,
                 find_keys, object_stats, find_tombs, reap_tombs, erase_keys]).
 -define(LIST_ACCUMULATE_QUERIES,
-            [fetch_clocks_nval, fetch_clocks_range, find_keys, find_tombs]).
+            [fetch_clocks_nval, fetch_clocks_range, find_keys, find_tombs,
+                list_buckets]).
 
 -define(REPL_BATCH_SIZE, 128).
 -define(DELETE_BATCH_SIZE, 1024).
@@ -256,9 +258,11 @@
     {erase_keys, bucket(), key_range(),
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all,
-        change_method()}.
+        change_method()} |
         % Erase keys using a riak_kv_eraser.  This is of specific use when
         % expiring keys beyond a certain modified date
+    {list_buckets, n_val()}.
+        % List all buckets in the aae store - assuming a given n_val
 
 
 %% NOTE: this is a dialyzer/start war with the weird init needing a
@@ -520,7 +524,9 @@ json_encode_results(reap_tombs, Count) ->
 json_encode_results(erase_keys, Count) ->
     mochijson2:encode({struct, [{<<"dispatched_count">>, Count}]});
 json_encode_results(object_stats, Stats) ->
-    mochijson2:encode({struct, Stats}).
+    mochijson2:encode({struct, Stats});
+json_encode_results(list_buckets, BucketList) ->
+    mochijson2:encode({struct, BucketList}).
 
 
 -spec pb_encode_results(query_types(), query_definition(), query_return())
@@ -616,7 +622,10 @@ pb_encode_results(object_stats, _QD, Results) ->
             ++ SzL0
             ++ SbL0,
     #rpbaaefoldkeycountresp{response_type = <<"stats">>,
-                            keys_count = KeysCount}.
+                            keys_count = KeysCount};
+pb_encode_results(list_buckets, _QD, Results) ->
+    #rpbaaefoldlistbucketsresp{bucket_list =
+                                lists:map(fun pb_encode_bucket/1, Results)}.
 
 pb_encode_bucketkeyclock({B, K, V}) ->
     pb_encode_bucketkeyvalue({B, K, riak_object:encode_vclock(V)}).
@@ -630,6 +639,11 @@ pb_encode_bucketkeyvalue({B, K, V}) ->
     #rpbkeysvalue{bucket = B,
                     key = K,
                     value = V}.
+
+pb_encode_bucket({T, B}) ->
+    #rpbaaefoldbucket{type = T, bucket = B};
+pb_encode_bucket(B) ->
+    #rpbaaefoldbucket{bucket = B}.
 
 -spec convert_level2_element({non_neg_integer(), binary()}) -> binary().
 %% @doc
@@ -650,6 +664,7 @@ encode_keys_and_clocks(KeysNClocks) ->
 encode_find_key(Key, Value) ->
     [{<<"key">>, Key},
      {<<"value">>, Value}].
+
 
 encode_key_and_clock({Type, Bucket}, Key, Clock) ->
     [{<<"bucket-type">>, Type},
