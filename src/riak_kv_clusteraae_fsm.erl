@@ -533,7 +533,8 @@ json_encode_results(erase_keys, Count) ->
 json_encode_results(object_stats, Stats) ->
     mochijson2:encode({struct, Stats});
 json_encode_results(list_buckets, BucketList) ->
-    mochijson2:encode({struct, BucketList}).
+    EncodedList = lists:map(fun encode_bucket/1, BucketList),
+    mochijson2:encode({struct, [{<<"results">>, EncodedList}]}).
 
 
 -spec pb_encode_results(query_types(), query_definition(), query_return())
@@ -672,6 +673,11 @@ encode_find_key(Key, Value) ->
     [{<<"key">>, Key},
      {<<"value">>, Value}].
 
+encode_bucket({Type, Bucket}) ->
+    {struct, 
+        [{<<"bucket-type">>, Type}, {<<"bucket">>, Bucket}]};
+encode_bucket(Bucket) ->
+    {struct, [{<<"bucket">>, Bucket}]}.
 
 encode_key_and_clock({Type, Bucket}, Key, Clock) ->
     [{<<"bucket-type">>, Type},

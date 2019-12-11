@@ -159,6 +159,9 @@ raw_dispatch(Name) ->
 
      {["erase"] ++ Prefix ++ ["buckets", bucket],
       riak_kv_wm_aaefold, Props},
+    
+     {["aaebucketlist"],
+      riak_kv_wm_aaefold, Props},
 
 
     %% Repl queue fetch URL
