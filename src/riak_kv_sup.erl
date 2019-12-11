@@ -83,6 +83,10 @@ init([]) ->
                     {riak_kv_ensembles, start_link, []},
                     permanent, 30000, worker, [riak_kv_ensembles]},
 
+    NodeWatcherKv = {riak_kv_node_watcher_updates_handler,
+                     {riak_kv_node_watcher_updates_handler, start_link, []},
+                     permanent, 5000, worker, [riak_kv_node_watcher_updates_handler]},
+
     % Figure out which processes we should run...
     HasStorageBackend = (app_helper:get_env(riak_kv, storage_backend) /= undefined),
 
@@ -99,7 +103,8 @@ init([]) ->
         ClusterAAEFsmSup,
         HotBackupAAEFsmSup,
         [EnsemblesKV || riak_core_sup:ensembles_enabled()],
-        HTTPCache
+        HTTPCache,
+        NodeWatcherKv
     ]),
 
     % Run the proesses...

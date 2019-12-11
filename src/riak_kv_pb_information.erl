@@ -7,12 +7,14 @@
 %%%
 %%%		<pre>
 %%%		 210 - RpbGetRingReq
+%%%		 212 - RpbGetDefaultBucketPropsReq
 %%%		</pre>
 %%%
 %%%		<p>This service produces the following responses:</p>
 %%%
 %%%		<pre>
 %%%		 211 - RpbGetRingResp
+%%%		 213 - RpbGetDefaultBucketPropsResp
 %%%		</pre>
 %%% @end
 %%% Created : 22. Oct 2019 15:11
