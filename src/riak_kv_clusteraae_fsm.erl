@@ -82,7 +82,8 @@
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats|
-    find_tombs|reap_tombs|erase_keys.
+    find_tombs|reap_tombs|erase_keys|
+    list_buckets.
 
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
@@ -397,7 +398,13 @@ process_results(Results, State) ->
     UpdAcc = 
         case lists:member(QueryType, ?LIST_ACCUMULATE_QUERIES) of
             true ->
-                lists:umerge(Acc, lists:reverse(Results));
+                case QueryType of
+                    list_buckets ->
+                        % This query already has results in order
+                        lists:umerge(Acc, Results);
+                    _ ->
+                        lists:umerge(Acc, lists:reverse(Results))
+                end;
             false ->
                 case {QueryType,
                         lists:member(QueryType, [reap_tombs, erase_keys])} of

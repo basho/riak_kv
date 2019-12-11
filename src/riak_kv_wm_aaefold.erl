@@ -29,6 +29,10 @@
 %% GET /siblings/[types/Type/]buckets/Bucket/counts/Cnt?filter
 %% GET /objectsizes/[types/Type/]buckets/Bucket/sizes/Size?filter
 %% GET /objectstats/[types/Type/]buckets/Bucket?filter
+%% GET /tombs/[types/Type/]buckets/Bucket?filter
+%% GET /reap/[types/Type/]buckets/Bucket?filter
+%% GET /erase/[types/Type/]buckets/Bucket?filter
+%% GET /aaebucketlist?nval
 %% '''
 %% @TODO Filter contains key ranges, date ranges, has_fun, segment
 %% filter now (doc below)
@@ -69,6 +73,14 @@
 %%         a tree of size Y. If absent then `all' segments will be queried.
 %%   </li>
 %%   <li><tt>hash_iv=Integer</tt><br />
+%%          rangetrees trees query only
+%%          an integer that is an initialisation vector for the hash
+%%          method for the trees. Useful for avoiding hash collision,
+%%          this IV will be used to initialise the hash function that
+%%          will be used to hash version vectors that go into creating
+%%          the merkle tree. If absent then the default hash fun is used.
+%%   </li>
+%%   <li><tt>change_method=count|local|{job, Integer}</tt><br />
 %%          rangetrees trees query only
 %%          an integer that is an initialisation vector for the hash
 %%          method for the trees. Useful for avoiding hash collision,
@@ -182,7 +194,8 @@ malformed_request(RD, Ctx) ->
         "objectstats" -> malformed_object_stats_request(RD, Ctx);
         "tombs" -> malformed_find_tombs_request(RD, Ctx);
         "reap" -> malformed_reap_tombs_request(RD, Ctx);
-        "erase" -> malformed_erase_keys_request(RD, Ctx)
+        "erase" -> malformed_erase_keys_request(RD, Ctx);
+        "aaebucketlist" -> malformed_list_buckets_request(RD, Ctx)
     end.
 
 %% @private check that we can parse out a valid cached tree aae fold
@@ -567,6 +580,19 @@ malformed_object_stats_request(RD, Ctx) ->
             end
     end.
 
+-spec malformed_list_buckets_request(#wm_reqdata{}, context()) ->
+                                        {boolean(), #wm_reqdata{}, context()}.
+malformed_list_buckets_request(RD, Ctx) ->
+    NVal = wrq:get_qs_value(?Q_NVAL, integer_to_list(1), RD),
+    case validate_integer(NVal) of
+        {valid, N} ->
+            Query = {list_buckets, N},
+            {false, RD, Ctx#ctx{query = Query}};
+        {invalid, Reason} ->
+            malformed_response("Invalid n_val ~p", [Reason], RD, Ctx)
+    end.
+
+
 %% @private since we use it so often, wrap it up
 -spec malformed_response(string(), list(any()), #wm_reqdata{}, context()) ->
                                 {true, #wm_reqdata{}, context()}.
@@ -631,6 +657,17 @@ validate_range_filter(String) ->
             {invalid, Other}
     catch _:_ ->
             {invalid, String}
+    end.
+
+-spec validate_integer(string()) -> {valid, pos_integer()}|{invalid, any()}.
+validate_integer(String) ->
+    try list_to_integer(String) of
+        Int when Int > 0 ->
+            {valid, Int};
+        _ ->
+            {invalid, String}
+    catch _:_ ->
+        {invalid, String}
     end.
 
 -spec validate_range_filter(list(), list(), filter()) ->

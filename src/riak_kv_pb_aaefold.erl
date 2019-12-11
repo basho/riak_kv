@@ -212,8 +212,9 @@ process(#rpbaaefoldobjectstatsreq{type = T,
     process_query(Query, State);
 process(#rpbaaefoldlistbucketsreq{n_val = N}, State) ->
     N0 = case is_integer(N) and (N > 0) of true -> N; false -> 1 end,
-    process_query({list_buckets, N0}, State).
-
+    process_query({list_buckets, N0}, State);
+process(rpbaaefoldlistbucketsreq, State) ->
+    process_query({list_buckets, 1}, State).
 
 
 process_query(Query, State) ->
