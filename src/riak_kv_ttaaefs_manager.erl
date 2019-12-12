@@ -41,6 +41,7 @@
             set_queuename/1,
             set_allsync/2,
             set_bucketsync/1,
+            enable_ssl/2,
             process_workitem/3]).
 
 -define(SLICE_COUNT, 100).
@@ -64,6 +65,7 @@
                 peer_ip :: string(),
                 peer_port :: integer(),
                 peer_protocol :: http|pb,
+                ssl_credentials :: ssl_credentials() | undefined,
                 scope :: bucket|all|disabled,
                 bucket_list :: list()|undefined,
                 local_nval :: pos_integer()|undefined,
@@ -86,6 +88,8 @@
 -type schedule_wants() :: [schedule_want()].
 -type node_info() :: {pos_integer(), pos_integer()}. % Node and node count
 -type ttaaefs_state() :: #state{}.
+-type ssl_credentials() :: {string(), string(), string(), string()}.
+    %% {cacert_filename, cert_filename, key_filename, username}
 
 
 -export_type([work_item/0]).
@@ -138,6 +142,10 @@ set_queuename(QueueName) ->
 -spec set_allsync(pos_integer(), pos_integer()) -> ok.
 set_allsync(LocalNVal, RemoteNVal) ->
     gen_server:call(?MODULE, {set_allsync, LocalNVal, RemoteNVal}).
+
+-spec enable_ssl(boolean(), ssl_credentials() | undefined) -> ok.
+enable_ssl(Enable, Credentials) ->
+    gen_server:call(?MODULE, {enable_ssl, Enable, Credentials}).
 
 %% @doc
 %% Set the manager to sync or a list of buckets.  This will leave
@@ -216,6 +224,29 @@ init([]) ->
     PeerIP = app_helper:get_env(riak_kv, ttaaefs_peerip),
     PeerPort = app_helper:get_env(riak_kv, ttaaefs_peerport),
     PeerProtocol = app_helper:get_env(riak_kv, ttaaefs_peerprotocol),
+    CaCertificateFilename =
+        app_helper:get_env(riak_kv, repl_cacert_filename),
+    CertificateFilename =
+        app_helper:get_env(riak_kv, repl_cert_filename),
+    KeyFilename =
+        app_helper:get_env(riak_kv, repl_key_filename),
+    SecuritySitename = 
+        app_helper:get_env(riak_kv, repl_username),
+    SSLEnabled = 
+        (CaCertificateFilename =/= undefined) and
+        (CertificateFilename =/= undefined) and
+        (KeyFilename =/= undefined) and
+        (SecuritySitename =/= undefined),
+    SSLCredentials =
+        case SSLEnabled of
+            true ->
+                {CaCertificateFilename,
+                    CertificateFilename,
+                    KeyFilename,
+                    SecuritySitename};
+            false ->
+                undefined
+        end,
     
     % Queue name to be used for AAE exchanges on this cluster
     SrcQueueName = app_helper:get_env(riak_kv, ttaaefs_queuename),
@@ -224,6 +255,7 @@ init([]) ->
         State2#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = PeerProtocol,
+                        ssl_credentials = SSLCredentials,
                         queue_name = SrcQueueName},
     
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
@@ -267,6 +299,13 @@ handle_call({set_allsync, LocalNVal, RemoteNVal}, _From, State) ->
         State#state{scope = all,
                     local_nval = LocalNVal,
                     remote_nval = RemoteNVal}};
+handle_call({enable_ssl, Enable, Credentials}, _From, State) ->
+    case Enable of
+        true ->
+            {reply, ok, State#state{ssl_credentials = Credentials}};
+        false ->
+            {reply, ok, State#state{ssl_credentials = undefined}}
+    end;
 handle_call({set_bucketsync, BucketList}, _From, State) ->
     {reply,
         ok,
@@ -384,7 +423,8 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
     {RemoteClient, RemoteMod} =
         init_client(State#state.peer_protocol,
                     State#state.peer_ip,
-                    State#state.peer_port),
+                    State#state.peer_port,
+                    State#state.ssl_credentials),
 
     case RemoteClient of
         no_client ->
@@ -459,10 +499,11 @@ generate_sendfun(SendClient, NVal) ->
 
 %% @doc
 %% Make a remote client for connecting to the remote cluster
--spec init_client(client_protocol(), client_ip(), client_port())
+-spec init_client(client_protocol(), client_ip(), client_port(),
+                    string()|undefined)
                     -> {rhc:rhc()|no_client, rhc}|
                         {pid()|no_client, riakc_pb_socket}.
-init_client(http, IP, Port) ->
+init_client(http, IP, Port, _Cert) ->
     RHC = rhc:create(IP, Port, "riak", []),
     case rhc:ping(RHC) of
         ok ->
@@ -472,8 +513,21 @@ init_client(http, IP, Port) ->
                             [IP, Port, Error]),
             {no_client, rhc}
     end;
-init_client(pb, IP, Port) ->
-    {ok, Pid} = riakc_pb_socket:start_link(IP, Port, [{auto_reconnect, true}]),
+init_client(pb, IP, Port, undefined) ->
+    Options = [{auto_reconnect, true}],
+    init_pbclient(IP, Port, Options);
+init_client(pb, IP, Port, Credentials) ->
+    SecurityOpts = 
+        [{cacertfile, element(1, Credentials)},
+            {certfile, element(2, Credentials)},
+            {keyfile, element(3, Credentials)},
+            {credentials, element(4, Credentials), ""}],
+    Options = [{auto_reconnect, true}|SecurityOpts],
+    init_pbclient(IP, Port, Options).
+
+
+init_pbclient(IP, Port, Options) ->
+    {ok, Pid} = riakc_pb_socket:start_link(IP, Port, Options),
     try riakc_pb_socket:ping(Pid) of
         pong ->
             {Pid, riakc_pb_socket}
@@ -483,7 +537,6 @@ init_client(pb, IP, Port) ->
                             [IP, Port, Reason]),
             {no_client, riakc_pb_socket}
     end.
-
 
 -spec local_sender(any(), riak_client:riak_client(), fun(), nval()) -> fun().
 local_sender(fetch_root, C, ReturnFun, NVal) ->

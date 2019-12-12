@@ -394,9 +394,27 @@ map_peer_to_wi_fun({QueueName, PeerInfo}) ->
                     fun(QN) -> rhc:fetch(HTC, QN) end
                 end;
             pb ->
+                CaCertificateFilename =
+                    app_helper:get_env(riak_kv, repl_cacert_filename),
+                CertfiicateFilename =
+                    app_helper:get_env(riak_kv, repl_cert_filename),
+                KeyFilename =
+                    app_helper:get_env(riak_kv, repl_key_filename),
+                SecuritySitename = 
+                    app_helper:get_env(riak_kv, repl_username),
+                Opts = 
+                    case CaCertificateFilename of
+                        undefined ->
+                            [{silence_terminate_crash, true}];
+                        CaCert ->
+                            [{silence_terminate_crash, true},
+                                {credentials, SecuritySitename, ""},
+                                {cacertfile, CaCert},
+                                {certfile, CertfiicateFilename},
+                                {keyfile, KeyFilename}]
+                    end,
                 InitClientFun =
                     fun() ->
-                        Opts = [{silence_terminate_crash, true}],
                         case riakc_pb_socket:start(Host, Port, Opts) of
                             {ok, PBpid} ->
                                 PBpid;
