@@ -45,9 +45,9 @@
 -record(state, {}).
 
 -type process_return() :: {reply, pb_information_resp(), #state{}} | {error, string(), #state{}}.
--type pb_information_req_code() :: 210 | 212.
--type pb_information_req_tag() :: rpbgetringreq | rpbgetdefaultbucketpropsreq.
--type pb_information_resp() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{}.
+-type pb_information_req_code() :: 210 | 212 | 214.
+-type pb_information_req_tag() :: rpbgetringreq | rpbgetdefaultbucketpropsreq | rpbnodewatcherupdate.
+-type pb_information_resp() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{} | #rpbnodewatcherupdate{}.
 
 %%====================================================================
 %% API Functions
@@ -73,7 +73,9 @@ encode(Message) ->
 process(Req, State) when Req == rpbgetringreq ->
 	process_get_ring_req(Req, State);
 process(Req, State) when Req == rpbgetdefaultbucketpropsreq ->
-	process_get_default_bucket_props(Req, State).
+	process_get_default_bucket_props(Req, State);
+process(Req, State) when Req == rpbnodewatcherupdate ->
+	process_node_watcher_update(Req, State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
 	{ignore, #state{}}.
@@ -97,4 +99,10 @@ process_get_ring_req(_Req, State) ->
 process_get_default_bucket_props(_Req, State) ->
 	{ok, DefaultBucketPropsList} = application:get_env(riak_core, default_bucket_props),
 	Resp = riak_pb_kv_codec:encode_bucket_props(DefaultBucketPropsList),
+	{reply, Resp, State}.
+
+process_node_watcher_update(_Req, State) ->
+	NodesList = riak_core_node_watcher:nodes(riak_kv),
+	EncodedNodesList = [erlang:term_to_binary(Node) || Node <- NodesList],
+	Resp = riak_pb_kv_codec:encode_node_watcher_update(EncodedNodesList),
 	{reply, Resp, State}.

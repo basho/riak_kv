@@ -47,6 +47,7 @@ handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({ring_update, _Update}, State) ->
+    handle_ring_update(),
     {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -69,4 +70,8 @@ setup_ring_updates_callback() ->
         gen_server:cast(Self, {ring_update, Update})
     end,
     riak_core_node_watcher_events:add_sup_callback(Fun),
+    ok.
+
+handle_ring_update() ->
+    riak_api_pb_sup:node_watcher_update(),
     ok.
