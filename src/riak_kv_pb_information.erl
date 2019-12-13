@@ -26,14 +26,10 @@
 -include_lib("riak_pb/include/riak_kv_pb.hrl").
 -include_lib("riak_pb/include/riak_pb_kv_codec.hrl").
 
--ifdef(TEST).
--compile([export_all, nowarn_export_all]).
--include_lib("eunit/include/eunit.hrl").
--endif.
-
 %% API
 -export([
 	init/0,
+	init/1,
 	decode/2,
 	encode/1,
 	process/2,
@@ -42,12 +38,18 @@
 
 -import(riak_pb_kv_codec, [decode_quorum/1]).
 
--record(state, {}).
+-define(handle_decode_guard(Message), Message == rpbgetringreq orelse Message == rpbgetdefaultbucketpropsreq orelse
+                                      Message == rpbgetnodesreq).
+
+-record(state, {
+	node_watcher_update_timestamp :: integer()
+}).
 
 -type process_return() :: {reply, pb_information_resp(), #state{}} | {error, string(), #state{}}.
 -type pb_information_req_code() :: 210 | 212 | 214.
--type pb_information_req_tag() :: rpbgetringreq | rpbgetdefaultbucketpropsreq | rpbnodewatcherupdate.
--type pb_information_resp() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{} | #rpbnodewatcherupdate{}.
+-type pb_information_req_tag() :: rpbgetringreq | rpbgetdefaultbucketpropsreq | rpbgetnodesreq | rpbnodewatcherupdate.
+-type pb_information_resp() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{} | #rpbgetnodesresp{} |
+                               #rpbnodewatcherupdate{}.
 
 %%====================================================================
 %% API Functions
@@ -56,6 +58,9 @@
 	#state{}.
 init() ->
 	#state{}.
+
+init(Timestamp) when erlang:is_integer(Timestamp) ->
+	#state{node_watcher_update_timestamp = Timestamp}.
 
 -spec decode(Code :: pb_information_req_code(), Bin :: binary()) ->
 	{ok, pb_information_req_tag()}.
@@ -71,11 +76,13 @@ encode(Message) ->
 -spec process(Req :: pb_information_req_tag(), State :: #state{}) ->
 	process_return().
 process(Req, State) when Req == rpbgetringreq ->
-	process_get_ring_req(Req, State);
+	process_get_ring_req(State);
 process(Req, State) when Req == rpbgetdefaultbucketpropsreq ->
-	process_get_default_bucket_props(Req, State);
+	process_get_default_bucket_props(State);
+process(Req, State) when Req == rpbgetnodesreq ->
+	process_get_nodes_req(State);
 process(Req, State) when Req == rpbnodewatcherupdate ->
-	process_node_watcher_update(Req, State).
+	process_node_watcher_update(State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
 	{ignore, #state{}}.
@@ -85,10 +92,10 @@ process_stream(_, _, State) ->
 %%====================================================================
 %% Internal Functions
 %%====================================================================
-handle_decode(Message) when Message == rpbgetringreq orelse Message == rpbgetdefaultbucketpropsreq ->
+handle_decode(Message) when ?handle_decode_guard(Message) ->
 	{ok, Message}.
 
-process_get_ring_req(_Req, State) ->
+process_get_ring_req(State) ->
 	{ok, {_, NodeName, Vclock, ChRing, Meta, ClusterName, Next, Members, Claimant, Seen, Rvsn}} =
 		riak_core_ring_manager:get_my_ring(),
 	Ring = #riak_pb_ring{nodename = NodeName, vclock = Vclock, chring = ChRing, meta = Meta, clustername = ClusterName,
@@ -96,12 +103,17 @@ process_get_ring_req(_Req, State) ->
 	Resp = riak_pb_kv_codec:encode_ring(Ring),
 	{reply, Resp, State}.
 
-process_get_default_bucket_props(_Req, State) ->
+process_get_default_bucket_props(State) ->
 	{ok, DefaultBucketPropsList} = application:get_env(riak_core, default_bucket_props),
 	Resp = riak_pb_kv_codec:encode_bucket_props(DefaultBucketPropsList),
 	{reply, Resp, State}.
 
-process_node_watcher_update(_Req, State) ->
+process_get_nodes_req(State) ->
 	NodesList = riak_core_node_watcher:nodes(riak_kv),
-	Resp = riak_pb_kv_codec:encode_node_watcher_update(NodesList),
+	Resp = riak_pb_kv_codec:encode_nodes(NodesList),
+	{reply, Resp, State}.
+
+process_node_watcher_update(State = #state{node_watcher_update_timestamp = Timestamp}) ->
+	NodesList = riak_core_node_watcher:nodes(riak_kv),
+	Resp = riak_pb_kv_codec:encode_node_watcher_update({Timestamp, NodesList}),
 	{reply, Resp, State}.
