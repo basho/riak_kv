@@ -103,6 +103,5 @@ process_get_default_bucket_props(_Req, State) ->
 
 process_node_watcher_update(_Req, State) ->
 	NodesList = riak_core_node_watcher:nodes(riak_kv),
-	EncodedNodesList = [erlang:term_to_binary(Node) || Node <- NodesList],
-	Resp = riak_pb_kv_codec:encode_node_watcher_update(EncodedNodesList),
+	Resp = riak_pb_kv_codec:encode_node_watcher_update(NodesList),
 	{reply, Resp, State}.
