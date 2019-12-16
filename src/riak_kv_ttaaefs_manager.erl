@@ -500,7 +500,7 @@ generate_sendfun(SendClient, NVal) ->
 %% @doc
 %% Make a remote client for connecting to the remote cluster
 -spec init_client(client_protocol(), client_ip(), client_port(),
-                    string()|undefined)
+                    ssl_credentials()|undefined)
                     -> {rhc:rhc()|no_client, rhc}|
                         {pid()|no_client, riakc_pb_socket}.
 init_client(http, IP, Port, _Cert) ->
