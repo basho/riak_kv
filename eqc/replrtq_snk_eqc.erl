@@ -80,11 +80,11 @@ config_pre(_, [_Enabled, Sinks]) ->
 
 config(Enabled, Sinks) ->
     application:set_env(riak_kv, replrtq_enablesink, Enabled == enabled),
-    [ lists:zipwith(fun setup_sink/2, lists:seq(1, length(Sinks)), Sinks) || Enabled == enabled ],
+    [ setup_sink(Sink) || Sink <- Sinks, Enabled == enabled ],
     ok.
 
-setup_sink(I, #{queue := Q, peers := Peers, workers := N}) ->
-    Key = fun(A) -> list_to_atom(lists:concat(["replrtq_sink", I, A])) end,
+setup_sink(#{queue := Q, peers := Peers, workers := N}) ->
+    Key = fun(A) -> list_to_atom(lists:concat(["replrtq_sink", A])) end,
     application:set_env(riak_kv, Key(queue), Q),
     application:set_env(riak_kv, Key(peers), pp_peers(Peers)),
     application:set_env(riak_kv, Key(workers), N),
@@ -182,7 +182,7 @@ add_pre(#{sinks := Sinks} = S, [#{queue := Q}]) ->
     not maps:is_key(Q, Sinks).
 
 add(#{queue := Q, peers := Peers, workers := N}) ->
-    PeerInfo = fun({{Host, Port}, _}) -> {Host, 8, Host, Port} end,
+    PeerInfo = fun({{Host, Port, Protocol}, _}) -> {Host, 8, Host, Port, Protocol} end,
     replrtq_snk_monitor:add_queue(Q, Peers, N),
     riak_kv_replrtq_snk:add_snkqueue(Q, lists:map(PeerInfo, Peers), N).
 
@@ -213,8 +213,8 @@ remove_next(#{sinks := Sinks} = S, _, [Q]) ->
 pp_peers(Peers) ->
     string:join([ pp_peer(Peer) || {Peer, _Cfg} <- Peers], "|").
 
-pp_peer({Name, Port}) ->
-    lists:concat([Name, ":", Port]).
+pp_peer({Name, Port, Protocol}) ->
+    lists:concat([Name, ":", Port, ":", Protocol]).
 
 queue_names() ->
    [ queue1, queue2, a, aa, b, c, banana, sledge_hammer ].
@@ -234,7 +234,7 @@ peers_gen() ->
     ?LET(N, choose(1, 8), peers_gen(N)).
 
 peers_gen(N) ->
-    vector(N, {{url(), ?LET(P, nat(), P + 8000)}, peer_config_gen()}).
+    vector(N, {{url(), ?LET(P, nat(), P + 8000), http}, peer_config_gen()}).
 
 elements_or([], Other) -> Other;
 elements_or(Xs, Other) -> weighted_default({4, elements(Xs)}, {1, Other}).

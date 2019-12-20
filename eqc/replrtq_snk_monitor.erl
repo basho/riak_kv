@@ -53,7 +53,7 @@ init([]) ->
 
 handle_call({add_queue, Queue, Peers, Workers}, _From, State) ->
     Ref = make_ref(),
-    PeerMap = maps:from_list([{{Peer, Queue}, {Ref, Cfg}} || {Peer, Cfg} <- Peers]),
+    PeerMap = maps:from_list([{{{Host, Port}, Queue}, {Ref, Cfg}} || {{Host, Port, http}, Cfg} <- Peers]),
     Q = #queue{ref = Ref, name = Queue, peers = Peers, workers = Workers},
     {reply, ok, State#state{ queues = [Q | State#state.queues],
                              peers  = maps:merge(State#state.peers, PeerMap) }};
