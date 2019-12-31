@@ -49,6 +49,7 @@
          overload_reply/1,
          get_backend_config/3,
          is_modfun_allowed/2]).
+-export([report_hashtree_tokens/0, reset_hashtree_tokens/2]).
 
 -include_lib("riak_kv_vnode.hrl").
 
@@ -195,6 +196,46 @@ get_write_once(Bucket) ->
             Err
     end.
 
+
+
+%% ===================================================================
+%% Hashtree token management functions
+%% ===================================================================
+
+%% @doc
+%% Report the maximum and minimum count of hashtree tokens across all online
+%% primary vnodes
+-spec report_hashtree_tokens() -> {non_neg_integer(), non_neg_integer()}.
+report_hashtree_tokens() ->
+    OnlinePrimaries = riak_core_apl:active_owners(riak_kv),
+    ReportTokenFun = 
+        fun({{P, N}, _T}, {Min, Max}) ->
+            HT =
+                riak_core_vnode_master:sync_command({P, N},
+                                                    report_hashtree_tokens,
+                                                    riak_kv_vnode_master),
+            {min(Min, HT), max(Max, HT)}
+        end,
+    lists:foldl(ReportTokenFun, {infinity, 0}, OnlinePrimaries).
+
+%% @doc
+%% Reset the hashtree tokens on each online primary to a random integer between
+%% the minimum and maximum amount.
+-spec reset_hashtree_tokens(non_neg_integer(), non_neg_integer()) -> ok.
+reset_hashtree_tokens(MinToken, MaxToken) when MaxToken >= MinToken ->
+    OnlinePrimaries = riak_core_apl:active_owners(riak_kv),
+    ResetTokenFun = 
+        fun({{P, N}, _T}) ->
+            ok =
+                riak_core_vnode_master:sync_command({P, N},
+                                                    {reset_hashtree_tokens,
+                                                        MinToken, MaxToken},
+                                                    riak_kv_vnode_master)
+        end,
+    lists:foreach(ResetTokenFun, OnlinePrimaries),
+    ok.
+
+
 %% ===================================================================
 %% Preflist utility functions
 %% ===================================================================
@@ -302,16 +343,11 @@ fix_incorrect_index_entries(Idx, FixFun, Acc0, FixOpts) ->
                                    {raw, Ref, self()},
                                    riak_kv_vnode_master),
     case process_incorrect_index_entries(Ref, Idx, ForUpgrade, FixFun, Acc0) of
-        ignore -> Acc0;
+        ignore ->
+                Acc0;
         {_,_,ErrorCount}=Res ->
-            MarkRes = mark_indexes_reformatted(Idx, ErrorCount, ForUpgrade),
-            case MarkRes of
-                error ->
-                    %% there was an error marking the partition as reformatted. treat this like
-                    %% any other error (indicating the need to re-run reformatting)
-                    {element(1, Res), element(2, Res), 1};
-                _ -> Res
-            end
+            _ = mark_indexes_reformatted(Idx, ErrorCount, ForUpgrade),
+            Res
     end.
 
 fix_incorrect_index_entry(Idx, ForUpgrade, BadKeys, {Success, Ignore, Error}) ->

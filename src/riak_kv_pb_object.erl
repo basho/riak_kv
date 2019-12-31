@@ -68,6 +68,7 @@
 -record(state, {client,    % local client
                 req,       % current request (for multi-message requests like list keys)
                 req_ctx,   % context to go along with request (partial results, request ids etc)
+                is_consistent = false :: boolean(),
                 client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
 
 %% @doc init/0 callback. Returns the service internal start
@@ -190,8 +191,8 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC,
     case Result of
         consistent ->
             process(Req#rpbputreq{if_not_modified=undefined,
-                                  if_none_match=consistent},
-                    State);
+                                  if_none_match=undefined},
+                    State#state{is_consistent = true});
         {ok, _} when NoneMatch ->
             {error, "match_found", State};
         {ok, O} when NotMod ->
@@ -217,9 +218,8 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                    w=W0, dw=DW0, pw=PW0, return_body=ReturnBody,
                    return_head=ReturnHead, timeout=Timeout, asis=AsIs,
                    n_val=N_val, sloppy_quorum=SloppyQuorum,
-                   node_confirms=NodeConfirms0,
-                   if_none_match=NoneMatch},
-        #state{client=C} = State) ->
+                   node_confirms=NodeConfirms0},
+        #state{client=C} = State0) ->
 
     case K of
         undefined ->
@@ -250,12 +250,14 @@ process(#rpbputreq{bucket=B0, type=T, key=K, vclock=PbVC, content=RpbContent,
                           _ -> []
                       end
               end,
-    Options2 = case NoneMatch of
-                   consistent ->
-                       [{if_none_match, true}|Options];
-                   _ ->
-                       Options
-               end,
+    {Options2, State} = 
+        case State0#state.is_consistent of
+            true ->
+                {[{if_none_match, true}|Options],
+                    State0#state{is_consistent = false}};
+            _ ->
+                {Options, State0}
+        end,
     case C:put(O, make_options([{w, W}, {dw, DW}, {pw, PW},
                                 {node_confirms, NodeConfirms},
                                 {timeout, Timeout}, {asis, AsIs},

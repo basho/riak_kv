@@ -95,10 +95,14 @@
 start_link(VnodePid, Index, UseEpochCounter) ->
     gen_server:start_link(?MODULE, {VnodePid, Index, UseEpochCounter, undefined}, []).
 
+-ifdef(EQC).
+
 -spec test_link(pid(), non_neg_integer(), boolean(), string())
                                             -> {ok, pid()} | {error, term()}.
 test_link(VnodePid, Index, UseEpochCounter, Path) ->
     gen_server:start_link(?MODULE, {VnodePid, Index, UseEpochCounter, Path}, []).
+
+-endif.
 
 %%--------------------------------------------------------------------
 %% @doc You can't ever have a `LeaseSize' greater than the maximum 32

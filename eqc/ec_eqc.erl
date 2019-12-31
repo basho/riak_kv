@@ -4,6 +4,7 @@
 
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-include("../src/stacktrace.hrl").
 
 -compile([export_all, nowarn_export_all]).
 
@@ -204,22 +205,22 @@ check_final(#state{history = H}) ->
 
 %% Todo, stop overloading Result
 
-check_final([{result, _, #req{op = {get, PL}}, Result}], Must, _May, _ClientView) ->
+check_final([{result, _, #req{op = {get, _PL}}, Result}], Must, _May, _ClientView) ->
     {Values, _VClock} = case Result of
                             {ok, Obj} ->
                                 {riak_object:get_values(Obj), riak_object:vclock(Obj)};
                             {error, _} ->
                                 {[], []}
                         end,
-    _Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     ?FINALDBG("Final GOT VALUES: ~p VC: ~w Must: ~p May: ~p Fallbacks: ~w\n",
-              [Values, _VClock, Must, _May, _Fallbacks]),
+              [Values, _VClock, Must, _May,
+                [{I,J} || {kv_vnode, I, J} <- _PL, I /= J]]),
     ?WHENFAIL(io:format(user, "Must: ~p\nMay: ~p\nValues: ~p\n", [Must, _May, Values]),
               equals(Must -- Values, []));
 %% conjunction([{must_leftover, equals(Must -- Values, [])},
 %%              {must_may_leftover, equals(Values -- (Must ++ May), [])}]))
 
-check_final([{result, Cid, #req{op = {get, PL}}, Result} | Results],
+check_final([{result, Cid, #req{op = {get, _PL}}, Result} | Results],
             Must, May, ClientViews) ->
     %% TODO: Check if _Result matches expected values
     {ValuesAtGet, _VClockAtGet} = case Result of
@@ -228,17 +229,16 @@ check_final([{result, Cid, #req{op = {get, PL}}, Result} | Results],
                                       {error, _} ->
                                           {[], []}
                                   end,
-    _Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     ?FINALDBG("Cid ~p GOT VALUES: ~p VC: ~w FALLBACKS: ~w\n",
-              [Cid, ValuesAtGet, _VClockAtGet, _Fallbacks]),
+              [Cid, ValuesAtGet, _VClockAtGet,
+                [{I,J} || {kv_vnode, I, J} <- _PL, I /= J]]),
     UpdClientViews = lists:keystore(Cid, 1, ClientViews, {Cid, ValuesAtGet}),
     check_final(Results, Must, May, UpdClientViews);
-check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}}, 
+check_final([{result, Cid, #req{rid = _ReqId, op = {put, _PL, V}}, 
               {Result, _PutObj, _UpdObj}} | Results],
             Must, May, ClientViews) ->
     {Cid, ValuesAtGet} = lists:keyfind(Cid, 1, ClientViews),
     ValNotInMay = not lists:member(V, May),
-    _Fallbacks = [{I,J} || {kv_vnode, I, J} <- PL, I /= J],
     UpdMust = case Result of
                   ok when ValNotInMay -> %, Fallbacks == [] ->
                       %% This put could have already been overwritten
@@ -259,7 +259,8 @@ check_final([{result, Cid, #req{rid = _ReqId, op = {put, PL, V}},
               end,
     UpdMay = lists:usort(May ++ ValuesAtGet),
     ?FINALDBG("Cid ~p PUT: ~p RESPONSE: ~p VC: ~w OVER ~p MUST: ~p MAY: ~p FALLBACKS: ~w\n",
-              [Cid, V, Result, riak_object:vclock(_PutObj), ValuesAtGet, UpdMust, UpdMay, _Fallbacks]),
+              [Cid, V, Result, riak_object:vclock(_PutObj), ValuesAtGet, UpdMust, UpdMay,
+                [{I,J} || {kv_vnode, I, J} <- _PL, I /= J]]),
     UpdClientViews = lists:keydelete(Cid, 1, ClientViews),
     check_final(Results, UpdMust, UpdMay, UpdClientViews);
 check_final([_ | Results], Must, May, ClientViews) ->
@@ -280,8 +281,8 @@ exec(S) ->
                 exec(inc_step(deliver_req(Cid, S)))
         end
     catch
-        What:Reason ->
-            {What, {Reason, erlang:get_stacktrace()}, Next, S}
+        ?_exception_(What, Reason, StackToken) ->
+            {What, {Reason, ?_get_stacktrace_(StackToken)}, Next, S}
     end.
 
 status(#state{verbose = true} = S, Next) ->

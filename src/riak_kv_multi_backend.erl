@@ -77,6 +77,8 @@
          mark_indexes_fixed/2,
          fixed_index_status/1]).
 
+-export([head/3]).
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([prop_multi_backend_sample/0, prop_multi_backend_async_fold/0]).
@@ -128,11 +130,15 @@ capabilities(State) ->
 
 %% @doc Return the capabilities of the backend.
 -spec capabilities(riak_object:bucket(), state()) -> {ok, [atom()]}.
-capabilities(Bucket, State) when is_binary(Bucket) ->
-    {_Name, Mod, ModState} = get_backend(Bucket, State),
-    Mod:capabilities(ModState);
-capabilities(_Bucket, State) ->
-    capabilities(State).
+capabilities(Bucket, State) ->
+    case Bucket of
+        B when is_binary(B) ->
+            fetch_bucket_capability(Bucket, State);
+        {T, B} when is_binary(T), is_binary(B) ->
+            fetch_bucket_capability(Bucket, State);
+        _ ->
+            capabilities(State)
+    end.
 
 %% @doc Start the backends
 -spec start(integer(), config()) -> {ok, state()} | {error, term()}.
@@ -223,6 +229,22 @@ stop(#state{backends=Backends}) ->
 get(Bucket, Key, State) ->
     {Name, Module, SubState} = get_backend(Bucket, State),
     case Module:get(Bucket, Key, SubState) of
+        {ok, Value, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {ok, Value, NewState};
+        {error, Reason, NewSubState} ->
+            NewState = update_backend_state(Name, Module, NewSubState, State),
+            {error, Reason, NewState}
+    end.
+
+%% @doc Retrieve an object from the leveled backend as a binary
+-spec head(riak_object:bucket(), riak_object:key(), state()) ->
+                 {ok, any(), state()} |
+                 {ok, not_found, state()} |
+                 {error, term(), state()}.
+head(Bucket, Key, State) ->
+    {Name, Module, SubState} = get_backend(Bucket, State),
+    case Module:head(Bucket, Key, SubState) of
         {ok, Value, NewSubState} ->
             NewState = update_backend_state(Name, Module, NewSubState, State),
             {ok, Value, NewState};
@@ -448,6 +470,14 @@ fixed_index_status(Mod, ModState, Status) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+%% @private
+%% Fetch the capabilities of a backend assocaited with a bucket
+-spec fetch_bucket_capability(riak_object:bucket(), state()) -> {ok, [atom()]}.
+fetch_bucket_capability(Bucket, State) ->
+    {_Name, Mod, ModState} = get_backend(Bucket, State),
+    Mod:capabilities(ModState).
+
 
 %% @private
 %% Given a Bucket name and the State, return the

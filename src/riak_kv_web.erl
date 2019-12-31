@@ -114,9 +114,6 @@ raw_dispatch(Name) ->
      {Prefix ++ ["buckets", bucket, "keys", key],
       riak_kv_wm_object, Props},
 
-     {Prefix ++ ["buckets", bucket, "keys", key, "preflist"],
-      riak_kv_wm_preflist, Props},
-
      {Prefix ++ ["buckets", bucket, "keys", key, '*'],
       riak_kv_wm_link_walker, Props},
 

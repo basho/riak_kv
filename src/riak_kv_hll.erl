@@ -189,7 +189,9 @@ to_version(_Version, HllSet) ->
 stats(HllSet) ->
     [{S, stat(S, HllSet)} || S <- ?STATS].
 
--spec stat(stat(), hllset()) -> byte() | precision() | undefined.
+-spec stat(stat(), hllset()) -> 1..255 | 4..16 | undefined.
+%% using predefined types byte() | precision() has issues in dialyzer, and so
+%% redfining directly in the spec.
 stat(bytes, HllSet) ->
     hyper:bytes(HllSet);
 stat(precision, HllSet) ->
