@@ -33,6 +33,7 @@
 %%
 
 -module(riak_kv_stat).
+-include_lib("riak_core/include/riak_stat.hrl").
 
 -behaviour(gen_server).
 
@@ -57,7 +58,6 @@
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
--define(PFX, riak_stat:prefix()).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -114,11 +114,11 @@ untrack_bucket(Bucket) when is_binary(Bucket) ->
 
 %% The current number of active get fsms in riak
 active_gets() ->
-    counter_value([?PFX, ?APP, node, gets, fsm, active]).
+    counter_value([?Prefix, ?APP, node, gets, fsm, active]).
 
 %% The current number of active put fsms in riak
 active_puts() ->
-    counter_value([?PFX, ?APP, node, puts, fsm, active]).
+    counter_value([?Prefix, ?APP, node, puts, fsm, active]).
 
 counter_value(Name) ->
     case get_value(Name) of
@@ -474,7 +474,7 @@ do_repairs(Indices, Preflist) ->
 %% for dynamically created / dimensioned stats
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
-    riak_stat:update(lists:flatten([?PFX, ?APP | [Name]]), UpdateVal, Type).
+    riak_stat:update(lists:flatten([?Prefix, ?APP | [Name]]), UpdateVal, Type).
 
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
@@ -829,7 +829,7 @@ stats() ->
 read_repair_aggr_stats() ->
   Spec = fun(Type, Reason) ->
     {function, exometer, aggregate,
-      [[{{[?PFX, ?APP, node, gets, read_repairs, '_', Type, Reason], '_', '_'},
+      [[{{[?Prefix, ?APP, node, gets, read_repairs, '_', Type, Reason], '_', '_'},
         [], [true]}], [one, count]], proplist, [one, count]}
          end,
   [
