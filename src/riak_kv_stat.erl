@@ -33,7 +33,7 @@
 %%
 
 -module(riak_kv_stat).
--include_lib("riak_core/include/riak_stat.hrl").
+%%-include_lib("riak_core/include/riak_stat.hrl").
 
 -behaviour(gen_server).
 
@@ -58,6 +58,7 @@
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
+-define(Prefix, riak).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
