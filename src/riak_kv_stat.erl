@@ -33,7 +33,6 @@
 %%
 
 -module(riak_kv_stat).
-%%-include_lib("riak_core/include/riak_stat.hrl").
 
 -behaviour(gen_server).
 
