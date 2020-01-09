@@ -90,6 +90,7 @@
     %% Filter function to apply to a user metadata item to confirm if an object
     %% is a match for the query and should be included in the result.
     %% The function should exist in in the riak_kv_aaemapfun.erl module, as a
+    %% single arity function that returns a single arity function when passed
     %% the initial seed.  The single arity function should return either a
     %% boolean or an {error, Error} tuple when passed the contents of the value
     %% in the user_metadata associated with the metadata_tag.
