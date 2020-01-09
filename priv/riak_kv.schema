@@ -943,6 +943,31 @@
   {default, http}
 ]}.
 
+%% @doc The filepath for the ca certificate to validate the ssl connection
+%% to the remote peer.
+{mapping, "repl_cacert_filename", "riak_kv.repl_cacert_filename", [
+    {datatype, string}
+]}.
+
+%% @doc The filepath for the certificate to be used by this node when acting
+%% as a client for replication.  Must be trusted by the cluster with security
+%% enabled
+{mapping, "repl_cert_filename", "riak_kv.repl_cert_filename", [
+    {datatype, string}
+]}.
+
+%% @doc The filepath for the key to related to the certificate in
+%% repl_cert_filename
+{mapping, "repl_key_filename", "riak_kv.repl_key_filename", [
+    {datatype, string}
+]}.
+
+%% @doc When security is enabled on the remote cluster for replication as
+%% username is required to identify the replication client.  This username
+%% must be configured on the remote cluster with appropriate access rights
+{mapping, "repl_username", "riak_kv.repl_username", [
+    {datatype, string}
+]}.
 
 %% @doc How many times per 24hour period should all the data be checked to
 %% confirm it is fully sync'd
