@@ -75,15 +75,42 @@
     %% be actioned only by a job-specific riak_kv_reaper/eraser process started
     %% by this FSM.  Or each fold can send reap/delete requests direct to the
     %% local node's riak_kv_reaper/riak_kv_eraser to distribute the load across
-    %% the cluster and increase parallelistaion of the process.
+    %% the cluster and increase parallelisation of the process.
     %% The count change_method() will perform no reaps/deletes - but will
     %% simply count the matching keys - this is cheaper than runnning
-    %% find_tombs/find_keys to accumulate/sort a large list for counting. 
+    %% find_tombs/find_keys to accumulate/sort a large list for counting.
+-type metadata_tag() :: string().
+    %% Tag of a user metadata element
+-type seed() :: any().
+    %% Seed item to be passed by the client into the metadata_fun to return the
+    %% actual function.  For example this might be a list of items to be
+    %% matched on
+-type metadata_fun() :: fun((term()) -> fun((term()) -> boolean())).
+-type metadata_filter() :: {any | all, metadata_tag(), metadata_fun(), seed()}.
+    %% Filter function to apply to a user metadata item to confirm if an object
+    %% is a match for the query and should be included in the result.
+    %% The function should exist in in the riak_kv_aaemapfun.erl module, as a
+    %% the initial seed.  The single arity function should return either a
+    %% boolean or an {error, Error} tuple when passed the contents of the value
+    %% in the user_metadata associated with the metadata_tag.
+-type metadata_accumulate() ::
+        return_keys | return_count |
+            {return_term, metadata_tag()} | {count_by_term, metadata_tag()} |
+            {count_by_error, boolean()} | {return_errors, boolean()}.
+    %% There are multiple accumulate options for metadata folds: 
+    %% - return_keys return the {Bucket, Key} pair associated with any matching
+    %% item
+    %% - return_count to simply count the matches
+    %% - {return_term, Tag} return {{Bucket, Key}, MDValue} tuples where
+    %% MDValue is the value in the user metadata dictionary associated with Tag
+    %% - {count_by_term, Tag} return {MDValue, Count} tuples
+    %% - {count_by_error, IsMissingError}
+    %% - {return_errors, IsMissingError
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats|
     find_tombs|reap_tombs|erase_keys|
-    list_buckets.
+    list_buckets|mapfold.
 
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
@@ -262,8 +289,22 @@
         change_method()} |
         % Erase keys using a riak_kv_eraser.  This is of specific use when
         % expiring keys beyond a certain modified date
-    {list_buckets, n_val()}.
+    {list_buckets, n_val()} |
         % List all buckets in the aae store - assuming a given n_val
+
+    {mapfold, bucket(), key_range(), 
+        modified_range() | all,
+        list(metadata_filter()),
+        metadata_accumulate()}.
+        % Run a fold over the metadata of the objects within a given range,
+        % applying a list of functions to that metadata and generating a
+        % response based on all those objects which return true on each of the
+        % functions in the list.
+        % Functions must be defined in the riak_kv_aaemapfun.erl module as a
+        % single arity function which can be passed a single binary argument
+        % and which returns a single arity function that will return a
+        % boolean() on being passed the value associated with a user metadata
+        % key
 
 
 %% NOTE: this is a dialyzer/start war with the weird init needing a
