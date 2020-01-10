@@ -1036,43 +1036,38 @@
 %% cluster_a:any|cluster_b:block_rtq|cluster_c:bucketprefix.user
 {mapping, "replrtq_srcqueue", "riak_kv.replrtq_srcqueue", [
     {datatype, string},
-    {default, "qi_ttaaefs:block_rtq"}
+    {default, "q1_ttaaefs:block_rtq"}
 ]}.
 
 %% @doc Enable this node to act as a sink and consume from a src cluster
 {mapping, "replrtq_enablesink", "riak_kv.replrtq_enablesink", [
     {datatype, {flag, enabled, disabled}},
-    {default, enabled}
+    {default, disabled}
 ]}.
 
-
-%% @doc The node can act as a sink for one queue, from an unlimited number
-%% of peers (which may be in more than one cluster).  If the cluster needs
-%% to consume from multiple queues, then this can be achieved via directly
-%% changing replrtq_snk configuration via attach
-%% The queuename should be set to disabled if either of the two replication
-%% queues is not to be configured.  The queue name if it is to be configured
-%% must match a replq<n>_queuename on the source node.
-%% If more than two sink queues are required to be configured, then this
-%% can be achieved through an attach script.
+%% @doc Default queue name  to be used for peers (replrtq_sinkpeers) that are
+%% defined without a queue name.  Will be ignored where all peers are defined
+%% with a queue name
 {mapping, "replrtq_sinkqueue", "riak_kv.replrtq_sinkqueue", [
   {datatype, atom},
-  {default, disabled}
+  {default, q1_ttaaefs}
 ]}.
-
 
 %% @doc A list of peers is required to inform the sink node how to reach the
 %% src.  All src nodes will need to have entries consumed - so it is
 %% recommended that each src node is referred to in multiple sink node
 %% configurations.
-%% The list of peers is tokenised as host:port|host:port etc.
+%% The list of peers is tokenised as
+%% queue:host:port:protocol or host:port:protocol
+%% The queue will be converted to an atom and must be a queue_name at the peer
+%% The protocol may be http or pb.
 {mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sinkpeers", [
     {datatype, string},
-    {commented, "127.0.0.1:8098"}
+    {commented, "q1_ttaaefs:127.0.0.1:8098:http"}
 ]}.
 
-%% @doc The number of workers to be used for that queue must be configured.
+%% @doc The number of workers to be used for each queue must be configured.
 {mapping, "replrtq_sinkworkers", "riak_kv.replrtq_sinkworkers", [
     {datatype, integer},
-    {default, 12}
+    {default, 24}
 ]}.
