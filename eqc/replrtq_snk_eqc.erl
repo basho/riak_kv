@@ -70,27 +70,31 @@ initial_state() ->
 config_pre(S) ->
     not maps:is_key(config, S).
 
+%% We configure the same amount of workes for all sinks
 config_args(_S) ->
-    [weighted_default({1, disabled}, {19, enabled}),
-     vector(2, sink_gen())].
+    ?LET(N, workers_gen(),
+         [weighted_default({1, disabled}, {19, enabled}),
+          list(sink_gen(N)), N]).
 
-config_pre(_, [_Enabled, Sinks]) ->
-    Queues = [ Q || #{queue := Q} <- Sinks, Q /= disabled ],
+config_pre(_, [_Enabled, Sinks, _]) ->
+    Queues = [ Q || #{queue := Q} <- Sinks ],
     lists:usort(Queues) == lists:sort(Queues).
 
-config(Enabled, Sinks) ->
+config(Enabled, Sinks, Workers) ->
     application:set_env(riak_kv, replrtq_enablesink, Enabled == enabled),
+    %% default Queue will be called "default" in tests
+    application:set_env(riak_kv, replrtq_sinkqueue, default),
+    %% We presupose that all queues have the same number of workers....
+    application:set_env(riak_kv, replrtq_sinkworkers, Workers),
+    PeerConfig = [ pp_peers(Q, Peers) || #{queue := Q, peers := Peers} <- Sinks ],
+    application:set_env(riak_kv, replrtq_sinkpeers, string:join(PeerConfig, "|")),
     [ setup_sink(Sink) || Sink <- Sinks, Enabled == enabled ],
     ok.
 
 setup_sink(#{queue := Q, peers := Peers, workers := N}) ->
-    Key = fun(A) -> list_to_atom(lists:concat(["replrtq_sink", A])) end,
-    application:set_env(riak_kv, Key(queue), Q),
-    application:set_env(riak_kv, Key(peers), pp_peers(Peers)),
-    application:set_env(riak_kv, Key(workers), N),
     replrtq_snk_monitor:add_queue(Q, Peers, N).
 
-config_next(S, _Value, [Enabled, Sinks]) ->
+config_next(S, _Value, [Enabled, Sinks, _]) ->
     S#{ enabled => Enabled == enabled,
         config  => Sinks }.
 
@@ -111,12 +115,12 @@ start() ->
 
 start_callouts(#{enabled := false}, _Args) -> ?EMPTY;
 start_callouts(#{config := Sinks}, _Args) ->
-    ?SEQ([ ?APPLY(setup_sink, [Sink]) || Sink <- Sinks ]).
+    ?PAR([ ?APPLY(setup_sink, [Sink]) || Sink <- Sinks ]).
 
 setup_sink_callouts(_S, [#{queue := disabled}]) -> ?EMPTY;
 setup_sink_callouts(_S, [#{peers := Peers}]) ->
-    ?SEQ([ ?CALLOUT(rhc, create, [?WILDCARD, ?WILDCARD, ?WILDCARD, ?WILDCARD], {Host, Port})
-         || {{Host, Port}, _} <- Peers]).
+    ?SEQ([ ?CALLOUT(rhc, create, [Host, Port, ?WILDCARD, ?WILDCARD], {Host, Port})
+           || {{Host, Port, http}, _} <- Peers ]).
 
 start_next(#{enabled := false} = S, Pid, []) -> S#{ pid => Pid, sinks => #{} };
 start_next(#{config  := Sinks} = S, Pid, _Args) ->
@@ -125,6 +129,10 @@ start_next(#{config  := Sinks} = S, Pid, _Args) ->
 
 start_post(_S, _Args, Res) ->
     is_pid(Res) andalso is_process_alive(Res).
+
+start_process(_S, []) ->
+    worker.
+
 
 %% --- Operation: sleep ---
 
@@ -210,25 +218,31 @@ remove_next(#{sinks := Sinks} = S, _, [Q]) ->
 
 %% -- Helper functions
 
-pp_peers(Peers) ->
-    string:join([ pp_peer(Peer) || {Peer, _Cfg} <- Peers], "|").
+pp_peers(Q, Peers) ->
+    string:join([ pp_peer(Q, Peer) || {Peer, _Cfg} <- Peers], "|").
 
-pp_peer({Name, Port, Protocol}) ->
-    lists:concat([Name, ":", Port, ":", Protocol]).
+pp_peer(default, {Name, Port, Protocol}) ->
+    lists:concat([Name, ":", Port, ":", Protocol]);
+pp_peer(Q, {Name, Port, Protocol}) ->
+    lists:concat([Q, ":", Name, ":", Port, ":", Protocol]).
+
 
 queue_names() ->
    [ queue1, queue2, a, aa, b, c, banana, sledge_hammer ].
 
 sink_queue_gen() ->
-    weighted_default({1, disabled}, {9, elements(queue_names())}).
+    weighted_default({1, default}, {9, elements(queue_names())}).
 
 sink_gen() ->
+    sink_gen(workers_gen()).
+
+sink_gen(WorkersGen) ->
     #{ queue   => sink_queue_gen(),
        peers   => peers_gen(),
-       workers => workers_gen() }.
+       workers => WorkersGen }.
 
 workers_gen() ->
-    frequency([{1, 0}, {10, choose(1, 5)}]).
+    frequency([{1, 0}, {10, choose(1, 5)}, {1, 24}]).
 
 peers_gen() ->
     ?LET(N, choose(1, 8), peers_gen(N)).
@@ -414,4 +428,3 @@ push(RObj, Bool, List, LocalClient) ->
 mock_spec() ->
     #api_module{ name = replrtq_mock,
                  functions = [ #api_fun{name = error, arity = 1} ] }.
-
