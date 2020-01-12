@@ -153,7 +153,8 @@
                 tictac_rebuilding = false :: erlang:timestamp()|false,
                 worker_pool_strategy = single :: none|single|dscp,
                 vnode_pool_pid :: undefined|pid(),
-                update_hook :: update_hook()
+                update_hook :: update_hook(),
+                enable_nextgenreplsrc = false :: boolean()
                }).
 
 -type index_op() :: add | remove.
@@ -733,6 +734,8 @@ init([Index]) ->
         app_helper:get_env(riak_kv, tictacaae_active, passive),
     WorkerPoolStrategy =
         app_helper:get_env(riak_kv, worker_pool_strategy),
+    EnableNextGenReplSrc = 
+        app_helper:get_env(riak_kv, replrtq_enablesrc, false),
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
@@ -759,7 +762,8 @@ init([Index]) ->
                            md_cache=MDCache,
                            md_cache_size=MDCacheSize,
                            worker_pool_strategy=WorkerPoolStrategy,
-                           update_hook=update_hook()},
+                           update_hook=update_hook(),
+                           enable_nextgenreplsrc = EnableNextGenReplSrc},
             try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
@@ -2447,8 +2451,10 @@ do_put(Sender, {Bucket, Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     % Now the reply has been sent, check for replication requirements.  If no
     % replication is enabled, then the replrtq_coordput/4 request will be
     % discarded by the riak_kv_replrtq_src
-    case {Coord, Reply} of
-        {true, {dw, _Idx, Obj, _ReqID}} ->
+    case {Coord, Reply, State#state.enable_nextgenreplsrc} of
+        {_, _, false} ->
+            ok;
+        {true, {dw, _Idx, Obj, _ReqID}, _} ->
             % This is the co-ordinator of the PUT - so cast this to the repl
             % sink to check for replication need.
             % If the replication cache is enabled, then add it to the cache.
@@ -2463,7 +2469,7 @@ do_put(Sender, {Bucket, Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                         % So the tombstone should but placed on the queue
                         {tomb, Obj};
                     false ->
-                        to_fetch
+                        {object, Obj}
                 end,
             riak_kv_replrtq_src:replrtq_coordput({Bucket,
                                                     Key,

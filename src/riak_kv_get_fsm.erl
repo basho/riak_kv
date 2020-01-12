@@ -211,9 +211,9 @@ init({test, Args, StateProps}) ->
 %% @private
 queue_fetch(timeout, StateData) ->
     {queue_name, QueueName} = StateData#state.bkey,
+    {raw, ReqID, Pid} = StateData#state.from,
     case riak_kv_replrtq_src:waitforpop_rtq(QueueName, ?QUEUE_EMPTY_LOOPS) of
         queue_empty ->
-            {raw, ReqID, Pid} = StateData#state.from,
             Msg = {ReqID, {ok, queue_empty}},
             Pid ! Msg,
             {stop, normal, StateData};
@@ -228,9 +228,12 @@ queue_fetch(timeout, StateData) ->
                                 timing = Timing,
                                 expected_fetchclock = ExpectedClock},
                 0};
+        {_Bucket, _Key, _ExpectedClock, {object, Obj}} ->
+            Msg = {ReqID, {ok, Obj}},
+            Pid ! Msg,
+            {stop, normal, StateData};
         {_Bucket, _Key, ExpectedClock, {tomb, Obj}} ->
             % A tombstone was queued - so there is no need to fetch
-            {raw, ReqID, Pid} = StateData#state.from,
             Msg = {ReqID, {ok, {deleted, ExpectedClock, Obj}}},
             Pid ! Msg,
             {stop, normal, StateData}

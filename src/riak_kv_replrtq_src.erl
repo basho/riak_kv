@@ -72,6 +72,12 @@
     % Real-time replication will tail-drop when over the limit, whereas batch
     % replication queues will prompt a pause in the process queueing the
     % repl references
+-define(OBJECT_LIMIT, 1000).
+    % If the priority queue is bigger than the object limit, and the object
+    % reference is {object, Object} then the object reference will be converted
+    % into a fetch request.  Manages the number of objects being held in
+    % memory.  The object limit can be altered using
+    % riak_kv.replrtq_srcobjectlimit
 -define(LOG_TIMER_SECONDS, 30).
     % Log the queue sizes every 30 seconds
 -define(CONSUME_DELAY, 4).
@@ -81,6 +87,7 @@
             queue_countmap = [] :: list(queue_countmap()),
             queue_map = [] :: list(queue_map()),
             queue_limit = ?QUEUE_LIMIT :: pos_integer(),
+            object_limit = ?OBJECT_LIMIT :: non_neg_integer(),
             log_frequency_in_ms = ?LOG_TIMER_SECONDS * 1000 :: pos_integer()
 }).
 
@@ -90,7 +97,11 @@
 
 -type queue_name() :: atom().
 -type object_ref() ::
-    {tomb, riak_object:riak_object()}|{vnode, {integer(), atom()}}|to_fetch.
+    {tomb, riak_object:riak_object()}|
+        {object, riak_object:riak_object()}|
+        to_fetch.
+    % The object reference can be the actual object or a request to fetch the
+    % actual object using the Bucket, Key and Clock in the repl_entry
 -type repl_entry() ::
     {riak_object:bucket(), riak_object:key(), vclock:vclock(), object_ref()}.
     % Normally the repl_entry will not include the object to save space on the
@@ -267,12 +278,14 @@ init([]) ->
     QM = lists:map(MapToQM, QFM),
     QC = lists:map(MaptoQC, QFM),
     QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
+    OL = app_helper:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
     LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency, ?LOG_TIMER_SECONDS * 1000),
     erlang:send_after(LogFreq, self(), log_queue),
     {ok, #state{queue_filtermap = QFM,
                 queue_map = QM,
                 queue_countmap = QC,
                 queue_limit = QL,
+                object_limit = OL,
                 log_frequency_in_ms = LogFreq}}.
 
 handle_call({rtq_ttaaefs, QueueName, ReplEntries}, _From, State) ->
@@ -381,7 +394,7 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
         addto_queues(ReplEntry, ?RTQ_PRIORITY,
                         QueueNames,
                         State#state.queue_map, State#state.queue_countmap,
-                        State#state.queue_limit),
+                        State#state.queue_limit, State#state.object_limit),
     {noreply, State#state{queue_map = QueueMap,
                             queue_countmap = QueueCountMap}}.
 
@@ -453,25 +466,39 @@ find_queues(Bucket, [_H|Rest], ActiveQueues) ->
                     list(queue_name()),
                     list(queue_map()),
                     list(queue_countmap()),
-                    pos_integer())
+                    pos_integer(),
+                    non_neg_integer())
                                 -> {list(queue_map()), list(queue_countmap())}.
-addto_queues(_ReplEntry, _P, [], QueueMap, QueueCountMap, _Limit) ->
+addto_queues(_ReplEntry, _P, [], QueueMap, QueueCountMap, _QLimit, _OLimit) ->
     {QueueMap, QueueCountMap};
-addto_queues(ReplEntry, P, [QueueName|Rest], QueueMap, QueueCountMap, Limit) ->
+addto_queues(ReplEntry, P, [QueueName|Rest],
+                QueueMap, QueueCountMap,
+                QLimit, OLimit) ->
     {QueueName, Counters} = lists:keyfind(QueueName, 1, QueueCountMap),
     case element(P, Counters) of
-        C when C >= Limit ->
-            addto_queues(ReplEntry, P, Rest, QueueMap, QueueCountMap, Limit);
+        C when C >= QLimit ->
+            addto_queues(ReplEntry, P, Rest,
+                            QueueMap, QueueCountMap,
+                            QLimit, OLimit);
         C ->
             C0 = setelement(P, Counters, C + 1),
             QCM0 =
                 lists:keyreplace(QueueName, 1, QueueCountMap, {QueueName, C0}),
             {QueueName, Q} = lists:keyfind(QueueName, 1, QueueMap),
-            Q0 = riak_core_priority_queue:in(ReplEntry, P, Q),
+            FilteredEntry = filter_on_objectlimit(ReplEntry, C, OLimit),
+            Q0 = riak_core_priority_queue:in(FilteredEntry, P, Q),
             QM0 =
                 lists:keyreplace(QueueName, 1, QueueMap, {QueueName, Q0}),
-            addto_queues(ReplEntry, P, Rest, QM0, QCM0, Limit)
+            addto_queues(ReplEntry, P, Rest, QM0, QCM0, QLimit, OLimit)
     end.
+
+-spec filter_on_objectlimit(repl_entry(), non_neg_integer(), non_neg_integer()) -> repl_entry().
+filter_on_objectlimit(ReplEntry, C, OLimit) when OLimit > C ->
+    ReplEntry;
+filter_on_objectlimit({B, K, VC, {object, _Obj}}, _C, _OLimit) ->
+    {B, K, VC, to_fetch};
+filter_on_objectlimit(ReplEntry, _C, _OLimit) ->
+    ReplEntry.
 
 %% @doc
 %% Add a list of repl_entries to the back of a queue.  Only add if the queue
