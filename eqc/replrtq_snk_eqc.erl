@@ -130,9 +130,6 @@ start_next(#{config  := Sinks} = S, Pid, _Args) ->
 start_post(_S, _Args, Res) ->
     is_pid(Res) andalso is_process_alive(Res).
 
-start_process(_S, []) ->
-    worker.
-
 
 %% --- Operation: sleep ---
 
@@ -148,7 +145,7 @@ sleep_pre(#{time := Time}, [N]) -> Time + N =< ?TEST_DURATION.
 
 sleep(N) -> timer:sleep(N).
 
-sleep_next(S = #{time := T}, _, [N]) -> S#{time := T + N}.
+sleep_next(S = #{time := T}, _, [N]) -> S#{time => T + N}.
 
 %% --- Operation: suspend ---
 
@@ -197,7 +194,7 @@ add(#{queue := Q, peers := Peers, workers := N}) ->
 add_callouts(_S, [Sink]) -> ?APPLY(setup_sink, [Sink]).
 
 add_next(#{sinks := Sinks} = S, _V, [#{queue := Q} = Sink]) ->
-  S#{ sinks := Sinks#{ Q => Sink } }.
+  S#{ sinks => Sinks#{ Q => Sink } }.
 
 %% --- remove ---
 
@@ -212,7 +209,7 @@ remove(Q) ->
 
 remove_next(#{sinks := Sinks} = S, _, [Q]) ->
     Removed = maps:get(removed, S, []),
-    S#{sinks := maps:remove(Q, Sinks), removed => [Q | Removed]}.
+    S#{sinks => maps:remove(Q, Sinks), removed => [Q | Removed]}.
 
 %% -- Generators -------------------------------------------------------------
 
@@ -242,7 +239,7 @@ sink_gen(WorkersGen) ->
        workers => WorkersGen }.
 
 workers_gen() ->
-    frequency([{1, 0}, {10, choose(1, 5)}, {1, 24}]).
+    frequency([{1, 0}, {10, choose(1, 5)}]).
 
 peers_gen() ->
     ?LET(N, choose(1, 8), peers_gen(N)).
