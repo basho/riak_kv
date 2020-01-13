@@ -9,7 +9,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1, add_queue/3, remove_queue/1]).
+-export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1,
+         add_queue/3, remove_queue/1, update_workers/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -46,6 +47,10 @@ suspend(Queue) ->
 resume(Queue) ->
     gen_server:call(?SERVER, {resume, Queue}).
 
+update_workers(Queue, Workers) ->
+    gen_server:call(?SERVER, {update_workers, Queue, Workers}).
+
+
 %% -- Callbacks --------------------------------------------------------------
 
 init([]) ->
@@ -53,7 +58,7 @@ init([]) ->
 
 handle_call({add_queue, Queue, Peers, Workers}, _From, State) ->
     Ref = make_ref(),
-    PeerMap = maps:from_list([{{Peer, Queue}, {Ref, Cfg}} || {Peer, Cfg} <- Peers]),
+    PeerMap = maps:from_list([{{{Host, Port}, Queue}, {Ref, Cfg}} || {{Host, Port, http}, Cfg} <- Peers]),
     Q = #queue{ref = Ref, name = Queue, peers = Peers, workers = Workers},
     {reply, ok, State#state{ queues = [Q | State#state.queues],
                              peers  = maps:merge(State#state.peers, PeerMap) }};
@@ -80,6 +85,10 @@ handle_call({suspend, Queue}, _From, State) ->
     {reply, ok, add_trace(State, Queue, suspend)};
 handle_call({resume, Queue}, _From, State) ->
     {reply, ok, add_trace(State, Queue, resume)};
+handle_call({update_workers, Q, Workers}, _From, State) ->
+    Queue = lists:keyfind(Q, #queue.name, State#state.queues),
+    NewQueue = Queue#queue{workers = Workers},
+    {reply, ok, State#state{ queues = [NewQueue | State#state.queues -- [Queue]]}};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -123,4 +132,3 @@ final_trace(#state{ queues = Queues, traces = Traces }, Ref) ->
     Trace = maps:get(Ref, Traces),
     #queue{name = Name, peers = Peers, workers = Workers} = lists:keyfind(Ref, #queue.ref, Queues),
     {Name, Peers, Workers, lists:reverse(Trace)}.
-

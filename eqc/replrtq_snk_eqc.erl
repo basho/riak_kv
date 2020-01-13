@@ -70,27 +70,31 @@ initial_state() ->
 config_pre(S) ->
     not maps:is_key(config, S).
 
+%% We configure the same amount of workes for all sinks
 config_args(_S) ->
-    [weighted_default({1, disabled}, {19, enabled}),
-     vector(2, sink_gen())].
+    ?LET(N, workers_gen(),
+         [weighted_default({1, disabled}, {19, enabled}),
+          list(sink_gen(N)), N]).
 
-config_pre(_, [_Enabled, Sinks]) ->
-    Queues = [ Q || #{queue := Q} <- Sinks, Q /= disabled ],
+config_pre(_, [_Enabled, Sinks, _]) ->
+    Queues = [ Q || #{queue := Q} <- Sinks ],
     lists:usort(Queues) == lists:sort(Queues).
 
-config(Enabled, Sinks) ->
+config(Enabled, Sinks, Workers) ->
     application:set_env(riak_kv, replrtq_enablesink, Enabled == enabled),
-    [ lists:zipwith(fun setup_sink/2, lists:seq(1, length(Sinks)), Sinks) || Enabled == enabled ],
+    %% default Queue will be called "default" in tests
+    application:set_env(riak_kv, replrtq_sinkqueue, default),
+    %% We presupose that all queues have the same number of workers....
+    application:set_env(riak_kv, replrtq_sinkworkers, Workers),
+    PeerConfig = [ pp_peers(Q, Peers) || #{queue := Q, peers := Peers} <- Sinks ],
+    application:set_env(riak_kv, replrtq_sinkpeers, string:join(PeerConfig, "|")),
+    [ setup_sink(Sink) || Sink <- Sinks, Enabled == enabled ],
     ok.
 
-setup_sink(I, #{queue := Q, peers := Peers, workers := N}) ->
-    Key = fun(A) -> list_to_atom(lists:concat(["replrtq_sink", I, A])) end,
-    application:set_env(riak_kv, Key(queue), Q),
-    application:set_env(riak_kv, Key(peers), pp_peers(Peers)),
-    application:set_env(riak_kv, Key(workers), N),
+setup_sink(#{queue := Q, peers := Peers, workers := N}) ->
     replrtq_snk_monitor:add_queue(Q, Peers, N).
 
-config_next(S, _Value, [Enabled, Sinks]) ->
+config_next(S, _Value, [Enabled, Sinks, _]) ->
     S#{ enabled => Enabled == enabled,
         config  => Sinks }.
 
@@ -111,12 +115,12 @@ start() ->
 
 start_callouts(#{enabled := false}, _Args) -> ?EMPTY;
 start_callouts(#{config := Sinks}, _Args) ->
-    ?SEQ([ ?APPLY(setup_sink, [Sink]) || Sink <- Sinks ]).
+    ?PAR([ ?APPLY(setup_sink, [Sink]) || Sink <- Sinks ]).
 
 setup_sink_callouts(_S, [#{queue := disabled}]) -> ?EMPTY;
 setup_sink_callouts(_S, [#{peers := Peers}]) ->
-    ?SEQ([ ?CALLOUT(rhc, create, [?WILDCARD, ?WILDCARD, ?WILDCARD, ?WILDCARD], {Host, Port})
-         || {{Host, Port}, _} <- Peers]).
+    ?SEQ([ ?CALLOUT(rhc, create, [Host, Port, ?WILDCARD, ?WILDCARD], {Host, Port})
+           || {{Host, Port, http}, _} <- Peers ]).
 
 start_next(#{enabled := false} = S, Pid, []) -> S#{ pid => Pid, sinks => #{} };
 start_next(#{config  := Sinks} = S, Pid, _Args) ->
@@ -125,6 +129,7 @@ start_next(#{config  := Sinks} = S, Pid, _Args) ->
 
 start_post(_S, _Args, Res) ->
     is_pid(Res) andalso is_process_alive(Res).
+
 
 %% --- Operation: sleep ---
 
@@ -140,7 +145,7 @@ sleep_pre(#{time := Time}, [N]) -> Time + N =< ?TEST_DURATION.
 
 sleep(N) -> timer:sleep(N).
 
-sleep_next(S = #{time := T}, _, [N]) -> S#{time := T + N}.
+sleep_next(S = #{time := T}, _, [N]) -> S#{time => T + N}.
 
 %% --- Operation: suspend ---
 
@@ -182,14 +187,14 @@ add_pre(#{sinks := Sinks} = S, [#{queue := Q}]) ->
     not maps:is_key(Q, Sinks).
 
 add(#{queue := Q, peers := Peers, workers := N}) ->
-    PeerInfo = fun({{Host, Port}, _}) -> {Host, 8, Host, Port} end,
+    PeerInfo = fun({{Host, Port, Protocol}, _}) -> {Host, 8, Host, Port, Protocol} end,
     replrtq_snk_monitor:add_queue(Q, Peers, N),
     riak_kv_replrtq_snk:add_snkqueue(Q, lists:map(PeerInfo, Peers), N).
 
 add_callouts(_S, [Sink]) -> ?APPLY(setup_sink, [Sink]).
 
 add_next(#{sinks := Sinks} = S, _V, [#{queue := Q} = Sink]) ->
-  S#{ sinks := Sinks#{ Q => Sink } }.
+  S#{ sinks => Sinks#{ Q => Sink } }.
 
 %% --- remove ---
 
@@ -204,28 +209,34 @@ remove(Q) ->
 
 remove_next(#{sinks := Sinks} = S, _, [Q]) ->
     Removed = maps:get(removed, S, []),
-    S#{sinks := maps:remove(Q, Sinks), removed => [Q | Removed]}.
+    S#{sinks => maps:remove(Q, Sinks), removed => [Q | Removed]}.
 
 %% -- Generators -------------------------------------------------------------
 
 %% -- Helper functions
 
-pp_peers(Peers) ->
-    string:join([ pp_peer(Peer) || {Peer, _Cfg} <- Peers], "|").
+pp_peers(Q, Peers) ->
+    string:join([ pp_peer(Q, Peer) || {Peer, _Cfg} <- Peers], "|").
 
-pp_peer({Name, Port}) ->
-    lists:concat([Name, ":", Port]).
+pp_peer(default, {Name, Port, Protocol}) ->
+    lists:concat([Name, ":", Port, ":", Protocol]);
+pp_peer(Q, {Name, Port, Protocol}) ->
+    lists:concat([Q, ":", Name, ":", Port, ":", Protocol]).
+
 
 queue_names() ->
    [ queue1, queue2, a, aa, b, c, banana, sledge_hammer ].
 
 sink_queue_gen() ->
-    weighted_default({1, disabled}, {9, elements(queue_names())}).
+    weighted_default({1, default}, {9, elements(queue_names())}).
 
 sink_gen() ->
+    sink_gen(workers_gen()).
+
+sink_gen(WorkersGen) ->
     #{ queue   => sink_queue_gen(),
        peers   => peers_gen(),
-       workers => workers_gen() }.
+       workers => WorkersGen }.
 
 workers_gen() ->
     frequency([{1, 0}, {10, choose(1, 5)}]).
@@ -234,7 +245,7 @@ peers_gen() ->
     ?LET(N, choose(1, 8), peers_gen(N)).
 
 peers_gen(N) ->
-    vector(N, {{url(), ?LET(P, nat(), P + 8000)}, peer_config_gen()}).
+    vector(N, {{url(), ?LET(P, nat(), P + 8000), http}, peer_config_gen()}).
 
 elements_or([], Other) -> Other;
 elements_or(Xs, Other) -> weighted_default({4, elements(Xs)}, {1, Other}).
@@ -414,4 +425,3 @@ push(RObj, Bool, List, LocalClient) ->
 mock_spec() ->
     #api_module{ name = replrtq_mock,
                  functions = [ #api_fun{name = error, arity = 1} ] }.
-
