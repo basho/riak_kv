@@ -1031,6 +1031,15 @@
   {default, 1000}
 ]}.
 
+%% @doc Limit the size of an object which may be pushed to the replication
+%% queue.  Objects larger than this will still be replicated, but by being
+%% re-fetched.  The product of replrtq_objectsize and replrtq_srcobjectlimit
+%% gives a theoretical maximum for the total memory consumed by the
+%% riak_kv_rpelrtq (in terms of objects).  Default of this product is 200MB.
+{mapping, "replrtq_srcobjectsize", "riak_kv.replrtq_srcobjectsize", [
+  {datatype, bytesize},
+  {default, "200KB"}
+]}.
 
 %% @doc Queue definitions
 %% Queues should be defined using a pipe '|' delimited string, of two
