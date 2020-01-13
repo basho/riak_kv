@@ -1012,8 +1012,8 @@
 %% @doc Enable this node to act as a real-time replication source
 {mapping, "replrtq_enablesrc", "riak_kv.replrtq_enablesrc", [
     {datatype, {flag, enabled, disabled}},
-    {default, enabled},
-    {commented, disabled}
+    {default, disabled},
+    {commented, enabled}
 ]}.
 
 %% @doc Limit the size of replication queues (for a queue and priority, i.e.

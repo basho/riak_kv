@@ -3388,10 +3388,6 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     riak_object:riak_object(),
                     pos_integer(), boolean(), boolean(), non_neg_integer()) ->
                         ok.
-nextgenrepl(_B, _K, _Obj, _Size, false, _Enabled, _Limit) ->
-    ok;
-nextgenrepl(_B, _K, _Obj, _Size, _, false, _Limit) ->
-    ok;
 nextgenrepl(Bucket, Key, Obj, Size, true, true, Limit) ->
     % This is the co-ordinator of the PUT, and nextgenrepl is enabled - so
     % cast this to the repl src.
@@ -3417,7 +3413,10 @@ nextgenrepl(Bucket, Key, Obj, Size, true, true, Limit) ->
     riak_kv_replrtq_src:replrtq_coordput({Bucket,
                                             Key,
                                             riak_object:vclock(Obj),
-                                            ObjectFormat}).
+                                            ObjectFormat});
+nextgenrepl(_B, _K, _Obj, _Size, _Coord, _Enabled, _Limit) ->
+    ok.
+
 
 -spec aae_update(binary(), binary(),
                     riak_object:riak_object()|none|undefined|use_binary,
