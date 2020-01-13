@@ -373,7 +373,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%============================================================================
 
-% @doc calculate the mean avoiding divide by 0
+%% @doc calculate the mean avoiding divide by 0
 -spec calc_mean(non_neg_integer(), non_neg_integer()) -> string().
 calc_mean(_, 0) ->
     "no_result";
@@ -381,10 +381,13 @@ calc_mean(Time, Count) ->
     [Mean] = io_lib:format("~.3f",[Time / Count]),
     Mean.
 
-% @doc convert the tokenised string of peers from the configuration into actual
-% usable peer information.
-% tokenised string expected to be of form:
-% "192.168.10.1:8098|192.168.10.2:8098 etc"
+%% @doc convert the tokenised string of peers from the configuration into actual
+%% usable peer information.
+%% tokenised string expected to be of form:
+%% "192.168.10.1:8098:http|192.168.10.2:8098:http etc"
+%% Optionally the tokenised string may include a queue name, if more than the
+%% default queue name is to be used.  The queue name should be a prefix e.g.:
+%% "q1_ttaaefs:192.168.10.1:8097:pb|passive:192.168.10.2:8097:pb etc"
 -spec tokenise_peers(queue_name(), string()) -> list({queue_name(), peer_info()}).
 tokenise_peers(DefaultQueue, PeersString) ->
     PeerL0 = string:tokens(PeersString, "|"),
