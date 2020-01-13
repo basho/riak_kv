@@ -185,7 +185,11 @@ add_snkqueue(QueueName, Peers, WorkerCount) ->
     gen_server:call(?MODULE, {add, QueueName, Peers, WorkerCount}).
 
 %% @doc
-%% Change the number of concurrent workers supporting a given queue
+%% Change the number of concurrent workers supporting a given queue.  Changing
+%% the count is equivalent to starting a new set of workers, and waiting for
+%% the old set of workers to expire once they have completed any outstanding
+%% work.  So for an initial period there may be more concurrent work ongoing
+%% until all in-flight work is finished.
 -spec set_workercount(queue_name(), pos_integer()) -> ok|not_found.
 set_workercount(QueueName, WorkerCount) ->
     gen_server:call(?MODULE, {worker_count, QueueName, WorkerCount}).
