@@ -251,7 +251,14 @@ waitforpop_rtq(QueueName, N) ->
     case popfrom_rtq(QueueName) of
         queue_empty ->
             timer:sleep(?CONSUME_DELAY),
-            waitforpop_rtq(QueueName, N - 1);
+            % Maybe a shutdown during sleep - so check process is alive when
+            % emerging from sleep to avoid noisy shutdown
+            case whereis(?MODULE) of
+                undefined ->
+                    queue_empty;
+                _ ->
+                    waitforpop_rtq(QueueName, N - 1)
+            end;
         R ->
             R
     end.

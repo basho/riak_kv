@@ -48,8 +48,12 @@
 
 -define(LOG_TIMER_SECONDS, 60).
 -define(ZERO_STATS,
-        {{success, 0}, {failure, 0}, {repl_time, 0},
-        {modified_time, 0, 0, 0, 0, 0}}).
+        {{success, 0},
+            {failure, 0},
+            {replfetch_time, 0},
+            {replpush_time, 0},
+            {replmod_time, 0},
+            {modified_time, 0, 0, 0, 0, 0}}).
 -define(STARTING_DELAYMS, 8).
 -define(MAX_SUCCESS_DELAYMS, 1024).
 -define(ON_ERROR_DELAYMS, 65536).
@@ -109,7 +113,9 @@
 
 -type queue_stats() ::
     {{success, non_neg_integer()}, {failure, non_neg_integer()},
-        {repl_time, non_neg_integer()},
+        {replfetch_time, non_neg_integer()},
+        {replpush_time, non_neg_integer()},
+        {replmod_time, non_neg_integer()},
         {modified_time,
             non_neg_integer(),
             non_neg_integer(),
@@ -122,8 +128,8 @@
 
 -type reply_tuple() ::
     {queue_empty, non_neg_integer()} |
-        {tomb, non_neg_integer(), non_neg_integer()} |
-        {object, non_neg_integer(), non_neg_integer()} |
+        {tomb, non_neg_integer(), non_neg_integer(), non_neg_integer()} |
+        {object, non_neg_integer(), non_neg_integer(), non_neg_integer()} |
         {error, any(), any()}.
 
 %%%============================================================================
@@ -378,7 +384,7 @@ code_change(_OldVsn, State, _Extra) ->
 calc_mean(_, 0) ->
     "no_result";
 calc_mean(Time, Count) ->
-    [Mean] = io_lib:format("~.3f",[Time / Count]),
+    [Mean] = io_lib:format("~.3f",[(Time / Count) / 1000]),
     Mean.
 
 %% @doc convert the tokenised string of peers from the configuration into actual
@@ -547,39 +553,51 @@ work(WorkItem) ->
 -spec repl_fetcher(work_item()) -> ok.
 repl_fetcher(WorkItem) ->
     SW = os:timestamp(),
-    {{QueueName, _Iter, _Peer}, LocalClient, RemoteFun, RenewClientFun}
+    {{QueueName, _Iter, Peer}, LocalClient, RemoteFun, RenewClientFun}
         = WorkItem,
     try
         case RemoteFun(QueueName) of
             {ok, queue_empty} ->
                 SW0 = os:timestamp(),
-                EmptyFetchSplit = timer:now_diff(SW0, SW) div 1000,
-                done_work(WorkItem, true, {queue_empty, EmptyFetchSplit});
+                EmptyFetchSplit = timer:now_diff(SW0, SW),
+                done_work(WorkItem, true,
+                            {queue_empty, EmptyFetchSplit});
             {ok, {deleted, _TC, RObj}} ->
+                SWFetched = os:timestamp(),
                 {ok, LMD} = riak_client:push(RObj, true, [], LocalClient),
-                SW0 = os:timestamp(),
-                ModSplit = timer:now_diff(SW0, LMD) div 1000,
-                FetchSplit = timer:now_diff(SW0, SW) div 1000,
-                done_work(WorkItem, true, {tomb, FetchSplit, ModSplit});
+                SWPushed = os:timestamp(),
+                ModSplit = timer:now_diff(SWPushed, LMD),
+                FetchSplit = timer:now_diff(SWFetched, SW),
+                PushSplit = timer:now_diff(SWPushed, SWFetched),
+                done_work(WorkItem, true,
+                            {tomb, FetchSplit, PushSplit, ModSplit});
             {ok, RObj} ->
+                SWFetched = os:timestamp(),
                 {ok, LMD} = riak_client:push(RObj, false, [], LocalClient),
-                SW0 = os:timestamp(),
-                ModSplit = timer:now_diff(SW0, LMD) div 1000,
-                FetchSplit = timer:now_diff(SW0, SW) div 1000,
-                done_work(WorkItem, true, {object, FetchSplit, ModSplit});
+                SWPushed = os:timestamp(),
+                ModSplit = timer:now_diff(SWPushed, LMD),
+                FetchSplit = timer:now_diff(SWFetched, SW),
+                PushSplit = timer:now_diff(SWPushed, SWFetched),
+                done_work(WorkItem, true,
+                            {object, FetchSplit, PushSplit, ModSplit});
             {error, no_client} ->
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
-                done_work(UpdWorkItem, false, {error, no_client, no_client});
-            {error, Bin} when is_binary(Bin) ->
-                lager:warning("Snk worker failed due to remote exception ~p",
-                                [binary_to_list(Bin)]),
+                done_work(UpdWorkItem, false, {error, error, no_client});
+            {error, {conn_failed, {error, econnrefused}}} ->
+                lager:info("Snk worker connection refused to peer ~w", [Peer]),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
-                done_work(UpdWorkItem, false, {error, remote_error, remote_error})
+                done_work(UpdWorkItem, false, {error, error, econnrefused});
+            {error, Bin} when is_binary(Bin) ->
+                lager:warning("Snk worker for peer ~w " ++
+                                    "failed due to remote exception ~p",
+                                [Peer, binary_to_list(Bin)]),
+                UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
+                done_work(UpdWorkItem, false, {error, error, remote_error})
         end
     catch
         Type:Exception ->
-            lager:warning("Snk worker failed due to ~w error ~w", 
-                            [Type, Exception]),
+            lager:warning("Snk worker failed at Peer ~w due to ~w error ~w",
+                            [Peer, Type, Exception]),
             UpdWorkItem0 = setelement(3, WorkItem, RenewClientFun()),
             done_work(UpdWorkItem0, false, {error, Type, Exception})
     end.
@@ -589,13 +607,13 @@ repl_fetcher(WorkItem) ->
 -spec increment_queuestats(queue_stats(), reply_tuple()) -> queue_stats().
 increment_queuestats(QueueStats, ReplyTuple) ->
     case ReplyTuple of
-        {tomb, FetchSplit, ModSplit} ->
+        {tomb, FetchSplit, PushSplit, ModSplit} ->
             add_modtime(add_repltime(add_success(QueueStats),
-                            FetchSplit),
+                            {FetchSplit, PushSplit, ModSplit}),
                         ModSplit);
-        {object, FetchSplit, ModSplit} ->
+        {object, FetchSplit, PushSplit, ModSplit} ->
             add_modtime(add_repltime(add_success(QueueStats),
-                            FetchSplit),
+                            {FetchSplit, PushSplit, ModSplit}),
                         ModSplit);
         {queue_empty, _TS} ->
             QueueStats;
@@ -615,22 +633,31 @@ mod_split_element(_) ->
     5.
 
 -spec add_success(queue_stats()) -> queue_stats().
-add_success({{success, Success}, F, RT, MT}) ->
-    {{success, Success + 1}, F, RT, MT}.
+add_success({{success, Success}, F, FT, PT, RT, MT}) ->
+    {{success, Success + 1}, F, FT, PT, RT, MT}.
 
 -spec add_failure(queue_stats()) -> queue_stats().
-add_failure({S, {failure, Failure}, RT, MT}) ->
-    {S, {failure, Failure + 1}, RT, MT}.
+add_failure({S, {failure, Failure}, FT, PT, RT, MT}) ->
+    {S, {failure, Failure + 1}, FT, PT, RT, MT}.
 
--spec add_repltime(queue_stats(), integer()) -> queue_stats().
-add_repltime({S, F, {repl_time, TotalReplTime}, MT}, ReplTime) ->
-    {S, F, {repl_time, TotalReplTime + ReplTime}, MT}.
+-spec add_repltime(queue_stats(),
+                    {integer(), integer(), integer()}) -> queue_stats().
+add_repltime({S, 
+                F,
+                {replfetch_time, FT}, {replpush_time, PT}, {replmod_time, RT},
+                MT},
+            {FT0, PT0, RT0}) ->
+    {S, F,
+        {replfetch_time, FT + FT0},
+        {replpush_time, PT + PT0},
+        {replmod_time, RT + RT0},
+        MT}.
 
 -spec add_modtime(queue_stats(), integer()) -> queue_stats().
-add_modtime({S, F, RT, MT}, ModTime) ->
-    E = mod_split_element(ModTime) +  1,
+add_modtime({S, F, FT, PT, RT, MT}, ModTime) ->
+    E = mod_split_element(ModTime div 1000) +  1,
     C = element(E, MT),
-    {S, F, RT, setelement(E, MT, C + 1)}.
+    {S, F, FT, PT, RT, setelement(E, MT, C + 1)}.
 
 %% @doc
 %% Depending on the result of the request, adjust the wait time before this
@@ -677,13 +704,18 @@ increment_delay(N) ->
 -spec log_mapfun(sink_work()) -> sink_work().
 log_mapfun({QueueName, Iteration, SinkWork}) ->
     {{success, SC}, {failure, EC},
-        {repl_time, RT},
+        {replfetch_time, FT},
+        {replpush_time, PT},
+        {replmod_time, RT},
         {modified_time, MTS, MTM, MTH, MTD, MTL}}
         = SinkWork#sink_work.queue_stats,
     lager:info("Queue=~w success_count=~w error_count=~w" ++
-                " mean_repltime=~s" ++
+                " mean_fetchtime_ms=~s" ++
+                " mean_pushtime_ms=~s" ++
+                " mean_repltime_ms=~s" ++
                 " lmdin_s=~w lmdin_m=~w lmdin_h=~w lmdin_d=~w lmd_over=~w",
-                [QueueName, SC, EC, calc_mean(RT, SC),
+                [QueueName, SC, EC,
+                    calc_mean(FT, SC), calc_mean(PT, SC), calc_mean(RT, SC),
                     MTS, MTM, MTH, MTD, MTL]),
     FoldPeerInfoFun =
         fun({_PeerID, D, IP, Port, _P}, Acc) ->
@@ -766,16 +798,16 @@ log_dont_blow_test() ->
     ?assertMatch(SW0, SW1),
     QS0 = SW1#sink_work.queue_stats,
     QS1 = increment_queuestats(QS0, {no_queue, 100}),
-    QS2 = increment_queuestats(QS1, {tomb, 150, 180}),
-    QS3 = increment_queuestats(QS2, {object, 150, 180}),
+    QS2 = increment_queuestats(QS1, {tomb, 150, 50, 180}),
+    QS3 = increment_queuestats(QS2, {object, 110, 10, 180}),
     QS4 = increment_queuestats(QS3, {error, tcp, closed}),
     QS5 = increment_queuestats(QS4, {no_queue, 100}),
     {queue1, 5, SW2} =
         log_mapfun({queue1, 5, SW1#sink_work{queue_stats = QS5}}),
     ?assertMatch(?ZERO_STATS, SW2#sink_work.queue_stats),
-    QSMT1 = add_modtime(?ZERO_STATS, 86400001),
+    QSMT1 = add_modtime(?ZERO_STATS, 86400001 * 1000),
     QSMT2 = add_modtime(QSMT1, 0),
-    ?assertMatch({modified_time, 1, 0, 0, 0, 1}, element(4, QSMT2)).
+    ?assertMatch({modified_time, 1, 0, 0, 0, 1}, element(6, QSMT2)).
 
 
 -endif.
