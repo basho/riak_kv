@@ -66,7 +66,7 @@
             reap_fun :: reap_fun()
 }).
 
--type priority() :: integer().
+-type priority() :: 1..2.
 -type squeue() :: {queue, [any()], [any()]}.
 -type pqueue() ::  squeue() | {pqueue, [{priority(), squeue()}]}.
 -type queue_length() :: {non_neg_integer(), non_neg_integer()}.
@@ -94,11 +94,11 @@ start_job(JobID) ->
     gen_server:start_link(?MODULE, [JobID, fun reap/1], []).
 
 -spec request_reap(reap_reference(), priority()) -> ok.
-request_reap(ReapReference, Priority) ->
+request_reap(ReapReference, Priority) when Priority == 1; Priority == 2 ->
     gen_server:cast(?MODULE, {request_reap, ReapReference, Priority}).
 
 -spec request_reap(pid(), reap_reference(), priority()) -> ok.
-request_reap(Pid, ReapReference, Priority) ->
+request_reap(Pid, ReapReference, Priority) when Priority == 1; Priority == 2 ->
     gen_server:cast(Pid, {request_reap, ReapReference, Priority}).
 
 -spec reap_stats(pid()) -> reap_stats().

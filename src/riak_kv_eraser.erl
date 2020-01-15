@@ -63,7 +63,7 @@
             redo_deletes = false :: boolean() 
 }).
 
--type priority() :: integer().
+-type priority() :: 1..2.
 -type squeue() :: {queue, [any()], [any()]}.
 -type pqueue() ::  squeue() | {pqueue, [{priority(), squeue()}]}.
 -type queue_length() :: {non_neg_integer(), non_neg_integer()}.
@@ -94,11 +94,12 @@ start_job(JobID) ->
     gen_server:start_link(?MODULE, [JobID, fun erase/2, DeleteMode], []).
 
 -spec request_delete(delete_reference(), priority()) -> ok.
-request_delete(DelReference, Priority) ->
+request_delete(DelReference, Priority) when Priority == 1; Priority == 2 ->
     gen_server:cast(?MODULE, {request_delete, DelReference, Priority}).
 
 -spec request_delete(pid(), delete_reference(), priority()) -> ok.
-request_delete(Pid, DelReference, Priority) ->
+request_delete(Pid, DelReference, Priority)
+                                        when Priority == 1; Priority == 2 ->
     gen_server:cast(Pid, {request_delete, DelReference, Priority}).
 
 -spec delete_stats(pid()) -> delete_stats().
