@@ -560,6 +560,7 @@ repl_fetcher(WorkItem) ->
             {ok, queue_empty} ->
                 SW0 = os:timestamp(),
                 EmptyFetchSplit = timer:now_diff(SW0, SW),
+                ok = riak_kv_stat:update(ngrrepl_empty),
                 done_work(WorkItem, true,
                             {queue_empty, EmptyFetchSplit});
             {ok, {deleted, _TC, RObj}} ->
@@ -569,6 +570,7 @@ repl_fetcher(WorkItem) ->
                 ModSplit = timer:now_diff(SWPushed, LMD),
                 FetchSplit = timer:now_diff(SWFetched, SW),
                 PushSplit = timer:now_diff(SWPushed, SWFetched),
+                ok = riak_kv_stat:update(ngrrepl_object),
                 done_work(WorkItem, true,
                             {tomb, FetchSplit, PushSplit, ModSplit});
             {ok, RObj} ->
@@ -578,20 +580,24 @@ repl_fetcher(WorkItem) ->
                 ModSplit = timer:now_diff(SWPushed, LMD),
                 FetchSplit = timer:now_diff(SWFetched, SW),
                 PushSplit = timer:now_diff(SWPushed, SWFetched),
+                ok = riak_kv_stat:update(ngrrepl_object),
                 done_work(WorkItem, true,
                             {object, FetchSplit, PushSplit, ModSplit});
             {error, no_client} ->
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
+                ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, no_client});
             {error, {conn_failed, {error, econnrefused}}} ->
                 lager:info("Snk worker connection refused to peer ~w", [Peer]),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
+                ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, econnrefused});
             {error, Bin} when is_binary(Bin) ->
                 lager:warning("Snk worker for peer ~w " ++
                                     "failed due to remote exception ~p",
                                 [Peer, binary_to_list(Bin)]),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
+                ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, remote_error})
         end
     catch
@@ -599,6 +605,7 @@ repl_fetcher(WorkItem) ->
             lager:warning("Snk worker failed at Peer ~w due to ~w error ~w",
                             [Peer, Type, Exception]),
             UpdWorkItem0 = setelement(3, WorkItem, RenewClientFun()),
+            ok = riak_kv_stat:update(ngrrepl_error),
             done_work(UpdWorkItem0, false, {error, Type, Exception})
     end.
 

@@ -216,12 +216,14 @@ queue_fetch(timeout, StateData) ->
         queue_empty ->
             Msg = {ReqID, {ok, queue_empty}},
             Pid ! Msg,
+            ok = riak_kv_stat:update(ngrfetch_nofetch),
             {stop, normal, StateData};
         {Bucket, Key, ExpectedClock, to_fetch} ->
             % Do a full fetch with default n and r.  Assume the answer returned
             % is the best answer, so no need to compare with the expected
             % answer
             Timing = riak_kv_fsm_timing:add_timing(prepare, []),
+            ok = riak_kv_stat:update(ngrfetch_tofetch),
             {next_state,
                 prepare,
                 StateData#state{bkey = {Bucket, Key},
@@ -231,11 +233,13 @@ queue_fetch(timeout, StateData) ->
         {_Bucket, _Key, _ExpectedClock, {object, Obj}} ->
             Msg = {ReqID, {ok, Obj}},
             Pid ! Msg,
+            ok = riak_kv_stat:update(ngrfetch_prefetch),
             {stop, normal, StateData};
         {_Bucket, _Key, ExpectedClock, {tomb, Obj}} ->
             % A tombstone was queued - so there is no need to fetch
             Msg = {ReqID, {ok, {deleted, ExpectedClock, Obj}}},
             Pid ! Msg,
+            ok = riak_kv_stat:update(ngrfetch_prefetch),
             {stop, normal, StateData}
     end.
 
