@@ -278,6 +278,8 @@ do_update(precommit_fail) ->
     exometer:update([?PFX, ?APP, precommit_fail], 1);
 do_update(postcommit_fail) ->
     exometer:update([?PFX, ?APP, postcommit_fail], 1);
+do_update({controller_queue, QueueTime}) ->
+    ok = create_or_update([?PFX, ?APP, tictacaae_controller_queue], QueueTime, histogram);
 do_update(write_once_merge) ->
     exometer:update([?PFX, ?APP, write_once_merge], 1);
 do_update({fsm_spawned, Type}) when Type =:= gets; Type =:= puts ->
@@ -720,6 +722,8 @@ stats() ->
      {[vnode, backend, leveldb, read_block_error],
       {function, ?MODULE, leveldb_read_block_errors, [], match, value}, [],
       [{value, leveldb_read_block_error}]},
+     {tictacaae_controller_queue, histogram, [], [{mean, tictacaae_queue_microsec_mean},
+                                                    {max, tictacaae_queue_microsec__max}]},
 
      %% datatype stats
      {[counter, actor_count], histogram, [], [{mean  , counter_actor_counts_mean},
