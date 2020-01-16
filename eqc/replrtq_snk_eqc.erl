@@ -19,14 +19,6 @@
 
 -define(TEST_DURATION, 100). %% milliseconds
 
-%% -- Notes ------------------------------------------------------------------
-
-%% BUG: If you remove a queue and add it again with different peers
-%%      riak_kv_replrtq_snk crashes when work comes back from the removed
-%%      queue. For now disabled reusing queue names:
-
-allow_reusing_queue_names() -> false.
-
 %% -- State ------------------------------------------------------------------
 
 get_sink(#{sinks := Sinks}, QueueName) ->
@@ -180,10 +172,7 @@ add_pre(S) -> maps:is_key(sinks, S).
 
 add_args(_S) -> [sink_gen()].
 
-add_pre(#{sinks := Sinks} = S, [#{queue := Q}]) ->
-    Q /= disabled andalso
-    (not lists:member(Q, maps:get(removed, S, [])) orelse
-     allow_reusing_queue_names()) andalso
+add_pre(#{sinks := Sinks}, [#{queue := Q}]) ->
     not maps:is_key(Q, Sinks).
 
 add(#{queue := Q, peers := Peers, workers := N}) ->
@@ -194,7 +183,9 @@ add(#{queue := Q, peers := Peers, workers := N}) ->
 add_callouts(_S, [Sink]) -> ?APPLY(setup_sink, [Sink]).
 
 add_next(#{sinks := Sinks} = S, _V, [#{queue := Q} = Sink]) ->
-  S#{ sinks => Sinks#{ Q => Sink } }.
+  Removed = maps:get(removed, S, []),
+  S#{ sinks => Sinks#{ Q => Sink },
+      reused => maps:get(reused, S, []) ++ [Q || lists:member(Q, Removed)] }.
 
 %% --- remove ---
 
@@ -210,6 +201,30 @@ remove(Q) ->
 remove_next(#{sinks := Sinks} = S, _, [Q]) ->
     Removed = maps:get(removed, S, []),
     S#{sinks => maps:remove(Q, Sinks), removed => [Q | Removed]}.
+
+%% --- Operation: set the numebr of workers for a queue ---
+nrworkers_pre(S) -> maps:is_key(sinks, S).
+
+nrworkers_args(S) ->
+    [maybe_active_queue_gen(S), ?LET(N, nat(), N + 1)].
+
+nrworkers_pre(#{sinks := Sinks}, [Q, _Workers]) ->
+    maps:is_key(Q, Sinks).
+
+nrworkers(Q, Workers) ->
+    replrtq_snk_monitor:update_workers(Q, Workers),
+    riak_kv_replrtq_snk:set_workercount(Q, Workers).
+
+nrworkers_next(#{sinks := Sinks} = S, _Value, [Q, Workers]) ->
+    Sink = maps:get(Q, Sinks),
+    S#{sinks => Sinks#{Q => Sink#{workers => Workers}},
+       with_dynamic_workers => [Q | maps:get(with_dynamic_workers, S, [])]}.
+
+nrworkers_callouts(#{sinks := Sinks}, [Q, _Workers]) ->
+    Sink = maps:get(Q, Sinks),
+    ?APPLY(setup_sink, [Sink]).
+
+
 
 %% -- Generators -------------------------------------------------------------
 
@@ -269,9 +284,10 @@ peer_config_gen() ->
 
 %% -- Property ---------------------------------------------------------------
 
-weight(_S, suspend) -> 1;
-weight(_S, remove)  -> 1;
-weight(_S, _Cmd)    -> 5.
+weight(_S, suspend) -> 10;
+weight(_S, remove)  -> 10;
+weight(_S, nrworkers) -> 5;
+weight(_S, _Cmd)    -> 50.
 
 prop_repl() ->
     ?SETUP(
@@ -297,28 +313,45 @@ prop_repl() ->
                     HasCrashed;
                 Other -> {not_pid, Other}
             end,
+        WithDynamicWorkers = maps:get(with_dynamic_workers, S, []),
+        ReUsedQueues = maps:get(reused, S, []),
         check_command_names(Cmds,
+            collect({changed_workers_count, length(WithDynamicWorkers) > 0},
+            collect({removed_and_reused, length(ReUsedQueues) > 0},
             measure(length, commands_length(Cmds),
             measure(trace, [length(T) || {_, _, _, T} <- Traces],
                 pretty_commands(?MODULE, Cmds, {H, S, Res},
                                 conjunction([{result, equals(Res, ok)},
-                                             {trace, check_traces(Traces)},
-                                             {alive, equals(Crashed, false)}])))))
+                                             {alive, equals(Crashed, false)},
+                                             {trace, check_traces(Traces, WithDynamicWorkers ++
+                                                                      ReUsedQueues)}])
+                               ))))))
     end))).
 
-check_traces(Traces) ->
-    conjunction([ {QueueName, check_trace(QueueName, Peers, Workers, Trace)}
-                  || {QueueName, Peers, Workers, Trace} <- Traces ]).
+check_traces(Traces, WithDynamicWorkers) ->
+    conjunction([ {QueueName, check_trace(QueueName, Peers, get_workers(Workers, Trace))}
+                  || {QueueName, Peers, Workers, Trace} <- Traces,
+                      not lists:member(QueueName, WithDynamicWorkers)]).
 
-check_trace(QueueName, Peers, Workers, Trace) ->
+%% We only need this if we have non dynamic worker count changes
+get_workers(Workers, Trace) ->
+    case Trace of
+        [{_, {workers, N}} | Rest ] -> {N, Rest};
+        _ -> {Workers, Trace}
+    end.
+
+check_trace(QueueName, Peers, {Workers, Trace}) ->
     Concurrent = concurrent_fetches(Trace),
     {Suspended, Active} = split_suspended(Concurrent),
     Max        = lists:max([0 | [N || {_, N} <- Active ++ Suspended]]),
     Avg        = weighted_average(Active),
     ActiveTime = lists:sum([ T || {T, _} <- Active ]),
     AnyActive  = lists:any(fun({_, {A, _}}) -> A == active end, Peers),
-    ?WHENFAIL(eqc:format("Trace for ~p:\n  ~p\n", [QueueName, Trace]),
-    conjunction([{max_workers, equals(Workers, Max)},
+    ?WHENFAIL(eqc:format("Trace for ~p:\n  ~p\nworkers ~p\n", [QueueName, Trace, Workers]),
+    conjunction([{max_workers, case Trace of
+                                   [{_, stop}] -> true;
+                                   _ -> equals(Workers, Max)
+                               end},
                  {avg_workers,
                     %% Check that the average number of active workers is >= WorkerCount - 1
                     ?WHENFAIL(eqc:format("Concurrent =\n~s\n~.1f < ~p\n",
@@ -394,7 +427,7 @@ concurrent_fetches([{T1, E} | Trace], T0, N, Status, Acc) ->
 api_spec() ->
     #api_spec{ language = erlang, mocking = eqc_mocking,
                modules = [ app_helper_spec(), lager_spec(), rhc_spec(),
-                           riak_client_spec(), mock_spec() ] }.
+                           riak_client_spec(), mock_spec(), riak_kv_stat_spec() ] }.
 
 app_helper_spec() ->
     #api_module{ name = app_helper, fallback = ?MODULE }.
@@ -416,6 +449,12 @@ rhc_spec() ->
 
 riak_client_spec() ->
     #api_module{ name = riak_client, fallback = ?MODULE }.
+
+riak_kv_stat_spec() ->
+    #api_module{ name = riak_kv_stat, fallback = ?MODULE}.
+
+update(_) ->
+    ok.
 
 new(_, _) -> riak_client.
 
