@@ -21,7 +21,7 @@
 %% -------------------------------------------------------------------
 
 %% @doc riak_kv_stat is a module for aggregating
-%%      stats about the Riak node on which it is runing.
+%%      stats about the Riak node on which it is running.
 %%
 %%      Update each stat with the exported function update/1. Add
 %%      a new stat to the internal stats/0 func to register a new stat with
@@ -474,7 +474,8 @@ do_repairs(Indices, Preflist) ->
 %% for dynamically created / dimensioned stats
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
-    riak_stat:update(lists:flatten([?Prefix, ?APP | [Name]]), UpdateVal, Type).
+    StatName = lists:flatten([?Prefix, ?APP | [Name]]),
+    riak_stat:update(StatName, UpdateVal, Type).
 
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
