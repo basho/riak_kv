@@ -266,6 +266,18 @@ do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
 do_update({read_repairs, Indices, Preflist}) ->
     ok = exometer:update([?PFX, ?APP, node, gets, read_repairs], 1),
     do_repairs(Indices, Preflist);
+do_update(ngrfetch_nofetch) ->
+    ok = exometer:update([?PFX, ?APP, node, gets, ngrfetch_nofetch], 1);
+do_update(ngrfetch_prefetch) ->
+    ok = exometer:update([?PFX, ?APP, node, gets, ngrfetch_prefetch], 1);
+do_update(ngrfetch_tofetch) ->
+    ok = exometer:update([?PFX, ?APP, node, gets, ngrfetch_tofetch], 1);
+do_update(ngrrepl_empty) ->
+    ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_empty], 1);
+do_update(ngrrepl_object) ->
+    ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_object], 1);
+do_update(ngrrepl_error) ->
+    ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_error], 1);
 do_update(skipped_read_repairs) ->
     ok = exometer:update([?PFX, ?APP, node, gets, skipped_read_repairs], 1);
 do_update(coord_redir) ->
@@ -565,6 +577,12 @@ stats() ->
                                                {count, read_repairs_total}]},
      {[node, gets, skipped_read_repairs], spiral, [], [{one, skipped_read_repairs},
                                                        {count, skipped_read_repairs_total}]},
+     {[node, gets, ngrfetch_nofetch], spiral, [], [{one, ngrfetch_nofetch},
+                                                    {count, ngrfetch_nofetch_total}]},
+     {[node, gets, ngrfetch_prefetch], spiral, [], [{one, ngrfetch_prefetch},
+                                                    {count, ngrfetch_prefetch_total}]},
+     {[node, gets, ngrfetch_tofetch], spiral, [], [{one, ngrfetch_tofetch},
+                                                    {count, ngrfetch_tofetch_total}]},
      {[node, gets, siblings], histogram, [], [{mean  , node_get_fsm_siblings_mean},
                                               {median, node_get_fsm_siblings_median},
                                               {95    , node_get_fsm_siblings_95},
@@ -700,6 +718,12 @@ stats() ->
                                                {95    , node_put_fsm_map_time_95},
                                                {99    , node_put_fsm_map_time_99},
                                                {max   , node_put_fsm_map_time_100}]},
+     {[node, puts, ngrrepl_empty], spiral, [], [{one, ngrrepl_empty},
+                                                    {count, ngrrepl_empty_total}]},
+     {[node, puts, ngrrepl_object], spiral, [], [{one, ngrrepl_object},
+                                                    {count, ngrrepl_object_total}]},
+     {[node, puts, ngrrepl_error], spiral, [], [{one, ngrrepl_error},
+                                                    {count, ngrrepl_error_total}]},
 
      %% index & list{keys,buckets} & clusteraae stats
      {[index, fsm, create], spiral, [], [{one, index_fsm_create}]},

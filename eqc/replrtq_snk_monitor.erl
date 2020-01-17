@@ -60,8 +60,9 @@ handle_call({add_queue, Queue, Peers, Workers}, _From, State) ->
     Ref = make_ref(),
     PeerMap = maps:from_list([{{{Host, Port}, Queue}, {Ref, Cfg}} || {{Host, Port, http}, Cfg} <- Peers]),
     Q = #queue{ref = Ref, name = Queue, peers = Peers, workers = Workers},
-    {reply, ok, State#state{ queues = [Q | State#state.queues],
-                             peers  = maps:merge(State#state.peers, PeerMap) }};
+    State1 = State#state{ queues = [Q | State#state.queues],
+                          peers  = maps:merge(State#state.peers, PeerMap) },
+    {reply, ok, add_trace(State1, Queue, {workers, Workers})};
 handle_call({fetch, Client, QueueName}, From, State = #state{ peers = Peers }) ->
     State1 = add_trace(State, QueueName, {fetch, Client}),
     case maps:get({Client, QueueName}, Peers, undefined) of
@@ -88,7 +89,8 @@ handle_call({resume, Queue}, _From, State) ->
 handle_call({update_workers, Q, Workers}, _From, State) ->
     Queue = lists:keyfind(Q, #queue.name, State#state.queues),
     NewQueue = Queue#queue{workers = Workers},
-    {reply, ok, State#state{ queues = [NewQueue | State#state.queues -- [Queue]]}};
+    State1 = State#state{ queues = [NewQueue | State#state.queues -- [Queue]]},
+    {reply, ok, add_trace(State1, Q, {workers, Workers})};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
