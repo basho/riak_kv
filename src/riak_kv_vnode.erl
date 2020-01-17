@@ -153,7 +153,9 @@
                 tictac_rebuilding = false :: erlang:timestamp()|false,
                 worker_pool_strategy = single :: none|single|dscp,
                 vnode_pool_pid :: undefined|pid(),
-                update_hook :: update_hook()
+                update_hook :: update_hook(),
+                enable_nextgenreplsrc = false :: boolean(),
+                sizelimit_nextgenreplsrc = 0 :: non_neg_integer()
                }).
 
 -type index_op() :: add | remove.
@@ -733,6 +735,10 @@ init([Index]) ->
         app_helper:get_env(riak_kv, tictacaae_active, passive),
     WorkerPoolStrategy =
         app_helper:get_env(riak_kv, worker_pool_strategy),
+    EnableNextGenReplSrc = 
+        app_helper:get_env(riak_kv, replrtq_enablesrc, false),
+    SizeLimitNextGenReplSrc = 
+        app_helper:get_env(riak_kv, replrtq_srcobjectsize, 0),
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
@@ -759,7 +765,9 @@ init([Index]) ->
                            md_cache=MDCache,
                            md_cache_size=MDCacheSize,
                            worker_pool_strategy=WorkerPoolStrategy,
-                           update_hook=update_hook()},
+                           update_hook=update_hook(),
+                           enable_nextgenreplsrc = EnableNextGenReplSrc,
+                           sizelimit_nextgenreplsrc = SizeLimitNextGenReplSrc},
             try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
@@ -2413,7 +2421,7 @@ do_put(Sender, Request, State) ->
 
 %% @private
 %% upon receipt of a client-initiated put
-do_put(Sender, {Bucket, Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
+do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     BProps =  case proplists:get_value(bucket_props, Options) of
                   undefined ->
                       riak_core_bucket:get_bucket(Bucket);
@@ -2443,36 +2451,6 @@ do_put(Sender, {Bucket, Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
-
-    % Now the reply has been sent, check for replication requirements.  If no
-    % replication is enabled, then the replrtq_coordput/4 request will be
-    % discarded by the riak_kv_replrtq_src
-    case {Coord, Reply} of
-        {true, {dw, _Idx, Obj, _ReqID}} ->
-            % This is the co-ordinator of the PUT - so cast this to the repl
-            % sink to check for replication need.
-            % If the replication cache is enabled, then add it to the cache.
-            % Note the Obj should always be present when the PUT is being
-            % coordinated as coordination will prompt the return_body to be
-            % set to true.
-            ObjectFormat =
-                case riak_kv_util:is_x_deleted(Obj) of
-                    true ->
-                        % This object may be reaped by the vnode before the 
-                        % sink attempts to fetch the tombstone from the vnode.
-                        % So the tombstone should but placed on the queue
-                        {tomb, Obj};
-                    false ->
-                        to_fetch
-                end,
-            riak_kv_replrtq_src:replrtq_coordput({Bucket,
-                                                    Key,
-                                                    riak_object:vclock(Obj),
-                                                    ObjectFormat});
-        _ ->
-            % Only cache co-ordinated PUTs
-            ok
-    end,
 
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
@@ -2771,27 +2749,35 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                      bkey=BKey,
                      reqid=ReqID,
                      index_specs=IndexSpecs,
-                     readrepair=ReadRepair}) ->
+                     readrepair=ReadRepair,
+                     coord=Coord}) ->
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
       false ->
         MaxCheckFlag = do_max_check
     end,
-    actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State).
+    actual_put(BKey, Objects, IndexSpecs,
+                RB, ReqID, MaxCheckFlag, Coord, State).
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, State).
+    actual_put(BKey, {Obj, OldObj}, IndexSpecs,
+                RB, ReqID, do_max_check, false, State).
 
-actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFlag,
-           State=#state{idx=Idx,
-                        mod=Mod,
-                        modstate=ModState,
-                        update_hook=UpdateHook}) ->
+actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs,
+            RB, ReqID, MaxCheckFlag, Coord,
+            State=#state{idx=Idx,
+                            mod=Mod,
+                            modstate=ModState,
+                            update_hook=UpdateHook}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
             aae_update(Bucket, Key, Obj, OldObj, EncodedVal, State),
+            nextgenrepl(Bucket, Key, Obj, size(EncodedVal),
+                        Coord,
+                        State#state.enable_nextgenreplsrc,
+                        State#state.sizelimit_nextgenreplsrc),
             maybe_cache_object(BKey, Obj, State),
             maybe_update(UpdateHook, {Obj, maybe_old_object(OldObj)}, put, Idx),
             Reply = case RB of
@@ -3396,6 +3382,40 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     end
             end
     end.
+
+
+-spec nextgenrepl(riak_object:bucket(), riak_object:key(),
+                    riak_object:riak_object(),
+                    pos_integer(), boolean(), boolean(), non_neg_integer()) ->
+                        ok.
+nextgenrepl(Bucket, Key, Obj, Size, true, true, Limit) ->
+    % This is the co-ordinator of the PUT, and nextgenrepl is enabled - so
+    % cast this to the repl src.
+    ObjectFormat =
+        case riak_kv_util:is_x_deleted(Obj) of
+            true ->
+                % This object may be reaped by the vnode before the 
+                % sink attempts to fetch the tombstone from the vnode.
+                % So the tombstone should be placed on the queue
+                {tomb, Obj};
+            false ->
+                % Check the size of the object before pushing the
+                % object to the replication queue.  Larger objects
+                % will have only a reference pushed, and will need
+                % to be fetched.
+                case Size > Limit of
+                    true ->
+                        to_fetch;
+                    _ ->
+                        {object, Obj}
+                end
+        end,
+    riak_kv_replrtq_src:replrtq_coordput({Bucket,
+                                            Key,
+                                            riak_object:vclock(Obj),
+                                            ObjectFormat});
+nextgenrepl(_B, _K, _Obj, _Size, _Coord, _Enabled, _Limit) ->
+    ok.
 
 
 -spec aae_update(binary(), binary(),
