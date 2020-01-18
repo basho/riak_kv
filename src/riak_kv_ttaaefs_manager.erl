@@ -431,9 +431,10 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
             {State#state{bucket_list = NextBucketList},
                 ?LOOP_TIMEOUT};
         _ ->
+            StopFun = fun() -> stop_client(RemoteClient, RemoteMod) end,
             RemoteSendFun = generate_sendfun({RemoteClient, RemoteMod}, RNVal),
             LocalSendFun = generate_sendfun(local, LNVal),
-            ReplyFun = generate_replyfun(ReqID, From),
+            ReplyFun = generate_replyfun(ReqID, From, StopFun),
             ReqID0 = 
                 case ReqID of
                     no_reply ->
@@ -454,7 +455,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
             
             lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
                             [ReqID0, ExID, ExPid]),
-            stop_client(RemoteClient, RemoteMod),
+            
             {State#state{bucket_list = NextBucketList},
                 ?CRASH_TIMEOUT}
     end.
@@ -634,8 +635,8 @@ format_segment_filter({segments, SegList, TreeSize}) ->
 %% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
--spec generate_replyfun(integer()|no_reply, pid()) -> fun().
-generate_replyfun(ReqID, From) ->
+-spec generate_replyfun(integer()|no_reply, pid(), fun()) -> fun().
+generate_replyfun(ReqID, From, StopClientFun) ->
     fun(Result) ->
         case ReqID of
             no_reply ->
@@ -645,7 +646,8 @@ generate_replyfun(ReqID, From) ->
                 From ! {ReqID, Result}
         end,
         lager:info("Completed full-sync with result=~w", [Result]),
-        gen_server:cast(?MODULE, {reply_complete, ReqID, Result})
+        gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),
+        StopClientFun()
     end.
 
 %% @doc
