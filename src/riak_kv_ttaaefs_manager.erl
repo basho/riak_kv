@@ -454,7 +454,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
             
             lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
                             [ReqID0, ExID, ExPid]),
-            
+            stop_client(RemoteClient, RemoteMod),
             {State#state{bucket_list = NextBucketList},
                 ?CRASH_TIMEOUT}
     end.
@@ -525,6 +525,13 @@ init_client(pb, IP, Port, Credentials) ->
     Options = [{auto_reconnect, true}|SecurityOpts],
     init_pbclient(IP, Port, Options).
 
+%% @doc
+%% Stop the client (if PBC), nothing started for RHC.
+-spec stop_client(rhc:rhc()|pid(), rhc|riak_c_pb_socket) -> ok.
+stop_client(_RemoteClient, rhc) ->
+    ok;
+stop_client(RemoteClient, Mod) ->
+    Mod:stop(RemoteClient).
 
 init_pbclient(IP, Port, Options) ->
     {ok, Pid} = riakc_pb_socket:start_link(IP, Port, Options),
