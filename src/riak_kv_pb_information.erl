@@ -83,7 +83,7 @@ process(Req, State) when Req == rpbgetnodesreq ->
 	process_get_nodes_req(State);
 process(Req, State) when Req == rpbnodewatcherupdate ->
 	process_node_watcher_update(State);
-process(Req, State) when Req == rpbnodewatchersubscribe ->
+process(Req, State) when erlang:is_record(Req, rpbnodewatchersubscribe) ->
 	process_node_watcher_subscribe(State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
