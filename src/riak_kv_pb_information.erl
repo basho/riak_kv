@@ -39,7 +39,7 @@
 -import(riak_pb_kv_codec, [decode_quorum/1]).
 
 -define(handle_decode_guard(Message), Message == rpbgetringreq orelse Message == rpbgetdefaultbucketpropsreq orelse
-                                      Message == rpbgetnodesreq orelse Message == rpbnodewatchersubscribe).
+                                      Message == rpbgetnodesreq orelse erlang:is_record(Message, rpbnodewatchersubscribe)).
 
 -record(state, {
 	node_watcher_update_timestamp :: integer()
