@@ -440,16 +440,13 @@ format_peer(QN, H, P, "pb") ->
                             pos_integer())
                                     -> {non_neg_integer(), list(work_item())}.
 determine_workitems(QueueName, Iteration, PeerInfo, WorkerCount) ->
-    WorkItems0 =
+    ClientList = lists:flatten(lists:duplicate(WorkerCount, PeerInfo)),
+    WorkItems =
         lists:map(fun map_peer_to_wi_fun/1,
                     lists:map(fun(PI) ->
                                     {QueueName, Iteration, PI}
                                 end,
-                                PeerInfo)),
-    WorkItems =
-        lists:foldl(fun(_I, Acc) -> Acc ++ WorkItems0 end,
-                    [],
-                    lists:seq(1, WorkerCount)),
+                                ClientList)),
     {length(WorkItems) - WorkerCount, WorkItems}.
 
 
@@ -464,7 +461,14 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
                     fun() -> rhc:create(Host, Port, "riak", []) end,
                 fun() ->
                     HTC = InitClientFun(),
-                    fun(QN) -> rhc:fetch(HTC, QN) end
+                    fun(Request) ->
+                        case Request of
+                            {consume, QN} ->
+                                rhc:fetch(HTC, QN);
+                            _ ->
+                                ok
+                        end
+                    end
                 end;
             pb ->
                 CaCertificateFilename =
@@ -492,18 +496,26 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
                             {ok, PBpid} ->
                                 PBpid;
                             _ ->
+                                lager:info("No client initialised -"
+                                                ++ " not reachable ~s ~w",
+                                            [Host, Port]),
                                 no_pid
                         end
                     end,
                 fun() ->
                     PBC = InitClientFun(),
-                    fun(QN) ->
-                        case check_pbc_client(PBC) of
-                            true ->
-                                QNB = atom_to_binary(QN, utf8),
-                                riakc_pb_socket:fetch(PBC, QNB);
-                            _ ->
-                                {error, no_client}
+                    fun(Request) ->
+                        case Request of
+                            {consume, QN} ->
+                                case check_pbc_client(PBC) of
+                                    true ->
+                                        QNB = atom_to_binary(QN, utf8),
+                                        riakc_pb_socket:fetch(PBC, QNB);
+                                    _ ->
+                                        {error, no_client}
+                                end;
+                            close ->
+                                close_pbc_client(PBC)
                         end
                     end
                 end
@@ -516,6 +528,15 @@ check_pbc_client(no_pid) ->
 check_pbc_client(PBC) ->
     is_process_alive(PBC).
 
+close_pbc_client(no_pid) ->
+    ok;
+close_pbc_client(PBC) ->
+    case is_process_alive(PBC) of
+        true ->
+            riakc_pb_socket:stop(PBC);
+        false ->
+            ok
+    end.
 
 %% @doc
 %% For an item of work which has been removed from the work queue, spawn a
@@ -557,7 +578,7 @@ repl_fetcher(WorkItem) ->
     {{QueueName, _Iter, Peer}, LocalClient, RemoteFun, RenewClientFun}
         = WorkItem,
     try
-        case RemoteFun(QueueName) of
+        case RemoteFun({consume, QueueName}) of
             {ok, queue_empty} ->
                 SW0 = os:timestamp(),
                 EmptyFetchSplit = timer:now_diff(SW0, SW),
@@ -585,11 +606,13 @@ repl_fetcher(WorkItem) ->
                 done_work(WorkItem, true,
                             {object, FetchSplit, PushSplit, ModSplit});
             {error, no_client} ->
+                RemoteFun(close),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
                 ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, no_client});
             {error, {conn_failed, {error, econnrefused}}} ->
                 lager:info("Snk worker connection refused to peer ~w", [Peer]),
+                RemoteFun(close),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
                 ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, econnrefused});
@@ -597,6 +620,7 @@ repl_fetcher(WorkItem) ->
                 lager:warning("Snk worker for peer ~w " ++
                                     "failed due to remote exception ~p",
                                 [Peer, binary_to_list(Bin)]),
+                RemoteFun(close),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
                 ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, remote_error})
@@ -605,6 +629,7 @@ repl_fetcher(WorkItem) ->
         Type:Exception ->
             lager:warning("Snk worker failed at Peer ~w due to ~w error ~w",
                             [Peer, Type, Exception]),
+            RemoteFun(close),
             UpdWorkItem0 = setelement(3, WorkItem, RenewClientFun()),
             ok = riak_kv_stat:update(ngrrepl_error),
             done_work(UpdWorkItem0, false, {error, Type, Exception})
