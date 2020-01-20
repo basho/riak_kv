@@ -298,6 +298,7 @@ handle_call({worker_count, QueueN, WorkerCount}, _From, State) ->
             W0 =
                 lists:keyreplace(QueueN, 1, State#state.work,
                                     {QueueN, Iteration, SinkWork0}),
+            prompt_work(),
             {reply, ok, State#state{work = W0, iteration = Iteration}}
     end.
 
