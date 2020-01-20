@@ -82,7 +82,9 @@ process(Req, State) when Req == rpbgetdefaultbucketpropsreq ->
 process(Req, State) when Req == rpbgetnodesreq ->
 	process_get_nodes_req(State);
 process(Req, State) when Req == rpbnodewatcherupdate ->
-	process_node_watcher_update(State).
+	process_node_watcher_update(State);
+process(Req, State) when Req == rpbnodewatchersubscribe ->
+	process_node_watcher_subscribe(State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
 	{ignore, #state{}}.
@@ -117,3 +119,7 @@ process_node_watcher_update(State = #state{node_watcher_update_timestamp = Times
 	NodesList = riak_core_node_watcher:nodes(riak_kv),
 	Resp = riak_pb_kv_codec:encode_node_watcher_update({Timestamp, NodesList}),
 	{reply, Resp, State}.
+
+process_node_watcher_subscribe(State) ->
+	%% TODO - Add functionality here.
+	{reply, ok, State}.
