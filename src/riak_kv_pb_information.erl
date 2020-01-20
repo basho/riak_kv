@@ -39,17 +39,17 @@
 -import(riak_pb_kv_codec, [decode_quorum/1]).
 
 -define(handle_decode_guard(Message), Message == rpbgetringreq orelse Message == rpbgetdefaultbucketpropsreq orelse
-                                      Message == rpbgetnodesreq orelse erlang:is_record(Message, rpbnodewatchersubscribe)).
+                                      Message == rpbgetnodesreq orelse erlang:is_record(Message, rpbnodewatchersubscribereq)).
 
 -record(state, {
 	node_watcher_update_timestamp :: integer()
 }).
 
 -type process_return() :: {reply, pb_information_resp(), #state{}} | {error, string(), #state{}}.
--type pb_information_req_code() :: 210 | 212 | 214.
--type pb_information_req_tag() :: rpbgetringreq | rpbgetdefaultbucketpropsreq | rpbgetnodesreq | rpbnodewatcherupdate.
+-type pb_information_req_code() :: 210 | 212 | 214 | 216 | 217.
+-type pb_information_req_tag() :: rpbgetringreq | rpbgetdefaultbucketpropsreq | rpbgetnodesreq | rpbnodewatcherupdate | rpbnodewatchersubscribereq.
 -type pb_information_resp() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{} | #rpbgetnodesresp{} |
-                               #rpbnodewatcherupdate{}.
+                               #rpbnodewatcherupdate{} | #rpbnodewatchersubscriberesp{}.
 
 %%====================================================================
 %% API Functions
@@ -83,7 +83,7 @@ process(Req, State) when Req == rpbgetnodesreq ->
 	process_get_nodes_req(State);
 process(Req, State) when Req == rpbnodewatcherupdate ->
 	process_node_watcher_update(State);
-process(Req, State) when erlang:is_record(Req, rpbnodewatchersubscribe) ->
+process(Req, State) when erlang:is_record(Req, rpbnodewatchersubscribereq) ->
 	process_node_watcher_subscribe(State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
@@ -122,4 +122,4 @@ process_node_watcher_update(State = #state{node_watcher_update_timestamp = Times
 
 process_node_watcher_subscribe(State) ->
 	%% TODO - Add functionality here.
-	{reply, ok, State}.
+	{reply, #rpbnodewatchersubscriberesp{}, State}.
