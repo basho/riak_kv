@@ -67,8 +67,8 @@ init([]) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
-handle_cast({?RING_UPDATE, _Update}, State) ->
-    handle_ring_update(),
+handle_cast({?RING_UPDATE, _Update}, State = #state{node_watcher_subs_tid = Tid}) ->
+    handle_ring_update(Tid),
     {noreply, State};
 handle_cast({?ADD_SUBSCRIBER, Pid}, State = #state{node_watcher_subs_tid = Tid}) ->
     ets:insert(Tid, {Pid, []}),
@@ -99,7 +99,7 @@ setup_ring_updates_callback() ->
     riak_core_node_watcher_events:add_sup_callback(Fun),
     ok.
 
-handle_ring_update() ->
-    Subscribers = lists:flatten(ets:match(?NODE_WATCHER_SUBS_TABLE, {'$1', []})),
+handle_ring_update(NodeWatcherSubsTid) ->
+    Subscribers = lists:flatten(ets:match(NodeWatcherSubsTid, {'$1', []})),
     riak_api_pb_sup:node_watcher_update(Subscribers),
     ok.
