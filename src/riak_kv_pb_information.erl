@@ -80,11 +80,11 @@ process(Req, State) when Req == rpbgetnodesreq ->
 process(Req, State) when Req == rpbnodewatcherupdate ->
 	process_node_watcher_update(State);
 process(Req, State) when erlang:is_record(Req, rpbnodewatchersubscribereq) ->
-	#rpbnodewatchersubscribereq{connection = Connection} = Req,
-	process_node_watcher_subscribe(Connection, State);
+	Pid = riak_pb_kv_codec:decode_node_watcher_subscribe_req(Req),
+	process_node_watcher_subscribe(Pid, State);
 process(Req, State) when erlang:is_record(Req, rpbnodewatcherunsubscribereq) ->
-	#rpbnodewatcherunsubscribereq{connection = Connection} = Req,
-	process_node_watcher_unsubscribe(Connection, State).
+	Pid = riak_pb_kv_codec:decode_node_watcher_unsubscribe_req(Req),
+	process_node_watcher_unsubscribe(Pid, State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
 	{ignore, #state{}}.
