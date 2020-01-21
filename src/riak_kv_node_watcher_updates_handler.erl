@@ -30,8 +30,13 @@
 
 -define(SERVER, ?MODULE).
 -define(NODE_WATCHER_SUBS_TABLE, node_watcher_subscribers).
+-define(RING_UPDATE, ring_update).
+-define(ADD_SUBSCRIBER, add_subscriber).
+-define(REMOVE_SUBSCRIBER, remove_subscriber).
 
--record(state, {}).
+-record(state, {
+    node_watcher_subs_tid :: ets:tid()
+}).
 
 %%%===================================================================
 %%% API
@@ -42,28 +47,34 @@ start_link() ->
 -spec add_subscriber(Pid :: pid()) ->
     ok.
 add_subscriber(Pid) ->
-    ets:insert(?NODE_WATCHER_SUBS_TABLE, {Pid, []}),
+    gen_server:cast(?SERVER, {?ADD_SUBSCRIBER, Pid}),
     ok.
 
 -spec remove_subscriber(Pid :: pid()) ->
     ok.
 remove_subscriber(Pid) ->
-    ets:delete(?NODE_WATCHER_SUBS_TABLE, Pid),
+    gen_server:cast(?SERVER, {?REMOVE_SUBSCRIBER, Pid}),
     ok.
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 init([]) ->
-    ets:new(?NODE_WATCHER_SUBS_TABLE, [named_table, sets]),
+    NodeWatcherSubsTid = ets:new(?NODE_WATCHER_SUBS_TABLE, []),
     setup_ring_updates_callback(),
-    {ok, #state{}}.
+    {ok, #state{node_watcher_subs_tid = NodeWatcherSubsTid}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
-handle_cast({ring_update, _Update}, State) ->
+handle_cast({?RING_UPDATE, _Update}, State) ->
     handle_ring_update(),
+    {noreply, State};
+handle_cast({?ADD_SUBSCRIBER, Pid}, State = #state{node_watcher_subs_tid = Tid}) ->
+    ets:insert(Tid, {Pid, []}),
+    {noreply, State};
+handle_cast({?REMOVE_SUBSCRIBER, Pid}, State = #state{node_watcher_subs_tid = Tid}) ->
+    ets:insert(Tid, Pid),
     {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -83,7 +94,7 @@ code_change(_OldVsn, State, _Extra) ->
 setup_ring_updates_callback() ->
     Self = erlang:self(),
     Fun = fun(Update) ->
-        gen_server:cast(Self, {ring_update, Update})
+        gen_server:cast(Self, {?RING_UPDATE, Update})
     end,
     riak_core_node_watcher_events:add_sup_callback(Fun),
     ok.
