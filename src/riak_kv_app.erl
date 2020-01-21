@@ -37,7 +37,7 @@
                    {riak_kv_pb_csbucket, 40, 41}, %%  CS bucket folding support
                    {riak_kv_pb_counter, 50, 53}, %% counter requests
                    {riak_kv_pb_crdt, 80, 83}, %% CRDT requests
-                   {riak_kv_pb_information, 210, 218} %% Intelligent client information requests
+                   {riak_kv_pb_information, 210, 220} %% Intelligent client information requests
                   ]).
 -define(MAX_FLUSH_PUT_FSM_RETRIES, 10).
 

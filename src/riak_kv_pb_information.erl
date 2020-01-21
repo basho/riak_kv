@@ -29,7 +29,6 @@
 %% API
 -export([
 	init/0,
-	init/1,
 	decode/2,
 	encode/1,
 	process/2,
@@ -39,15 +38,15 @@
 -import(riak_pb_kv_codec, [decode_quorum/1]).
 
 -define(handle_decode_guard(Message), Message == rpbgetringreq orelse Message == rpbgetdefaultbucketpropsreq orelse
-                                      Message == rpbgetnodesreq orelse erlang:is_record(Message, rpbnodewatchersubscribereq)).
+	Message == rpbgetnodesreq orelse erlang:is_record(Message, rpbnodewatchersubscribereq) orelse
+	erlang:is_record(Message, rpbnodewatcherunsubscribereq)).
 
--record(state, {
-	node_watcher_update_timestamp :: integer()
-}).
+-record(state, {}).
 
 -type process_return() :: {reply, pb_information_resp(), #state{}} | {error, string(), #state{}}.
 -type pb_information_req_code() :: 210 | 212 | 214 | 216 | 217.
--type pb_information_req_tag() :: rpbgetringreq | rpbgetdefaultbucketpropsreq | rpbgetnodesreq | rpbnodewatcherupdate | rpbnodewatchersubscribereq.
+-type pb_information_req_tag() :: rpbgetringreq | rpbgetdefaultbucketpropsreq | rpbgetnodesreq | rpbnodewatcherupdate |
+	rpbnodewatchersubscribereq | rpbnodewatcherunsubscribereq.
 -type pb_information_resp() :: #rpbgetringresp{} | #rpbgetdefaultbucketpropsresp{} | #rpbgetnodesresp{} |
                                #rpbnodewatcherupdate{} | #rpbnodewatchersubscriberesp{}.
 
@@ -58,9 +57,6 @@
 	#state{}.
 init() ->
 	#state{}.
-
-init(Timestamp) when erlang:is_integer(Timestamp) ->
-	#state{node_watcher_update_timestamp = Timestamp}.
 
 -spec decode(Code :: pb_information_req_code(), Bin :: binary()) ->
 	{ok, pb_information_req_tag()}.
@@ -84,7 +80,11 @@ process(Req, State) when Req == rpbgetnodesreq ->
 process(Req, State) when Req == rpbnodewatcherupdate ->
 	process_node_watcher_update(State);
 process(Req, State) when erlang:is_record(Req, rpbnodewatchersubscribereq) ->
-	process_node_watcher_subscribe(State).
+	#rpbnodewatchersubscribereq{connection = Connection} = Req,
+	process_node_watcher_subscribe(Connection, State);
+process(Req, State) when erlang:is_record(Req, rpbnodewatcherunsubscribereq) ->
+	#rpbnodewatcherunsubscribereq{connection = Connection} = Req,
+	process_node_watcher_unsubscribe(Connection, State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
 	{ignore, #state{}}.
@@ -115,11 +115,15 @@ process_get_nodes_req(State) ->
 	Resp = riak_pb_kv_codec:encode_nodes(NodesList),
 	{reply, Resp, State}.
 
-process_node_watcher_update(State = #state{node_watcher_update_timestamp = Timestamp}) ->
+process_node_watcher_update(State) ->
 	NodesList = riak_core_node_watcher:nodes(riak_kv),
-	Resp = riak_pb_kv_codec:encode_node_watcher_update({Timestamp, NodesList}),
+	Resp = riak_pb_kv_codec:encode_node_watcher_update(NodesList),
 	{reply, Resp, State}.
 
-process_node_watcher_subscribe(State) ->
-	%% TODO - Add functionality here.
+process_node_watcher_subscribe(Connection, State) ->
+	riak_kv_node_watcher_updates_handler:add_subscriber(Connection),
 	{reply, #rpbnodewatchersubscriberesp{}, State}.
+
+process_node_watcher_unsubscribe(Connection, State) ->
+	riak_kv_node_watcher_updates_handler:remove_subscriber(Connection),
+	{reply, #rpbnodewatcherunsubscriberesp{}, State}.

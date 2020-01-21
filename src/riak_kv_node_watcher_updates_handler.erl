@@ -1,6 +1,6 @@
 %%%-------------------------------------------------------------------
 %%% @author paulhunt
-%%% @copyright (C) 2019, <COMPANY>
+%%% @copyright (C) 2019, bet365
 %%% @doc
 %%%
 %%% @end
@@ -13,7 +13,9 @@
 
 %% API
 -export([
-    start_link/0
+    start_link/0,
+    add_subscriber/1,
+    remove_subscriber/1
 ]).
 
 %% gen_server callbacks
@@ -27,6 +29,7 @@
 ]).
 
 -define(SERVER, ?MODULE).
+-define(NODE_WATCHER_SUBS_TABLE, node_watcher_subscribers).
 
 -record(state, {}).
 
@@ -36,10 +39,23 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
+-spec add_subscriber(Pid :: pid()) ->
+    ok.
+add_subscriber(Pid) ->
+    ets:insert(?NODE_WATCHER_SUBS_TABLE, {Pid, []}),
+    ok.
+
+-spec remove_subscriber(Pid :: pid()) ->
+    ok.
+remove_subscriber(Pid) ->
+    ets:delete(?NODE_WATCHER_SUBS_TABLE, Pid),
+    ok.
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 init([]) ->
+    ets:new(?NODE_WATCHER_SUBS_TABLE, [named_table, sets]),
     setup_ring_updates_callback(),
     {ok, #state{}}.
 
@@ -73,5 +89,6 @@ setup_ring_updates_callback() ->
     ok.
 
 handle_ring_update() ->
-    riak_api_pb_sup:node_watcher_update(),
+    Subscribers = lists:flatten(ets:match(?NODE_WATCHER_SUBS_TABLE, {'$1', []})),
+    riak_api_pb_sup:node_watcher_update(Subscribers),
     ok.
