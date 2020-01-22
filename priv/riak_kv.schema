@@ -1097,3 +1097,11 @@
     {datatype, integer},
     {default, 24}
 ]}.
+
+%% @doc The maximume number of workers to be for any given peer may be
+%% configured - if not configured will default to the number of sinkworkers
+{mapping, "replrtq_sinkpeerlimit", "riak_kv.replrtq_sinkpeerlimit", [
+    {datatype, integer},
+    {commented, 24}
+]}.
+
