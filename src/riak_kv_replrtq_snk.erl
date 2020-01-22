@@ -343,7 +343,7 @@ handle_cast(prompt_work, State) ->
     Work0 = lists:map(fun do_work/1, State#state.work),
     {noreply, State#state{work = Work0}};
 handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
-    {{QueueName, Iteration, PeerID}, _LC, _RC, _RNCF} = WorkItem,
+    {{QueueName, Iteration, PeerID}, _LC, RC, _RNCF} = WorkItem,
     case lists:keyfind(QueueName, 1, State#state.work) of
         {QueueName, Iteration, SinkWork} ->
             QS = SinkWork#sink_work.queue_stats,
@@ -367,11 +367,12 @@ handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
             end,
             {noreply, State#state{work = UpdWork}};
         _ ->
+            RC(close),
             % Work profile has changed since this work was prompted
             {noreply, State}
     end;
 handle_cast({requeue_work, WorkItem}, State) ->
-    {{QueueName, Iteration, _PeerID}, _LC, _RC, _RNCF} = WorkItem,
+    {{QueueName, Iteration, _PeerID}, _LC, RC, _RNCF} = WorkItem,
     case lists:keyfind(QueueName, 1, State#state.work) of
         {QueueName, Iteration, SinkWork} ->
             UpdWorkQueue = [WorkItem|SinkWork#sink_work.work_queue],
@@ -383,6 +384,7 @@ handle_cast({requeue_work, WorkItem}, State) ->
             prompt_work(),
             {noreply, State#state{work = UpdWork}};
         _ ->
+            RC(close),
             % Work profile has changed since this work was requeued
             {noreply, State}
     end.
