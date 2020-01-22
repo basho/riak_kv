@@ -67,7 +67,7 @@ init([]) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
-handle_cast({?RING_UPDATE, _Update}, State = #state{node_watcher_subs_tid = Tid}) ->
+handle_cast({?RING_UPDATE, [riak_kv]}, State = #state{node_watcher_subs_tid = Tid}) ->
     handle_ring_update(Tid),
     {noreply, State};
 handle_cast({?ADD_SUBSCRIBER, Pid}, State = #state{node_watcher_subs_tid = Tid}) ->
