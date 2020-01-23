@@ -1020,7 +1020,7 @@
 %% each priority on each queue will have this as the limit)
 {mapping, "replrtq_srcqueuelimit", "riak_kv.replrtq_srcqueuelimit", [
   {datatype, integer},
-  {default, 100000}
+  {default, 300000}
 ]}.
 
 %% @doc Limit the number of objects to be cached on the replication queue,
