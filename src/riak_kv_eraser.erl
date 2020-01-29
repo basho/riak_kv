@@ -60,7 +60,8 @@
             pending_close = false :: boolean(),
             last_tick_time = os:timestamp() :: erlang:timestamp(),
             erase_fun :: erase_fun(),
-            redo_deletes = false :: boolean() 
+            redo_deletes = false :: boolean(),
+            redo_timeout :: non_neg_integer()
 }).
 
 -type priority() :: 1..2.
@@ -137,7 +138,7 @@ stop_job(Pid) ->
 
 init([JobID, DelFun, DeleteMode]) ->
     erlang:send_after(?LOG_TICK, self(), log_queue),
-    Redo = 
+    Redo =
         case DeleteMode of
             keep ->
                 %% Tombstones are kept, so a delete attempted during failure
@@ -148,7 +149,9 @@ init([JobID, DelFun, DeleteMode]) ->
             _ ->
                 true
         end,
-    {ok, #state{job_id = JobID, erase_fun = DelFun, redo_deletes = Redo}, 0}.
+    RedoTimeout = app_helper:get_env(riak_kv, eraser_redo_timeout, ?REDO_TIMEOUT),
+    {ok, #state{job_id = JobID, erase_fun = DelFun, redo_deletes = Redo,
+                redo_timeout = RedoTemout}, 0}.
 
 handle_call(Msg, _From, State) ->
     {reply, R, S0} = handle_sync_message(Msg, State),
@@ -238,16 +241,16 @@ handle_async_message(timeout, State) ->
                             AT0 = State#state.delete_attempts + 1,
                             QL0 = {RedoQL - 1, 0},
                             {noreply,
-                                State#state{delete_queue = Q0, 
+                                State#state{delete_queue = Q0,
                                             delete_attempts = AT0,
                                             pqueue_length = QL0}};
                         false ->
                             AB0 = State#state.delete_aborts + 1,
                             Q1 = riak_core_priority_queue:in(DelRef, 1, Q0),
                             {override_timeout,
-                                ?REDO_TIMEOUT, 
+                                 State#state.redo_timeout,
                                 {noreply,
-                                    State#state{delete_queue = Q1, 
+                                    State#state{delete_queue = Q1,
                                                 delete_aborts = AB0}}}
                     end;
                 {empty, Q0} ->
@@ -289,7 +292,7 @@ handle_async_message(timeout, State) ->
                             pqueue_length = {RedoQL, DeleteQL - BatchSize}}}
     end;
 handle_async_message(log_queue, State) ->
-    lager:info("Eraser job ~w has queue lengths ~w " ++ 
+    lager:info("Eraser job ~w has queue lengths ~w " ++
                     "delete_attempts=~w delete_aborts=~w ",
                 [State#state.job_id,
                     State#state.pqueue_length,
@@ -305,7 +308,7 @@ handle_async_message(log_queue, State) ->
 
 %% @doc
 %% Try and delete the key.  If Redo is true, this should only be attempted if
-%% all primaries are up 
+%% all primaries are up
 -spec erase(delete_reference(), boolean()) -> boolean().
 erase({{Bucket, Key}, VectorClock}, true) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
@@ -315,7 +318,7 @@ erase({{Bucket, Key}, VectorClock}, true) ->
     case length(PrefList) of
         N ->
             riak_kv_delete:delete(eraser,
-                                    Bucket, Key, 
+                                    Bucket, Key,
                                     [], ?DELETE_TIMEOUT, undefined, eraser,
                                     VectorClock),
             true;
@@ -324,7 +327,7 @@ erase({{Bucket, Key}, VectorClock}, true) ->
     end;
 erase({{Bucket, Key}, VectorClock}, false) ->
     riak_kv_delete:delete(eraser,
-                            Bucket, Key, 
+                            Bucket, Key,
                             [], ?DELETE_TIMEOUT, undefined, eraser,
                             VectorClock),
     true.
@@ -369,7 +372,7 @@ standard_eraser_tester() ->
     spawn(fun() ->
                 lists:foreach(fun(R) -> request_delete(P, R, 2) end, RefList)
             end),
-    WaitFun = 
+    WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->
@@ -410,7 +413,7 @@ somefail_eraser_tester(N) ->
     spawn(fun() ->
                 lists:foreach(fun(R) -> request_delete(P, R, 2) end, RefList)
             end),
-    WaitFun = 
+    WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->
