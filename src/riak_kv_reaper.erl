@@ -63,7 +63,8 @@
             job_id :: non_neg_integer(), % can be 0 for named reaper
             pending_close = false :: boolean(),
             last_tick_time = os:timestamp() :: erlang:timestamp(),
-            reap_fun :: reap_fun()
+            reap_fun :: reap_fun(),
+            redo_timeout :: non_neg_integer()
 }).
 
 -type priority() :: 1..2.
@@ -132,7 +133,8 @@ stop_job(Pid) ->
 
 init([JobID, ReapFun]) ->
     erlang:send_after(?LOG_TICK, self(), log_queue),
-    {ok, #state{job_id = JobID, reap_fun = ReapFun}, 0}.
+    RedoTimeout = app_helper:get_env(riak_kv, reaper_redo_timeout, ?REDO_TIMEOUT),
+    {ok, #state{job_id = JobID, reap_fun = ReapFun, redo_timeout = RedoTimeout}, 0}.
 
 
 handle_call(Msg, _From, State) ->
@@ -222,18 +224,18 @@ handle_async_message(timeout, State) ->
                             AT0 = State#state.reap_attempts + 1,
                             QL0 = {RedoQL - 1, 0},
                             {noreply,
-                                State#state{reap_queue = Q0, 
+                                State#state{reap_queue = Q0,
                                             reap_attempts = AT0,
                                             pqueue_length = QL0}};
                         false ->
                             AB0 = State#state.reap_aborts + 1,
                             Q1 = riak_core_priority_queue:in(ReapRef, 1, Q0),
                             {override_timeout,
-                                ?REDO_TIMEOUT,
-                                {noreply, 
-                                    State#state{reap_queue = Q1, 
+                                State#state.redo_timeout,
+                                {noreply,
+                                    State#state{reap_queue = Q1,
                                                 reap_aborts = AB0}}}
-                    end;
+                   end;
                 {empty, Q0} ->
                     %% This shoudn't happen - must have miscalulated
                     %% queue lengths
@@ -344,7 +346,7 @@ standard_reaper_tester() ->
     spawn(fun() ->
                 lists:foreach(fun(R) -> request_reap(P, R, 2) end, RefList)
             end),
-    WaitFun = 
+    WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->
@@ -383,7 +385,7 @@ somefail_reaper_tester(N) ->
     spawn(fun() ->
                 lists:foreach(fun(R) -> request_reap(P, R, 2) end, RefList)
             end),
-    WaitFun = 
+    WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->
