@@ -204,6 +204,9 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
         ok ->
             {ok, State};
         {error, Reason} ->
+            % Confirm this has not failed due to db_write error - as this is
+            % not recoverable and should result in a crash of the vnode
+            false = is_tuple(Reason) and (element(1, Reason) == db_write),
             {error, Reason, State}
     end.
 
