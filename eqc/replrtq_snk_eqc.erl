@@ -64,31 +64,30 @@ config_pre(S) ->
 
 %% We configure the same amount of workes for all sinks
 config_args(_S) ->
-    ?LET(N, workers_gen(),
-         [weighted_default({1, disabled}, {19, enabled}),
-          list(sink_gen(N)), N]).
+    [weighted_default({1, disabled}, {19, enabled}), sink_gen()].
 
-config_pre(_, [_Enabled, Sinks, _]) ->
-    Queues = [ Q || #{queue := Q} <- Sinks ],
-    lists:usort(Queues) == lists:sort(Queues).
+config_pre(_, [_Enabled, #{queue := _Q, peerlimit:= PL, workers := N}]) ->
+    PL =< N.
 
-config(Enabled, Sinks, Workers) ->
+config(Enabled, #{queue := Q, peers := Peers, peerlimit:= PL, workers := N} = Sink) ->
     application:set_env(riak_kv, replrtq_enablesink, Enabled == enabled),
     %% default Queue will be called "default" in tests
     application:set_env(riak_kv, replrtq_sinkqueue, default),
     %% We presupose that all queues have the same number of workers....
-    application:set_env(riak_kv, replrtq_sinkworkers, Workers),
-    PeerConfig = [ pp_peers(Q, Peers) || #{queue := Q, peers := Peers} <- Sinks ],
-    application:set_env(riak_kv, replrtq_sinkpeers, string:join(PeerConfig, "|")),
-    [ setup_sink(Sink) || Sink <- Sinks, Enabled == enabled ],
+    application:set_env(riak_kv, replrtq_sinkworkers, N),
+    application:set_env(riak_kv, replrtq_sinkpeerlimit, PL),
+    application:set_env(riak_kv, replrtq_sinkpeers, pp_peers(Q, Peers)),
+    [ setup_sink(Sink) || Enabled == enabled ],
     ok.
 
-setup_sink(#{queue := Q, peers := Peers, workers := N}) ->
-    replrtq_snk_monitor:add_queue(Q, Peers, N).
 
-config_next(S, _Value, [Enabled, Sinks, _]) ->
+setup_sink(#{queue := Q, peers := Peers, workers := N, peerlimit := PL}) ->
+    %% possibly take peerlimit into account here?
+    replrtq_snk_monitor:add_queue(Q, Peers, N, PL).
+
+config_next(S, _Value, [Enabled, Sink]) ->
     S#{ enabled => Enabled == enabled,
-        config  => Sinks }.
+        config  => [Sink]}.
 
 
 %% --- Operation: start ---
@@ -102,25 +101,21 @@ start_args(_S) ->
 start() ->
     {ok, Pid} = riak_kv_replrtq_snk:start_link(),
     unlink(Pid),
+    %% we don't yet test auto starting
     riak_kv_replrtq_snk:prompt_work(),
     Pid.
-
-start_callouts(#{enabled := false}, _Args) -> ?EMPTY;
-start_callouts(#{config := Sinks}, _Args) ->
-    ?PAR([ ?APPLY(setup_sink, [Sink]) || Sink <- Sinks ]).
-
-setup_sink_callouts(_S, [#{queue := disabled}]) -> ?EMPTY;
-setup_sink_callouts(_S, [#{peers := Peers}]) ->
-    ?SEQ([ ?CALLOUT(rhc, create, [Host, Port, ?WILDCARD, ?WILDCARD], {Host, Port})
-           || {{Host, Port, http}, _} <- Peers ]).
 
 start_next(#{enabled := false} = S, Pid, []) -> S#{ pid => Pid, sinks => #{} };
 start_next(#{config  := Sinks} = S, Pid, _Args) ->
     S#{pid   => Pid,
-       sinks => maps:from_list([ {Q, Sink} || #{queue := Q} = Sink <- Sinks, Q /= disabled ])}.
+       sinks => maps:from_list([ {Q, Sink} || #{queue := Q} = Sink <- Sinks ])}.
 
 start_post(_S, _Args, Res) ->
     is_pid(Res) andalso is_process_alive(Res).
+
+%% start_process(_S, []) ->
+%%     worker.
+
 
 
 %% --- Operation: sleep ---
@@ -148,6 +143,7 @@ suspend_args(S) -> [maybe_active_queue_gen(S)].
 suspend(QueueName) ->
     R = riak_kv_replrtq_snk:suspend_snkqueue(QueueName),
     replrtq_snk_monitor:suspend(QueueName),
+    timer:sleep(1),
     R.
 
 suspend_next(S, _, [QueueName]) ->
@@ -172,15 +168,19 @@ add_pre(S) -> maps:is_key(sinks, S).
 
 add_args(_S) -> [sink_gen()].
 
-add_pre(#{sinks := Sinks}, [#{queue := Q}]) ->
-    not maps:is_key(Q, Sinks).
+add_pre(#{sinks := Sinks}, [#{queue := Q, workers := N}]) ->
+    not maps:is_key(Q, Sinks) andalso N > 0.
 
-add(#{queue := Q, peers := Peers, workers := N}) ->
-    PeerInfo = fun({{Host, Port, Protocol}, _}) -> {Host, 8, Host, Port, Protocol} end,
-    replrtq_snk_monitor:add_queue(Q, Peers, N),
-    riak_kv_replrtq_snk:add_snkqueue(Q, lists:map(PeerInfo, Peers), N).
-
-add_callouts(_S, [Sink]) -> ?APPLY(setup_sink, [Sink]).
+add(#{queue := Q, peers := Peers, workers := N, peerlimit := PL}) ->
+    PeerInfo = fun(I, {{Host, Port, Protocol}, _}) -> {I, 8, Host, Port, Protocol} end,
+    replrtq_snk_monitor:add_queue(Q, Peers, N, PL),
+    PeerInfos = [PeerInfo(I, Peer) ||
+                    {I, Peer} <- lists:zip(lists:seq(1, length(Peers)), Peers) ],
+    if PL == N ->
+            riak_kv_replrtq_snk:add_snkqueue(Q, PeerInfos, N);
+       PL =/= N ->
+            riak_kv_replrtq_snk:add_snkqueue(Q, PeerInfos, N, PL)
+    end.
 
 add_next(#{sinks := Sinks} = S, _V, [#{queue := Q} = Sink]) ->
   Removed = maps:get(removed, S, []),
@@ -217,13 +217,8 @@ nrworkers(Q, Workers) ->
 
 nrworkers_next(#{sinks := Sinks} = S, _Value, [Q, Workers]) ->
     Sink = maps:get(Q, Sinks),
-    S#{sinks => Sinks#{Q => Sink#{workers => Workers}},
+    S#{sinks => Sinks#{Q => Sink#{workers => Workers, peerlimit => Workers}},
        with_dynamic_workers => [Q | maps:get(with_dynamic_workers, S, [])]}.
-
-nrworkers_callouts(#{sinks := Sinks}, [Q, _Workers]) ->
-    Sink = maps:get(Q, Sinks),
-    ?APPLY(setup_sink, [Sink]).
-
 
 
 %% -- Generators -------------------------------------------------------------
@@ -240,18 +235,21 @@ pp_peer(Q, {Name, Port, Protocol}) ->
 
 
 queue_names() ->
-   [ queue1, queue2, a, aa, b, c, banana, sledge_hammer ].
+   [ queue1, queue2, a, b, c, banana, sledge_hammer ].
 
 sink_queue_gen() ->
     weighted_default({1, default}, {9, elements(queue_names())}).
 
+%% Workers  =< Peerlimit * nr(Peers)
 sink_gen() ->
-    sink_gen(workers_gen()).
+    ?LET(Peers, peers_gen(),
+    ?LET(Workers, choose(1, 30),
+    ?LET(Peerlimit, choose((Workers + length(Peers) - 1) div length(Peers), Workers),
+         #{ queue   => sink_queue_gen(),
+            peers   => Peers,
+            peerlimit => Peerlimit,
+            workers => Workers}))).
 
-sink_gen(WorkersGen) ->
-    #{ queue   => sink_queue_gen(),
-       peers   => peers_gen(),
-       workers => WorkersGen }.
 
 workers_gen() ->
     frequency([{1, 0}, {10, choose(1, 5)}]).
@@ -278,8 +276,8 @@ url() ->
     return(Name ++ "." ++ Suf))).
 
 peer_config_gen() ->
-    {elements([inactive, active]),
-     choose(1, 10)}.    %% Response time
+    {frequency([{7, active}, {2, inactive}, {1, error}]),
+     choose(5, 20)}.    %% Response time
 
 
 %% -- Property ---------------------------------------------------------------
@@ -329,9 +327,9 @@ prop_repl() ->
     end))).
 
 check_traces(Traces, WithDynamicWorkers) ->
-    conjunction([ {QueueName, check_trace(QueueName, Peers, get_workers(Workers, Trace))}
-                  || {QueueName, Peers, Workers, Trace} <- Traces,
-                      not lists:member(QueueName, WithDynamicWorkers)]).
+    conjunction([ {QueueName, check_trace(QueueName, Peerlimit, Peers, get_workers(Workers, Trace))}
+                  || {QueueName, Peerlimit, Peers, Workers, Trace} <- Traces,
+                      not lists:member(QueueName, WithDynamicWorkers), QueueName /= no_queue ]).
 
 %% We only need this if we have non dynamic worker count changes
 get_workers(Workers, Trace) ->
@@ -340,13 +338,16 @@ get_workers(Workers, Trace) ->
         _ -> {Workers, Trace}
     end.
 
-check_trace(QueueName, Peers, {Workers, Trace}) ->
+check_trace(QueueName, Peerlimit, Peers, {Workers, Trace}) ->
     Concurrent = concurrent_fetches(Trace),
     {Suspended, Active} = split_suspended(Concurrent),
     Max        = lists:max([0 | [N || {_, N} <- Active ++ Suspended]]),
     Avg        = weighted_average(Active),
     ActiveTime = lists:sum([ T || {T, _} <- Active ]),
-    AnyActive  = lists:any(fun({_, {A, _}}) -> A == active end, Peers),
+    ActivePeers = length([ x || {_, {active, _}} <- Peers ]),
+    AnyActive  = ActivePeers > 0,
+    ActiveWorkers = min(ActivePeers * Peerlimit, Workers),
+    MinActiveWorkers = min(ActiveWorkers - 1, 0.8 * ActiveWorkers),
     ?WHENFAIL(eqc:format("Trace for ~p:\n  ~p\nworkers ~p\n", [QueueName, Trace, Workers]),
     conjunction([{max_workers, case Trace of
                                    [{_, stop}] -> true;
@@ -355,8 +356,8 @@ check_trace(QueueName, Peers, {Workers, Trace}) ->
                  {avg_workers,
                     %% Check that the average number of active workers is >= WorkerCount - 1
                     ?WHENFAIL(eqc:format("Concurrent =\n~s\n~.1f < ~p\n",
-                                         [format_concurrent(Active), Avg, Workers - 1]),
-                        Avg >= Workers - 1
+                                         [format_concurrent(Active), Avg, MinActiveWorkers]),
+                        Avg >= MinActiveWorkers
                             orelse not AnyActive        %% Don't check saturation if no work
                             orelse ActiveTime < 40000   %% or if mostly suspended
                         )},
@@ -368,7 +369,7 @@ format_concurrent(Xs) ->
     [ io_lib:format("  ~p for ~5.1fms\n", [C, T / 1000])
       || {T, C} <- Xs, T >= 100 ].
 
--define(SLACK, 100). %% allow fetches 100µs after suspension
+-define(SLACK, 900). %% allow fetches 900µs after suspension
 
 drop_slack(Chunk) -> drop_slack(0, Chunk).
 drop_slack(_, []) -> [];
@@ -440,12 +441,12 @@ get_env(riak_kv, Key) -> get_env(riak_kv, Key, undefined).
 lager_spec() ->
     #api_module{ name = lager, fallback = ?MODULE }.
 
-warning(_, _) ->
+warning(_F, _As) ->
+    %% io:format(F++"\n", As),
     ok.
 
 rhc_spec() ->
-    #api_module{ name = rhc, fallback = replrtq_snk_monitor,
-                 functions = [ #api_fun{name = create, arity = 4} ] }.
+    #api_module{ name = rhc, fallback = replrtq_snk_monitor }.
 
 riak_client_spec() ->
     #api_module{ name = riak_client, fallback = ?MODULE }.

@@ -42,7 +42,9 @@
             resume_snkqueue/1,
             remove_snkqueue/1,
             set_workercount/2,
-            add_snkqueue/3]).
+            set_workercount/3,
+            add_snkqueue/3,
+            add_snkqueue/4]).
 
 -export([repl_fetcher/1]).
 
@@ -58,6 +60,7 @@
 -define(MAX_SUCCESS_DELAYMS, 1024).
 -define(ON_ERROR_DELAYMS, 65536).
 -define(INACTIVITY_TIMEOUT_MS, 60000).
+-define(DEFAULT_WORKERCOUNT, 1).
 
 -record(sink_work, {queue_name :: queue_name(),
                         %% The name of the remote queue to be fetched from
@@ -188,7 +191,19 @@ remove_snkqueue(QueueName) ->
 %% This added-in configuration will not be preserved between process restarts.
 -spec add_snkqueue(queue_name(), list(peer_info()), pos_integer()) -> ok.
 add_snkqueue(QueueName, Peers, WorkerCount) ->
-    gen_server:call(?MODULE, {add, QueueName, Peers, WorkerCount}).
+    add_snkqueue(QueueName, Peers, WorkerCount, WorkerCount).
+
+%% @doc
+%% Add a queue restricting the number of workers per peer, as well as the
+%% number of workers overall
+-spec add_snkqueue(queue_name(), list(peer_info()),
+                    pos_integer(), pos_integer()) -> ok.
+add_snkqueue(QueueName, Peers, WorkerCount, PerPeerLimit) 
+                                            when PerPeerLimit =< WorkerCount ->
+    gen_server:call(?MODULE,
+                    {add, QueueName, Peers, WorkerCount, PerPeerLimit}).
+
+
 
 %% @doc
 %% Change the number of concurrent workers supporting a given queue.  Changing
@@ -198,7 +213,17 @@ add_snkqueue(QueueName, Peers, WorkerCount) ->
 %% until all in-flight work is finished.
 -spec set_workercount(queue_name(), pos_integer()) -> ok|not_found.
 set_workercount(QueueName, WorkerCount) ->
-    gen_server:call(?MODULE, {worker_count, QueueName, WorkerCount}).
+    set_workercount(QueueName, WorkerCount, WorkerCount).
+
+%% @doc
+%% Change the number of concurrent workers whilst limiting the number of
+%% workers per peer
+-spec set_workercount(queue_name(), pos_integer(), pos_integer())
+                                                            -> ok|not_found.
+set_workercount(QueueName, WorkerCount, PerPeerLimit)
+                                            when PerPeerLimit =< WorkerCount ->
+    gen_server:call(?MODULE,
+                    {worker_count, QueueName, WorkerCount, PerPeerLimit}).
 
 %%%============================================================================
 %%% gen_server callbacks
@@ -211,7 +236,14 @@ init([]) ->
             SinkPeers = app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
             DefaultQueue = app_helper:get_env(riak_kv, replrtq_sinkqueue),
             SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
-            SnkWorkerCount = app_helper:get_env(riak_kv, replrtq_sinkworkers, 1),
+            SnkWorkerCount =
+                app_helper:get_env(riak_kv,
+                                    replrtq_sinkworkers,
+                                    ?DEFAULT_WORKERCOUNT),
+            PerPeerLimit =
+                app_helper:get_env(riak_kv,
+                                        replrtq_sinkpeerlimit,
+                                        SnkWorkerCount),
             Iteration = 1,
             MapPeerInfoFun =
                 fun({SnkQueueName, SnkPeerInfo}) ->
@@ -219,7 +251,8 @@ init([]) ->
                         determine_workitems(SnkQueueName,
                                             Iteration,
                                             SnkPeerInfo,
-                                            SnkWorkerCount),
+                                            SnkWorkerCount,
+                                            min(SnkWorkerCount, PerPeerLimit)),
                     SnkW =
                         #sink_work{queue_name = SnkQueueName,
                                     work_queue = SnkWorkQueue,
@@ -266,10 +299,14 @@ handle_call({remove, QueueN}, _From, State) ->
                 ok,
                 State#state{work = W0, iteration = Iteration, enabled = true}}
     end;
-handle_call({add, QueueN, Peers, WorkerCount}, _From, State) ->
+handle_call({add, QueueN, Peers, WorkerCount, PerPeerLimit}, _From, State) ->
     Iteration = State#state.iteration + 1,
     {QueueLength, WorkQueue} =
-        determine_workitems(QueueN, Iteration, Peers, WorkerCount),
+        determine_workitems(QueueN,
+                            Iteration,
+                            Peers,
+                            WorkerCount,
+                            min(WorkerCount, PerPeerLimit)),
     SnkW =
         #sink_work{queue_name = QueueN,
                     work_queue = WorkQueue,
@@ -280,7 +317,7 @@ handle_call({add, QueueN, Peers, WorkerCount}, _From, State) ->
         lists:keystore(QueueN, 1, State#state.work, {QueueN, Iteration, SnkW}),
     prompt_work(),
     {reply, ok, State#state{work = W0, iteration = Iteration, enabled = true}};
-handle_call({worker_count, QueueN, WorkerCount}, _From, State) ->
+handle_call({worker_count, QueueN, WorkerCount, PerPeerLimit}, _From, State) ->
     case lists:keyfind(QueueN, 1, State#state.work) of
         false ->
             {reply, not_found, State};
@@ -290,7 +327,8 @@ handle_call({worker_count, QueueN, WorkerCount}, _From, State) ->
                 determine_workitems(QueueN,
                                     Iteration,
                                     SinkWork#sink_work.peer_list,
-                                    WorkerCount),
+                                    WorkerCount,
+                                    min(WorkerCount, PerPeerLimit)),
             SinkWork0 =
                 SinkWork#sink_work{work_queue = WorkQueue,
                                     minimum_queue_length = QueueLength,
@@ -298,6 +336,7 @@ handle_call({worker_count, QueueN, WorkerCount}, _From, State) ->
             W0 =
                 lists:keyreplace(QueueN, 1, State#state.work,
                                     {QueueN, Iteration, SinkWork0}),
+            prompt_work(),
             {reply, ok, State#state{work = W0, iteration = Iteration}}
     end.
 
@@ -306,7 +345,7 @@ handle_cast(prompt_work, State) ->
     Work0 = lists:map(fun do_work/1, State#state.work),
     {noreply, State#state{work = Work0}};
 handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
-    {{QueueName, Iteration, PeerID}, _LC, _RC, _RNCF} = WorkItem,
+    {{QueueName, Iteration, PeerID}, _LC, RC, _RNCF} = WorkItem,
     case lists:keyfind(QueueName, 1, State#state.work) of
         {QueueName, Iteration, SinkWork} ->
             QS = SinkWork#sink_work.queue_stats,
@@ -330,11 +369,12 @@ handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
             end,
             {noreply, State#state{work = UpdWork}};
         _ ->
+            RC(close),
             % Work profile has changed since this work was prompted
             {noreply, State}
     end;
 handle_cast({requeue_work, WorkItem}, State) ->
-    {{QueueName, Iteration, _PeerID}, _LC, _RC, _RNCF} = WorkItem,
+    {{QueueName, Iteration, _PeerID}, _LC, RC, _RNCF} = WorkItem,
     case lists:keyfind(QueueName, 1, State#state.work) of
         {QueueName, Iteration, SinkWork} ->
             UpdWorkQueue = [WorkItem|SinkWork#sink_work.work_queue],
@@ -346,6 +386,7 @@ handle_cast({requeue_work, WorkItem}, State) ->
             prompt_work(),
             {noreply, State#state{work = UpdWork}};
         _ ->
+            RC(close),
             % Work profile has changed since this work was requeued
             {noreply, State}
     end.
@@ -368,7 +409,7 @@ handle_info({prompt_requeue, WorkItem}, State) ->
     requeue_work(WorkItem),
     {noreply, State}.
 
-terminate(normal, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -433,22 +474,20 @@ format_peer(QN, H, P, "pb") ->
 %% Calculates the queue of work items and the minimum length of queue to be
 %% kept by the process, in order to deliver the desired number of concurrent
 %% worker processes.
-%% The count of work items should allow for all workers to be busy with one
-%% peer yielding work, when all other peers have no work
+%% No one peer may occupy more than per-peer limit of workers
 -spec determine_workitems(queue_name(), iteration(), list(peer_info()),
-                            pos_integer())
+                            pos_integer(), pos_integer())
                                     -> {non_neg_integer(), list(work_item())}.
-determine_workitems(QueueName, Iteration, PeerInfo, WorkerCount) ->
-    WorkItems0 =
+determine_workitems(QueueName, Iteration, PeerInfo, WorkerCount, PerPeerLimit)
+                                            when PerPeerLimit =< WorkerCount ->
+    ClientList =
+        lists:flatten(lists:duplicate(PerPeerLimit, PeerInfo)),
+    WorkItems =
         lists:map(fun map_peer_to_wi_fun/1,
                     lists:map(fun(PI) ->
                                     {QueueName, Iteration, PI}
                                 end,
-                                PeerInfo)),
-    WorkItems =
-        lists:foldl(fun(_I, Acc) -> Acc ++ WorkItems0 end,
-                    [],
-                    lists:seq(1, WorkerCount)),
+                                ClientList)),
     {length(WorkItems) - WorkerCount, WorkItems}.
 
 
@@ -463,7 +502,14 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
                     fun() -> rhc:create(Host, Port, "riak", []) end,
                 fun() ->
                     HTC = InitClientFun(),
-                    fun(QN) -> rhc:fetch(HTC, QN) end
+                    fun(Request) ->
+                        case Request of
+                            {consume, QN} ->
+                                rhc:fetch(HTC, QN);
+                            _ ->
+                                ok
+                        end
+                    end
                 end;
             pb ->
                 CaCertificateFilename =
@@ -491,18 +537,26 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
                             {ok, PBpid} ->
                                 PBpid;
                             _ ->
+                                lager:info("No client initialised -"
+                                                ++ " not reachable ~s ~w",
+                                            [Host, Port]),
                                 no_pid
                         end
                     end,
                 fun() ->
                     PBC = InitClientFun(),
-                    fun(QN) ->
-                        case check_pbc_client(PBC) of
-                            true ->
-                                QNB = atom_to_binary(QN, utf8),
-                                riakc_pb_socket:fetch(PBC, QNB);
-                            _ ->
-                                {error, no_client}
+                    fun(Request) ->
+                        case Request of
+                            {consume, QN} ->
+                                case check_pbc_client(PBC) of
+                                    true ->
+                                        QNB = atom_to_binary(QN, utf8),
+                                        riakc_pb_socket:fetch(PBC, QNB);
+                                    _ ->
+                                        {error, no_client}
+                                end;
+                            close ->
+                                close_pbc_client(PBC)
                         end
                     end
                 end
@@ -515,6 +569,15 @@ check_pbc_client(no_pid) ->
 check_pbc_client(PBC) ->
     is_process_alive(PBC).
 
+close_pbc_client(no_pid) ->
+    ok;
+close_pbc_client(PBC) ->
+    case is_process_alive(PBC) of
+        true ->
+            riakc_pb_socket:stop(PBC);
+        false ->
+            ok
+    end.
 
 %% @doc
 %% For an item of work which has been removed from the work queue, spawn a
@@ -556,7 +619,7 @@ repl_fetcher(WorkItem) ->
     {{QueueName, _Iter, Peer}, LocalClient, RemoteFun, RenewClientFun}
         = WorkItem,
     try
-        case RemoteFun(QueueName) of
+        case RemoteFun({consume, QueueName}) of
             {ok, queue_empty} ->
                 SW0 = os:timestamp(),
                 EmptyFetchSplit = timer:now_diff(SW0, SW),
@@ -584,11 +647,13 @@ repl_fetcher(WorkItem) ->
                 done_work(WorkItem, true,
                             {object, FetchSplit, PushSplit, ModSplit});
             {error, no_client} ->
+                RemoteFun(close),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
                 ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, no_client});
             {error, {conn_failed, {error, econnrefused}}} ->
                 lager:info("Snk worker connection refused to peer ~w", [Peer]),
+                RemoteFun(close),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
                 ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, econnrefused});
@@ -596,6 +661,7 @@ repl_fetcher(WorkItem) ->
                 lager:warning("Snk worker for peer ~w " ++
                                     "failed due to remote exception ~p",
                                 [Peer, binary_to_list(Bin)]),
+                RemoteFun(close),
                 UpdWorkItem = setelement(3, WorkItem, RenewClientFun()),
                 ok = riak_kv_stat:update(ngrrepl_error),
                 done_work(UpdWorkItem, false, {error, error, remote_error})
@@ -604,6 +670,7 @@ repl_fetcher(WorkItem) ->
         Type:Exception ->
             lager:warning("Snk worker failed at Peer ~w due to ~w error ~w",
                             [Peer, Type, Exception]),
+            RemoteFun(close),
             UpdWorkItem0 = setelement(3, WorkItem, RenewClientFun()),
             ok = riak_kv_stat:update(ngrrepl_error),
             done_work(UpdWorkItem0, false, {error, Type, Exception})
@@ -766,14 +833,16 @@ determine_workitems_test() ->
     Peer2 = {2, ?STARTING_DELAYMS, "127.0.0.1", 12009, http},
     Peer3 = {3, ?STARTING_DELAYMS, "127.0.0.1", 12009, http},
     WC1 = 5,
-    {MQL1, WIL1} = determine_workitems(queue1, 1, [Peer1, Peer2, Peer3], WC1),
-    ?assertMatch(10, MQL1),
-    ?assertMatch(15, length(WIL1)),
+    {MQL1, WIL1} =
+        determine_workitems(queue1, 1, [Peer1, Peer2, Peer3], WC1, 3),
+    ?assertMatch(4, MQL1), % 3 clients per peer, worker count of 5
+    ?assertMatch(9, length(WIL1)),
     WIL1A = lists:map(fun({K, _LC, _RC, _RNCF}) -> K end, WIL1),
     ?assertMatch([{queue1, 1, 1}, {queue1, 1, 2}, {queue1, 1, 3}],
                     lists:sublist(WIL1A, 3)),
 
-    {MQL2, WIL2} = determine_workitems(queue1, 2, [Peer1], WC1),
+    {MQL2, WIL2} =
+        determine_workitems(queue1, 2, [Peer1], WC1, WC1),
     ?assertMatch(0, MQL2),
     ?assertMatch(5, length(WIL2)),
     WIL2A = lists:map(fun({K, _LC, _RC, _RNCF}) -> K end, WIL2),

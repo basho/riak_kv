@@ -415,7 +415,7 @@ handle_info(log_queue, State) ->
     erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),
     {noreply, State}.
 
-terminate(normal, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

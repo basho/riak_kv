@@ -43,8 +43,8 @@
 
 -export([start_link/0,
             start_job/1,
+            request_reap/1,
             request_reap/2,
-            request_reap/3,
             direct_reap/1,
             reap_stats/1,
             clear_queue/1,
@@ -63,7 +63,8 @@
             job_id :: non_neg_integer(), % can be 0 for named reaper
             pending_close = false :: boolean(),
             last_tick_time = os:timestamp() :: erlang:timestamp(),
-            reap_fun :: reap_fun()
+            reap_fun :: reap_fun(),
+            redo_timeout :: non_neg_integer()
 }).
 
 -type priority() :: 1..2.
@@ -77,6 +78,7 @@
 -type reap_stats() :: {non_neg_integer(), non_neg_integer(), queue_length()}.
 
 -type reap_fun() :: fun((reap_reference()) -> boolean()).
+-type reaper_state() :: #state{}.
 
 -export_type([reap_reference/0, job_id/0]).
 
@@ -93,11 +95,17 @@ start_link() ->
 start_job(JobID) ->
     gen_server:start_link(?MODULE, [JobID, fun reap/1], []).
 
--spec request_reap(reap_reference(), priority()) -> ok.
-request_reap(ReapReference, Priority) when Priority == 1; Priority == 2 ->
-    gen_server:cast(?MODULE, {request_reap, ReapReference, Priority}).
+-spec request_reap(reap_reference()) -> ok.
+request_reap(ReapReference) ->
+    request_reap(?MODULE, ReapReference, 2).
 
--spec request_reap(pid(), reap_reference(), priority()) -> ok.
+-spec request_reap(pid(), reap_reference()) -> ok.
+request_reap(Pid, ReapReference) ->
+    request_reap(Pid, ReapReference, 2).
+
+%% @doc
+%% Priority of Reaps is by default 2. 1 is reserved for redo of reaps
+-spec request_reap(pid()|atom(), reap_reference(), priority()) -> ok.
 request_reap(Pid, ReapReference, Priority) when Priority == 1; Priority == 2 ->
     gen_server:cast(Pid, {request_reap, ReapReference, Priority}).
 
@@ -125,27 +133,67 @@ stop_job(Pid) ->
 
 init([JobID, ReapFun]) ->
     erlang:send_after(?LOG_TICK, self(), log_queue),
-    {ok, #state{job_id = JobID, reap_fun = ReapFun}, 0}.
+    RedoTimeout = app_helper:get_env(riak_kv, reaper_redo_timeout, ?REDO_TIMEOUT),
+    {ok, #state{job_id = JobID, reap_fun = ReapFun, redo_timeout = RedoTimeout}, 0}.
 
-handle_call(reap_stats, _From, State) ->
+
+handle_call(Msg, _From, State) ->
+    {reply, R, S0} = handle_sync_message(Msg, State),
+    {reply, R, S0, 0}.
+
+handle_cast(Msg, State) ->
+    {noreply, S0} = handle_async_message(Msg, State),
+    {noreply, S0, 0}.
+
+handle_info(Msg, State) ->
+    case handle_async_message(Msg, State) of
+        {override_timeout, none, R} ->
+            R;
+        {override_timeout, T0, {noreply, S0}} ->
+            {noreply, S0, T0};
+        {noreply, S0} ->
+            {noreply, S0, 0}
+    end.
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+
+%%%============================================================================
+%%% Actual Callbacks
+%%%============================================================================
+
+%% Handle a call message - with a reply.  The handle_call function will enforce
+%% the addition of an immediate timeout
+-spec handle_sync_message(any(), reaper_state()) ->
+        {reply, any(), reaper_state()}.
+handle_sync_message(reap_stats, State) ->
     Stats =
         {State#state.reap_attempts,
             State#state.reap_aborts,
             State#state.pqueue_length},
-    {reply, Stats, State, 0};
-handle_call({direct_reap, ReapReference}, _From, State) ->
-    {reply, reap(ReapReference), State, 0};
-handle_call(clear_queue, _From, State) ->
+    {reply, Stats, State};
+handle_sync_message({direct_reap, ReapReference}, State) ->
+    {reply, reap(ReapReference), State};
+handle_sync_message(clear_queue, State) ->
     {reply,
         ok,
         State#state{reap_queue = riak_core_priority_queue:new(),
-                    pqueue_length = {0, 0}},
-        0};
-handle_call(stop_job, _From, State) ->
-    {reply, ok, State#state{pending_close = true}, 0}.
+                    pqueue_length = {0, 0}}};
+handle_sync_message(stop_job, State) ->
+    {reply, ok, State#state{pending_close = true}}.
 
-handle_cast({request_reap, ReapReference, Priority}, State) ->
-
+%% Handle a cast or info message - with a reply.  The handle_cast function
+%% will expet a {noreply, State} response and will override the return with
+%% an immediate timeout.  the handle_info may also receive a reply with an
+%% overrride to the timeout.
+-spec handle_async_message(any(), reaper_state()) ->
+        {noreply, reaper_state()}|
+        {override_timeout, none|pos_integer(), tuple()}.
+handle_async_message({request_reap, ReapReference, Priority}, State) ->
     UpdQL =
         setelement(Priority,
                     State#state.pqueue_length,
@@ -154,18 +202,17 @@ handle_cast({request_reap, ReapReference, Priority}, State) ->
         riak_core_priority_queue:in(ReapReference,
                                     Priority,
                                     State#state.reap_queue),
-    {noreply, State#state{pqueue_length = UpdQL, reap_queue = UpdQ}, 0}.
-
-handle_info(timeout, State) ->
+    {noreply, State#state{pqueue_length = UpdQL, reap_queue = UpdQ}};
+handle_async_message(timeout, State) ->
     ReapFun = State#state.reap_fun,
     case State#state.pqueue_length of
         {0, 0} ->
             case State#state.pending_close of
                 true ->
-                    {stop, normal, State};
+                    {override_timeout, none, {stop, normal, State}};
                 false ->
                     %% No timeout here, as no work to do
-                    {noreply, State}
+                    {override_timeout, none, {noreply, State}}
             end;
         {RedoQL, 0} ->
             %% Work a single item on the redo queue, and no immediate timeout
@@ -177,25 +224,24 @@ handle_info(timeout, State) ->
                             AT0 = State#state.reap_attempts + 1,
                             QL0 = {RedoQL - 1, 0},
                             {noreply,
-                                State#state{reap_queue = Q0, 
+                                State#state{reap_queue = Q0,
                                             reap_attempts = AT0,
-                                            pqueue_length = QL0},
-                                0};
+                                            pqueue_length = QL0}};
                         false ->
                             AB0 = State#state.reap_aborts + 1,
                             Q1 = riak_core_priority_queue:in(ReapRef, 1, Q0),
-                            {noreply,
-                                State#state{reap_queue = Q1, 
-                                            reap_aborts = AB0},
-                                ?REDO_TIMEOUT}
-                    end;
+                            {override_timeout,
+                                State#state.redo_timeout,
+                                {noreply,
+                                    State#state{reap_queue = Q1,
+                                                reap_aborts = AB0}}}
+                   end;
                 {empty, Q0} ->
                     %% This shoudn't happen - must have miscalulated
                     %% queue lengths
                     {noreply,
                         State#state{reap_queue = Q0,
-                                    pqueue_length = {0, 0}},
-                        0}
+                                    pqueue_length = {0, 0}}}
             end;
         {RedoQL, ReapQL} ->
             %% Work a batch of items from the reap queue before yielding
@@ -226,10 +272,9 @@ handle_info(timeout, State) ->
                 State#state{reap_queue = UpdQ,
                             reap_attempts = AT0,
                             reap_aborts = AB0,
-                            pqueue_length = {RedoQL, ReapQL - BatchSize}},
-                0}
+                            pqueue_length = {RedoQL, ReapQL - BatchSize}}}
     end;
-handle_info(log_queue, State) ->
+handle_async_message(log_queue, State) ->
     lager:info("Reaper Job ~w has queue lengths ~w " ++
                     " reap_attempts=~w reap_aborts=~w ",
                 [State#state.job_id,
@@ -237,14 +282,7 @@ handle_info(log_queue, State) ->
                     State#state.reap_attempts,
                     State#state.reap_aborts]),
     erlang:send_after(?LOG_TICK, self(), log_queue),
-    {noreply, State#state{reap_attempts = 0, reap_aborts = 0}, 0}.
-
-
-terminate(normal, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+    {noreply, State#state{reap_attempts = 0, reap_aborts = 0}}.
 
 
 %%%============================================================================
@@ -308,7 +346,7 @@ standard_reaper_tester() ->
     spawn(fun() ->
                 lists:foreach(fun(R) -> request_reap(P, R, 2) end, RefList)
             end),
-    WaitFun = 
+    WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->
@@ -347,7 +385,7 @@ somefail_reaper_tester(N) ->
     spawn(fun() ->
                 lists:foreach(fun(R) -> request_reap(P, R, 2) end, RefList)
             end),
-    WaitFun = 
+    WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->

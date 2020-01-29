@@ -154,6 +154,7 @@
                 worker_pool_strategy = single :: none|single|dscp,
                 vnode_pool_pid :: undefined|pid(),
                 update_hook :: update_hook(),
+                max_aae_queue_time :: non_neg_integer(),
                 enable_nextgenreplsrc = false :: boolean(),
                 sizelimit_nextgenreplsrc = 0 :: non_neg_integer()
                }).
@@ -201,6 +202,9 @@
 -define(DEFAULT_CNTR_LEASE_TO, 20000). % 20 seconds!
 
 -define(MAX_REBUILD_TIME, 86400).
+
+-define(MAX_AAE_QUEUE_TIME, 1000). 
+    %% Queue time in ms to prompt a sync ping.
 
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
@@ -735,6 +739,8 @@ init([Index]) ->
         app_helper:get_env(riak_kv, tictacaae_active, passive),
     WorkerPoolStrategy =
         app_helper:get_env(riak_kv, worker_pool_strategy),
+    MaxAAEQueueTime =
+        app_helper:get_env(riak_kv, max_aae_queue_time, ?MAX_AAE_QUEUE_TIME),
     EnableNextGenReplSrc = 
         app_helper:get_env(riak_kv, replrtq_enablesrc, false),
     SizeLimitNextGenReplSrc = 
@@ -766,6 +772,7 @@ init([Index]) ->
                            md_cache_size=MDCacheSize,
                            worker_pool_strategy=WorkerPoolStrategy,
                            update_hook=update_hook(),
+                           max_aae_queue_time=MaxAAEQueueTime,
                            enable_nextgenreplsrc = EnableNextGenReplSrc,
                            sizelimit_nextgenreplsrc = SizeLimitNextGenReplSrc},
             try_set_vnode_lock_limit(Index),
@@ -1145,6 +1152,9 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                     "node failure",
                                     [Local, Remote, {DocIdx, N}])
             end,
+            ok = aae_controller:aae_ping(State#state.aae_controller,
+                                            os:timestamp(),
+                                            self()),
             {noreply, State#state{tictac_exchangequeue = Rest}}
     end;
 
@@ -1779,7 +1789,7 @@ handle_aaefold({reap_tombs,
                     DH = riak_object:delete_hash(VV),
                     case ReapMethod of
                         local ->
-                            riak_kv_reaper:request_reap({{BF, KF}, DH}, 2),
+                            riak_kv_reaper:request_reap({{BF, KF}, DH}),
                             NewCount = element(2, TombHashAcc) + 1,
                             setelement(2, TombHashAcc, NewCount);
                         count ->
@@ -1829,7 +1839,7 @@ handle_aaefold({erase_keys,
                     {clock, VV} = lists:keyfind(clock, 1, EFs),
                     case DeleteMethod of
                         local ->
-                            riak_kv_eraser:request_delete({{BF, KF}, VV}, 2),
+                            riak_kv_eraser:request_delete({{BF, KF}, VV}),
                             NewCount = element(2, EraseKeyAcc) + 1,
                             setelement(2, EraseKeyAcc, NewCount);
                         count ->
@@ -2351,7 +2361,35 @@ handle_info({counter_lease, {FromPid, NewVnodeId, NewLease}}, State=#state{statu
     CS1 = CounterState#counter_state{lease=NewLease, leasing=false, cnt=1},
     State2 = State#state{vnodeid=NewVnodeId, counter=CS1},
     lager:info("New Vnode id for ~p. Epoch counter rolled over.", [Idx]),
-    {ok, State2}.
+    {ok, State2};
+handle_info({aae_pong, QueueTime}, State) ->
+    ok = riak_kv_stat:update({controller_queue, QueueTime}),
+    QueueTimeMS = QueueTime div 1000,
+    case QueueTimeMS >= State#state.max_aae_queue_time of
+        true ->
+            lager:info("AAE Queue time of ~w ms prompting sync ping",
+                        [QueueTimeMS]),
+            StartDrain = os:timestamp(),
+            R = aae_controller:aae_ping(State#state.aae_controller,
+                                        StartDrain,
+                                        {sync, max(1, QueueTimeMS)}),
+            case R of
+                ok ->
+                    DrainTime =
+                        timer:now_diff(os:timestamp(), StartDrain) div 1000,
+                    lager:info("AAE queue drained in ~w ms", [DrainTime]);
+                timeout ->
+                    lager:warning("AAE queue not yet drained due to timeout")
+            end;
+        false ->
+            ok
+    end,
+    {ok, State};
+handle_info({Ref, ok}, State) ->
+    lager:info("Ignoring ok returned after timeout for Ref ~p", [Ref]),
+    {ok, State}.
+
+    
 
 handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=CntrState}) ->
     lager:error("Vnode status manager exit ~p", [Reason]),

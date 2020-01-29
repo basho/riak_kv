@@ -1020,7 +1020,7 @@
 %% each priority on each queue will have this as the limit)
 {mapping, "replrtq_srcqueuelimit", "riak_kv.replrtq_srcqueuelimit", [
   {datatype, integer},
-  {default, 100000}
+  {default, 300000}
 ]}.
 
 %% @doc Limit the number of objects to be cached on the replication queue,
@@ -1097,3 +1097,11 @@
     {datatype, integer},
     {default, 24}
 ]}.
+
+%% @doc The maximume number of workers to be for any given peer may be
+%% configured - if not configured will default to the number of sinkworkers
+{mapping, "replrtq_sinkpeerlimit", "riak_kv.replrtq_sinkpeerlimit", [
+    {datatype, integer},
+    {commented, 24}
+]}.
+

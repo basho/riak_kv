@@ -98,7 +98,12 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
   * Queues may have data filtering rules to restrict what changes are distributed via that queue.  The filters can restrict replication to a specific bucket, or bucket type, a bucket name prefix or allow for any change to be published to that queue.
 
-  * __Real-time replication__ changes (i.e. PUTs that have just been co-ordinated on this node within the cluster), are sent to the `riak_kv_replrtq_src` as either references (e.g. Bucket, Key, Clock and co-ordinating vnode) or whole objects in the case of tombstones.  These are the highest priority items to be queued, and are placed on __every queue whose data filtering rules are matched__ by the object.
+  * __Real-time replication__ changes (i.e. PUTs that have just been co-ordinated on this node within the cluster), are sent to the `riak_kv_replrtq_src` in one of the following formats:
+    * {Bucket, Key, Clock, {tombstone, Object}};
+    * {Bucket, Key, Clock, {object, Object}};
+    * {Bucket, Key, Clock, to_fetch}.
+
+  * Real-time replicated objects are the highest priority items to be queued, and are placed on __every queue whose data filtering rules are matched__ by the object.  If the priority queue has grown beyond a limited number of items (the number being defined in `riak_kv.replrtq_srcobjectlimt`), then any {object, Object} references is stripped and replaced with `to_fetch`.  This is to help limit the memory consumed by the queue during failure conditions i.e. when a sink has stopped consuming from the source queue.
 
   * Changes identified by __AAE full-sync replication__ processes run by the `riak_kv_ttaaefs` manager on the local node are sent to the `riak_kv_replrtq_src` as references, and queued as the second highest priority.  These changes are queued only on __a single queue defined within the configuration__ of `riak_kv_ttaaefs_manager`.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object.
 
@@ -116,7 +121,7 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
   * There is a single actor on each node that manages the process of consuming from queues on the `riak_kv_replrtq_src` on remote clusters.
 
-  * The `riak_kv_replrtq_snk` can be configured to consume from up to two queues, across an open-ended number of peers.  For instance if each node on Cluster A maintains a queue named `cluster_c_full`, and each node on Cluster B maintains a queue named `cluster_c_partial` - then `riak_kv_replrtq_snk` can be configured to consume from the `cluster_c_full` from every node in Cluster A and from `cluster_c_partial` from every node in Cluster B.
+  * The `riak_kv_replrtq_snk` can be configured to consume from multiple queues, across an open-ended number of peers.  For instance if each node on Cluster A maintains a queue named `cluster_c_full`, and each node on Cluster B maintains a queue named `cluster_c_partial` - then `riak_kv_replrtq_snk` can be configured to consume from the `cluster_c_full` from every node in Cluster A and from `cluster_c_partial` from every node in Cluster B.
 
   * The `riak_kv_replrtq_snk` manages a finite number of workers for consuming from remote peers.  The `riak_kv_replrtq_snk` tracks the results of work in order to back-off slightly from peers regularly not returning results to consume requests (in favour of those peers indicating a backlog by regularly returning results).  The `riak_kv_replrtq_snk` also tracks the results of work in order to back-off severely from those peers returning errors (so as not to lock too many workers consuming from unreachable nodes).
 
@@ -125,29 +130,29 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
 ### Real-time Replication - Step by Step
 
-Previous replication implementations initiate replication through a post-commit hook.  Post-commit hooks are fired from the `riak_kv_put_fsm` after "enough" responses have been received from other vnodes (based on n, w, dw and pw values for the PUT).  Without enough responses, the replication hook is not fired, although the client should receive an error and retry, a process of retrying that eventually may fire the hook.
+Previous replication implementations initiate replication through a post-commit hook.  Post-commit hooks are fired from the `riak_kv_put_fsm` after "enough" responses have been received from other vnodes (based on n, w, dw and pw values for the PUT).  Without enough responses, the replication hook is not fired, although the client should receive an error and retry. This process of retrying may eventually fire the hook - although it is possible for a PUT to fail, the hook not to be fired, but a GET be locally successful (due to read-repair and anti-entropy) and there be no clue that the object has not been replicated.
 
-In implementing the new replication solution, the point of firing off replication has been changed to the point that the co-ordinated PUT is completed.  So the replication of the PUT to the clusters may occur in parallel to the replication of the PUT to other nodes in the source cluster.  This is the first opportunity where sufficient information is known (e.g. the updated vector clock), and should help control the size of the time-window of inconsistency between the clusters.
+In implementing the new replication solution, the point of firing off replication has been changed to the point that the co-ordinated PUT is completed.  So the replication of the PUT to the clusters may occur in parallel to the replication of the PUT to other nodes in the source cluster.  This is the first opportunity where sufficient information is known (e.g. the updated vector clock), and reduces the size of the time-window of inconsistency between the clusters, and also reduce the window of opportunity for a PUT to succeed but not have replication triggered.
 
-Replication is fired within the `riak_kv_vnode` `do_put/7`.  Once the put to the backend has been completed, and the reply sent back to the `riak_kv_put_fsm`, on condition of the vnode being a co-ordinator of the put, the following work is done:
+Replication is fired within the `riak_kv_vnode` `actual_put/8`.  On condition of the vnode being a co-ordinator of the put, and of `riak_kv.replrtq_enablesrc` being set to enabled (true), the following work is done:
 
 - The object reference to be replicated is determined, this is the type of reference to be placed on the replication queue.  
 
-  - If the object is now a tombstone, the whole object is used as the replication reference (due to the small size of the object, and the need to avoid race conditions with reaping activity if `delete_mode` is not `keep` - the cluster may not be able to fetch the tombstone to replicate in the future).
+  - If the object is now a tombstone, the whole object is used as the replication reference.  The whole object is used due to the small size of the object, and the need to avoid race conditions with reaping activity if `delete_mode` is not `keep` - the cluster may not be able to fetch the tombstone to replicate in the future.  The whole object must be kept on the queue and not be filtered by the `riak_kv_replrtq_src` to be replaced with a `to_fetch` reference.
 
-  - If no `repl_cache` has been configured, the flag `to_fetch` replaces the object - to indicate that the object must be fetched via a standard `riak_kv_get_fsm` process. Configuration of the `repl_cache` is set using `riak_kv.enable_repl_cache`.
+  - If the object is below the `riak_kv.replrtq_srcobjectsize` (default 200KB) then whole object will be sent to the `riak_kv_replrtq_src`, and it will be queued as a whole object as long as the current size of the priority real-time queue does not exceed the `riak_kv.replrtq_srcobjectlimit` (default 1000).  If an object is over the size limit a `to_fetch` references will be sent instead of the object, and if the queue is too large the `riak_kv_replrtq_src` will substitute a `to_fetch` reference before queueing.
 
-  - If the `repl_cache` is enabled (through configuration), the object is placed in an ets table local to the vnode that acts as a cache of recently coordinated PUTs, and a reference to the vnode ID is used as a replication reference.  The ets table is fixed in size by the configuration item `riak_kv.repl_cache_size`.
+- The `{Bucket, Key, Clock, ObjectReference}` is cast to the `riak_kv_replrtq_src` and placed by the `riak_kv_replrtq_src` on the priority queue.
 
-- The `{Bucket, Key, Clock, ObjectReference}` is then cast to the `riak_kv_replrtq_src`.  This cast will occur for all coordinated PUTs even if no replication is enabled - if replication is not enabled, then the `riak_kv_replrtq_src` will discard the event.
+- The queue has a configurable absolute limit, that is applied individually for each priority.  The limit is configured via `riak_kv.replrtq_srcqueuelimit` and defaults to 300,000 references (5 minutes of traffic at 1,000 PUTs per second).  When this limit is reached, new replication references are discarded on receipt rather than queued - these discarded references will need to eventually be re-replicated via full-sync.
 
-The reference now needs to be handled by the `riak_kv_replrtq_src`.  It has a simple task list:
+The reference now needs to be handled by the `riak_kv_replrtq_src`.  The task list for this process is:
 
 - Assign a priority to the replication event depending on what prompted the replication (e.g. highest priority to real-time events received from co-ordinator vnodes).
 
-- Add the reference to the tail of the __every__ matching queue based on priority.  Each queue is configured to either match `any` replication event, no events (using the configuration `block_rtq`), or a subset of events (using either a bucket `type` filter or a `bucket` filter).
+- Add the reference to the tail of the __every__ matching queue based on priority.  Each queue is configured to either match `any` replication event, no real-time events (using the configuration `block_rtq`), or a subset of events (using either a bucket `type` filter or a `bucket` filter).
 
-In order to replicate the object, it must now be fetched from the queue by a sink.  A sink-side cluster should have multiple consumers, on multiple nodes, consuming form each node in the source-side cluster.  These workers are handed work items by the `riak_kv_replrtq_src`, with the IP/Port of a remote node and the name of a queue to consume from - and the worker should initiate a `fetch` to that destination on receipt of such a work item.
+In order to replicate the object, it must now be fetched from the queue by a sink.  A sink-side cluster should have multiple consumers, on multiple nodes, consuming from each node in the source-side cluster.  These workers are handed work items by the `riak_kv_replrtq_snk`, with a Riak client configured to communicate to the remote node, and the worker will initiate a `fetch` from that node.
 
 On receipt of the `fetch` request the source node should:
 
@@ -155,13 +160,11 @@ On receipt of the `fetch` request the source node should:
 
 - The GET FSM should go directly into the `queue_fetch` state, and try and fetch the next replication reference from the given queue name via the `riak_kv_replrtq_src`.
 
-  - If the fetch from the queue returns `queue_empty` this is relayed back to the sink-side worker, and ultimately the `riak_kv_replrtq_snk` which may then slow down the pace at which fetch requests are sent to this node/queue combination.
+  - If the fetch from the queue returns `queue_empty` this is relayed back to the sink-side worker, and ultimately the `riak_kv_replrtq_snk` which may then slow down the pace at which fetch requests are sent to this node/queue combination.  To reduce the volume of individual requests when queues are mainly empty, the queue is only considered empty if it has reported empty 8 times from requests 4ms apart.
 
-  - If the fetch returns an actual tombstone object, this is relayed back to the sink worker.
+  - If the fetch returns an actual object, this is relayed back to the sink worker.
 
   - If the fetch returns a replication reference with the flag `to_fetch`, the `riak_kv_get_fsm` will continue down the standard path os states starting with `prepare`, and fetch the object which the will be returned to the sink worker.
-
-  - If the fetch returns a replication reference with a vnode reference (to indicate a potentially cached object), a `fetch_repl` request will be cast to the specific vnode (the original co-ordinator), and the `riak_kv_get_fsm` should transition to the `waiting_vnode_fetch`.  The vnode on receipt of a `fetch_repl` request should try and retrieve the object from the cache, and otherwise return the object from a backend GET.  The response will then be sent back to the `riak_kv_get_fsm` and relayed back to the sink worker.
 
 - If a successful fetch is relayed back to the sink worker it will replicate the PUT using a local `riak_client:push/4`.  The push will complete a PUT of the object on the sink cluster - using a `riak_kv_put_fsm` with appropriate options (e.g. `asis`, `disable-hooks`).
 
@@ -172,9 +175,9 @@ On receipt of the `fetch` request the source node should:
 
 ### Full-Sync Reconciliation and Repair - Step by Step
 
-The `riak_kv_ttaaefs_manager` controls the full-sync replication activity of a node.  Each node is configured with a single peer with which it is to run full-sync checks and repairs, assuming that across the cluster sufficient peers to sufficient clusters have been configured to complete the overall work necessary for that cluster.  Ensuring this is an administrator responsibility, it is not something determined automatically by Riak.
+The `riak_kv_ttaaefs_manager` controls the full-sync replication activity of a node.  Each node is configured with a single peer with which it is to run full-sync checks and repairs, assuming that across the cluster sufficient peers to sufficient clusters have been configured to complete the overall work necessary for that cluster.  Ensuring there are sufficient peer relations is an administrator responsibility, there are no re-balancing or re-scaling scenarios during failure scenarios.
 
-The `riak_kv_ttaaefs_manager` is a source side process.   It will not attempt to repair any discovered discrepancies where the remote cluster is ahead of the local cluster - the job of the process is to ensure that a remote cluster is up-to-date with the changes which have occurred in the local cluster.
+The `riak_kv_ttaaefs_manager` is a source side process.   It will not attempt to repair any discovered discrepancies where the remote cluster is ahead of the local cluster - the job of the process is to ensure that a remote cluster is up-to-date with the changes which have occurred in the local cluster.  For mutual full-sync replication, there will be a need for an equivalent configuration on the peer cluster.
 
 The `riak_kv_ttaaefs_manager` has a schedule of work obtained from the configuration.  The schedule has wants, the number of times per day that it is desired that this manager will:
 
@@ -188,7 +191,7 @@ The `riak_kv_ttaaefs_manager` has a schedule of work obtained from the configura
 
 On startup, the manager looks at these wants and provides a random distribution of work across slots.  The day is divided into slots evenly distributed so there is a slot for each want in the schedule.  It will run work for the slot at an offset from the start of the slot, based on the place this node has in the sorted list of currently active nodes.  So if each node is configured with the same total number of wants, work will be synchronised to have limited overlapping work within the cluster.
 
-When, on a node, a scheduled piece of work comes due, the `riak_kv_ttaaefs_manager` will start an `aae_exchange` to run the work between the two clusters (using the peer configuration to reach the remote cluster).  Once the work is finished, it will schedule the next piece of work - unless the start time for the next piece of work has already passed, in which case that work is skipped.  When all the work in the schedule is complete, a new schedule is calculated from the wants.
+When, on a node, a scheduled piece of work comes due, the `riak_kv_ttaaefs_manager` will start an `aae_exchange` to run the work between the two clusters (using the peer configuration to reach the remote cluster).  Once the work is finished, it will schedule the next piece of work - unless the start time for the next piece of work has already passed, in which case the next work is skipped.  When all the work in the schedule is complete, a new schedule is calculated from the wants.
 
 When starting an `aae_exchange` the `riak_kv_ttaaefs_manager` must pass in a repair function.  This function will compare clocks from identified discrepancies, and where the source cluster is ahead of the sink, send the `{Bucket, Key, Clock, to_fetch}` tuple to a configured queue name on `riak_kv_replrtq_src`.  These queued entries will then be replicated through being fetched by the `riak_kv_replrtq_snk` workers, although this will only occur when there is no higher priority work to replicate i.e. real-time replication events prompted by locally co-ordinated PUTs.
 
@@ -210,58 +213,58 @@ TODO
 
 ### Frequently Asked Questions
 
-TODO - potential questions below
-
 *Previously there were moves to run real-time replication via RabbitMQ, is this still the intention?*
 
-...
+Not presently, although it would not be a significant code change to modify the `riak_kc_replrtq_src` so that it would point to an external queue not an internal riak_core_priority_queue.
 
 
 *Can this be used to synchronise data between Riak and another data store (e.g. Elastic Search, Hadoop etc)?*
 
-...
+The intention is to open up this possibility by removing the need to understand the internal riak infrastructure, when trying to interface to Riak for replication.  The API calls used by replications (fetch, aae_fold) are now exposed and documented.  However, it will still require some implementation work in the destination database to replicate sink-side functionality - in particular the storing of keys and clocks so that they can be converted into a cluster-wide Merkle tree for comparison.
+
 
 *In this future will this mean there is 1 way of doing replication in Riak, or n + 1 ways?*
 
-...
+In the medium term it will certainly be an additional replication feature and not a replacement.  The `riak_repl` remains to assist in transition, but also Riak customers are committed to continued investment in improving `riak_repl`, and adding features such as improved replication filtering logic.
 
 
 *What is left to do to make this production ready?  When might it be production ready?*
 
-...
+Original release target was Autumn 2019, and the current target for release is e/o January 2020.  The release schedule has been extended as:
+
+- There was an increase in scope for the release to add in `riak_kv_reaper` and `riak_kv_eraser` functionality to improve support for mass deletion and tombstone management.
+
+- Initial volume tests indicated a need for improvements in observability and median replication latency.
 
 
 *Does this work with all Riak backends?  Does the efficiency of the solution change depending on backend choice?*
 
-...
+The full-scope of the solution is intended to work with all backends *if* Tictac AAE has been enabled as an anti-entropy mechanism.  For non-leveled backends there is a cost in enabling Tictac AAE (due to the need for the AAE keystore), and so the replication features have a higher cost in those backends.
+
+The replication sink workers, and the process of copying objects between processes can lead to increased CPU utilisation with nextgenrepl enabled.
 
 
 *How reliably does this mechanism handle deletions?  Might deleted data be resurrected?*
 
-...
+Whether or not deletions can be resurrected is a function of the delete_mode chosen, and the additional replication changes make no difference in this regard.  The release 2.9.1 does though enable the new `riak_kv_eraser` and `riak_kv_reaper` features, which allow for more efficient use of the delete_mode of keep.
 
 
 *Is this replication approach compatible with fixing a Time to Live for objects?*
 
-...
+If a backend TTL is used in Riak, objects will be removed from the backend without being erased from the AAE stores.  This will lead to a build-up of data in the AAE store, and when AAE store rebuilds occur large (and false) deltas being reported during intra-cluster and inter-cluster AAE checks.  If the intention is to used object TTLs, it would be better to use the `riak_kv_eraser` feature via `aae_fold` to expire objects rather than a backend TTL.
+
 
 *Will this replication approach work with Riak's strong consistency module `riak_ensemble`?*
 
-...
+No, and there are no plans to extend the solution to support strongly consistent PUTs.  It should be noted that the `riak_ensemble` feature remains an experimental solution not assured for production use (although customers have been known to sue it successfully in production).
+
+
+*What about hash collisions in the merkle tree - as only 4 byte hashes are used rather than full cryptographic hashes*
+
+The aae_fold feature allows for a modification in the hash_method so that instead of the pre-calculated hash, each hash will be recalculated using a combination of the vector clock (the current hash input) and an initialisation vector (passed in through the hash_method).  So it is possible to validate synchronisation against hash collisions, although the `riak_kv_ttaaefs_manager` doe snot support the orchestartion of such validation.
 
 
 ### Outstanding TODO
-
-*Can we prove that crashing the riak_kv_replrtq_src will not crash all the riak_kv_vnode processes on the node.  If so, should the repl work be moved back to the riak_kv_put_fsm?*
-
-Some advantages of using a vnode - src cannot be overloaded by unbalanced sending of load into the cluster, load between src will be distributed in line with hash/ring.
-
-Small distributed caches seems intuitively to be efficient, a good use of riak capability, and avoids the cache becoming a bottleneck.
-
-*riak_kv_replrtq_src needs to pick-up config at startup*
-
-Add with new test - https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_ttaaefs_autoall.erl
-
 
 *Extend the replication support to the write once path by implementing it within the riak_kv_w1c_worker.  Initial thoughts are that the push on the repl side should not use the write once path*
 
@@ -271,61 +274,6 @@ Add with new test - https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefu
 
 ...
 
-*Volume and performance tests*
-
-...
-
-*Further riak_test tests*
-
-typed buckets, replication filters, replicating CRDTs
-
-https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_rtq_autotypes.erl
-https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_rtq_autocrdt.erl
-
-*Location of the cache - is having a cache at each vnode the right thing*
-
-The location of the cache for fetching could be:
-
-- The vnode (as currently implemented);
-
-- The `riak_kv_replrtq_src`;
-
-- Another named process on the node (e.g. a `riak_kv_replrtq_cache`);
-
-- A public ets table.
-
-The reasons for choosing the vnode:
-
-- Less worry about contention over access to the cache being a bottleneck;
-
-- No overhead in serializing the object to cast it to the cache at PUT time - minimise extension of vnode delay for PUT.
-
-*Add stats gathered at src/snk into riak stats*
-
-...
-
-*AAE Fold implementation*
-
-Added on 30/4.  New test https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_aaefold.erl
-
-*Provide support for non-utf8 keys*
-
-Need to write pb api for services.  HTTP API will blow up on a non-utf8 bucket or key (true for all services, not just repl)
-
-*Upgrade ibrowse to handle connection pooling*
-
-...
-
-*Allow for ssl support in replication*
-
-...
-
-*External data format to be supported in fetch i.e. a fetch that would return a GET response, not a specific internal riak repl format*
-
-...
-
-*Add prefix support for filters on source queue.  Maybe add bucketname_exc and bucketname_inc to allow "all but bucket name" as well as "none but bucket name"*
-
-Added.  New test https://github.com/nhs-riak/riak_test/blob/mas-i1691-ttaaefullsync/tests/nextgenrepl_rtq_autotypes.erl
-
 *Add validation functions for tokenised inputs (peer list on rpel sink, queue definitions on repl source). Startup should fail due to invalid config*
+
+...

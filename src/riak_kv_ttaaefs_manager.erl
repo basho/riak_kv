@@ -402,7 +402,7 @@ handle_info({work_item, WorkItem}, State) ->
     process_workitem(WorkItem, no_reply, os:timestamp()),
     {noreply, State}.
 
-terminate(normal, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -431,9 +431,10 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
             {State#state{bucket_list = NextBucketList},
                 ?LOOP_TIMEOUT};
         _ ->
+            StopFun = fun() -> stop_client(RemoteClient, RemoteMod) end,
             RemoteSendFun = generate_sendfun({RemoteClient, RemoteMod}, RNVal),
             LocalSendFun = generate_sendfun(local, LNVal),
-            ReplyFun = generate_replyfun(ReqID, From),
+            ReplyFun = generate_replyfun(ReqID, From, StopFun),
             ReqID0 = 
                 case ReqID of
                     no_reply ->
@@ -525,6 +526,13 @@ init_client(pb, IP, Port, Credentials) ->
     Options = [{auto_reconnect, true}|SecurityOpts],
     init_pbclient(IP, Port, Options).
 
+%% @doc
+%% Stop the client (if PBC), nothing started for RHC.
+-spec stop_client(rhc:rhc()|pid(), rhc|riak_c_pb_socket) -> ok.
+stop_client(_RemoteClient, rhc) ->
+    ok;
+stop_client(RemoteClient, Mod) ->
+    Mod:stop(RemoteClient).
 
 init_pbclient(IP, Port, Options) ->
     {ok, Pid} = riakc_pb_socket:start_link(IP, Port, Options),
@@ -627,8 +635,8 @@ format_segment_filter({segments, SegList, TreeSize}) ->
 %% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
--spec generate_replyfun(integer()|no_reply, pid()) -> fun().
-generate_replyfun(ReqID, From) ->
+-spec generate_replyfun(integer()|no_reply, pid(), fun()) -> fun().
+generate_replyfun(ReqID, From, StopClientFun) ->
     fun(Result) ->
         case ReqID of
             no_reply ->
@@ -638,7 +646,8 @@ generate_replyfun(ReqID, From) ->
                 From ! {ReqID, Result}
         end,
         lager:info("Completed full-sync with result=~w", [Result]),
-        gen_server:cast(?MODULE, {reply_complete, ReqID, Result})
+        gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),
+        StopClientFun()
     end.
 
 %% @doc
