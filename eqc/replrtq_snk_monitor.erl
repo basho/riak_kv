@@ -10,7 +10,7 @@
 
 %% API
 -export([start_link/0, stop/0, fetch/2, push/4, suspend/1, resume/1,
-         add_queue/3, remove_queue/1, update_workers/2]).
+         add_queue/4, remove_queue/1, update_workers/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -19,7 +19,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {queues = [], peers = #{}, traces = #{}}).
--record(queue, {ref, name, peers, workers}).
+-record(queue, {ref, name, peers, workers, peerlimit}).
 
 %% -- API functions ----------------------------------------------------------
 
@@ -35,8 +35,8 @@ fetch(Client, QueueName) ->
 push(RObj, Bool, List, LocalClient) ->
     gen_server:call(?SERVER, {push, RObj, Bool, List, LocalClient}).
 
-add_queue(Queue, Peers, Workers) ->
-    gen_server:call(?SERVER, {add_queue, Queue, Peers, Workers}).
+add_queue(Queue, Peers, Workers, Peerlimit) ->
+    gen_server:call(?SERVER, {add_queue, Queue, Peers, Workers, Peerlimit}).
 
 remove_queue(Queue) ->
     gen_server:call(?SERVER, {remove, Queue}).
@@ -56,10 +56,10 @@ update_workers(Queue, Workers) ->
 init([]) ->
     {ok, #state{}}.
 
-handle_call({add_queue, Queue, Peers, Workers}, _From, State) ->
+handle_call({add_queue, Queue, Peers, Workers, Peerlimit}, _From, State) ->
     Ref = make_ref(),
     PeerMap = maps:from_list([{{{Host, Port}, Queue}, {Ref, Cfg}} || {{Host, Port, http}, Cfg} <- Peers]),
-    Q = #queue{ref = Ref, name = Queue, peers = Peers, workers = Workers},
+    Q = #queue{ref = Ref, name = Queue, peers = Peers, workers = Workers, peerlimit = Peerlimit},
     State1 = State#state{ queues = [Q | State#state.queues],
                           peers  = maps:merge(State#state.peers, PeerMap) },
     {reply, ok, add_trace(State1, Queue, {workers, Workers})};
@@ -88,7 +88,7 @@ handle_call({resume, Queue}, _From, State) ->
     {reply, ok, add_trace(State, Queue, resume)};
 handle_call({update_workers, Q, Workers}, _From, State) ->
     Queue = lists:keyfind(Q, #queue.name, State#state.queues),
-    NewQueue = Queue#queue{workers = Workers},
+    NewQueue = Queue#queue{workers = Workers, peerlimit = Workers},
     State1 = State#state{ queues = [NewQueue | State#state.queues -- [Queue]]},
     {reply, ok, add_trace(State1, Q, {workers, Workers})};
 handle_call(_Request, _From, State) ->
@@ -132,5 +132,5 @@ get_ref(#state{queues = Queues}, QueueName) ->
 
 final_trace(#state{ queues = Queues, traces = Traces }, Ref) ->
     Trace = maps:get(Ref, Traces),
-    #queue{name = Name, peers = Peers, workers = Workers} = lists:keyfind(Ref, #queue.ref, Queues),
-    {Name, Peers, Workers, lists:reverse(Trace)}.
+    #queue{name = Name, peers = Peers, workers = Workers, peerlimit = PL} = lists:keyfind(Ref, #queue.ref, Queues),
+    {Name, PL, Peers, Workers, lists:reverse(Trace)}.
