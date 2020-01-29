@@ -105,15 +105,6 @@ start() ->
     riak_kv_replrtq_snk:prompt_work(),
     Pid.
 
-start_callouts(#{enabled := false}, _Args) -> ?EMPTY;
-start_callouts(#{config := Sinks}, _Args) ->
-    ?PAR([ ?APPLY(setup_sink, [Sink]) || Sink <- Sinks ]).
-
-%% setup_sink_callouts(_S, [#{queue := disabled}]) -> ?EMPTY;
-setup_sink_callouts(_S, [#{peers := Peers, peerlimit := Peerlimit}]) ->
-    ?PAR([ ?CALLOUT(rhc, create, [Host, Port, ?WILDCARD, ?WILDCARD], {Host, Port})
-           || {{Host, Port, http}, _} <- Peers, _ <- lists:seq(1, Peerlimit) ]).
-
 start_next(#{enabled := false} = S, Pid, []) -> S#{ pid => Pid, sinks => #{} };
 start_next(#{config  := Sinks} = S, Pid, _Args) ->
     S#{pid   => Pid,
@@ -191,8 +182,6 @@ add(#{queue := Q, peers := Peers, workers := N, peerlimit := PL}) ->
             riak_kv_replrtq_snk:add_snkqueue(Q, PeerInfos, N, PL)
     end.
 
-add_callouts(_S, [Sink]) -> ?APPLY(setup_sink, [Sink]).
-
 add_next(#{sinks := Sinks} = S, _V, [#{queue := Q} = Sink]) ->
   Removed = maps:get(removed, S, []),
   S#{ sinks => Sinks#{ Q => Sink },
@@ -230,11 +219,6 @@ nrworkers_next(#{sinks := Sinks} = S, _Value, [Q, Workers]) ->
     Sink = maps:get(Q, Sinks),
     S#{sinks => Sinks#{Q => Sink#{workers => Workers, peerlimit => Workers}},
        with_dynamic_workers => [Q | maps:get(with_dynamic_workers, S, [])]}.
-
-nrworkers_callouts(#{sinks := Sinks}, [Q, Workers]) ->
-    Sink = maps:get(Q, Sinks),
-    ?APPLY(setup_sink, [Sink#{ workers => Workers, peerlimit => Workers }]).
-
 
 
 %% -- Generators -------------------------------------------------------------
@@ -292,7 +276,7 @@ url() ->
     return(Name ++ "." ++ Suf))).
 
 peer_config_gen() ->
-    {elements([inactive, active]),
+    {frequency([{7, active}, {2, inactive}, {1, error}]),
      choose(5, 20)}.    %% Response time
 
 
@@ -345,7 +329,7 @@ prop_repl() ->
 check_traces(Traces, WithDynamicWorkers) ->
     conjunction([ {QueueName, check_trace(QueueName, Peerlimit, Peers, get_workers(Workers, Trace))}
                   || {QueueName, Peerlimit, Peers, Workers, Trace} <- Traces,
-                      not lists:member(QueueName, WithDynamicWorkers)]).
+                      not lists:member(QueueName, WithDynamicWorkers), QueueName /= no_queue ]).
 
 %% We only need this if we have non dynamic worker count changes
 get_workers(Workers, Trace) ->
@@ -457,13 +441,12 @@ get_env(riak_kv, Key) -> get_env(riak_kv, Key, undefined).
 lager_spec() ->
     #api_module{ name = lager, fallback = ?MODULE }.
 
-warning(F, As) ->
+warning(_F, _As) ->
     %% io:format(F++"\n", As),
     ok.
 
 rhc_spec() ->
-    #api_module{ name = rhc, fallback = replrtq_snk_monitor,
-                 functions = [ #api_fun{name = create, arity = 4} ] }.
+    #api_module{ name = rhc, fallback = replrtq_snk_monitor }.
 
 riak_client_spec() ->
     #api_module{ name = riak_client, fallback = ?MODULE }.

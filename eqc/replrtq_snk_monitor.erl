@@ -50,6 +50,8 @@ resume(Queue) ->
 update_workers(Queue, Workers) ->
     gen_server:call(?SERVER, {update_workers, Queue, Workers}).
 
+create(Host, Port, _, _) ->
+    {Host, Port}.
 
 %% -- Callbacks --------------------------------------------------------------
 
@@ -102,7 +104,8 @@ handle_info({return, From, QueueName, Active}, State) ->
     Reply =
         case Active of
             active   -> {ok, <<"riak_obj">>};
-            inactive -> {ok, queue_empty}
+            inactive -> {ok, queue_empty};
+            error    -> {error, no_client}
         end,
     gen_server:reply(From, Reply),
     {noreply, add_trace(State, QueueName, {return, Active})};
