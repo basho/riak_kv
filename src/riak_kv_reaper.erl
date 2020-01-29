@@ -43,8 +43,8 @@
 
 -export([start_link/0,
             start_job/1,
+            request_reap/1,
             request_reap/2,
-            request_reap/3,
             direct_reap/1,
             reap_stats/1,
             clear_queue/1,
@@ -94,11 +94,17 @@ start_link() ->
 start_job(JobID) ->
     gen_server:start_link(?MODULE, [JobID, fun reap/1], []).
 
--spec request_reap(reap_reference(), priority()) -> ok.
-request_reap(ReapReference, Priority) when Priority == 1; Priority == 2 ->
-    gen_server:cast(?MODULE, {request_reap, ReapReference, Priority}).
+-spec request_reap(reap_reference()) -> ok.
+request_reap(ReapReference) ->
+    request_reap(?MODULE, ReapReference, 2).
 
--spec request_reap(pid(), reap_reference(), priority()) -> ok.
+-spec request_reap(pid(), reap_reference()) -> ok.
+request_reap(Pid, ReapReference) ->
+    request_reap(Pid, ReapReference, 2).
+
+%% @doc
+%% Priority of Reaps is by default 2. 1 is reserved for redo of reaps
+-spec request_reap(pid()|atom(), reap_reference(), priority()) -> ok.
 request_reap(Pid, ReapReference, Priority) when Priority == 1; Priority == 2 ->
     gen_server:cast(Pid, {request_reap, ReapReference, Priority}).
 

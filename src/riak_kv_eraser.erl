@@ -38,8 +38,8 @@
 
 -export([start_link/0,
             start_job/1,
+            request_delete/1,
             request_delete/2,
-            request_delete/3,
             delete_stats/1,
             override_redo/1,
             clear_queue/1,
@@ -95,11 +95,17 @@ start_job(JobID) ->
     DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
     gen_server:start_link(?MODULE, [JobID, fun erase/2, DeleteMode], []).
 
--spec request_delete(delete_reference(), priority()) -> ok.
-request_delete(DelReference, Priority) when Priority == 1; Priority == 2 ->
-    gen_server:cast(?MODULE, {request_delete, DelReference, Priority}).
+-spec request_delete(delete_reference()) -> ok.
+request_delete(DeleteReference) ->
+    request_delete(?MODULE, DeleteReference, 2).
 
--spec request_delete(pid(), delete_reference(), priority()) -> ok.
+-spec request_delete(pid(), delete_reference()) -> ok.
+request_delete(Pid, DeleteReference) ->
+    request_delete(Pid, DeleteReference, 2).
+
+%% @doc
+%% Priority of Deletes is by default 2. 1 is reserved for redo of deletes
+-spec request_delete(pid()|atom(), delete_reference(), priority()) -> ok.
 request_delete(Pid, DelReference, Priority)
                                         when Priority == 1; Priority == 2 ->
     gen_server:cast(Pid, {request_delete, DelReference, Priority}).

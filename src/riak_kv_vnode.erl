@@ -1789,7 +1789,7 @@ handle_aaefold({reap_tombs,
                     DH = riak_object:delete_hash(VV),
                     case ReapMethod of
                         local ->
-                            riak_kv_reaper:request_reap({{BF, KF}, DH}, 2),
+                            riak_kv_reaper:request_reap({{BF, KF}, DH}),
                             NewCount = element(2, TombHashAcc) + 1,
                             setelement(2, TombHashAcc, NewCount);
                         count ->
@@ -1839,7 +1839,7 @@ handle_aaefold({erase_keys,
                     {clock, VV} = lists:keyfind(clock, 1, EFs),
                     case DeleteMethod of
                         local ->
-                            riak_kv_eraser:request_delete({{BF, KF}, VV}, 2),
+                            riak_kv_eraser:request_delete({{BF, KF}, VV}),
                             NewCount = element(2, EraseKeyAcc) + 1,
                             setelement(2, EraseKeyAcc, NewCount);
                         count ->

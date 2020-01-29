@@ -724,9 +724,9 @@ handle_in_batches(Type, RefList, BatchCount, Worker)
 handle_in_batches(Type, [Ref|RestRefs], BatchCount, Worker) ->
     case Type of
         reap_tombs ->
-            ok = riak_kv_reaper:request_reap(Worker, Ref, 2);
+            ok = riak_kv_reaper:request_reap(Worker, Ref);
         erase_keys ->
-            ok = riak_kv_eraser:request_delete(Worker, Ref, 2)
+            ok = riak_kv_eraser:request_delete(Worker, Ref)
     end,
     handle_in_batches(Type, RestRefs, BatchCount + 1, Worker).
 
