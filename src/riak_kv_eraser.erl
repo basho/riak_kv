@@ -151,7 +151,7 @@ init([JobID, DelFun, DeleteMode]) ->
         end,
     RedoTimeout = app_helper:get_env(riak_kv, eraser_redo_timeout, ?REDO_TIMEOUT),
     {ok, #state{job_id = JobID, erase_fun = DelFun, redo_deletes = Redo,
-                redo_timeout = RedoTemout}, 0}.
+                redo_timeout = RedoTimeout}, 0}.
 
 handle_call(Msg, _From, State) ->
     {reply, R, S0} = handle_sync_message(Msg, State),

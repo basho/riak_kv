@@ -64,7 +64,7 @@
             pending_close = false :: boolean(),
             last_tick_time = os:timestamp() :: erlang:timestamp(),
             reap_fun :: reap_fun(),
-            redo_timeout :: non_negative_integer()
+            redo_timeout :: non_neg_integer()
 }).
 
 -type priority() :: 1..2.
