@@ -200,7 +200,7 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
         % disable_hooks - this makes this compatible with previous repl,
         % although this may no longer be necessary (no repl hook to disable)
         % w = 1 - allow for the repl worker to return fast to do more work
-        % pw = 1 - in theory we don't need to wair for primaries, but if this
+        % pw = 1 - in theory we don't need to wait for primaries, but if this
         % node cannot access any primaries it would be good to treat this as an
         % error and punish that peer relationship in the schedule (so that a
         % snk node with access to primaries will manage more of the
