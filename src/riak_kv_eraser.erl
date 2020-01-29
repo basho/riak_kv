@@ -73,7 +73,9 @@
 
 -type delete_stats() :: {non_neg_integer(), non_neg_integer(), queue_length()}.
 
+-type eraser_state() :: #state{}.
 -type erase_fun() :: fun((delete_reference(), boolean()) -> boolean()).
+
 
 -export_type([delete_reference/0, job_id/0]).
 
@@ -142,24 +144,63 @@ init([JobID, DelFun, DeleteMode]) ->
         end,
     {ok, #state{job_id = JobID, erase_fun = DelFun, redo_deletes = Redo}, 0}.
 
-handle_call(delete_stats, _From, State) ->
+handle_call(Msg, _From, State) ->
+    {reply, R, S0} = handle_sync_message(Msg, State),
+    {reply, R, S0, 0}.
+
+handle_cast(Msg, State) ->
+    {noreply, S0} = handle_async_message(Msg, State),
+    {noreply, S0, 0}.
+
+handle_info(Msg, State) ->
+    case handle_async_message(Msg, State) of
+        {override_timeout, none, R} ->
+            R;
+        {override_timeout, T0, {noreply, S0}} ->
+            {noreply, S0, T0};
+        {noreply, S0} ->
+            {noreply, S0, 0}
+    end.
+
+terminate(normal, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+
+%%%============================================================================
+%%% Actual Callbacks
+%%%============================================================================
+
+%% Handle a call message - with a reply.  The handle_call function will enforce
+%% the addition of an immediate timeout
+-spec handle_sync_message(any(), eraser_state()) ->
+        {reply, any(), eraser_state()}.
+handle_sync_message(delete_stats, State) ->
     Stats =
         {State#state.delete_attempts,
             State#state.delete_aborts,
             State#state.pqueue_length},
-    {reply, Stats, State, 0};
-handle_call({override_redo, Redo}, _From, State) ->
-    {reply, ok, State#state{redo_deletes = Redo}, 0};
-handle_call(clear_queue, _From, State) ->
+    {reply, Stats, State};
+handle_sync_message({override_redo, Redo}, State) ->
+    {reply, ok, State#state{redo_deletes = Redo}};
+handle_sync_message(clear_queue, State) ->
     {reply,
         ok,
         State#state{delete_queue = riak_core_priority_queue:new(),
-                    pqueue_length = {0, 0}},
-        0};
-handle_call(stop_job, _From, State) ->
-    {reply, ok, State#state{pending_close = true}, 0}.
+                    pqueue_length = {0, 0}}};
+handle_sync_message(stop_job, State) ->
+    {reply, ok, State#state{pending_close = true}}.
 
-handle_cast({request_delete, DelReference, Priority}, State) ->
+%% Handle a cast or info message - with a reply.  The handle_cast function
+%% will expet a {noreply, State} response and will override the return with
+%% an immediate timeout.  the handle_info may also receive a reply with an
+%% overrride to the timeout.
+-spec handle_async_message(any(), eraser_state()) ->
+        {noreply, eraser_state()}|
+        {override_timeout, none|pos_integer(), tuple()}.
+handle_async_message({request_delete, DelReference, Priority}, State) ->
 
     UpdQL =
         setelement(Priority,
@@ -169,18 +210,17 @@ handle_cast({request_delete, DelReference, Priority}, State) ->
         riak_core_priority_queue:in(DelReference,
                                     Priority,
                                     State#state.delete_queue),
-    {noreply, State#state{pqueue_length = UpdQL, delete_queue = UpdQ}, 0}.
-
-handle_info(timeout, State) ->
+    {noreply, State#state{pqueue_length = UpdQL, delete_queue = UpdQ}};
+handle_async_message(timeout, State) ->
     DelFun = State#state.erase_fun,
     case State#state.pqueue_length of
         {0, 0} ->
             case State#state.pending_close of
                 true ->
-                    {stop, normal, State};
+                    {override_timeout, none, {stop, normal, State}};
                 false ->
                     %% No timeout here, as no work to do
-                    {noreply, State}
+                    {override_timeout, none, {noreply, State}}
             end;
         {RedoQL, 0} ->
             %% Work a single item on the redo queue, and no immediate timeout
@@ -194,23 +234,22 @@ handle_info(timeout, State) ->
                             {noreply,
                                 State#state{delete_queue = Q0, 
                                             delete_attempts = AT0,
-                                            pqueue_length = QL0},
-                                0};
+                                            pqueue_length = QL0}};
                         false ->
                             AB0 = State#state.delete_aborts + 1,
                             Q1 = riak_core_priority_queue:in(DelRef, 1, Q0),
-                            {noreply,
-                                State#state{delete_queue = Q1, 
-                                            delete_aborts = AB0},
-                                ?REDO_TIMEOUT}
+                            {override_timeout,
+                                ?REDO_TIMEOUT, 
+                                {noreply,
+                                    State#state{delete_queue = Q1, 
+                                                delete_aborts = AB0}}}
                     end;
                 {empty, Q0} ->
                     %% This shoudn't happen - must have miscalulated
                     %% queue lengths
                     {noreply,
                         State#state{delete_queue = Q0,
-                                    pqueue_length = {0, 0}},
-                        0}
+                                    pqueue_length = {0, 0}}}
             end;
         {RedoQL, DeleteQL} ->
             %% Work a batch of items from the erase queue before yielding
@@ -241,10 +280,9 @@ handle_info(timeout, State) ->
                 State#state{delete_queue = UpdQ,
                             delete_attempts = AT0,
                             delete_aborts = AB0,
-                            pqueue_length = {RedoQL, DeleteQL - BatchSize}},
-                0}
+                            pqueue_length = {RedoQL, DeleteQL - BatchSize}}}
     end;
-handle_info(log_queue, State) ->
+handle_async_message(log_queue, State) ->
     lager:info("Eraser job ~w has queue lengths ~w " ++ 
                     "delete_attempts=~w delete_aborts=~w ",
                 [State#state.job_id,
@@ -252,14 +290,7 @@ handle_info(log_queue, State) ->
                     State#state.delete_attempts,
                     State#state.delete_aborts]),
     erlang:send_after(?LOG_TICK, self(), log_queue),
-    {noreply, State#state{delete_attempts = 0, delete_aborts = 0}, 0}.
-
-
-terminate(normal, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+    {noreply, State#state{delete_attempts = 0, delete_aborts = 0}}.
 
 
 %%%============================================================================
@@ -350,7 +381,7 @@ standard_eraser_tester() ->
                     true
             end
         end,
-    lists:foldl(WaitFun, false, lists:seq(101, 200)),
+    ?assertMatch(true, lists:foldl(WaitFun, false, lists:seq(101, 200))),
     ok = stop_job(P),
     timer:sleep(100),
     ?assertMatch(false, is_process_alive(P)).
@@ -395,7 +426,7 @@ somefail_eraser_tester(N) ->
                     true
             end
         end,
-    lists:foldl(WaitFun, false, lists:seq(101, 500)),
+    ?assertMatch(true, lists:foldl(WaitFun, false, lists:seq(101, 500))),
     ok = clear_queue(P),
     ok = stop_job(P),
     timer:sleep(100),

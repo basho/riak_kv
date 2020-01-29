@@ -220,7 +220,7 @@ Not presently, although it would not be a significant code change to modify the 
 
 *Can this be used to synchronise data between Riak and another data store (e.g. Elastic Search, Hadoop etc)?*
 
-The intention is to open up this possibility by removing the need to understand the internal riak infrastructure to interface for replication.  The API calls used by replications (fetch, aae_fold) are now exposed and documented.  However, it will still require some implementation work in the destination database to replicate sink-side functionality - in particular the storing of keys and clocks so that they can be converted into a cluster-wide Merkle tree.
+The intention is to open up this possibility by removing the need to understand the internal riak infrastructure, when trying to interface to Riak for replication.  The API calls used by replications (fetch, aae_fold) are now exposed and documented.  However, it will still require some implementation work in the destination database to replicate sink-side functionality - in particular the storing of keys and clocks so that they can be converted into a cluster-wide Merkle tree for comparison.
 
 
 *In this future will this mean there is 1 way of doing replication in Riak, or n + 1 ways?*

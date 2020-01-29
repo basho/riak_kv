@@ -198,7 +198,8 @@ add_snkqueue(QueueName, Peers, WorkerCount) ->
 %% number of workers overall
 -spec add_snkqueue(queue_name(), list(peer_info()),
                     pos_integer(), pos_integer()) -> ok.
-add_snkqueue(QueueName, Peers, WorkerCount, PerPeerLimit) ->
+add_snkqueue(QueueName, Peers, WorkerCount, PerPeerLimit) 
+                                            when PerPeerLimit =< WorkerCount ->
     gen_server:call(?MODULE,
                     {add, QueueName, Peers, WorkerCount, PerPeerLimit}).
 
@@ -219,7 +220,8 @@ set_workercount(QueueName, WorkerCount) ->
 %% workers per peer
 -spec set_workercount(queue_name(), pos_integer(), pos_integer())
                                                             -> ok|not_found.
-set_workercount(QueueName, WorkerCount, PerPeerLimit) ->
+set_workercount(QueueName, WorkerCount, PerPeerLimit)
+                                            when PerPeerLimit =< WorkerCount ->
     gen_server:call(?MODULE,
                     {worker_count, QueueName, WorkerCount, PerPeerLimit}).
 
