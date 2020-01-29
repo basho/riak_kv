@@ -402,7 +402,7 @@ handle_info({work_item, WorkItem}, State) ->
     process_workitem(WorkItem, no_reply, os:timestamp()),
     {noreply, State}.
 
-terminate(normal, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

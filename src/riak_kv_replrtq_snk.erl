@@ -409,7 +409,7 @@ handle_info({prompt_requeue, WorkItem}, State) ->
     requeue_work(WorkItem),
     {noreply, State}.
 
-terminate(normal, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

@@ -147,7 +147,7 @@ handle_info(Msg, State) ->
             {noreply, S0, 0}
     end.
 
-terminate(normal, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
