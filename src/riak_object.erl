@@ -100,7 +100,7 @@
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
--export([nextgenrepl_encode/2]).
+-export([nextgenrepl_encode/2, nextgenrepl_decode/1]).
 -export([summary_from_binary/1, aae_from_object_binary/1,
             get_metadata_from_aae_binary/1, aae_fold_metabin/2,
             is_aae_object_deleted/2]).
@@ -1218,6 +1218,17 @@ nextgenrepl_encode(repl_v1, RObj) ->
     ObjBin = riak_object:to_binary(v1, RObj),
     <<ObjBK/binary, ObjBin/binary>>.
 
+%% @doc Deocde for nextgen_repl
+-spec nextgenrepl_decode(binary()) -> riak_object().
+nextgenrepl_decode(<<0:32/integer, BL:32/integer, B:BL/binary,
+                        KL:32/integer, K:KL/binary,
+                        ObjBin/binary>>) ->
+    riak_object:from_binary(B, K, ObjBin);
+nextgenrepl_decode(<<TL:32/integer, T:TL/binary, BL:32/integer, B:BL/binary,
+                        KL:32/integer, K:KL/binary,
+                        ObjBin/binary>>) ->
+    riak_object:from_binary({T, B}, K, ObjBin).
+
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
     riak_object() | {error, 'bad_object_format'} | proxy_object().
@@ -1894,23 +1905,24 @@ bucket_prop_needers_test_() ->
              meck:unload(riak_core_bucket)
      end,
      [{"Ancestor", fun ancestor/0},
-      {"Ancestor Weird Clocks", fun ancestor_weird_clocks/0},
-      {"Reconcile", fun reconcile/0},
-      {"Merge 1", fun merge1/0},
-      {"Merge 2", fun merge2/0},
-      {"Merge 3", fun merge3/0},
-      {"Merge 4", fun merge4/0},
-      {"Merge 5", fun merge5/0},
-      {"Inequality", fun inequality1/0},
-      {"Inequality Vclock", fun inequality_vclock/0},
-      {"Date Reconcile", fun date_reconcile/0},
-      {"Dotted values reconcile", fun dotted_values_reconcile/0},
-      {"Weird Clocks, Weird Dots", fun weird_clocks_weird_dots/0},
-      {"Mixed Merge", fun mixed_merge/0},
-      {"Mixed Merge 2", fun mixed_merge2/0},
+        {"Ancestor Weird Clocks", fun ancestor_weird_clocks/0},
+        {"Reconcile", fun reconcile/0},
+        {"Merge 1", fun merge1/0},
+        {"Merge 2", fun merge2/0},
+        {"Merge 3", fun merge3/0},
+        {"Merge 4", fun merge4/0},
+        {"Merge 5", fun merge5/0},
+        {"Inequality", fun inequality1/0},
+        {"Inequality Vclock", fun inequality_vclock/0},
+        {"Date Reconcile", fun date_reconcile/0},
+        {"Dotted values reconcile", fun dotted_values_reconcile/0},
+        {"Weird Clocks, Weird Dots", fun weird_clocks_weird_dots/0},
+        {"Mixed Merge", fun mixed_merge/0},
+        {"Mixed Merge 2", fun mixed_merge2/0},
         {"Find Object Ancestor", fun find_bestobject_ancestor/0},
         {"Find Object Reconcile", fun find_bestobject_reconcile/0},
-        {"Test Summary Bin Extract", fun summary_binary_extract/0}]
+        {"Test Summary Bin Extract", fun summary_binary_extract/0},
+        {"Next Gen Repl Encode/Decode", fun nextgenrepl/0}]
     }.
 
 ancestor() ->
@@ -2217,6 +2229,18 @@ mixed_merge2() ->
     AZ4 = riak_object:syntactic_merge(AZ3, AZ2),
     ?assertEqual(3, riak_object:value_count(AZ4)),
     ?assert(equal(AZ3, AZ4)).
+
+nextgenrepl() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A_VC = vclock:fresh(a, 3),
+    Z_VC = vclock:fresh(b, 2),
+    A = riak_object:set_vclock(riak_object:new(B, K, <<"a">>), A_VC),
+    C = riak_object:increment_vclock(riak_object:new(B, K, <<"c">>), c),
+    Z = riak_object:set_vclock(riak_object:new(B, K, <<"b">>), Z_VC),
+    ACZ = riak_object:reconcile([A, C, Z], true),
+    ACZ0 = nextgenrepl_decode(nextgenrepl_encode(repl_v1, ACZ)),
+    ?assertEqual(ACZ0, ACZ).
+
 
 verify_contents([], []) ->
     ?assert(true);
