@@ -179,16 +179,7 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
             true ->
                 RObjMaybeBin;
             false ->
-                case RObjMaybeBin of
-                    <<0:32/integer, BL:32/integer, B:BL/binary,
-                        KL:32/integer, K:KL/binary,
-                        ObjBin/binary>> ->
-                            riak_object:from_binary(B, K, ObjBin);
-                    <<TL:32/integer, T:TL/binary, BL:32/integer, B:BL/binary,
-                        KL:32/integer, K:KL/binary,
-                        ObjBin/binary>> ->
-                            riak_object:from_binary({T, B}, K, ObjBin)
-                end
+                riak_object:nextgenrepl_decode(RObjMaybeBin)
         end,
     Bucket = riak_object:bucket(RObj),
     Key = riak_object:key(RObj),

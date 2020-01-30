@@ -351,20 +351,16 @@ init(From={_, _, _}, [Query, Timeout]) ->
                             {total_size, 0},
                             {sizes, []},
                             {siblings, []}];
-                    reap_tombs ->
+                    QT when QT == erase_keys; QT == reap_tombs ->
                         case element(6, Query) of
                             {job, JobID} ->
-                                {ok, Pid} = riak_kv_reaper:start_job(JobID),
-                                {[], 0, Pid};
-                            local ->
-                                {[], 0, local};
-                            count ->
-                                {[], 0, count}
-                        end;
-                    erase_keys ->
-                        case element(6, Query) of
-                            {job, JobID} ->
-                                {ok, Pid} = riak_kv_eraser:start_job(JobID),
+                                {ok, Pid} =
+                                    case QT of
+                                        reap_tombs ->
+                                            riak_kv_reaper:start_job(JobID);
+                                        erase_keys ->
+                                            riak_kv_eraser:start_job(JobID)
+                                    end,
                                 {[], 0, Pid};
                             local ->
                                 {[], 0, local};
@@ -406,15 +402,14 @@ process_results(Results, State) ->
                         lists:umerge(Acc, lists:reverse(Results))
                 end;
             false ->
-                case {QueryType,
-                        lists:member(QueryType, [reap_tombs, erase_keys])} of
-                    {merge_root_nval, _} ->
+                case QueryType of
+                    merge_root_nval ->
                         aae_exchange:merge_root(Results, Acc);
-                    {merge_branch_nval, _} ->
+                    merge_branch_nval ->
                         aae_exchange:merge_branches(Results, Acc);
-                    {merge_tree_range, _} ->
+                    merge_tree_range ->
                         leveled_tictac:merge_trees(Results, Acc);
-                    {repl_keys_range, _} ->
+                    repl_keys_range ->
                         {ReplEntries, Count, QueueName, RBS} = Results,
                         riak_kv_replrtq_src:replrtq_aaefold(QueueName,
                                                             ReplEntries),
@@ -422,7 +417,7 @@ process_results(Results, State) ->
                         % the list, not when is is pushed to the queue
                         {_EL, AccCount, QueueName, RBS} = Acc,
                         {[], AccCount + Count, QueueName, RBS};
-                    {object_stats, _} ->
+                    object_stats ->
                         [{total_count, R_TC}, 
                             {total_size, R_TS},
                             {sizes, R_SzL},
@@ -435,7 +430,7 @@ process_results(Results, State) ->
                             {total_size, R_TS + A_TS},
                             {sizes, merge_countinlists(A_SzL, R_SzL)},
                             {siblings, merge_countinlists(A_SbL, R_SbL)}];
-                    {QT, true} ->
+                    QT when QT == erase_keys; QT == reap_tombs ->
                         case Results of
                             {[], Count, local} ->
                                 {[], element(2, Acc) + Count, local};
@@ -468,12 +463,12 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     lager:info("Finished aaefold of type=~w with fold_time=~w seconds", 
                 [State#state.query_type, QueryDuration/1000000]),
     Results =
-        case lists:member(State#state.query_type, [reap_tombs, erase_keys]) of
-            true ->
+        case State#state.query_type of
+            QT when QT == erase_keys; QT == reap_tombs ->
                 {_RL, Count, Worker} = State#state.acc,
                 case is_pid(Worker) of
                     true ->
-                        case State#state.query_type of
+                        case QT of
                             reap_tombs ->
                                 _ = riak_kv_reaper:stop_job(Worker);
                             erase_keys ->
@@ -483,7 +478,7 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
                         ok
                 end,    
                 Count;
-            false ->
+            _ ->
                 State#state.acc
         end,
     ClientPid ! {ReqId, {results, Results}},
