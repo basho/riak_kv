@@ -40,7 +40,7 @@
 
 -export([start_link/0,
             replrtq_aaefold/2,
-            replrtq_ttaefs/2,
+            replrtq_ttaaefs/2,
             replrtq_coordput/1,
             register_rtq/2,
             delist_rtq/1,
@@ -53,7 +53,7 @@
 
 -ifdef(TEST).
 -export([ replrtq_aaefold/3,
-          replrtq_ttaefs/3 ]).
+          replrtq_ttaaefs/3 ]).
 -endif.
 
 -define(BACKOFF_PAUSE, 1000).
@@ -170,16 +170,18 @@ replrtq_aaefold(QueueName, ReplEntries, BackoffPause) ->
 %% higher priority).
 %% This should be use to replicate the outcome of Tictac AAE full-sync
 %% aae_exchange.
--spec replrtq_ttaefs(queue_name(), list(repl_entry())) -> ok | pause.
-replrtq_ttaefs(QueueName, ReplEntries) ->
-    replrtq_ttaefs(QueueName, ReplEntries,  ?BACKOFF_PAUSE).
+-spec replrtq_ttaaefs(queue_name(), list(repl_entry())) -> ok | pause.
+replrtq_ttaaefs(QueueName, ReplEntries) ->
+    replrtq_ttaaefs(QueueName, ReplEntries,  ?BACKOFF_PAUSE).
 
 
--spec replrtq_ttaefs(queue_name(), list(repl_entry()), pos_integer()) -> ok | pause.
+-spec replrtq_ttaaefs(queue_name(), list(repl_entry()), pos_integer())
+                                                                -> ok | pause.
 %% @hidden
 %% Used for testing if we want to have control over the length of pausing.
-replrtq_ttaefs(QueueName, ReplEntries, BackoffPause) ->
-    % This is a call as we don't want this process to be able to overload the src
+replrtq_ttaaefs(QueueName, ReplEntries, BackoffPause) ->
+    % This is a call as we don't want this process to be able to overload
+    % the src
     case gen_server:call(?MODULE,
                             {rtq_ttaaefs, QueueName, ReplEntries},
                             infinity) of
@@ -634,12 +636,12 @@ basic_singlequeue_test() ->
     Grp5 = lists:map(generate_replentryfun(?TB2), lists:seq(41, 50)),
     ?assertMatch(true, register_rtq(?QN1, any)),
     lists:foreach(fun(RE) -> replrtq_coordput(RE) end, Grp1),
-    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp2)),
+    ok = replrtq_ttaaefs(?QN1, lists:reverse(Grp2)),
     {?TB1, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 10, 9}}, length_rtq(?QN1)),
     {?TB1, <<2:32/integer>>, _VC2, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 10, 8}}, length_rtq(?QN1)),
-    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp3)),
+    ok = replrtq_ttaaefs(?QN1, lists:reverse(Grp3)),
     {?TB1, <<3:32/integer>>, _VC3, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 20, 7}}, length_rtq(?QN1)),
     lists:foreach(fun(_I) -> popfrom_rtq(?QN1) end, lists:seq(1, 7)),
@@ -656,7 +658,7 @@ basic_singlequeue_test() ->
     {?TB3, <<30:32/integer>>, _VC30, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
     ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
-    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp5)),
+    ok = replrtq_ttaaefs(?QN1, lists:reverse(Grp5)),
     ?assertMatch({?QN1, {0, 10, 0}}, length_rtq(?QN1)),
     {?TB2, <<41:32/integer>>, _VC41, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 9, 0}}, length_rtq(?QN1)),
@@ -700,7 +702,7 @@ basic_multiqueue_test() ->
     % Adding a bulk based on an AAE job will be applied to the actual
     % queue regardless of filter
     Grp5A = lists:map(GenB5, lists:seq(61, 70)),
-    ok = replrtq_ttaefs(?QN2, lists:reverse(Grp5A)),
+    ok = replrtq_ttaaefs(?QN2, lists:reverse(Grp5A)),
 
     ?assertMatch({?QN1, {0, 0, 60}}, length_rtq(?QN1)),
     ?assertMatch({?QN2, {0, 10, 20}}, length_rtq(?QN2)),
@@ -750,7 +752,7 @@ basic_multiqueue_test() ->
     Grp6B = lists:map(GenB6, lists:seq(81, 90)),
     Grp6C = lists:map(GenB6, lists:seq(91, 100)),
     lists:foreach(fun(RE) -> replrtq_coordput(RE) end, Grp6B),
-    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp6C)),
+    ok = replrtq_ttaaefs(?QN1, lists:reverse(Grp6C)),
     {?TB3, <<73:32/integer>>, _VC73, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 0, 7}}, length_rtq(?QN1)),
 
@@ -763,7 +765,7 @@ basic_multiqueue_test() ->
     {?TB3, <<74:32/integer>>, _VC74, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 0, 6}}, length_rtq(?QN1)),
     lists:foreach(fun replrtq_coordput/1, Grp6B),
-    ok = replrtq_ttaefs(?QN1, lists:reverse(Grp6C)),
+    ok = replrtq_ttaaefs(?QN1, lists:reverse(Grp6C)),
     {?TB3, <<75:32/integer>>, _VC75, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 10, 15}}, length_rtq(?QN1)),
 
