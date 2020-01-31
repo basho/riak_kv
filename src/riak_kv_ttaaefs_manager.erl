@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_ttaefs_manager: coordination of full-sync replication
+%% riak_kv_ttaaefs_manager: coordination of full-sync replication
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -700,7 +700,7 @@ generate_repairfun(ExchangeID, QueueName) ->
                     [ExchangeID, SinkDCount]),
         lager:info("AAE exchange ~w outputs ~w keys to be repaired",
                     [ExchangeID, length(ToRepair)]),
-        riak_kv_replrtq_src:replrtq_ttaefs(QueueName, ToRepair),
+        riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
         lager:info("AAE exchange ~w has requeue complete for ~w keys",
                     [ExchangeID, length(ToRepair)])
     end.

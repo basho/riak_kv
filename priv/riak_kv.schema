@@ -1071,9 +1071,14 @@
     {commented, enabled}
 ]}.
 
-%% @doc Default queue name  to be used for peers (replrtq_sinkpeers) that are
-%% defined without a queue name.  Will be ignored where all peers are defined
-%% with a queue name
+%% @doc Queue name  to be used for peers (replrtq_sinkpeers) that are
+%% defined without a queue name.  Each node is expected to have a single
+%% queue from which it will consume (by name).  This queue may be consumed
+%% from multiple peers - and those peers may sit on multiple clusters.
+%% If more than one queue name is to be consumed from, real-time changes can
+%% be made through `riak_kv_replrtq_snk:add_snkqueue/3`.  The peer list can
+%% also be extended to add different queue names into definitions - however
+%% it is strongly recommended to use a single sinkqueue name per node.
 {mapping, "replrtq_sinkqueue", "riak_kv.replrtq_sinkqueue", [
   {datatype, atom},
   {default, q1_ttaaefs}
@@ -1083,13 +1088,13 @@
 %% src.  All src nodes will need to have entries consumed - so it is
 %% recommended that each src node is referred to in multiple sink node
 %% configurations.
-%% The list of peers is tokenised as
-%% queue:host:port:protocol or host:port:protocol
-%% The queue will be converted to an atom and must be a queue_name at the peer
-%% The protocol may be http or pb.
+%% The list of peers is tokenised as host:port:protocol
+%% In exceptional circumstances this definition can be extended to
+%% queuename:host:port:protocol - but restricting the definitions of queuename
+%% to the single queue specified in replrtq_sinkqueue is strongly recommended.
 {mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sinkpeers", [
     {datatype, string},
-    {commented, "q1_ttaaefs:127.0.0.1:8098:http"}
+    {commented, "127.0.0.1:8098:http"}
 ]}.
 
 %% @doc The number of workers to be used for each queue must be configured.
