@@ -100,7 +100,7 @@
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
--export([nextgenrepl_encode/2, nextgenrepl_decode/1]).
+-export([nextgenrepl_encode/3, nextgenrepl_decode/1]).
 -export([summary_from_binary/1, aae_from_object_binary/1,
             get_metadata_from_aae_binary/1, aae_fold_metabin/2,
             is_aae_object_deleted/2]).
@@ -1198,8 +1198,8 @@ binary_version(<<131,_/binary>>) -> v0;
 binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 
 %% @doc Encode for nextgen_repl
--spec nextgenrepl_encode(repl_v1, riak_object()) -> binary().
-nextgenrepl_encode(repl_v1, RObj) ->
+-spec nextgenrepl_encode(repl_v1, riak_object(), boolean()) -> binary().
+nextgenrepl_encode(repl_v1, RObj, ToCompress) ->
     B = riak_object:bucket(RObj),
     K = riak_object:key(RObj),
     KS = byte_size(K),
@@ -1215,19 +1215,34 @@ nextgenrepl_encode(repl_v1, RObj) ->
                 <<0:32/integer, B0S:32/integer, B0/binary,
                     KS:32/integer, K/binary>>
         end,
-    ObjBin = riak_object:to_binary(v1, RObj),
-    <<ObjBK/binary, ObjBin/binary>>.
+    {Version, ObjBin} =
+        case ToCompress of
+            true ->
+                {<<1:4/integer, 1:1/integer, 0:3/integer>>,
+                    zlib:compress(riak_object:to_binary(v1, RObj))};
+            false ->
+                {<<1:4/integer, 0:1/integer, 0:3/integer>>,
+                    riak_object:to_binary(v1, RObj)}
+        end,
+    <<Version/binary, ObjBK/binary, ObjBin/binary>>.
 
 %% @doc Deocde for nextgen_repl
 -spec nextgenrepl_decode(binary()) -> riak_object().
-nextgenrepl_decode(<<0:32/integer, BL:32/integer, B:BL/binary,
+nextgenrepl_decode(<<1:4/integer, C:1/integer, _:3/integer,
+                        0:32/integer, BL:32/integer, B:BL/binary,
                         KL:32/integer, K:KL/binary,
                         ObjBin/binary>>) ->
-    riak_object:from_binary(B, K, ObjBin);
-nextgenrepl_decode(<<TL:32/integer, T:TL/binary, BL:32/integer, B:BL/binary,
+    nextgenrepl_decode(B, K, C == 1, ObjBin);
+nextgenrepl_decode(<<1:4/integer, C:1/integer, _:3/integer,
+                        TL:32/integer, T:TL/binary, BL:32/integer, B:BL/binary,
                         KL:32/integer, K:KL/binary,
                         ObjBin/binary>>) ->
-    riak_object:from_binary({T, B}, K, ObjBin).
+    nextgenrepl_decode({T, B}, K, C == 1, ObjBin).
+
+nextgenrepl_decode(B, K, true, ObjBin) ->
+    nextgenrepl_decode(B, K, false, zlib:uncompress(ObjBin));
+nextgenrepl_decode(B, K, false, ObjBin) ->
+    riak_object:from_binary(B, K, ObjBin).
 
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
@@ -2238,7 +2253,8 @@ nextgenrepl() ->
     C = riak_object:increment_vclock(riak_object:new(B, K, <<"c">>), c),
     Z = riak_object:set_vclock(riak_object:new(B, K, <<"b">>), Z_VC),
     ACZ = riak_object:reconcile([A, C, Z], true),
-    ACZ0 = nextgenrepl_decode(nextgenrepl_encode(repl_v1, ACZ)),
+    ACZ0 = nextgenrepl_decode(nextgenrepl_encode(repl_v1, ACZ, false)),
+    ACZ0 = nextgenrepl_decode(nextgenrepl_encode(repl_v1, ACZ, true)),
     ?assertEqual(ACZ0, ACZ).
 
 

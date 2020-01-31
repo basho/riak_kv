@@ -179,7 +179,8 @@ process(#rpbfetchreq{queuename = QueueName}, #state{client=C} = State) ->
         {ok, queue_empty} ->
             {reply, #rpbfetchresp{queue_empty = true}, State};
         {ok, {deleted, Vclock, RObj}} ->
-            EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj),
+            % Never bother compressing tombstones, they're practically empty
+            EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, false),
             CRC32 = erlang:crc32(EncObj),
             {reply,
                 #rpbfetchresp{queue_empty = false,
@@ -189,7 +190,9 @@ process(#rpbfetchreq{queuename = QueueName}, #state{client=C} = State) ->
                                 deleted_vclock = pbify_rpbvc(Vclock)},
                 State};
         {ok, RObj} ->
-            EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj),
+            ToCompress =
+                app_helper:get_env(riak_kv, replrtq_compressonwire, false),
+            EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, ToCompress),
             CRC32 = erlang:crc32(EncObj),
             {reply,
                 #rpbfetchresp{queue_empty = false,
