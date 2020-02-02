@@ -130,6 +130,7 @@ format_response(internal, UnexpectedResponse, RD, Ctx) ->
     {{error, unexpected}, RD, Ctx}.
 
 encode_riakobject(RObj) ->
-    FullObjBin = riak_object:nextgenrepl_encode(repl_v1, RObj),
+    ToCompress = app_helper:get_env(riak_kv, replrtq_compressonwire, false),
+    FullObjBin = riak_object:nextgenrepl_encode(repl_v1, RObj, ToCompress),
     CRC = erlang:crc32(FullObjBin),
     <<CRC:32/integer, FullObjBin/binary>>. 

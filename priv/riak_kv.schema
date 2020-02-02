@@ -1064,6 +1064,13 @@
     {default, "q1_ttaaefs:block_rtq"}
 ]}.
 
+%% @doc Enable this node zlib compress objects over the wire
+{mapping, "replrtq_compressonwire", "riak_kv.replrtq_compressonwire", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
 %% @doc Enable this node to act as a sink and consume from a src cluster
 {mapping, "replrtq_enablesink", "riak_kv.replrtq_enablesink", [
     {datatype, {flag, enabled, disabled}},
