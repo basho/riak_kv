@@ -2367,7 +2367,7 @@ handle_info({aae_pong, QueueTime}, State) ->
     QueueTimeMS = QueueTime div 1000,
     case QueueTimeMS >= State#state.max_aae_queue_time of
         true ->
-            lager:info("AAE Queue time of ~w ms prompting sync ping",
+            lager:info("AAE queue queue_time=~w ms prompting sync ping",
                         [QueueTimeMS]),
             StartDrain = os:timestamp(),
             R = aae_controller:aae_ping(State#state.aae_controller,
@@ -3261,7 +3261,6 @@ do_delete(BKey, State) ->
 do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
                                                  mod=Mod,
                                                  modstate=ModState}) ->
-    lager:info("Fold request received ReqOpts ~w", [ReqOpts]),
     {ok, Capabilities} = Mod:capabilities(ModState),
     Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
     Opts = maybe_enable_iterator_refresh(Capabilities, Opts0),
