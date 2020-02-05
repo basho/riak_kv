@@ -478,7 +478,7 @@ get_slotinfo() ->
 %% to try and make the remote and local cluster sends happen as close to
 %% parallel as possible. 
 -spec generate_sendfun({rhc:rhc(), rhc}|{pid(), riakc_pb_socket}|local,
-                        nval()) -> fun().
+                        nval()) -> aae_exchange:send_fun().
 generate_sendfun(SendClient, NVal) ->
     fun(Msg, all, Colour) ->
         AAE_Exchange = self(),
@@ -538,10 +538,14 @@ init_pbclient(IP, Port, Options) ->
     {ok, Pid} = riakc_pb_socket:start_link(IP, Port, Options),
     try riakc_pb_socket:ping(Pid) of
         pong ->
-            {Pid, riakc_pb_socket}
+            {Pid, riakc_pb_socket};
+        {error, Reason} ->
+            lager:info("Cannot reach remote cluster ~p ~p as ~p",
+                            [IP, Port, Reason]),
+            {no_client, riakc_pb_socket}
     catch 
         _Exception:Reason ->
-            lager:warning("Cannot reach remote cluster ~p ~p with error ~p",
+            lager:warning("Cannot reach remote cluster ~p ~p exception ~p",
                             [IP, Port, Reason]),
             {no_client, riakc_pb_socket}
     end.
@@ -584,15 +588,23 @@ local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, range) ->
 -spec remote_sender(any(), rhc:rhc()|pid(), module(), fun(), nval()) -> fun().
 remote_sender(fetch_root, Client, Mod, ReturnFun, NVal) ->
     fun() ->
-        {ok, {root, Root}}
-            = Mod:aae_merge_root(Client, NVal),
-        ReturnFun(Root)
+        case Mod:aae_merge_root(Client, NVal) of
+            {ok, {root, Root}} ->
+                ReturnFun(Root);
+            {error, Error} ->
+                lager:warning("Error of ~w in root request", [Error]),
+                ReturnFun({error, Error})
+        end
     end;
 remote_sender({fetch_branches, BranchIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
-        {ok, {branches, ListOfBranchResults}}
-            = Mod:aae_merge_branches(Client, NVal, BranchIDs),
-        ReturnFun(ListOfBranchResults)
+        case Mod:aae_merge_branches(Client, NVal, BranchIDs) of
+            {ok, {branches, ListOfBranchResults}} ->
+                ReturnFun(ListOfBranchResults);
+            {error, Error} ->
+                lager:warning("Error of ~w in branches request", [Error]),
+                ReturnFun({error, Error})
+        end
     end;
 remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
@@ -601,8 +613,7 @@ remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
                 ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
                             KeysClocks));
             {error, Error} ->
-                lager:warning("Error of ~w in fetch_clocks response",
-                                [Error]),
+                lager:warning("Error of ~w in clocks request", [Error]),
                 ReturnFun({error, Error})
         end
     end;
@@ -610,17 +621,26 @@ remote_sender({merge_tree_range, B, KR, TS, SF, MR, HM},
                     Client, Mod, ReturnFun, range) ->
     SF0 = format_segment_filter(SF),
     fun() ->
-        {ok, {tree, Tree}}
-            = Mod:aae_range_tree(Client, B, KR, TS, SF0, MR, HM),
-        ReturnFun(leveled_tictac:import_tree(Tree))
+        case Mod:aae_range_tree(Client, B, KR, TS, SF0, MR, HM) of
+            {ok, {tree, Tree}} ->
+                ReturnFun(leveled_tictac:import_tree(Tree));
+            {error, Error} ->
+                lager:warning("Error of ~w in tree request", [Error]),
+                ReturnFun({error, Error})
+        end
     end;
 remote_sender({fetch_clocks_range, B0, KR, SF, MR},
                     Client, Mod, ReturnFun, range) ->
     SF0 = format_segment_filter(SF),
     fun() ->
-        {ok, {keysclocks, KeysClocks}}
-            = Mod:aae_range_clocks(Client, B0, KR, SF0, MR),
-        ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end, KeysClocks))
+        case Mod:aae_range_clocks(Client, B0, KR, SF0, MR) of
+            {ok, {keysclocks, KeysClocks}} ->
+                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
+                                        KeysClocks));
+            {error, Error} ->
+                lager:warning("Error of ~w in segment request", [Error]),
+                ReturnFun({error, Error})
+        end
     end.
 
 %% @doc
@@ -635,7 +655,8 @@ format_segment_filter({segments, SegList, TreeSize}) ->
 %% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
--spec generate_replyfun(integer()|no_reply, pid(), fun()) -> fun().
+-spec generate_replyfun(integer()|no_reply, pid(), fun())
+                                                -> aae_exchange:reply_fun().
 generate_replyfun(ReqID, From, StopClientFun) ->
     fun(Result) ->
         case ReqID of
@@ -665,7 +686,8 @@ generate_replyfun(ReqID, From, StopClientFun) ->
 %% the object should be repaired by requeueing.  Requeueing will cause the
 %% object to be re-replicated to all destination clusters (not just a specific
 %% sink cluster)
--spec generate_repairfun(integer(), riak_kv_replrtq_src:queue_name()) -> fun().
+-spec generate_repairfun(integer(), riak_kv_replrtq_src:queue_name())
+                                                -> aae_exchange:repair_fun().
 generate_repairfun(ExchangeID, QueueName) ->
     LogRepairs = app_helper:get_env(riak_kv, ttaaefs_logrepairs, false),
     fun(RepairList) ->
