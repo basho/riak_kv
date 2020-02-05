@@ -478,7 +478,7 @@ get_slotinfo() ->
 %% to try and make the remote and local cluster sends happen as close to
 %% parallel as possible. 
 -spec generate_sendfun({rhc:rhc(), rhc}|{pid(), riakc_pb_socket}|local,
-                        nval()) -> fun().
+                        nval()) -> aae_exchange:send_fun().
 generate_sendfun(SendClient, NVal) ->
     fun(Msg, all, Colour) ->
         AAE_Exchange = self(),
@@ -655,7 +655,8 @@ format_segment_filter({segments, SegList, TreeSize}) ->
 %% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
--spec generate_replyfun(integer()|no_reply, pid(), fun()) -> fun().
+-spec generate_replyfun(integer()|no_reply, pid(), fun())
+                                                -> aae_exchange:reply_fun().
 generate_replyfun(ReqID, From, StopClientFun) ->
     fun(Result) ->
         case ReqID of
@@ -685,7 +686,8 @@ generate_replyfun(ReqID, From, StopClientFun) ->
 %% the object should be repaired by requeueing.  Requeueing will cause the
 %% object to be re-replicated to all destination clusters (not just a specific
 %% sink cluster)
--spec generate_repairfun(integer(), riak_kv_replrtq_src:queue_name()) -> fun().
+-spec generate_repairfun(integer(), riak_kv_replrtq_src:queue_name())
+                                                -> aae_exchange:repair_fun().
 generate_repairfun(ExchangeID, QueueName) ->
     LogRepairs = app_helper:get_env(riak_kv, ttaaefs_logrepairs, false),
     fun(RepairList) ->
