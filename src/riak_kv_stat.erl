@@ -66,7 +66,7 @@ register_stats() ->
   register_stats(stats()).
 
 register_stats(Stats) ->
-    riak_stat:register(?APP, Stats).
+    riak_core_stats_mgr:register(?APP, Stats).
 
 unregister_vnode_stats(Index) ->
     unregister_per_index(gets, Index),
@@ -79,13 +79,13 @@ get_stats() ->
   get_stats(?APP).
 
 get_stats(Arg) ->
-    riak_stat:get_stats(Arg).
+    riak_core_stats_mgr:get_stats(Arg).
 
 get_value(Arg) ->
-    riak_stat:get_value(Arg).
+    riak_core_stats_mgr:get_value(Arg).
 
 get_info() ->
-    riak_stat:get_info(?APP).
+    riak_core_stats_mgr:get_info(?APP).
 
 update(Arg) ->
     maybe_dispatch_to_sidejob(erlang:module_loaded(riak_kv_stat_sj), Arg).
@@ -381,8 +381,8 @@ do_per_index(Op, Idx, USecs) ->
 
 unregister_per_index(Op, Idx) ->
   IdxAtom = list_to_atom(integer_to_list(Idx)),
-    riak_stat:unregister({Op, IdxAtom, vnode, ?APP}),
-    riak_stat:unregister({[Op, time], IdxAtom, vnode, ?APP}).
+    riak_core_stats_mgr:unregister({Op, IdxAtom, vnode, ?APP}),
+    riak_core_stats_mgr:unregister({[Op, time], IdxAtom, vnode, ?APP}).
 
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
@@ -475,7 +475,7 @@ do_repairs(Indices, Preflist) ->
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
     StatName = lists:flatten([?Prefix, ?APP | [Name]]),
-    riak_stat:update(StatName, UpdateVal, Type).
+    riak_core_stats_mgr:update(StatName, UpdateVal, Type).
 
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
@@ -1014,7 +1014,7 @@ create_or_update_histogram_test() ->
     try
         Metric = [riak_kv,put_fsm,counter,time],
         ok = repeat_create_or_update(Metric, 1, histogram, 100),
-        ?assertNotEqual(riak_stat_exom:get_value(Metric), 0),
+        ?assertNotEqual(riak_core_stats_mgr:get_value(Metric), 0),
         Stats = get_stats(),
         %%lager:info("stats prop list ~s", [Stats]),
         ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0)
