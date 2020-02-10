@@ -195,21 +195,170 @@ When, on a node, a scheduled piece of work comes due, the `riak_kv_ttaaefs_manag
 
 When starting an `aae_exchange` the `riak_kv_ttaaefs_manager` must pass in a repair function.  This function will compare clocks from identified discrepancies, and where the source cluster is ahead of the sink, send the `{Bucket, Key, Clock, to_fetch}` tuple to a configured queue name on `riak_kv_replrtq_src`.  These queued entries will then be replicated through being fetched by the `riak_kv_replrtq_snk` workers, although this will only occur when there is no higher priority work to replicate i.e. real-time replication events prompted by locally co-ordinated PUTs.
 
-### Notes on Configuration and Operation
+### Notes on Configuration
 
-TODO
+*Full-sync Manager [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)*
 
-* [`riak_kv_ttaaefs_manager`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_ttaaefs_manager.erl)
+`ttaaefs_scope = disabled`
 
-  * [Schema](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L837-L974)
+Each node has a scope for full-sync, which defaults to disabled (no full-sync will be performed).  It can also be set to `all`,  or `bucket`.  If set to `all` this node will perform cluster-wide full-sync for a given n-val with its configured peer.  With `bucket`, full-sync will be restricted to a specific bucket or bucket & bucket type if typed buckets are used.
 
-* [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)
+Note that if it is necessary to configure full-sync between this cluster and multiple different clusters, potentially with different sync requirements - then different peer relationships must be given different configurations.  Each node in a cluster may have one, and only one peer relationship, and hence full-sync configuration.
 
-  * [Schema](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L976-L1086)
+For the purpose of the configuration, the peer relationship allows this node to act as a "source" for a replication relationship.  This means it will queue for replication any objects where its cluster is "ahead" of the remote cluster.  To replicate in the reverse direction, an equivalent peer relationship is required on a node in the remote cluster.
 
-* [`riak_kv_replrtq_snk`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_snk.erl)
+There are no constraints, other than resource, with regards to running full-sync in parallel with or without other replication mechanisms.  It can be run in parallel with: nextgen repl real-time sync; riak repl real-time sync, or; riak repl full-sync.
 
-  * [Schema](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/priv/riak_kv.schema#L1088-L1144)
+`ttaaefs_queuename = q1_ttaaefs`
+
+The queue to write the discovery of any updates where *this* cluster has objects in advance of the remote peer's cluster.  Any configured queue is split by priority, with full-sync updates being a lower priority than real-time updates (and updates related to adhoc `aae_fold` queries being a lower priority still).  There should be no need to define separate queue names to manage priority - this `ttaaefs_queuename` can be the same as defined for real-time replication..
+
+The queue defined here must also be defined in `replrtq_srcqueue`, and consumed by a `riak_kv_replrtq_snk` configured on another cluster.  The `replrtq_enablesrc` does NOT need to be enabled for this queue to function.  There will be need for a node on the remote cluster to have `replrtq_enablesink` enabled for the differences discovered by this full-sync to be pulled in to the remote cluster.
+
+`ttaaefs_bucketfilter_name = sample_bucketname`
+`ttaaefs_bucketfilter_type = default`
+
+To be configured if `ttaaefs_scope` is restricted to `bucket` - allows the bucket name to be configured, as well as the type if the type is not default.
+
+`ttaaefs_localnval = 3`
+`ttaaefs_remotenval = 3`
+
+To be configured if `ttaaefs_scope` is set to all.  The peer relationship will full-sync for all buckets/keys, but restricted to those buckets with this n_val.  There needs to be a 1:1 relationship between the clusters on n_vals - sets of buckets with an n_val can map to the same sets on a different cluster with a consistently different n_val.  If there are buckets with both n_val 3 and n_val 5 on a source cluster, it cannot sync if all buckets are n_val 1 on the sink cluster - but could sync if n_val 3 buckets mapped to n_val 1 buckets and n_val 5 buckets mapped to n_val 3 buckets on the sink.
+
+If there is more than on n_val mapping between source and sink (e.g. n_val 5 -> n_val 3 and n_val 3 to n_val 1), then different nodes in the source cluster would need to manage sync of the different mappings - a single node cannot manage full-sync for more than one n_val mapping.
+
+`ttaaefs_peerip = 127.0.0.1`
+
+`ttaaefs_peerport = 8098`
+
+`ttaaefs_peerprotocol = http`
+
+The IP port and protocol to be used when communicating with the sink cluster.  This can be an IP/port of a load-balancer for resilience purposes.
+
+If it is necessary to encrypt the communication in transit, then the `pb` peer protocol must be used (and TLS security configured on the sink cluster `pb` api).  The port is the standard port of the application-facing Riak API for that cluster.
+
+`ttaaefs_allcheck = 100`
+
+`ttaaefs_nocheck = 0`
+
+If `all` is the scope for cluster full-sync, then only the `allcheck` and `nocheck` counts should be configured.  This is the number of times per day to run a sync operation (or in the case of `nocheck` to skip a sync operation).  It is preferable that the total number of sync's configured per-node within the cluster is the same for each node - this will allow for the cluster to best schedule work to avoid overlapping sync operations.  The `ttaaefs_nocheck` exists to allow these numbers to be evened up.
+
+For example if this cluster has a peer relationship with `cluster_b` with which it is expected to sync 100 times per day, and another node has a peer relationship with `cluster_c` and a requirement to sync 30 times per day - the second peer relationship should have 70 `ttaaefs_nocheck` syncs configured to balance the schedule within the cluster.
+
+`ttaaefs_allcheck = 100`
+
+`ttaaefs_nocheck = 0`
+
+`ttaaefs_hourcheck = 0`
+
+`ttaaefs_daycheck = 0`
+
+If `bucket` or `type` is the scope for this node, then two additional sync counts can be configured.  The `hourcheck` and `daycheck` will be configured to sync only for objects modified in the past hour or day (as determined by the objects last_modified metadata).  When running a full-sync check restricted to a bucket or type, this is less efficient than running a check for an entire n_val as cached trees may not be used.  Running a `ttaaefs_allcheck` may take o(hour) on a large bucket, whereas `ttaaefs_daycheck` may be o(minute) and `ttaaefs_hourcheck` may be o(second).  so it would be preferable to frequently check recent modifications have synced correctly, and less frequently check that older modifications have synchronised.
+
+A random distribution of checks is used, based on the allocated counts.  If a check count of 1 of N is set for a given check type, there is no pre-determination of when in the day that check will run.
+
+If a previous check is still running when the allocated scheduled time for the next check on this node occurs, the following check will not be run.  Checks are skipped if the node falls behind schedule.
+
+`ttaaefs_logrepairs = enabled`
+
+By default the `riak_kv_ttaaefs_manager` will log counts of keys repaired on each sync.  Enabling `ttaaefs_logrepairs` will log the Bucket and Key of every key re-queued for synchronisation via full-sync.
+
+*Replication Source [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)*
+
+`replrtq_enablesrc = enabled`
+
+Enabling or disabling the replrtq src is specifically related ro real-time replication.  Regardless of this configuration a `riak_kv_replrtq_src` process will startup and log any activity - the src may be required for other replication needs such as for full-sync.  Disabling the `replrtq_enablesrc` will stop co-ordinating vnodes on this node from forwarding real-time changes.  If a src is enabled, it should be enabled cluster-wide, as it cannot be pre-determined at design time which node will co-ordinate any given PUT.
+
+`replrtq_srcqueuelimit = 300000`
+
+There is a limit of the total number of object references, and objects, which can be placed on a queue for any given priority.  If the queue exceeds this size for a given priority, then any further addition to the queue is discarded until the queue drops below the threshold (i.e. due to consumption from a sink).
+
+`replrtq_srcobjectlimit = 1000`
+
+`replrtq_srcobjectsize = 200KB`
+
+For real-time replication the object can be placed on queue, and not just an object reference - which would otherwise require the object to be re-fetched at consume time.  This may reduce the time it takes to replicate objects.  To control the amount of memory consumed by objects on the queue, there is a size limit on the objects, and a limit on the size of the real-time queue.  If the real-time queue is longer than the limit, any object sent for queueing will be stripped back to an object reference before queueing.  If the size limit for an object is exceeded, then only the reference will be sent for queuing.
+
+The `riak_kv_replrtq_src` regularly logs the size of its queues, so these logs can be monitored to confirm if the object limit is being breached.
+
+`replrtq_srcqueue = q1_ttaaefs:block_rtq`
+
+The `riak_kv_replrtq_src` can support multiple queue names, for example to allow the same data to be replicated to multiple clusters.  Each queue name can be configured in a de-limited list here, as well as any restriction rule to be used to filter objects being sent to the queue.  Each queue configured has a filter associated with it.  The filter is applied only for real-time replication, all references sent to the `riak_kv_replrtq_src` by other means will always be replicated.
+
+There are five different filters:
+
+ - `any`: every real-time update will be replicated.
+ - `block_rtq`: no real-time updates will ever be replicated.
+ - `bucketname`: any bucket matching this name (regardless of type) will be real-time replicated.
+ - `bucketprefix`: any bucket name where the name starts with the configured ascii string (regardless of type) will be real-time replicated.
+ - `buckettype`: any bucket of the given type will be real-time replicated.
+
+Although the capability to do real-time replication filtered by `buckettype` or `bucketprefix` may be useful, it is only compatible with the `riak_kv_ttaaefs_manager` full-sync solution when these definitions are used as a shortcut to define a small number of known buckets.  
+
+If a single bucket is to be replicated, both in real-time and full-sync - the the `bucketname` definition should be used here, and that bucket should be defined along with its type as the `ttaaef_bucketfilter_name` and `ttaaefs_bucketfilter_type`.  If there are multiple buckets to be replicated they should be defined so either they have a type that is common, or a prefix that is common - without overlap  to non-replicated buckets.  For real-time replication definition the `bucketprefix` or `buckettype` can then be used, for `riak_kv_ttaaefs_manager` different peers will need to be configured with the different individual bucket definitions.
+
+If a more complex set of definitions is to be supported, then for full-sync this can be managed by external orchestration of calls to the `aae_fold` API.
+
+The `block_rtq` filter is to be used when the intention is for replication to be periodic only, and controlled via automated `riak_kv_ttaaefs_manager` full-sync runs or application-managed `aae_fold` jobs. In this case and real-time changes will be ignored and not added to this queue, but any changes arriving at the `riak_kv_replrtq_src` due to other jobs will be added to the queue.
+
+`replrtq_compressonwire = enabled`
+
+If "compress on wire" is enabled, each object sent on the wire will be individually compressed (using zlib) when being fetched from the sink.  This will be applied for all replicated objects, including those replicated via `riak_kv_ttaaefs_manager`.  The application of compression may add latency to the replication operation (commonly o(1ms)).
+
+*Replication Sink [`riak_kv_replrtq_snk`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_snk.erl)*
+
+`replrtq_enablesink = enabled`
+
+If the sink is not enabled a `riak_kv_replrtq_snk` process will still be started, but it will sit idle and do no work.  To actually do work, and pull replication objects from remote clusters, this needs to be `enabled`.
+
+`replrtq_sinkqueue = q1_ttaaefs`
+
+The `replrtq_sinkqueue` is the name of the source queue from which this node will pull replication activity.  If more than one queue is to be consumed from for this cluster, then other nodes in the cluster must be configured with those alternate queue names.  The peers should have this queue name configured via
+`replrtq_srcqueue`.
+
+`replrtq_sinkpeers = 127.0.0.1:8098:http`
+
+Each sink queue configuration can have multiple peers configured - for example it can be configured with the destination endpoint for every node in a remote cluster.  The available sink workers will be split amongst the peers, but will be biased to those peers consistently returning objects from their replication queues.  It will severely throttle work from any peer where errors are being returned.
+
+The peers need not be on the same cluster, but each peer must support the configured queue name.  It is important that across the nodes on the sink cluster, that the administrator ensures that sufficient sink nodes are configured with a peer relationship with each source cluster node so that sink node failure does not lead to there being a source cluster node from which no fetches are bing made.
+
+Peer relationships can be made with a load-balance destination address to assist with failure, but the algorithm for biasing sink workers to nodes with queue backlogs will not be efficient in this case.
+
+Best performance, and lowest overheads, tend to be found by using the protocol buffers (`pb`) API.  If security is to be enabled (e.g. TLS, and certificate authentication), then this will only work with the `pb` API.  This connection uses the standard Riak API endpoint, there is no dedicated endpoint for nextgen replication - so enabling security requires security to be enabled on all connections to the source Riak cluster (via protocol buffers).
+
+`replrtq_sinkworkers = 24`
+
+`replrtq_sinkpeerlimit = 24`
+
+The loading of data via replication into the sink cluster is throttled by setting a maximum number of sink workers that may concurrently fetch load.  If queues are backing up on the source, then this number should be increased if there is capacity for more updates on the sink side.
+
+By default, if only one peer has work to consume, then almost all the workers will become dedicated to consuming from that peer.  This can be controlled by setting the `replrtq_sinkpeerlimit` which limits the number of concurrent workers for each peer.  This also limit the number of concurrent connections when the `pb` api is used for the peer.
+
+### Notes on Run-time Changes
+
+It is possible to change the run-time setup of replication using `riak attach`.  Some useful functions are:
+
+`riak_kv_replrtq_snk:set_worker_count(QueueName, WorkerCount, PeerLimit).`
+
+Change the current sink worker count and per-peer limit for the queue - can be used to increase sink workers to resolve a backlog.
+
+`riak_kv_replrtq_snk:suspend_snkqueue(QueueName).`
+
+`riak_kv_replrtq_snk:resume_snkqueue(QueueName).`
+
+suspend and resume consuming from a particular source queue on this node in the cluster.
+
+`riak_kv_replrtq_snk:remove_snkqueue(QueueName).`
+
+`riak_kv_replrtq_snk:add_snkqueue(QueueName, Peers, WorkerCount, PerPeerLimit).`
+
+Remove and add a queue (for example to change the peer list).
+
+`riak_kv_replrtq_src:suspend_rtq(QueueName).`
+
+`riak_kv_replrtq_src:resume_rtq(QueueName).`
+
+This will suspend a queue on a replication source node, so that no new items will be added to the queue.  It will still be possible to consume from the queue.  Resume will allow new items to be added again, without losing any of the existing items on the queue
 
 ### Frequently Asked Questions
 
@@ -261,19 +410,15 @@ No, and there are no plans to extend the solution to support strongly consistent
 
 *What about hash collisions in the merkle tree - as only 4 byte hashes are used rather than full cryptographic hashes*
 
-The aae_fold feature allows for a modification in the hash_method so that instead of the pre-calculated hash, each hash will be recalculated using a combination of the vector clock (the current hash input) and an initialisation vector (passed in through the hash_method).  So it is possible to validate synchronisation against hash collisions, although the `riak_kv_ttaaefs_manager` doe snot support the orchestartion of such validation.
+The aae_fold feature allows for a modification in the hash_method so that instead of the pre-calculated hash, each hash will be recalculated using a combination of the vector clock (the current hash input) and an initialisation vector (passed in through the hash_method).  So it is possible to validate synchronisation against hash collisions, although the `riak_kv_ttaaefs_manager` doe snot support the orchestration of such validation.
 
 
 ### Outstanding TODO
 
 *Extend the replication support to the write once path by implementing it within the riak_kv_w1c_worker.  Initial thoughts are that the push on the repl side should not use the write once path*
 
-...
 
 *If hooks are not used any more for replication, should disable_hooks still be passed in as an option on replicated PUTs*
 
-...
 
-*Add validation functions for tokenised inputs (peer list on rpel sink, queue definitions on repl source). Startup should fail due to invalid config*
-
-...
+*Add validation functions for tokenised inputs (peer list on repl sink, queue definitions on repl source). Startup should fail due to invalid config*
