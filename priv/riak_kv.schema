@@ -846,3 +846,274 @@
     {default, enabled},
     {commented, enabled}
 ]}.
+
+
+%% @doc For Tictac full-sync does all data need to be sync'd, or should a 
+%% specific bucket be sync'd (bucket), or a specific bucket type (type). 
+%% Note that in most cases sync of all data is lower overhead than sync of
+%% a subset of data - as cached AAE trees will be used.
+%% TODO: type is not yet implemented.  
+{mapping, "ttaaefs_scope", "riak_kv.ttaaefs_scope", [
+  {datatype, {enum, [all, bucket, type, disabled]}},
+  {default, disabled}
+]}.
+
+%% @doc for tictac full-sync what registered queue name on this cluster should
+%% be use for passing references to data which needs to be replicated for AAE
+%% full-sync.  This queue name must be defined as a
+%% `riak_kv.replq<n>_queuename`, but need not be exlusive to full-sync (i.e. a
+%% real-time replication queue may be used as well)
+{mapping, "ttaaefs_queuename", "riak_kv.ttaaefs_queuename", [
+  {datatype, atom},
+  {default, q1_ttaaefs}
+]}.
+
+%% @doc For Tictac bucket full-sync which bucket should be sync'd by this
+%% node.  Only ascii string bucket definitions supported (which will be 
+%% converted using list_to_binary). 
+{mapping, "ttaaefs_bucketfilter_name", "riak_kv.ttaaefs_bucketfilter_name", [
+  {datatype, string},
+  {commented, "sample_bucketname"}
+]}.
+
+%% @doc For Tictac bucket full-sync what is the bucket type of the bucket name.  
+%% Only ascii string type bucket definitions supported (these
+%% definitions will be converted to binary using list_to_binary)
+{mapping, "ttaaefs_bucketfilter_type", "riak_kv.ttaaefs_bucketfilter_type", [
+  {datatype, string},
+  {commented, "default"}
+]}.
+
+%% @doc For Tictac bucket-type full-sync what is the bucket type to be sync'd.  
+%% Only ascii string type bucket definitions supported (these
+%% definitions will be converted to binary using list_to_binary).
+%% TODO: Type-based filtering is not yet supported
+{mapping, "ttaaefs_buckettype", "riak_kv.ttaaefs_buckettype", [
+  {datatype, string}
+]}.
+
+
+%% @doc For Tictac all full-sync which NVAL should be sync'd by this node.
+%% This is the `local` nval, as the data in the remote cluster may have an
+%% alternative nval.
+{mapping, "ttaaefs_localnval", "riak_kv.ttaaefs_localnval", [
+  {datatype, integer},
+  {default, 3}
+]}.
+
+%% @doc For Tictac all full-sync which NVAL should be sync'd in the remote
+%% cluster.
+{mapping, "ttaaefs_remotenval", "riak_kv.ttaaefs_remotenval", [
+  {datatype, integer},
+  {default, 3}
+]}.
+
+%% @doc The network address of the peer node in the cluster with which this
+%% node will connect to for full_sync purposes.  If this peer node is
+%% unavailable, then this local node will not perform any full-sync actions,
+%% so alternative peer addresses should eb configured in other nodes.  The
+%% peer address may be a load-balanced IP to avoid this issue.
+{mapping, "ttaaefs_peerip", "riak_kv.ttaaefs_peerip", [
+  {datatype, string},
+  {commented, "127.0.0.1"},
+  {validators, ["valid_ipaddr"]}
+]}.
+
+{validator,
+  "valid_ipaddr",
+  "must be a valid IP address",
+  fun(AddrString) ->
+    case inet_parse:address(AddrString) of
+      {ok, _} -> true;
+      {error, _} -> false
+    end
+  end}.
+
+%% @doc The port to be used when connecting to the remote peer cluster
+{mapping, "ttaaefs_peerport", "riak_kv.ttaaefs_peerport", [
+  {datatype, integer},
+  {commented, 8098}
+]}.
+
+%% @doc The protocol to be used when conecting to the peer in the remote
+%% cluster.  Could be http or pb (but only http currently being tested)
+%% TODO: Support for SSL?  Support for pb.
+{mapping, "ttaaefs_peerprotocol", "riak_kv.ttaaefs_peerprotocol", [
+  {datatype, {enum, [http, pb]}},
+  {default, http}
+]}.
+
+%% @doc The filepath for the ca certificate to validate the ssl connection
+%% to the remote peer.
+{mapping, "repl_cacert_filename", "riak_kv.repl_cacert_filename", [
+    {datatype, string}
+]}.
+
+%% @doc The filepath for the certificate to be used by this node when acting
+%% as a client for replication.  Must be trusted by the cluster with security
+%% enabled
+{mapping, "repl_cert_filename", "riak_kv.repl_cert_filename", [
+    {datatype, string}
+]}.
+
+%% @doc The filepath for the key to related to the certificate in
+%% repl_cert_filename
+{mapping, "repl_key_filename", "riak_kv.repl_key_filename", [
+    {datatype, string}
+]}.
+
+%% @doc When security is enabled on the remote cluster for replication as
+%% username is required to identify the replication client.  This username
+%% must be configured on the remote cluster with appropriate access rights
+{mapping, "repl_username", "riak_kv.repl_username", [
+    {datatype, string}
+]}.
+
+%% @doc How many times per 24hour period should all the data be checked to
+%% confirm it is fully sync'd
+{mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [
+  {datatype, integer},
+  {default, 100}
+]}.
+
+%% @doc How many times per 24hour period should no data be checked to
+%% confirm it is fully sync'd.  Use nochecks to align the number of checks
+%% done by each node - if each node has the same number of slots, they will
+%% naurally space their checks within the period of the slot.
+{mapping, "ttaaefs_nocheck", "riak_kv.ttaaefs_nocheck", [
+  {datatype, integer},
+  {default, 0}
+]}.
+
+%% @doc How many times per 24hour period should the last hours data be checked
+%% to confirm it is fully sync'd.  This is relevant for per-bucket sync scope
+%% only, and will be ignored if all sync is enabled
+{mapping, "ttaaefs_hourcheck", "riak_kv.ttaaefs_hourcheck", [
+  {datatype, integer},
+  {default, 0}
+]}.
+
+%% @doc How many times per 24hour period should the last 24-hours of data be
+%% checked to confirm it is fully sync'd.  This si relevant for per-bucket
+%% sync scope only, and will be ignored if all sync is enabled
+{mapping, "ttaaefs_daycheck", "riak_kv.ttaaefs_daycheck", [
+  {datatype, integer},
+  {default, 0}
+]}.
+
+%% @doc If Tictac AAE full-sync discovers keys to be repaired, should each key
+%% that is repaired be logged
+{mapping, "ttaaefs_logrepairs", "riak_kv.ttaaefs_logrepairs", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc Enable this node to act as a real-time replication source
+{mapping, "replrtq_enablesrc", "riak_kv.replrtq_enablesrc", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc Limit the size of replication queues (for a queue and priority, i.e.
+%% each priority on each queue will have this as the limit)
+{mapping, "replrtq_srcqueuelimit", "riak_kv.replrtq_srcqueuelimit", [
+  {datatype, integer},
+  {default, 300000}
+]}.
+
+%% @doc Limit the number of objects to be cached on the replication queue,
+%% with objects queued when the priority queue is beyond this limit stored as
+%% clocks only to be fetched on replication
+{mapping, "replrtq_srcobjectlimit", "riak_kv.replrtq_srcobjectlimit", [
+  {datatype, integer},
+  {default, 1000}
+]}.
+
+%% @doc Limit the size of an object which may be pushed to the replication
+%% queue.  Objects larger than this will still be replicated, but by being
+%% re-fetched.  The product of replrtq_objectsize and replrtq_srcobjectlimit
+%% gives a theoretical maximum for the total memory consumed by the
+%% riak_kv_rpelrtq (in terms of objects).  Default of this product is 200MB.
+{mapping, "replrtq_srcobjectsize", "riak_kv.replrtq_srcobjectsize", [
+  {datatype, bytesize},
+  {default, "200KB"}
+]}.
+
+%% @doc Queue definitions
+%% Queues should be defined using a pipe '|' delimited string, of two
+%% colon ':' delimited elements.  The first part of each queue definition is
+%% the ascii name of the queue, the second part indicated the filter to be
+%% applied which should be either:
+%% - any (all real-time modifications to be replicated via this queue)
+%% - block_rtq (no real-time modifications to be replicated)
+%% - bucketname.<name_of_bucket>
+%% - bucketprefix.<prefix_for_bucket>
+%% - buckettype.<name_of_type>
+%% The latter three options allow for specific buckets to be supported by the
+%% queue, or only buckets with certain prefixes, or for just buckets of a given
+%% type.
+%% If a list of buckets or types need to be supported, then either multiple
+%% queues need to be defined, or non-persistent extended definitions can be
+%% made at runtime used the riak_kv_replrtq_src API.
+%% Example configurtaion might be:
+%% cluster_a:any|cluster_b:block_rtq|cluster_c:bucketprefix.user
+{mapping, "replrtq_srcqueue", "riak_kv.replrtq_srcqueue", [
+    {datatype, string},
+    {default, "q1_ttaaefs:block_rtq"}
+]}.
+
+%% @doc Enable this node zlib compress objects over the wire
+{mapping, "replrtq_compressonwire", "riak_kv.replrtq_compressonwire", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc Enable this node to act as a sink and consume from a src cluster
+{mapping, "replrtq_enablesink", "riak_kv.replrtq_enablesink", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc Queue name  to be used for peers (replrtq_sinkpeers) that are
+%% defined without a queue name.  Each node is expected to have a single
+%% queue from which it will consume (by name).  This queue may be consumed
+%% from multiple peers - and those peers may sit on multiple clusters.
+%% If more than one queue name is to be consumed from, real-time changes can
+%% be made through `riak_kv_replrtq_snk:add_snkqueue/3`.  The peer list can
+%% also be extended to add different queue names into definitions - however
+%% it is strongly recommended to use a single sinkqueue name per node.
+{mapping, "replrtq_sinkqueue", "riak_kv.replrtq_sinkqueue", [
+  {datatype, atom},
+  {default, q1_ttaaefs}
+]}.
+
+%% @doc A list of peers is required to inform the sink node how to reach the
+%% src.  All src nodes will need to have entries consumed - so it is
+%% recommended that each src node is referred to in multiple sink node
+%% configurations.
+%% The list of peers is tokenised as host:port:protocol
+%% In exceptional circumstances this definition can be extended to
+%% queuename:host:port:protocol - but restricting the definitions of queuename
+%% to the single queue specified in replrtq_sinkqueue is strongly recommended.
+{mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sinkpeers", [
+    {datatype, string},
+    {commented, "127.0.0.1:8098:http"}
+]}.
+
+%% @doc The number of workers to be used for each queue must be configured.
+{mapping, "replrtq_sinkworkers", "riak_kv.replrtq_sinkworkers", [
+    {datatype, integer},
+    {default, 24}
+]}.
+
+%% @doc The maximume number of workers to be for any given peer may be
+%% configured - if not configured will default to the number of sinkworkers
+{mapping, "replrtq_sinkpeerlimit", "riak_kv.replrtq_sinkpeerlimit", [
+    {datatype, integer},
+    {commented, 24}
+]}.
+

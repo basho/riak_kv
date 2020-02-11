@@ -30,7 +30,8 @@
 -export([start/6, start_link/6, start/4, start_link/4]).
 -export([init/1, handle_event/3, handle_sync_event/4,
          handle_info/3, terminate/3, code_change/4]).
--export([prepare/2,
+-export([queue_fetch/2,
+            prepare/2,
             validate/2,
             execute/2,
             waiting_vnode_r/2,
@@ -46,7 +47,7 @@
                   {pr, non_neg_integer()} |    %% Minimum number of primary vnodes participating
                   {basic_quorum, boolean()} |  %% Whether to use basic quorum (return early
                                                %% in some failure cases.
-                  {notfound_ok, boolean()}  |  %% Count notfound reponses as successful.
+                  {notfound_ok, boolean()}  |  %% Count notfound responses as successful.
                   {force_aae, boolean()}    |  %% Force there to be be an AAE exchange for the
                                                %% preflist after the GEt has been completed 
                   {timeout, pos_integer() | infinity} | %% Timeout for vnode responses
@@ -74,7 +75,8 @@
                 get_core :: riak_kv_get_core:getcore(),
                 timeout :: infinity | pos_integer(),
                 tref    :: reference(),
-                bkey :: {riak_object:bucket(), riak_object:key()},
+                bkey :: {riak_object:bucket(), riak_object:key()}|
+                        {queue_name, riak_kv_replrtq_src:queue_name()},
                 bucket_props,
                 startnow :: {non_neg_integer(), non_neg_integer(), non_neg_integer()},
                 get_usecs :: non_neg_integer(),
@@ -86,7 +88,9 @@
                 crdt_op :: undefined | true,
                 request_type :: undefined | request_type(),
                 force_aae = false :: boolean(),
-                override_vnodes = [] :: list()
+                override_vnodes = [] :: list(),
+                return_tombstone = false :: boolean(),
+                expected_fetchclock = false :: false | vclock:vclock()
                }).
 
 -include("riak_kv_dtrace.hrl").
@@ -95,6 +99,7 @@
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
 -define(DEFAULT_RT, head).
+-define(QUEUE_EMPTY_LOOPS, 8).
 
 %% ===================================================================
 %% Public API
@@ -115,7 +120,10 @@ start_link(ReqId,Bucket,Key,R,Timeout,From) ->
 %%                             in some failure cases.
 %% {notfound_ok, boolean()}  - Count notfound reponses as successful.
 %% {timeout, pos_integer() | infinity} -  Timeout for vnode responses
--spec start({raw, req_id(), pid()}, binary(), binary(), options()) -> {ok, pid()} | {error, any()}.
+-spec start({raw, req_id(), pid()},
+            queue_name|binary(), 
+            binary()|riak_kv_replrtq_src:queue_name(),
+            options()) -> {ok, pid()} | {error, any()}.
 start(From, Bucket, Key, GetOptions) ->
     Args = [From, Bucket, Key, GetOptions],
     case sidejob_supervisor:start_child(riak_kv_get_fsm_sj,
@@ -158,6 +166,16 @@ test_link(From, Bucket, Key, GetOptions, StateProps) ->
 %% ====================================================================
 
 %% @private
+init([From, queue_name, QueueName, Options0]) ->
+    StartNow = os:timestamp(),
+    Options = proplists:unfold(Options0),
+    StateData = #state{from = From,
+                       options = Options,
+                       bkey = {queue_name, QueueName},
+                       timing = riak_kv_fsm_timing:add_timing(prepare, []),
+                       startnow = StartNow,
+                       return_tombstone = true},
+    {ok, queue_fetch, StateData, 0};
 init([From, Bucket, Key, Options0]) ->
     StartNow = os:timestamp(),
     Options = proplists:unfold(Options0),
@@ -188,6 +206,43 @@ init({test, Args, StateProps}) ->
         end,
     TestStateData = lists:foldl(F, StateData, StateProps),
     {ok, validate, TestStateData, 0}.
+
+
+%% @private
+queue_fetch(timeout, StateData) ->
+    {queue_name, QueueName} = StateData#state.bkey,
+    {raw, ReqID, Pid} = StateData#state.from,
+    case riak_kv_replrtq_src:waitforpop_rtq(QueueName, ?QUEUE_EMPTY_LOOPS) of
+        queue_empty ->
+            Msg = {ReqID, {ok, queue_empty}},
+            Pid ! Msg,
+            ok = riak_kv_stat:update(ngrfetch_nofetch),
+            {stop, normal, StateData};
+        {Bucket, Key, ExpectedClock, to_fetch} ->
+            % Do a full fetch with default n and r.  Assume the answer returned
+            % is the best answer, so no need to compare with the expected
+            % answer
+            Timing = riak_kv_fsm_timing:add_timing(prepare, []),
+            ok = riak_kv_stat:update(ngrfetch_tofetch),
+            {next_state,
+                prepare,
+                StateData#state{bkey = {Bucket, Key},
+                                timing = Timing,
+                                expected_fetchclock = ExpectedClock},
+                0};
+        {_Bucket, _Key, _ExpectedClock, {object, Obj}} ->
+            Msg = {ReqID, {ok, Obj}},
+            Pid ! Msg,
+            ok = riak_kv_stat:update(ngrfetch_prefetch),
+            {stop, normal, StateData};
+        {_Bucket, _Key, ExpectedClock, {tomb, Obj}} ->
+            % A tombstone was queued - so there is no need to fetch
+            Msg = {ReqID, {ok, {deleted, ExpectedClock, Obj}}},
+            Pid ! Msg,
+            ok = riak_kv_stat:update(ngrfetch_prefetch),
+            {stop, normal, StateData}
+    end.
+
 
 %% @private
 prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
@@ -247,7 +302,8 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
 %% @private
 validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
                                    n = N, bucket_props = BucketProps, preflist2 = PL2,
-                                   trace=Trace}) ->
+                                   trace=Trace,
+                                   expected_fetchclock = ExpClock}) ->
     ?DTRACE(Trace, ?C_GET_FSM_VALIDATE, [], ["validate"]),
     AppEnvTimeout = app_helper:get_env(riak_kv, timeout),
     Timeout = case AppEnvTimeout of
@@ -280,7 +336,8 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             DeletedVClock = get_option(deletedvclock, Options, false),
             GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
-                                            DeletedVClock, IdxType),
+                                            DeletedVClock, IdxType,
+                                            ExpClock),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
                                                        req_id = ReqId});
@@ -670,11 +727,28 @@ schedule_timeout(infinity) ->
 schedule_timeout(Timeout) ->
     erlang:send_after(Timeout, self(), request_timeout).
 
-client_reply(Reply, StateData = #state{from = {raw, ReqId, Pid},
+client_reply(Reply0, StateData = #state{from = {raw, ReqId, Pid},
                                        options = Options,
                                        timing = Timing,
                                        trace = Trace}) ->
     NewTiming = riak_kv_fsm_timing:add_timing(reply, Timing),
+
+    % For the fetch style get, the underlying tombstone object needs to be
+    % returned for replication.  However, a normal GET is not expecting that
+    % format - so only return {error, {deleted, VClock}} for backwards
+    % compatability
+    Reply = 
+        case Reply0 of
+            {error, {deleted, TombClock, TombStone}} ->
+                case StateData#state.return_tombstone of
+                    true ->
+                        {ok, {deleted, TombClock, TombStone}};
+                    false ->
+                        {error, {deleted, TombClock}}
+                end;
+            _ ->
+                Reply0
+        end,
     Msg = case get_option(details, Options, false) of
               false ->
                   {ReqId, Reply};

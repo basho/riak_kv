@@ -78,14 +78,14 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
     case get_w_options(Bucket, Options) of
         {error, Reason} ->
             ?DTRACE(?C_DELETE_INIT2, [-1], []),
-            Client ! {ReqId, {error, Reason}};
+            send_reply(Client, ReqId, {error, Reason});
         {W, PW, DW, PassThruOptions} ->
             Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
                                                                  "true", dict:new())),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
             {ok,C} = riak:local_client(ClientId),
             Reply = C:put(Tombstone, [{w,W},{pw,PW},{dw, DW},{timeout,Timeout}]++PassThruOptions),
-            Client ! {ReqId, Reply},
+            send_reply(Client, ReqId, Reply),
             HasCustomN_val = proplists:get_value(n_val, Options) /= undefined,
             case Reply of
                 ok when HasCustomN_val == false ->
@@ -100,6 +100,11 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
                     nop
             end
     end.
+
+send_reply(undefined, _ReqId, _Reply) ->
+    ok;
+send_reply(Client, ReqId, Reply) ->
+    Client ! {ReqId, Reply}.
 
 get_r_options(Bucket, Options) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
