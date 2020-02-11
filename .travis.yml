@@ -1,0 +1,6 @@
+language: erlang
+script:
+  - make dialyzer
+  - make test
+otp_release:
+  - R16B03
