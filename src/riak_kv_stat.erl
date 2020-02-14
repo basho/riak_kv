@@ -43,7 +43,7 @@
 %% API
 -export([start_link/0, get_stats/0,
          update/1, perform_update/1, register_stats/0, unregister_vnode_stats/1,
-         produce_stats/0, get_value/1, get_info/0,
+         produce_stats/0, get_value/1,
          leveldb_read_block_errors/0, stat_update_error/3, stop/0]).
 -export([track_bucket/1, untrack_bucket/1]).
 -export([active_gets/0, active_puts/0]).
@@ -57,7 +57,7 @@
 
 -define(SERVER, ?MODULE).
 -define(APP, riak_kv).
--define(Prefix, riak).
+-define(PREFIX, riak).
 
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -66,7 +66,7 @@ register_stats() ->
   register_stats(stats()).
 
 register_stats(Stats) ->
-    riak_core_stats_mgr:register(?APP, Stats).
+    lists:foreach(fun(Stat) -> stats:register([?PREFIX,?APP| Stat]) end, Stats).
 
 unregister_vnode_stats(Index) ->
     unregister_per_index(gets, Index),
@@ -79,13 +79,10 @@ get_stats() ->
   get_stats(?APP).
 
 get_stats(Arg) ->
-    riak_core_stats_mgr:get_stats(Arg).
+    stats:get_stats(Arg).
 
 get_value(Arg) ->
-    riak_core_stats_mgr:get_value(Arg).
-
-get_info() ->
-    riak_core_stats_mgr:get_info(?APP).
+    stats:get_value(Arg).
 
 update(Arg) ->
     maybe_dispatch_to_sidejob(erlang:module_loaded(riak_kv_stat_sj), Arg).
@@ -381,8 +378,8 @@ do_per_index(Op, Idx, USecs) ->
 
 unregister_per_index(Op, Idx) ->
   IdxAtom = list_to_atom(integer_to_list(Idx)),
-    riak_core_stats_mgr:unregister({Op, IdxAtom, vnode, ?APP}),
-    riak_core_stats_mgr:unregister({[Op, time], IdxAtom, vnode, ?APP}).
+    riak_core_stat:unregister_vnode_stats(Op, IdxAtom, vnode, ?APP),
+    riak_core_stat:unregister_vnode_stats([Op, time], IdxAtom, vnode, ?APP).
 
 %%  per bucket get_fsm stats
 do_get_bucket(false, _) ->
@@ -474,8 +471,8 @@ do_repairs(Indices, Preflist) ->
 %% for dynamically created / dimensioned stats
 %% that can't be registered at start up
 create_or_update(Name, UpdateVal, Type) ->
-    StatName = lists:flatten([?Prefix, ?APP | [Name]]),
-    riak_core_stats_mgr:update(StatName, UpdateVal, Type).
+    StatName = lists:flatten([?PREFIX, ?APP | [Name]]),
+    stats:update(StatName, UpdateVal, Type).
 
 %% @doc list of {Name, Type} for static
 %% stats that we can register at start up
@@ -830,7 +827,7 @@ stats() ->
 read_repair_aggr_stats() ->
   Spec = fun(Type, Reason) ->
     {function, exometer, aggregate,
-      [[{{[?Prefix, ?APP, node, gets, read_repairs, '_', Type, Reason], '_', '_'},
+      [[{{[?PREFIX, ?APP, node, gets, read_repairs, '_', Type, Reason], '_', '_'},
         [], [true]}], [one, count]], proplist, [one, count]}
          end,
   [
@@ -1014,7 +1011,7 @@ create_or_update_histogram_test() ->
     try
         Metric = [riak_kv,put_fsm,counter,time],
         ok = repeat_create_or_update(Metric, 1, histogram, 100),
-        ?assertNotEqual(riak_core_stats_mgr:get_value(Metric), 0),
+        ?assertNotEqual(stats:get_value(Metric), 0),
         Stats = get_stats(),
         %%lager:info("stats prop list ~s", [Stats]),
         ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0)
