@@ -111,11 +111,11 @@ untrack_bucket(Bucket) when is_binary(Bucket) ->
 
 %% The current number of active get fsms in riak
 active_gets() ->
-    counter_value([?Prefix, ?APP, node, gets, fsm, active]).
+    counter_value([?PREFIX, ?APP, node, gets, fsm, active]).
 
 %% The current number of active put fsms in riak
 active_puts() ->
-    counter_value([?Prefix, ?APP, node, puts, fsm, active]).
+    counter_value([?PREFIX, ?APP, node, puts, fsm, active]).
 
 counter_value(Name) ->
     case get_value(Name) of
