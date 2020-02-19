@@ -344,9 +344,12 @@ produce_doc_body(Doc) ->
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
-        pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
+            pr=PR, basic_quorum=Quorum,
+            notfound_ok=NotFoundOK, node_confirms=NC}) ->
     Ctx#ctx{doc=C:get(B, K, [{r, R}, {pr, PR},
-                {basic_quorum, Quorum}, {notfound_ok, NotFoundOK}])};
+                                {basic_quorum, Quorum},
+                                {notfound_ok, NotFoundOK},
+                                {node_confirms, NC}])};
 ensure_doc(Ctx) -> Ctx.
 
 handle_common_error(Reason, RD, Ctx) ->

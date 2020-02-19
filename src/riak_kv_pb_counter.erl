@@ -83,7 +83,9 @@ encode(Message) ->
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0,
-                          notfound_ok=NFOk, basic_quorum=BQ},
+                            notfound_ok=NFOk, 
+                            node_confirms=NC,
+                            basic_quorum=BQ},
         #state{client=C} = State) ->
     case lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, [])) of
         true ->
@@ -92,6 +94,7 @@ process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0,
             case C:get(B, K, make_option(r, R) ++
                            make_option(pr, PR) ++
                            make_option(notfound_ok, NFOk) ++
+                           make_option(node_confirms, NC) ++
                            make_option(basic_quorum, BQ)) of
                 {ok, O} ->
                     {{_Ctx, Value}, _} = riak_kv_crdt:value(O, ?V1_COUNTER_TYPE),
