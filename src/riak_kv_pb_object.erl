@@ -124,11 +124,13 @@ process(#rpbgetreq{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
 process(#rpbgetreq{type = <<>>}, State) ->
     {error, "Type cannot be zero-length", State};
-process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
-                   basic_quorum=BQ, if_modified=VClock,
-                   head=Head, deletedvclock=DeletedVClock,
-                   n_val=N_val, sloppy_quorum=SloppyQuorum,
-                   timeout=Timeout}, #state{client=C} = State) ->
+process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
+                    notfound_ok=NFOk, node_confirms=NC,
+                    basic_quorum=BQ, if_modified=VClock,
+                    head=Head, deletedvclock=DeletedVClock,
+                    n_val=N_val, sloppy_quorum=SloppyQuorum,
+                    timeout=Timeout},
+            #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     B = maybe_bucket_type(T, B0),
@@ -137,6 +139,7 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    make_option(pr, PR) ++
                    make_option(timeout, Timeout) ++
                    make_option(notfound_ok, NFOk) ++
+                   make_option(node_confirms, NC) ++
                    make_option(basic_quorum, BQ) ++
                    make_option(n_val, N_val) ++
                    make_option(sloppy_quorum, SloppyQuorum)) of

@@ -199,13 +199,16 @@ process_update_response({error, Reason}, State) ->
 
 %% Make a list of options for the Get / Put ops
 make_options(#dtfetchreq{r=R0, pr=PR0,
-                         notfound_ok=NFOk, basic_quorum=BQ,
+                         notfound_ok=NFOk,
+                         node_confirms=NC,
+                         basic_quorum=BQ,
                          sloppy_quorum=SloppyQ, n_val=NVal}) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     make_option(r, R) ++
         make_option(pr, PR) ++
         make_option(notfound_ok, NFOk) ++
+        make_option(node_confirms, NC) ++
         make_option(basic_quorum, BQ) ++
         make_option(sloppy_quorum, SloppyQ) ++
         make_option(n_val, NVal);

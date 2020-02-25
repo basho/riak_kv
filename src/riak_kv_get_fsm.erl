@@ -99,6 +99,7 @@
 -define(DEFAULT_R, default).
 -define(DEFAULT_PR, 0).
 -define(DEFAULT_RT, head).
+-define(DEFAULT_NC, 0).
 -define(QUEUE_EMPTY_LOOPS, 8).
 
 %% ===================================================================
@@ -289,6 +290,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                         riak_core_apl:get_apl_ann(DocIdx, N, UpNodes)
                 end,
             RequestType = get_default_support_request_type(?DEFAULT_RT),
+            
             new_state_timeout(validate, StateData#state{starttime=riak_core_util:moment(),
                                                 n = N,
                                                 bucket_props=Props,
@@ -312,13 +314,19 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
               end,
     R0 = get_option(r, Options, ?DEFAULT_R),
     PR0 = get_option(pr, Options, ?DEFAULT_PR),
+    NodeConfirms0 = get_option(node_confirms, Options, default),
     R = riak_kv_util:expand_rw_value(r, R0, BucketProps, N),
     PR = riak_kv_util:expand_rw_value(pr, PR0, BucketProps, N),
     NumVnodes = length(PL2),
+    NumNodes = count_nodes(PL2),
     NumPrimaries = length([x || {_,primary} <- PL2]),
     IdxType = [{Part, Type} || {{Part, _Node}, Type} <- PL2],
-
-    case validate_quorum(R, R0, N, PR, PR0, NumPrimaries, NumVnodes) of
+    NodeConfirms =
+        riak_kv_util:expand_rw_value(node_confirms, NodeConfirms0,
+                                        BucketProps, N),
+    
+    case validate_quorum(R, R0, N, PR, PR0, NodeConfirms,
+                            NumPrimaries, NumVnodes, NumNodes) of
         ok ->
             BQ0 = get_option(basic_quorum, Options, default),
             FailR = erlang:max(R, PR), %% fail fast
@@ -337,7 +345,8 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             GetCore = riak_kv_get_core:init(N, R, PR, FailThreshold,
                                             NotFoundOk, AllowMult,
                                             DeletedVClock, IdxType,
-                                            ExpClock),
+                                            ExpClock,
+                                            NodeConfirms),
             new_state_timeout(execute, StateData#state{get_core = GetCore,
                                                        timeout = Timeout,
                                                        req_id = ReqId});
@@ -345,23 +354,6 @@ validate(timeout, StateData=#state{from = {raw, ReqId, _Pid}, options = Options,
             StateData2 = client_reply(Error, StateData),
             {stop, normal, StateData2}
     end.
-
-%% @private validate the quorum values
-%% {error, Message} or ok
-validate_quorum(R, ROpt, _N, _PR, _PROpt, _NumPrimaries, _NumVnodes) when R =:= error ->
-    {error, {r_val_violation, ROpt}};
-validate_quorum(R, _ROpt, N, _PR, _PROpt, _NumPrimaries, _NumVnodes) when R > N ->
-    {error, {n_val_violation, N}};
-validate_quorum(_R, _ROpt, _N, PR, PROpt, _NumPrimaries, _NumVnodes) when PR =:= error ->
-    {error, {pr_val_violation, PROpt}};
-validate_quorum(_R, _ROpt,  N, PR, _PROpt, _NumPrimaries, _NumVnodes) when PR > N ->
-    {error, {n_val_violation, N}};
-validate_quorum(_R, _ROpt, _N, PR, _PROpt, NumPrimaries, _NumVnodes) when PR > NumPrimaries ->
-    {error, {pr_val_unsatisfied, PR, NumPrimaries}};
-validate_quorum(R, _ROpt, _N, _PR, _PROpt, _NumPrimaries, NumVnodes) when R > NumVnodes ->
-    {error, {insufficient_vnodes, NumVnodes, need, R}};
-validate_quorum(_R, _ROpt, _N, _PR, _PROpt, _NumPrimaries, _NumVnodes) ->
-    ok.
 
 %% @private
 execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
@@ -410,16 +402,6 @@ execute(timeout, StateData0=#state{timeout=Timeout,req_id=ReqId,
         end,
     new_state(waiting_vnode_r, StateData).
 
-%% @private calculate a concatenated preflist for tracing macro
-preflist_for_tracing(Preflist) ->
-    %% TODO: We can see entire preflist (more than 4 nodes) if we concatenate
-    %%       all info into a single string.
-    [if is_atom(Nd) ->
-             [atom_to_list(Nd), $,, integer_to_list(Idx)];
-        true ->
-             <<>>                          % eunit test
-     end || {Idx, Nd} <- lists:sublist(Preflist, 4)].
-
 %% @private
 waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
                     StateData = #state{get_core = GetCore, trace = Trace}) ->
@@ -437,15 +419,18 @@ waiting_vnode_r({r, VnodeResult, Idx, _ReqId},
     % in the result list, not just append to the result list.  The r counter
     % needs updating, regardless if primary, as in override_nodes loop we're
     % no longer bothered as quorum has been met in a previous loop
+    ResNode = find_node(Idx, StateData#state.preflist2),
     UpdGetCore =
         case StateData#state.request_type of
             update ->
+                
                 riak_kv_get_core:update_result(Idx,
                                                 VnodeResult,
                                                 StateData#state.override_vnodes,
+                                                ResNode,
                                                 GetCore);
-            _ ->
-                riak_kv_get_core:add_result(Idx, VnodeResult, GetCore)
+            _ -> 
+                riak_kv_get_core:add_result(Idx, VnodeResult, ResNode, GetCore)
         end,
     case riak_kv_get_core:enough(UpdGetCore) of
         true ->
@@ -500,7 +485,9 @@ waiting_read_repair({r, VnodeResult, Idx, _ReqId},
         _ ->
             ok
     end,
-    UpdGetCore = riak_kv_get_core:add_result(Idx, VnodeResult, GetCore),
+    ResNode = find_node(Idx, StateData#state.preflist2),
+    UpdGetCore =
+        riak_kv_get_core:add_result(Idx, VnodeResult, ResNode, GetCore),
     maybe_finalize(StateData#state{get_core = UpdGetCore});
 waiting_read_repair(request_timeout, StateData = #state{trace=Trace}) ->
     ?DTRACE(Trace, ?C_GET_FSM_WAITING_RR_TIMEOUT, [-2],
@@ -533,6 +520,63 @@ code_change(_OldVsn, StateName, State, _Extra) -> {ok, StateName, State}.
 %% ====================================================================
 %% Internal functions
 %% ====================================================================
+
+%% @private validate the quorum values
+%% {error, Message} or ok
+validate_quorum(R, ROpt, _N, _PR, _PROpt, _NodeConfirms,
+                _NumPrimaries, _NumVnodes, _NumNodes) when R =:= error ->
+    {error, {r_val_violation, ROpt}};
+validate_quorum(R, _ROpt, N, _PR, _PROpt, _NodeConfirms,
+                _NumPrimaries, _NumVnodes, _NumNodes) when R > N ->
+    {error, {n_val_violation, N}};
+validate_quorum(_R, _ROpt, _N, PR, PROpt, _NodeConfirms,
+                _NumPrimaries, _NumVnodes, _NumNodes) when PR =:= error ->
+    {error, {pr_val_violation, PROpt}};
+validate_quorum(_R, _ROpt,  N, PR, _PROpt, _NodeConfirms,
+                _NumPrimaries, _NumVnodes, _NumNodes) when PR > N ->
+    {error, {n_val_violation, N}};
+validate_quorum(_R, _ROpt, _N, PR, _PROpt, _NodeConfirms,
+                NumPrimaries, _NumVnodes, _NumNodes) when PR > NumPrimaries ->
+    {error, {pr_val_unsatisfied, PR, NumPrimaries}};
+validate_quorum(R, _ROpt, _N, _PR, _PROpt, _NodeConfirms,
+                _NumPrimaries, NumVnodes, _NumNodes) when R > NumVnodes ->
+    {error, {insufficient_vnodes, NumVnodes, need, R}};
+validate_quorum(_R, _ROpt, _N, _PR, _PROpt, NodeConfirms,
+                _NumPrimaries, _NumVnodes, NumNodes)
+                                                when NodeConfirms > NumNodes ->
+    {error, {insufficient_nodes, NumNodes, need, NodeConfirms}};
+validate_quorum(_R, _ROpt, _N, _PR, _PROpt, _NodeConfirms, 
+                _NumPrimaries, _NumVnodes, _NumNodes) ->
+    ok.
+
+count_nodes(Preflist) ->
+    CountFun = 
+        fun({{_Idx, Node}, _PriFall}, Acc) ->
+            case lists:member(Node, Acc) of
+                true -> Acc;
+                false -> [Node|Acc]
+            end
+        end,
+    length(lists:foldl(CountFun, [], Preflist)).
+
+
+find_node(Idx, Preflist) ->
+    {Idx, Node} =
+        lists:keyfind(Idx,
+                        1,
+                        lists:map(fun(T) -> element(1, T) end, Preflist)),
+    Node.
+
+%% @private calculate a concatenated preflist for tracing macro
+preflist_for_tracing(Preflist) ->
+    %% TODO: We can see entire preflist (more than 4 nodes) if we concatenate
+    %%       all info into a single string.
+    [if is_atom(Nd) ->
+             [atom_to_list(Nd), $,, integer_to_list(Idx)];
+        true ->
+             <<>>                          % eunit test
+     end || {Idx, Nd} <- lists:sublist(Preflist, 4)].
+
 
 %% Move to the new state, marking the time it started
 new_state(StateName, StateData=#state{trace = true}) ->
@@ -828,6 +872,12 @@ get_default_support_request_type(Default) ->
 -ifdef(TEST).
 -define(expect_msg(Exp,Timeout),
         ?assertEqual(Exp, receive Exp -> Exp after Timeout -> timeout end)).
+
+node_count_test() ->
+    PL1 = [{{0, "a"}, primary}, {{1, "b"}, fallback}, {{2, "c"}, fallback}],
+    PL2 = [{{0, "a"}, primary}, {{1, "a"}, fallback}, {{2, "a"}, fallback}],
+    ?assertEqual(3, count_nodes(PL1)),
+    ?assertEqual(1, count_nodes(PL2)).
 
 %% SLF: Comment these test cases because of OTP app dependency
 %%      changes: riak_kv_vnode:test_vnode/1 now relies on riak_core to
