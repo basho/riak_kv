@@ -22,7 +22,7 @@
                   kv_index_tictactree,
                   gen_fsm_compat,
                   riak_ensemble,
-                  exometer_core,
+%%                  exometer_core,
                   hyper,
                   redbug,
                   recon
