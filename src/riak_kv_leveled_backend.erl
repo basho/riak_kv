@@ -136,6 +136,7 @@ start(Partition, Config) ->
                     {true, true} ->
                         {ok, recalc};
                     {true, false} ->
+                        ok = filelib:ensure_dir(FN),
                         ok = file:write_file(FN, term_to_binary(os:timestamp())),
                         {ok, recalc};
                     {false, true} ->
