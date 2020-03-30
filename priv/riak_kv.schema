@@ -1117,3 +1117,22 @@
     {commented, 24}
 ]}.
 
+%% @doc Enable the `recalc` compaction strategy within the leveled backend in
+%% riak.  The default (when disabled) is `retain`, but this will leave
+%% uncollected garbage within the, journal. 
+%% It is now recommended from Riak KV 2.9.2 to consider the `recalc` strategy.
+%% This strategy has a side effect of slower startups, and slower recovery
+%% from a wiped ledger - but it will not keep an overhead of garbage within
+%% the Journal.
+%% It should be possible to move from `retain` to `recalc` via configuration
+%% change.  However, it is not possible to switch from `recalc` back to
+%% `retain`.  This switch can only be made for new nodes receiving data
+%% through riak transfers (not inheriting data on disk).
+%% The default `retain` strategy retains a history of key changes in the
+%% journal, whereas the `recalc` strategy discards that history, but will redo
+%% a diff_index_specs calculation when reloading each object.
+{mapping, "leveled_reload_recalc", "riak_kv.leveled_reload_recalc", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
