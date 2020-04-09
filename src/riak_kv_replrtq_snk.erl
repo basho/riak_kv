@@ -363,7 +363,7 @@ handle_cast({done_work, WorkItem, Success, ReplyTuple}, State) ->
                     requeue_work(WorkItem);
                 W ->
                     prompt_work(),
-                    erlang:send_after(random:uniform(W),
+                    erlang:send_after(rand:uniform(W),
                                         self(),
                                         {prompt_requeue, WorkItem})
             end,

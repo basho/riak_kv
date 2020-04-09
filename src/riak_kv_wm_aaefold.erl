@@ -419,7 +419,7 @@ malformed_find_tombs_request(RD, Ctx) ->
                        riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
                       ),
             Ctx2 = Ctx#ctx{bucket=Bucket},
-            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
             case validate_range_filter(Filter0) of
                 {invalid, Reason} ->
                     malformed_response("Invalid range filter ~p",
@@ -449,7 +449,7 @@ malformed_reap_tombs_request(RD, Ctx) ->
                        riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
                       ),
             Ctx2 = Ctx#ctx{bucket=Bucket},
-            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
             case validate_range_filter(Filter0) of
                 {invalid, Reason} ->
                     malformed_response("Invalid range filter ~p",
@@ -480,7 +480,7 @@ malformed_erase_keys_request(RD, Ctx) ->
                        riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)
                       ),
             Ctx2 = Ctx#ctx{bucket=Bucket},
-            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
             case validate_range_filter(Filter0) of
                 {invalid, Reason} ->
                     malformed_response("Invalid range filter ~p",
@@ -519,7 +519,7 @@ malformed_range_repl_request(RD, Ctx) ->
                     malformed_response("Queue Name required", [], RD, Ctx);
                 QN0 ->
                     Filter0 =
-                        wrq:get_qs_value(?Q_AAEFOLD_FILTER, undefined, RD),
+                        wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
                     malformed_range_repl_request(Filter0, QN0,
                                                     RD, Ctx#ctx{bucket=Bucket})
             end

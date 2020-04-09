@@ -35,15 +35,10 @@
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
 -type value() :: term().
-
--ifdef(namespaced_types).
 -type riak_object_dict() :: dict:dict().
--else.
--type riak_object_dict() :: dict().
--endif.
 
 -record(r_content, {
-          metadata :: riak_object_dict() | list(),
+          metadata :: riak_object_dict(),
           value :: term()
          }).
 
@@ -59,7 +54,7 @@
 -record(r_object, {
           bucket :: bucket(),
           key :: key(),
-          contents :: [#r_content{}],
+          contents :: list(r_content()),
           vclock = vclock:fresh() :: vclock:vclock(),
           updatemetadata=dict:store(clean, true, dict:new()) :: riak_object_dict(),
           updatevalue :: term()
@@ -552,8 +547,9 @@ prune_object_siblings(Object, Clock, MergeAcc) ->
 %% Nuno Preguiça, Carlos Bauqero, Paulo Sérgio Almeida, Victor Fonte,
 %% and Ricardo Gonçalves. 2012
 -spec fold_contents(r_content(), merge_acc(), vclock:vclock()) -> merge_acc().
-fold_contents({r_content, Dict, Value}=C0, MergeAcc, Clock) ->
+fold_contents(C0, MergeAcc, Clock) ->
     #merge_acc{drop=Drop, keep=Keep, crdt=CRDT, error=Error} = MergeAcc,
+    #r_content{metadata = Dict, value = Value} = C0,
     case get_dot(Dict) of
         {ok, {Dot, PureDot}} ->
             case {vclock:descends_dot(Clock, Dot),
@@ -698,7 +694,8 @@ merge_acc_to_contents(Bucket, MergeAcc) ->
 %% just a {binary(), pos_integer()} pair.
 %%
 %% @see vclock:destructure_dot/1
--spec get_dot(riak_object_dict()) -> {ok, {vclock:vclock_node(), pos_integer()}} | undefined.
+-spec get_dot(riak_object_dict()) ->
+        {ok, {vclock:dot(), vclock:pure_dot()}} | undefined.
 get_dot(Dict) ->
     case dict:find(?DOT, Dict) of
         {ok, Dot} ->

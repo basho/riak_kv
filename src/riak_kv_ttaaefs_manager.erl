@@ -59,18 +59,18 @@
     % Pause between stages of the AAE exchange
 
 -record(state, {slice_allocations = [] :: list(allocation()),
-                slice_set_start :: erlang:timestamp(),
-                schedule :: schedule_wants(),
-                backup_schedule :: schedule_wants(),
-                peer_ip :: string(),
-                peer_port :: integer(),
-                peer_protocol :: http|pb,
+                slice_set_start :: erlang:timestamp()|undefined,
+                schedule :: schedule_wants()|undefined,
+                backup_schedule :: schedule_wants()|undefined,
+                peer_ip :: string() | undefined,
+                peer_port :: integer() | undefined,
+                peer_protocol = pb :: http|pb,
                 ssl_credentials :: ssl_credentials() | undefined,
                 scope :: bucket|all|disabled,
                 bucket_list :: list()|undefined,
                 local_nval :: pos_integer()|undefined,
                 remote_nval :: pos_integer()|undefined,
-                queue_name :: riak_kv_replrtq_src:queue_name(),
+                queue_name :: riak_kv_replrtq_src:queue_name() | undefined,
                 slot_info_fun :: fun(),
                 slice_count = ?SLICE_COUNT :: pos_integer(),
                 is_paused = false :: boolean()
@@ -160,42 +160,9 @@ set_bucketsync(BucketList) ->
 %%%============================================================================
 
 init([]) ->
-    State0 = #state{},
     % Get basic coniguration of scope (either all keys for each n_val, or a
     % specific list of buckets)
     Scope = app_helper:get_env(riak_kv, ttaaefs_scope, disabled),
-
-    State1 = 
-        case Scope of
-            all ->
-                LocalNVal = app_helper:get_env(riak_kv, ttaaefs_localnval),
-                RemoteNVal = app_helper:get_env(riak_kv, ttaaefs_remotenval),
-                State0#state{scope=all,
-                                local_nval = LocalNVal,
-                                remote_nval = RemoteNVal};
-            bucket ->
-                B = app_helper:get_env(riak_kv, ttaaefs_bucketfilter_name),
-                T = app_helper:get_env(riak_kv, ttaaefs_bucketfilter_type),
-                B0 =
-                    case is_binary(B) of 
-                        true ->
-                            B;
-                        false ->
-                            list_to_binary(B)
-                    end,
-                BucketT =
-                    case T of
-                        "default" ->
-                            B0;
-                        T when is_binary(T) ->
-                            {T, B0};
-                        _ ->
-                            {list_to_binary(T), B0}
-                    end,
-                State0#state{scope=bucket, bucket_list=[BucketT]};
-            disabled ->
-                State0#state{scope = disabled}
-        end,
     NoCheck = app_helper:get_env(riak_kv, ttaaefs_nocheck),
     AllCheck = app_helper:get_env(riak_kv, ttaaefs_allcheck),
     HourCheck = app_helper:get_env(riak_kv, ttaaefs_hourcheck),
@@ -216,9 +183,49 @@ init([]) ->
                         {day_sync, 0}, {hour_sync, 0}]}
                     % No sync once an hour if disabled
         end,
-    State2 = State1#state{schedule = Schedule,
-                            slice_count = SliceCount,
-                            slot_info_fun = fun get_slotinfo/0},
+
+    State1 = 
+        case Scope of
+            all ->
+                LocalNVal = app_helper:get_env(riak_kv, ttaaefs_localnval),
+                RemoteNVal = app_helper:get_env(riak_kv, ttaaefs_remotenval),
+                #state{scope=all,
+                        local_nval = LocalNVal,
+                        remote_nval = RemoteNVal,
+                        schedule = Schedule,
+                        slice_count = SliceCount,
+                        slot_info_fun = fun get_slotinfo/0};
+            bucket ->
+                B = app_helper:get_env(riak_kv, ttaaefs_bucketfilter_name),
+                T = app_helper:get_env(riak_kv, ttaaefs_bucketfilter_type),
+                B0 =
+                    case is_binary(B) of 
+                        true ->
+                            B;
+                        false ->
+                            list_to_binary(B)
+                    end,
+                BucketT =
+                    case T of
+                        "default" ->
+                            B0;
+                        T when is_binary(T) ->
+                            {T, B0};
+                        _ ->
+                            {list_to_binary(T), B0}
+                    end,
+                #state{scope=bucket,
+                        bucket_list=[BucketT],
+                        schedule = Schedule,
+                        slice_count = SliceCount,
+                        slot_info_fun = fun get_slotinfo/0};
+            disabled ->
+                #state{scope = disabled,
+                        schedule = Schedule,
+                        slice_count = SliceCount,
+                        slot_info_fun = fun get_slotinfo/0}
+        end,
+    
     
     % Fetch connectivity information for remote cluster
     PeerIP = app_helper:get_env(riak_kv, ttaaefs_peerip),
@@ -251,15 +258,15 @@ init([]) ->
     % Queue name to be used for AAE exchanges on this cluster
     SrcQueueName = app_helper:get_env(riak_kv, ttaaefs_queuename),
 
-    State3 = 
-        State2#state{peer_ip = PeerIP,
+    State2 = 
+        State1#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = PeerProtocol,
                         ssl_credentials = SSLCredentials,
                         queue_name = SrcQueueName},
     
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
-    {ok, State3, ?INITIAL_TIMEOUT}.
+    {ok, State2, ?INITIAL_TIMEOUT}.
 
 handle_call(pause, _From, State) ->
     case State#state.is_paused of
@@ -753,7 +760,7 @@ decode_clock(EncodedClock) ->
 %% more items queue, start a new queue based on the wants for the schedule.
 -spec take_next_workitem(list(allocation()), 
                             schedule_wants(),
-                            erlang:timestamp(),
+                            erlang:timestamp()|undefined,
                             node_info(),
                             pos_integer()) ->
                                 {work_item(), pos_integer(),
@@ -813,25 +820,25 @@ choose_schedule([], Allocations, {0, 0, 0, 0}) ->
     lists:ukeysort(1, Allocations);
 choose_schedule(Slices, Allocations, {NoSync, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
-        lists:split(random:uniform(length(Slices)) - 1, Slices),
+        lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, no_sync}|Allocations],
                     {NoSync - 1, 0, 0, 0});
 choose_schedule(Slices, Allocations, {NoSync, AllSync, 0, 0}) ->
     {HL, [Allocation|TL]} =
-        lists:split(random:uniform(length(Slices)) - 1, Slices),
+        lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, all_sync}|Allocations],
                     {NoSync, AllSync - 1, 0, 0});
 choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, 0}) ->
     {HL, [Allocation|TL]} =
-        lists:split(random:uniform(length(Slices)) - 1, Slices),
+        lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, day_sync}|Allocations],
                     {NoSync, AllSync, DaySync - 1, 0});
 choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, HourSync}) ->
     {HL, [Allocation|TL]} =
-        lists:split(random:uniform(length(Slices)) - 1, Slices),
+        lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, hour_sync}|Allocations],
                     {NoSync, AllSync, DaySync, HourSync - 1}).
