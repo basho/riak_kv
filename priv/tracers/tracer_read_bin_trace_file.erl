@@ -23,6 +23,8 @@
 -compile(nowarn_export_all).
 -compile(export_all).
 
+-include("../../src/stacktrace.hrl").
+
 read(Path) ->
     read(Path, 1).
 
@@ -55,8 +57,8 @@ read({ok, <<Size:40>>}, FH, LatencyMS, Hist) ->
             catch
                 error:{badmatch,false} ->
                     read(file:read(FH, 5), FH, LatencyMS, Hist);
-                X:Y ->
-                    io:format("ERR ~p ~p @ ~p\n", [X, Y, erlang:get_stacktrace()]),
+                ?_exception_(X, Y, StackToken) ->
+                    io:format("ERR ~p ~p @ ~p\n", [X, Y, ?_get_stacktrace_(StackToken)]),
                     read(file:read(FH, 5), FH, LatencyMS, Hist)
             end
     end.
