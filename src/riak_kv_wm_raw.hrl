@@ -77,3 +77,5 @@
 -define(Q_MF_MAPFOLDMOD, "mapfoldmod").
 -define(Q_MF_MAPFOLDOPTS, "mapfoldoptions").
 -define(Q_AAEFOLD_FILTER, "filter").
+-define(Q_OBJECT_FORMAT, "object_format").
+-define(Q_NVAL, "nval").

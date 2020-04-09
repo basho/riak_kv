@@ -69,14 +69,16 @@
                 req,       % current request (for multi-message requests like list keys)
                 req_ctx,   % context to go along with request (partial results, request ids etc)
                 is_consistent = false :: boolean(),
-                client_id = <<0,0,0,0>> }). % emulate legacy API when vnode_vclocks is true
+                client_id = <<0,0,0,0>>, % emulate legacy API when vnode_vclocks is true
+                repl_compress = false :: boolean()}).
 
 %% @doc init/0 callback. Returns the service internal start
 %% state.
 -spec init() -> any().
 init() ->
     {ok, C} = riak:local_client(),
-    #state{client=C}.
+    ToCompress = app_helper:get_env(riak_kv, replrtq_compressonwire, false),
+    #state{client=C, repl_compress = ToCompress}.
 
 %% @doc decode/2 callback. Decodes an incoming message.
 decode(Code, Bin) ->
@@ -123,11 +125,13 @@ process(#rpbgetreq{key = <<>>}, State) ->
     {error, "Key cannot be zero-length", State};
 process(#rpbgetreq{type = <<>>}, State) ->
     {error, "Type cannot be zero-length", State};
-process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
-                   basic_quorum=BQ, if_modified=VClock,
-                   head=Head, deletedvclock=DeletedVClock,
-                   n_val=N_val, sloppy_quorum=SloppyQuorum,
-                   timeout=Timeout}, #state{client=C} = State) ->
+process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
+                    notfound_ok=NFOk, node_confirms=NC,
+                    basic_quorum=BQ, if_modified=VClock,
+                    head=Head, deletedvclock=DeletedVClock,
+                    n_val=N_val, sloppy_quorum=SloppyQuorum,
+                    timeout=Timeout},
+            #state{client=C} = State) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     B = maybe_bucket_type(T, B0),
@@ -136,6 +140,7 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
                    make_option(pr, PR) ++
                    make_option(timeout, Timeout) ++
                    make_option(notfound_ok, NFOk) ++
+                   make_option(node_confirms, NC) ++
                    make_option(basic_quorum, BQ) ++
                    make_option(n_val, N_val) ++
                    make_option(sloppy_quorum, SloppyQuorum)) of
@@ -167,6 +172,41 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0, notfound_ok=NFOk,
             {reply, #rpbgetresp{}, State};
         {error, Reason} ->
             {error, {format,Reason}, State}
+    end;
+
+process(#rpbfetchreq{queuename = QueueName},
+        #state{client=C, repl_compress=ToCompress} = State) ->
+    Result = 
+        try
+            C:fetch(binary_to_existing_atom(QueueName, utf8))
+        catch _:badarg ->
+            {error, queue_not_defined}
+        end,
+    case Result of
+        {ok, queue_empty} ->
+            {reply, #rpbfetchresp{queue_empty = true}, State};
+        {ok, {deleted, Vclock, RObj}} ->
+            % Never bother compressing tombstones, they're practically empty
+            EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, false),
+            CRC32 = erlang:crc32(EncObj),
+            {reply,
+                #rpbfetchresp{queue_empty = false,
+                                deleted = true,
+                                replencoded_object = EncObj,
+                                crc_check = CRC32,
+                                deleted_vclock = pbify_rpbvc(Vclock)},
+                State};
+        {ok, RObj} ->
+            EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, ToCompress),
+            CRC32 = erlang:crc32(EncObj),
+            {reply,
+                #rpbfetchresp{queue_empty = false,
+                                deleted = false,
+                                replencoded_object = EncObj,
+                                crc_check = CRC32},
+                State};
+        {error, Reason} ->
+            {error, {format, Reason}, State}
     end;
 
 process(#rpbputreq{bucket = <<>>}, State) ->

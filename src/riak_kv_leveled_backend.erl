@@ -127,10 +127,32 @@ start(Partition, Config) ->
     PCL = app_helper:get_prop_or_env(ledger_pagecachelevel, Config, leveled),
 
     BackendPause = app_helper:get_env(riak_kv, backend_pause_ms, ?PAUSE_TIME),
+    LCR = app_helper:get_env(riak_kv, leveled_reload_recalc, false),
 
     case get_data_dir(DataRoot, integer_to_list(Partition)) of
         {ok, DataDir} ->
             DBid = generate_partition_identity(Partition),
+            FN = filename:join(DataDir, "recalc.lock"),
+            {ok, ReloadStrategy} = 
+                case {LCR, filelib:is_file(FN)} of
+                    {true, true} ->
+                        {ok, recalc};
+                    {true, false} ->
+                        ok = filelib:ensure_dir(FN),
+                        ok = file:write_file(FN, term_to_binary(os:timestamp())),
+                        {ok, recalc};
+                    {false, true} ->
+                        {ok, TS} = file:read_file(FN),
+                        LockTS = calendar:now_to_datetime(binary_to_term(TS)),
+                        lager:error("Cannot start in retain mode " ++
+                                        "due to recalc being set on ~w " ++
+                                        "see FN ~s",
+                                        [LockTS, FN]),
+                        {error, invalid_compaction_change};
+                    {false, false} ->
+                        {ok, retain}
+                end,
+
             StartOpts = [{root_path, DataDir},
                             {max_journalsize, MJS},
                             {max_journalobjectcount, MJC},
@@ -146,7 +168,8 @@ start(Partition, Config) ->
                             {maxrunlength_compactionpercentage, MCP},
                             {singlefile_compactionpercentage, SCP},
                             {snapshot_timeout_short, TOS},
-                            {snapshot_timeout_long, TOL}],
+                            {snapshot_timeout_long, TOL},
+                            {reload_strategy, [{?RIAK_TAG, ReloadStrategy}]}],
             {ok, Bookie} = leveled_bookie:book_start(StartOpts),
             Ref = make_ref(),
             ValidHours = valid_hours(CLH, CTH),

@@ -100,13 +100,17 @@
 -export([index_data/1, diff_index_data/2]).
 -export([index_specs/1, diff_index_specs/2]).
 -export([to_binary/2, from_binary/3, to_binary_version/4, binary_version/1]).
--export([summary_from_binary/1]).
+-export([nextgenrepl_encode/3, nextgenrepl_decode/1]).
+-export([summary_from_binary/1, aae_from_object_binary/1,
+            get_metadata_from_aae_binary/1, aae_fold_metabin/2,
+            is_aae_object_deleted/2]).
 -export([set_contents/2, set_vclock/2]). %% INTERNAL, only for riak_*
 -export([is_robject/1, is_head/1]).
 -export([update_last_modified/1, update_last_modified/2, get_last_modified/1]).
 -export([strict_descendant/2, new_actor_epoch/2]).
 -export([find_bestobject/1]).
 -export([spoof_getdeletedobject/1]).
+-export([delete_hash/1]).
 
 -ifdef(TEST).
 -export([convert_object_to_headonly/3]). % Used in unit testing of get_core
@@ -1185,6 +1189,53 @@ to_binary_version(Vsn, _B, _K, Obj = #r_object{}) ->
 binary_version(<<131,_/binary>>) -> v0;
 binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 
+%% @doc Encode for nextgen_repl
+-spec nextgenrepl_encode(repl_v1, riak_object(), boolean()) -> binary().
+nextgenrepl_encode(repl_v1, RObj, ToCompress) ->
+    B = riak_object:bucket(RObj),
+    K = riak_object:key(RObj),
+    KS = byte_size(K),
+    ObjBK =
+        case B of
+            {T, B0} ->
+                TS = byte_size(T),
+                B0S = byte_size(B0),
+                <<TS:32/integer, T/binary, B0S:32/integer, B0/binary,
+                    KS:32/integer, K/binary>>;
+            B0 ->
+                B0S = byte_size(B0),
+                <<0:32/integer, B0S:32/integer, B0/binary,
+                    KS:32/integer, K/binary>>
+        end,
+    {Version, ObjBin} =
+        case ToCompress of
+            true ->
+                {<<1:4/integer, 1:1/integer, 0:3/integer>>,
+                    zlib:compress(riak_object:to_binary(v1, RObj))};
+            false ->
+                {<<1:4/integer, 0:1/integer, 0:3/integer>>,
+                    riak_object:to_binary(v1, RObj)}
+        end,
+    <<Version/binary, ObjBK/binary, ObjBin/binary>>.
+
+%% @doc Deocde for nextgen_repl
+-spec nextgenrepl_decode(binary()) -> riak_object().
+nextgenrepl_decode(<<1:4/integer, C:1/integer, _:3/integer,
+                        0:32/integer, BL:32/integer, B:BL/binary,
+                        KL:32/integer, K:KL/binary,
+                        ObjBin/binary>>) ->
+    nextgenrepl_decode(B, K, C == 1, ObjBin);
+nextgenrepl_decode(<<1:4/integer, C:1/integer, _:3/integer,
+                        TL:32/integer, T:TL/binary, BL:32/integer, B:BL/binary,
+                        KL:32/integer, K:KL/binary,
+                        ObjBin/binary>>) ->
+    nextgenrepl_decode({T, B}, K, C == 1, ObjBin).
+
+nextgenrepl_decode(B, K, true, ObjBin) ->
+    nextgenrepl_decode(B, K, false, zlib:uncompress(ObjBin));
+nextgenrepl_decode(B, K, false, ObjBin) ->
+    riak_object:from_binary(B, K, ObjBin).
+
 %% @doc Convert binary object to riak object
 -spec from_binary(bucket(),key(),binary()) ->
     riak_object() | {error, 'bad_object_format'} | proxy_object().
@@ -1229,11 +1280,10 @@ summary_from_binary(<<131, _Rest/binary>>=ObjBin) ->
     end;
 summary_from_binary(ObjBin) when is_binary(ObjBin) ->
     summary_from_binary(ObjBin, byte_size(ObjBin));
-summary_from_binary(Obj = #r_object{}) ->
+summary_from_binary(Object = #r_object{}) ->
     % Unexpected scenario but included for parity with from_binary
     % Calculating object size is expensive (relatively to other branches)
-    {vclock(Obj), byte_size(to_binary(v1, Obj)), value_count(Obj),
-        undefined, <<>>}.
+    summary_from_binary(to_binary(v1, Object)).
 
 
 -spec summary_from_binary(binary(), integer()) ->
@@ -1257,6 +1307,24 @@ summary_from_binary(ObjBin, ObjSize) ->
         end,
     {binary_to_term(VclockBin), ObjSize, SibCount, LastMods, SibBin}.
 
+%% @doc
+%% Function used to split objects in parallel AAE store
+-spec aae_from_object_binary(boolean()) ->
+        fun((binary()) -> 
+            {integer(), integer(), integer(),
+                list(erlang:timestamp()), binary()}).
+aae_from_object_binary(true) ->
+    fun(ObjBin) ->
+        {_Clock, Size, SibCount, LastMods, SibsBin} =
+            summary_from_binary(ObjBin),
+        {Size, SibCount, 0, LastMods, SibsBin}
+    end;
+aae_from_object_binary(false) ->
+    fun(ObjBin) ->
+        {_Clock, Size, SibCount, LastMods, _SibsBin} =
+            summary_from_binary(ObjBin),
+        {Size, SibCount, 0, LastMods, term_to_binary(null)}
+    end.
 
 
 -spec get_metadata_from_siblings(binary(), integer(),
@@ -1278,6 +1346,82 @@ get_metadata_from_siblings(<<ValLen:32/integer, Rest0/binary>>,
                                 SibCount - 1,
                                 [LastMod|LastMods],
                                 [SibMetaData|SibMDList]).
+
+%% @doc Where sibs_of_binary has been used to create a value-free binary of
+%% an object - reverse it here.
+-spec get_metadata_from_aae_binary(binary()) -> list().
+get_metadata_from_aae_binary(SiblingBinary) ->
+    case binary_to_term(SiblingBinary) of
+        null ->
+            [];
+        ContentList ->
+            lists:map(fun(S) -> S#r_content.metadata end, ContentList)
+    end.
+
+%% @doc
+%% AAE folds need to cope with metadata being returned in native form, only
+%% with and empty value - but also as stored in parallel mode using
+%% get_metadata_from_siblngs
+-spec aae_fold_metabin(binary(), list()) -> list().
+aae_fold_metabin(<<>>, SibMDAcc) ->
+    SibMDAcc;
+aae_fold_metabin(<<0:32/integer, Rest/binary>>, SibMDAcc) ->
+    %% Native mode
+    {SibMetaData, _LastMod, OtherSibs} =
+        sib_of_binary(<<0:32/integer, Rest/binary>>),
+    aae_fold_metabin(OtherSibs, [SibMetaData#r_content.metadata|SibMDAcc]);
+aae_fold_metabin(Bin, _SibMDAcc) ->
+    %% Parallel mode
+    get_metadata_from_aae_binary(Bin).
+
+%% @doc
+%% Given the MD result of an AAE Fold - determine if the object is a Riak
+%% tombstone.  The MD result is subtly different for parallel and native mode
+%% and this is handle within aae_fold_metabin.
+%% Second argument is a boolean to indicate if the applictaion is interested
+%% in processing the metadata after determining the tombstone status - if true
+%% the de-serialised metadata list is returned along with the deleted status.
+-spec is_aae_object_deleted(binary()|list(), boolean()) ->
+                                                {boolean(), list()|undefined}.
+is_aae_object_deleted(<<0:32, _Rest/binary>> = MetaBin, false) ->
+    {is_binary_deleted(MetaBin, true), undefined};
+is_aae_object_deleted(MetaBin, ReturnMD) when is_binary(MetaBin) ->
+    is_aae_object_deleted(aae_fold_metabin(MetaBin, []), ReturnMD);
+is_aae_object_deleted([], ReturnMD) ->
+    case ReturnMD of
+        true ->
+            {false, []};
+        false ->
+            {false, undefined}
+    end;
+is_aae_object_deleted(MDs, ReturnMD) ->
+    PredFun = 
+        fun(M) ->
+            dict:is_key(<<"X-Riak-Deleted">>, M)
+        end,
+    IsDeleted = lists:all(PredFun, MDs),
+    case ReturnMD of
+        true ->
+            {IsDeleted, MDs};
+        false ->
+            {IsDeleted, undefined}
+    end.
+
+%% @doc
+%% In the case that the binary is the native objetc binayr format - can find
+%% if it is deleted by pattern matching the binary, there is no need to process
+%% all the metadata
+-spec is_binary_deleted(binary(), boolean()) -> boolean().
+is_binary_deleted(<<>>, IsDeleted) ->
+    IsDeleted;
+is_binary_deleted(<<ValLen:32/integer, _ValBin:ValLen/binary,
+                    MetaLen:32/integer, MetaBin:MetaLen/binary,
+                    Rest/binary>>, true) ->
+    <<_LMD:12/binary, VTagLen:8/integer, _VTag:VTagLen/binary,
+        Deleted:1/binary-unit:8, _MetaRestBin/binary>> = MetaBin,
+    is_binary_deleted(Rest, Deleted == <<1>>);
+is_binary_deleted(_SibBin, false) ->
+    false.
 
 
 sibs_of_binary(Count,SibsBin) ->
@@ -1514,6 +1658,25 @@ decode_vclock(Method, VClock) ->
                        throw(bad_vclock_encoding_method)
     end.
 
+%% @doc Need to hash the object, so that when a final_delete is processed
+%% it can be compared against the current object state to ensure that the
+%% deletion is not of an updated object
+-spec delete_hash(riak_object()|vclock:vclock()) -> non_neg_integer().
+delete_hash(ObjOrClock) ->
+    %% This could be the same as vclock_hash, but kept different should the
+    %% two hashes need to diverge in the future.  Extra collision protection
+    %% from using 2^32 range as with previous riak_kv_vnode:delete_hash/1, but
+    %% this should not be necessary given addition of is_x_deleted check before
+    %% comparison (and changes to vector clocks e.g. addition of epochs) since
+    %% delete_hash/1 was introduced.
+    case is_robject(ObjOrClock) of
+        false ->
+            erlang:phash2(lists:sort(ObjOrClock), 4294967296);
+        _ ->
+            delete_hash(vclock(ObjOrClock))
+    end.
+
+
 -ifdef(TEST).
 
 object_test() ->
@@ -1749,23 +1912,24 @@ bucket_prop_needers_test_() ->
              meck:unload(riak_core_bucket)
      end,
      [{"Ancestor", fun ancestor/0},
-      {"Ancestor Weird Clocks", fun ancestor_weird_clocks/0},
-      {"Reconcile", fun reconcile/0},
-      {"Merge 1", fun merge1/0},
-      {"Merge 2", fun merge2/0},
-      {"Merge 3", fun merge3/0},
-      {"Merge 4", fun merge4/0},
-      {"Merge 5", fun merge5/0},
-      {"Inequality", fun inequality1/0},
-      {"Inequality Vclock", fun inequality_vclock/0},
-      {"Date Reconcile", fun date_reconcile/0},
-      {"Dotted values reconcile", fun dotted_values_reconcile/0},
-      {"Weird Clocks, Weird Dots", fun weird_clocks_weird_dots/0},
-      {"Mixed Merge", fun mixed_merge/0},
-      {"Mixed Merge 2", fun mixed_merge2/0},
+        {"Ancestor Weird Clocks", fun ancestor_weird_clocks/0},
+        {"Reconcile", fun reconcile/0},
+        {"Merge 1", fun merge1/0},
+        {"Merge 2", fun merge2/0},
+        {"Merge 3", fun merge3/0},
+        {"Merge 4", fun merge4/0},
+        {"Merge 5", fun merge5/0},
+        {"Inequality", fun inequality1/0},
+        {"Inequality Vclock", fun inequality_vclock/0},
+        {"Date Reconcile", fun date_reconcile/0},
+        {"Dotted values reconcile", fun dotted_values_reconcile/0},
+        {"Weird Clocks, Weird Dots", fun weird_clocks_weird_dots/0},
+        {"Mixed Merge", fun mixed_merge/0},
+        {"Mixed Merge 2", fun mixed_merge2/0},
         {"Find Object Ancestor", fun find_bestobject_ancestor/0},
         {"Find Object Reconcile", fun find_bestobject_reconcile/0},
-        {"Test Summary Bin Extract", fun summary_binary_extract/0}]
+        {"Test Summary Bin Extract", fun summary_binary_extract/0},
+        {"Next Gen Repl Encode/Decode", fun nextgenrepl/0}]
     }.
 
 ancestor() ->
@@ -2073,6 +2237,19 @@ mixed_merge2() ->
     ?assertEqual(3, riak_object:value_count(AZ4)),
     ?assert(equal(AZ3, AZ4)).
 
+nextgenrepl() ->
+    {B, K} = {<<"b">>, <<"k">>},
+    A_VC = vclock:fresh(a, 3),
+    Z_VC = vclock:fresh(b, 2),
+    A = riak_object:set_vclock(riak_object:new(B, K, <<"a">>), A_VC),
+    C = riak_object:increment_vclock(riak_object:new(B, K, <<"c">>), c),
+    Z = riak_object:set_vclock(riak_object:new(B, K, <<"b">>), Z_VC),
+    ACZ = riak_object:reconcile([A, C, Z], true),
+    ACZ0 = nextgenrepl_decode(nextgenrepl_encode(repl_v1, ACZ, false)),
+    ACZ0 = nextgenrepl_decode(nextgenrepl_encode(repl_v1, ACZ, true)),
+    ?assertEqual(ACZ0, ACZ).
+
+
 verify_contents([], []) ->
     ?assert(true);
 verify_contents([{MD, V} | Rest], [{{Actor, Count}, V} | Rest2]) ->
@@ -2175,13 +2352,82 @@ summary_binary_extract() ->
     B = <<"buckets are binaries">>,
     K = <<"keys are binaries">>,
     V = <<"Some Binary Data">>,
-    Object0 = riak_object:new(B, K, V),
-    Object = riak_object:increment_vclock(Object0, a),
-    Binary = to_binary(v1, Object),
-    {Clock, Size, SibCount, _LMD, _SibBin} = summary_from_binary(Binary),
+    ObjectA0 = riak_object:new(B, K, V),
+    ObjectA = riak_object:increment_vclock(ObjectA0, a),
+    Binary = to_binary(v1, ObjectA),
+    {Clock, Size, SibCount, LMD, SibBin} = summary_from_binary(Binary),
     ?assertMatch(1, SibCount),
     ?assertMatch(1, length(Clock)),
     ?assertMatch(true, Size > 0),
-    {Clock, Size, SibCount, undefined, <<>>} = summary_from_binary(Object).
+    {Clock, Size, SibCount, LMD, SibBin} = summary_from_binary(ObjectA),
+    DeletedM = dict:store(<<"X-Riak-Deleted">>, true, dict:new()),
+    ObjectB0 = riak_object:new(B, K, V, DeletedM),
+    ObjectB = riak_object:increment_vclock(ObjectB0, b),
+    {_ClockB, _SizeB, 1, _LMDB, SibBinB} = summary_from_binary(ObjectB),
+    DeletedMDLB = aae_fold_metabin(SibBinB, []),
+    ?assertMatch({true, undefined},
+                    is_aae_object_deleted(DeletedMDLB, false)),
+    ObjectC = merge(ObjectA, ObjectB),
+    {_ClockC, _SizeC, 2, _LMDC, SibBinC} = summary_from_binary(ObjectC),
+    DeletedMDLC = aae_fold_metabin(SibBinC, []),
+    ?assertMatch({false, undefined},
+                    is_aae_object_deleted(DeletedMDLC, false)),
+    ObjectD0 = riak_object:new(B, K, V, DeletedM),
+    ObjectD = riak_object:increment_vclock(ObjectD0, d),
+    ObjectE = merge(ObjectB, ObjectD),
+    {_ClockE, _SizeE, 2, _LMDE, SibBinE} = summary_from_binary(ObjectE),
+    DeletedMDLE = aae_fold_metabin(SibBinE, []),
+    ?assertMatch(true,
+                    element(1, is_aae_object_deleted(DeletedMDLE, true))),
+
+    % Should be able to see is_deleted status straight from binary
+    % although in the case of parallel this will convert
+    ?assertMatch(true, element(1, is_aae_object_deleted(SibBinB, true))),
+    ?assertMatch(false, element(1, is_aae_object_deleted(SibBinC, true))),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(SibBinE, false)),
+    
+    ObjBinA = trim_value_frombinary(to_binary(v1, ObjectA)),
+    ObjBinB = trim_value_frombinary(to_binary(v1, ObjectB)),
+    ObjBinC = trim_value_frombinary(to_binary(v1, ObjectC)),
+    ObjBinD = trim_value_frombinary(to_binary(v1, ObjectD)),
+    ObjBinE = trim_value_frombinary(to_binary(v1, ObjectE)),
+    
+    % Prove that we cna extract metadata - and see is deleted status
+    MDLA = aae_fold_metabin(ObjBinA, []),
+    MDLB = aae_fold_metabin(ObjBinB, []),
+    MDLC = aae_fold_metabin(ObjBinC, []),
+    MDLD = aae_fold_metabin(ObjBinD, []),
+    MDLE = aae_fold_metabin(ObjBinE, []),
+    ?assertMatch({false, undefined}, is_aae_object_deleted(MDLA, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(MDLB, false)),
+    ?assertMatch({false, undefined}, is_aae_object_deleted(MDLC, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(MDLD, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(MDLE, false)),
+    
+    % Should be able to see is_deleted status straight from binary
+    ?assertMatch({false, undefined}, is_aae_object_deleted(ObjBinA, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(ObjBinB, false)),
+    ?assertMatch({false, undefined}, is_aae_object_deleted(ObjBinC, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(ObjBinD, false)),
+    ?assertMatch({true, undefined}, is_aae_object_deleted(ObjBinE, false)),
+    ?assertMatch(false, element(1, is_aae_object_deleted(ObjBinA, true))),
+    ?assertMatch(true, element(1, is_aae_object_deleted(ObjBinB, true))),
+    ?assertMatch(false, element(1, is_aae_object_deleted(ObjBinC, true))),
+    ?assertMatch(true, element(1, is_aae_object_deleted(ObjBinD, true))),
+    ?assertMatch(true, element(1, is_aae_object_deleted(ObjBinE, true))).
+
+
+trim_value_frombinary(<<?MAGIC:8/integer, 1:8/integer,
+                        VclockLen:32/integer, _VclockBin:VclockLen/binary,
+                        _SibCount:32/integer, SibsBin/binary>>) ->
+    trim_values(SibsBin, <<>>).
+
+trim_values(<<>>, AccBin) ->
+    AccBin;
+trim_values(<<ValueLen:32/integer, _ValueBin:ValueLen/binary,
+            MetaLen:32/integer, MetaBin:MetaLen/binary, Rest/binary>>, AccBin) ->
+    trim_values(Rest,
+                <<AccBin/binary,
+                    0:32/integer, MetaLen:32/integer, MetaBin/binary>>).
 
 -endif.
