@@ -783,7 +783,7 @@ take_next_workitem([NextAlloc|T], Wants,
                         ScheduleStartTime, SlotInfo, SliceCount) ->
     {NodeNumber, NodeCount} = SlotInfo,
     SliceSeconds = ?SECONDS_IN_DAY div SliceCount,
-    SlotSeconds = (NodeNumber - 1) * (SliceSeconds div NodeCount),
+    SlotSeconds = (NodeNumber - 1) * (SliceSeconds div max(NodeCount, 1)),
     {SliceNumber, NextAction} = NextAlloc,
     {Mega, Sec, _Micro} = ScheduleStartTime,
     ScheduleSeconds = 
