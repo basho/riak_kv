@@ -123,7 +123,7 @@ maybe_stream_list_keys(#rpblistkeysreq{type = Type, bucket = B, timeout = T} = R
     case check_bucket_type(Type) of
         {ok, GoodType} ->
             Bucket = maybe_create_bucket_type(GoodType, B),
-            {ok, ReqId} = Client:stream_list_keys(Bucket, T),
+            {ok, ReqId} = riak_client:stream_list_keys(Bucket, T, Client),
             {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
         error ->
             error_no_bucket_type(Type, State)
@@ -191,10 +191,10 @@ process_stream({ReqId, Error}, ReqId,
                              {reply, tuple(), #state{}} |
                              {error, {format, iodata()}, #state{}}.
 do_list_buckets(Type, Timeout, true, Req, #state{client=C}=State) ->
-    {ok, ReqId} = C:stream_list_buckets(none, Timeout, Type),
+    {ok, ReqId} = riak_client:stream_list_buckets(none, Timeout, Type, C),
     {reply, {stream, ReqId}, State#state{req = Req, req_ctx = ReqId}};
 do_list_buckets(Type, Timeout, _Stream, _Req, #state{client=C}=State) ->
-    case C:list_buckets(none, Timeout, Type) of
+    case riak_client:list_buckets(none, Timeout, Type, C) of
         {ok, Buckets} ->
             {reply, #rpblistbucketsresp{buckets = Buckets}, State};
         {error, Reason} ->
