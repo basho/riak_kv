@@ -242,10 +242,11 @@ produce_bucket_body(RD, #ctx{client=Client,
     case wrq:get_qs_value(?Q_KEYS, RD) of
         ?Q_STREAM ->
             %% Start streaming the keys...
-            F = fun() ->
-                        {ok, ReqId} = Client:stream_list_keys(Bucket,
-                                                              Timeout),
-                        stream_keys(ReqId)
+            F = 
+                fun() ->
+                    {ok, ReqId} =
+                        riak_client:stream_list_keys(Bucket, Timeout, Client),
+                    stream_keys(ReqId)
                 end,
 
             %% For API Version 1, send back the BucketPropsJson first
@@ -262,7 +263,7 @@ produce_bucket_body(RD, #ctx{client=Client,
 
         ?Q_TRUE ->
             %% Get the JSON response...
-            case Client:list_keys(Bucket, Timeout) of
+            case riak_client:list_keys(Bucket, Timeout, Client) of
                 {ok, KeyList} ->
                     JsonKeys = mochijson2:encode({struct, BucketPropsJson ++
                                                       [{?Q_KEYS, KeyList}]}),

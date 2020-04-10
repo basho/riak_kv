@@ -103,7 +103,10 @@ content_types_provided(RD, Ctx) ->
 produce_queue_fetch(RD, Ctx) ->
     Client = Ctx#ctx.client,
     QueueName = Ctx#ctx.queuename,
-    format_response(Ctx#ctx.object_format, Client:fetch(QueueName), RD, Ctx).
+    format_response(Ctx#ctx.object_format,
+                        riak_client:fetch(QueueName, Client),
+                        RD,
+                        Ctx).
     
 format_response(internal, {ok, queue_empty}, RD, Ctx) ->
     {<<0:8/integer>>, RD, Ctx};
@@ -124,10 +127,7 @@ format_response(internal, {ok, RObj}, RD, Ctx) ->
         ObjBin/binary>>, RD, Ctx};
 format_response(internal, {error, Reason}, RD, Ctx) ->
     lager:warning("Fetch error ~w", [Reason]),
-    {{error, Reason}, RD, Ctx};
-format_response(internal, UnexpectedResponse, RD, Ctx) ->
-    lager:warning("Fetch unexpected ~w", [UnexpectedResponse]),
-    {{error, unexpected}, RD, Ctx}.
+    {{error, Reason}, RD, Ctx}.
 
 encode_riakobject(RObj) ->
     ToCompress = app_helper:get_env(riak_kv, replrtq_compressonwire, false),

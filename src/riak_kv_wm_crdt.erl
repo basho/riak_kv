@@ -362,8 +362,8 @@ resource_exists(RD, Ctx=#ctx{key=undefined}) ->
     %% found.
     handle_common_error(notfound, RD, Ctx);
 resource_exists(RD, Ctx=#ctx{client=C, bucket_type=T, bucket=B, key=K, module=Mod}) ->
-    Options = make_options(Ctx),
-    case C:get({T,B}, K, [{crdt_op, Mod}|Options]) of
+    Options = [{crdt_op, Mod}|make_options(Ctx)],
+    case riak_client:get({T, B}, K, Options, C) of
         {ok, O} ->
             {true, RD, Ctx#ctx{data=O}};
         {error, Reason} ->
@@ -381,7 +381,7 @@ process_post(RD0, Ctx0=#ctx{client=C, bucket_type=T, bucket=B, module=Mod}) ->
             CrdtOp = make_operation(Mod, Op, OpCtx),
             Options = [{crdt_op, CrdtOp},
                        {retry_put_coordinator_failure,false}|Options0],
-            case C:put(O, Options) of
+            case riak_client:put(O, Options, C) of
                 ok ->
                     {true, RD, Ctx};
                 {ok, RObj} ->

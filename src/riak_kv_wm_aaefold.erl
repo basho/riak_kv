@@ -814,9 +814,8 @@ resource_exists(RD, #ctx{bucket_type=BType}=Ctx) ->
     {any(), #wm_reqdata{}, context()}.
 %% @doc Produce the JSON response to an aae fold
 produce_fold_results(RD, Ctx) ->
-    Client = Ctx#ctx.client,
     Query = Ctx#ctx.query,
-    case Client:aae_fold(Query) of
+    case riak_client:aae_fold(Query, Ctx#ctx.client) of
         {ok, Results} ->
             QueryName = element(1, Query),
             JsonResults = riak_kv_clusteraae_fsm:json_encode_results(QueryName, Results),

@@ -383,7 +383,8 @@ handle_streaming_index_query(RD, Ctx) ->
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
     Opts = riak_index:add_timeout_opt(Timeout, Opts0),
 
-    {ok, ReqID, FSMPid} =  Client:stream_get_index(Bucket, Query, Opts),
+    {ok, ReqID, FSMPid} = 
+        riak_client:stream_get_index(Bucket, Query, Opts, Client),
     StreamFun = index_stream_helper(ReqID, FSMPid, Boundary, ReturnTerms, MaxResults, proplists:get_value(timeout, Opts), undefined, 0),
     {{stream, {<<>>, StreamFun}}, CTypeRD, Ctx}.
 
@@ -477,7 +478,7 @@ handle_all_in_memory_index_query(RD, Ctx) ->
         riak_index:add_timeout_opt(Timeout, Opts0),
 
     %% Do the index lookup...
-    case Client:get_index(Bucket, Query, Opts) of
+    case riak_client:get_index(Bucket, Query, Opts, Client) of
         {ok, Results} ->
             Continuation = make_continuation(MaxResults, 
                                                 Results, 
