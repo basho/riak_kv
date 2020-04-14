@@ -25,7 +25,9 @@
                   exometer_core,
                   hyper,
                   redbug,
-                  recon
+                  recon,
+                  riakc,
+                  riakhttpc
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},

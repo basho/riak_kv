@@ -40,8 +40,6 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    catch dtrace:init(),                   % NIF load trigger (R14B04)
-    catch dyntrace:p(),                    % NIF load trigger (R15B01+)
     riak_kv_entropy_info:create_table(),
     riak_kv_hooks:create_table(),
     VMaster = {riak_kv_vnode_master,
