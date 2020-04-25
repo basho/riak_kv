@@ -215,7 +215,14 @@ monitor_remote_coordinator(false = _UseAckP, _MiddleMan, _CoordNode, StateData) 
     {stop, normal, StateData};
 monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
     receive
-        {ack, CoordNode, now_executing} ->
+        {ack, CoordNodeFinal, now_executing} ->
+            case CoordNodeFinal of
+                CoordNode ->
+                    ok;
+                _ ->
+                    lager:warning("unexpected forward-ack from ~p, expected from ~p",
+                                  [CoordNodeFinal, CoordNode])
+            end,
             {stop, normal, StateData}
     after StateData#state.coordinator_timeout ->
             exit(MiddleMan, kill),
