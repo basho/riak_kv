@@ -22,6 +22,9 @@
 -module(riak_kv_vnode).
 -behaviour(riak_core_vnode).
 
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, send_event, 2}]}).
+
 %% API
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
@@ -1230,7 +1233,7 @@ handle_command({mapexec_error_noretry, JobId, Err}, _Sender, #state{mrjobs=Jobs}
                    {ok, Job} ->
                        Jobs1 = dict:erase(JobId, Jobs),
                        #mrjob{target=Target} = Job,
-                       gen_fsm_compat:send_event(Target, {mapexec_error_noretry, self(), Err}),
+                       gen_fsm:send_event(Target, {mapexec_error_noretry, self(), Err}),
                        State#state{mrjobs=Jobs1};
                    error ->
                        State
@@ -1241,7 +1244,7 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                    {ok, Job} ->
                        Jobs1 = dict:erase(JobId, Jobs),
                        #mrjob{target=Target} = Job,
-                       gen_fsm_compat:send_event(Target, {mapexec_reply, Result, self()}),
+                       gen_fsm:send_event(Target, {mapexec_reply, Result, self()}),
                        State#state{mrjobs=Jobs1};
                    error ->
                        State

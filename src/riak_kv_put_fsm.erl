@@ -31,7 +31,11 @@
 -include("riak_kv_types.hrl").
 -include("stacktrace.hrl").
 
--behaviour(gen_fsm_compat).
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start_link, 3},
+                {gen_fsm, send_event, 2}]}).
+
+-behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
 -export([start/3,start/6,start/7]).
 -export([start_link/3,start_link/6,start_link/7]).
@@ -157,7 +161,7 @@ start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
 start(From, Object, PutOptions) ->
     Args = [From, Object, PutOptions],
     case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
-                                        gen_fsm_compat, start_link,
+                                        gen_fsm, start_link,
                                         [?MODULE, Args, []]) of
         {error, overload} ->
             riak_kv_util:overload_reply(From),
@@ -247,13 +251,13 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
 %%
 %% As test, but linked to the caller
 test_link(From, Object, PutOptions, StateProps) ->
-    gen_fsm_compat:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
 
 -endif.
 
 
 %% ====================================================================
-%% gen_fsm_compat callbacks
+%% gen_fsm callbacks
 %% ====================================================================
 
 %% @private
@@ -284,7 +288,7 @@ init([From, RObj, Options0]) ->
         _ ->
             ok
     end,
-    gen_fsm_compat:send_event(self(), timeout),
+    gen_fsm:send_event(self(), timeout),
     {ok, prepare, StateData};
 init({test, Args, StateProps}) ->
     %% Call normal init
@@ -685,10 +689,10 @@ new_state(StateName, StateData) ->
 %% Move to the new state, marking the time it started and trigger an immediate
 %% timeout.
 new_state_timeout(StateName, StateData=#state{trace = true}) ->
-    gen_fsm_compat:send_event(self(), timeout),
+    gen_fsm:send_event(self(), timeout),
     {next_state, StateName, add_timing(StateName, StateData)};
 new_state_timeout(StateName, StateData) ->
-    gen_fsm_compat:send_event(self(), timeout),
+    gen_fsm:send_event(self(), timeout),
     {next_state, StateName, StateData}.
 
 %% What to do once enough responses from vnodes have been received to reply

@@ -94,7 +94,14 @@
          code_change/4
         ]).
 
--behaviour(gen_fsm_compat).
+-behaviour(gen_fsm).
+
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start_link, 3},
+                {gen_fsm, send_event, 2},
+                {gen_fsm, sync_send_event, 2},
+                {gen_fsm, sync_send_event, 3},
+                {gen_fsm, reply, 2}]}).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -121,14 +128,14 @@ start(OwnerPid, Options) ->
     riak_kv_mrc_sink_sup:start_sink(OwnerPid, Options).
 
 start_link(OwnerPid, Options) ->
-    gen_fsm_compat:start_link(?MODULE, [OwnerPid, Options], []).
+    gen_fsm:start_link(?MODULE, [OwnerPid, Options], []).
 
 use_pipe(Sink, Pipe) ->
-    gen_fsm_compat:sync_send_event(Sink, {use_pipe, Pipe}).
+    gen_fsm:sync_send_event(Sink, {use_pipe, Pipe}).
 
 %% @doc Trigger the send of the next result/log/eoi batch received.
 next(Sink) ->
-    gen_fsm_compat:send_event(Sink, next).
+    gen_fsm:send_event(Sink, next).
 
 stop(Sink) ->
     riak_kv_mrc_sink_sup:terminate_sink(Sink).
@@ -149,7 +156,7 @@ merge_outputs(Acc) ->
     DM = fun(_K, O, A) -> O++A end,
     lists:foldl(fun(O, A) -> orddict:merge(DM, O, A) end, [], Acc).
 
-%% gen_fsm_compat exports
+%% gen_fsm exports
 
 init([OwnerPid, Options]) ->
     erlang:monitor(process, OwnerPid),
@@ -329,7 +336,7 @@ send_to_owner(#state{owner=Owner, ref=Ref,
                          results=finish_results(Results),
                          logs=lists:reverse(Logs),
                          done=Done},
-    _ = [ gen_fsm_compat:reply(From, ok) || From <- Delayed ],
+    _ = [ gen_fsm:reply(From, ok) || From <- Delayed ],
     State#state{results=[], logs=[],
                 buffer_left=Max, delayed_acks=[]}.
 
@@ -385,8 +392,8 @@ buffer_size_test_() ->
     Tests = [ {"buffer option", 5, [{buffer, 5}], []},
               {"buffer app env", 5, [], [{mrc_sink_buffer, 5}]},
               {"buffer default", ?BUFFER_SIZE_DEFAULT, [], []} ],
-    FillFuns = [ {"send_event", fun gen_fsm_compat:send_event/2},
-                 {"sync_send_event", fun gen_fsm_compat:sync_send_event/2},
+    FillFuns = [ {"send_event", fun gen_fsm:send_event/2},
+                 {"sync_send_event", fun gen_fsm:sync_send_event/2},
                  {"erlang:send", fun(S, R) -> S ! R, ok end} ],
     {foreach,
      fun() -> application:load(riak_kv) end,
@@ -415,8 +422,8 @@ buffer_size_test_helper(Name, {FillName, FillFun}, Size, Options, AppEnv) ->
               || I <- lists:seq(1, Size) ],
             
             %% ensure extra result will block
-            {'EXIT',{timeout,{gen_fsm_compat,sync_send_event,_}}} =
-                (catch gen_fsm_compat:sync_send_event(
+            {'EXIT',{timeout,{gen_fsm,sync_send_event,_}}} =
+                (catch gen_fsm:sync_send_event(
                          Sink,
                          #pipe_result{from=tester, ref=Ref, result=Size+1},
                          1000)),
