@@ -146,7 +146,7 @@ tictac(QueueName, Entries) ->
                      ({Bucket, Key, VClock, ObjRef}) ->
                           {list_to_binary(Bucket), Key, VClock, ObjRef}
                   end, Entries),
-    riak_kv_replrtq_src:replrtq_ttaefs(QueueName, ReplEntries, 0).
+    riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ReplEntries, 0).
 
 tictac_callouts(_S, [QueueName, Entries]) ->
     ?APPLY(put_prio, [2, QueueName, Entries]).

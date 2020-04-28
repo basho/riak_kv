@@ -433,10 +433,10 @@ api_spec() ->
 app_helper_spec() ->
     #api_module{ name = app_helper, fallback = ?MODULE }.
 
-get_env(riak_kv, Key, Default) ->
-    application:get_env(riak_kv, Key, Default).
+get_env(App, Key, Default) ->
+    application:get_env(App, Key, Default).
 
-get_env(riak_kv, Key) -> get_env(riak_kv, Key, undefined).
+get_env(App, Key) -> get_env(App, Key, undefined).
 
 lager_spec() ->
     #api_module{ name = lager, fallback = ?MODULE }.
