@@ -293,7 +293,7 @@ prop_repl() ->
                 %% Setup mocking, etc.
                 eqc_mocking:start_mocking(api_spec()),
                 %% Return the teardwown function
-                fun() -> ok end
+                fun() -> eqc_mocking:stop_mocking() end
         end,
     eqc:dont_print_counterexample(
     ?FORALL(Cmds, commands(?MODULE),
