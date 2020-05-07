@@ -27,8 +27,14 @@
 %% -------------------------------------------------------------------
 
 -module(fsm_eqc_vnode).
--behaviour(gen_fsm_compat).
+-behaviour(gen_fsm).
 -include("include/riak_kv_vnode.hrl").
+
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start_link, 3},
+                {gen_fsm, start_link, 4},
+                {gen_fsm, sync_send_all_state_event, 2}]}).
+
 
 -export([start_link/0, start_link/1, set_data/2, set_vput_replies/1, 
          get_history/0, get_put_history/0,
@@ -66,30 +72,30 @@ start_link() ->
     start_link(?MODULE).
 
 start_link(undefined) ->
-    gen_fsm_compat:start_link(?MODULE, [], []);
+    gen_fsm:start_link(?MODULE, [], []);
 start_link(RegName) ->
-    gen_fsm_compat:start_link({local, RegName}, ?MODULE, [], []).
+    gen_fsm:start_link({local, RegName}, ?MODULE, [], []).
 
 set_data(Objs, PartVals) ->
-    ok = gen_fsm_compat:sync_send_all_state_event(?MODULE, {set_data, Objs, PartVals}).
+    ok = gen_fsm:sync_send_all_state_event(?MODULE, {set_data, Objs, PartVals}).
 
 set_vput_replies(VPutReplies) ->
-    ok = gen_fsm_compat:sync_send_all_state_event(?MODULE, {set_vput_replies, VPutReplies}).
+    ok = gen_fsm:sync_send_all_state_event(?MODULE, {set_vput_replies, VPutReplies}).
 
 get_history() ->
-    gen_fsm_compat:sync_send_all_state_event(?MODULE, get_history).
+    gen_fsm:sync_send_all_state_event(?MODULE, get_history).
 
 get_put_history() ->
-    gen_fsm_compat:sync_send_all_state_event(?MODULE, get_put_history).
+    gen_fsm:sync_send_all_state_event(?MODULE, get_put_history).
 
 get_reply_history() ->
-    gen_fsm_compat:sync_send_all_state_event(?MODULE, get_reply_history).
+    gen_fsm:sync_send_all_state_event(?MODULE, get_reply_history).
 
 log_postcommit(Obj) ->
-    gen_fsm_compat:sync_send_all_state_event(?MODULE, {log_postcommit, Obj}).
+    gen_fsm:sync_send_all_state_event(?MODULE, {log_postcommit, Obj}).
 
 get_postcommits() ->
-    gen_fsm_compat:sync_send_all_state_event(?MODULE, get_postcommits).
+    gen_fsm:sync_send_all_state_event(?MODULE, get_postcommits).
 
 %% ====================================================================
 %% gen_fsm callbacks

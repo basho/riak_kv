@@ -136,6 +136,9 @@ raw_dispatch(Name) ->
      {["rangetrees"] ++ Prefix ++ ["buckets", bucket, "keysclocks"],
       riak_kv_wm_aaefold, Props},
 
+     {["rangerepl"] ++ Prefix ++ ["buckets", bucket, "queuename", queuename],
+      riak_kv_wm_aaefold, Props},
+
      {["siblings"] ++ Prefix ++ ["buckets", bucket, "counts", count],
       riak_kv_wm_aaefold, Props},
 
@@ -143,7 +146,25 @@ raw_dispatch(Name) ->
       riak_kv_wm_aaefold, Props},
 
      {["objectstats"] ++ Prefix ++ ["buckets", bucket],
-      riak_kv_wm_aaefold, Props}
+      riak_kv_wm_aaefold, Props},
+
+     {["tombs"] ++ Prefix ++ ["buckets", bucket],
+      riak_kv_wm_aaefold, Props},
+    
+     {["reap"] ++ Prefix ++ ["buckets", bucket],
+      riak_kv_wm_aaefold, Props},
+
+     {["erase"] ++ Prefix ++ ["buckets", bucket],
+      riak_kv_wm_aaefold, Props},
+    
+     {["aaebucketlist"],
+      riak_kv_wm_aaefold, Props},
+
+
+    %% Repl queue fetch URL
+
+    {["queuename", queuename],
+        riak_kv_wm_queue, Props}
 
     ] || {Prefix, Props} <- Props2 ]).
 

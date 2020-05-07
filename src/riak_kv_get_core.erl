@@ -20,8 +20,8 @@
 %%
 %% -------------------------------------------------------------------
 -module(riak_kv_get_core).
--export([init/8, update_init/2, head_merge/1,
-            add_result/3, update_result/4, result_shortcode/1,
+-export([init/10, update_init/2, head_merge/1,
+            add_result/4, update_result/5, result_shortcode/1,
             enough/1, response/1, has_all_results/1, final_action/1, info/1]).
 -export_type([getcore/0, result/0, reply/0, final_action/0]).
 
@@ -67,7 +67,10 @@
                   num_fail = 0 :: non_neg_integer(),
                   num_upd = 0 :: non_neg_integer(),
                   idx_type :: idx_type(),
-                  head_merge = false :: boolean()}).
+                  head_merge = false :: boolean(),
+                  expected_fetchclock = false :: boolean()|vclock:vclock(),
+                  node_confirms = 0 :: non_neg_integer(),
+                  confirmed_nodes = []}).
 -opaque getcore() :: #getcore{}.
 
 %% ====================================================================
@@ -78,17 +81,22 @@
 -spec init(N::pos_integer(), R::pos_integer(), PR::pos_integer(),
            FailThreshold::pos_integer(), NotFoundOK::boolean(),
            AllowMult::boolean(), DeletedVClock::boolean(),
-           IdxType::idx_type()) -> getcore().
-init(N, R, PR, FailThreshold, NotFoundOk, AllowMult, DeletedVClock, IdxType) ->
+           IdxType::idx_type(),
+           ExpClock::false|vclock:vclock(),
+           NodeConfirms::non_neg_integer()) -> getcore().
+init(N, R, PR, FailThreshold, NotFoundOk, AllowMult,
+        DeletedVClock, IdxType, ExpClock, NodeConfirms) ->
     #getcore{n = N,
-             r = R,
+             r = case ExpClock of false -> R; _ -> N end,
              pr = PR,
              ur = 0,
              fail_threshold = FailThreshold,
              notfound_ok = NotFoundOk,
              allow_mult = AllowMult,
              deletedvclock = DeletedVClock,
-             idx_type = IdxType}.
+             idx_type = IdxType,
+             expected_fetchclock = ExpClock,
+             node_confirms = NodeConfirms}.
 
 %% Re-initialise a get to a restricted number of vnodes (that must all respond)
 -spec update_init(N::pos_integer(), getcore()) -> getcore().
@@ -108,8 +116,23 @@ head_merge(GetCore) ->
 %% arrive is assumed to be preserved in the get core
 %% datastructure. i.e. first arriving at the end of the list, latest
 %% arrival at the head.
--spec add_result(non_neg_integer(), result(), getcore()) -> getcore().
-add_result(Idx, {ok, RObj}, GetCore) ->
+-spec add_result(non_neg_integer(), result(), node(), getcore()) -> getcore().
+add_result(Idx, {ok, RObj}, Node, GetCore0) ->
+    GetCore = 
+        case GetCore0#getcore.expected_fetchclock of
+            false ->
+                GetCore0;
+            true ->
+                GetCore0;
+            ExpectedClock ->
+                case vclock:descends(riak_object:vclock(RObj),
+                                        ExpectedClock) of
+                    true ->
+                        GetCore0#getcore{expected_fetchclock = true};
+                    false ->
+                        GetCore0
+                end
+        end,
     {Dels, Result} = 
         case riak_kv_util:is_x_deleted(RObj) of
             true ->  {1, {ok, riak_object:spoof_getdeletedobject(RObj)}};
@@ -119,21 +142,27 @@ add_result(Idx, {ok, RObj}, GetCore) ->
             results = [{Idx, Result}|GetCore#getcore.results],
             merged = undefined,
             num_ok = GetCore#getcore.num_ok + 1,
-            num_deleted = GetCore#getcore.num_deleted + Dels}, Idx);
-add_result(Idx, {error, notfound} = Result, GetCore) ->
+            num_deleted = GetCore#getcore.num_deleted + Dels,
+            confirmed_nodes =
+                lists:usort([Node|GetCore#getcore.confirmed_nodes])},
+            Idx);
+add_result(Idx, {error, notfound} = Result, Node, GetCore) ->
     case GetCore#getcore.notfound_ok of
         true ->
             num_pr(GetCore#getcore{
                     results = [{Idx, Result}|GetCore#getcore.results],
                     merged = undefined,
-                    num_ok = GetCore#getcore.num_ok + 1}, Idx);
+                    num_ok = GetCore#getcore.num_ok + 1,
+                    confirmed_nodes =
+                        lists:usort([Node|GetCore#getcore.confirmed_nodes])},
+                    Idx);
         _ ->
             GetCore#getcore{
                 results = [{Idx, Result}|GetCore#getcore.results],
                 merged = undefined,
                 num_notfound = GetCore#getcore.num_notfound + 1}
     end;
-add_result(Idx, {error, _Reason} = Result, GetCore) ->
+add_result(Idx, {error, _Reason} = Result, _Node, GetCore) ->
     GetCore#getcore{
         results = [{Idx, Result}|GetCore#getcore.results],
         merged = undefined,
@@ -146,8 +175,9 @@ add_result(Idx, {error, _Reason} = Result, GetCore) ->
 -spec update_result(non_neg_integer(),
                     result(),
                     list(),
+                    node(),
                     getcore()) -> getcore().
-update_result(Idx, Result, IdxList, GetCore) ->
+update_result(Idx, Result, IdxList, Node, GetCore) ->
     case lists:member(Idx, IdxList) of
         true ->
             % This results should always be OK
@@ -165,7 +195,7 @@ update_result(Idx, Result, IdxList, GetCore) ->
             % Add them to the result set - the result set will still be used
             % for read repair.  Will also detect if the last read was actually
             % a more upto date object
-            add_result(Idx, Result, GetCore)
+            add_result(Idx, Result, Node, GetCore)
     end.
 
 
@@ -175,30 +205,53 @@ result_shortcode(_)                 -> -1.
 
 %% Check if enough results have been added to respond
 -spec enough(getcore()) -> boolean().
+%% Found expected clock
+enough(#getcore{expected_fetchclock = true}) ->
+    true;
 %% Met quorum
 enough(#getcore{r = R, ur = UR, pr= PR,
                     num_ok = NumOK, num_pok = NumPOK,
-                    num_upd = NumUPD})
-        when NumOK >= R andalso NumPOK >= PR andalso NumUPD >= UR ->
+                    num_upd = NumUPD,
+                    node_confirms = RequiredConfirms, confirmed_nodes = Nodes})
+        when NumOK >= R andalso
+                NumPOK >= PR andalso
+                NumUPD >= UR andalso
+                length(Nodes) >= RequiredConfirms ->
     true;
-%% too many failures
+%% Too many failures
 enough(#getcore{fail_threshold = FailThreshold, num_notfound = NumNotFound,
             num_fail = NumFail})
         when NumNotFound + NumFail >= FailThreshold ->
     true;
-%% Got all N responses, but unable to satisfy PR
+%% Got all N responses, and no updated reads outstanding - not waiting on
+%% anything.
+%% In this case there has been a failure to satisfy PR or node_confirms
+%% but enough is known, so can return true to prompt error via response
+%% rather than sit waiting for a timeout.
 enough(#getcore{n = N, ur = UR, num_ok = NumOK, num_notfound = NumNotFound,
             num_fail = NumFail})
         when NumOK + NumNotFound + NumFail >= N andalso UR == 0 ->
     true;
+%% Awaiting outstanding responses
 enough(_) ->
     false.
 
 %% Get success/fail response once enough results received
 -spec response(getcore()) -> {reply(), getcore()}.
 %% Met quorum for a standard get request/response
-response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK, head_merge = HM} = GetCore)
-        when NumOK >= R andalso NumPOK >= PR andalso HM == false ->
+response(#getcore{node_confirms = RequiredConfirms,
+                    confirmed_nodes = Nodes} = GetCore)
+            when length(Nodes) < RequiredConfirms ->
+    check_overload({error,
+                    {insufficient_nodes,
+                        length(Nodes), need, RequiredConfirms}}, GetCore);
+    %% Insufficient nodes confirmed
+response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK,
+                    expected_fetchclock = ExpClock, head_merge = HM} = GetCore)
+        when 
+            ((NumOK >= R andalso NumPOK >= PR)
+                orelse ExpClock == true)
+            andalso HM == false ->
     #getcore{results = Results, allow_mult=AllowMult,
         deletedvclock = DeletedVClock} = GetCore,
     {ObjState, MObj} = Merged = merge(Results, AllowMult),
@@ -206,14 +259,15 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK, head_merge = 
         ok ->
             Merged; % {ok, MObj}
         tombstone when DeletedVClock ->
-            {error, {deleted, riak_object:vclock(MObj)}};
+            {error, {deleted, riak_object:vclock(MObj), MObj}};
         _ -> % tombstone or notfound or expired
             {error, notfound}
     end,
     {Reply, GetCore#getcore{merged = Merged}};
 %% Met quorum, but the request had asked only for head responses
-response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
-        when NumOK >= R andalso NumPOK >= PR ->
+response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK,
+                    expected_fetchclock = ExpClock} = GetCore)
+        when (NumOK >= R andalso NumPOK >= PR) orelse ExpClock == true ->
     #getcore{results = Results, allow_mult=AllowMult,
         deletedvclock = DeletedVClock} = GetCore,
     Merged = merge_heads(Results, AllowMult),
@@ -221,7 +275,7 @@ response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK} = GetCore)
         {ok, _MergedObj} ->
             {Merged, GetCore#getcore{merged = Merged}}; % {ok, MObj}
         {tombstone, MObj} when DeletedVClock ->
-            {{error, {deleted, riak_object:vclock(MObj)}},
+            {{error, {deleted, riak_object:vclock(MObj), MObj}},
                 GetCore#getcore{merged = Merged}};
         {fetch, IdxList} ->
             % A list of vnode indexes to be fetched from using a GET request
@@ -469,13 +523,13 @@ update_test() ->
                     idx_type = [],
                     results = [{1, {ok, fake_head1}}, {2, {ok, fake_head2}}]},
     GC1 = update_init(1, GC0),
-    GC2 = update_result(3, {ok, Obj3}, [2], GC1),
+    GC2 = update_result(3, {ok, Obj3}, [2], node(), GC1),
     ?assertMatch(3, GC2#getcore.num_ok),
     ?assertMatch(2, GC2#getcore.r),
     ?assertMatch(1, GC2#getcore.ur),
     ?assertMatch(0, GC2#getcore.num_upd),
     ?assertMatch(3, length(GC2#getcore.results)),
-    GC3 = update_result(2, {ok, fake_get2}, [2], GC2),
+    GC3 = update_result(2, {ok, fake_get2}, [2], node(), GC2),
     ?assertMatch(3, GC3#getcore.num_ok),
     ?assertMatch(2, GC3#getcore.r),
     ?assertMatch(1, GC3#getcore.ur),
@@ -485,6 +539,77 @@ update_test() ->
                         {1, {ok, fake_head1}},
                         {2, {ok, fake_get2}}],
                     GC3#getcore.results).
+
+increment_vclock(Object, ClientId) ->
+    NewClock = vclock:increment(ClientId, riak_object:vclock(Object)),
+    riak_object:set_vclock(Object, NewClock).
+
+enough_expectedclock_test() ->
+    B = <<"B">>,
+    K = <<"K">>,
+    V = <<"V">>,
+    V0 = <<"V0">>,
+    V1 = <<"V1">>,
+    V2 = <<"V2">>,
+    V3 = <<"V3">>,
+
+    Obj0 = 
+        increment_vclock(
+            riak_object:new(B, K, V,
+                                dict:from_list([{<<"X-Riak-Val-Encoding">>, 2},
+                                {<<"X-Foo_MetaData">>, "Foo"}])),
+            a),
+    Obj1 =
+        increment_vclock(
+            riak_object:apply_updates(riak_object:update_value(Obj0, V0)),
+            a),
+    
+    Obj2 =
+        increment_vclock(
+            riak_object:apply_updates(riak_object:update_value(Obj1, V1)),
+            b),
+    
+    Obj3 =
+        increment_vclock(
+            riak_object:apply_updates(riak_object:update_value(Obj2, V2)),
+            c),
+    
+    Obj4 =
+        increment_vclock(
+            riak_object:apply_updates(riak_object:update_value(Obj3, V3)),
+            a),
+
+    
+    ExpectedClock = riak_object:vclock(Obj3),
+
+    GC0 = #getcore{n= 3, r = 3, pr=0, ur=0,
+                    fail_threshold = 1, num_ok = 0, num_pok = 0,
+                    num_notfound = 0, num_deleted = 0, num_fail = 0,
+                    idx_type = [],
+                    results = [],
+                    allow_mult = true,
+                    expected_fetchclock = ExpectedClock},
+    GC1 = add_result(3, {ok, Obj1}, node(), GC0),
+    ?assertEqual(false, enough(GC1)),
+    ?assertEqual({{error, {r_val_unsatisfied, 3, 1}}, GC1}, response(GC1)),
+    
+    GC2A = add_result(1, {ok, Obj3}, node(), GC1),
+    ?assertEqual(true, enough(GC2A)),
+    ?assertEqual({ok, Obj3}, element(1, response(GC2A))),
+    
+    GC2B = add_result(1, {ok, Obj4}, node(), GC1),
+    ?assertEqual(true, enough(GC2B)),
+    ?assertEqual({ok, Obj4}, element(1, response(GC2B))),
+    
+    GC2C = add_result(1, {ok, Obj2}, node(), GC1),
+    ?assertEqual(false, enough(GC2C)),
+    ?assertEqual({{error, {r_val_unsatisfied, 3, 2}}, GC2C}, response(GC2C)),
+
+    GC3C = add_result(2, {ok, Obj1}, node(), GC2C),
+    io:format("GC32 ~w~n", [GC3C]),
+    ?assertEqual(true, enough(GC3C)),
+    ?assertEqual({ok, Obj2}, element(1, response(GC3C))).
+
 
 %% simple sanity tests
 enough_test_() ->
@@ -530,6 +655,18 @@ enough_test_() ->
                                 fail_threshold = 1, num_ok = 2, num_pok = 0,
                                 num_notfound = 0, num_deleted = 0,
                                 num_fail = 1})),
+                    %% Seen expected clock
+                    ?assertEqual(true, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=1,
+                                fail_threshold = 1, num_ok = 3, num_pok = 0,
+                                num_notfound = 0, num_deleted = 0, num_upd=0,
+                                num_fail = 0, expected_fetchclock = true})),
+                    %% Not seen expected clock
+                    ?assertEqual(false, enough(#getcore{n= 3,
+                                r = 3, pr=0, ur=1,
+                                fail_threshold = 1, num_ok = 3, num_pok = 0,
+                                num_notfound = 0, num_deleted = 0, num_upd=0,
+                                num_fail = 0, expected_fetchclock = []})),
                     ok
             end},
         {"Checking PR",
@@ -617,6 +754,22 @@ response_test_() ->
                                     {4, {ok, RObj}}]})), %% from a fallback
                     ok
             end},
+        {"PR unsatisfied but expected clock found",
+            fun() ->
+                    RObj = riak_object:new(<<"foo">>, <<"bar">>, <<"baz">>),
+                    ?assertMatch({{ok, RObj}, _},
+                        response(#getcore{n= 3, r = 0, pr=3,
+                                fail_threshold = 1, num_ok = 3, num_pok = 2,
+                                allow_mult = false,
+                                num_notfound = 0, num_deleted = 0,
+                                num_fail = 0,
+                                expected_fetchclock = true,
+                                results= [
+                                    {1, {ok, RObj}},
+                                    {2, {ok, RObj}},
+                                    {4, {ok, RObj}}]})), %% from a fallback
+                    ok
+            end},
         {"R & PR unsatisfied, PR >= R",
             fun() ->
                     RObj = riak_object:new(<<"foo">>, <<"bar">>, <<"baz">>),
@@ -662,6 +815,24 @@ response_test_() ->
                                     {1, {ok, RObj}},
                                     {2, {error, notfound}},
                                     {3, {error, notfound}}]})),
+                    ok
+            end},
+        {"Confirms not met",
+            fun() ->
+                    RObj = riak_object:new(<<"foo">>, <<"bar">>, <<"baz">>),
+                    ?assertMatch({{error,
+                                    {insufficient_nodes, 1, need, 2}}, _},
+                        response(#getcore{n= 3, r = 3, pr=0,
+                                fail_threshold = 1, num_ok = 3, num_pok = 0,
+                                allow_mult = false,
+                                num_notfound = 0, num_deleted = 0,
+                                num_fail = 0,
+                                node_confirms = 2,
+                                confirmed_nodes = [node()],
+                                results= [
+                                    {1, {ok, RObj}},
+                                    {2, {ok, RObj}},
+                                    {3, {ok, RObj}}]})),
                     ok
             end}
     ]}.

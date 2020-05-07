@@ -135,7 +135,8 @@ maybe_perform_query({ok, Query}, Req=#rpbindexreq{stream=true}, State) ->
     PgSort = maybe_pgsort(Continuation, PgSort0),
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
     Opts = riak_index:add_timeout_opt(Timeout, Opts0),
-    {ok, ReqId, _FSMPid} = Client:stream_get_index(Bucket, Query, Opts),
+    {ok, ReqId, _FSMPid} =
+        riak_client:stream_get_index(Bucket, Query, Opts, Client),
     ReturnTerms = riak_index:return_terms(Req#rpbindexreq.return_terms, Query),
     {reply, {stream, ReqId}, State#state{req_id=ReqId, req=Req#rpbindexreq{return_terms=ReturnTerms}}};
 maybe_perform_query({ok, Query}, Req, State) ->
@@ -148,7 +149,8 @@ maybe_perform_query({ok, Query}, Req, State) ->
     Opts0 = [{max_results, MaxResults}] ++ [{pagination_sort, PgSort} || PgSort /= undefined],
     Opts = riak_index:add_timeout_opt(Timeout, Opts0),
     ReturnTerms =  riak_index:return_terms(ReturnTerms0, Query),
-    QueryResult = Client:get_index(Bucket, Query, Opts),
+    QueryResult =
+        riak_client:get_index(Bucket, Query, Opts, Client),
     handle_query_results(ReturnTerms, MaxResults, QueryResult , State).
 
 maybe_pgsort(undefined, PgSort0) ->

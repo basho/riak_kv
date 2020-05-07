@@ -31,7 +31,11 @@
 -include("riak_kv_types.hrl").
 -include("stacktrace.hrl").
 
--behaviour(gen_fsm_compat).
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, start_link, 3},
+                {gen_fsm, send_event, 2}]}).
+
+-behaviour(gen_fsm).
 -define(DEFAULT_OPTS, [{returnbody, false}, {update_last_modified, true}]).
 -export([start/3,start/6,start/7]).
 -export([start_link/3,start_link/6,start_link/7]).
@@ -157,7 +161,7 @@ start_link(ReqId,RObj,W,DW,Timeout,ResultPid,Options) ->
 start(From, Object, PutOptions) ->
     Args = [From, Object, PutOptions],
     case sidejob_supervisor:start_child(riak_kv_put_fsm_sj,
-                                        gen_fsm_compat, start_link,
+                                        gen_fsm, start_link,
                                         [?MODULE, Args, []]) of
         {error, overload} ->
             riak_kv_util:overload_reply(From),
@@ -183,20 +187,24 @@ get_put_coordinator_failure_timeout() ->
     app_helper:get_env(riak_kv, put_coordinator_failure_timeout, 3000).
 
 make_ack_options(Options) ->
-    case (riak_core_capability:get(
-            {riak_kv, put_fsm_ack_execute}, disabled) == disabled
-          orelse not
-          app_helper:get_env(
-            riak_kv, retry_put_coordinator_failure, true)) of
-        true ->
+    AckOption = get_option(ack_execute, Options),
+    AckCap = riak_core_capability:get({riak_kv, put_fsm_ack_execute}, disabled),
+    RetryCoord =
+        app_helper:get_env(riak_kv, retry_put_coordinator_failure, true) andalso
+        get_option(retry_put_coordinator_failure, Options, true),
+    case {AckOption, AckCap, RetryCoord} of
+        {Pid, _, _} when is_pid(Pid) ->
+            %% Some process (probably on another node) is already waiting
+            %% for an ack, no need to monitor here.
             {false, Options};
-        false ->
-            case get_option(retry_put_coordinator_failure, Options, true) of
-                true ->
-                    {true, [{ack_execute, self()}|Options]};
-                _Else ->
-                    {false, Options}
-            end
+        {undefined, disabled, _} ->
+            {false, Options};
+        {undefined, _, false} ->
+            {false, Options};
+        {undefined, enabled, true} ->
+            {true, [
+                %% ack forwarder
+                {ack_execute, self()}| Options]}
     end.
 
 spawn_coordinator_proc(CoordNode, Mod, Fun, Args) ->
@@ -212,7 +220,14 @@ monitor_remote_coordinator(false = _UseAckP, _MiddleMan, _CoordNode, StateData) 
     {stop, normal, StateData};
 monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
     receive
-        {ack, CoordNode, now_executing} ->
+        {ack, CoordNodeFinal, now_executing} ->
+            case CoordNodeFinal of
+                CoordNode ->
+                    ok;
+                _ ->
+                    lager:warning("unexpected forward-ack from ~p, expected from ~p",
+                                  [CoordNodeFinal, CoordNode])
+            end,
             {stop, normal, StateData}
     after StateData#state.coordinator_timeout ->
             exit(MiddleMan, kill),
@@ -236,13 +251,13 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
 %%
 %% As test, but linked to the caller
 test_link(From, Object, PutOptions, StateProps) ->
-    gen_fsm_compat:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
+    gen_fsm:start_link(?MODULE, {test, [From, Object, PutOptions], StateProps}, []).
 
 -endif.
 
 
 %% ====================================================================
-%% gen_fsm_compat callbacks
+%% gen_fsm callbacks
 %% ====================================================================
 
 %% @private
@@ -273,7 +288,7 @@ init([From, RObj, Options0]) ->
         _ ->
             ok
     end,
-    gen_fsm_compat:send_event(self(), timeout),
+    gen_fsm:send_event(self(), timeout),
     {ok, prepare, StateData};
 init({test, Args, StateProps}) ->
     %% Call normal init
@@ -674,10 +689,10 @@ new_state(StateName, StateData) ->
 %% Move to the new state, marking the time it started and trigger an immediate
 %% timeout.
 new_state_timeout(StateName, StateData=#state{trace = true}) ->
-    gen_fsm_compat:send_event(self(), timeout),
+    gen_fsm:send_event(self(), timeout),
     {next_state, StateName, add_timing(StateName, StateData)};
 new_state_timeout(StateName, StateData) ->
-    gen_fsm_compat:send_event(self(), timeout),
+    gen_fsm:send_event(self(), timeout),
     {next_state, StateName, StateData}.
 
 %% What to do once enough responses from vnodes have been received to reply
@@ -1252,9 +1267,7 @@ forward(CoordNode, State) ->
                                 [
                                  %% don't check mbox at new fsm, we
                                  %% picked the "best"
-                                 {mbox_check, false},
-                                 %% ack forwarder
-                                 {ack_execute, self()}
+                                 {mbox_check, false}
                                  | Options]),
         MiddleMan = spawn_coordinator_proc(
                       CoordNode, riak_kv_put_fsm, start_link,

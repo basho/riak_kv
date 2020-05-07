@@ -670,11 +670,15 @@ get_fsm_proc(ReqId, #params{n = N, r = R}) ->
     NotFoundOk = true,
     AllowMult = true,
     DeletedVclock = true,
+    ExpectedVclock = false,
+    NodeConfirms = 0,
     GetCore = riak_kv_get_core:init(N, R,
                                     0, %% SLF hack
                                     FailThreshold,
                                     NotFoundOk, AllowMult, DeletedVclock,
-                                    [{Idx, primary} || Idx <- lists:seq(1, N)] %% SLF hack
+                                    [{Idx, primary} || Idx <- lists:seq(1, N)], %% SLF hack
+                                    ExpectedVclock,
+                                    NodeConfirms
                                    ),
     #proc{name = {get_fsm, ReqId}, handler = get_fsm,
           procst = #getfsmst{getcore = GetCore}}.
@@ -689,7 +693,7 @@ get_fsm(#msg{from = {kv_vnode, Idx, _}, c = {r, Result, Idx, _ReqId}},
                                               reply_to = ReplyTo,
                                               responded = Responded,
                                               getcore = GetCore} = ProcSt} = P) ->
-    UpdGetCore1 = riak_kv_get_core:add_result(Idx, Result, GetCore),
+    UpdGetCore1 = riak_kv_get_core:add_result(Idx, Result, node(), GetCore),
     {ReplyMsgs, UpdGetCore3, UpdResponded} =
         case riak_kv_get_core:enough(UpdGetCore1) of
             true when Responded == false ->

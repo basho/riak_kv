@@ -756,7 +756,7 @@ accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, 
                    false ->
                        Options
                end,
-    case C:put(Doc, Options2) of
+    case riak_client:put(Doc, Options2, C) of
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx);
         ok ->
@@ -1000,7 +1000,8 @@ ensure_doc(Ctx=#ctx{doc=undefined, bucket_type=T, bucket=B, key=K, client=C,
             Options0 = [deletedvclock, {basic_quorum, Quorum},
                         {notfound_ok, NotFoundOK}],
             Options = make_options(Options0, Ctx),
-            Ctx#ctx{doc=C:get(riak_kv_wm_utils:maybe_bucket_type(T,B), K, Options)};
+            BT = riak_kv_wm_utils:maybe_bucket_type(T,B),
+            Ctx#ctx{doc=riak_client:get(BT, K, Options, C)};
         false ->
             Ctx#ctx{doc={error, bucket_type_unknown}}
     end;
@@ -1011,12 +1012,15 @@ ensure_doc(Ctx) -> Ctx.
 %% @doc Delete the document specified.
 delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
     Options = make_options([], Ctx),
-    Result = case wrq:get_req_header(?HEAD_VCLOCK, RD) of
-        undefined ->
-            C:delete(riak_kv_wm_utils:maybe_bucket_type(T,B),K,Options);
-        _ ->
-            C:delete_vclock(riak_kv_wm_utils:maybe_bucket_type(T,B),K,decode_vclock_header(RD),Options)
-    end,
+    BT = riak_kv_wm_utils:maybe_bucket_type(T,B),
+    Result =
+        case wrq:get_req_header(?HEAD_VCLOCK, RD) of
+            undefined ->
+                riak_client:delete(BT, K, Options, C);
+            _ ->
+                VC = decode_vclock_header(RD),
+                riak_client:delete_vclock(BT, K, VC, Options, C)
+        end,
     case Result of
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx);

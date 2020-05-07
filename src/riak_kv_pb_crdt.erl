@@ -122,8 +122,8 @@ fetch_type({error, no_type}, #dtfetchreq{type=BType}, State) ->
 maybe_fetch(true, Req, State) ->
     #dtfetchreq{bucket=B, key=K, type=BType, include_context=InclCtx} = Req,
     #state{client=C} = State,
-    Options = make_options(Req),
-    Resp = C:get({BType, B}, K, [{crdt_op, State#state.mod}|Options]),
+    Options = [{crdt_op, State#state.mod}|make_options(Req)],
+    Resp = riak_client:get({BType, B}, K, Options, C),
     process_fetch_response(Resp, State#state{return_ctx=InclCtx});
 maybe_fetch(false, _Req, State) ->
     #state{type=Type} = State,
@@ -170,7 +170,7 @@ maybe_update({true, true}, Req, State0) ->
     CrdtOp = make_operation(Mod, Op, Ctx),
     Options = [{crdt_op, CrdtOp},
                {retry_put_coordinator_failure, false}] ++ Options0,
-    Resp =  C:put(O, Options),
+    Resp =  riak_client:put(O, Options, C),
     State = State0#state{return_key=ReturnKey, return_ctx=InclCtx},
     process_update_response(Resp, State);
 maybe_update({false, _}, _Req, State ) ->
@@ -199,13 +199,16 @@ process_update_response({error, Reason}, State) ->
 
 %% Make a list of options for the Get / Put ops
 make_options(#dtfetchreq{r=R0, pr=PR0,
-                         notfound_ok=NFOk, basic_quorum=BQ,
+                         notfound_ok=NFOk,
+                         node_confirms=NC,
+                         basic_quorum=BQ,
                          sloppy_quorum=SloppyQ, n_val=NVal}) ->
     R = decode_quorum(R0),
     PR = decode_quorum(PR0),
     make_option(r, R) ++
         make_option(pr, PR) ++
         make_option(notfound_ok, NFOk) ++
+        make_option(node_confirms, NC) ++
         make_option(basic_quorum, BQ) ++
         make_option(sloppy_quorum, SloppyQ) ++
         make_option(n_val, NVal);

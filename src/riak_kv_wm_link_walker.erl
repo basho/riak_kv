@@ -317,7 +317,7 @@ expires(RD, Ctx=#ctx{cache_secs=Secs}) ->
 %% @doc This resource exists if Riak returns {ok, riak_object()} from
 %%      a get of the starting document.
 resource_exists(RD, Ctx=#ctx{bucket=B, key=K, client=C}) ->
-    case C:get(B, K, 2) of
+    case riak_client:get(B, K, 2, C) of
         {ok, Start} ->
             {true, RD, Ctx#ctx{start=Start}};
         _ ->

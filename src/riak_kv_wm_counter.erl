@@ -307,10 +307,13 @@ accept_doc_body(RD, Ctx=#ctx{bucket=B, key=K, client=C,
     case allow_mult(B) of
         true ->
             Doc = riak_kv_crdt:new(B, K, ?V1_COUNTER_TYPE),
-            Options = [{counter_op, CounterOp}] ++ return_value(RD),
-            case C:put(Doc, [{w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw}, {node_confirms, Ctx#ctx.node_confirms},
-                             {timeout, 60000}, {retry_put_coordinator_failure, false} |
-                                   Options]) of
+            Options =
+                [{counter_op, CounterOp},
+                    {w, Ctx#ctx.w}, {dw, Ctx#ctx.dw}, {pw, Ctx#ctx.pw},
+                    {node_confirms, Ctx#ctx.node_confirms},
+                    {timeout, 60000}, {retry_put_coordinator_failure, false}]
+                ++ return_value(RD),
+            case riak_client:put(Doc, Options, C) of
                 {error, Reason} ->
                     handle_common_error(Reason, RD, Ctx);
                 ok ->
@@ -344,9 +347,12 @@ produce_doc_body(Doc) ->
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket=B, key=K, client=C, r=R,
-        pr=PR, basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
-    Ctx#ctx{doc=C:get(B, K, [{r, R}, {pr, PR},
-                {basic_quorum, Quorum}, {notfound_ok, NotFoundOK}])};
+            pr=PR, basic_quorum=Quorum,
+            notfound_ok=NotFoundOK, node_confirms=NC}) ->
+    Options =
+        [{r, R}, {pr, PR}, {basic_quorum, Quorum},
+            {notfound_ok, NotFoundOK}, {node_confirms, NC}],
+    Ctx#ctx{doc=riak_client:get(B, K, Options, C)};
 ensure_doc(Ctx) -> Ctx.
 
 handle_common_error(Reason, RD, Ctx) ->

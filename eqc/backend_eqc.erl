@@ -62,6 +62,8 @@
          async_put/5,
          init_backend/3]).
 
+-export([fold_keys/5, check/1, check2/1]).
+
 -define(TEST_SECONDS, 120).
 
 -record(qcst, {backend, % Backend module under test

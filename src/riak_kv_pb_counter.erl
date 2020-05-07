@@ -83,16 +83,20 @@ encode(Message) ->
 
 %% @doc process/2 callback. Handles an incoming request message.
 process(#rpbcountergetreq{bucket=B, key=K, r=R0, pr=PR0,
-                          notfound_ok=NFOk, basic_quorum=BQ},
+                            notfound_ok=NFOk, 
+                            node_confirms=NC,
+                            basic_quorum=BQ},
         #state{client=C} = State) ->
     case lists:member(pncounter, riak_core_capability:get({riak_kv, crdt}, [])) of
         true ->
             R = decode_quorum(R0),
             PR = decode_quorum(PR0),
-            case C:get(B, K, make_option(r, R) ++
-                           make_option(pr, PR) ++
-                           make_option(notfound_ok, NFOk) ++
-                           make_option(basic_quorum, BQ)) of
+            Options = make_option(r, R) ++
+                        make_option(pr, PR) ++
+                        make_option(notfound_ok, NFOk) ++
+                        make_option(node_confirms, NC) ++
+                        make_option(basic_quorum, BQ),
+            case riak_client:get(B, K, Options, C) of
                 {ok, O} ->
                     {{_Ctx, Value}, _} = riak_kv_crdt:value(O, ?V1_COUNTER_TYPE),
                     {reply, #rpbcountergetresp{value = Value}, State};
@@ -119,10 +123,14 @@ process(#rpbcounterupdatereq{bucket=B, key=K,  w=W0, dw=DW0, pw=PW0,
             PW = decode_quorum(PW0),
             NodeConfirms = decode_quorum(NodeConfirms0),
             Options = [{counter_op, CounterOp}] ++ return_value(RetVal),
-            case C:put(O, make_option(w, W) ++ make_option(dw, DW) ++
-                           make_option(node_confirms, NodeConfirms) ++
-                           make_option(pw, PW) ++ [{timeout, default_timeout()},
-                                                   {retry_put_coordinator_failure, false} | Options]) of
+            Opts =
+                make_option(w, W) ++
+                make_option(dw, DW) ++
+                make_option(node_confirms, NodeConfirms) ++
+                make_option(pw, PW) ++
+                [{timeout, default_timeout()},
+                    {retry_put_coordinator_failure, false} | Options],
+            case riak_client:put(O, Opts, C) of
                 ok ->
                     {reply, #rpbcounterupdateresp{}, State};
                 {ok, RObj} ->

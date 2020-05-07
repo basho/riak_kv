@@ -22,6 +22,9 @@
 -module(riak_kv_vnode).
 -behaviour(riak_core_vnode).
 
+-compile({nowarn_deprecated_function, 
+            [{gen_fsm, send_event, 2}]}).
+
 %% API
 -export([test_vnode/1, put/7]).
 -export([start_vnode/1,
@@ -31,6 +34,7 @@
          head/3,
          head/4,
          del/3,
+         reap/3,
          put/6,
          local_get/2,
          local_put/2,
@@ -152,7 +156,10 @@
                 tictac_rebuilding = false :: erlang:timestamp()|false,
                 worker_pool_strategy = single :: none|single|dscp,
                 vnode_pool_pid :: undefined|pid(),
-                update_hook :: update_hook()
+                update_hook :: update_hook(),
+                max_aae_queue_time :: non_neg_integer(),
+                enable_nextgenreplsrc = false :: boolean(),
+                sizelimit_nextgenreplsrc = 0 :: non_neg_integer()
                }).
 
 -type index_op() :: add | remove.
@@ -199,6 +206,9 @@
 
 -define(MAX_REBUILD_TIME, 86400).
 
+-define(MAX_AAE_QUEUE_TIME, 1000). 
+    %% Queue time in ms to prompt a sync ping.
+
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
     %% Hot backups
@@ -211,7 +221,8 @@
     %% the cached tree do not use a pool (e.g. n_val queries)
 -define(AF4_QUEUE, riak_core_node_worker_pool:af4()).
     %% Assured Forwarding - pool 4
-    %% perational information queries (e.g. object_stats)
+    %% operational information queries (e.g. object_stats).  Replication folds
+    %% for transition.  Reaping operations
 -define(BE_QUEUE, riak_core_node_worker_pool:be()).
     %% Best efforts (aka scavenger) pool
     %% Rebuilds
@@ -310,11 +321,7 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
 
     StoreHead = app_helper:get_env(riak_kv, tictacaae_storeheads),
-    ObjSplitFun = 
-        case StoreHead of
-            true -> fun from_object_binary/1;
-            false -> fun from_object_binary_headless/1
-        end,
+    ObjSplitFun = riak_object:aae_from_object_binary(StoreHead),
 
     {ok, AAECntrl} = 
         aae_controller:aae_start(KeyStoreType, 
@@ -352,29 +359,6 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                 aae_controller = AAECntrl,
                 modstate = ModState,
                 tictac_rebuilding = Rebuilding}.
-
-
--spec from_object_binary(binary()) ->
-        {integer(), integer(), integer(), list(erlang:timestamp()), binary()}.
-%% @doc
-%% When folding over objects need to be able to convert from the object into 
-%% a tuple of metadata for the AAE keystore
-from_object_binary(RobjBin) ->
-    {_Clock, Size, SibCount, LastMods, SibsBin} =
-        riak_object:summary_from_binary(RobjBin),
-    % TODO: Actually get the index hash
-    {Size, SibCount, 0, LastMods, SibsBin}.
-
--spec from_object_binary_headless(binary()) ->
-        {integer(), integer(), integer(), list(erlang:timestamp()), binary()}.
-%% @doc
-%% When folding over objects need to be able to convert from the object into 
-%% a tuple of metadata for the AAE keystore
-from_object_binary_headless(RobjBin) ->
-    {_Clock, Size, SibCount, LastMods, _SibsBin} =
-        riak_object:summary_from_binary(RobjBin),
-    % TODO: Actually get the index hash
-    {Size, SibCount, 0, LastMods, term_to_binary(null)}.
 
 
 -spec determine_aaedata_root(integer()) -> list().
@@ -535,6 +519,21 @@ head(Preflist, BKey, ReqId, Sender) ->
 del(Preflist, BKey, ReqId) ->
     Req = riak_kv_requests:new_delete_request(sanitize_bkey(BKey), ReqId),
     riak_core_vnode_master:command(Preflist, Req, riak_kv_vnode_master).
+
+%% @doc
+%% Reap a tombstone, assuming a preflist of UP primaries.
+-spec reap(riak_core_apl:preflist(),
+            {riak_object:bucket(), riak_object:key()},
+            non_neg_integer()) -> ok.
+reap(Preflist, {Bucket, Key}, DeleteHash) ->
+    Req = riak_kv_requests:new_reap_request({Bucket, Key}, DeleteHash),
+    [{Idx, Node}|Rest] = Preflist,
+    %% For the head of the preflist we do this sync, to regulate the pace of
+    %% reaps and help prevent overloading of vnodes.
+    ok = riak_core_vnode_master:sync_command({Idx, Node},
+                                                Req,
+                                                riak_kv_vnode_master),
+    riak_core_vnode_master:command(Rest, Req, riak_kv_vnode_master).
 
 %% Issue a put for the object to the preflist, expecting a reply
 %% to an FSM.
@@ -743,6 +742,12 @@ init([Index]) ->
         app_helper:get_env(riak_kv, tictacaae_active, passive),
     WorkerPoolStrategy =
         app_helper:get_env(riak_kv, worker_pool_strategy),
+    MaxAAEQueueTime =
+        app_helper:get_env(riak_kv, max_aae_queue_time, ?MAX_AAE_QUEUE_TIME),
+    EnableNextGenReplSrc = 
+        app_helper:get_env(riak_kv, replrtq_enablesrc, false),
+    SizeLimitNextGenReplSrc = 
+        app_helper:get_env(riak_kv, replrtq_srcobjectsize, 0),
 
     case catch Mod:start(Index, Configuration) of
         {ok, ModState} ->
@@ -769,7 +774,10 @@ init([Index]) ->
                            md_cache=MDCache,
                            md_cache_size=MDCacheSize,
                            worker_pool_strategy=WorkerPoolStrategy,
-                           update_hook=update_hook()},
+                           update_hook=update_hook(),
+                           max_aae_queue_time=MaxAAEQueueTime,
+                           enable_nextgenreplsrc = EnableNextGenReplSrc,
+                           sizelimit_nextgenreplsrc = SizeLimitNextGenReplSrc},
             try_set_vnode_lock_limit(Index),
             case AsyncFolding of
                 true ->
@@ -1088,6 +1096,12 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
             Now = os:timestamp(),
             LoopDuration = 
                 timer:now_diff(Now, State#state.tictac_startqueue),
+            % This log has a different behaviour at startup.  At startup we
+            % will have scheduled the loop without completing any, so the first
+            % iteration of this log will always show exchanges_completed=0
+            % This is normal.  On subsequent runs we expected to see expected
+            % and complete to be aligned (and the loop duration with be about
+            % expected * tictacaae_exchangetick).
             lager:info("Tictac AAE loop completed for partition=~w with "
                             ++ "exchanges expected=~w "
                             ++ "exchanges completed=~w "
@@ -1141,6 +1155,9 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                     "node failure",
                                     [Local, Remote, {DocIdx, N}])
             end,
+            ok = aae_controller:aae_ping(State#state.aae_controller,
+                                            os:timestamp(),
+                                            self()),
             {noreply, State#state{tictac_exchangequeue = Rest}}
     end;
 
@@ -1216,7 +1233,7 @@ handle_command({mapexec_error_noretry, JobId, Err}, _Sender, #state{mrjobs=Jobs}
                    {ok, Job} ->
                        Jobs1 = dict:erase(JobId, Jobs),
                        #mrjob{target=Target} = Job,
-                       gen_fsm_compat:send_event(Target, {mapexec_error_noretry, self(), Err}),
+                       gen_fsm:send_event(Target, {mapexec_error_noretry, self(), Err}),
                        State#state{mrjobs=Jobs1};
                    error ->
                        State
@@ -1227,7 +1244,7 @@ handle_command({mapexec_reply, JobId, Result}, _Sender, #state{mrjobs=Jobs}=Stat
                    {ok, Job} ->
                        Jobs1 = dict:erase(JobId, Jobs),
                        #mrjob{target=Target} = Job,
-                       gen_fsm_compat:send_event(Target, {mapexec_reply, Result, self()}),
+                       gen_fsm:send_event(Target, {mapexec_reply, Result, self()}),
                        State#state{mrjobs=Jobs1};
                    error ->
                        State
@@ -1400,7 +1417,11 @@ handle_request(kv_delete_request, Req, _Sender, State) ->
     do_delete(BKey, State);
 handle_request(kv_vclock_request, Req, _Sender, State) ->
     BKeys = riak_kv_requests:get_bucket_keys(Req),
-    {reply, do_get_vclocks(BKeys, State), State}.
+    {reply, do_get_vclocks(BKeys, State), State};
+handle_request(kv_reap_request, Req, _Sender, State) ->
+    BKey = riak_kv_requests:get_bucket_key(Req),
+    DeleteHash = riak_kv_requests:get_delete_hash(Req),
+    {reply, ok, final_delete(BKey, DeleteHash, State)}.
 
 
 handle_coverage_request(kv_listkeys_request, Req, FilterVNodes, Sender, State) ->
@@ -1632,6 +1653,39 @@ handle_aaefold({fetch_clocks_range,
                                 InitAcc, 
                                 [{clock, null}]),
     {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({repl_keys_range,
+                        Bucket, KeyRange,
+                        ModifiedRange,
+                        QueueName},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, Acc) ->
+            {clock, VV} = lists:keyfind(clock, 1, EFs),
+            RE = {BF, KF, VV, to_fetch},
+            {AccL, Count, QueueName, BatchSize} = Acc,
+            case Count rem BatchSize of
+                0 ->
+                    riak_kv_replrtq_src:replrtq_aaefold(QueueName, AccL),
+                    {[RE], Count + 1, QueueName, BatchSize};
+                _ ->
+                    {[RE|AccL], Count + 1, QueueName, BatchSize}
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} = 
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                all,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{clock, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({find_keys, 
                         Bucket, KeyRange,
                         ModifiedRange,
@@ -1692,6 +1746,128 @@ handle_aaefold({find_keys,
                                 InitAcc, 
                                 [{size, null}]),
     {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({find_tombs, 
+                        Bucket, KeyRange,
+                        SegmentFilter, ModifiedRange},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, TombHashAcc) ->
+            {md, MD} = lists:keyfind(md, 1, EFs),
+            case riak_object:is_aae_object_deleted(MD, false) of
+                {true, undefined} ->
+                    {clock, VV} = lists:keyfind(clock, 1, EFs),
+                    [{BF, KF, riak_object:delete_hash(VV)}|TombHashAcc];
+                {false, undefined} ->
+                    TombHashAcc
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                SegmentFilter,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{md, null}, {clock, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({reap_tombs, 
+                        Bucket, KeyRange,
+                        SegmentFilter, ModifiedRange,
+                        ReapMethod},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, TombHashAcc) ->
+            {md, MD} = lists:keyfind(md, 1, EFs),
+            case riak_object:is_aae_object_deleted(MD, false) of
+                {true, undefined} ->
+                    {clock, VV} = lists:keyfind(clock, 1, EFs),
+                    DH = riak_object:delete_hash(VV),
+                    case ReapMethod of
+                        local ->
+                            riak_kv_reaper:request_reap({{BF, KF}, DH}),
+                            NewCount = element(2, TombHashAcc) + 1,
+                            setelement(2, TombHashAcc, NewCount);
+                        count ->
+                            NewCount = element(2, TombHashAcc) + 1,
+                            setelement(2, TombHashAcc, NewCount);
+                        {job, _JobID} ->
+                            {[{{BF, KF}, DH}|element(1, TombHashAcc)],
+                                element(2, TombHashAcc),
+                                element(3, TombHashAcc)}
+                    end;
+                {false, undefined} ->
+                    TombHashAcc
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                SegmentFilter,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{md, null}, {clock, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({erase_keys, 
+                        Bucket, KeyRange,
+                        SegmentFilter, ModifiedRange,
+                        DeleteMethod},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    FoldFun =
+        fun(BF, KF, EFs, EraseKeyAcc) ->
+            {md, MD} = lists:keyfind(md, 1, EFs),
+            %% This might be a tombstone, and what to avoid simply creating an
+            %% update tombstone
+            %% If storeheads is false, then will not check for tombstone. In
+            %% this case fetch_clocks may be used, and an external get/delete
+            %% be called
+            case riak_object:is_aae_object_deleted(MD, false) of
+                {true, undefined} ->
+                    EraseKeyAcc;
+                {false, undefined} ->
+                    {clock, VV} = lists:keyfind(clock, 1, EFs),
+                    case DeleteMethod of
+                        local ->
+                            riak_kv_eraser:request_delete({{BF, KF}, VV}),
+                            NewCount = element(2, EraseKeyAcc) + 1,
+                            setelement(2, EraseKeyAcc, NewCount);
+                        count ->
+                            NewCount = element(2, EraseKeyAcc) + 1,
+                            setelement(2, EraseKeyAcc, NewCount);
+                        {job, _JobID} ->
+                            {[{{BF, KF}, VV}|element(1, EraseKeyAcc)],
+                                element(2, EraseKeyAcc),
+                                element(3, EraseKeyAcc)}
+                    end
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} =
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                SegmentFilter,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                [{md, null}, {clock, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({object_stats, Bucket, KeyRange, ModifiedRange},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
@@ -1735,6 +1911,12 @@ handle_aaefold({object_stats, Bucket, KeyRange, ModifiedRange},
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{sibcount, null}, {size, null}]),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({list_buckets, Nval}, 
+                    _InitAcc, Nval,
+                    _IndexNs, _Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    {async, Folder} = aae_controller:aae_bucketlist(Cntrl),
     {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State}.
 
 
@@ -2168,18 +2350,8 @@ handle_info({'DOWN', _, _, Pid, _}, State=#state{hashtrees=Pid}) ->
     {ok, State3};
 handle_info({'DOWN', _, _, _, _}, State) ->
     {ok, State};
-handle_info({final_delete, BKey, RObjHash}, State = #state{mod=Mod, modstate=ModState}) ->
-    UpdState = case do_get_term(BKey, Mod, ModState) of
-                   {{ok, RObj}, ModState1} ->
-                       case delete_hash(RObj) of
-                           RObjHash ->
-                               do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
-                         _ ->
-                               State#state{modstate=ModState1}
-                       end;
-                   {{error, _}, ModState1} ->
-                       State#state{modstate=ModState1}
-               end,
+handle_info({final_delete, BKey, DeleteHash}, State) ->
+    UpdState = final_delete(BKey, DeleteHash, State),
     {ok, UpdState};
 handle_info({counter_lease, {FromPid, VnodeId, NewLease}}, State=#state{status_mgr_pid=FromPid, vnodeid=VnodeId}) ->
     #state{counter=CounterState} = State,
@@ -2192,7 +2364,35 @@ handle_info({counter_lease, {FromPid, NewVnodeId, NewLease}}, State=#state{statu
     CS1 = CounterState#counter_state{lease=NewLease, leasing=false, cnt=1},
     State2 = State#state{vnodeid=NewVnodeId, counter=CS1},
     lager:info("New Vnode id for ~p. Epoch counter rolled over.", [Idx]),
-    {ok, State2}.
+    {ok, State2};
+handle_info({aae_pong, QueueTime}, State) ->
+    ok = riak_kv_stat:update({controller_queue, QueueTime}),
+    QueueTimeMS = QueueTime div 1000,
+    case QueueTimeMS >= State#state.max_aae_queue_time of
+        true ->
+            lager:info("AAE queue queue_time=~w ms prompting sync ping",
+                        [QueueTimeMS]),
+            StartDrain = os:timestamp(),
+            R = aae_controller:aae_ping(State#state.aae_controller,
+                                        StartDrain,
+                                        {sync, max(1, QueueTimeMS)}),
+            case R of
+                ok ->
+                    DrainTime =
+                        timer:now_diff(os:timestamp(), StartDrain) div 1000,
+                    lager:info("AAE queue drained in ~w ms", [DrainTime]);
+                timeout ->
+                    lager:warning("AAE queue not yet drained due to timeout")
+            end;
+        false ->
+            ok
+    end,
+    {ok, State};
+handle_info({Ref, ok}, State) ->
+    lager:info("Ignoring ok returned after timeout for Ref ~p", [Ref]),
+    {ok, State}.
+
+    
 
 handle_exit(Pid, Reason, State=#state{status_mgr_pid=Pid, idx=Index, counter=CntrState}) ->
     lager:error("Vnode status manager exit ~p", [Reason]),
@@ -2262,7 +2462,7 @@ do_put(Sender, Request, State) ->
 
 %% @private
 %% upon receipt of a client-initiated put
-do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
+do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     BProps =  case proplists:get_value(bucket_props, Options) of
                   undefined ->
                       riak_core_bucket:get_bucket(Bucket);
@@ -2296,6 +2496,29 @@ do_put(Sender, {Bucket,_Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     update_index_write_stats(UpdPutArgs#putargs.is_index, UpdPutArgs#putargs.index_specs),
     {Reply, UpdState}.
 
+
+%% @doc Remove a tombstone, assuming the state of the object currently in the
+%% store is the same tombstone from when the removal decision was made 
+-spec final_delete({riak_core_bucket:bucket(), riak_object:key()},
+                    non_neg_integer(),
+                    #state{}) -> #state{}.
+final_delete(BKey, DeleteHash, State = #state{mod=Mod, modstate=ModState}) ->
+    case do_get_term(BKey, Mod, ModState) of
+        {{ok, RObj}, ModState1} ->
+            case {riak_kv_util:is_x_deleted(RObj),
+                    riak_object:delete_hash(RObj)} of
+                {true, DeleteHash} ->
+                    do_backend_delete(BKey, RObj, State#state{modstate=ModState1});
+                {IsDeleted, OtherHash} ->
+                    lager:info("Final delete failure " ++
+                                "~p deleted ~w hashes ~w ~w",
+                                [BKey, IsDeleted, DeleteHash, OtherHash]),
+                    State#state{modstate=ModState1}
+            end;
+        {{error, _}, ModState1} ->
+            State#state{modstate=ModState1}
+    end.
+
 -spec do_backend_delete(
     {riak_core_bucket:bucket(), riak_object:key()},
     riak_object:riak_object(), #state{}
@@ -2322,10 +2545,6 @@ do_backend_delete(BKey, RObj, State = #state{idx = Idx,
         {error, _Reason, UpdModState} ->
             State#state{modstate = UpdModState}
     end.
-
-%% Compute a hash of the deleted object
-delete_hash(RObj) ->
-    erlang:phash2(RObj, 4294967296).
 
 %% @doc
 %% Prepare PUT needs to prepare the correct transition from old object to new
@@ -2571,27 +2790,35 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                      bkey=BKey,
                      reqid=ReqID,
                      index_specs=IndexSpecs,
-                     readrepair=ReadRepair}) ->
+                     readrepair=ReadRepair,
+                     coord=Coord}) ->
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
       false ->
         MaxCheckFlag = do_max_check
     end,
-    actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, State).
+    actual_put(BKey, Objects, IndexSpecs,
+                RB, ReqID, MaxCheckFlag, Coord, State).
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, State).
+    actual_put(BKey, {Obj, OldObj}, IndexSpecs,
+                RB, ReqID, do_max_check, false, State).
 
-actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs, RB, ReqID, MaxCheckFlag,
-           State=#state{idx=Idx,
-                        mod=Mod,
-                        modstate=ModState,
-                        update_hook=UpdateHook}) ->
+actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs,
+            RB, ReqID, MaxCheckFlag, Coord,
+            State=#state{idx=Idx,
+                            mod=Mod,
+                            modstate=ModState,
+                            update_hook=UpdateHook}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                        MaxCheckFlag) of
         {{ok, UpdModState}, EncodedVal} ->
             aae_update(Bucket, Key, Obj, OldObj, EncodedVal, State),
+            nextgenrepl(Bucket, Key, Obj, size(EncodedVal),
+                        Coord,
+                        State#state.enable_nextgenreplsrc,
+                        State#state.sizelimit_nextgenreplsrc),
             maybe_cache_object(BKey, Obj, State),
             maybe_update(UpdateHook, {Obj, maybe_old_object(OldObj)}, put, Idx),
             Reply = case RB of
@@ -3021,7 +3248,7 @@ do_delete(BKey, State) ->
                         Delay when is_integer(Delay) ->
                             erlang:send_after(Delay, self(),
                                               {final_delete, BKey,
-                                               delete_hash(RObj)}),
+                                               riak_object:delete_hash(RObj)}),
                             %% Nothing checks these messages - will just reply
                             %% del for now until we can refactor.
                             {reply, {del, Idx, del_mode_delayed},
@@ -3040,7 +3267,6 @@ do_delete(BKey, State) ->
 do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
                                                  mod=Mod,
                                                  modstate=ModState}) ->
-    lager:info("Fold request received ReqOpts ~w", [ReqOpts]),
     {ok, Capabilities} = Mod:capabilities(ModState),
     Opts0 = maybe_enable_async_fold(AsyncFolding, Capabilities, ReqOpts),
     Opts = maybe_enable_iterator_refresh(Capabilities, Opts0),
@@ -3199,6 +3425,40 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                     end
             end
     end.
+
+
+-spec nextgenrepl(riak_object:bucket(), riak_object:key(),
+                    riak_object:riak_object(),
+                    pos_integer(), boolean(), boolean(), non_neg_integer()) ->
+                        ok.
+nextgenrepl(Bucket, Key, Obj, Size, true, true, Limit) ->
+    % This is the co-ordinator of the PUT, and nextgenrepl is enabled - so
+    % cast this to the repl src.
+    ObjectFormat =
+        case riak_kv_util:is_x_deleted(Obj) of
+            true ->
+                % This object may be reaped by the vnode before the 
+                % sink attempts to fetch the tombstone from the vnode.
+                % So the tombstone should be placed on the queue
+                {tomb, Obj};
+            false ->
+                % Check the size of the object before pushing the
+                % object to the replication queue.  Larger objects
+                % will have only a reference pushed, and will need
+                % to be fetched.
+                case Size > Limit of
+                    true ->
+                        to_fetch;
+                    _ ->
+                        {object, Obj}
+                end
+        end,
+    riak_kv_replrtq_src:replrtq_coordput({Bucket,
+                                            Key,
+                                            riak_object:vclock(Obj),
+                                            ObjectFormat});
+nextgenrepl(_B, _K, _Obj, _Size, _Coord, _Enabled, _Limit) ->
+    ok.
 
 
 -spec aae_update(binary(), binary(),
@@ -3701,6 +3961,7 @@ new_md_cache(VId) ->
     %% ordered set to make sure that the first key is the oldest
     %% term format is {TimeStamp, Key, ValueTuple}
     ets:new(MDCacheName, [ordered_set, {keypos,2}]).
+
 
 %% @private increment the per vnode coordinating put counter,
 %% flushing/leasing if needed

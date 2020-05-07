@@ -40,8 +40,6 @@ start_link() ->
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    catch dtrace:init(),                   % NIF load trigger (R14B04)
-    catch dyntrace:p(),                    % NIF load trigger (R15B01+)
     riak_kv_entropy_info:create_table(),
     riak_kv_hooks:create_table(),
     VMaster = {riak_kv_vnode_master,
@@ -78,6 +76,21 @@ init([]) ->
     EntropyManager = {riak_kv_entropy_manager,
                       {riak_kv_entropy_manager, start_link, []},
                       permanent, 30000, worker, [riak_kv_entropy_manager]},
+    TictacFSManager = {riak_kv_ttaaefs_manager,
+                      {riak_kv_ttaaefs_manager, start_link, []},
+                      permanent, 30000, worker, [riak_kv_ttaaefs_manager]},
+    ReplRTQSrc = {riak_kv_replrtq_src,
+                      {riak_kv_replrtq_src, start_link, []},
+                      permanent, 30000, worker, [riak_kv_replrtq_src]},
+    ReplRTQSnk = {riak_kv_replrtq_snk,
+                      {riak_kv_replrtq_snk, start_link, []},
+                      permanent, 30000, worker, [riak_kv_replrtq_snk]},
+    Reaper = {riak_kv_reaper,
+                {riak_kv_reaper, start_link, []},
+                permanent, 30000, worker, [riak_kv_reaper]},
+    Eraser = {riak_kv_eraser,
+                {riak_kv_eraser, start_link, []},
+                permanent, 30000, worker, [riak_kv_eraser]},
 
     EnsemblesKV =  {riak_kv_ensembles,
                     {riak_kv_ensembles, start_link, []},
@@ -89,6 +102,11 @@ init([]) ->
     % Build the process list...
     Processes = lists:flatten([
         EntropyManager,
+        TictacFSManager,
+        ReplRTQSrc,
+        ReplRTQSnk,
+        Reaper,
+        Eraser,
         ?IF(HasStorageBackend, VMaster, []),
         FastPutSup,
         DeleteSup,
