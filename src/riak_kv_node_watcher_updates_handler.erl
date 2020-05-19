@@ -14,7 +14,7 @@
 %% API
 -export([
     start_link/0,
-    add_subscriber/1,
+    add_subscriber/2,
     remove_subscriber/1
 ]).
 
@@ -44,10 +44,10 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
--spec add_subscriber(Pid :: pid()) ->
+-spec add_subscriber(Pid :: pid(), UpdateFun :: function()) ->
     ok.
-add_subscriber(Pid) ->
-    gen_server:cast(?SERVER, {?ADD_SUBSCRIBER, Pid}),
+add_subscriber(Pid, UpdateFun) ->
+    gen_server:cast(?SERVER, {?ADD_SUBSCRIBER, Pid, UpdateFun}),
     ok.
 
 -spec remove_subscriber(Pid :: pid()) ->
@@ -70,11 +70,11 @@ handle_call(_Request, _From, State) ->
 handle_cast({?RING_UPDATE, [riak_kv]}, State = #state{node_watcher_subs_tid = Tid}) ->
     handle_ring_update(Tid),
     {noreply, State};
-handle_cast({?ADD_SUBSCRIBER, Pid}, State = #state{node_watcher_subs_tid = Tid}) ->
-    ets:insert(Tid, {Pid, []}),
+handle_cast({?ADD_SUBSCRIBER, Pid, UpdateFun}, State = #state{node_watcher_subs_tid = Tid}) ->
+    ets:insert(Tid, {Pid, UpdateFun}),
     {noreply, State};
 handle_cast({?REMOVE_SUBSCRIBER, Pid}, State = #state{node_watcher_subs_tid = Tid}) ->
-    ets:insert(Tid, Pid),
+    ets:delete(Tid, Pid),
     {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -100,6 +100,6 @@ setup_ring_updates_callback() ->
     ok.
 
 handle_ring_update(NodeWatcherSubsTid) ->
-    Subscribers = lists:flatten(ets:match(NodeWatcherSubsTid, {'$1', []})),
+    Subscribers = ets:tab2list(NodeWatcherSubsTid),
     riak_api_pb_sup:node_watcher_update(Subscribers),
     ok.

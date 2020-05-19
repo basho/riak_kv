@@ -39,7 +39,7 @@
 
 -define(handle_decode_guard(Message), Message == rpbgetringreq orelse Message == rpbgetdefaultbucketpropsreq orelse
 	Message == rpbgetnodesreq orelse erlang:is_record(Message, rpbnodewatchersubscribereq) orelse
-	erlang:is_record(Message, rpbnodewatcherunsubscribereq)).
+	Message == rpbnodewatcherunsubscribereq).
 
 -record(state, {}).
 
@@ -77,13 +77,14 @@ process(Req, State) when Req == rpbgetdefaultbucketpropsreq ->
 	process_get_default_bucket_props(State);
 process(Req, State) when Req == rpbgetnodesreq ->
 	process_get_nodes_req(State);
-process(Req, State) when Req == rpbnodewatcherupdate ->
-	process_node_watcher_update(State);
+process({rpbnodewatcherupdate, UpdateFun}, State) ->
+	process_node_watcher_update(UpdateFun, State);
 process(Req, State) when erlang:is_record(Req, rpbnodewatchersubscribereq) ->
-	Pid = riak_pb_kv_codec:decode_node_watcher_subscribe_req(Req),
-	process_node_watcher_subscribe(Pid, State);
-process(Req, State) when erlang:is_record(Req, rpbnodewatcherunsubscribereq) ->
-	Pid = riak_pb_kv_codec:decode_node_watcher_unsubscribe_req(Req),
+	Pid = erlang:self(),
+	UpdateFun = riak_pb_kv_codec:decode_node_watcher_subscribe_req(Req),
+	process_node_watcher_subscribe(Pid, UpdateFun, State);
+process(Req, State) when Req == rpbnodewatcherunsubscribereq ->
+	Pid = erlang:self(),
 	process_node_watcher_unsubscribe(Pid, State).
 
 -spec process_stream(_Message :: term(), _ReqId :: term(), State :: #state{}) ->
@@ -115,13 +116,13 @@ process_get_nodes_req(State) ->
 	Resp = riak_pb_kv_codec:encode_nodes(NodesList),
 	{reply, Resp, State}.
 
-process_node_watcher_update(State) ->
+process_node_watcher_update(UpdateFun, State) ->
 	NodesList = riak_core_node_watcher:nodes(riak_kv),
-	Resp = riak_pb_kv_codec:encode_node_watcher_update(NodesList),
+	Resp = riak_pb_kv_codec:encode_node_watcher_update(NodesList, UpdateFun),
 	{reply, Resp, State}.
 
-process_node_watcher_subscribe(Connection, State) ->
-	riak_kv_node_watcher_updates_handler:add_subscriber(Connection),
+process_node_watcher_subscribe(Pid, UpdateFun, State) ->
+	riak_kv_node_watcher_updates_handler:add_subscriber(Pid, UpdateFun),
 	{reply, #rpbnodewatchersubscriberesp{}, State}.
 
 process_node_watcher_unsubscribe(Connection, State) ->
