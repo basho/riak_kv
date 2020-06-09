@@ -2209,20 +2209,32 @@ delete(State=#state{status_mgr_pid=StatusMgr, mod=Mod, modstate=ModState}) ->
     %% clear vnodeid first, if drop removes data but fails
     %% want to err on the side of creating a new vnodeid
     {ok, cleared} = clear_vnodeid(StatusMgr),
-    UpdModState = case Mod:drop(ModState) of
-                      {ok, S} ->
-                          S;
-                      {error, Reason, S2} ->
-                          lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
-                          S2
-                  end,
+    UpdModState =
+        case Mod:drop(ModState) of
+            {ok, S} ->
+                S;
+            {error, Reason, S2} ->
+                lager:error("Failed to drop ~p. Reason: ~p~n", [Mod, Reason]),
+                S2
+        end,
     case State#state.hashtrees of
         undefined ->
             ok;
         HT ->
             riak_kv_index_hashtree:destroy(HT)
     end,
-    {ok, State#state{modstate=UpdModState,vnodeid=undefined,hashtrees=undefined}}.
+    case State#state.tictac_aae of 
+        false ->
+            ok;
+        true ->
+            aae_controller:aae_destroy(State#state.aae_controller)
+    end,
+    {ok,
+        State#state{modstate = UpdModState,
+                    vnodeid = undefined,
+                    hashtrees = undefined,
+                    tictac_aae = false,
+                    aae_controller = undefined}}.
 
 terminate(_Reason, #state{idx=Idx, 
                             mod=Mod, modstate=ModState, 
