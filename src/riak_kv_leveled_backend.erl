@@ -418,7 +418,10 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                                                         InnerAcc)
                                 end;
                             {skip, _BK} ->
-                                Acc
+                                Acc;
+                            _ ->
+                                % Required for riak_test/tests/verify_cs_bucket
+                                throw({break, Acc})
                         end
                     end,
                 leveled_bookie:book_objectfold(Bookie, 
