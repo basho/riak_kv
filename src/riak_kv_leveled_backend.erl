@@ -434,17 +434,30 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             {skip, _BK} ->
                                 InnerAcc;
                             _ ->
-                                % Required for riak_test/tests/verify_cs_bucket
+                                % This is expected when object_key_in_range
+                                % returns false - such as when the end of
+                                % range is reached.  An end key could be used
+                                % in the query - but control over end_inclusive
+                                % is gained by instead relying on this range
+                                % check.
+                                %
+                                % This aligns with riak_kv_eleveldb_backend.
+                                % Throw will be handled within riak_kv_worker
+                                % as throw:PrematureAcc - as leveled will
+                                % re-throw, and not expect {break, Acc} to
+                                % re-throw as with eleveldb
                                 throw(InnerAcc)
                         end
                     end,
+                EndKey = null,
                 % StartKey and StartInclusive based on query, but the EndKey
                 % and EndInclusive should be handled by the passed in fold
-                % function, so null is used for EndKey
+                % function (by the riak_index range checker), so null is used
+                % for EndKey
                 leveled_bookie:book_objectfold(Bookie, 
                                                 ?RIAK_TAG,
                                                 FilterBucket, 
-                                                {StartKey, null}, 
+                                                {StartKey, EndKey},
                                                 {SpecialFoldFun, Acc}, 
                                                 false);
             {false, false} ->
