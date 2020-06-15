@@ -391,7 +391,15 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
     {async, ObjectFolder} =
         case {lists:keyfind(bucket, 1, Opts), 
                 lists:keyfind(index, 1, Opts)} of
-            {_, {index, FilterBucket, Q=?KV_INDEX_Q{}}} ->
+            {_, {index,
+                    FilterBucket,
+                    Q=?KV_INDEX_Q{start_key=StartKey0,
+                                    start_inclusive=StartInc}}} ->
+                StartKey = 
+                    case StartInc of
+                        true -> StartKey0;
+                        false -> leveled_codec:next_key(StartKey0)
+                    end,
                 % This is an undocumented thing - required by CS
                 % Copied as far as possible from eleveldb backend - as actual
                 % requirements not known
@@ -402,6 +410,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                         false ->
                             false
                     end,
+                
                 SpecialFoldFun = 
                     fun(ObjB, ObjK, Obj, InnerAcc) ->
                         case riak_index:object_key_in_range({ObjB, ObjK}, 
@@ -409,24 +418,33 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             {true, _BK} ->
                                 case StndObjFold of   
                                     true ->
-                                        FoldObjectsFun(ObjB, ObjK, Obj, 
+                                        FoldObjectsFun(ObjB,
+                                                        ObjK,
+                                                        Obj, 
                                                         InnerAcc);
                                     false ->
                                         % Assumption here is that if this is 
                                         % not flagged as a standard object fold
                                         % it is using a fold_keys_fun -
                                         % so the object is disguised as a key
-                                        FoldObjectsFun(ObjB, {o, ObjK, Obj}, 
+                                        FoldObjectsFun(ObjB,
+                                                        {o, ObjK, Obj}, 
                                                         InnerAcc)
                                 end;
                             {skip, _BK} ->
-                                Acc
+                                InnerAcc;
+                            _ ->
+                                % Required for riak_test/tests/verify_cs_bucket
+                                throw(InnerAcc)
                         end
                     end,
+                % StartKey and StartInclusive based on query, but the EndKey
+                % and EndInclusive should be handled by the passed in fold
+                % function, so null is used for EndKey
                 leveled_bookie:book_objectfold(Bookie, 
                                                 ?RIAK_TAG,
                                                 FilterBucket, 
-                                                all, 
+                                                {StartKey, null}, 
                                                 {SpecialFoldFun, Acc}, 
                                                 false);
             {false, false} ->
