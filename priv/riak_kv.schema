@@ -448,7 +448,7 @@
     {default, on},
     {datatype, flag},
     hidden
-]}
+]}.
 
 %% @doc Controls which binary representation of a riak value is stored
 %% on disk.
