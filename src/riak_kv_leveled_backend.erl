@@ -389,7 +389,15 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
     {async, ObjectFolder} =
         case {lists:keyfind(bucket, 1, Opts), 
                 lists:keyfind(index, 1, Opts)} of
-            {_, {index, FilterBucket, Q=?KV_INDEX_Q{}}} ->
+            {_, {index,
+                    FilterBucket,
+                    Q=?KV_INDEX_Q{start_key=StartKey0,
+                                    start_inclusive=StartInc}}} ->
+                StartKey = 
+                    case StartInc of
+                        true -> StartKey0;
+                        false -> leveled_codec:next_key(StartKey0)
+                    end,
                 % This is an undocumented thing - required by CS
                 % Copied as far as possible from eleveldb backend - as actual
                 % requirements not known
@@ -400,6 +408,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                         false ->
                             false
                     end,
+                
                 SpecialFoldFun = 
                     fun(ObjB, ObjK, Obj, InnerAcc) ->
                         case riak_index:object_key_in_range({ObjB, ObjK}, 
@@ -407,24 +416,46 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             {true, _BK} ->
                                 case StndObjFold of   
                                     true ->
-                                        FoldObjectsFun(ObjB, ObjK, Obj, 
+                                        FoldObjectsFun(ObjB,
+                                                        ObjK,
+                                                        Obj, 
                                                         InnerAcc);
                                     false ->
                                         % Assumption here is that if this is 
                                         % not flagged as a standard object fold
                                         % it is using a fold_keys_fun -
                                         % so the object is disguised as a key
-                                        FoldObjectsFun(ObjB, {o, ObjK, Obj}, 
+                                        FoldObjectsFun(ObjB,
+                                                        {o, ObjK, Obj}, 
                                                         InnerAcc)
                                 end;
                             {skip, _BK} ->
-                                Acc
+                                InnerAcc;
+                            _ ->
+                                % This is expected when object_key_in_range
+                                % returns false - such as when the end of
+                                % range is reached.  An end key could be used
+                                % in the query - but control over end_inclusive
+                                % is gained by instead relying on this range
+                                % check.
+                                %
+                                % This aligns with riak_kv_eleveldb_backend.
+                                % Throw will be handled within riak_kv_worker
+                                % as throw:PrematureAcc - as leveled will
+                                % re-throw, and not expect {break, Acc} to
+                                % re-throw as with eleveldb
+                                throw(InnerAcc)
                         end
                     end,
+                EndKey = null,
+                % StartKey and StartInclusive based on query, but the EndKey
+                % and EndInclusive should be handled by the passed in fold
+                % function (by the riak_index range checker), so null is used
+                % for EndKey
                 leveled_bookie:book_objectfold(Bookie, 
                                                 ?RIAK_TAG,
                                                 FilterBucket, 
-                                                all, 
+                                                {StartKey, EndKey},
                                                 {SpecialFoldFun, Acc}, 
                                                 false);
             {false, false} ->
