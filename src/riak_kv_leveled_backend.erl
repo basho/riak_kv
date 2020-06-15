@@ -447,13 +447,15 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                                 throw(InnerAcc)
                         end
                     end,
+                EndKey = null,
                 % StartKey and StartInclusive based on query, but the EndKey
                 % and EndInclusive should be handled by the passed in fold
-                % function, so null is used for EndKey
+                % function (by the riak_index range checker), so null is used
+                % for EndKey
                 leveled_bookie:book_objectfold(Bookie, 
                                                 ?RIAK_TAG,
                                                 FilterBucket, 
-                                                {StartKey, null}, 
+                                                {StartKey, EndKey},
                                                 {SpecialFoldFun, Acc}, 
                                                 false);
             {false, false} ->
