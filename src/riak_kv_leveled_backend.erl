@@ -432,7 +432,18 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
                             {skip, _BK} ->
                                 InnerAcc;
                             _ ->
-                                % Required for riak_test/tests/verify_cs_bucket
+                                % This is expected when object_key_in_range
+                                % returns false - such as when the end of
+                                % range is reached.  An end key could be used
+                                % in the query - but control over end_inclusive
+                                % is gained by instead relying on this range
+                                % check.
+                                %
+                                % This aligns with riak_kv_eleveldb_backend.
+                                % Throw will be handled within riak_kv_worker
+                                % as throw:PrematureAcc - as leveled will
+                                % re-throw, and not expect {break, Acc} to
+                                % re-throw as with eleveldb
                                 throw(InnerAcc)
                         end
                     end,
