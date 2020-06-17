@@ -439,6 +439,17 @@
   hidden
 ]}.
 
+%% @doc Enable or disable mbox_check on PUTs
+%% By default mbox_checks are performed so that vnodes with long queues
+%% will not be used as put coordinators.  To return to the pre-2.9 behaviour
+%% of not checking, this can be disabled.  The mbox_check may add additional
+%% latency to PUTs in some environments.
+{mapping, "mbox_check_enabled", "riak_kv.mbox_check_enabled", [
+    {default, on},
+    {datatype, flag},
+    hidden
+]}.
+
 %% @doc Controls which binary representation of a riak value is stored
 %% on disk.
 %% * 0: Original erlang:term_to_binary format. Higher space overhead.
