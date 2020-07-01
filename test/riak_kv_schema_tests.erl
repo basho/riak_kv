@@ -54,12 +54,6 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.aae_throttle_enabled", true),
     cuttlefish_unit:assert_not_configured(Config, "riak_kv.aae_throttle_limits"),
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter", true),
-    cuttlefish_unit:assert_config(Config, "riak_kv.map_js_vm_count", 8),
-    cuttlefish_unit:assert_config(Config, "riak_kv.reduce_js_vm_count", 6),
-    cuttlefish_unit:assert_config(Config, "riak_kv.hook_js_vm_count", 2),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_max_vm_mem", 8),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_thread_stack", 16),
-    cuttlefish_unit:assert_not_configured(Config, "riak_kv.js_source_dir"),
     cuttlefish_unit:assert_config(Config, "riak_kv.fsm_limit", 50000),
     cuttlefish_unit:assert_config(Config, "riak_kv.retry_put_coordinator_failure", true),
     cuttlefish_unit:assert_config(Config, "riak_kv.object_format", v1),
@@ -117,12 +111,6 @@ override_non_multi_backend_schema_test() ->
         {["anti_entropy", "throttle", "tier2", "mailbox_size"], 11},
         {["anti_entropy", "throttle", "tier2", "delay"], "10d"},
         {["anti_entropy", "bloomfilter"], off},
-        {["javascript", "map_pool_size"], 16},
-        {["javascript", "reduce_pool_size"], 12},
-        {["javascript", "hook_pool_size"], 4},
-        {["javascript", "maximum_heap_size"], "16MB"},
-        {["javascript", "maximum_stack_size"], "32MB"},
-        {["javascript", "source_dir"], "/tmp/js_source"},
         {["max_concurrent_requests"], 100000},
         {["retry_put_coordinator_failure"], off},
         {["object", "format"], 0},
@@ -169,12 +157,6 @@ override_non_multi_backend_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.aae_throttle_enabled", false),
     cuttlefish_unit:assert_config(Config, "riak_kv.aae_throttle_limits", [{-1, 86400000}, {10, 864000000}]),
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter", false),
-    cuttlefish_unit:assert_config(Config, "riak_kv.map_js_vm_count", 16),
-    cuttlefish_unit:assert_config(Config, "riak_kv.reduce_js_vm_count", 12),
-    cuttlefish_unit:assert_config(Config, "riak_kv.hook_js_vm_count", 4),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_max_vm_mem", 16),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_thread_stack", 32),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_source_dir", "/tmp/js_source"),
     cuttlefish_unit:assert_config(Config, "riak_kv.fsm_limit", 100000),
     cuttlefish_unit:assert_config(Config, "riak_kv.retry_put_coordinator_failure", false),
     cuttlefish_unit:assert_config(Config, "riak_kv.object_format", v0),
@@ -249,12 +231,6 @@ multi_backend_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.aae_throttle_enabled", true),
     cuttlefish_unit:assert_not_configured(Config, "riak_kv.aae_throttle_limits"),
     cuttlefish_unit:assert_config(Config, "riak_kv.anti_entropy_leveldb_opts.use_bloomfilter", true),
-    cuttlefish_unit:assert_config(Config, "riak_kv.map_js_vm_count", 8),
-    cuttlefish_unit:assert_config(Config, "riak_kv.reduce_js_vm_count", 6),
-    cuttlefish_unit:assert_config(Config, "riak_kv.hook_js_vm_count", 2),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_max_vm_mem", 8),
-    cuttlefish_unit:assert_config(Config, "riak_kv.js_thread_stack", 16),
-    cuttlefish_unit:assert_not_configured(Config, "riak_kv.js_source_dir"),
     cuttlefish_unit:assert_config(Config, "riak_kv.fsm_limit", 50000),
     cuttlefish_unit:assert_config(Config, "riak_kv.retry_put_coordinator_failure", true),
     cuttlefish_unit:assert_config(Config, "riak_kv.object_format", v1),
@@ -423,10 +399,7 @@ test_job_class_enabled({error, enoent}) ->
 %% in real life.
 context() ->
     [
-        {storage_backend, "bitcask"},
-        {map_js_vms,   8},
-        {reduce_js_vms, 6},
-        {hook_js_vms, 2}
+        {storage_backend, "bitcask"}
     ].
 
 %% This predefined schema covers riak_kv's dependency on
