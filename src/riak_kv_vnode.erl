@@ -149,8 +149,10 @@
                     :: list(riak_kv_entropy_manager:exchange()),
                 tictac_exchangecount = 0 :: integer(),
                 tictac_deltacount = 0 :: integer(),
+                tictac_exchangetime = 0 :: integer(),
                 tictac_startqueue = os:timestamp() :: erlang:timestamp(),
                 tictac_rebuilding = false :: erlang:timestamp()|false,
+                tictac_skiptick = 0 :: non_neg_integer(),
                 worker_pool_strategy = single :: none|single|dscp,
                 vnode_pool_pid :: undefined|pid(),
                 update_hook :: update_hook(),
@@ -205,6 +207,7 @@
 
 -define(MAX_AAE_QUEUE_TIME, 1000). 
     %% Queue time in ms to prompt a sync ping.
+-define(AAE_SKIP_COUNT, 10).
 
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
@@ -376,16 +379,18 @@ preflistfun(Bucket, Key) -> riak_kv_util:get_index_n({Bucket, Key}).
 %% Function to be passed to return a response once an operation is complete
 tictac_returnfun(Partition, exchange) ->
     Vnode = {Partition, node()},
+    StartTime = os:timestamp(),
     ReturnFun = 
         fun(ExchangeResult) ->
-            ok = tictacexchange_complete(Vnode, ExchangeResult)
+            ok = tictacexchange_complete(Vnode, StartTime, ExchangeResult)
         end,
     ReturnFun;
 tictac_returnfun(Partition, RebuildType) ->
     Vnode = {Partition, node()},
+    StartTime = os:timestamp(),
     ReturnFun = 
         fun(ok) ->
-            ok = tictacrebuild_complete(Vnode, RebuildType)
+            ok = tictacrebuild_complete(Vnode, StartTime, RebuildType)
         end,
     ReturnFun.
 
@@ -472,21 +477,28 @@ aae_send(Preflist) ->
                                         riak_kv_vnode_master)
     end.
 
--spec tictacrebuild_complete({partition(), node()}, store|trees) -> ok.
+-spec tictacrebuild_complete({partition(), node()},
+                                erlang:timestamp(),
+                                store|trees) -> ok.
 %% @doc
 %% Inform the vnode that an aae rebuild is complete
-tictacrebuild_complete(Vnode, ProcessType) ->
+tictacrebuild_complete(Vnode, StartTime, ProcessType) ->
     riak_core_vnode_master:command(Vnode, 
-                                    {rebuild_complete, ProcessType},
+                                    {rebuild_complete,
+                                        ProcessType,
+                                        StartTime},
                                     riak_kv_vnode_master).
 
--spec tictacexchange_complete({partition(), node()}, 
+-spec tictacexchange_complete({partition(), node()},
+                                erlang:timestamp(),
                                 {atom(), non_neg_integer()}) -> ok.
 %% @doc
 %% Infor the vnode that an aae exchange is complete
-tictacexchange_complete(Vnode, ExchangeResult) ->
+tictacexchange_complete(Vnode, StartTime, ExchangeResult) ->
     riak_core_vnode_master:command(Vnode, 
-                                    {exchange_complete, ExchangeResult},
+                                    {exchange_complete,
+                                        ExchangeResult,
+                                        StartTime},
                                     riak_kv_vnode_master).
 
 get(Preflist, BKey, ReqId) ->
@@ -1013,23 +1025,34 @@ handle_command({fold_indexes, FoldIndexFun, Acc}, Sender, State=#state{mod=Mod, 
     end;
 
 
-handle_command({rebuild_complete, store}, _Sender, State) ->
+handle_command({rebuild_complete, store, ST}, _Sender, State) ->
     %% If store rebuild complete - then need to rebuild trees
     AAECntrl = State#state.aae_controller,
     Partition = State#state.idx,
     Preflists = riak_kv_util:responsible_preflists(Partition),
+    lager:info("AAE pid=~w partition=~w rebuild store complete " ++
+                "in duration=~w seconds",
+                [AAECntrl,
+                    Partition,
+                    timer:now_diff(os:timestamp(), ST) div (1000 * 1000)]),
     aae_controller:aae_rebuildtrees(AAECntrl,
                                     Preflists,
                                     fun preflistfun/2, 
                                     rebuildtrees_workerfun(Partition, State),
                                     false),
-    lager:info("AAE Controller rebuild trees started with pid ~w", [AAECntrl]),
+    lager:info("AAE pid=~w rebuild trees started", [AAECntrl]),
     {noreply, State};
 
-handle_command({rebuild_complete, trees}, _Sender, State) ->
+handle_command({rebuild_complete, trees, ST}, _Sender, State) ->
     % Rebuilding the trees now complete, so change the status of the 
     % rebuilding state so other rebuilds may be prompted
+    AAECntrl = State#state.aae_controller,
     Partition = State#state.idx,
+    lager:info("AAE pid=~w partition=~w rebuild trees complete " ++ 
+                "in duration=~w seconds",
+                [AAECntrl,
+                    Partition,
+                    timer:now_diff(os:timestamp(), ST) div (1000 * 1000)]),
     case State#state.tictac_rebuilding of
         false ->
             lager:warning("Rebuild complete for Partition=~w but not expected",
@@ -1043,11 +1066,18 @@ handle_command({rebuild_complete, trees}, _Sender, State) ->
             {noreply, State#state{tictac_rebuilding = false}}
     end;
 
-handle_command({exchange_complete, {_EndState, DeltaCount}}, _Sender, State) ->
+handle_command({exchange_complete, {_EndState, DeltaCount}, ST},
+                                                    _Sender, State) ->
     %% Record how many deltas were seen in the exchange
+    %% Revert the skip_count to 0 so that exchanges can be made at the next
+    %% prompt.
     XC = State#state.tictac_exchangecount + 1,
     DC = State#state.tictac_deltacount + DeltaCount,
-    {noreply, State#state{tictac_exchangecount = XC, tictac_deltacount = DC}};
+    XT = State#state.tictac_exchangetime + timer:now_diff(os:timestamp(), ST),
+    {noreply, State#state{tictac_exchangecount = XC,
+                            tictac_deltacount = DC,
+                            tictac_exchangetime = XT,
+                            tictac_skiptick = 0}};
 
 handle_command({upgrade_hashtree, Node}, _, State=#state{hashtrees=HT}) ->
     %% Make sure we dont kick off an upgrade during a possible handoff
@@ -1084,8 +1114,8 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
     XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
     riak_core_vnode:send_command_after(XTick, tictacaae_exchangepoke),
     Idx = State#state.idx,
-    case State#state.tictac_exchangequeue of
-        [] ->
+    case {State#state.tictac_exchangequeue, State#state.tictac_skiptick} of
+        {[], _} ->
             {ok, Ring} = 
                 riak_core_ring_manager:get_my_ring(),
             Exchanges = 
@@ -1103,17 +1133,20 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                             ++ "exchanges expected=~w "
                             ++ "exchanges completed=~w "
                             ++ "total deltas=~w "
+                            ++ "total exchange_time=~w seconds"
                             ++ "loop duration=~w seconds (elapsed)",
                         [Idx,
                             length(Exchanges),
                             State#state.tictac_exchangecount,
                             State#state.tictac_deltacount,
+                            State#state.tictac_exchangetime div (1000 * 1000),
                             LoopDuration div (1000 * 1000)]),
             {noreply, State#state{tictac_exchangequeue = Exchanges,
                                     tictac_exchangecount = 0,
                                     tictac_deltacount = 0,
+                                    tictac_exchangetime = 0,
                                     tictac_startqueue = Now}};
-        [{Local, Remote, {DocIdx, N}}|Rest] ->
+        {[{Local, Remote, {DocIdx, N}}|Rest], 0} ->
             PrimaryOnly =
                 app_helper:get_env(riak_kv, tictacaae_primaryonly, true),
                 % By default TictacAAE exchanges are run only between primary
@@ -1130,32 +1163,45 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                     false ->
                         riak_core_apl:get_apl(PlLup, N, riak_kv)
                 end,
-            case {lists:keyfind(Local, 1, PL), lists:keyfind(Remote, 1, PL)} of
-                {{Local, LN}, {Remote, RN}} ->
-                    IndexN = {DocIdx, N},
-                    BlueList = 
-                        [{riak_kv_vnode:aae_send({Local, LN}), [IndexN]}],
-                    PinkList = 
-                        [{riak_kv_vnode:aae_send({Remote, RN}), [IndexN]}],
-                    RepairFun = 
-                        riak_kv_get_fsm:prompt_readrepair([{Local, LN}, 
-                                                            {Remote, RN}]),
-                    ReplyFun = tictac_returnfun(Idx, exchange),
-                    aae_exchange:start(BlueList, 
-                                        PinkList, 
-                                        RepairFun, 
-                                        ReplyFun);
+            SkipCount =
+                case {lists:keyfind(Local, 1, PL),
+                        lists:keyfind(Remote, 1, PL)} of
+                    {{Local, LN}, {Remote, RN}} ->
+                        IndexN = {DocIdx, N},
+                        BlueList = 
+                            [{riak_kv_vnode:aae_send({Local, LN}), [IndexN]}],
+                        PinkList = 
+                            [{riak_kv_vnode:aae_send({Remote, RN}), [IndexN]}],
+                        RepairFun = 
+                            riak_kv_get_fsm:prompt_readrepair([{Local, LN}, 
+                                                                {Remote, RN}]),
+                        ReplyFun = tictac_returnfun(Idx, exchange),
+                        ScanTimeout = ?AAE_SKIP_COUNT * XTick,
+                        aae_exchange:start(full,
+                                            BlueList, 
+                                            PinkList, 
+                                            RepairFun, 
+                                            ReplyFun,
+                                            none,
+                                            [{scan_timeout, ScanTimeout}]),
+                        ?AAE_SKIP_COUNT;
                 _ ->
                     lager:warning("Proposed exchange between ~w and ~w " ++ 
                                     "not currently supported within " ++
-                                    "preflist for IndexN=~w possibly due to " ++
-                                    "node failure",
-                                    [Local, Remote, {DocIdx, N}])
+                                    "preflist for IndexN=~w possibly " ++
+                                    "due to node failure",
+                                    [Local, Remote, {DocIdx, N}]),
+                        0
             end,
             ok = aae_controller:aae_ping(State#state.aae_controller,
                                             os:timestamp(),
                                             self()),
-            {noreply, State#state{tictac_exchangequeue = Rest}}
+            {noreply, State#state{tictac_exchangequeue = Rest,
+                                    tictac_skiptick = SkipCount}};
+        {_, SkipCount} ->
+            lager:warning("Skipping a tick due to non_zero " ++
+                            "skip_count=~w", [SkipCount]),
+            {noreply, State#state{tictac_skiptick = SkipCount - 1}}
     end;
 
 handle_command(tictacaae_rebuildpoke, Sender, State) ->
