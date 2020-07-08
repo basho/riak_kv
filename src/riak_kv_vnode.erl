@@ -320,6 +320,9 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
 
+    StepInitialTick =
+        app_helper:get_env(riak_kv, tictacaae_stepinitialtick, true),
+
     StoreHead = app_helper:get_env(riak_kv, tictacaae_storeheads),
     ObjSplitFun = riak_object:aae_from_object_binary(StoreHead),
 
@@ -349,18 +352,31 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     InitD = erlang:phash2(Partition, 256),
     % Space out the initial poke to avoid over-coordination between vnodes,
     % each of up to 256 vnodes will end on a different point in the slot, with
-    % the points wrpaping every 256 vnodes (assuming coordinated restart)
+    % the points wrpaping every 256 vnodes (assuming coordinated restart)    
     FirstRebuildDelay = (RTick div 256) * InitD,
     FirstExchangeDelay = (XTick div 256) * InitD,
     riak_core_vnode:send_command_after(FirstRebuildDelay, 
                                         tictacaae_rebuildpoke),
     riak_core_vnode:send_command_after(FirstExchangeDelay, 
                                         tictacaae_exchangepoke),
+    
+    InitalStep =
+        case StepInitialTick of
+            true ->
+                % Stops each vnode from re-filling the AAE work queue at the
+                % same time, creating a pause in AAE across the cluster if all
+                % nodes in the cluster were started concurrently
+                erlang:phash2(Partition, 8);
+            false ->
+                % During riak_test we set this to false
+                0
+        end,
 
     State#state{tictac_aae = true,
                 aae_controller = AAECntrl,
                 modstate = ModState,
-                tictac_rebuilding = Rebuilding}.
+                tictac_rebuilding = Rebuilding,
+                tictac_skiptick = InitalStep}.
 
 
 -spec determine_aaedata_root(integer()) -> list().
