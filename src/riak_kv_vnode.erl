@@ -333,21 +333,9 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                                     Preflists, 
                                     RootPath, 
                                     ObjSplitFun),
-    R = aae_controller:aae_rebuildtrees(AAECntrl, 
-                                        Preflists, 
-                                        fun preflistfun/2, 
-                                        rebuildtrees_workerfun(Partition, 
-                                                                State),
-                                        true),
-    lager:info("AAE Controller started with pid ~w and rebuild state ~w", 
-                [AAECntrl, R]),
-    Rebuilding = 
-        case R of
-            ok -> 
-                os:timestamp();
-            skipped ->
-                false
-        end,
+    queue_tictactreerebuild(AAECntrl, Partition, true, State),
+    lager:info("AAE Controller started with pid=~w", [AAECntrl]),
+    Rebuilding = os:timestamp(),
     
     InitD = erlang:phash2(Partition, 256),
     % Space out the initial poke to avoid over-coordination between vnodes,
@@ -423,26 +411,48 @@ tictac_rebuild(B, K, V) ->
     Clock = element(1, riak_object:summary_from_binary(V)),
     {IndexN, Clock}.
 
--spec rebuildtrees_workerfun(partition(), state()) -> fun().
 %% @doc
-%% A wrapper around the node_worker_pool to provide workers for tictac aae
-%% folds.  As the pool is a named pool started with riak_core, should be safe
-%% to used in init of inidivdual vnodes.
-rebuildtrees_workerfun(Partition, State) ->
-    fun(FoldFun, FinishFun) ->
-        Sender = self(),
-        ReturnFun = tictac_returnfun(Partition, trees),
-        FinishPlusReturnFun =
-            fun(WorkOutput) ->
-                FinishFun(WorkOutput),
-                ReturnFun(ok)
+%% Queue a tictac tree rebuild.  There are occasions when all vnodes queue this
+%% at the same time, so important that the snapshot for the rebuild is taken
+%% only when the fold is initiated.  Otherwise the snapshot may expire whilst
+%% sat on the queue
+-spec queue_tictactreerebuild(pid(), partition(), boolean(), state()) -> ok.
+queue_tictactreerebuild(AAECntrl, Partition, OnlyIfBroken, State) ->
+    Preflists = riak_kv_util:responsible_preflists(Partition),
+    Sender = self(),
+    ReturnFun = tictac_returnfun(Partition, trees),
+    FoldFun =
+        fun() ->
+            lager:info("Starting tree rebuild for partition=~w", [Partition]),
+            SW = os:timestamp(),
+            case aae_controller:aae_rebuildtrees(AAECntrl,
+                                                    Preflists,
+                                                    fun preflistfun/2,
+                                                    OnlyIfBroken) of
+                {ok, StoreFold, FinishFun} ->
+                    Output = StoreFold(),
+                    FinishFun(Output),
+                    Duration =
+                        timer:now_diff(os:timestamp(), SW) div (1000 * 1000),
+                    lager:info("Tree rebuild complete for partition=~w" ++
+                                " in duration=~w seconds", 
+                                [Partition, Duration]);
+                skipped ->
+                    lager:info("tree rebuild skipped for partition=~w",
+                                [Partition])
             end,
-        Pool = select_queue(be_pool, State),
-        riak_core_vnode:queue_work(Pool, 
-                                    {fold, FoldFun, FinishPlusReturnFun},
-                                    Sender,
-                                    State#state.vnode_pool_pid)
-    end.
+            ok
+        end,
+    JustReturnFun =
+        fun(ok) ->
+            ReturnFun(ok)
+        end,
+    Pool = select_queue(be_pool, State),
+    riak_core_vnode:queue_work(Pool, 
+                                {fold, FoldFun, JustReturnFun},
+                                Sender,
+                                State#state.vnode_pool_pid).
+
 
 %% @doc Reveal the underlying module state for testing
 -spec(get_modstate(state()) -> {atom(), state()}).
@@ -1047,40 +1057,28 @@ handle_command({rebuild_complete, store, ST}, _Sender, State) ->
     %% If store rebuild complete - then need to rebuild trees
     AAECntrl = State#state.aae_controller,
     Partition = State#state.idx,
-    Preflists = riak_kv_util:responsible_preflists(Partition),
     lager:info("AAE pid=~w partition=~w rebuild store complete " ++
                 "in duration=~w seconds",
                 [AAECntrl,
                     Partition,
                     timer:now_diff(os:timestamp(), ST) div (1000 * 1000)]),
-    aae_controller:aae_rebuildtrees(AAECntrl,
-                                    Preflists,
-                                    fun preflistfun/2, 
-                                    rebuildtrees_workerfun(Partition, State),
-                                    false),
-    lager:info("AAE pid=~w rebuild trees started", [AAECntrl]),
+    queue_tictactreerebuild(AAECntrl, Partition, false, State),
+    lager:info("AAE pid=~w rebuild trees queued", [AAECntrl]),
     {noreply, State};
 
-handle_command({rebuild_complete, trees, ST}, _Sender, State) ->
+handle_command({rebuild_complete, trees, _ST}, _Sender, State) ->
     % Rebuilding the trees now complete, so change the status of the 
     % rebuilding state so other rebuilds may be prompted
-    AAECntrl = State#state.aae_controller,
     Partition = State#state.idx,
-    lager:info("AAE pid=~w partition=~w rebuild trees complete " ++ 
-                "in duration=~w seconds",
-                [AAECntrl,
-                    Partition,
-                    timer:now_diff(os:timestamp(), ST) div (1000 * 1000)]),
     case State#state.tictac_rebuilding of
         false ->
             lager:warning("Rebuild complete for Partition=~w but not expected",
-                        [Partition]),
+                            [Partition]),
             {noreply, State};
         TS ->
-            RebuildTime = timer:now_diff(os:timestamp(), TS) / (1000 * 1000),
-            lager:info("Rebuild complete for " ++ 
-                            "Partition=~w in duration=~w seconds",
-                        [Partition, RebuildTime]),
+            ProcessTime = timer:now_diff(os:timestamp(), TS) div (1000 * 1000),
+            lager:info("Rebuild process for partition=~w complete in " ++
+                        "duration=~w seconds", [Partition, ProcessTime]),
             {noreply, State#state{tictac_rebuilding = false}}
     end;
 
