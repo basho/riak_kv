@@ -438,7 +438,7 @@ queue_tictactreerebuild(AAECntrl, Partition, OnlyIfBroken, State) ->
                                 " in duration=~w seconds", 
                                 [Partition, Duration]);
                 skipped ->
-                    lager:info("tree rebuild skipped for partition=~w",
+                    lager:info("Tree rebuild skipped for partition=~w",
                                 [Partition])
             end,
             ok
@@ -1250,6 +1250,8 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
             {noreply, State};
         {true, false} ->
             % Next Rebuild Time is in the past - prompt a rebuild
+            lager:info("Prompting tictac_aae rebuild for controller=~w", 
+                        [State#state.aae_controller]),
             ReturnFun = tictac_returnfun(State#state.idx, store),
             State0 = State#state{tictac_rebuilding = os:timestamp()},
             case aae_controller:aae_rebuildstore(State#state.aae_controller, 
