@@ -453,7 +453,7 @@ queue_tictactreerebuild(AAECntrl, Partition, OnlyIfBroken, State) ->
                                 Sender,
                                 State#state.vnode_pool_pid).
 
-when_loading_complate(AAECntrl, Preflists, PreflistFun, OnlyIfBroken) ->
+when_loading_complete(AAECntrl, Preflists, PreflistFun, OnlyIfBroken) ->
     R = aae_controller:aae_rebuildtrees(AAECntrl,
                                         Preflists, PreflistFun,
                                         OnlyIfBroken),
