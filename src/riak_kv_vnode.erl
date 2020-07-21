@@ -425,10 +425,10 @@ queue_tictactreerebuild(AAECntrl, Partition, OnlyIfBroken, State) ->
         fun() ->
             lager:info("Starting tree rebuild for partition=~w", [Partition]),
             SW = os:timestamp(),
-            case aae_controller:aae_rebuildtrees(AAECntrl,
-                                                    Preflists,
-                                                    fun preflistfun/2,
-                                                    OnlyIfBroken) of
+            case when_loading_complete(AAECntrl,
+                                        Preflists,
+                                        fun preflistfun/2,
+                                        OnlyIfBroken) of
                 {ok, StoreFold, FinishFun} ->
                     Output = StoreFold(),
                     FinishFun(Output),
@@ -452,6 +452,21 @@ queue_tictactreerebuild(AAECntrl, Partition, OnlyIfBroken, State) ->
                                 {fold, FoldFun, JustReturnFun},
                                 Sender,
                                 State#state.vnode_pool_pid).
+
+when_loading_complate(AAECntrl, Preflists, PreflistFun, OnlyIfBroken) ->
+    R = aae_controller:aae_rebuildtrees(AAECntrl,
+                                        Preflists, PreflistFun,
+                                        OnlyIfBroken),
+    case R of
+        loading ->
+            timer:sleep(1000),
+            when_loading_complete(AAECntrl,
+                                    Preflists,
+                                    PreflistFun,
+                                    OnlyIfBroken);
+        _ ->
+            R
+    end.
 
 
 %% @doc Reveal the underlying module state for testing
