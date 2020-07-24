@@ -340,9 +340,9 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     InitD = erlang:phash2(Partition, 256),
     % Space out the initial poke to avoid over-coordination between vnodes,
     % each of up to 256 vnodes will end on a different point in the slot, with
-    % the points wrpaping every 256 vnodes (assuming coordinated restart)    
-    FirstRebuildDelay = (RTick div 256) * InitD,
-    FirstExchangeDelay = (XTick div 256) * InitD,
+    % the points wrapping every 256 vnodes (assuming coordinated restart)    
+    FirstRebuildDelay = RTick + ((RTick div 256) * InitD),
+    FirstExchangeDelay = XTick + ((XTick div 256) * InitD),
     riak_core_vnode:send_command_after(FirstRebuildDelay, 
                                         tictacaae_rebuildpoke),
     riak_core_vnode:send_command_after(FirstExchangeDelay, 

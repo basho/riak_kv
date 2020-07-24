@@ -69,7 +69,7 @@
 %% @doc Store heads in parallel key stores
 %% If running a parallel key store, the whole "head" object may be stored to 
 %% allow for fold_heads queries to be run against the parallel store.  
-%% Alternatively, the cost of the paralle key store can be reduced by storing 
+%% Alternatively, the cost of the parallel key store can be reduced by storing 
 %% only a minimal data set necessary for AAE and monitoring
 {mapping, "tictacaae_storeheads", "riak_kv.tictacaae_storeheads", [
   {datatype, {flag, enabled, disabled}},
@@ -92,10 +92,13 @@
 
 %% @doc Frequency to prompt rebuild check per vnode
 %% The number of milliseconds which the vnode must wait between self-pokes to
-%% maybe prompt the next rebuild. Default is 30 minutes.  
+%% maybe prompt the next rebuild. Default is 60 minutes.
+%% When a node is being re-introduced to a cluster following a long delay, then
+%% increase this tick prior to the reintroduction.  This will reduce
+%% the concurrency of some activity e.g. handoffs and rebuilds
 {mapping, "tictacaae_rebuildtick", "riak_kv.tictacaae_rebuildtick", [
   {datatype, integer},
-  {default, 1800000},
+  {default, 3600000},
   hidden
 ]}.
 
