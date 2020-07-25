@@ -208,6 +208,7 @@
 -define(MAX_AAE_QUEUE_TIME, 1000). 
     %% Queue time in ms to prompt a sync ping.
 -define(AAE_SKIP_COUNT, 10).
+-define(AAE_LOADING_WAIT, 5000).
 
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
@@ -454,18 +455,25 @@ queue_tictactreerebuild(AAECntrl, Partition, OnlyIfBroken, State) ->
                                 State#state.vnode_pool_pid).
 
 when_loading_complete(AAECntrl, Preflists, PreflistFun, OnlyIfBroken) ->
-    R = aae_controller:aae_rebuildtrees(AAECntrl,
-                                        Preflists, PreflistFun,
-                                        OnlyIfBroken),
-    case R of
-        loading ->
-            timer:sleep(1000),
-            when_loading_complete(AAECntrl,
-                                    Preflists,
-                                    PreflistFun,
-                                    OnlyIfBroken);
+    case is_process_alive(AAECntrl) of
+        true ->
+            R = aae_controller:aae_rebuildtrees(AAECntrl,
+                                                Preflists, PreflistFun,
+                                                OnlyIfBroken),
+            case R of
+                loading ->
+                    timer:sleep(?AAE_LOADING_WAIT),
+                    when_loading_complete(AAECntrl,
+                                            Preflists,
+                                            PreflistFun,
+                                            OnlyIfBroken);
+                _ ->
+                    R
+            end;
         _ ->
-            R
+            % May have queued a rebuild for a vnode aae controller for an
+            % exited vnode (e.g. one which has completed handoff)
+            skipped
     end.
 
 
