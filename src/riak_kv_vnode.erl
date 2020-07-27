@@ -1244,11 +1244,13 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
 
 handle_command(tictacaae_rebuildpoke, _Sender, State=#state{tictac_startup=TS})
                                 when TS == true ->
+    RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
+    riak_core_vnode:send_command_after(RTick, tictacaae_rebuildpoke),
     AAECntrl = State#state.aae_controller,
     Partition = State#state.idx,
     queue_tictactreerebuild(AAECntrl, Partition, true, State),
     {noreply, State#state{tictac_rebuilding = os:timestamp(),
-                            tictac_startup=false}};
+                            tictac_startup = false}};
 
 
 handle_command(tictacaae_rebuildpoke, Sender, State) ->
