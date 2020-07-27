@@ -153,6 +153,7 @@
                 tictac_startqueue = os:timestamp() :: erlang:timestamp(),
                 tictac_rebuilding = false :: erlang:timestamp()|false,
                 tictac_skiptick = 0 :: non_neg_integer(),
+                tictac_startup = true :: boolean(),
                 worker_pool_strategy = single :: none|single|dscp,
                 vnode_pool_pid :: undefined|pid(),
                 update_hook :: update_hook(),
@@ -334,9 +335,7 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
                                     Preflists, 
                                     RootPath, 
                                     ObjSplitFun),
-    queue_tictactreerebuild(AAECntrl, Partition, true, State),
     lager:info("AAE Controller started with pid=~w", [AAECntrl]),
-    Rebuilding = os:timestamp(),
     
     InitD = erlang:phash2(Partition, 256),
     % Space out the initial poke to avoid over-coordination between vnodes,
@@ -364,7 +363,7 @@ maybe_start_aaecontroller(active, State=#state{mod=Mod,
     State#state{tictac_aae = true,
                 aae_controller = AAECntrl,
                 modstate = ModState,
-                tictac_rebuilding = Rebuilding,
+                tictac_rebuilding = false,
                 tictac_skiptick = InitalStep}.
 
 
@@ -1243,14 +1242,23 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
             {noreply, State#state{tictac_skiptick = SkipCount - 1}}
     end;
 
+handle_command(tictacaae_rebuildpoke, Sender, State=#state{tictac_startup=TS})
+                                when TS == true ->
+    AAECntrl = State#state.aae_controller,
+    Partition = State#state.idx,
+    queue_tictactreerebuild(AAECntrl, Partition, true, State),
+    {noreply, State#state{tictac_rebuilding = os:timestamp(),
+                            tictac_startup=false}};
+
+
 handle_command(tictacaae_rebuildpoke, Sender, State) ->
     NRT = aae_controller:aae_nextrebuild(State#state.aae_controller),
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
     riak_core_vnode:send_command_after(RTick, tictacaae_rebuildpoke),
     TimeToRebuild = timer:now_diff(NRT, os:timestamp()),
     RebuildPending = State#state.tictac_rebuilding =/= false,
-
-    case {TimeToRebuild < 0, RebuildPending} of 
+    
+    case {TimeToRebuild < 0, RebuildPending, TriggerRebuild} of 
         {false, _} ->
             lager:info("No rebuild as next_rebuild=~w seconds in the future",
                         [TimeToRebuild / (1000 * 1000)]),
