@@ -1242,7 +1242,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
             {noreply, State#state{tictac_skiptick = SkipCount - 1}}
     end;
 
-handle_command(tictacaae_rebuildpoke, Sender, State=#state{tictac_startup=TS})
+handle_command(tictacaae_rebuildpoke, _Sender, State=#state{tictac_startup=TS})
                                 when TS == true ->
     AAECntrl = State#state.aae_controller,
     Partition = State#state.idx,
@@ -1258,7 +1258,7 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
     TimeToRebuild = timer:now_diff(NRT, os:timestamp()),
     RebuildPending = State#state.tictac_rebuilding =/= false,
     
-    case {TimeToRebuild < 0, RebuildPending, TriggerRebuild} of 
+    case {TimeToRebuild < 0, RebuildPending} of 
         {false, _} ->
             lager:info("No rebuild as next_rebuild=~w seconds in the future",
                         [TimeToRebuild / (1000 * 1000)]),
