@@ -79,14 +79,14 @@
 
 %% @doc Frequency to prompt exchange per vnode
 %% The number of milliseconds which the vnode must wait between self-pokes to
-%% maybe prompt the next exchange. Default is 5 minutes.
-%% Note if this is to be reduced to 2 minutes or below the riak_core
-%% vnode_inactivity_timeout should also be reduced or handoffs may be
-%% blocked.  To be safe the vnode_inactivity_timeout must be < 0.5 * the
-%% tictacaae_exchangetick. 
+%% maybe prompt the next exchange. Default is 4 minutes - check all partitions
+%% when n=3 every 30 minutes.
+%% Note if this is to be reduced further the riak_core vnode_inactivity_timeout
+%% should also be reduced or handoffs may be blocked.  To be safe the 
+%% vnode_inactivity_timeout must be < 0.5 * the tictacaae_exchangetick. 
 {mapping, "tictacaae_exchangetick", "riak_kv.tictacaae_exchangetick", [
   {datatype, integer},
-  {default, 300000},
+  {default, 240000},
   hidden
 ]}.
 

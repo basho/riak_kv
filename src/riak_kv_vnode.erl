@@ -1244,6 +1244,10 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
 
 handle_command(tictacaae_rebuildpoke, _Sender, State=#state{tictac_startup=TS})
                                 when TS == true ->
+    % On startup the first poke should check if the trees need rebuilding, e.g.
+    % as the tree was not persisted when shutdown.  This won't rebuild unless
+    % the trees have been marked as broken.  Trees are marked as broken in a
+    % non-empty store where trees do not exist.
     RTick = app_helper:get_env(riak_kv, tictacaae_rebuildtick),
     riak_core_vnode:send_command_after(RTick, tictacaae_rebuildpoke),
     AAECntrl = State#state.aae_controller,
