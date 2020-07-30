@@ -635,8 +635,14 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
     end,
     {stop,normal,StateData}.
 
-
+-spec prompt_readrepair([{riak_core_ring:partition_id(), node()}]) ->
+    fun((list({{riak_object:bucket(), riak_object:key()},
+                {vclock:vclock(), vclock:vclock()}})) -> ok).
 prompt_readrepair(VnodeList) ->
+    prompt_readrepair(VnodeList, 
+                        app_helper:get_env(riak_kv, log_read_repair, false)).
+
+prompt_readrepair(VnodeList, LogRepair) ->
     {ok, C} = riak:local_client(),
     FetchFun = 
         fun({{B, K}, {_BlueClock, _PinkClock}}) ->
@@ -646,12 +652,24 @@ prompt_readrepair(VnodeList) ->
         fun({{B, K}, {_BlueClock, _PinkClock}}) ->
             riak_kv_vnode:rehash(VnodeList, B, K)
         end,
+    LogFun = 
+        fun({{B, K}, {BlueClock, PinkClock}}) ->
+            lager:info(
+                "Prompted read repair Bucket=~w Key=~w Clocks ~w ~w",
+                    [B, K, BlueClock, PinkClock])
+        end,
     fun(RepairList) ->
         lager:info("Repairing ~w keys between ~w", 
                     [length(RepairList), VnodeList]),
         lists:foreach(FetchFun, RepairList),
         timer:sleep(1000), % Sleep for repairs to complete
-        lists:foreach(RehashFun, RepairList)
+        lists:foreach(RehashFun, RepairList),
+        case LogRepair of
+            true ->
+                lists:foreach(LogFun, RepairList);
+            false ->
+                ok
+        end
     end.
 
 reply_fun({EndStateName, DeltaCount}) ->
