@@ -3422,19 +3422,19 @@ fold_type_for_query(Query) ->
 maybe_enable_async_fold(AsyncFolding, Capabilities, Opts) ->
     AsyncBackend = lists:member(async_fold, Capabilities),
     options_for_folding_and_backend(Opts,
-									AsyncFolding andalso AsyncBackend,
-									async_fold).
+                                    AsyncFolding andalso AsyncBackend,
+                                    async_fold).
 
 -spec maybe_enable_snap_prefold(boolean(), list(), list()) -> list().
 maybe_enable_snap_prefold(SnapFolding, Capabilities, Opts) ->
 	SnapBackend = lists:member(snap_prefold, Capabilities),
     options_for_folding_and_backend(Opts,
-									SnapFolding andalso SnapBackend,
-									snap_prefold).
+                                    SnapFolding andalso SnapBackend,
+                                    snap_prefold).
 
 -spec options_for_folding_and_backend(list(),
-										UseAsyncFolding :: boolean(),
-										atom()) -> list().
+                                        UseAsyncFolding :: boolean(),
+                                        atom()) -> list().
 options_for_folding_and_backend(Opts, true, async_fold) ->
     [async_fold | Opts];
 options_for_folding_and_backend(Opts, true, snap_prefold) ->
