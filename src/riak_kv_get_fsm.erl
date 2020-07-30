@@ -640,7 +640,7 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
                 {vclock:vclock(), vclock:vclock()}})) -> ok).
 prompt_readrepair(VnodeList) ->
     prompt_readrepair(VnodeList, 
-                        app_helper:get_env(riak_kv, log_read_repair, false)).
+                        app_helper:get_env(riak_kv, log_readrepair, false)).
 
 prompt_readrepair(VnodeList, LogRepair) ->
     {ok, C} = riak:local_client(),
