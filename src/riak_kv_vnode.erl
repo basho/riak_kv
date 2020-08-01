@@ -154,6 +154,7 @@
                 tictac_rebuilding = false :: erlang:timestamp()|false,
                 tictac_skiptick = 0 :: non_neg_integer(),
                 tictac_startup = true :: boolean(),
+                aae_tokenbucket = true :: boolean(),
                 worker_pool_strategy = single :: none|single|dscp,
                 vnode_pool_pid :: undefined|pid(),
                 update_hook :: update_hook(),
@@ -801,6 +802,8 @@ init([Index]) ->
         app_helper:get_env(riak_kv, tictacaae_active, passive),
     WorkerPoolStrategy =
         app_helper:get_env(riak_kv, worker_pool_strategy),
+    TokenBucket =
+        app_helper:get_env(riak_kv, aae_tokenbucket, true),
     MaxAAEQueueTime =
         app_helper:get_env(riak_kv, max_aae_queue_time, ?MAX_AAE_QUEUE_TIME),
     EnableNextGenReplSrc = 
@@ -835,6 +838,7 @@ init([Index]) ->
                            worker_pool_strategy=WorkerPoolStrategy,
                            update_hook=update_hook(),
                            max_aae_queue_time=MaxAAEQueueTime,
+                           aae_tokenbucket=TokenBucket,
                            enable_nextgenreplsrc = EnableNextGenReplSrc,
                            sizelimit_nextgenreplsrc = SizeLimitNextGenReplSrc},
             try_set_vnode_lock_limit(Index),
@@ -3577,8 +3581,14 @@ nextgenrepl(_B, _K, _Obj, _Size, _Coord, _Enabled, _Limit) ->
 %% @doc
 %% Update both the AAE controller (tictac aae) and old school hashtree aae
 %% if either or both are enabled.
-aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
-    case State#state.hashtrees of 
+aae_update(_Bucket, _Key, _UpdObj, _PrevObj, _UpdObjBin,
+            #state{hashtrees = HTs, tictac_aae = TAAE} = _State) 
+            when HTs == undefined, TAAE == false ->
+    ok;
+aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin,
+            #state{hashtrees = HTs, tictac_aae = TAAE} = State) ->
+    Async = async_aae(State#state.aae_tokenbucket),
+    case HTs of 
         undefined ->
             ok;
         Trees ->
@@ -3589,9 +3599,9 @@ aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
                     _ ->
                         UpdObj
                 end,
-            update_hashtree(Bucket, Key, RObj, Trees)
+            update_hashtree(Bucket, Key, RObj, Trees, Async)
     end,
-    case {State#state.tictac_aae, PrevObj} of 
+    case {TAAE, PrevObj} of 
         {false, _} ->
             ok;
         {_, unchanged_no_old_object} ->
@@ -3615,6 +3625,14 @@ aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
                     _ ->
                         UpdObjBin
                 end,
+            case Async of
+                true ->
+                    ok;
+                false ->
+                    aae_controller:aae_ping(State#state.aae_controller,
+                                            os:timestamp(),
+                                            self())
+            end,
             aae_controller:aae_put(State#state.aae_controller, 
                                     IndexN, 
                                     Bucket, Key, 
@@ -3626,24 +3644,53 @@ aae_update(Bucket, Key, UpdObj, PrevObj, UpdObjBin, State) ->
 -spec aae_delete(binary(), binary(), old_object(), state()) -> ok.
 %% @doc
 %% Remove an item from the AAE store, where AAE has been enabled
-aae_delete(Bucket, Key, PrevObj, State) ->
-    case State#state.hashtrees of 
+aae_delete(_Bucket, _Key, _PrevObj,
+            #state{hashtrees = HTs, tictac_aae = TAAE} = _State) 
+            when HTs == undefined, TAAE == false ->
+    ok;
+aae_delete(Bucket, Key, PrevObj,
+            #state{hashtrees = HTs, tictac_aae = TAAE} = State) ->
+    Async = async_aae(State#state.aae_tokenbucket),
+    case HTs of 
         undefined ->
             ok;
         Trees ->
-            delete_from_hashtree(Bucket, Key, Trees)
+            delete_from_hashtree(Bucket, Key, Trees, Async)
     end,
-    case State#state.tictac_aae of 
+    case TAAE of 
         false ->
             ok;
         true ->
             PrevClock = get_clock(PrevObj),
             IndexN = riak_kv_util:get_index_n({Bucket, Key}),
+            case Async of
+                true ->
+                    ok;
+                false ->
+                    aae_controller:aae_ping(State#state.aae_controller,
+                                            os:timestamp(),
+                                            self())
+            end,
             aae_controller:aae_put(State#state.aae_controller, 
                                     IndexN, 
                                     Bucket, Key, 
                                     none, PrevClock, 
                                     <<>>)
+    end.
+
+%% @doc
+%% Normally should use an async aae call, unless using a token bucket when a
+%% non-async call may be requested (false) each time the bucket is empty 
+-spec async_aae(boolean()) -> boolean().
+async_aae(false) ->
+    true;
+async_aae(true) ->
+    case get_hashtree_token() of
+        true ->
+            true;
+        false ->
+            put(hashtree_tokens, max_hashtree_tokens()),
+            false
     end.
 
 
@@ -3674,39 +3721,37 @@ maybe_old_object(OldObject) ->
     OldObject.
 
 
--spec update_hashtree(binary(), binary(), riak_object:riak_object(), pid()) 
-                                                                        -> ok.
+-spec update_hashtree(binary(), binary(), riak_object:riak_object(), pid(),
+                        boolean()) -> ok.
 %% @doc
 %% Update hashtree based AAE when enabled.
 %% Note that this requires an object copy - the object has been converted from
 %% a binary before being sent to another pid.  Also, all information on the 
 %% object is ignored other than that necessary to hash the object.  There is 
 %% scope for greater efficiency here, even without moving to Tictac AAE
-update_hashtree(Bucket, Key, RObj, Trees) ->
+update_hashtree(Bucket, Key, RObj, Trees, Async) ->
     Items = [{object, {Bucket, Key}, RObj}],
-    case get_hashtree_token() of
+    case Async of
         true ->
             riak_kv_index_hashtree:async_insert(Items, [], Trees),
             ok;
         false ->
             riak_kv_index_hashtree:insert(Items, [], Trees),
-            put(hashtree_tokens, max_hashtree_tokens()),
             ok
     end.
 
 
--spec delete_from_hashtree(binary(), binary(), pid()) -> ok.
+-spec delete_from_hashtree(binary(), binary(), pid(), boolean()) -> ok.
 %% @doc
 %% Remove an object from the hashtree based AAE
-delete_from_hashtree(Bucket, Key, Trees)->
+delete_from_hashtree(Bucket, Key, Trees, Async)->
     Items = [{object, {Bucket, Key}}],
-    case get_hashtree_token() of
+    case Async of
         true ->
             riak_kv_index_hashtree:async_delete(Items, Trees),
             ok;
         false ->
             riak_kv_index_hashtree:delete(Items, Trees),
-            put(hashtree_tokens, max_hashtree_tokens()),
             ok
     end.
 

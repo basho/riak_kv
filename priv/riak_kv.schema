@@ -30,6 +30,17 @@
   {default, passive}
 ]}.
 
+%% @doc Use hashtree tokens for anti-entropy throttling
+%% To hold-up the vnode when there is a backlog of activity on the AAE store
+%% hashtree token bucket may be used to block the vnode every 90 puts until
+%% the PUT has been completed.  This use aae_ping with tictac_aae, and a full
+%% sync block with legacy anti-entropy
+{mapping, "aae_tokenbucket", "riak_kv.aae_tokenbucket", [
+  {datatype, {flag, enabled, disabled}},
+  {default, enabled},
+  {commented, enabled}
+]}.
+
 %% @doc A path under which aae data files will be stored.
 {mapping, "tictacaae_dataroot", "riak_kv.tictacaae_dataroot", [
   {default, "$(platform_data_dir)/tictac_aae"},
