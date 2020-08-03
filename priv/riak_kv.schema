@@ -113,6 +113,17 @@
   hidden
 ]}.
 
+%% @doc Max number of leaf IDs per exchange
+%% To control the length of time for each exchange, only a subset of the
+%% conflicting leaves will be compared on each exchange.  If there are issues
+%% with query timeouts this may be halved.  Large backlogs may be reduced
+%% faster by doubling.  There are 1M segments in a standard tree overall.
+{mapping, "tictacaae_maxresults", "riak_kv.tictacaae_maxresults", [
+  {datatype, integer},
+  {default, 256},
+  hidden
+]}.
+
 %% @doc Exchange only between primary vnodes
 %% Setting this to false allows Tictac AAE exchanges between both primary and
 %% fallback vnodes.
