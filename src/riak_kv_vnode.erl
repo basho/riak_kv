@@ -1219,13 +1219,22 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                                                 {Remote, RN}]),
                         ReplyFun = tictac_returnfun(Idx, exchange),
                         ScanTimeout = ?AAE_SKIP_COUNT * XTick,
+                        ExchangeOptions =
+                            case app_helper:get_env(riak_kv,
+                                                    tictacaae_maxresults) of
+                                MR when is_integer(MR) ->
+                                    [{scan_timeout, ScanTimeout},
+                                        {max_results, MR}];
+                                _ ->
+                                    [{scan_timeout, ScanTimeout}]
+                            end,
                         aae_exchange:start(full,
                                             BlueList, 
                                             PinkList, 
                                             RepairFun, 
                                             ReplyFun,
                                             none,
-                                            [{scan_timeout, ScanTimeout}]),
+                                            ExchangeOptions),
                         ?AAE_SKIP_COUNT;
                 _ ->
                     lager:warning("Proposed exchange between ~w and ~w " ++ 
