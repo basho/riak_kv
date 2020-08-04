@@ -101,6 +101,8 @@
 -define(DEFAULT_RT, head).
 -define(DEFAULT_NC, 0).
 -define(QUEUE_EMPTY_LOOPS, 8).
+-define(MIN_REPAIRTIME_MS, 10000).
+-define(MIN_REPAIRPAUSE_MS, 10).
 
 %% ===================================================================
 %% Public API
@@ -646,11 +648,12 @@ prompt_readrepair(VnodeList, LogRepair) ->
     {ok, C} = riak:local_client(),
     FetchFun = 
         fun({{B, K}, {_BlueClock, _PinkClock}}) ->
-            riak_client:get(B, K, C)
-        end,
-    RehashFun = 
-        fun({{B, K}, {_BlueClock, _PinkClock}}) ->
-            riak_kv_vnode:rehash(VnodeList, B, K)
+            case riak_kv_util:consistent_object(B) of
+                true ->
+                    riak_kv_exchange_fsm:repair_consistent({B, K});
+                false ->
+                    riak_client:get(B, K, C)
+            end
         end,
     LogFun = 
         fun({{B, K}, {BlueClock, PinkClock}}) ->
@@ -659,17 +662,29 @@ prompt_readrepair(VnodeList, LogRepair) ->
                     [B, K, BlueClock, PinkClock])
         end,
     fun(RepairList) ->
-        lager:info("Repairing ~w keys between ~w", 
-                    [length(RepairList), VnodeList]),
+        SW = os:timestamp(),
+        RepairCount = length(RepairList),
+        lager:info("Repairing key_count=~w between ~w", 
+                    [RepairCount, VnodeList]),
+        Pause = max(?MIN_REPAIRPAUSE_MS, ?MIN_REPAIRTIME_MS div RepairCount),
+        RehashFun = 
+        fun({{B, K}, {_BlueClock, _PinkClock}}) ->
+            timer:sleep(Pause),
+            riak_kv_vnode:rehash(VnodeList, B, K)
+        end,
         lists:foreach(FetchFun, RepairList),
-        timer:sleep(1000), % Sleep for repairs to complete
         lists:foreach(RehashFun, RepairList),
         case LogRepair of
             true ->
                 lists:foreach(LogFun, RepairList);
             false ->
                 ok
-        end
+        end,
+        lager:info("Repaired key_count=~w " ++ 
+                        "in repair_time=~w ms with pause_time=~w ms",
+                    [RepairCount,
+                        timer:now_diff(os:timestamp(), SW) div 1000,
+                        RepairCount * Pause])
     end.
 
 reply_fun({EndStateName, DeltaCount}) ->
