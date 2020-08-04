@@ -669,7 +669,7 @@ prompt_readrepair(VnodeList, LogRepair) ->
         Pause =
             max(?MIN_REPAIRPAUSE_MS,
                 ?MIN_REPAIRTIME_MS div max(1, RepairCount)),
-        RepairFun = 
+        RehashFun = 
             fun({{B, K}, {_BlueClock, _PinkClock}}) ->
                 timer:sleep(Pause),
                 riak_kv_vnode:rehash(VnodeList, B, K)
