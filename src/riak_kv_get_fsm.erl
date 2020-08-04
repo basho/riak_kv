@@ -664,14 +664,16 @@ prompt_readrepair(VnodeList, LogRepair) ->
     fun(RepairList) ->
         SW = os:timestamp(),
         RepairCount = length(RepairList),
-        lager:info("Repairing key_count=~w between ~w", 
+        lager:info("Repairing key_count=~w between ~w",
                     [RepairCount, VnodeList]),
-        Pause = max(?MIN_REPAIRPAUSE_MS, ?MIN_REPAIRTIME_MS div RepairCount),
-        RehashFun = 
-        fun({{B, K}, {_BlueClock, _PinkClock}}) ->
-            timer:sleep(Pause),
-            riak_kv_vnode:rehash(VnodeList, B, K)
-        end,
+        Pause =
+            max(?MIN_REPAIRPAUSE_MS,
+                ?MIN_REPAIRTIME_MS div max(1, RepairCount)),
+        RepairFun = 
+            fun({{B, K}, {_BlueClock, _PinkClock}}) ->
+                timer:sleep(Pause),
+                riak_kv_vnode:rehash(VnodeList, B, K)
+            end,
         lists:foreach(FetchFun, RepairList),
         lists:foreach(RehashFun, RepairList),
         case LogRepair of
