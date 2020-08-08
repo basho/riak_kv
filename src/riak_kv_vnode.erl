@@ -1236,14 +1236,14 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                             none,
                                             ExchangeOptions),
                         ?AAE_SKIP_COUNT;
-                _ ->
-                    lager:warning("Proposed exchange between ~w and ~w " ++ 
-                                    "not currently supported within " ++
-                                    "preflist for IndexN=~w possibly " ++
-                                    "due to node failure",
-                                    [Local, Remote, {DocIdx, N}]),
-                        0
-            end,
+                    _ ->
+                        lager:warning("Proposed exchange between ~w and ~w " ++ 
+                                        "not currently supported within " ++
+                                        "preflist for IndexN=~w possibly " ++
+                                        "due to node failure",
+                                        [Local, Remote, {DocIdx, N}]),
+                            0
+                end,
             ok = aae_controller:aae_ping(State#state.aae_controller,
                                             os:timestamp(),
                                             self()),
