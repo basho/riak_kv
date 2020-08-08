@@ -1252,7 +1252,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
         {_, SkipCount} ->
             lager:warning("Skipping a tick due to non_zero " ++
                             "skip_count=~w", [SkipCount]),
-            {noreply, State#state{tictac_skiptick = SkipCount - 1}}
+            {noreply, State#state{tictac_skiptick = max(0, SkipCount - 1)}}
     end;
 
 handle_command(tictacaae_rebuildpoke, _Sender, State=#state{tictac_startup=TS})
