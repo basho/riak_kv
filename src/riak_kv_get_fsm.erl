@@ -101,6 +101,8 @@
 -define(DEFAULT_RT, head).
 -define(DEFAULT_NC, 0).
 -define(QUEUE_EMPTY_LOOPS, 8).
+-define(MIN_REPAIRTIME_MS, 10000).
+-define(MIN_REPAIRPAUSE_MS, 10).
 
 %% ===================================================================
 %% Public API
@@ -641,23 +643,56 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
     end,
     {stop,normal,StateData}.
 
-
+-spec prompt_readrepair([{riak_core_ring:partition_id(), node()}]) ->
+    fun((list({{riak_object:bucket(), riak_object:key()},
+                {vclock:vclock(), vclock:vclock()}})) -> ok).
 prompt_readrepair(VnodeList) ->
+    prompt_readrepair(VnodeList, 
+                        app_helper:get_env(riak_kv, log_readrepair, false)).
+
+prompt_readrepair(VnodeList, LogRepair) ->
     {ok, C} = riak:local_client(),
     FetchFun = 
         fun({{B, K}, {_BlueClock, _PinkClock}}) ->
-            riak_client:get(B, K, C)
+            case riak_kv_util:consistent_object(B) of
+                true ->
+                    riak_kv_exchange_fsm:repair_consistent({B, K});
+                false ->
+                    riak_client:get(B, K, C)
+            end
         end,
-    RehashFun = 
-        fun({{B, K}, {_BlueClock, _PinkClock}}) ->
-            riak_kv_vnode:rehash(VnodeList, B, K)
+    LogFun = 
+        fun({{B, K}, {BlueClock, PinkClock}}) ->
+            lager:info(
+                "Prompted read repair Bucket=~w Key=~w Clocks ~w ~w",
+                    [B, K, BlueClock, PinkClock])
         end,
     fun(RepairList) ->
-        lager:info("Repairing ~w keys between ~w", 
-                    [length(RepairList), VnodeList]),
+        SW = os:timestamp(),
+        RepairCount = length(RepairList),
+        lager:info("Repairing key_count=~w between ~w",
+                    [RepairCount, VnodeList]),
+        Pause =
+            max(?MIN_REPAIRPAUSE_MS,
+                ?MIN_REPAIRTIME_MS div max(1, RepairCount)),
+        RehashFun = 
+            fun({{B, K}, {_BlueClock, _PinkClock}}) ->
+                timer:sleep(Pause),
+                riak_kv_vnode:rehash(VnodeList, B, K)
+            end,
         lists:foreach(FetchFun, RepairList),
-        timer:sleep(1000), % Sleep for repairs to complete
-        lists:foreach(RehashFun, RepairList)
+        lists:foreach(RehashFun, RepairList),
+        case LogRepair of
+            true ->
+                lists:foreach(LogFun, RepairList);
+            false ->
+                ok
+        end,
+        lager:info("Repaired key_count=~w " ++ 
+                        "in repair_time=~w ms with pause_time=~w ms",
+                    [RepairCount,
+                        timer:now_diff(os:timestamp(), SW) div 1000,
+                        RepairCount * Pause])
     end.
 
 reply_fun({EndStateName, DeltaCount}) ->
