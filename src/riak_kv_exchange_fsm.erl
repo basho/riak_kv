@@ -33,7 +33,8 @@
 %% FSM states
 -export([prepare_exchange/2,
          update_trees/2,
-         key_exchange/2]).
+         key_exchange/2,
+         repair_consistent/1]).
 
 %% gen_fsm callbacks
 -export([init/1, handle_event/3, handle_sync_event/4, handle_info/3,
