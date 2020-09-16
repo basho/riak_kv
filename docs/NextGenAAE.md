@@ -4,7 +4,7 @@
 
 The Active Anti-Entropy solution within Riak has been a reliable feature of the database since [release 1.3](https://github.com/basho/riak/blob/develop-3.0/releasenotes/riak-1.3.md#riak-130-release-notes).  The only significant change in its lifetime was a change to make the hash of an object that of the object's sorted vector-clock, not of the value, which improved the performance of AAE for larger object sizes.  The motivation for updating AAE and adding a next generation AAE solution (referred to as Tictac AAE), was not driven by necessity due to any significant flaws.  However, an update to AAE still has the potential to offer the following benefits:
 
-- Provide an under-pinnning for a [NextGenRepl](../docs/NextGenREPL.md) solution for full-sync replication.  Previously a full-sync AAE replication feature was added to riak_repl, but it was never formally supported for production use.  There were reliability issues associated with locks, and a lack of flexibility for supporting partial replication strategies (e.g. per-bucket).  A new AAE feature was required to support a [more flexible full-sync AAE feature](../docs/NextGenREPL.md).
+- Provide foundations for a [NextGenRepl](../docs/NextGenREPL.md) solution for full-sync replication.  Previously a full-sync AAE replication feature was added to riak_repl, but it was never formally supported for production use.  There were reliability issues associated with locks, and a lack of flexibility for supporting partial replication strategies (e.g. per-bucket).  A new AAE feature was required to support a [more flexible full-sync AAE feature](../docs/NextGenREPL.md).
 
 - Have an AAE solution that re-used existing vnode key-stores (as found in the leveled backend), rather than needing to maintain parallel keystores.
 
@@ -38,7 +38,7 @@ The folowing configuration options exist for NextGenAAE:
 
 - riak_kv.tictacaae_active [active, passive]
 
-Enable or disable tictacaae.  Note that disabling tictacaae will set the use of tictacaae_active only at startup - setting the environment vairable at runtime will have no impact.  If tictacaae is disabled for a period, it will not wipe any store or cache, so if it is subsequently re-enabled it will re-start with out of date anti-entropy data.  If AAE is to be re-enabled, then it would normally be preferable to wipe the folders containing these stores before re-starting.
+Enable or disable tictacaae.  Note that disabling tictacaae will set the use of tictacaae_active only at startup - setting the environment variable at runtime will have no impact.  If tictacaae is disabled for a period, it will not wipe any store or cache, so if it is subsequently re-enabled it will re-start with out of date anti-entropy data.  If AAE is to be re-enabled, then it would normally be preferable to wipe the folders containing these stores before re-starting.
 
 - riak_kv.aae_tokenbucket [enabled, disabled]
 
@@ -72,7 +72,7 @@ By default when running a parallel keystore, only a small amount of metadata is 
 
 - riak_kv.tictacaae_exchangetick "240000"
 
-Exchanges are prompted every exchange tick, on each vnode.  By default there is a tick every 4 minutes.  Exchanges will skip when previous exchanges have not completed, in order to prevent a backlog of fetch-clock scans developing.  Do not reduce this amount without ensuring that it remains more than twice the size of the vnode_inactivity_tmeout - the tick can prevent the vnode ever considering itself inactive, and hence prevent handoffs from being triggered.  The tick size can be modified at run-time by setting the environment variable via riak attach.
+Exchanges are prompted every exchange tick, on each vnode.  By default there is a tick every 4 minutes.  Exchanges will skip when previous exchanges have not completed, in order to prevent a backlog of fetch-clock scans developing.  Do not reduce this amount without ensuring that it remains more than twice the size of the vnode_inactivity_timeout - the tick can prevent the vnode ever considering itself inactive, and hence prevent handoffs from being triggered.  The tick size can be modified at run-time by setting the environment variable via riak attach.
 
 - riak_kv.tictacaae_rebuildtick "3600000"
 
@@ -80,22 +80,22 @@ Rebuilds will be triggered depending on the riak_kv.tictacaae_rebuildwait, but t
 
 - riak_kv.tictacaae_maxresults "256"
 
-The Merkle tree used has 4096 * 1024 leaves.  When a large discrepancy is discovered, only part of the discrepancy will be resolved each exchange - active anti-entropy is intended to be a background process for repairing long-term loss of data, hinted handoff and read-repair are the short-term and immmediate answers to entropy.  How much of the tree is repaired each pass is defined by the `tictacaae_maxresults`, if more divergences are found at the root, only `tictacaae_maxresults` branches will be checked to find differences in leaves.  If more than `tictacaae_maxresults` divergences are discovered in the leaves, only `tictacaae_maxresults` leaves will be queried for the key and clock comparison.
+The Merkle tree used has 4096 * 1024 leaves.  When a large discrepancy is discovered, only part of the discrepancy will be resolved each exchange - active anti-entropy is intended to be a background process for repairing long-term loss of data, hinted handoff and read-repair are the short-term and immediate answers to entropy.  How much of the tree is repaired each pass is defined by the `tictacaae_maxresults`, if more divergences are found at the root, only `tictacaae_maxresults` branches will be checked to find differences in leaves.  If more than `tictacaae_maxresults` divergences are discovered in the leaves, only `tictacaae_maxresults` leaves will be queried for the key and clock comparison.
 
 With the default settings, on a cluster with divergences spread across all partitions, more than 1M differences can still be repaired per day.
 
 Increasing the `tictacaae_maxresults` will in some cases increase the speed of repair, however it may lead to work backlogs that could overall still decrease the speed of repair.  If there are significant numbers of warnings about queries not being run due to query backlogs and exchanges being skipped, then reducing the `tictacaae_maxresults` could improve overall performance.
 
-This parameter cna be changed per-node at run-time using riak attach.
+This parameter can be changed per-node at run-time using riak attach.
 
 - riak_kv.tictacaae_primaryonly [on, off]
 
 If a node fails, the fallback vnodes will be elected.  By default tictacaae_primaryonly is set on, and so these fallback vnodes will not participate in AAE.  Fallback vnodes will be populated by read-repair and fresh puts, but not by anti-entropy exchanges.
 
 
-## Logging and Monitoring of NextGenAAE (Tictac AAE)
+## Logging and Monitoring of NextGenAAE (Tictac AAE) - Exchanges
 
-Monitoring of NextGenAAE like NextGenREPL, is primarily achieved through anlaysis of logs rather than by the output of statistics.  Key log entries to examine when monitoring AAE are:
+Monitoring of NextGenAAE like NextGenREPL, is primarily achieved through analysis of logs rather than by the output of statistics.  Key log entries to examine when monitoring AAE are:
 
 - riak_kv_vnode warning "Skipping a tick due to non_zero skip_count=~w"
 
@@ -105,7 +105,7 @@ The scheduled exchange will still run when the skip_count reaches 0.  The exchan
 
 - riak_kv_vnode info "Tictac AAE loop completed for partition=~w with exchanges expected=~w exchanges completed=~w total deltas=~w total exchange_time=~w seconds loop duration=~w seconds (elapsed)
 
-When the exchange queue is empty, the vnode logs the statistics gathered with regards to the previous exchange cycle before consulting the cluster claim to re-queue a new set of exchanges.  Normally exchanges expected should equal exchanges completed, except at startup.  The loop duration should be constant between echange loops unless long-running exchanges have resulted in exchange ticks being skipped.  The exchange_time is the summation of the time take for each exchange, but note exchanges include built in pauses - so this does not necessarily represent CPU or disk activity.  The key_deltas are the number of differences found after running the key and clock comparison between the partitions across all exchanges in the loop, the number of keys that have been flagged for repair.
+When the exchange queue is empty, the vnode logs the statistics gathered with regards to the previous exchange cycle before consulting the cluster claim to re-queue a new set of exchanges.  Normally exchanges expected should equal exchanges completed, except at startup.  The loop duration should be constant between exchange loops unless long-running exchanges have resulted in exchange ticks being skipped.  The exchange_time is the summation of the time take for each exchange, but note exchanges include built in pauses - so this does not necessarily represent CPU or disk activity.  The key_deltas are the number of differences found after running the key and clock comparison between the partitions across all exchanges in the loop, the number of keys that have been flagged for repair.
 
 - riak_kv_get_fsm info "Repairing key_count=~w between ~w"
 
@@ -113,11 +113,11 @@ When a set of deltas are discovered, the read-repair functions within the riak_k
 
 - riak_kv_get_fsm info "Repaired key_count=~w in repair_time=~w ms with pause_time=~w ms"
 
-Once the repairs have been triggered, this additional log is produced.  Note that the triggering is deliberately spaced out so as not to prompt a large number of concurrent reapirs and rehashes, and this spacing will be reflected in the repair_time and pause_time.  For each key delta there will have been a fetch prompted followed by a rehash, so the time to complete each repair is typically longer than the mean node_get time.  Fetches and rehashes for a given set of repairs are never launched concurrently, for each key there must be at least a 10ms wait between attempts to repair. 
+Once the repairs have been triggered, this additional log is produced.  Note that the triggering is deliberately spaced out so as not to prompt a large number of concurrent repairs and rehashes, and this spacing will be reflected in the repair_time and pause_time.  For each key delta there will have been a fetch prompted followed by a rehash, so the time to complete each repair is typically longer than the mean node_get time.  Fetches and rehashes for a given set of repairs are never launched concurrently, for each key there must be at least a 10ms wait between attempts to repair. 
 
 - riak_kv_get_fsm info "Prompted read repair Bucket=~w Key=~w Clocks ~w ~w"
 
-In order to receive this log, the environment variable riak_kv:log_readrepair must be set to `true` at runtime (e.g. `riak attach` or `riak rconsole` and `application:set_env(riak_kv, log_readrepair, true)`).  This log is intended to help an operator, with an understanding of the applictaion and of vector clock format, to try and diagnose the what and why of keys becoming in need of repair.
+In order to receive this log, the environment variable riak_kv:log_readrepair must be set to `true` at runtime (e.g. `riak attach` or `riak rconsole` and `application:set_env(riak_kv, log_readrepair, true)`).  This log is intended to help an operator, with an understanding of the application and of vector clock format, to try and diagnose the what and why of keys becoming in need of repair.
 
 - aae_exchange EX005 info "Exchange id=~s throttled count=~w at state=~w"
 
@@ -129,6 +129,18 @@ Log raised on successful completion of exchange showing the number of deltas fou
 
 When pending_state is `waiting_all_results` this indicates the exchange failed to complete as an AAE process failed to respond to an exchange request in a correct and in a timely manner.
 
+## Logging and Monitoring of NextGenAAE (Tictac AAE) - Rebuilds
+
+- riak_kv_vnode info "Prompting tictac_aae rebuild for controller=~w"
+- riak_kv_vnode info "AAE pid=~w partition=~w rebuild store complete in duration=~w seconds"
+- riak_kv_vnode info "AAE pid=~w rebuild trees queued"
+- riak_kv_vnode info "Starting tree rebuild for partition=~w"
+- riak_kv_vnode info "Tree rebuild compete for partition=~w in duration=~w seconds"
+- riak_kv_vnode info "Rebuild process for partition=~w complete in duration=~w seconds"
+
+This is the set of logs raised during the rebuild process.
+
+The rebuild of the store is prompted, and as store rebuilds are not deferred it will prompt without delay a rebuild of the store.  Depending on the size of the store, the rebuild may take many hours if in parallel mode - obviously in native mode the rebuild is unnecessary and so will be complete immediately.  Once the rebuild of the store is complete, the rebuild of the AAE tree caches is queued, and only when the rebuild request is consumed by the `riak_kv_worker` from the front of the queue will the snapshots be taken and the "Starting tree rebuild" will be logged.  Once complete the duration of the rebuild is logged (not including the time on the queue), and then the time for the overall process (store rebuild, queue time and tree rebuild).
 
 
 
