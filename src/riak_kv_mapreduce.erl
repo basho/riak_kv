@@ -46,6 +46,13 @@
          reduce_sum/2,
          reduce_plist_sum/2,
          reduce_count_inputs/2]).
+-export([reduce_index_identity/2,
+         reduce_index_extractinteger/2,
+         reduce_index_byrange/2,
+         reduce_index_regex/2,
+         reduce_index_max/2]).
+
+-type keep() :: all|this.
 
 %-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -140,7 +147,7 @@ reduce_identity(Acc) ->
 %% @doc map phase function for reduce_identity/1
 reduce_identity(List, _) -> 
     F = fun({{Bucket, Key}, _}, Acc) ->
-                %% Handle BKeys with a extra data.
+                %% Handle BKeys with extra data.
                 [[Bucket, Key]|Acc];
            ({Bucket, Key}, Acc) ->
                 %% Handle BKeys.
@@ -148,12 +155,178 @@ reduce_identity(List, _) ->
            ([Bucket, Key], Acc) ->
                 %% Handle re-reduces.
                 [[Bucket, Key]|Acc];
+           ([Bucket, Key, KeyData], Acc) ->
+                [[Bucket, Key, KeyData]|Acc];
            (Other, _Acc) ->
                 %% Fail loudly on anything unexpected.
                 lager:error("Unhandled entry: ~p", [Other]),
                 throw({unhandled_entry, Other})
         end,
     lists:foldl(F, [], List).
+
+
+-spec reduce_index_identity(list(riak_kv_pipe_index:index_keydata()|
+                                    list(riak_kv_pipe_index:index_keydata())),
+                                any()) ->
+                                    list(riak_kv_pipe_index:index_keydata()).
+reduce_index_identity(List, _) ->
+    F = fun({{Bucket, Key}, undefined}, Acc) ->
+                [{Bucket, Key}|Acc];
+            ({{Bucket, Key}, KeyData}, Acc) when is_list(KeyData) ->
+                [{{Bucket, Key}, KeyData}|Acc];
+            (PrevAcc, Acc) when is_list(PrevAcc) ->
+                Acc ++ PrevAcc;
+            ({Bucket, Key}, Acc) ->
+                [{Bucket, Key}|Acc];
+            (Other, Acc) ->
+                lager:warning("Unhandled entry: ~p", [Other]),
+                Acc
+        end,
+    lists:foldl(F, [], List).
+
+-spec reduce_index_extractinteger(list(riak_kv_pipe_index:index_keydata()|
+                                        list(riak_kv_pipe_index:index_keydata())),
+                                    {atom(), atom(), keep(), 
+                                        non_neg_integer(),
+                                        pos_integer()}) ->
+                                            list(riak_kv_pipe_index:index_keydata()).
+reduce_index_extractinteger(List,
+                            {InputTerm, OutputTerm, Keep, PreBytes, IntSize}) ->
+    F =
+    fun({{Bucket, Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+            case lists:keyfind(OutputTerm, 1, KeyTermList) of
+                false ->
+                    case lists:keyfind(InputTerm, 1, KeyTermList) of
+                        {InputTerm, <<_P:PreBytes/binary,
+                                        I:IntSize/integer,
+                                        _T/binary>>} ->
+                            KeyTermList0 =
+                                case Keep of
+                                    all ->
+                                        [{OutputTerm, I}|KeyTermList];
+                                    this ->
+                                        [{OutputTerm, I}]
+                                end,
+                            [{{Bucket, Key}, KeyTermList0}|Acc];
+                        _Other ->
+                            Acc
+                    end;
+                _ ->
+                    [{{Bucket, Key}, KeyTermList}|Acc]
+            end;
+        (PrevAcc, Acc) when is_list(PrevAcc), is_list(Acc) ->
+            Acc ++ PrevAcc;
+        (_Other, Acc) ->
+            Acc
+    end,
+    lists:foldl(F, [], List).
+
+-spec reduce_index_byrange(list(riak_kv_pipe_index:index_keydata()|
+                                list(riak_kv_pipe_index:index_keydata())),
+                            {atom(), keep(),
+                                term(), term()}) ->
+                                    list(riak_kv_pipe_index:index_keydata()).
+reduce_index_byrange(List, {InputTerm, Keep, LowRange, HighRange}) ->
+    F =
+    fun({{Bucket, Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, ToTest} when ToTest >=LowRange, ToTest < HighRange ->
+                    Output =
+                        case Keep of
+                            all ->
+                                {{Bucket, Key}, KeyTermList};
+                            this ->
+                                {{Bucket, Key}, [{InputTerm, ToTest}]}
+                        end,
+                    [Output|Acc];
+                _ ->
+                    Acc
+            end;
+        (PrevAcc, Acc) when is_list(PrevAcc) ->
+            Acc ++ PrevAcc;
+        (_, Acc) ->
+            Acc
+    end,
+    lists:foldl(F, [], List).
+            
+-spec reduce_index_regex(list(riak_kv_pipe_index:index_keydata()|
+                                list(riak_kv_pipe_index:index_keydata())),
+                            {atom(), keep(),
+                                binary()}) ->
+                                    list(riak_kv_pipe_index:index_keydata()).
+reduce_index_regex(List, {InputTerm, Keep, CompiledRe}) ->
+    F =
+    fun({{Bucket, Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, ToTest} ->
+                    case re:run(ToTest, CompiledRe) of
+                        {match, _} ->
+                            Output =
+                                case Keep of
+                                    all ->
+                                        {{Bucket, Key}, KeyTermList};
+                                    this ->
+                                        {{Bucket, Key}, [{InputTerm, ToTest}]}
+                                end,
+                            [Output|Acc];
+                        _ ->
+                            Acc
+                    end;
+                false ->
+                    Acc
+            end;
+        (PrevAcc, Acc) when is_list(PrevAcc) ->
+            Acc ++ PrevAcc;
+        (_, Acc) ->
+            Acc
+    end,
+    lists:foldl(F, [], List).
+
+
+-spec reduce_index_max(list(riak_kv_pipe_index:index_keydata()|
+                                list(riak_kv_pipe_index:index_keydata())),
+                            {atom(), keep()}) ->
+                                list(riak_kv_pipe_index:index_keydata()).
+reduce_index_max(List, {InputTerm, Keep}) ->
+    F =
+    fun({{Bucket, Key}, KeyTermList}, none) when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, ToTest} ->
+                    case Keep of
+                        all ->
+                            {{Bucket, Key}, KeyTermList};
+                        this ->
+                            {{Bucket, Key}, [{InputTerm, ToTest}]}
+                    end;
+                false ->
+                    none
+            end;
+        ({{Bucket, Key}, KeyTermList}, {{MaxBucket, MaxKey}, MaxKeyTermList})
+                                            when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, ToTest} ->
+                    case lists:keyfind(InputTerm, 1, MaxKeyTermList) of
+                        {InputTerm, MaxTest} when ToTest > MaxTest ->
+                            case Keep of
+                                all ->
+                                    {{Bucket, Key}, KeyTermList};
+                                this ->
+                                    {{Bucket, Key}, [{InputTerm, ToTest}]}
+                            end;
+                        _ ->
+                            {{MaxBucket, MaxKey}, MaxKeyTermList}
+                    end;
+                _ ->
+                    {{MaxBucket, MaxKey}, MaxKeyTermList}
+            end
+    end,
+    case lists:foldl(F, none, lists:flatten(List)) of
+        none ->
+            [];
+        R ->
+            [R]
+    end.
+
 
 %% @spec reduce_set_union(boolean()) -> reduce_phase_spec()
 %% @doc Produces a spec for a reduce phase that produces the
@@ -343,3 +516,87 @@ reduce_count_inputs_test() ->
                               {"b5","k5"},{"b5","k5"}],
                              none),
                         none)).
+
+reduce_index_identity_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{term, <<"KD1">>}]},
+    B = {{<<"B2">>, <<"K2">>}, [{term, <<"KD2">>}]},
+    C = {{<<"B3">>, <<"K3">>}, [{term, <<"KD3">>}, {extract, 4}]},
+    D = {{<<"B4">>, <<"K4">>}, undefined},
+    E = {<<"B5">>, <<"K5">>},
+    F = {{<<"B6">>, <<"K6">>}, undefined},
+    G = {{<<"B7">>, <<"K7">>}, undefined},
+    H = {{<<"B8">>, <<"K8">>}, undefined},
+    R0 = commassidem_check(fun reduce_index_identity/2, undefined, A, B, C, D),
+    R1 = commassidem_check(fun reduce_index_identity/2, undefined, A, B, C, E),
+    R2 = commassidem_check(fun reduce_index_identity/2, undefined, D, F, G, H),
+    D0 = element(1, D),
+    ?assertMatch([A, B, C, D0], R0),
+    ?assertMatch([A, B, C, E], R1),
+    ?assertMatch([{<<"B4">>, <<"K4">>},
+                    {<<"B6">>, <<"K6">>},
+                    {<<"B7">>, <<"K7">>},
+                    {<<"B8">>, <<"K8">>}], R2).
+
+reduce_index_extractinteger_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{term, <<0:8/integer, 1:32/integer, 0:8/integer>>}]},
+    B = {{<<"B2">>, <<"K2">>}, [{term, <<0:8/integer, 2:32/integer>>}, {extract, 26}]},
+    C = {{<<"B3">>, <<"K3">>}, [{extract, 99}, {term, <<0:8/integer, 3:32/integer, 0:16/integer>>}]},
+    D = {{<<"B4">>, <<"K4">>}, undefined},
+    E = {{<<"EB5">>, <<"EK5">>}, <<0:4/integer>>},
+    R0 = commassidem_check(fun reduce_index_extractinteger/2, {term, extint, all, 1, 32}, A, B, C, D),
+    R1 = commassidem_check(fun reduce_index_extractinteger/2, {term, extint, this, 1, 32}, A, B, C, E),
+    ExpR0 = 
+        [{{<<"B1">>, <<"K1">>}, [{extint, 1}, {term, <<0:8/integer, 1:32/integer, 0:8/integer>>}]},
+        {{<<"B2">>, <<"K2">>}, [{extint, 2}, {term, <<0:8/integer, 2:32/integer>>}, {extract, 26}]},
+        {{<<"B3">>, <<"K3">>}, [{extint, 3}, {extract, 99}, {term, <<0:8/integer, 3:32/integer, 0:16/integer>>}]}
+        ],
+    ExpR1 =
+        [{{<<"B1">>, <<"K1">>}, [{extint, 1}]},
+        {{<<"B2">>, <<"K2">>}, [{extint, 2}]},
+        {{<<"B3">>, <<"K3">>}, [{extint, 3}]}
+        ],
+    ?assertMatch(ExpR0, R0),
+    ?assertMatch(ExpR1, R1).
+
+reduce_index_byrange_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{extint, 1}]},
+    B = {{<<"B2">>, <<"K2">>}, [{extint, 2}]},
+    C = {{<<"B3">>, <<"K3">>}, [{extint, 3}]},
+    D = {{<<"B4">>, <<"K4">>}, [{extint, 4}]},
+    E = {{<<"E5">>}},
+    F = {{<<"F6">>, <<"F7">>}, undefined},
+    R0 = commassidem_check(fun reduce_index_byrange/2, {extint, all, 2, 4}, A, B, C, D),
+    commassidem_check(fun reduce_index_byrange/2, {extint, this, 2, 4}, A, B, C, E),
+    commassidem_check(fun reduce_index_byrange/2, {extint, all, 2, 4}, A, B, C, F),
+    ?assertMatch([B, C], R0).
+
+reduce_index_regex_test() ->
+    {ok, R} = re:compile(".*99.*"),
+    A = {{<<"B1">>, <<"K1">>}, [{term, <<"v99a">>}]},
+    B = {{<<"B2">>, <<"K2">>}, [{term, <<"v99b">>}]},
+    C = {{<<"B3">>, <<"K3">>}, [{term, <<"v98a">>}]},
+    D = {{<<"B4">>, <<"K4">>}, [{term, <<"v99d">>}]},
+    E = {{<<"E5">>}},
+    F = {{<<"F6">>, <<"F7">>}, undefined},
+    R0 = commassidem_check(fun reduce_index_regex/2, {term, this, R}, A, B, C, D),
+    commassidem_check(fun reduce_index_regex/2, {term, this, R}, A, B, C, E),
+    commassidem_check(fun reduce_index_regex/2, {term, all, R}, A, B, C, F),
+    ?assertMatch([A, B, D], R0).
+
+reduce_index_max_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{int, 5}]},
+    B = {{<<"B2">>, <<"K2">>}, [{int, 7}, {term, <<"v7">>}]},
+    C = {{<<"B3">>, <<"K3">>}, [{int, 8}]},
+    D = {{<<"B4">>, <<"K4">>}, [{term, 9}]},
+    R = commassidem_check(fun reduce_index_max/2, {int, this}, A, B, C, D),
+    ?assertMatch([C], R).
+
+commassidem_check(F, Args, A, B, C, D) ->
+    % Is the reduce function commutative, associative and idempotent
+    ID1 = F([A, B, C, D], Args),
+    ID2 = F([A, D] ++ F([C, B], Args), Args),
+    ID3 = F([F([A], Args), F([B], Args), F([C], Args), F([D], Args)], Args),
+    R = lists:sort(ID1),
+    ?assertMatch(R, lists:sort(ID2)),
+    ?assertMatch(R, lists:sort(ID3)),
+    R.

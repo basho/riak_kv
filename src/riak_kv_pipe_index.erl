@@ -51,7 +51,10 @@
 -record(state, {p :: riak_pipe_vnode:partition(),
                 fd :: riak_pipe_fitting:details()}).
 -opaque state() :: #state{}.
--export_type([state/0]).
+-type index_keydata() :: 
+    {{riak_object:bucket(), riak_object:key()}, undefined|list({atom(), term()})}.
+
+-export_type([state/0, index_keydata/0]).
 
 %% @doc Init just stashes the `Partition' and `FittingDetails' for later.
 -spec init(riak_pipe_vnode:partition(), riak_pipe_fitting:details()) ->
@@ -113,27 +116,28 @@ keysend(Bucket, [{o,Key,BinRiakObj}|Keys], Partition, FittingDetails) ->
             ER
     end;
 keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
-    SKey = strip_index(Key),
-    Out = if
-        is_tuple(Bucket) ->
-            {{Bucket, SKey}, undefined};
-        true ->
-            {Bucket, SKey}
-    end,
     case riak_pipe_vnode_worker:send_output(
-           Out, Partition, FittingDetails) of
+            strip_indexkey(Bucket, Key), Partition, FittingDetails) of
         ok ->
             keysend(Bucket, Keys, Partition, FittingDetails);
         ER ->
             ER
     end.
 
-%% @doc remove the index term from the
-%% 2i result
-strip_index({_IndexTerm, Key}) ->
-    Key;
-strip_index(Key) ->
-    Key.
+%% @doc Remove the type from the bucket, and pass through a returned term as KeyData
+-spec strip_indexkey(riak_object:bucket(), riak_object:key()|
+                        {binary(), riak_object:key()})
+                            -> index_keydata().
+strip_indexkey(Bucket, KeyPlusTerm) ->
+    {Key, Term} = strip(KeyPlusTerm),
+    {{Bucket, Key}, Term}.
+
+-spec strip({binary(), binary()}|binary())
+        -> {binary(), list({term, binary()})}|undefined.
+strip({IndexTerm, Key}) ->
+    {Key, [{term, IndexTerm}]};
+strip(Key) when is_binary(Key) ->
+    {Key, undefined}.
 
 %% @doc Unused.
 -spec done(state()) -> ok.
@@ -161,7 +165,8 @@ done(_State) ->
                           bucket_or_filter(),
                           {eq, Index::binary(), Value::term()}
                           |{range, Index::binary(),
-                            Start::term(), End::term()},
+                            Start::term(), End::term()}
+                          |riak_index:query_def(),
                           timeout()) ->
          ok | {error, Reason :: term()}.
 queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->

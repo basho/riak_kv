@@ -162,7 +162,13 @@
 -type index_input() :: {index, Bucket :: binary(), Index :: binary(),
                         Key :: term()}
                      | {index, Bucket :: binary(), Index :: binary(),
-                        Start :: term(), End :: term()}.
+                        Start :: term(), End :: term()}
+                     | {index, Bucket :: binary(), Index :: binary(),
+                        Start :: term(), End :: term(),
+                        ReturnTerms :: boolean()}
+                     | {index, Bucket :: binary(), Index :: binary(),
+                        Start :: term(), End :: term(),
+                        ReturnTerms :: boolean(), TermRegex :: binary()|undefined}.
 -type search_input() :: {search, Bucket :: binary(), Query :: binary()}
                       | {search, Bucket :: binary(), Query :: binary(),
                          Filter :: [keyfilter()]}.
@@ -407,20 +413,6 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
     PrereduceP = I+2 =< size(QueryT) andalso
         query_type(I+2, QueryT) == reduce andalso
         want_prereduce_p(I+1, QueryT),
-    SafeArg = case FunSpec of
-                  {JS, _} when (JS == jsfun orelse JS == jsanon),
-                               is_list(Arg) ->
-                      %% mochijson cannot encode these properties,
-                      %% so remove them from the argument list
-                      lists:filter(
-                        fun(do_prereduce)     -> false;
-                           ({do_prereduce,_}) -> false;
-                           (_)                -> true
-                        end,
-                        Arg);
-                  _ ->
-                      Arg
-              end,
 
     [#fitting_spec{name={kvget_map,I},
                    module=riak_kv_pipe_get,
@@ -428,7 +420,7 @@ map2pipe(FunSpec, Arg, Keep, I, QueryT) ->
                    nval={riak_kv_pipe_get, bkey_nval}},
      #fitting_spec{name={xform_map,I},
                    module=riak_kv_mrc_map,
-                   arg={FunSpec, SafeArg},
+                   arg={FunSpec, Arg},
                    chashfun=follow}]
      ++
      [#fitting_spec{name=I,
@@ -635,6 +627,14 @@ send_inputs(Pipe, {index, Bucket, Index, Key}, Timeout) ->
     end;
 
 send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
+    send_inputs(Pipe,
+                {index, Bucket, Index, StartKey, EndKey, false},
+                Timeout);
+send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey, ReturnTerms}, Timeout) ->
+    send_inputs(Pipe,
+                {index, Bucket, Index, StartKey, EndKey, ReturnTerms, undefined},
+                Timeout);
+send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey, RT, TR}, Timeout) ->
     Query = {range, Index, StartKey, EndKey},
     case riak_core_capability:get({riak_kv, mapred_2i_pipe}, false) of
         true ->
@@ -655,7 +655,9 @@ send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
                                         start_key=StartKey,
                                         return_body=true};
                         %% This head is default
-                        _ -> Query
+                        _ -> 
+                            Q = riak_index:upgrade_query(Query),
+                            Q?KV_INDEX_Q{return_terms = RT, term_regex = TR}
                     end,
             riak_kv_pipe_index:queue_existing_pipe(
               Pipe, Bucket, Query2, Timeout);
