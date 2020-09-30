@@ -52,6 +52,11 @@
          reduce_index_regex/2,
          reduce_index_max/2]).
 
+-export([prereduce_index_extractinteger_fun/1,
+         prereduce_index_byrange_fun/1,
+         prereduce_index_regex_fun/1,
+         prereduce_index_logidentity_fun/1]).
+
 -type keep() :: all|this.
 
 %-ifdef(TEST).
@@ -169,20 +174,43 @@ reduce_identity(List, _) ->
                                     list(riak_kv_pipe_index:index_keydata())),
                                 any()) ->
                                     list(riak_kv_pipe_index:index_keydata()).
-reduce_index_identity(List, _) ->
-    F = fun({{Bucket, Key}, undefined}, Acc) ->
-                [{Bucket, Key}|Acc];
-            ({{Bucket, Key}, KeyData}, Acc) when is_list(KeyData) ->
-                [{{Bucket, Key}, KeyData}|Acc];
-            (PrevAcc, Acc) when is_list(PrevAcc) ->
-                Acc ++ PrevAcc;
-            ({Bucket, Key}, Acc) ->
-                [{Bucket, Key}|Acc];
-            (Other, Acc) ->
-                lager:warning("Unhandled entry: ~p", [Other]),
-                Acc
-        end,
-    lists:foldl(F, [], List).
+reduce_index_identity(List, Args) ->
+    lists:foldl(reduce_index_identity_fun(Args), [], List).
+
+reduce_index_identity_fun(_Args) ->
+    fun({{Bucket, Key}, undefined}, Acc) ->
+            [{Bucket, Key}|Acc];
+        ({{Bucket, Key}, KeyData}, Acc) when is_list(KeyData) ->
+            [{{Bucket, Key}, KeyData}|Acc];
+        (PrevAcc, Acc) when is_list(PrevAcc) ->
+            Acc ++ PrevAcc;
+        ({Bucket, Key}, Acc) ->
+            [{Bucket, Key}|Acc];
+        (Other, Acc) ->
+            lager:warning("Unhandled entry: ~p", [Other]),
+            Acc
+    end.
+
+-spec prereduce_index_logidentity_fun(any()) -> riak_kv_pipe_index:prereduce_fun().
+prereduce_index_logidentity_fun(_Args) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            lager:info("Key=~w passed through fun", [Key]),
+            {{Bucket, Key}, KeyTermList};
+        (_Other) ->
+            none
+    end.
+
+reduce_foldfun(FilterFun) ->
+    fun(PrevAcc, Acc) when is_list(PrevAcc) ->
+            Acc ++ PrevAcc;
+        (IndexKeyData, Acc) ->
+            case FilterFun(IndexKeyData) of
+                none ->
+                    Acc;
+                IndexKeyData0 ->
+                    [IndexKeyData0|Acc]
+            end
+    end.
 
 -spec reduce_index_extractinteger(list(riak_kv_pipe_index:index_keydata()|
                                         list(riak_kv_pipe_index:index_keydata())),
@@ -190,16 +218,21 @@ reduce_index_identity(List, _) ->
                                         non_neg_integer(),
                                         pos_integer()}) ->
                                             list(riak_kv_pipe_index:index_keydata()).
-reduce_index_extractinteger(List,
-                            {InputTerm, OutputTerm, Keep, PreBytes, IntSize}) ->
-    F =
-    fun({{Bucket, Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+reduce_index_extractinteger(List, Args) ->
+    FilterFun = prereduce_index_extractinteger_fun(Args),
+    lists:foldl(reduce_foldfun(FilterFun), [], List).
+
+-spec prereduce_index_extractinteger_fun({atom(), atom(), keep(),
+                                            non_neg_integer(), pos_integer()}) ->
+                                                riak_kv_pipe_index:prereduce_fun().
+prereduce_index_extractinteger_fun({InputTerm, OutputTerm, Keep,
+                                    PreBytes, IntSize}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
             case lists:keyfind(OutputTerm, 1, KeyTermList) of
                 false ->
                     case lists:keyfind(InputTerm, 1, KeyTermList) of
-                        {InputTerm, <<_P:PreBytes/binary,
-                                        I:IntSize/integer,
-                                        _T/binary>>} ->
+                        {InputTerm,
+                            <<_P:PreBytes/binary, I:IntSize/integer, _T/binary>>} ->
                             KeyTermList0 =
                                 case Keep of
                                     all ->
@@ -207,88 +240,92 @@ reduce_index_extractinteger(List,
                                     this ->
                                         [{OutputTerm, I}]
                                 end,
-                            [{{Bucket, Key}, KeyTermList0}|Acc];
+                            {{Bucket, Key}, KeyTermList0};
                         _Other ->
-                            Acc
+                            none
                     end;
                 _ ->
-                    [{{Bucket, Key}, KeyTermList}|Acc]
+                    {{Bucket, Key}, KeyTermList}
             end;
-        (PrevAcc, Acc) when is_list(PrevAcc), is_list(Acc) ->
-            Acc ++ PrevAcc;
-        (_Other, Acc) ->
-            Acc
-    end,
-    lists:foldl(F, [], List).
+        (_Other) ->
+            none
+    end.
 
 -spec reduce_index_byrange(list(riak_kv_pipe_index:index_keydata()|
                                 list(riak_kv_pipe_index:index_keydata())),
                             {atom(), keep(),
                                 term(), term()}) ->
                                     list(riak_kv_pipe_index:index_keydata()).
-reduce_index_byrange(List, {InputTerm, Keep, LowRange, HighRange}) ->
-    F =
-    fun({{Bucket, Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+reduce_index_byrange(List, Args) ->
+    FilterFun = prereduce_index_byrange_fun(Args),
+    lists:foldl(reduce_foldfun(FilterFun), [], List).
+
+-spec prereduce_index_byrange_fun({atom(), keep(),
+                                    term(), term()}) ->
+                                        riak_kv_pipe_index:prereduce_fun().
+prereduce_index_byrange_fun({InputTerm, Keep, LowRange, HighRange}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
             case lists:keyfind(InputTerm, 1, KeyTermList) of
                 {InputTerm, ToTest} when ToTest >=LowRange, ToTest < HighRange ->
-                    Output =
-                        case Keep of
-                            all ->
-                                {{Bucket, Key}, KeyTermList};
-                            this ->
-                                {{Bucket, Key}, [{InputTerm, ToTest}]}
-                        end,
-                    [Output|Acc];
+                    case Keep of
+                        all ->
+                            {{Bucket, Key}, KeyTermList};
+                        this ->
+                            {{Bucket, Key}, [{InputTerm, ToTest}]}
+                    end;
                 _ ->
-                    Acc
+                    none
             end;
-        (PrevAcc, Acc) when is_list(PrevAcc) ->
-            Acc ++ PrevAcc;
-        (_, Acc) ->
-            Acc
-    end,
-    lists:foldl(F, [], List).
+        (_Other) ->
+            none
+    end.
             
 -spec reduce_index_regex(list(riak_kv_pipe_index:index_keydata()|
                                 list(riak_kv_pipe_index:index_keydata())),
                             {atom(), keep(),
                                 binary()}) ->
                                     list(riak_kv_pipe_index:index_keydata()).
-reduce_index_regex(List, {InputTerm, Keep, CompiledRe}) ->
-    F =
-    fun({{Bucket, Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+reduce_index_regex(List, Args) ->
+    FilterFun = prereduce_index_regex_fun(Args),
+    lists:foldl(reduce_foldfun(FilterFun), [], List).
+
+-spec prereduce_index_regex_fun({atom(), keep(), binary()}) ->
+                                riak_kv_pipe_index:prereduce_fun().
+prereduce_index_regex_fun({InputTerm, Keep, CompiledRe}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
             case lists:keyfind(InputTerm, 1, KeyTermList) of
                 {InputTerm, ToTest} ->
                     case re:run(ToTest, CompiledRe) of
                         {match, _} ->
-                            Output =
-                                case Keep of
-                                    all ->
-                                        {{Bucket, Key}, KeyTermList};
-                                    this ->
-                                        {{Bucket, Key}, [{InputTerm, ToTest}]}
-                                end,
-                            [Output|Acc];
+                            case Keep of
+                                all ->
+                                    {{Bucket, Key}, KeyTermList};
+                                this ->
+                                    {{Bucket, Key}, [{InputTerm, ToTest}]}
+                            end;
                         _ ->
-                            Acc
+                            none
                     end;
                 false ->
-                    Acc
+                    none
             end;
-        (PrevAcc, Acc) when is_list(PrevAcc) ->
-            Acc ++ PrevAcc;
-        (_, Acc) ->
-            Acc
-    end,
-    lists:foldl(F, [], List).
-
+        (_Other) ->
+            none
+    end.
 
 -spec reduce_index_max(list(riak_kv_pipe_index:index_keydata()|
                                 list(riak_kv_pipe_index:index_keydata())),
                             {atom(), keep()}) ->
                                 list(riak_kv_pipe_index:index_keydata()).
-reduce_index_max(List, {InputTerm, Keep}) ->
-    F =
+reduce_index_max(List, Args) ->
+    case lists:foldl(reduce_index_max_fun(Args), none, lists:flatten(List)) of
+        none ->
+            [];
+        R ->
+            [R]
+    end.
+
+reduce_index_max_fun({InputTerm, Keep}) ->
     fun({{Bucket, Key}, KeyTermList}, none) when is_list(KeyTermList) ->
             case lists:keyfind(InputTerm, 1, KeyTermList) of
                 {InputTerm, ToTest} ->
@@ -319,14 +356,7 @@ reduce_index_max(List, {InputTerm, Keep}) ->
                 _ ->
                     {{MaxBucket, MaxKey}, MaxKeyTermList}
             end
-    end,
-    case lists:foldl(F, none, lists:flatten(List)) of
-        none ->
-            [];
-        R ->
-            [R]
     end.
-
 
 %% @spec reduce_set_union(boolean()) -> reduce_phase_spec()
 %% @doc Produces a spec for a reduce phase that produces the

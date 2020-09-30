@@ -42,19 +42,30 @@
 -export([init/2,
          process/3,
          done/1,
-         queue_existing_pipe/4]).
+         queue_existing_pipe/4,
+         queue_existing_pipe/5]).
 
 -include("riak_kv_vnode.hrl").
 -include_lib("riak_pipe/include/riak_pipe.hrl").
 -include_lib("riak_pipe/include/riak_pipe_log.hrl").
 
 -record(state, {p :: riak_pipe_vnode:partition(),
-                fd :: riak_pipe_fitting:details()}).
+                fd :: riak_pipe_fitting:details()
+            }).
 -opaque state() :: #state{}.
 -type index_keydata() :: 
     {{riak_object:bucket(), riak_object:key()}, undefined|list({atom(), term()})}.
+-type prereduce_fun() ::
+    fun((index_keydata()) -> index_keydata()|none).
+-type prereduce_def() ::
+    {atom(), atom(), tuple()}.
+-type query_input() ::
+    {cover,
+        list({riak_pipe_vnode:partition(), node()}),
+        {riak_object:bucket(), riak_index:query_def(), list(prereduce_fun())}}
+    | {riak_object:bucket(), riak_index:query_def(), list(prereduce_fun())}.
 
--export_type([state/0, index_keydata/0]).
+-export_type([state/0, index_keydata/0, prereduce_fun/0, prereduce_def/0]).
 
 %% @doc Init just stashes the `Partition' and `FittingDetails' for later.
 -spec init(riak_pipe_vnode:partition(), riak_pipe_fitting:details()) ->
@@ -64,12 +75,12 @@ init(Partition, FittingDetails) ->
 
 %% @doc Process queries indexes on the KV vnode, according to the
 %% input bucket and query.
--spec process(term(), boolean(), state()) -> {ok | {error, term()}, state()}.
+-spec process(query_input(), boolean(), state()) -> {ok | {error, term()}, state()}.
 process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
     case Input of
-        {cover, FilterVNodes, {Bucket, Query}} ->
+        {cover, FilterVNodes, {Bucket, Query, PRFuns}} ->
             ok;
-        {Bucket, Query} ->
+        {Bucket, Query, PRFuns} ->
             FilterVNodes = []
     end,
     ReqId = erlang:phash2({self(), os:timestamp()}), % stolen from riak_client
@@ -79,24 +90,25 @@ process(Input, _Last, #state{p=Partition, fd=FittingDetails}=State) ->
       FilterVNodes,
       {raw, ReqId, self()},
       riak_kv_vnode_master),
-    {keysend_loop(ReqId, Partition, FittingDetails), State}.
+    {keysend_loop(ReqId, Partition, FittingDetails, PRFuns),
+        State}.
 
-keysend_loop(ReqId, Partition, FittingDetails) ->
+keysend_loop(ReqId, Partition, FittingDetails, PRs) ->
     receive
         {ReqId, {error, _Reason} = ER} ->
             ER;
         {ReqId, {From, Bucket, Keys}} ->
-            case keysend(Bucket, Keys, Partition, FittingDetails) of
+            case keysend(Bucket, Keys, Partition, FittingDetails, PRs) of
                 ok ->
                     _ = riak_kv_vnode:ack_keys(From),
-                    keysend_loop(ReqId, Partition, FittingDetails);
+                    keysend_loop(ReqId, Partition, FittingDetails, PRs);
                 ER ->
                     ER
             end;
         {ReqId, {Bucket, Keys}} ->
-            case keysend(Bucket, Keys, Partition, FittingDetails) of
+            case keysend(Bucket, Keys, Partition, FittingDetails, PRs) of
                 ok ->
-                    keysend_loop(ReqId, Partition, FittingDetails);
+                    keysend_loop(ReqId, Partition, FittingDetails, PRs);
                 ER ->
                     ER
             end;
@@ -104,24 +116,28 @@ keysend_loop(ReqId, Partition, FittingDetails) ->
             ok
     end.
 
-keysend(_Bucket, [], _Partition, _FittingDetails) ->
+keysend(_Bucket, [], _Partition, _FittingDetails, _PRs) ->
     ok;
-keysend(Bucket, [{o,Key,BinRiakObj}|Keys], Partition, FittingDetails) ->
+keysend(Bucket, [{o,Key,BinRiakObj}|Keys], Partition, FittingDetails, PRs) ->
     RiakObj = riak_object:from_binary(Bucket, Key, BinRiakObj),
     Out = {ok, RiakObj, undefined},
     case riak_pipe_vnode_worker:send_output(Out, Partition, FittingDetails) of
         ok ->
-            keysend(Bucket, Keys, Partition, FittingDetails);
+            keysend(Bucket, Keys, Partition, FittingDetails, PRs);
         ER ->
             ER
     end;
-keysend(Bucket, [Key | Keys], Partition, FittingDetails) ->
-    case riak_pipe_vnode_worker:send_output(
-            strip_indexkey(Bucket, Key), Partition, FittingDetails) of
-        ok ->
-            keysend(Bucket, Keys, Partition, FittingDetails);
-        ER ->
-            ER
+keysend(Bucket, [Key | Keys], Partition, FittingDetails, PRs) ->
+    case lists:foldl(fun(F, Acc) -> F(Acc) end, strip_indexkey(Bucket, Key), PRs) of
+        none ->
+            keysend(Bucket, Keys, Partition, FittingDetails, PRs);
+        IndexTerm ->        
+            case riak_pipe_vnode_worker:send_output(IndexTerm, Partition, FittingDetails) of
+                ok ->
+                    keysend(Bucket, Keys, Partition, FittingDetails, PRs);
+                ER ->
+                    ER
+            end
     end.
 
 %% @doc Remove the type from the bucket, and pass through a returned term as KeyData
@@ -151,6 +167,9 @@ done(_State) ->
         {{binary(), binary()}, list()}.
         % Bucket may be typed bucket
 
+queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
+    queue_existing_pipe(Pipe, Bucket, Query, [], Timeout).
+
 %% @doc Query and index, and send the results as inputs to the
 %%      given pipe.  This starts a new pipe with one fitting
 %%      (`riak_kv_pipe_index'), with its sink pointed at the
@@ -167,9 +186,10 @@ done(_State) ->
                           |{range, Index::binary(),
                             Start::term(), End::term()}
                           |riak_index:query_def(),
+                          list(prereduce_def()),
                           timeout()) ->
          ok | {error, Reason :: term()}.
-queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
+queue_existing_pipe(Pipe, Bucket, Query, FunDefs, Timeout) ->
     %% make our tiny pipe
     [{_Name, Head}|_] = Pipe#pipe.fittings,
     Period = riak_kv_mrc_pipe:sink_sync_period(),
@@ -185,9 +205,10 @@ queue_existing_pipe(Pipe, Bucket, Query, Timeout) ->
     ReqId = erlang:phash2({self(), os:timestamp()}), %% stolen from riak_client
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
+    PRFuns = lists:map(fun({M, F, A}) -> M:F(A) end, FunDefs),
     {ok, Sender} = riak_pipe_qcover_sup:start_qcover_fsm(
                      [{raw, ReqId, self()},
-                      [LKP, {Bucket, Query}, NVal]]),
+                      [LKP, {Bucket, Query, PRFuns}, NVal]]),
 
     %% wait for cover to hit everything
     {RealTO, TOReason} =

@@ -168,7 +168,11 @@
                         ReturnTerms :: boolean()}
                      | {index, Bucket :: binary(), Index :: binary(),
                         Start :: term(), End :: term(),
-                        ReturnTerms :: boolean(), TermRegex :: binary()|undefined}.
+                        ReturnTerms :: boolean(), TermRegex :: binary()|undefined}
+                     | {index, Bucket :: binary(), Index :: binary(),
+                        Start :: term(), End :: term(),
+                        ReturnTerms :: boolean(), TermRegex :: binary()|undefined,
+                        list(riak_kv_pipe_index:prereduce_def())}.
 -type search_input() :: {search, Bucket :: binary(), Query :: binary()}
                       | {search, Bucket :: binary(), Query :: binary(),
                          Filter :: [keyfilter()]}.
@@ -630,11 +634,19 @@ send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey}, Timeout) ->
     send_inputs(Pipe,
                 {index, Bucket, Index, StartKey, EndKey, false},
                 Timeout);
-send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey, ReturnTerms}, Timeout) ->
+send_inputs(Pipe,
+            {index, Bucket, Index, StartKey, EndKey, ReturnTerms},
+            Timeout) ->
     send_inputs(Pipe,
                 {index, Bucket, Index, StartKey, EndKey, ReturnTerms, undefined},
                 Timeout);
 send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey, RT, TR}, Timeout) ->
+    send_inputs(Pipe, 
+                {index, Bucket, Index, StartKey, EndKey, RT, TR, []},
+                Timeout);
+send_inputs(Pipe,
+            {index, Bucket, Index, StartKey, EndKey, RT, TR, PRFuns},
+            Timeout) ->
     Query = {range, Index, StartKey, EndKey},
     case riak_core_capability:get({riak_kv, mapred_2i_pipe}, false) of
         true ->
@@ -660,7 +672,7 @@ send_inputs(Pipe, {index, Bucket, Index, StartKey, EndKey, RT, TR}, Timeout) ->
                             Q?KV_INDEX_Q{return_terms = RT, term_regex = TR}
                     end,
             riak_kv_pipe_index:queue_existing_pipe(
-              Pipe, Bucket, Query2, Timeout);
+              Pipe, Bucket, Query2, PRFuns, Timeout);
         _ ->
             NewInput = {modfun, riak_index, mapred_index, [Bucket, Query]},
             send_inputs(Pipe, NewInput, Timeout)
