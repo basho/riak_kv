@@ -56,7 +56,9 @@
          reduce_index_byrange/2,
          reduce_index_regex/2,
          reduce_index_max/2,
-         reduce_index_hamming/2]).
+         reduce_index_hamming/2,
+         reduce_index_set_union/2,
+         reduce_index_countby/2]).
 
 -export([prereduce_index_extractinteger_fun/1,
          prereduce_index_extractbinary_fun/1,
@@ -517,6 +519,73 @@ reduce_index_max_fun({InputTerm, Keep}) ->
             end
     end.
 
+
+-spec reduce_index_set_union(list(any()), {atom(), binary|integer}) -> list(any()).
+reduce_index_set_union(List, {InputTerm, InputType}) ->
+    FoldFun = 
+        fun({{_Bucket, _Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+                case lists:keyfind(InputTerm, 1, KeyTermList) of
+                    {InputTerm, ToAdd} when
+                            InputType == binary, is_binary(ToAdd); 
+                            InputType == integer, is_integer(ToAdd) ->
+                        lists:usort([ToAdd|Acc]);
+                    _ ->
+                        Acc
+                end;
+            (PrevAcc, Acc) when is_list(PrevAcc) ->
+                lists:usort(Acc ++ PrevAcc);
+            (PrevAcc, Acc) when
+                            InputType == binary, is_binary(PrevAcc); 
+                            InputType == integer, is_integer(PrevAcc) ->
+                lists:usort([PrevAcc|Acc])
+            end,
+    lists:foldl(FoldFun, [], List).
+
+
+-spec reduce_index_countby(list(riak_kv_pipe_index:index_keydata()|
+                                {binary()|integer(), non_neg_integer()}),
+                                {atom(), binary|integer}) ->
+                                    list({binary()|integer(), non_neg_integer()}).
+reduce_index_countby(List, {InputTerm, InputType}) ->
+    FoldFun = 
+        fun({{_Bucket, _Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+                case lists:keyfind(InputTerm, 1, KeyTermList) of
+                    {InputTerm, Term}  when
+                            InputType == binary, is_binary(Term); 
+                            InputType == integer, is_integer(Term) ->
+                        case lists:keyfind(Term, 1, Acc) of
+                            {Term, CurrCount}->
+                                lists:ukeysort(1, [{Term, CurrCount + 1}|Acc]);
+                            false ->
+                                lists:ukeysort(1, [{Term, 1}|Acc])
+                        end;
+                    _ ->
+                        Acc
+                end;
+            (PrevAcc, Acc) when is_list(PrevAcc), is_list(Acc) ->
+                F = fun({Term, C0}, A) ->
+                        case lists:keyfind(Term, 1, A) of
+                            {Term, CurrCount} ->
+                                lists:ukeysort(1, [{Term, CurrCount + C0}|A]);
+                            false ->
+                                lists:ukeysort(1, [{Term, C0}|A])
+                        end
+                    end,
+                lists:foldl(F, Acc, PrevAcc);
+            ({Term, C0}, Acc) when
+                    InputType == binary, is_binary(Term), is_integer(C0); 
+                    InputType == integer, is_integer(Term), is_integer(C0) ->
+                case lists:keyfind(Term, 1, Acc) of
+                    {Term, CurrCount} ->
+                        lists:ukeysort(1, [{Term, CurrCount + C0}|Acc]);
+                    false ->
+                        lists:ukeysort(1, [{Term, C0}|Acc])
+                end
+        end,
+    lists:foldl(FoldFun, [], List).
+
+
+
 %% @spec reduce_set_union(boolean()) -> reduce_phase_spec()
 %% @doc Produces a spec for a reduce phase that produces the
 %%      union-set of its input.  That is, given an input of:
@@ -927,12 +996,33 @@ reduce_index_hamming_tester(HashFun) ->
     [{BK1, _H1}|_T] = R0,
     ?assertMatch({<<"B1">>, <<"K1">>}, BK1).
 
+reduce_index_set_union_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{int, 5}]},
+    B = {{<<"B2">>, <<"K2">>}, [{int, 5}, {term, <<"v7">>}]},
+    C = {{<<"B3">>, <<"K3">>}, [{int, 8}]},
+    D = {{<<"B4">>, <<"K4">>}, [{term, 9}]},
+    R0 = commassidem_check(fun reduce_index_set_union/2, {int, integer}, A, B, C, D),
+    R1 = commassidem_check(fun reduce_index_set_union/2, {term, binary}, A, B, C, D),
+    ?assertMatch([5, 8], R0),
+    ?assertMatch([<<"v7">>], R1).
+
+reduce_index_countby_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{int, 5}, {term, <<"v8">>}]},
+    B = {{<<"B2">>, <<"K2">>}, [{int, 5}, {term, <<"v7">>}]},
+    C = {{<<"B3">>, <<"K3">>}, [{int, 8}, {term, <<"v7">>}]},
+    D = {{<<"B4">>, <<"K4">>}, [{term, 9}]},
+    R0 = commassidem_check(fun reduce_index_countby/2, {int, integer}, A, B, C, D),
+    R1 = commassidem_check(fun reduce_index_countby/2, {term, binary}, A, B, C, D),
+    ?assertMatch([{5, 2}, {8, 1}], R0),
+    ?assertMatch([{<<"v7">>, 2}, {<<"v8">>, 1}], R1).
+
 
 commassidem_check(F, Args, A, B, C, D) ->
     % Is the reduce function commutative, associative and idempotent
     ID1 = F([A, B, C, D], Args),
     ID2 = F([A, D] ++ F([C, B], Args), Args),
     ID3 = F([F([A], Args), F([B], Args), F([C], Args), F([D], Args)], Args),
+    io:format("ID1 ~w ID2 ~w ID3 ~w~n", [ID1, ID2, ID3]),
     R = lists:sort(ID1),
     ?assertMatch(R, lists:sort(ID2)),
     ?assertMatch(R, lists:sort(ID3)),
