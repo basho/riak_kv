@@ -49,22 +49,26 @@
          reduce_count_inputs/2]).
 
 %% Index manipulation definitions
--export([reduce_index_identity/2,
-         reduce_index_extractinteger/2,
+-export([reduce_index_extractinteger/2,
          reduce_index_extractbinary/2,
          reduce_index_extractregex/2,
-         reduce_index_byrange/2,
-         reduce_index_regex/2,
+         reduce_index_extractmask/2,
+         reduce_index_applyrange/2,
+         reduce_index_applyregex/2,
+         reduce_index_applymask/2,
+         reduce_index_identity/2,
          reduce_index_max/2,
          reduce_index_hamming/2,
-         reduce_index_set_union/2,
+         reduce_index_union/2,
          reduce_index_countby/2]).
 
 -export([prereduce_index_extractinteger_fun/1,
          prereduce_index_extractbinary_fun/1,
          prereduce_index_extractregex_fun/1,
-         prereduce_index_byrange_fun/1,
-         prereduce_index_regex_fun/1,
+         prereduce_index_extractmask_fun/1,
+         prereduce_index_applyrange_fun/1,
+         prereduce_index_applyregex_fun/1,
+         prereduce_index_applymask_fun/1,
          prereduce_index_logidentity_fun/1,
          prereduce_index_hamming_fun/1]).
 
@@ -295,21 +299,32 @@ prereduce_index_extractinteger_fun({InputTerm, OutputTerm, Keep,
                                         list(riak_kv_pipe_index:index_keydata())),
                                     {atom(), atom(), keep(), 
                                         non_neg_integer(),
-                                        pos_integer()}) ->
+                                        pos_integer()|all}) ->
                                             list(riak_kv_pipe_index:index_keydata()).
 reduce_index_extractbinary(List, Args) ->
     ExtractFun = prereduce_index_extractbinary_fun(Args),
     lists:foldl(reduce_extractfun(ExtractFun, element(2, Args)), [], List).
 
 -spec prereduce_index_extractbinary_fun({atom(), atom(), keep(),
-                                            non_neg_integer(), pos_integer()}) ->
+                                            non_neg_integer(), pos_integer()|all}) ->
                                                 riak_kv_pipe_index:prereduce_fun().
 prereduce_index_extractbinary_fun({InputTerm, OutputTerm, Keep,
                                     PreBytes, BinSize}) ->
     fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
-            case lists:keyfind(InputTerm, 1, KeyTermList) of
-                {InputTerm,
-                    <<_P:PreBytes/binary, B:BinSize/binary, _T/binary>>} ->
+            case {lists:keyfind(InputTerm, 1, KeyTermList), BinSize} of
+                {{InputTerm,
+                        <<_P:PreBytes/binary, B/binary>>}, all} ->
+                    KeyTermList0 =
+                    case Keep of
+                        all ->
+                            lists:ukeysort(1, [{OutputTerm, B}|KeyTermList]);
+                        this ->
+                            [{OutputTerm, B}]
+                    end,
+                    {{Bucket, Key}, KeyTermList0};
+                {{InputTerm,
+                        <<_P:PreBytes/binary, B:BinSize/binary, _T/binary>>},
+                        BinSize} ->
                     KeyTermList0 =
                         case Keep of
                             all ->
@@ -363,22 +378,53 @@ prereduce_index_extractregex_fun({InputTerm, OutputTerms, Keep, CompiledRe}) ->
             none
     end.
 
--spec reduce_index_byrange(list(riak_kv_pipe_index:index_keydata()|
+
+-spec reduce_index_extractmask(list(riak_kv_pipe_index:index_keydata()|
+                                        list(riak_kv_pipe_index:index_keydata())),
+                                    {atom(), atom(), keep(), non_neg_integer()}) ->
+                                            list(riak_kv_pipe_index:index_keydata()).
+reduce_index_extractmask(List, Args) ->
+    ExtractFun = prereduce_index_extractmask_fun(Args),
+    lists:foldl(reduce_extractfun(ExtractFun, element(2, Args)), [], List).
+    
+-spec prereduce_index_extractmask_fun({atom(), atom(), keep(), non_neg_integer()}) ->
+                                        riak_kv_pipe_index:prereduce_fun().
+prereduce_index_extractmask_fun({InputTerm, OutputTerm, Keep, Mask}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, Int} when is_integer(Int) ->
+                    Output = {OutputTerm, Int band Mask},
+                    KeyTermList0 =
+                        case Keep of
+                            all ->
+                                lists:ukeysort(1, [Output|KeyTermList]);
+                            this ->
+                                [Output]
+                        end,
+                    {{Bucket, Key}, KeyTermList0};
+                _Other ->
+                    none
+            end;
+        (_Other) ->
+            none
+    end.
+
+-spec reduce_index_applyrange(list(riak_kv_pipe_index:index_keydata()|
                                 list(riak_kv_pipe_index:index_keydata())),
                             {atom(), keep(),
                                 term(), term()}) ->
                                     list(riak_kv_pipe_index:index_keydata()).
-reduce_index_byrange(List, Args) ->
-    FilterFun = prereduce_index_byrange_fun(Args),
+reduce_index_applyrange(List, Args) ->
+    FilterFun = prereduce_index_applyrange_fun(Args),
     lists:foldl(reduce_filterfun(FilterFun), [], List).
 
--spec prereduce_index_byrange_fun({atom(), keep(),
+-spec prereduce_index_applyrange_fun({atom(), keep(),
                                     term(), term()}) ->
                                         riak_kv_pipe_index:prereduce_fun().
-prereduce_index_byrange_fun({InputTerm, Keep, LowRange, HighRange}) ->
+prereduce_index_applyrange_fun({InputTerm, Keep, LowRange, HighRange}) ->
     fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
             case lists:keyfind(InputTerm, 1, KeyTermList) of
-                {InputTerm, ToTest} when ToTest >=LowRange, ToTest < HighRange ->
+                {InputTerm, ToTest} when ToTest >=LowRange, ToTest =< HighRange ->
                     case Keep of
                         all ->
                             {{Bucket, Key}, KeyTermList};
@@ -392,23 +438,54 @@ prereduce_index_byrange_fun({InputTerm, Keep, LowRange, HighRange}) ->
             none
     end.
             
--spec reduce_index_regex(list(riak_kv_pipe_index:index_keydata()|
+-spec reduce_index_applyregex(list(riak_kv_pipe_index:index_keydata()|
                                 list(riak_kv_pipe_index:index_keydata())),
-                            {atom(), keep(),
-                                binary()}) ->
+                            {atom(), keep(), binary()}) ->
                                     list(riak_kv_pipe_index:index_keydata()).
-reduce_index_regex(List, Args) ->
-    FilterFun = prereduce_index_regex_fun(Args),
+reduce_index_applyregex(List, Args) ->
+    FilterFun = prereduce_index_applyregex_fun(Args),
     lists:foldl(reduce_filterfun(FilterFun), [], List).
 
--spec prereduce_index_regex_fun({atom(), keep(), binary()}) ->
+-spec prereduce_index_applyregex_fun({atom(), keep(), binary()}) ->
                                 riak_kv_pipe_index:prereduce_fun().
-prereduce_index_regex_fun({InputTerm, Keep, CompiledRe}) ->
+prereduce_index_applyregex_fun({InputTerm, Keep, CompiledRe}) ->
     fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
             case lists:keyfind(InputTerm, 1, KeyTermList) of
                 {InputTerm, ToTest} ->
                     case re:run(ToTest, CompiledRe) of
                         {match, _} ->
+                            case Keep of
+                                all ->
+                                    {{Bucket, Key}, KeyTermList};
+                                this ->
+                                    {{Bucket, Key}, [{InputTerm, ToTest}]}
+                            end;
+                        _ ->
+                            none
+                    end;
+                false ->
+                    none
+            end;
+        (_Other) ->
+            none
+    end.
+
+-spec reduce_index_applymask(list(riak_kv_pipe_index:index_keydata()|
+                                list(riak_kv_pipe_index:index_keydata())),
+                            {atom(), keep(), non_neg_integer()}) ->
+                                    list(riak_kv_pipe_index:index_keydata()).
+reduce_index_applymask(List, Args) ->
+    FilterFun = prereduce_index_applymask_fun(Args),
+    lists:foldl(reduce_filterfun(FilterFun), [], List).
+
+-spec prereduce_index_applymask_fun({atom(), keep(), non_neg_integer()}) ->
+                                riak_kv_pipe_index:prereduce_fun().
+prereduce_index_applymask_fun({InputTerm, Keep, Mask}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, ToTest} when is_integer(ToTest) ->
+                    case ToTest band Mask of
+                        Mask ->
                             case Keep of
                                 all ->
                                     {{Bucket, Key}, KeyTermList};
@@ -520,8 +597,8 @@ reduce_index_max_fun({InputTerm, Keep}) ->
     end.
 
 
--spec reduce_index_set_union(list(any()), {atom(), binary|integer}) -> list(any()).
-reduce_index_set_union(List, {InputTerm, InputType}) ->
+-spec reduce_index_union(list(any()), {atom(), binary|integer}) -> list(any()).
+reduce_index_union(List, {InputTerm, InputType}) ->
     FoldFun = 
         fun({{_Bucket, _Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
                 case lists:keyfind(InputTerm, 1, KeyTermList) of
@@ -909,7 +986,7 @@ reduce_index_extractinteger_test() ->
     ?assertMatch(ExpR1, R1).
 
 reduce_index_extractbinary_test() ->
-    [Bin1, Bin2, Bin3] = [<<"Bin1">>, <<"Bin2">>, <<"Bin3">>],
+    [Bin1, Bin2, Bin3, Bin4] = [<<"Bin1">>, <<"Bin2">>, <<"Bin3">>, <<"BigBin4">>],
     A = {{<<"B1">>, <<"K1">>}, [{term, <<0:8/integer, Bin1/binary, 0:8/integer>>}]},
     B = {{<<"B2">>, <<"K2">>}, [{term, <<0:8/integer, Bin2/binary>>}, {extract, 26}]},
     C = {{<<"B3">>, <<"K3">>}, [{extract, 99}, {term, <<0:8/integer, Bin3/binary, 0:16/integer>>}]},
@@ -928,7 +1005,16 @@ reduce_index_extractbinary_test() ->
         {{<<"B3">>, <<"K3">>}, [{extbin, Bin3}]}
         ],
     ?assertMatch(ExpR0, R0),
-    ?assertMatch(ExpR1, R1).
+    ?assertMatch(ExpR1, R1),
+
+    A1 = {{<<"B1">>, <<"K1">>}, [{term, <<0:8/integer, Bin1/binary>>}]},
+    B1 = {{<<"B2">>, <<"K2">>}, [{term, <<0:8/integer, Bin2/binary>>}]},
+    C1 = {{<<"B3">>, <<"K3">>}, [{term, <<0:8/integer, Bin3/binary>>}]},
+    D1 = {{<<"B4">>, <<"K4">>}, [{term, <<0:8/integer, Bin4/binary>>}]},
+    ExpR2 = ExpR1 ++ [{{<<"B4">>, <<"K4">>}, [{extbin, Bin4}]}],
+    R2 = commassidem_check(fun reduce_index_extractbinary/2, {term, extbin, this, 1, all}, A1, B1, C1, D1),
+    ?assertMatch(ExpR2, R2).
+
 
 reduce_index_extractregex_test() ->
     {ok, RE} = re:compile("[0-9]+\\|(?<surname>[^|]*)\\|(?<preferred>[^|]*)$"),
@@ -954,9 +1040,9 @@ reduce_index_byrange_test() ->
     D = {{<<"B4">>, <<"K4">>}, [{extint, 4}]},
     E = {{<<"E5">>}},
     F = {{<<"F6">>, <<"F7">>}, undefined},
-    R0 = commassidem_check(fun reduce_index_byrange/2, {extint, all, 2, 4}, A, B, C, D),
-    commassidem_check(fun reduce_index_byrange/2, {extint, this, 2, 4}, A, B, C, E),
-    commassidem_check(fun reduce_index_byrange/2, {extint, all, 2, 4}, A, B, C, F),
+    R0 = commassidem_check(fun reduce_index_applyrange/2, {extint, all, 2, 3}, A, B, C, D),
+    commassidem_check(fun reduce_index_applyrange/2, {extint, this, 2, 3}, A, B, C, E),
+    commassidem_check(fun reduce_index_applyrange/2, {extint, all, 2, 3}, A, B, C, F),
     ?assertMatch([B, C], R0).
 
 reduce_index_regex_test() ->
@@ -967,9 +1053,9 @@ reduce_index_regex_test() ->
     D = {{<<"B4">>, <<"K4">>}, [{term, <<"v99d">>}]},
     E = {{<<"E5">>}},
     F = {{<<"F6">>, <<"F7">>}, undefined},
-    R0 = commassidem_check(fun reduce_index_regex/2, {term, this, R}, A, B, C, D),
-    commassidem_check(fun reduce_index_regex/2, {term, this, R}, A, B, C, E),
-    commassidem_check(fun reduce_index_regex/2, {term, all, R}, A, B, C, F),
+    R0 = commassidem_check(fun reduce_index_applyregex/2, {term, this, R}, A, B, C, D),
+    commassidem_check(fun reduce_index_applyregex/2, {term, this, R}, A, B, C, E),
+    commassidem_check(fun reduce_index_applyregex/2, {term, all, R}, A, B, C, F),
     ?assertMatch([A, B, D], R0).
 
 reduce_index_max_test() ->
@@ -996,13 +1082,13 @@ reduce_index_hamming_tester(HashFun) ->
     [{BK1, _H1}|_T] = R0,
     ?assertMatch({<<"B1">>, <<"K1">>}, BK1).
 
-reduce_index_set_union_test() ->
+reduce_index_union_test() ->
     A = {{<<"B1">>, <<"K1">>}, [{int, 5}]},
     B = {{<<"B2">>, <<"K2">>}, [{int, 5}, {term, <<"v7">>}]},
     C = {{<<"B3">>, <<"K3">>}, [{int, 8}]},
     D = {{<<"B4">>, <<"K4">>}, [{term, 9}]},
-    R0 = commassidem_check(fun reduce_index_set_union/2, {int, integer}, A, B, C, D),
-    R1 = commassidem_check(fun reduce_index_set_union/2, {term, binary}, A, B, C, D),
+    R0 = commassidem_check(fun reduce_index_union/2, {int, integer}, A, B, C, D),
+    R1 = commassidem_check(fun reduce_index_union/2, {term, binary}, A, B, C, D),
     ?assertMatch([5, 8], R0),
     ?assertMatch([<<"v7">>], R1).
 
@@ -1015,6 +1101,25 @@ reduce_index_countby_test() ->
     R1 = commassidem_check(fun reduce_index_countby/2, {term, binary}, A, B, C, D),
     ?assertMatch([{5, 2}, {8, 1}], R0),
     ?assertMatch([{<<"v7">>, 2}, {<<"v8">>, 1}], R1).
+
+reduce_index_extractmask_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{int, 1}, {term, <<"v8">>}]},
+    B = {{<<"B2">>, <<"K2">>}, [{int, 9}, {term, <<"v7">>}]},
+    C = {{<<"B3">>, <<"K3">>}, [{int, 2}, {term, <<"v7">>}]},
+    D = {{<<"B4">>, <<"K4">>}, [{term, 9}]},
+    R0 = commassidem_check(fun reduce_index_extractmask/2, {int, mask, this, 3}, A, B, C, D),
+    ?assertMatch([{{<<"B1">>, <<"K1">>}, [{mask, 1}]},
+                    {{<<"B2">>, <<"K2">>}, [{mask, 1}]},
+                    {{<<"B3">>, <<"K3">>}, [{mask, 2}]}], R0).
+
+reduce_index_applymask_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{int, 1}, {term, <<"v8">>}]},
+    B = {{<<"B2">>, <<"K2">>}, [{int, 9}, {term, <<"v7">>}]},
+    C = {{<<"B3">>, <<"K3">>}, [{int, 2}, {term, <<"v7">>}]},
+    D = {{<<"B4">>, <<"K4">>}, [{term, 9}]},
+    R0 = commassidem_check(fun reduce_index_applymask/2, {int, this, 1}, A, B, C, D),
+    ?assertMatch([{{<<"B1">>, <<"K1">>}, [{int, 1}]},
+                    {{<<"B2">>, <<"K2">>}, [{int, 9}]}], R0).
 
 
 commassidem_check(F, Args, A, B, C, D) ->
