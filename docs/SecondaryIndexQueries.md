@@ -237,13 +237,29 @@ The following pre-reduce filter functions have been implemented:
                                 riak_kv_pipe_index:prereduce_fun().
 ```
 
+```
+%% @doc
+%% Filter an attribute by checking if it exists in a passed in bloom filter
+%% InputTerm - the attribute name whose binary value is to be checked - use
+%% the atom key if the key is to be checked
+%% Keep - set to `all` to keep all terms in the output, or `this` to make the
+%% tested attribute/value the only element in the IndexData after extract.  If
+%% key is the tested attribute all IndexKeyData will be dropped
+%% {Module, Bloom} - the module for the bloom code, which must have a check_key
+%% function, and a bloom (produced by that module) for checking.
+-spec prereduce_index_applybloom_fun({attribute_name(),
+                                        keep(),
+                                        {module(), any()}}) ->
+                                riak_kv_pipe_index:prereduce_fun().
+```
+
 Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is a list of {attribute, value} tuples.  
 
 If no map or reduce functions are added to the map/reduce pipe (i.e. an empty list is the pipeline), an unsorted set of results will be returned back to the client in the {{Bucket, Key}, IndexData} format.  Other reduce functions can be applied to refine ad reformat the results, although it should be noted that due to re-reduce overheads there may be a variable impact on response time from adding reduce functions.
 
 - `reduce_count_inputs`.  Count the results, without stripping duplicates.
 
-- `reduce_index_sort(attribute_name()|key)`.  Sort the results before returning, using th atom key as the single function argument to sort by key, or an attribute name to sort on the values of that attribute.
+- `reduce_index_sort(attribute_name()|key)`.  Sort the results before returning, using the atom `key` as the single function argument to sort by key, or an attribute name to sort on the values of that attribute.
 
 - `reduce_index_max({attribute_name(), MaxCount})`.  Return the MaxCount results with the highest value for the identified attribute.  Ties are resolved by returning the higher keys.  
 

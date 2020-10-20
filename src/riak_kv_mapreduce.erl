@@ -54,9 +54,11 @@
          reduce_index_extractregex/2,
          reduce_index_extractmask/2,
          reduce_index_extracthamming/2,
+         reduce_index_extracthash/2,
          reduce_index_applyrange/2,
          reduce_index_applyregex/2,
          reduce_index_applymask/2,
+         reduce_index_applybloom/2,
          reduce_index_identity/2,
          reduce_index_sort/2,
          reduce_index_max/2,
@@ -69,9 +71,11 @@
          prereduce_index_extractregex_fun/1,
          prereduce_index_extractmask_fun/1,
          prereduce_index_extracthamming_fun/1,
+         prereduce_index_extracthash_fun/1,
          prereduce_index_applyrange_fun/1,
          prereduce_index_applyregex_fun/1,
          prereduce_index_applymask_fun/1,
+         prereduce_index_applybloom_fun/1,
          prereduce_index_logidentity_fun/1]).
 
 %% Helper functions for index manipulation
@@ -554,6 +558,126 @@ prereduce_index_extractmask_fun({InputTerm, OutputTerm, Keep, Mask}) ->
             none
     end.
 
+
+-spec reduce_index_extracthamming(riak_kv_pipe_index:index_keydata()|
+                                    list(riak_kv_pipe_index:index_keydata()),
+                                    list()|
+                                        {attribute_name(), attribute_name(),
+                                            keep(),
+                                            binary()}) ->
+                                        list(riak_kv_pipe_index:index_keydata()).
+reduce_index_extracthamming(List, ArgPropList) when is_list(ArgPropList) ->
+    reduce_index_extracthamming(List,
+        element(2, lists:keyfind(args, 1, ArgPropList)));
+reduce_index_extracthamming(List, Args) ->
+    ExtractFun = prereduce_index_extracthamming_fun(Args),
+    lists:foldl(reduce_extractfun(ExtractFun, element(2, Args)), [], List).
+
+%% @doc
+%% Where an attribute value is a simlarity hash, calculate and extract a
+%% hamming distance between that similarity hash and one passed in for
+%% comparison:
+%% InputTerm - the attribute name whose value is to be tested
+%% OutputTerm - the name of the attribute for the extracted hamming distance
+%% Keep - set to `all` to keep all terms in the output, or `this` to make the
+%% calculated hamming distance the only output
+%% Comparator - binary sim hash for comparison
+-spec prereduce_index_extracthamming_fun({attribute_name(), attribute_name(),
+                                            keep(),
+                                            binary()})
+                                        -> riak_kv_pipe_index:prereduce_fun().
+prereduce_index_extracthamming_fun({InputTerm, OutputTerm, Keep, Comparator}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            BitSize = bit_size(Comparator),
+            H = 
+                case lists:keyfind(InputTerm, 1, KeyTermList) of
+                    {InputTerm, Int} when is_integer(Int) ->
+                        hamming(<<Int:BitSize/integer>>, Comparator);
+                    {InputTerm, B} when
+                                    is_binary(B), bit_size(B) == BitSize ->
+                        hamming(B, Comparator);
+                    _Other ->
+                        none
+                end,
+            case H of
+                none ->
+                    none;
+                H ->
+                    KeyTermList0 =
+                        case Keep of
+                            all ->
+                                [{OutputTerm, H}|KeyTermList];
+                            this ->
+                                [{OutputTerm, H}]
+                        end,
+                    {{Bucket, Key}, KeyTermList0}
+            end;
+        (_Other) ->
+            none
+    end.
+
+-spec reduce_index_extracthash(riak_kv_pipe_index:index_keydata()|
+                                    list(riak_kv_pipe_index:index_keydata()),
+                                    list()|
+                                        {attribute_name()|key,
+                                            attribute_name(),
+                                            keep(),
+                                            riak_kv_hints:hash_algo()}) ->
+                                        list(riak_kv_pipe_index:index_keydata()).
+reduce_index_extracthash(List, ArgPropList) when is_list(ArgPropList) ->
+    reduce_index_extracthash(List,
+        element(2, lists:keyfind(args, 1, ArgPropList)));
+reduce_index_extracthash(List, Args) ->
+    ExtractFun = prereduce_index_extracthash_fun(Args),
+    lists:foldl(reduce_extractfun(ExtractFun, element(2, Args)), [], List).
+
+%% @doc
+%% Calculate the hash of the Key, and extract it to a projected attribute:
+%% InputTerm - the attribute value to hash, use key to hash the key
+%% OutputTerm - the name of the attribute for the extracted hash
+%% Keep - set to `all` to keep all terms in the output, or `this` to make the
+%% calculated hamming distance the only output
+%% Algorithm - supports md5 or fnva
+-spec prereduce_index_extracthash_fun({attribute_name()|key,
+                                            attribute_name(),
+                                            keep(),
+                                            riak_kv_hints:hash_algo()}) ->
+                                        riak_kv_pipe_index:prereduce_fun().
+prereduce_index_extracthash_fun({key, OutputTerm, Keep, Algo}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            H = riak_kv_hints:hash(Key, Algo),
+            KeyTermList0 =
+                case Keep of
+                    all ->
+                        [{OutputTerm, H}|KeyTermList];
+                    this ->
+                        [{OutputTerm, H}]
+                end,
+            {{Bucket, Key}, KeyTermList0};
+        (_Other) ->
+            none
+    end;
+prereduce_index_extracthash_fun({InputTerm, OutputTerm, Keep, Algo}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, Bin} when is_binary(Bin) ->
+                    H = riak_kv_hints:hash(Bin, Algo),
+                    KeyTermList0 =
+                        case Keep of
+                            all ->
+                                [{OutputTerm, H}|KeyTermList];
+                            this ->
+                                [{OutputTerm, H}]
+                        end,
+                    {{Bucket, Key}, KeyTermList0};
+                _ ->
+                    none
+            end;
+        (_Other) ->
+            none
+    end.
+                    
+
 -spec reduce_index_applyrange(list(riak_kv_pipe_index:index_keydata()|
                                 list(riak_kv_pipe_index:index_keydata())),
                             list()|
@@ -679,64 +803,77 @@ prereduce_index_applymask_fun({InputTerm, Keep, Mask}) ->
             none
     end.
 
-
--spec reduce_index_extracthamming(riak_kv_pipe_index:index_keydata()|
-                                    list(riak_kv_pipe_index:index_keydata()),
-                                    list()|
-                                        {attribute_name(), attribute_name(),
-                                            keep(),
-                                            binary()}) ->
-                                        list(riak_kv_pipe_index:index_keydata()).
-reduce_index_extracthamming(List, ArgPropList) when is_list(ArgPropList) ->
-    reduce_index_extracthamming(List,
+-spec reduce_index_applybloom(list(riak_kv_pipe_index:index_keydata()|
+                                list(riak_kv_pipe_index:index_keydata())),
+                            list()|{attribute_name()|key,
+                                    keep(),
+                                    {module(), any()}}) ->
+                                list(riak_kv_pipe_index:index_keydata()).
+reduce_index_applybloom(List, ArgPropList) when is_list(ArgPropList) ->
+    reduce_index_applybloom(List,
         element(2, lists:keyfind(args, 1, ArgPropList)));
-reduce_index_extracthamming(List, Args) ->
-    ExtractFun = prereduce_index_extracthamming_fun(Args),
-    lists:foldl(reduce_extractfun(ExtractFun, element(2, Args)), [], List).
+reduce_index_applybloom(List, Args) ->
+    FilterFun = prereduce_index_applybloom_fun(Args),
+    lists:foldl(reduce_filterfun(FilterFun), [], List).
 
 %% @doc
-%% Where an attribute value is a simlarity hash, calculate and extract a
-%% hamming distance between that similarity hash and one passed in for
-%% comparison:
-%% InputTerm - the attribute name whose value is to be tested
-%% OutputTerm - the name of the attribute for the extracted hamming distance
+%% Filter an attribute by checking if it exists in a passed in bloom filter
+%% InputTerm - the attribute name whose binary value is to be checked - use
+%% the atom key if the key is to be checked
 %% Keep - set to `all` to keep all terms in the output, or `this` to make the
-%% calculated hamming distance the only output
-%% Comparator - binary sim hash for comparison
--spec prereduce_index_extracthamming_fun({attribute_name(), attribute_name(),
-                                            keep(),
-                                            binary()})
-                                        -> riak_kv_pipe_index:prereduce_fun().
-prereduce_index_extracthamming_fun({InputTerm, OutputTerm, Keep, Comparator}) ->
+%% tested attribute/value the only element in the IndexData after extract.  If
+%% key is the tested attribute all IndexKeyData will be dropped
+%% {Module, Bloom} - the module for the bloom code, which must have a check_key
+%% function, and a bloom (produced by that module) for checking.
+-spec prereduce_index_applybloom_fun({attribute_name(),
+                                        keep(),
+                                        {module(), any()}}) ->
+                                riak_kv_pipe_index:prereduce_fun().
+prereduce_index_applybloom_fun({key, Keep, {BloomMod, Bloom}}) ->
     fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
-            BitSize = bit_size(Comparator),
-            H = 
-                case lists:keyfind(InputTerm, 1, KeyTermList) of
-                    {InputTerm, Int} when is_integer(Int) ->
-                        hamming(<<Int:BitSize/integer>>, Comparator);
-                    {InputTerm, B} when
-                                    is_binary(B), bit_size(B) == BitSize ->
-                        hamming(B, Comparator);
-                    _Other ->
-                        none
-                end,
-            case H of
-                none ->
-                    none;
-                H ->
-                    KeyTermList0 =
-                        case Keep of
-                            all ->
-                                [{OutputTerm, H}|KeyTermList];
-                            this ->
-                                [{OutputTerm, H}]
-                        end,
-                    {{Bucket, Key}, KeyTermList0}
+            case BloomMod:check_key(Key, Bloom) of
+                true ->
+                    case Keep of
+                        all ->
+                            {{Bucket, Key}, KeyTermList};
+                        this ->
+                            {Bucket, Key}
+                    end;
+                false ->
+                    none
+            end;
+        ({Bucket, Key}) when is_binary(Key) ->
+            case BloomMod:check_key(Key, Bloom) of
+                true ->
+                    {Bucket, Key};
+                false ->
+                    none
+            end;
+        
+        (_Other) ->
+            none
+    end;
+prereduce_index_applybloom_fun({InputTerm, Keep, {BloomMod, Bloom}}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, ToTest} when is_binary(ToTest) ->
+                    case BloomMod:check_key(ToTest, Bloom) of
+                        true ->
+                            case Keep of
+                                all ->
+                                    {{Bucket, Key}, KeyTermList};
+                                this ->
+                                    {{Bucket, Key}, [{InputTerm, ToTest}]}
+                            end;
+                        false ->
+                            none
+                    end;
+                _ ->
+                    none
             end;
         (_Other) ->
             none
     end.
-
 
 
 -spec reduce_index_union(list(any()), list()|{attribute_name(), binary|integer})
@@ -1300,6 +1437,52 @@ reduce_index_sort_test() ->
     ?assertMatch([B, C, A, D], R1),
     ?assertMatch([B, C, A, D], R1A),
     ?assertMatch([D, A, C, B], R2).
+
+reduce_index_extracthash_test() ->
+    Hashes0 =
+        lists:sort(
+            lists:map(fun(K) -> riak_kv_hints:hash(K, fnva) end,
+                    [<<"K1">>, <<"K2">>, <<"K3">>, <<"K4">>])),
+    Hashes1 =
+        lists:sort(
+            lists:map(fun(K) -> riak_kv_hints:hash(K, fnva) end,
+                    [<<"v8">>, <<"v7">>])),
+    A = {{<<"B1">>, <<"K1">>}, [{int, 1}, {term, <<"v8">>}]},
+    B = {{<<"B1">>, <<"K2">>}, [{int, 9}, {term, <<"v7">>}]},
+    C = {{<<"B1">>, <<"K3">>}, [{int, 2}, {term, <<"v7">>}]},
+    D = {{<<"B1">>, <<"K4">>}, [{term, 9}]},
+    R0A = commassidem_check(fun reduce_index_extracthash/2, {key, hash, this, fnva}, A, B, C, D),
+    R0B = reduce_index_union(R0A, {hash, integer}),
+    ?assertMatch(Hashes0, lists:sort(R0B)),
+    R1A = commassidem_check(fun reduce_index_extracthash/2, {term, hash, this, fnva}, A, B, C, D),
+    R1B = reduce_index_union(R1A, {hash, integer}),
+    ?assertMatch(Hashes1, lists:sort(R1B)).
+
+reduce_index_apply_bloom_test() ->
+    Keys0 = [<<"K1">>, <<"K2">>, <<"K3">>, <<"K4">>,
+                <<"K5">>, <<"K6">>, <<"K7">>, <<"K8">>,
+                <<"K9">>, <<"K10">>, <<"K11">>, <<"K12">>],
+    Keys1 = [<<"K1">>, <<"K4">>],
+    Bloom0 = riak_kv_hints:create_gcs_metavalue(Keys0, 10, fnva),
+    Bloom1 = riak_kv_hints:create_gcs_metavalue(Keys1, 12, md5),
+    A = {{<<"B1">>, <<"K1">>}, [{int, 1}, {term, <<"v8">>}]},
+    B = {{<<"B1">>, <<"K2">>}, [{int, 9}, {term, <<"v7">>}]},
+    C = {{<<"B1">>, <<"K3">>}, [{int, 2}, {term, <<"v7">>}]},
+    D = {{<<"B1">>, <<"K4">>}, [{term, 9}]},
+    R0A = commassidem_check(fun reduce_index_applybloom/2, {key, this, {riak_kv_hints, Bloom0}}, A, B, C, D),
+    ?assertMatch([{<<"B1">>, <<"K1">>}, 
+                    {<<"B1">>, <<"K2">>},
+                    {<<"B1">>, <<"K3">>},
+                    {<<"B1">>, <<"K4">>}], R0A),
+    R1A = commassidem_check(fun reduce_index_applybloom/2, {key, all, {riak_kv_hints, Bloom1}}, A, B, C, D),
+    ?assertMatch([A, D], lists:sort(R1A)),
+    Vals0 = [<<"v7">>, <<"v77">>, <<"v777">>],
+    BloomV0 = riak_kv_hints:create_gcs_metavalue(Vals0, 12, md5),
+    RV0 = commassidem_check(fun reduce_index_applybloom/2, {term, this, {riak_kv_hints, BloomV0}}, A, B, C, D),
+    ?assertMatch([{{<<"B1">>, <<"K2">>}, [{term, <<"v7">>}]},
+                        {{<<"B1">>, <<"K3">>}, [{term, <<"v7">>}]}],
+                    lists:sort(RV0)).
+
 
 commassidem_check(F, Args, A, B, C, D) ->
     commassidem_check(F, Args, A, B, C, D, true).
