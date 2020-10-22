@@ -273,7 +273,7 @@ If no map or reduce functions are added to the map/reduce pipe (i.e. an empty li
 
 ### Extended Projected Attributes - Using Projected Attributes
 
-Example 1 - People Search
+*Example 1 - People Search*
 
 Let us say we want to produce a compact index that supports queries across a large number of customers, based on:
 
@@ -284,7 +284,7 @@ Current Address - approximate matches supported.
 
 To support this we add a pipe-delimited index entry for each customer, like this:
 
-<<"pfinder_bin">> : <FamilyName>|<DateOfBirth>|<GivenNameSoundexCodes>|<AddressHash>
+<<"pfinder_bin">> : FamilyName|DateOfBirth|GivenNameSoundexCodes|AddressHash
 
 The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and nay normalised versions of those Given Names). The AddressHash takes a [similarity of hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and base64 encodes it to make sure it can fetched from the HTTP API without error.
 
@@ -299,9 +299,13 @@ SMINOKOWSKI|19391201|S250S000J500|hC8Nky4S/u/sSTnXjzpoOg==
 If we now have a query for:
 
 FamilyName: SM.*KOWSKI
+
 DoB: before 1941/1/1
+
 GivenName: sounds like "Sue"
+
 Address: similar to "Acecia Avenue, Gorton, Manchester"
+
 
 This can be done as a Map/Reduce query as follows (this uses the syntax for a direct RPC-based query to a node):
 
