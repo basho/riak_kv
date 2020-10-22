@@ -244,7 +244,8 @@ The following pre-reduce filter functions have been implemented:
 %% the atom key if the key is to be checked
 %% Keep - set to `all` to keep all terms in the output, or `this` to make the
 %% tested attribute/value the only element in the IndexData after extract.  If
-%% key is the tested attribute all IndexKeyData will be dropped
+%% key is the tested attribute all IndexKeyData will be dropped if Keep is 
+%% `this`
 %% {Module, Bloom} - the module for the bloom code, which must have a check_key
 %% function, and a bloom (produced by that module) for checking.
 -spec prereduce_index_applybloom_fun({attribute_name(),
@@ -270,4 +271,128 @@ If no map or reduce functions are added to the map/reduce pipe (i.e. an empty li
 - `reduce_index_union({attribute_name(), binary|integer})`.  Return a list of all values for the identified attribute.  Attribute values can be a binary or an integer, but they must be specified in the function arguments as such.
 
 
+### Extended Projected Attributes - Using Projected Attributes
 
+Example 1 - People Search
+
+Let us say we want to produce a compact index that supports queries across a large number of customers, based on:
+
+Family Name - with wildcard support, and at least first two characters supported;
+Date of Birth range - which can be open-ended;
+Given Name - optionally provided - normailised and phonetically matched;
+Current Address - approximate matches supported.
+
+To support this we add a pipe-delimited index entry for each customer, like this:
+
+<<"pfinder_bin">> : <FamilyName>|<DateOfBirth>|<GivenNameSoundexCodes>|<AddressHash>
+
+The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and nay normalised versions of those Given Names). The AddressHash takes a [similarity of hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and base64 encodes it to make sure it can fetched from the HTTP API without error.
+
+So:
+
+Susan Jane Sminokowski, DoB 1939/12/1, "1 Acacia Avenue, Gorton, Manchester" 
+
+would generate an index of:
+
+SMINOKOWSKI|19391201|S250S000J500|hC8Nky4S/u/sSTnXjzpoOg==
+
+If we now have a query for:
+
+FamilyName: SM.*KOWSKI
+DoB: before 1941/1/1
+GivenName: sounds like "Sue"
+Address: similar to "Acecia Avenue, Gorton, Manchester"
+
+This can be done as a Map/Reduce query as follows (this uses the syntax for a direct RPC-based query to a node):
+
+```
+rpcmr(
+    hd(Nodes),
+    {index, 
+        ?BUCKET,
+            <<"psearch_bin">>,
+            <<"SM">>, <<"SM~">>,
+            true,
+            "^SM[^\|]*KOWSKI\\|",
+            % query the range of all family names beginning with SM
+            % but apply an additional regular expression to filter for
+            % only those names ending in *KOWSKI 
+            [{riak_kv_mapreduce,
+                    prereduce_index_extractregex_fun,
+                    {term,
+                        [dob, givennames, address],
+                        this,
+                        "[^\|]*\\|(?<dob>[0-9]{8})\\|(?<givennames>[A-Z0-9]+)\\|(?<address>.*)"}},
+                % Use a regular expresssion to split the term into three different terms
+                % dob, givennames and address.  As Keep=this, only those three KV pairs will
+                % be kept in the indexdata to the next stage
+                {riak_kv_mapreduce,
+                    prereduce_index_applyrange_fun,
+                    {dob,
+                        all,
+                        <<"0">>,
+                        <<"19401231">>}},
+                % Filter out all dates of births up to an including the last day of 1940.
+                % Need to keep all terms as givenname and address filters still to be
+                % applied
+                {riak_kv_mapreduce,
+                    prereduce_index_applyregex_fun,
+                    {givennames,
+                        all,
+                        "S000"}},
+                % Use a regular expression to only include those results with a given name
+                % which sounds like Sue
+                {riak_kv_mapreduce,
+                    prereduce_index_extractencoded_fun,
+                    {address,
+                        address_sim,
+                        this}},
+                % This converts the base64 encoded hash back into a binary, and only `this`
+                % is required now - so only the [{address_sim, Hash}] will be in the
+                % IndexData downstream
+                {riak_kv_mapreduce,
+                    prereduce_index_extracthamming_fun,
+                    {address_sim,
+                        address_distance,
+                        this,
+                        riak_kv_mapreduce:simhash(<<"Acecia Avenue, Manchester">>)}},
+                % This generates a new projected attribute `address_distance` which
+                % id the hamming distance between the query and the indexed address
+                {riak_kv_mapreduce,
+                    prereduce_index_logidentity_fun,
+                    address_distance},
+                % This adds a log for troubleshooting - the term passed to logidentity
+                % is the projected attribute to log (`key` can be used just to log
+                % the key
+                {riak_kv_mapreduce,
+                    prereduce_index_applyrange_fun,
+                    {address_distance,
+                        this,
+                        0,
+                        50}}
+                % Filter out any result where the hamming distance to the query
+                % address is more than 50
+                    ]},
+    [{reduce, {modfun, riak_kv_mapreduce, reduce_index_min}, {address_distance, 10}, false},
+        % Restricts the number of results to be fetched to the ten matches with the
+        % smallest hamming distance to the queried address
+        {map, {modfun, riak_kv_mapreduce, map_identity}, none, true}
+        % Fetch all the matching objects
+    ]),
+```
+
+Without the term_regex feature, using a standard secondary index range query would have extracted a large number of results and sorted and serialised those results for streaming to the client (as the range would include all the SMITHs).  This sorting/serilisation delay could be significant.
+
+The regular expression reduces this load significantly.  It could be further optimised to filter on given name rather than doing this at the prereduce stage (e.g. `"^SM.*KOWSKI\|[0-9]+\|[^\|]*S000"`), but from a development perspective forcing more work onto regular expressions can quickly become relative complex and risky.
+
+Decoding the similarity hash, and finding the hamming distance, coulf also be done in the application (by just returning the results).  Doing this at the prereduce stage will parallelise this decoding and hamminng-distance calculation work across all the cores in the cluster though - so in some cases this may significantly reduce response times, as well as reducing the count of results to be serilaised and the number of round trips required.
+
+As the final stage restricts the total number of results to the ten results with the closest addresses, the actual objects are fetched at this point - as there is a controllerd overhead of fecthing a fixed number of objects within the query.
+
+
+Example 2 - Reporting on Conditions
+
+
+Example 3 - Approximate Concatenations
+
+Searching first for Postcode, then applying the bloom

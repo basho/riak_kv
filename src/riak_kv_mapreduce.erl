@@ -55,6 +55,7 @@
          reduce_index_extractmask/2,
          reduce_index_extracthamming/2,
          reduce_index_extracthash/2,
+         reduce_index_extractencoded/2,
          reduce_index_applyrange/2,
          reduce_index_applyregex/2,
          reduce_index_applymask/2,
@@ -72,6 +73,7 @@
          prereduce_index_extractmask_fun/1,
          prereduce_index_extracthamming_fun/1,
          prereduce_index_extracthash_fun/1,
+         prereduce_index_extractencoded_fun/1,
          prereduce_index_applyrange_fun/1,
          prereduce_index_applyregex_fun/1,
          prereduce_index_applymask_fun/1,
@@ -299,10 +301,22 @@ reduce_index_min(List, {Term, MinCount}) ->
 
 
 
--spec prereduce_index_logidentity_fun(any()) -> riak_kv_pipe_index:prereduce_fun().
-prereduce_index_logidentity_fun(_Args) ->
+-spec prereduce_index_logidentity_fun(atom()) -> riak_kv_pipe_index:prereduce_fun().
+prereduce_index_logidentity_fun(Term) ->
     fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
-            lager:info("Key=~w passed through fun", [Key]),
+            case Term of
+                key ->
+                    lager:info("Key=~w passed through fun", [Key]);
+                Term ->
+                    case lists:keyfind(Term, 1, KeyTermList) of
+                        {Term, Value} ->
+                            lager:info("Key=~w passed with term=~w ~w",
+                                        [Key, Term, Value]);
+                        _ ->
+                            lager:info("Key=~w missing term=~w",
+                                        [Key, Term])
+                    end
+            end,
             {{Bucket, Key}, KeyTermList};
         (_Other) ->
             none
@@ -678,6 +692,42 @@ prereduce_index_extracthash_fun({InputTerm, OutputTerm, Keep, Algo}) ->
     end.
                     
 
+-spec reduce_index_extractencoded(list(riak_kv_pipe_index:index_keydata()|
+                                        list(riak_kv_pipe_index:index_keydata())),
+                                    list()|
+                                        {attribute_name(), attribute_name(), keep()}) ->
+                                            list(riak_kv_pipe_index:index_keydata()).
+reduce_index_extractencoded(List, ArgPropList) when is_list(ArgPropList) ->
+    reduce_index_extractencoded(List, 
+        element(2, lists:keyfind(args, 1, ArgPropList)));
+reduce_index_extractencoded(List, Args) ->
+    ExtractFun = prereduce_index_extractencoded_fun(Args),
+    lists:foldl(reduce_extractfun(ExtractFun, element(2, Args)), [], List).
+
+-spec prereduce_index_extractencoded_fun({attribute_name(),
+                                                attribute_name(),
+                                                keep()}) ->
+                                            riak_kv_pipe_index:prereduce_fun().
+prereduce_index_extractencoded_fun({InputTerm, OutputTerm, Keep}) ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            case lists:keyfind(InputTerm, 1, KeyTermList) of
+                {InputTerm, EncodedBin} when is_binary(EncodedBin) ->
+                    Bin = base64:decode(EncodedBin),
+                    KeyTermList0 =
+                        case Keep of
+                            all ->
+                                [{OutputTerm, Bin}|KeyTermList];
+                            this ->
+                                [{OutputTerm, Bin}]
+                        end,
+                    {{Bucket, Key}, KeyTermList0};
+                _ ->
+                    none
+            end;
+        (_Other) ->
+            none
+    end.
+
 -spec reduce_index_applyrange(list(riak_kv_pipe_index:index_keydata()|
                                 list(riak_kv_pipe_index:index_keydata())),
                             list()|
@@ -822,7 +872,8 @@ reduce_index_applybloom(List, Args) ->
 %% the atom key if the key is to be checked
 %% Keep - set to `all` to keep all terms in the output, or `this` to make the
 %% tested attribute/value the only element in the IndexData after extract.  If
-%% key is the tested attribute all IndexKeyData will be dropped
+%% key is the tested attribute all IndexKeyData will be dropped if Keep is 
+%% `this`
 %% {Module, Bloom} - the module for the bloom code, which must have a check_key
 %% function, and a bloom (produced by that module) for checking.
 -spec prereduce_index_applybloom_fun({attribute_name(),
@@ -1385,6 +1436,20 @@ reduce_index_hamming_tester(HashFun) ->
     [{BK1, _H1}|_T] = R0,
     ?assertMatch({<<"B1">>, <<"K1">>}, BK1).
 
+reduce_index_decode_test() ->
+    HashFun = fun(Bin) -> base64:encode(simhash(Bin)) end,
+    A = {{<<"B1">>, <<"K1">>}, [{sim, HashFun(<<"pablo is king">>)}]},
+    B = {{<<"B2">>, <<"K2">>}, [{sim, HashFun(<<"marching on together">>)}]},
+    C = {{<<"B3">>, <<"K3">>}, [{sim, HashFun(<<"ups and downs">>)}]},
+    D = {{<<"B4">>, <<"K4">>}, [{sim, HashFun(<<"oliver's army">>)}]},
+    R = commassidem_check(fun reduce_index_extractencoded/2,
+                            {sim, sim_decoded, this},
+                            A, B, C, D),
+    R0 = reduce_index_extracthamming(R, {sim_decoded, hamming, this, simhash(<<"pabs is king">>)}),
+    R1 = lists:keysort(2, lists:map(fun({BK, [{hamming, H}]}) -> {BK, H} end, R0)),
+    [{BK1, _H1}|_T] = R1,
+    ?assertMatch({<<"B1">>, <<"K1">>}, BK1).
+
 reduce_index_union_test() ->
     A = {{<<"B1">>, <<"K1">>}, [{int, 5}]},
     B = {{<<"B2">>, <<"K2">>}, [{int, 5}, {term, <<"v7">>}]},
@@ -1482,7 +1547,6 @@ reduce_index_apply_bloom_test() ->
     ?assertMatch([{{<<"B1">>, <<"K2">>}, [{term, <<"v7">>}]},
                         {{<<"B1">>, <<"K3">>}, [{term, <<"v7">>}]}],
                     lists:sort(RV0)).
-
 
 commassidem_check(F, Args, A, B, C, D) ->
     commassidem_check(F, Args, A, B, C, D, true).

@@ -544,25 +544,21 @@ size_block_tester() ->
     BitsPK = 11,
     TestCount = 3,
     multi_block_tester(100, BitsPK, TestCount, KeyType, HashAlgo, PackType),
-    multi_block_tester(200, BitsPK, TestCount, KeyType, HashAlgo, PackType),
     multi_block_tester(300, BitsPK, TestCount, KeyType, HashAlgo, PackType),
-    multi_block_tester(500, BitsPK, TestCount, KeyType, HashAlgo, PackType),
-    multi_block_tester(1000, BitsPK, TestCount, KeyType, HashAlgo, PackType),
-    multi_block_tester(2000, BitsPK, TestCount, KeyType, HashAlgo, PackType),
-    multi_block_tester(3000, BitsPK, TestCount, KeyType, HashAlgo, PackType),
-    multi_block_tester(5000, BitsPK, TestCount, KeyType, HashAlgo, PackType),
-    multi_block_tester(8000, BitsPK, TestCount, KeyType, HashAlgo, PackType).
+    multi_block_tester(800, BitsPK, TestCount, KeyType, HashAlgo, PackType),
+    multi_block_tester(2100, BitsPK, TestCount, KeyType, HashAlgo, PackType),
+    multi_block_tester(4500, BitsPK, TestCount, KeyType, HashAlgo, PackType).
 
 bitrate_block_tester() ->
     KeyType = uuid,
     HashAlgo = fnva,
     PackType = lz4,
-    multi_block_tester(6000, 9, 1, KeyType, HashAlgo, PackType),
-    multi_block_tester(6000, 11, 1, KeyType, HashAlgo, PackType),
-    multi_block_tester(6000, 14, 1, KeyType, HashAlgo, PackType).
+    multi_block_tester(2100, 9, 1, KeyType, HashAlgo, PackType),
+    multi_block_tester(2100, 11, 1, KeyType, HashAlgo, PackType),
+    multi_block_tester(2100, 14, 1, KeyType, HashAlgo, PackType).
 
 func_block_tester() ->
-    KeyCount = 7000,
+    KeyCount = 2100,
     BitsPerKey = 13,
     TestCount = 1,
     multi_block_tester(KeyCount, BitsPerKey, TestCount, uuid, fnva, lz4),
