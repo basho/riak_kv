@@ -91,168 +91,34 @@ Once a subset of results has been returned from a secondary index query in the n
 
 The following pre-reduce extract functions have been implemented:
 
-- Extract an integer from a binary term by position
+- `extract_integer`: Extract an integer from a binary term by position
 
-```
-%% @doc
-%% Extract an integer from a binary term:
-%% InputTerm - the name of the attribute from which to eprform the extract
-%% OutputTerm - the name of the attribute for the extracted output
-%% Keep - set to 'all' to keep all terms in the output, or 'this' to make the
-%% output attribute/value the only element in the IndexData after extract
-%% PreBytes - the number of bytes in the term for the start of the integer
-%% IntSize - the length of the integer in bits.
-%% If the InputTerm is not present, or does not pattern match to find an
-%% integer then the result will be filtered out
--spec prereduce_index_extractinteger_fun({attribute_name(),
-                                            attribute_name(),
-                                            keep(),
-                                            non_neg_integer(),
-                                            pos_integer()}) ->
-                                                riak_kv_pipe_index:prereduce_fun().
-```
+- `extract_binary`: Extract a binary from a binary term by position
 
-- Extract a binary from a binary term by position
+- `extract_regex`: Extract a list of binary attributes via a regular expression
 
-```
-%% @doc
-%% As with prereduce_index_extractinteger_fun/4 except the Size is expressed in
-%% bytes, and the atom 'all' can be used for size to extract a binary of
-%% open-ended size
--spec prereduce_index_extractbinary_fun({attribute_name(),
-                                            attribute_name(),
-                                            keep(),
-                                            non_neg_integer(),
-                                            pos_integer()|all}) ->
-                                                riak_kv_pipe_index:prereduce_fun().
-```
+- `extract_mask`: Extract a subset of a bitmap using a bitmap mask
 
-- Extract a list of binary attributes via a regular expression
+- `extract_hamming`: Calculate then extract hamming distance by comparison to a simhash
 
-```
-%% @doc
-%% Extract a list of attribute/value pairs via regular expression, using the
-%% capture feature in regular expressions:
-%% InputTerm - the binary term to which the regular expression should be
-%% applied
-%% OutputTerms - a list of attribute names which must match up with names of
-%% capturing groups within the regular expression
-%% Keep - set to `all` to keep all terms in the output, or `this` to make the
-%% output attributes/values the only elements in the IndexData after extract
-%% Regex - a regular expression (string)
--spec prereduce_index_extractregex_fun({attribute_name(),
-                                        list(attribute_name()),
-                                        keep(),
-                                        string()}) ->
-                                            riak_kv_pipe_index:prereduce_fun().
-```
+- `extract_hash`: Calculate the hash of a key or term
 
-- Extract a subset of a bitmap using a bitmap mask
+- `extract_encoded`: Decode a base64 encoded term into a binary
 
-```
-%% @doc
-%% Apply a mask to a bitmap to make sure only bits in the bitmap aligning
-%% with a bit in the mask retain their value, all other bits are zeroed. 
-%% InputTerm - the name of the attribute from which to eprform the extract
-%% OutputTerm - the name of the attribute for the extracted output
-%% Keep - set to `all` to keep all terms in the output, or `this` to make the
-%% output attribute/value the only element in the IndexData after extract
-%% Mask - mask expressed as an integer
--spec prereduce_index_extractmask_fun({attribute_name(),
-                                        attribute_name(),
-                                        keep(),
-                                        non_neg_integer()}) ->
-                                        riak_kv_pipe_index:prereduce_fun().
-```
+- `extract_buckets`: Extract a term where the value is amapping based on the size for another term
 
-- Calculate then extract ahamming distance by comparison to a simhash
-
-```
-%% @doc
-%% Where an attribute value is a simlarity hash, calculate and extract a
-%% hamming distance between that similarity hash and one passed in for
-%% comparison:
-%% InputTerm - the attribute name whose value is to be tested
-%% OutputTerm - the name of the attribute for the extracted hamming distance
-%% Keep - set to `all` to keep all terms in the output, or `this` to make the
-%% calculated hamming distance the only output
-%% Comparator - binary sim hash for comparison
--spec prereduce_index_extracthamming_fun({attribute_name(),
-                                            attribute_name(),
-                                            keep(),
-                                            binary()})
-                                        -> riak_kv_pipe_index:prereduce_fun().
-```
+- `extract_coalesce`: Create  a new term by merging one or more existing terms together
 
 
 The following pre-reduce filter functions have been implemented:
 
-- Filter by range testing an attribute
+- `apply_range`: Filter by range testing an attribute
 
-```
-%% @doc
-%% Filter results based on whether the value for a given attribute is in a
-%% range
-%% InputTerm - the attribute name whose value is to be tested
-%% Keep - set to `all` to keep all terms in the output, or `this` to make the
-%% tested attribute/value the only element in the IndexData after extract
-%% LowRange - inclusive, using erlang comparator
-%% HighRange - inclusive, using erlang comparator
--spec prereduce_index_applyrange_fun({attribute_name(),
-                                        keep(),
-                                        term(),
-                                        term()}) ->
-                                        riak_kv_pipe_index:prereduce_fun().
-```
+- `apply_regex`: Filter by matching a regular expression
 
-- Filter by matching a regular expression
+- `apply_mask`: Filter by checking bits in a bitmap against a bitmap mask
 
-```
-%% @doc
-%% Filter an attribute with a binary value by ensuring a match against a
-%% compiled regular expression
-%% InputTerm - the attribute name whose value is to be tested
-%% Keep - set to `all` to keep all terms in the output, or `this` to make the
-%% tested attribute/value the only element in the IndexData after extract
-%% Regex - a regular expression (string)
--spec prereduce_index_applyregex_fun({attribute_name(),
-                                        keep(),
-                                        string()}) ->
-                                riak_kv_pipe_index:prereduce_fun().
-```
-
-- Filter by checking bits in a bitmap against a bitmap mask
-
-```
-%% @doc
-%% Filter an attribute with a bitmap (integer) value by confirming that all
-%% bits in the passed mask
-%% InputTerm - the attribute name whose value is to be tested
-%% Keep - set to `all` to keep all terms in the output, or `this` to make the
-%% tested attribute/value the only element in the IndexData after extract
-%% Mask - bitmap maks as an integer
--spec prereduce_index_applymask_fun({attribute_name(),
-                                        keep(),
-                                        non_neg_integer()}) ->
-                                riak_kv_pipe_index:prereduce_fun().
-```
-
-```
-%% @doc
-%% Filter an attribute by checking if it exists in a passed in bloom filter
-%% InputTerm - the attribute name whose binary value is to be checked - use
-%% the atom key if the key is to be checked
-%% Keep - set to `all` to keep all terms in the output, or `this` to make the
-%% tested attribute/value the only element in the IndexData after extract.  If
-%% key is the tested attribute all IndexKeyData will be dropped if Keep is 
-%% `this`
-%% {Module, Bloom} - the module for the bloom code, which must have a check_key
-%% function, and a bloom (produced by that module) for checking.
--spec prereduce_index_applybloom_fun({attribute_name(),
-                                        keep(),
-                                        {module(), any()}}) ->
-                                riak_kv_pipe_index:prereduce_fun().
-```
+- `apply_bloom`: Filter either the key or an attribute value by checking for existence in a passed-in bloom filter
 
 Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is a list of {attribute, value} tuples.  
 
@@ -321,8 +187,8 @@ rpcmr(
             % query the range of all family names beginning with SM
             % but apply an additional regular expression to filter for
             % only those names ending in *KOWSKI 
-            [{riak_kv_mapreduce,
-                    prereduce_index_extractregex_fun,
+            [{riak_kv_index_prereduce,
+                    extract_regex,
                     {term,
                         [dob, givennames, address],
                         this,
@@ -330,8 +196,8 @@ rpcmr(
                 % Use a regular expresssion to split the term into three different terms
                 % dob, givennames and address.  As Keep=this, only those three KV pairs will
                 % be kept in the indexdata to the next stage
-                {riak_kv_mapreduce,
-                    prereduce_index_applyrange_fun,
+                {riak_kv_index_prereduce,
+                    apply_range,
                     {dob,
                         all,
                         <<"0">>,
@@ -339,37 +205,37 @@ rpcmr(
                 % Filter out all dates of births up to an including the last day of 1940.
                 % Need to keep all terms as givenname and address filters still to be
                 % applied
-                {riak_kv_mapreduce,
-                    prereduce_index_applyregex_fun,
+                {riak_kv_index_prereduce,
+                    apply_regex,
                     {givennames,
                         all,
                         "S000"}},
                 % Use a regular expression to only include those results with a given name
                 % which sounds like Sue
-                {riak_kv_mapreduce,
-                    prereduce_index_extractencoded_fun,
+                {riak_kv_index_prereduce,
+                    extract_encoded,
                     {address,
                         address_sim,
                         this}},
                 % This converts the base64 encoded hash back into a binary, and only `this`
                 % is required now - so only the [{address_sim, Hash}] will be in the
                 % IndexData downstream
-                {riak_kv_mapreduce,
-                    prereduce_index_extracthamming_fun,
+                {riak_kv_index_prereduce,
+                    extract_hamming,
                     {address_sim,
                         address_distance,
                         this,
-                        riak_kv_mapreduce:simhash(<<"Acecia Avenue, Manchester">>)}},
+                        riak_kv_index_prereduce:simhash(<<"Acecia Avenue, Manchester">>)}},
                 % This generates a new projected attribute `address_distance` which
-                % id the hamming distance between the query and the indexed address
-                {riak_kv_mapreduce,
-                    prereduce_index_logidentity_fun,
+                % is the hamming distance between the query and the indexed address
+                {riak_kv_index_prereduce,
+                    log_identity,
                     address_distance},
                 % This adds a log for troubleshooting - the term passed to logidentity
                 % is the projected attribute to log (`key` can be used just to log
                 % the key
-                {riak_kv_mapreduce,
-                    prereduce_index_applyrange_fun,
+                {riak_kv_index_prereduce,
+                    apply_range,
                     {address_distance,
                         this,
                         0,
