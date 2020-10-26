@@ -37,7 +37,7 @@ There are no default limits on page sizes for queries, either in terms of result
 
 Indexes have two types, integers and binary indexes.  Binary indexes can be any binary value, like bucket and key names; however, as with bucket and key names only binary values that map to strings will allow the object to be accessed via the HTTP API and via all clients.  If a non-string binary secondary index term is added to an object via the erlang client, the object will not be retrievable via the HTTP API, and any HTTP API based query request which includes that object in the result set will fail if return_terms is selected.
 
-### Projected Attributes - Current 
+### Projected Attributes - Equivalent Feature
 
 Riak has no direct implementation of Projected Attributes on secondary indexes.  However, there is equivalent functionality available (albeit at a lower level of developer convenience) through the ability to overload secondary index terms.  
 
@@ -65,7 +65,7 @@ To reduce the costs associated with queries over large ranges, where many result
 
 Regular expressions can provide for powerful filtering of terms, but poorly-defined or overly-complex regular expressions resulting in significant [backtracking](https://regular-expressions.mobi/catastrophic.html?wlr=1), can create a significant load.  As the developer is the query planner, not the database, the developer must ensure the the benefits of reduced serialisation outweigh the overheads of additional computation before using the `term_regex` filter.
 
-## Projected Attributes - Extended
+## Extending Projected Attributes
 
 More complex manipulation of query results can, in theory, be managed in riak using the [Map/Reduce](https://docs.riak.com/riak/kv/2.2.3/developing/app-guide/advanced-mapreduce.1.html) capability.  However, in Riak 2.x and Riak 3.0 - only Buckets and Keys can be outputted from an index query in a Map/Reduce flow.  Given this constraint, Map/Reduce can only be efficiently used to count (rather than return) query results, whilst potentially applying filters based on the object key.  
 
@@ -87,7 +87,9 @@ Once a subset of results has been returned from a secondary index query in the n
 
 - Or fittted to map or reduce pipes for further processing.  
 
-### Extended Projected Attributes - Pre-defined Functions
+## Extending Projected Attributes - Examples
+
+### Pre-defined Functions
 
 There are a number of predefined functions in the `riak_kv_index_prereduce` module (for prereduce functions) and the `riak_kv_mapreduce` (for reduce functions) which can be used to implement advanced queries. 
 
@@ -140,7 +142,7 @@ If no map or reduce functions are added to the map/reduce pipe (i.e. an empty li
 - `reduce_index_union({attribute_name(), binary|integer})`.  Return a list of all values for the identified attribute.  Attribute values can be a binary or an integer, but they must be specified in the function arguments as such.
 
 
-### Extended Projected Attributes - Example 1 - People Search
+### Example 1 - People Search
 
 Let us say we want to produce a compact index that supports queries across a large number of customers, based on:
 
@@ -185,69 +187,88 @@ rpcmr(
             <<"SM">>, <<"SM~">>,
             true,
             "^SM[^\|]*KOWSKI\\|",
+            
             % query the range of all family names beginning with SM
             % but apply an additional regular expression to filter for
-            % only those names ending in *KOWSKI 
+            % only those names ending in *KOWSKI
+            
             [{riak_kv_index_prereduce,
                     extract_regex,
                     {term,
                         [dob, givennames, address],
                         this,
                         "[^\|]*\\|(?<dob>[0-9]{8})\\|(?<givennames>[A-Z0-9]+)\\|(?<address>.*)"}},
+                
                 % Use a regular expresssion to split the term into three different terms
                 % dob, givennames and address.  As Keep=this, only those three KV pairs will
                 % be kept in the indexdata to the next stage
+                
                 {riak_kv_index_prereduce,
                     apply_range,
                     {dob,
                         all,
                         <<"0">>,
                         <<"19401231">>}},
+                
                 % Filter out all dates of births up to an including the last day of 1940.
                 % Need to keep all terms as givenname and address filters still to be
                 % applied
+                
                 {riak_kv_index_prereduce,
                     apply_regex,
                     {givennames,
                         all,
                         "S000"}},
+                
                 % Use a regular expression to only include those results with a given name
                 % which sounds like Sue
+                
                 {riak_kv_index_prereduce,
                     extract_encoded,
                     {address,
                         address_sim,
                         this}},
+                
                 % This converts the base64 encoded hash back into a binary, and only `this`
                 % is required now - so only the [{address_sim, Hash}] will be in the
                 % IndexData downstream
+                
                 {riak_kv_index_prereduce,
                     extract_hamming,
                     {address_sim,
                         address_distance,
                         this,
                         riak_kv_index_prereduce:simhash(<<"Acecia Avenue, Manchester">>)}},
+                
                 % This generates a new projected attribute `address_distance` which
                 % is the hamming distance between the query and the indexed address
+                
                 {riak_kv_index_prereduce,
                     log_identity,
                     address_distance},
+                
                 % This adds a log for troubleshooting - the term passed to logidentity
                 % is the projected attribute to log (`key` can be used just to log
                 % the key
+                
                 {riak_kv_index_prereduce,
                     apply_range,
                     {address_distance,
                         this,
                         0,
                         50}}
+                
                 % Filter out any result where the hamming distance to the query
                 % address is more than 50
                     ]},
+
     [{reduce, {modfun, riak_kv_mapreduce, reduce_index_min}, {address_distance, 10}, false},
+        
         % Restricts the number of results to be fetched to the ten matches with the
         % smallest hamming distance to the queried address
+        
         {map, {modfun, riak_kv_mapreduce, map_identity}, none, true}
+        
         % Fetch all the matching objects
     ]),
 ```
@@ -260,10 +281,11 @@ Decoding the similarity hash, and finding the hamming distance, could also be do
 
 As the final stage restricts the total number of results to the ten results with the closest addresses, the actual objects are fetched at this point - as there is a controllerd overhead of fecthing a fixed number of objects within the query.
 
-This query can be seen in action in the [`mapred_index_peoplesearch` riak_test](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_peoplesearch.erl).
-
-### Extended Projected Attributes - Example 2 - Reporting on Conditions
+This query can be seen in action in the [`mapred_index_peoplesearch`](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_peoplesearch.erl) riak_test.
 
 
-### Extended Projected Attributes - Example 3 - Approximate Concatenations
+### Example 2 - Reporting on Conditions
+
+
+### Example 3 - Approximate Concatenations
 
