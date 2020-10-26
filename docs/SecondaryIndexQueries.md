@@ -87,9 +87,11 @@ Once a subset of results has been returned from a secondary index query in the n
 
 - Or fittted to map or reduce pipes for further processing.  
 
-### Extended Projected Attributes - Examples
+### Extended Projected Attributes - Pre-defined Functions
 
-The following pre-reduce extract functions have been implemented:
+There are a number of predefined functions in the `riak_kv_index_prereduce` module (for prereduce functions) and the `riak_kv_mapreduce` (for reduce functions) which can be used to implement advanced queries. 
+
+The following prereduce *extract* functions are available:
 
 - `extract_integer`: Extract an integer from a binary term by position
 
@@ -110,7 +112,7 @@ The following pre-reduce extract functions have been implemented:
 - `extract_coalesce`: Create  a new term by merging one or more existing terms together
 
 
-The following pre-reduce filter functions have been implemented:
+The following prereduce *filter* functions are available:
 
 - `apply_range`: Filter by range testing an attribute
 
@@ -119,6 +121,7 @@ The following pre-reduce filter functions have been implemented:
 - `apply_mask`: Filter by checking bits in a bitmap against a bitmap mask
 
 - `apply_bloom`: Filter either the key or an attribute value by checking for existence in a passed-in bloom filter
+
 
 Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is a list of {attribute, value} tuples.  
 
@@ -137,43 +140,41 @@ If no map or reduce functions are added to the map/reduce pipe (i.e. an empty li
 - `reduce_index_union({attribute_name(), binary|integer})`.  Return a list of all values for the identified attribute.  Attribute values can be a binary or an integer, but they must be specified in the function arguments as such.
 
 
-### Extended Projected Attributes - Using Projected Attributes
-
-*Example 1 - People Search*
+### Extended Projected Attributes - Example 1 - People Search
 
 Let us say we want to produce a compact index that supports queries across a large number of customers, based on:
 
 Family Name - with wildcard support, and at least first two characters supported;
+
 Date of Birth range - which can be open-ended;
+
 Given Name - optionally provided - normailised and phonetically matched;
+
 Current Address - approximate matches supported.
+
 
 To support this we add a pipe-delimited index entry for each customer, like this:
 
-<<"pfinder_bin">> : FamilyName|DateOfBirth|GivenNameSoundexCodes|AddressHash
+`<<"pfinder_bin">> : FamilyName|DateOfBirth|GivenNameSoundexCodes|AddressHash`
 
 The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and nay normalised versions of those Given Names). The AddressHash takes a [similarity of hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and base64 encodes it to make sure it can fetched from the HTTP API without error.
 
-So:
+For example, the following details would map to the following index entry: 
 
-Susan Jane Sminokowski, DoB 1939/12/1, "1 Acacia Avenue, Gorton, Manchester" 
-
-would generate an index of:
-
-SMINOKOWSKI|19391201|S250S000J500|hC8Nky4S/u/sSTnXjzpoOg==
+Susan Jane Sminokowski, DoB 1939/12/1, "1 Acacia Avenue, Gorton, Manchester" -> `SMINOKOWSKI|19391201|S250S000J500|hC8Nky4S/u/sSTnXjzpoOg==`
 
 If we now have a query for:
 
-FamilyName: SM.*KOWSKI
+FamilyName: `SM?KOWSKI`
 
-DoB: before 1941/1/1
+DoB: `before 1941/1/1`
 
-GivenName: sounds like "Sue"
+GivenName: `sounds like "Sue"`
 
-Address: similar to "Acecia Avenue, Gorton, Manchester"
+Address: `similar to "Acecia Avenue, Gorton, Manchester"`
 
 
-This can be done as a Map/Reduce query as follows (this uses the syntax for a direct RPC-based query to a node):
+This query should match the example record, and this can be found by creating the following Map/Reduce query:
 
 ```
 rpcmr(
@@ -253,16 +254,16 @@ rpcmr(
 
 Without the term_regex feature, using a standard secondary index range query would have extracted a large number of results and sorted and serialised those results for streaming to the client (as the range would include all the SMITHs).  This sorting/serilisation delay could be significant.
 
-The regular expression reduces this load significantly.  It could be further optimised to filter on given name rather than doing this at the prereduce stage (e.g. `"^SM.*KOWSKI\|[0-9]+\|[^\|]*S000"`), but from a development perspective forcing more work onto regular expressions can quickly become relative complex and risky.
+The regular expression reduces this load significantly.  It could be further optimised to filter on given name rather than doing this at the prereduce stage (e.g. `"^SM.*KOWSKI\|[0-9]+\|[^\|]*S000"`), but from a development perspective forcing more work onto regular expressions can quickly become relativly complex and add the risk of generating computationally complex back-tracking regular expressions.
 
-Decoding the similarity hash, and finding the hamming distance, coulf also be done in the application (by just returning the results).  Doing this at the prereduce stage will parallelise this decoding and hamminng-distance calculation work across all the cores in the cluster though - so in some cases this may significantly reduce response times, as well as reducing the count of results to be serilaised and the number of round trips required.
+Decoding the similarity hash, and finding the hamming distance, could also be done in the application (by just returning the results).  Doing this at the prereduce stage will parallelise this decoding and hamminng-distance calculation work across all the cores in the cluster though - so in some cases this may significantly reduce response times, as well as reducing the count of results to be serilaised and the number of round trips required.
 
 As the final stage restricts the total number of results to the ten results with the closest addresses, the actual objects are fetched at this point - as there is a controllerd overhead of fecthing a fixed number of objects within the query.
 
+This query can be seen in action in the [`mapred_index_peoplesearch` riak_test](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_peoplesearch.erl).
 
-Example 2 - Reporting on Conditions
+### Extended Projected Attributes - Example 2 - Reporting on Conditions
 
 
-Example 3 - Approximate Concatenations
+### Extended Projected Attributes - Example 3 - Approximate Concatenations
 
-Searching first for Postcode, then applying the bloom
