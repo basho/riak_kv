@@ -184,6 +184,8 @@
                        Arg :: term(), Keep :: boolean()}
                     | {reduce, reduce_query_fun(),
                        Arg :: term(), Keep :: boolean()}
+                    | {prereduce, reduce_query_fun(),
+                        Arg :: term(), Keep :: boolean()}
                     | {link,
                        BucketMatch :: link_match(),
                        TagMatch :: link_match(),
@@ -388,6 +390,14 @@ mr2pipe_phase({map,FunSpec,Arg,Keep}, I, _ConstHash, QueryT) ->
     map2pipe(FunSpec, Arg, Keep, I, QueryT);
 mr2pipe_phase({reduce,FunSpec,Arg,Keep}, I, ConstHash, _QueryT) ->
     reduce2pipe(FunSpec, Arg, Keep, I, ConstHash);
+mr2pipe_phase({prereduce, FunSpec, Arg, Keep}, I, ConstHash, _QueryT) ->
+    [#fitting_spec{name={prereduce, I},
+                            module=riak_kv_w_reduce,
+                            arg={rct,
+                                 riak_kv_w_reduce:reduce_compat(FunSpec),
+                                 Arg},
+                            chashfun=follow}] ++
+        reduce2pipe(FunSpec, Arg, Keep, I, ConstHash);
 mr2pipe_phase({link,Bucket,Tag,Keep}, I, _ConstHash, QueryT)->
     link2pipe(Bucket, Tag, Keep, I, QueryT).
 
