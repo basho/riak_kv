@@ -149,20 +149,20 @@ This query can be seen in action in the [`mapred_index_peoplesearch`](https://gi
 
 Let us say we want to produce a compact index that supports queries across a large number of customers, based on:
 
-Family Name - with wildcard support, and at least first two characters supported;
+- Family Name (with wildcard support);
 
-Date of Birth range - which can be open-ended;
+- Date of Birth range (which can be open-ended);
 
-Given Name - optionally provided - normalised and phonetically matched;
+- Given Name (optionally provided, to be phonetically matched);
 
-Current Address - approximate matches supported.
+- Current Address (approximate matches supported).
 
 
 To support this we add a pipe-delimited index entry for each customer, like this:
 
 `<<"pfinder_bin">> : FamilyName|DateOfBirth|GivenNameSoundexCodes|AddressHash`
 
-The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and nay normalised versions of those Given Names). The AddressHash takes a [similarity of hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and then base64 encodes it to make sure it can fetched from the HTTP API without error.
+The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and any normalised versions of those Given Names). The AddressHash takes a [similarity of hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and then base64 encodes it to make sure it can fetched from the HTTP API without error.
 
 For example, the following details would map to the following index entry:
 
@@ -171,13 +171,13 @@ Susan Jane Sminokowski, DoB 1939/12/1, "1 Acacia Avenue, Gorton, Manchester"
 
 If we now have a query for:
 
-FamilyName: `SM?KOWSKI`
+- FamilyName: `SM?KOWSKI`
 
-DoB: `before 1941/1/1`
+- DoB: `before 1941/1/1`
 
-GivenName: `sounds like "Sue"`
+- GivenName: `sounds like "Sue"`
 
-Address: `similar to "Acecia Avenue, Gorton, Manchester"`
+- Address: `similar to "Acecia Avenue, Gorton, Manchester"`
 
 
 This query should match the example record, and this can be found by creating the following Map/Reduce query:
@@ -187,10 +187,10 @@ This query should match the example record, and this can be found by creating th
 ```
 {index,
     ?BUCKET,
-        <<"psearch_bin">>,
-        <<"SM">>, <<"SM~">>,
-        true,
-        "^SM[^\|]*KOWSKI\\|"}
+    <<"psearch_bin">>,
+    <<"SM">>, <<"SM~">>,
+    true,
+    "^SM[^\|]*KOWSKI\\|"}
 ```
 
 This will perform a range query for all the family names beginning with SM, but apply an additional regular expression to filter for only those names ending in KOWSKI (exploiting the fact that `|` is the delimiter used to separate the family name from the other fields).
@@ -312,11 +312,11 @@ Projected attributes may also be useful when reporting on data in the database. 
 
 In this case we will consider each record to be a clinical history for the patient, and the patient has the following interesting characteristics from a reporting basis:
 
-Date of Birth - as reports are often required split by age groupings.
+- Date of Birth (as reports are often required split by age groupings)
 
-GP Provider - the primary care organisation to which the patient is registered.
+- GP Provider (the primary care organisation to which the patient is registered)
 
-Common significant conditions - it maybe that there are many common conditions that can be represented as a bitmap (with each bit set to 1 if the condition is true for that patient, and 0 if false), this is then base64 encoded before being added to the index to avoid issues with the HTTP API.
+- Common significant conditions (it maybe that there are many common conditions that can be represented as a bitmap, with each bit set to 1 if the condition is true for that patient, and 0 if false; this is then base64 encoded before being added to the index to avoid issues with the HTTP API)
 
 
 To support this we add a fixed-width index entry for each customer, like this [size in bytes]:
@@ -330,10 +330,10 @@ For example, it may now be required to understand the spread of diabetes amongst
 ```
 {index,
     ?BUCKET,
-        <<"conditions_bin">>,
-        <<"0">>, <<"19551027">>,
-        true,
-        undefined}
+    <<"conditions_bin">>,
+    <<"0">>, <<"19551027">>,
+    true,
+    undefined}
 ```
 
 In this example the requirement is only to count patients over the age of 65, and we assume that 27th October 2020 is Groundhog Day for the purpose of this illustration
