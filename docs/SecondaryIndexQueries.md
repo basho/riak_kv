@@ -109,7 +109,7 @@ The following prereduce *extract* functions are available:
 
 - `extract_encoded`: Decode a base64 encoded term into a binary
 
-- `extract_buckets`: Extract a term where the value is a mapping based on the size for another term
+- `extract_buckets`: Provide a mapping to categorise the sizes of value (e.g. for histogram production)
 
 - `extract_coalesce`: Create  a new term by merging one or more existing terms together
 
@@ -140,6 +140,8 @@ If no map or reduce functions are added to the map/reduce pipe (i.e. an empty li
 - `reduce_index_countby({attribute_name(), binary|integer})`.  Return a property list mapping terms to counts of terms for the identified attribute.  Attribute values can be a binary or an integer, but they must be specified in the function arguments as such.
 
 - `reduce_index_union({attribute_name(), binary|integer})`.  Return a list of all values for the identified attribute.  Attribute values can be a binary or an integer, but they must be specified in the function arguments as such.
+
+- `reduce_index_collateresults({attribute_name(), attribute_name(), keep(), min|max, pos_integer()})`.  Returns a list of results, sorted by a Sort Term, up to a maximum count of results.  Alongside this returns a facet count by facet term of all results (not just those in the maximum set).
 
 Some basic examples using these preduce and reduce functions can be seen in action in the [`mapred_index_general`](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_general.erl) riak_test.
 

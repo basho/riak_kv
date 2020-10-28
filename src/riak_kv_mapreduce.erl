@@ -66,7 +66,8 @@
          reduce_index_max/2,
          reduce_index_min/2,
          reduce_index_union/2,
-         reduce_index_countby/2]).
+         reduce_index_countby/2,
+         reduce_index_collateresults/2]).
 
 -type keep() :: all|this.
 -type attribute_name() :: atom().
@@ -261,7 +262,7 @@ reduce_index_max(List, {Term, MaxCount}) ->
             false ->
                 L
         end,
-    lists:reverse(L1).
+    L1.
 
 -spec reduce_index_min(list(riak_kv_pipe_index:index_keydata()|
                                     list(riak_kv_pipe_index:index_keydata())),
@@ -584,6 +585,82 @@ reduce_index_countby(List, {InputTerm, InputType}) ->
         end,
     lists:foldl(FoldFun, [], List).
 
+
+-type collated_results() ::
+    {{results, list(riak_kv_pipe_index:index_keydata())},
+        {facet_count, list({binary()|integer(), non_neg_integer()})}}.
+
+-spec reduce_index_collateresults(list(riak_kv_pipe_index:index_keydata()|
+                                        collated_results()),
+                                list()|{attribute_name(),
+                                        attribute_name(),
+                                        keep(),
+                                        max|min,
+                                        pos_integer()}) ->
+                                    list(collated_results()).
+reduce_index_collateresults(List, ArgPropList) when is_list(ArgPropList) ->
+    reduce_index_collateresults(List,
+        element(2, lists:keyfind(args, 1, ArgPropList)));
+reduce_index_collateresults(List, {SortTerm, FacetTerm, Keep, MaxOrMin, Count}) ->
+    FoldFun = 
+        fun({{Bucket, Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+                {{results, ResultAcc},
+                    {facet_count, FacetCountAcc}} = Acc,
+                case {lists:keyfind(SortTerm, 1, KeyTermList),
+                        lists:keyfind(FacetTerm, 1, KeyTermList)} of
+                    {{SortTerm, SortItem}, {FacetTerm, FacetItem}} ->
+                        Result =
+                            case Keep of
+                                this ->
+                                    KT0 = [{SortTerm, SortItem},
+                                            {FacetTerm, FacetItem}],
+                                    {{Bucket, Key}, 
+                                        lists:ukeysort(1, KT0)};
+                                all ->
+                                    {{Bucket, Key}, 
+                                        lists:ukeysort(1, KeyTermList)}
+                            end,
+                        ResultAcc0 = [Result|ResultAcc],
+                        FacetCountAcc0 = add_facet(FacetItem, FacetCountAcc, 1),
+                        {{results, ResultAcc0},
+                            {facet_count, FacetCountAcc0}};
+                    _ ->
+                        Acc
+                end;
+            ({{results, ResultAcc0}, {facet_count, FacetCountAcc0}}, 
+                {{results, ResultAcc}, {facet_count, FacetCountAcc}}) ->
+                FoldFun = 
+                    fun({FacetItem, FacetCount}, FacetAcc) ->
+                        add_facet(FacetItem, FacetAcc, FacetCount)
+                    end,
+                {{results,
+                        ResultAcc ++ ResultAcc0},
+                    {facet_count,
+                        lists:foldl(FoldFun, FacetCountAcc, FacetCountAcc0)}}
+        end,
+    {{results, UnsortedResults},
+        {facet_count, UpdatedFacetCount}} =
+            lists:foldl(FoldFun,
+                        {{results, []}, {facet_count, []}},
+                        lists:flatten(List)),
+    SortedResults =
+        case MaxOrMin of
+            max ->
+                reduce_index_max(UnsortedResults, {SortTerm, Count});
+            min ->
+                reduce_index_min(UnsortedResults, {SortTerm, Count})
+        end,
+    [{{results, SortedResults},
+        {facet_count, lists:keysort(1, UpdatedFacetCount)}}].
+
+
+add_facet(FacetItem, FacetCountAcc, Incr) ->
+    case lists:keyfind(FacetItem, 1, FacetCountAcc) of
+        {FacetItem, CurrCount}->
+            lists:ukeysort(1, [{FacetItem, CurrCount + Incr}|FacetCountAcc]);
+        false ->
+            lists:ukeysort(1, [{FacetItem, Incr}|FacetCountAcc])
+    end.
 
 
 %% @spec reduce_set_union(boolean()) -> reduce_phase_spec()
@@ -1132,7 +1209,54 @@ reduce_index_extractcoalesce_test() ->
                     {{<<"B1">>, <<"K5">>}, [{vsize, <<"v7|">>}]},
                     {{<<"B1">>, <<"K6">>}, [{vsize, <<"|meh">>}]}],
                     R1A).
+
+reduce_index_collatedresults_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{size, <<"small">>}, {int, 1}, {version, <<"v8">>}]},
+    B = {{<<"B1">>, <<"K2">>}, [{size, <<"big">>}, {int, 4}, {version, <<"v7">>}]},
+    C = {{<<"B1">>, <<"K3">>}, [{size, <<"small">>}, {int, 3}, {version, <<"v7">>}]},
+    D = {{<<"B1">>, <<"K4">>}, [{size, <<"meh">>}, {int, 2}, {version, <<"v7">>}]},
+    R0A = commassidem_check(fun reduce_index_collateresults/2, 
+                            {int, version, this, min, 3},
+                            A, B, C, D),
+    ExpResult0A =
+        [{{results,
+                [{{<<"B1">>, <<"K1">>}, [{int, 1}, {version, <<"v8">>}]},
+                {{<<"B1">>, <<"K4">>}, [{int, 2}, {version, <<"v7">>}]},
+                {{<<"B1">>, <<"K3">>}, [{int, 3}, {version, <<"v7">>}]}]},
+            {facet_count,
+                [{<<"v7">>, 3}, {<<"v8">>, 1}]}}
+            ],
+    ?assertMatch(ExpResult0A, R0A),
     
+    R0B = commassidem_check(fun reduce_index_collateresults/2, 
+                            {int, version, this, max, 3},
+                            A, B, C, D),
+    ExpResult0B =
+        [{{results,
+                [{{<<"B1">>, <<"K2">>}, [{int, 4}, {version, <<"v7">>}]},
+                {{<<"B1">>, <<"K3">>}, [{int, 3}, {version, <<"v7">>}]},
+                {{<<"B1">>, <<"K4">>}, [{int, 2}, {version, <<"v7">>}]}]},
+            {facet_count,
+                [{<<"v7">>, 3}, {<<"v8">>, 1}]}}
+            ],
+    ?assertMatch(ExpResult0B, R0B),
+    
+    R0C = commassidem_check(fun reduce_index_collateresults/2, 
+                            {int, version, all, max, 3},
+                            A, B, C, D),
+    ExpResult0C =
+        [{{results,
+                [{{<<"B1">>, <<"K2">>},
+                    [{int, 4}, {size, <<"big">>}, {version, <<"v7">>}]},
+                {{<<"B1">>, <<"K3">>},
+                    [{int, 3}, {size, <<"small">>}, {version, <<"v7">>}]},
+                {{<<"B1">>, <<"K4">>},
+                    [{int, 2}, {size, <<"meh">>}, {version, <<"v7">>}]}]},
+            {facet_count,
+                [{<<"v7">>, 3}, {<<"v8">>, 1}]}}
+            ],
+    ?assertMatch(ExpResult0C, R0C).
+
 
 commassidem_check(F, Args, A, B, C, D) ->
     commassidem_check(F, Args, A, B, C, D, true).
