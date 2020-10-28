@@ -85,13 +85,13 @@ Once a subset of results has been returned from a secondary index query in the n
 
 - Returned as a list of results back to the client;
 
-- Or fittted to map or reduce pipes for further processing.  
+- Or fitted to map or reduce pipes for further processing.  
 
 ## Extending Projected Attributes - Examples
 
 ### Pre-defined Functions
 
-There are a number of predefined functions in the `riak_kv_index_prereduce` module (for prereduce functions) and the `riak_kv_mapreduce` (for reduce functions) which can be used to implement advanced queries. 
+There are a number of predefined functions in the `riak_kv_index_prereduce` module (for prereduce functions) and the `riak_kv_mapreduce` (for reduce functions) which can be used to implement advanced queries.
 
 The following prereduce *extract* functions are available:
 
@@ -109,7 +109,7 @@ The following prereduce *extract* functions are available:
 
 - `extract_encoded`: Decode a base64 encoded term into a binary
 
-- `extract_buckets`: Extract a term where the value is amapping based on the size for another term
+- `extract_buckets`: Extract a term where the value is a mapping based on the size for another term
 
 - `extract_coalesce`: Create  a new term by merging one or more existing terms together
 
@@ -141,8 +141,11 @@ If no map or reduce functions are added to the map/reduce pipe (i.e. an empty li
 
 - `reduce_index_union({attribute_name(), binary|integer})`.  Return a list of all values for the identified attribute.  Attribute values can be a binary or an integer, but they must be specified in the function arguments as such.
 
+Some basic examples using these preduce and reduce functions can be seen in action in the [`mapred_index_general`](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_general.erl) riak_test.
 
 ### Example 1 - People Search
+
+This query can be seen in action in the [`mapred_index_peoplesearch`](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_peoplesearch.erl) riak_test.
 
 Let us say we want to produce a compact index that supports queries across a large number of customers, based on:
 
@@ -150,7 +153,7 @@ Family Name - with wildcard support, and at least first two characters supported
 
 Date of Birth range - which can be open-ended;
 
-Given Name - optionally provided - normailised and phonetically matched;
+Given Name - optionally provided - normalised and phonetically matched;
 
 Current Address - approximate matches supported.
 
@@ -159,11 +162,12 @@ To support this we add a pipe-delimited index entry for each customer, like this
 
 `<<"pfinder_bin">> : FamilyName|DateOfBirth|GivenNameSoundexCodes|AddressHash`
 
-The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and nay normalised versions of those Given Names). The AddressHash takes a [similarity of hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and base64 encodes it to make sure it can fetched from the HTTP API without error.
+The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and nay normalised versions of those Given Names). The AddressHash takes a [similarity of hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and then base64 encodes it to make sure it can fetched from the HTTP API without error.
 
-For example, the following details would map to the following index entry: 
+For example, the following details would map to the following index entry:
 
-Susan Jane Sminokowski, DoB 1939/12/1, "1 Acacia Avenue, Gorton, Manchester" -> `SMINOKOWSKI|19391201|S250S000J500|hC8Nky4S/u/sSTnXjzpoOg==`
+Susan Jane Sminokowski, DoB 1939/12/1, "1 Acacia Avenue, Gorton, Manchester"
+    -> `SMINOKOWSKI|19391201|S250S000J500|hC8Nky4S/u/sSTnXjzpoOg==`
 
 If we now have a query for:
 
@@ -178,114 +182,304 @@ Address: `similar to "Acecia Avenue, Gorton, Manchester"`
 
 This query should match the example record, and this can be found by creating the following Map/Reduce query:
 
-```
-rpcmr(
-    hd(Nodes),
-    {index, 
-        ?BUCKET,
-            <<"psearch_bin">>,
-            <<"SM">>, <<"SM~">>,
-            true,
-            "^SM[^\|]*KOWSKI\\|",
-            
-            % query the range of all family names beginning with SM
-            % but apply an additional regular expression to filter for
-            % only those names ending in *KOWSKI
-            
-            [{riak_kv_index_prereduce,
-                    extract_regex,
-                    {term,
-                        [dob, givennames, address],
-                        this,
-                        "[^\|]*\\|(?<dob>[0-9]{8})\\|(?<givennames>[A-Z0-9]+)\\|(?<address>.*)"}},
-                
-                % Use a regular expresssion to split the term into three different terms
-                % dob, givennames and address.  As Keep=this, only those three KV pairs will
-                % be kept in the indexdata to the next stage
-                
-                {riak_kv_index_prereduce,
-                    apply_range,
-                    {dob,
-                        all,
-                        <<"0">>,
-                        <<"19401231">>}},
-                
-                % Filter out all dates of births up to an including the last day of 1940.
-                % Need to keep all terms as givenname and address filters still to be
-                % applied
-                
-                {riak_kv_index_prereduce,
-                    apply_regex,
-                    {givennames,
-                        all,
-                        "S000"}},
-                
-                % Use a regular expression to only include those results with a given name
-                % which sounds like Sue
-                
-                {riak_kv_index_prereduce,
-                    extract_encoded,
-                    {address,
-                        address_sim,
-                        this}},
-                
-                % This converts the base64 encoded hash back into a binary, and only `this`
-                % is required now - so only the [{address_sim, Hash}] will be in the
-                % IndexData downstream
-                
-                {riak_kv_index_prereduce,
-                    extract_hamming,
-                    {address_sim,
-                        address_distance,
-                        this,
-                        riak_kv_index_prereduce:simhash(<<"Acecia Avenue, Manchester">>)}},
-                
-                % This generates a new projected attribute `address_distance` which
-                % is the hamming distance between the query and the indexed address
-                
-                {riak_kv_index_prereduce,
-                    log_identity,
-                    address_distance},
-                
-                % This adds a log for troubleshooting - the term passed to logidentity
-                % is the projected attribute to log (`key` can be used just to log
-                % the key
-                
-                {riak_kv_index_prereduce,
-                    apply_range,
-                    {address_distance,
-                        this,
-                        0,
-                        50}}
-                
-                % Filter out any result where the hamming distance to the query
-                % address is more than 50
-                    ]},
+*Stage 1 - Query:*
 
-    [{reduce, {modfun, riak_kv_mapreduce, reduce_index_min}, {address_distance, 10}, false},
-        
-        % Restricts the number of results to be fetched to the ten matches with the
-        % smallest hamming distance to the queried address
-        
-        {map, {modfun, riak_kv_mapreduce, map_identity}, none, true}
-        
-        % Fetch all the matching objects
-    ]),
+```
+{index,
+    ?BUCKET,
+        <<"psearch_bin">>,
+        <<"SM">>, <<"SM~">>,
+        true,
+        "^SM[^\|]*KOWSKI\\|"}
 ```
 
-Without the term_regex feature, using a standard secondary index range query would have extracted a large number of results and sorted and serialised those results for streaming to the client (as the range would include all the SMITHs).  This sorting/serilisation delay could be significant.
+This will perform a range query for all the family names beginning with SM, but apply an additional regular expression to filter for only those names ending in KOWSKI (exploiting the fact that `|` is the delimiter used to separate the family name from the other fields).
 
-The regular expression reduces this load significantly.  It could be further optimised to filter on given name rather than doing this at the prereduce stage (e.g. `"^SM.*KOWSKI\|[0-9]+\|[^\|]*S000"`), but from a development perspective forcing more work onto regular expressions can quickly become relativly complex and add the risk of generating computationally complex back-tracking regular expressions.
+*Stage 2 - Index Prereduce Functions*
 
-Decoding the similarity hash, and finding the hamming distance, could also be done in the application (by just returning the results).  Doing this at the prereduce stage will parallelise this decoding and hamminng-distance calculation work across all the cores in the cluster though - so in some cases this may significantly reduce response times, as well as reducing the count of results to be serilaised and the number of round trips required.
+The sequence of functions required is:
 
-As the final stage restricts the total number of results to the ten results with the closest addresses, the actual objects are fetched at this point - as there is a controllerd overhead of fecthing a fixed number of objects within the query.
+```
+extract_regex(term) -> [dob, givennames, address]
 
-This query can be seen in action in the [`mapred_index_peoplesearch`](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_peoplesearch.erl) riak_test.
+    apply_range(dob) ->
+    apply_regex(givennames) ->
+
+    extract_encoded(address) -> address_sim
+        extract_hamming(address_sim) -> address_distance
+                apply_range(address_distance)
+```
+
+Detail of each function within Stage 2:
+
+```
+{riak_kv_index_prereduce,
+    extract_regex,
+    {term,
+        [dob, givennames, address],
+        this,
+        "[^\|]*\\|(?<dob>[0-9]{8})\\|(?<givennames>[A-Z0-9]+)\\|(?<address>.*)"}
+```
+
+The first stage is to take the term which is delimited using "|", and split it into three parts.  After this extract has been made, the next stage will see four projected attributes - term (the original attribute), dob, givennames and address.
+
+```
+{riak_kv_index_prereduce,
+    apply_range,
+    {dob, all, <<"0">>, <<"19401231">>}}
+```
+
+Now we have extracted the dob, we can filter out all the dates of birth outside of the range (i.e. we only want those that are born before 1941).
+
+```
+{riak_kv_index_prereduce,
+    apply_regex,
+    {givennames, all, "S000"}}
+```
+
+Use a regular expression to only include those results with a given name which sounds like Sue (which would map to S000 in Soundex).
+
+```
+{riak_kv_index_prereduce,
+    extract_encoded,
+    {address, address_sim, this}}
+```
+
+The address sim has been base64 encoded, so this will decode.  As all other projected attributes have been used, only the outcome of this extract (address_sim) now needs be taken forward; hence the 'Keep' input is set to `this`.
+
+```
+{riak_kv_index_prereduce,
+    extract_hamming,
+    {address_sim,
+        address_distance,
+        this,
+        riak_kv_index_prereduce:simhash(<<"Acecia Avenue, Manchester">>)}}
+```
+
+This generates a new projected attribute address_distance which is the hamming distance between the query and the indexed address.
+
+```
+{riak_kv_index_prereduce,
+    apply_range,
+    {address_distance, this, 0, 50}}
+```
+
+Filter out any result where the hamming distance to the query address is more than 50.
+
+*Stage 3 - Map and reduce functions*
+
+```
+reduce_index_min ->
+    map_identity
+```
+
+Detail of each function within Stage 3:
+
+```
+{reduce,
+    {modfun, riak_kv_mapreduce, reduce_index_min},
+    {address_distance, 10},
+    false}
+```
+
+This reduce function filters the results to just the ten results with the smallest distance from the queried address.  Where there are ties, ties are resolved by sorting on Key.
+
+```
+{map,
+    {modfun, riak_kv_mapreduce, map_identity},
+    none,
+    true}
+```
+
+Fetch the final results, which can be done safely as the previous reduce function has limited the final results to just 10.
+
+*Notes*
+
+Without the term_regex feature, using a standard secondary index range query would have extracted a large number of results and sorted and serialised those results for streaming to the client (as the range would include all the SMITHs).  This sorting/serialisation delay could be significant.
+
+The regular expression reduces this load significantly.  It could be further optimised to filter on given name rather than doing this at the prereduce stage (e.g. `"^SM.*KOWSKI\|[0-9]+\|[^\|]*S000"`), but from a development perspective forcing more work onto regular expressions can quickly become relatively complex and add the risk of generating computationally complex back-tracking expressions.
+
+Decoding the similarity hash, and finding the hamming distance, could also be done in the application (by just returning the results).  Doing this at the prereduce stage will parallelise this decoding and hamming-distance calculation work across all the cores in the cluster though - so in some cases this may significantly reduce response times, as well as reducing the count of results to be serialised and the number of round trips required.
+
+As the final stage restricts the total number of results to the ten results with the closest addresses, the actual objects are fetched at this point - as there is a controlled overhead of fetching a fixed number of objects within the query.
 
 
 ### Example 2 - Reporting on Conditions
 
+This query can be seen in action in the [`mapred_index_reporting`](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_reporting.erl) riak_test.
+
+Projected attributes may also be useful when reporting on data in the database.  Where records have different categories and group memberships, it can be useful to report on counts of records by those categories and group memberships.
+
+In this case we will consider each record to be a clinical history for the patient, and the patient has the following interesting characteristics from a reporting basis:
+
+Date of Birth - as reports are often required split by age groupings.
+
+GP Provider - the primary care organisation to which the patient is registered.
+
+Common significant conditions - it maybe that there are many common conditions that can be represented as a bitmap (with each bit set to 1 if the condition is true for that patient, and 0 if false), this is then base64 encoded before being added to the index to avoid issues with the HTTP API.
+
+
+To support this we add a fixed-width index entry for each customer, like this [size in bytes]:
+
+`<<"conditions_bin">> : <DateOfBirth[8]><GPProvider>[6]<EncodedConditionsBitmap>[*]`
+
+For example, it may now be required to understand the spread of diabetes amongst the elderly across the estate by age group.  The requirement is to have a count of those with and without diabetes by age and GP Provider.  This can be supported using the following Map/Reduce query:
+
+*Stage 1 - Query*
+
+```
+{index,
+    ?BUCKET,
+        <<"conditions_bin">>,
+        <<"0">>, <<"19551027">>,
+        true,
+        undefined}
+```
+
+In this example the requirement is only to count patients over the age of 65, and we assume that 27th October 2020 is Groundhog Day for the purpose of this illustration
+
+*Stage 2 - Index Prereduce Functions*
+
+The sequence of functions required is:
+
+```
+extract_binary(term) -> dob
+    extract_binary(term) -> gpprovider
+        extract_binary(term) -> conditions_b64
+
+    extract_buckets(dob) -> age
+        extract_encoded(conditions_b64) -> conditions_bin
+            extract_integer(conditions_bin) -> conditions
+                extract_mask(conditions) -> is_diabetic_int
+                    extract_buckets(is_diabetic_int) -> diabetic_flag
+
+    extract_coalesce([gpprovider, age, diabetic_flag]) -> counting_term
+```
+
+Detail of each function within Stage 2:
+
+```
+{riak_kv_index_prereduce,
+                extract_binary,
+                {term,
+                    dob,
+                    all,
+                    0, 8}},
+{riak_kv_index_prereduce,
+    extract_binary,
+    {term,
+        gpprovider,
+        all,
+        8, 6}},
+{riak_kv_index_prereduce,
+    extract_binary,
+    {term,
+        conditions_b64,
+        all,
+        14, all}}
+```
+
+The index term is broken up into binaries using the fact that the first two elements are fixed width.
+
+```
+{riak_kv_index_prereduce,
+    extract_buckets,
+    {dob,
+        age,
+        all,
+        AgeMap,
+        <<"Unexpected">>}}
+```
+
+Take each date of birth, and map it to an Age category.  There should not be results over the highest Date Of Birth in the Age Map (i.e. people younger than 65).  The query should not produce results for anyone under 65 - so any dob over the highest date of birth in the AgeMap would be "Unexpected", and so this tag is used.
+
+In this case the AgeMap is a list of tuples mapping a date of birth high-point to an Age"
+
+```
+AgeMap =
+    [{<<"19301027">>, <<"Over90">>}|
+        lists:map(fun(Y) -> {iolist_to_binary(io_lib:format("~4..0B", [Y]) ++ "1027"),
+                                iolist_to_binary(io_lib:format("Age~2..0B", [2020 - Y]))}
+                            end,
+                        lists:seq(1931, 1955))],
+```
+
+The next phase requires the conditions bitmap to be decoded, and converted to be usable:
+
+```
+{riak_kv_index_prereduce,
+    extract_encoded,
+    {conditions_b64,
+        conditions_bin,
+        all}},
+
+{riak_kv_index_prereduce,
+    extract_integer,
+    {conditions_bin,
+        conditions,
+        all,
+        0, 8}},
+
+{riak_kv_index_prereduce,
+    extract_mask,
+    {conditions,
+        is_diabetic_int,
+        all,
+        1}},
+
+{riak_kv_index_prereduce,
+    extract_buckets,
+    {is_diabetic_int,
+        is_diabetic,
+        all,
+        [{0, <<"NotD">>}, {1, <<"IsD">>}],
+        <<"Unexpected">>}}
+```
+
+The bitmap is base64 encoded as a binary, but then needs to be converted to an integer.  Once it is an integer, only the least significant bit is interesting (the one that represents whether or not a patient is diabetic), and so this is extracted with a mask.  Finally the 1 or 0 is mapped back into a binary tag.
+
+```
+{riak_kv_index_prereduce,
+    extract_coalesce,
+    {[gpprovider, age, is_diabetic],
+        counting_term,
+        this,
+        <<"|">>}}
+```
+
+A combined term is then made by merging together these flags, and it is these terms that need to be counted.  As none of the previous terms are interesting for the reduce function, the keep attribute is set to `this` so those terms are discarded and only the `counting_term` will be passed forward.
+
+*Stage 3 - Map and reduce functions*
+
+A single reduce function is required:
+
+```
+{reduce,
+    {modfun, riak_kv_mapreduce, reduce_index_countby},
+    [{reduce_phase_batch_size, 1000},
+        {args, {counting_term, binary}}
+    ],
+    true}
+```
+
+The `reduce_index_countby` will produce a facet count for unique `counting_term` i.e. a count of the diabetics/non-diabetics in each age band for each primary-care provider.  The reduce phase is single-threaded (it is not distributed across the nodes, like the application of the prereduce functions), and to make this more efficient the `reduce_phase_batch_size` is increased.  As the reduce phase properties are controlled via passed-in arguments, the actual function arguments now need to be passed as a tuple labelled with the atom `args`.
+
+*Notes*
+
+Running this query on a single machine (so with constrained parallelisation), for a non-trivial number of patients (o(100K)) reveals that 30.3 % of the time is spent on the 2i query, 8.6% on the prereduce functions and 61.1% of the time in the reduce function.
+
+The response time of this query can be greatly improved by forcing the reduce function to be prereduced - in other words forcing the Map/Reduce system to pre-calculate a partial result locally at each vnode worker before sending to the single reduce function to combine.  This is possible, as all reduce functions must be commutative, associative and idempotent.
+
+To force a reduce statement to prereduce, *in the case of the first reduce statement in an index Map/Reduce operation*, then the `reduce` keyword should be changed to `prereduce`.
+
+```
+{prereduce,
+    {modfun, riak_kv_mapreduce, reduce_index_countby},
+    [{args, {counting_term, binary}}
+    ],
+    true}
+```
+
+This change will make an order-of-magnitude change in the speed of the reduce part of the query.
 
 ### Example 3 - Approximate Concatenations
-
