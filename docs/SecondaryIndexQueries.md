@@ -79,9 +79,9 @@ For this feature, the current Map/Reduce index query API has been extended from 
 
 - TermRegex is a compiled regular expression that can be applied to the term to filter out so the processed result set any result that does not `match` the regular expression.
 
-- PreReduceFuns is a list of functions that can be applied to `{{Bucket, Key}, IndexData}` tuples, and return either a (potentially altered) `{{Bucket, Key}, IndexData}` tuple or `none` (if the tuple is to be removed from the result set).  IndexData will always be a list of `{attribute, value}` tuples, initially starting as `[{term, IndexTerm}]`.  PreReduceFuns will always be either filter functions (which strip results based on some match against an attribute) or extract functions (which pull out new terms from existing terms).
+- PreReduceFuns is a list of functions that can be applied to `{{Bucket, Key}, IndexData}` tuples, and return either a (potentially altered) `{{Bucket, Key}, IndexData}` tuple or `none` (if the tuple is to be removed from the pipeline and hence the result set).  IndexData will always be a list of `{attribute, value}` tuples, initially starting as `[{term, IndexTerm}]`.  PreReduceFuns will always be either filter functions (which strip results based on some match against an attribute) or extract functions (which pull out new terms from existing terms).
 
-Once a subset of results has been returned from a secondary index query in the new Index Map/Reduce system, it will be passed through the flters and extracts of the PreReduceFuns, and then will be either:
+Once a subset of results has been returned from a secondary index query in the new Index Map/Reduce system, it will be passed through the filters and extracts of the PreReduceFuns, and then will be either:
 
 - Returned as a list of results back to the client;
 
@@ -89,9 +89,10 @@ Once a subset of results has been returned from a secondary index query in the n
 
 ## Extending Projected Attributes - Examples
 
+
 ### Pre-defined Functions
 
-There are a number of predefined functions in the `riak_kv_index_prereduce` module (for prereduce functions) and the `riak_kv_mapreduce` (for reduce functions) which can be used to implement advanced queries.
+There are a number of predefined functions in the `riak_kv_index_prereduce` module (for prereduce functions) and the `riak_kv_mapreduce` (for reduce functions) which can be used to implement advanced queries.  The aim is to be able to form pipelines of these simple functions at the reduce stage, to support potentially complex filtering and enrichment tasks, and greatly expanding the scope of what could otherwise be achieved with projected attributes.
 
 The following prereduce *extract* functions are available:
 
@@ -124,8 +125,6 @@ The following prereduce *filter* functions are available:
 
 - `apply_remotebloom`: Filter either the key or an attribute value by checking for existence in a passed-in bloom filter
 
-- `apply_localbloom`: Filter by checking for a hash or hashes in a projected attributes's bloom filter  
-
 
 Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is a list of {attribute, value} tuples.  
 
@@ -143,9 +142,10 @@ If no map or reduce functions are added to the map/reduce pipe (i.e. an empty li
 
 - `reduce_index_union({attribute_name(), binary|integer})`.  Return a list of all values for the identified attribute.  Attribute values can be a binary or an integer, but they must be specified in the function arguments as such.
 
-- `reduce_index_collateresults({attribute_name(), attribute_name(), keep(), min|max, pos_integer()})`.  Returns a list of results, sorted by a Sort Term, up to a maximum count of results.  Alongside this returns a facet count by facet term of all results (not just those in the maximum set).
+- `reduce_index_collateresults({attribute_name(), attribute_name(), keep(), min|max, pos_integer()})`.  Returns a list of results, sorted by specific attribute's value, up to a maximum count of results.  Alongside this returns a facet count for a given attribute of all results (not just those in the maximum set).
 
-Some basic examples using these preduce and reduce functions can be seen in action in the [`mapred_index_general`](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_general.erl) riak_test.
+Some basic examples using these prereduce and reduce functions can be seen in action in the [`mapred_index_general`](https://github.com/basho/riak_test/blob/mas-i1737-indexkeydata1/tests/mapred_index_general.erl) riak_test.
+
 
 ### Example 1 - People Search
 
@@ -166,7 +166,7 @@ To support this we add a pipe-delimited index entry for each customer, like this
 
 `<<"pfinder_bin">> : FamilyName|DateOfBirth|GivenNameSoundexCodes|AddressHash`
 
-The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and any normalised versions of those Given Names). The AddressHash takes a [similarity of hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and then base64 encodes it to make sure it can fetched from the HTTP API without error.
+The GiveNameSoundexCodes take each GiveName of the customer, and provide a sequence of soundex codes for those given names (and any normalised versions of those Given Names). The AddressHash takes a [similarity hash](https://en.wikipedia.org/wiki/MinHash) of the customer address, and then base64 encodes it to make sure it can fetched from the HTTP API without error.
 
 For example, the following details would map to the following index entry:
 
@@ -184,7 +184,7 @@ If we now have a query for:
 - Address: `similar to "Acecia Avenue, Gorton, Manchester"`
 
 
-This query should match the example record, and this can be found by creating the following Map/Reduce query:
+This query should match the example record, and this can be found by creating a Map/Reduce query.  The required query builds a set of results with projected attributes from an index query - and then manipulates those projected attributes through prereduce functions to filter and refine the results down.
 
 *Stage 1 - Query:*
 
@@ -197,11 +197,11 @@ This query should match the example record, and this can be found by creating th
     "^SM[^\|]*KOWSKI\\|"}
 ```
 
-This will perform a range query for all the family names beginning with SM, but apply an additional regular expression to filter for only those names ending in KOWSKI (exploiting the fact that `|` is the delimiter used to separate the family name from the other fields).
+This will perform a range query for all the family names beginning with `SM`, but apply an additional regular expression to filter for only those names ending in `KOWSKI` (exploiting the fact that `|` is the delimiter used to separate the family name from the other fields).
 
 *Stage 2 - Index Prereduce Functions*
 
-The sequence of functions required is:
+To filter the results down, the date of birth needs to be range checked, the matched name needs to be checked against the set of given name codes and finally there is a need to see how "close" lexicographically the address is to the query address.  The sequence of prereduce functions required to complete these tasks are:
 
 ```
 extract_regex(term) -> [dob, givennames, address]
@@ -210,8 +210,9 @@ extract_regex(term) -> [dob, givennames, address]
     apply_regex(givennames) ->
 
     extract_encoded(address) -> address_sim
-        extract_hamming(address_sim) -> address_distance
-                apply_range(address_distance)
+    extract_hamming(address_sim) -> address_distance
+    apply_range(address_distance)
+
 ```
 
 Detail of each function within Stage 2:
@@ -305,7 +306,9 @@ The regular expression reduces this load significantly.  It could be further opt
 
 Decoding the similarity hash, and finding the hamming distance, could also be done in the application (by just returning the results).  Doing this at the prereduce stage will parallelise this decoding and hamming-distance calculation work across all the cores in the cluster though - so in some cases this may significantly reduce response times, as well as reducing the count of results to be serialised and the number of round trips required.
 
-As the final stage restricts the total number of results to the ten results with the closest addresses, the actual objects are fetched at this point - as there is a controlled overhead of fetching a fixed number of objects within the query.
+As the final stage restricts the total number of results to the ten results with the closest addresses, the actual objects are fetched at this point.  Using map statements needs to be carefully controlled in Riak as it can create a large parallel storm of vnode activity, however in this case there is a controlled overhead of fetching a fixed number of objects, due to the result restriction made in the prior reduce statement.
+
+If the result set being passed to the `reduce_index_min` reduce stage is large, the processing time for this stage will become a dominant factor in the overall latency of the query, as reduce stages are not parallelised.  This stage, as it involves a comparison between results, can not be converted into a prereduce function - but it can still be converted from a reduce stage to a prereduce stage (as it is the first reduce statement), to parallelise the workload.  This conversion cna be made by changing the first item of the tuple from `reduce` to `prereduce`.  For smaller results sets this change will not lead to a significant performance boost.
 
 
 ### Example 2 - Reporting on Conditions
@@ -348,16 +351,18 @@ The sequence of functions required is:
 
 ```
 extract_binary(term) -> dob
+
     extract_binary(term) -> gpprovider
-        extract_binary(term) -> conditions_b64
+    extract_binary(term) -> conditions_b64
 
     extract_buckets(dob) -> age
-        extract_encoded(conditions_b64) -> conditions_bin
-            extract_integer(conditions_bin) -> conditions
-                extract_mask(conditions) -> is_diabetic_int
-                    extract_buckets(is_diabetic_int) -> diabetic_flag
+    extract_encoded(conditions_b64) -> conditions_bin
+    extract_integer(conditions_bin) -> conditions
+    extract_mask(conditions) -> is_diabetic_int
+    extract_buckets(is_diabetic_int) -> diabetic_flag
 
     extract_coalesce([gpprovider, age, diabetic_flag]) -> counting_term
+
 ```
 
 Detail of each function within Stage 2:
@@ -472,7 +477,7 @@ The `reduce_index_countby` will produce a facet count for unique `counting_term`
 
 Running this query on a single machine (so with constrained parallelisation), for a non-trivial number of patients (o(100K)) reveals that 30.3 % of the time is spent on the 2i query, 8.6% on the prereduce functions and 61.1% of the time in the reduce function.
 
-The response time of this query can be greatly improved by forcing the reduce function to be prereduced - in other words forcing the Map/Reduce system to pre-calculate a partial result locally at each vnode worker before sending to the single reduce function to combine.  This is possible, as all reduce functions must be commutative, associative and idempotent.
+The response time of this query can be greatly improved by forcing the reduce function to be prereduced; in other words forcing the Map/Reduce system to pre-calculate a partial result locally at each vnode worker before sending to the single reduce function to combine.  This is possible, as all correctly defined reduce functions must be [commutative, associative and idempotent](https://docs.riak.com/riak/kv/latest/developing/app-guide/advanced-mapreduce/index.html#reduce-phase-functions).
 
 To force a reduce statement to prereduce, *in the case of the first reduce statement in an index Map/Reduce operation*, then the `reduce` keyword should be changed to `prereduce`.
 
@@ -486,10 +491,11 @@ To force a reduce statement to prereduce, *in the case of the first reduce state
 
 This change will make an order-of-magnitude change in the speed of the reduce part of the query.  The lack of parallelisation in standard reduce functions will create a bottleneck, although the flip-side of parallelisation is increased CPU usage across the cluster.  Prereduce simply [increases parallelisation of the workload](https://speakerdeck.com/basho/riak-pipe-distributed-processing-system-ricon-2012?slide=19), and so reduces response times.
 
+
 ### Example 3 - Inverted Indices and Anti-Entropy
 
 Inverted indexes can be used in Riak to improve consistency of query results, and the performance of queries, when terms change frequently (normally at the expense of false positive results, and overheads in the PUT path).  An inverted index is an object which contains a set of index results for a given term, meaning that queries can be made with r > 1 (i.e. checking the results are correct in more than one read replica, whereas 2i and M/R queries are always r=1.  Changes can be coordinated between inverted indexes and objects using "unit of work" patterns or pre-commit hooks, but there are challenges confirming that this has been done reliably, that is to say proving that inverted indexes never become inconsistent.
 
 This example looks at using secondary indexes and map/reduce to make anti-entropy checks between inverted indexes and objects at scale.
 
-..... 
+.....
