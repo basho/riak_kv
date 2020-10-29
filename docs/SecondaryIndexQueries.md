@@ -206,12 +206,12 @@ To filter the results down, the date of birth needs to be range checked, the mat
 ```
 extract_regex(term) -> [dob, givennames, address]
 
-    apply_range(dob) ->
-    apply_regex(givennames) ->
+apply_range(dob) ->
+apply_regex(givennames) ->
 
-    extract_encoded(address) -> address_sim
-    extract_hamming(address_sim) -> address_distance
-    apply_range(address_distance)
+extract_encoded(address) -> address_sim
+extract_hamming(address_sim) -> address_distance
+apply_range(address_distance)
 
 ```
 
@@ -351,17 +351,16 @@ The sequence of functions required is:
 
 ```
 extract_binary(term) -> dob
+extract_binary(term) -> gpprovider
+extract_binary(term) -> conditions_b64
 
-    extract_binary(term) -> gpprovider
-    extract_binary(term) -> conditions_b64
+extract_buckets(dob) -> age
+extract_encoded(conditions_b64) -> conditions_bin
+extract_integer(conditions_bin) -> conditions
+extract_mask(conditions) -> is_diabetic_int
+extract_buckets(is_diabetic_int) -> diabetic_flag
 
-    extract_buckets(dob) -> age
-    extract_encoded(conditions_b64) -> conditions_bin
-    extract_integer(conditions_bin) -> conditions
-    extract_mask(conditions) -> is_diabetic_int
-    extract_buckets(is_diabetic_int) -> diabetic_flag
-
-    extract_coalesce([gpprovider, age, diabetic_flag]) -> counting_term
+extract_coalesce([gpprovider, age, diabetic_flag]) -> counting_term
 
 ```
 
