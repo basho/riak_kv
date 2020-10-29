@@ -60,7 +60,7 @@
          reduce_index_applyrange/2,
          reduce_index_applyregex/2,
          reduce_index_applymask/2,
-         reduce_index_applybloom/2,
+         reduce_index_applyremotebloom/2,
          reduce_index_identity/2,
          reduce_index_sort/2,
          reduce_index_max/2,
@@ -499,17 +499,17 @@ reduce_index_applymask(List, Args) ->
     lists:foldl(reduce_filterfun(FilterFun), [], List).
 
 
--spec reduce_index_applybloom(list(riak_kv_pipe_index:index_keydata()|
+-spec reduce_index_applyremotebloom(list(riak_kv_pipe_index:index_keydata()|
                                 list(riak_kv_pipe_index:index_keydata())),
                             list()|{attribute_name()|key,
                                     keep(),
                                     {module(), any()}}) ->
                                 list(riak_kv_pipe_index:index_keydata()).
-reduce_index_applybloom(List, ArgPropList) when is_list(ArgPropList) ->
-    reduce_index_applybloom(List,
+reduce_index_applyremotebloom(List, ArgPropList) when is_list(ArgPropList) ->
+    reduce_index_applyremotebloom(List,
         element(2, lists:keyfind(args, 1, ArgPropList)));
-reduce_index_applybloom(List, Args) ->
-    FilterFun = riak_kv_index_prereduce:apply_bloom(Args),
+reduce_index_applyremotebloom(List, Args) ->
+    FilterFun = riak_kv_index_prereduce:apply_remotebloom(Args),
     lists:foldl(reduce_filterfun(FilterFun), [], List).
 
 
@@ -1108,7 +1108,7 @@ reduce_index_extracthash_test() ->
     R1B = reduce_index_union(R1A, {hash, integer}),
     ?assertMatch(Hashes1, lists:sort(R1B)).
 
-reduce_index_apply_bloom_test() ->
+reduce_index_apply_remotebloom_test() ->
     Keys0 = [<<"K1">>, <<"K2">>, <<"K3">>, <<"K4">>,
                 <<"K5">>, <<"K6">>, <<"K7">>, <<"K8">>,
                 <<"K9">>, <<"K10">>, <<"K11">>, <<"K12">>],
@@ -1119,16 +1119,22 @@ reduce_index_apply_bloom_test() ->
     B = {{<<"B1">>, <<"K2">>}, [{int, 9}, {term, <<"v7">>}]},
     C = {{<<"B1">>, <<"K3">>}, [{int, 2}, {term, <<"v7">>}]},
     D = {{<<"B1">>, <<"K4">>}, [{term, 9}]},
-    R0A = commassidem_check(fun reduce_index_applybloom/2, {key, this, {riak_kv_hints, Bloom0}}, A, B, C, D),
+    R0A = commassidem_check(fun reduce_index_applyremotebloom/2,
+                            {key, this, {riak_kv_hints, Bloom0}},
+                            A, B, C, D),
     ?assertMatch([{<<"B1">>, <<"K1">>}, 
                     {<<"B1">>, <<"K2">>},
                     {<<"B1">>, <<"K3">>},
                     {<<"B1">>, <<"K4">>}], R0A),
-    R1A = commassidem_check(fun reduce_index_applybloom/2, {key, all, {riak_kv_hints, Bloom1}}, A, B, C, D),
+    R1A = commassidem_check(fun reduce_index_applyremotebloom/2,
+                            {key, all, {riak_kv_hints, Bloom1}},
+                            A, B, C, D),
     ?assertMatch([A, D], lists:sort(R1A)),
     Vals0 = [<<"v7">>, <<"v77">>, <<"v777">>],
     BloomV0 = riak_kv_hints:create_gcs_metavalue(Vals0, 12, md5),
-    RV0 = commassidem_check(fun reduce_index_applybloom/2, {term, this, {riak_kv_hints, BloomV0}}, A, B, C, D),
+    RV0 = commassidem_check(fun reduce_index_applyremotebloom/2,
+                            {term, this, {riak_kv_hints, BloomV0}},
+                            A, B, C, D),
     ?assertMatch([{{<<"B1">>, <<"K2">>}, [{term, <<"v7">>}]},
                         {{<<"B1">>, <<"K3">>}, [{term, <<"v7">>}]}],
                     lists:sort(RV0)).

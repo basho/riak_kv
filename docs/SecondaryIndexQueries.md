@@ -122,7 +122,9 @@ The following prereduce *filter* functions are available:
 
 - `apply_mask`: Filter by checking bits in a bitmap against a bitmap mask
 
-- `apply_bloom`: Filter either the key or an attribute value by checking for existence in a passed-in bloom filter
+- `apply_remotebloom`: Filter either the key or an attribute value by checking for existence in a passed-in bloom filter
+
+- `apply_localbloom`: Filter by checking for a hash or hashes in a projected attributes's bloom filter  
 
 
 Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is a list of {attribute, value} tuples.  
@@ -482,6 +484,12 @@ To force a reduce statement to prereduce, *in the case of the first reduce state
     true}
 ```
 
-This change will make an order-of-magnitude change in the speed of the reduce part of the query.
+This change will make an order-of-magnitude change in the speed of the reduce part of the query.  The lack of parallelisation in standard reduce functions will create a bottleneck, although the flip-side of parallelisation is increased CPU usage across the cluster.  Prereduce simply [increases parallelisation of the workload](https://speakerdeck.com/basho/riak-pipe-distributed-processing-system-ricon-2012?slide=19), and so reduces response times.
 
-### Example 3 - Approximate Concatenations
+### Example 3 - Inverted Indices and Anti-Entropy
+
+Inverted indexes can be used in Riak to improve consistency of query results, and the performance of queries, when terms change frequently (normally at the expense of false positive results, and overheads in the PUT path).  An inverted index is an object which contains a set of index results for a given term, meaning that queries can be made with r > 1 (i.e. checking the results are correct in more than one read replica, whereas 2i and M/R queries are always r=1.  Changes can be coordinated between inverted indexes and objects using "unit of work" patterns or pre-commit hooks, but there are challenges confirming that this has been done reliably, that is to say proving that inverted indexes never become inconsistent.
+
+This example looks at using secondary indexes and map/reduce to make anti-entropy checks between inverted indexes and objects at scale.
+
+..... 

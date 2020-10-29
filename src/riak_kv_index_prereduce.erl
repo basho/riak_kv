@@ -35,7 +35,7 @@
          apply_range/1,
          apply_regex/1,
          apply_mask/1,
-         apply_bloom/1,
+         apply_remotebloom/1,
          log_identity/1]).
 
 %% Helper functions for index manipulation
@@ -469,11 +469,11 @@ apply_mask({InputTerm, Keep, Mask}) ->
 %% `this`
 %% {Module, Bloom} - the module for the bloom code, which must have a check_key
 %% function, and a bloom (produced by that module) for checking.
--spec apply_bloom({attribute_name(),
+-spec apply_remotebloom({attribute_name(),
                         keep(),
                         {module(), any()}}) ->
                     riak_kv_pipe_index:prereduce_fun().
-apply_bloom({key, Keep, {BloomMod, Bloom}}) ->
+apply_remotebloom({key, Keep, {BloomMod, Bloom}}) ->
     fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
             case BloomMod:check_key(Key, Bloom) of
                 true ->
@@ -497,7 +497,7 @@ apply_bloom({key, Keep, {BloomMod, Bloom}}) ->
         (_Other) ->
             none
     end;
-apply_bloom({InputTerm, Keep, {BloomMod, Bloom}}) ->
+apply_remotebloom({InputTerm, Keep, {BloomMod, Bloom}}) ->
     fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
             case lists:keyfind(InputTerm, 1, KeyTermList) of
                 {InputTerm, ToTest} when is_binary(ToTest) ->
