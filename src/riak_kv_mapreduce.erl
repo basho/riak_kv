@@ -51,6 +51,7 @@
 %% Index manipulation definitions
 -export([reduce_index_extractinteger/2,
          reduce_index_extractbinary/2,
+         reduce_index_extractsplit/2,
          reduce_index_extractregex/2,
          reduce_index_extractmask/2,
          reduce_index_extracthamming/2,
@@ -67,10 +68,13 @@
          reduce_index_min/2,
          reduce_index_union/2,
          reduce_index_countby/2,
-         reduce_index_collateresults/2]).
+         reduce_index_collateresults/2,
+         reduce_index_tictac/2]).
 
 -type keep() :: all|this.
 -type attribute_name() :: atom().
+-type attribute_output() :: binary()|integer()|tuple().
+-type attribute_type() :: binary|integer|tuple.
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -367,6 +371,19 @@ reduce_index_extractregex(List, Args) ->
     ExtractFun = riak_kv_index_prereduce:extract_regex(Args),
     lists:foldl(reduce_extractfun(ExtractFun, element(2, Args)), [], List).
 
+-spec reduce_index_extractsplit(list(riak_kv_pipe_index:index_keydata()|
+                                        list(riak_kv_pipe_index:index_keydata())),
+                                    list()|
+                                        {attribute_name(),
+                                            list(attribute_name()), keep(), binary()}) ->
+                                        list(riak_kv_pipe_index:index_keydata()).
+reduce_index_extractsplit(List, ArgPropList) when is_list(ArgPropList) ->
+    reduce_index_extractsplit(List,
+        element(2, lists:keyfind(args, 1, ArgPropList)));
+reduce_index_extractsplit(List, Args) ->
+    ExtractFun = riak_kv_index_prereduce:extract_split(Args),
+    lists:foldl(reduce_extractfun(ExtractFun, element(2, Args)), [], List).
+
 
 -spec reduce_index_extractmask(list(riak_kv_pipe_index:index_keydata()|
                                         list(riak_kv_pipe_index:index_keydata())),
@@ -452,7 +469,7 @@ reduce_index_extractbuckets(List, Args) ->
                                         {list(attribute_name()), 
                                             attribute_name(),
                                             keep(),
-                                            binary()}) ->
+                                            binary()|tuple}) ->
                                 list(riak_kv_pipe_index:index_keydata()).
 reduce_index_extractcoalesce(List, ArgPropList) when is_list(ArgPropList) ->
     reduce_index_extractcoalesce(List, 
@@ -540,10 +557,14 @@ reduce_index_union(List, {InputTerm, InputType}) ->
     lists:foldl(FoldFun, [], List).
 
 
+%% @doc
+%% Count the results by a given term
+%% InputTerm - the atttribute_name whose values will be counted
+%% InputType - the type of the value to be counted
 -spec reduce_index_countby(list(riak_kv_pipe_index:index_keydata()|
-                                {binary()|integer(), non_neg_integer()}),
-                                list()|{attribute_name(), binary|integer}) ->
-                                    list({binary()|integer(), non_neg_integer()}).
+                                {attribute_output(), non_neg_integer()}),
+                                list()|{attribute_name(), attribute_type()}) ->
+                                    list({attribute_output(), non_neg_integer()}).
 reduce_index_countby(List, ArgPropList) when is_list(ArgPropList) ->
     reduce_index_countby(List,
         element(2, lists:keyfind(args, 1, ArgPropList)));
@@ -553,7 +574,8 @@ reduce_index_countby(List, {InputTerm, InputType}) ->
                 case lists:keyfind(InputTerm, 1, KeyTermList) of
                     {InputTerm, Term}  when
                             InputType == binary, is_binary(Term); 
-                            InputType == integer, is_integer(Term) ->
+                            InputType == integer, is_integer(Term);
+                            InputType == tuple, is_tuple(Term) ->
                         case lists:keyfind(Term, 1, Acc) of
                             {Term, CurrCount}->
                                 lists:ukeysort(1, [{Term, CurrCount + 1}|Acc]);
@@ -575,7 +597,8 @@ reduce_index_countby(List, {InputTerm, InputType}) ->
                 lists:foldl(F, Acc, PrevAcc);
             ({Term, C0}, Acc) when
                     InputType == binary, is_binary(Term), is_integer(C0); 
-                    InputType == integer, is_integer(Term), is_integer(C0) ->
+                    InputType == integer, is_integer(Term), is_integer(C0);
+                    InputType == tuple, is_tuple(Term), is_integer(C0) ->
                 case lists:keyfind(Term, 1, Acc) of
                     {Term, CurrCount} ->
                         lists:ukeysort(1, [{Term, CurrCount + C0}|Acc]);
@@ -590,6 +613,18 @@ reduce_index_countby(List, {InputTerm, InputType}) ->
     {{results, list(riak_kv_pipe_index:index_keydata())},
         {facet_count, list({binary()|integer(), non_neg_integer()})}}.
 
+%% @doc
+%% Collate the reesults of a query, where a facet count is required as well
+%% as a sorted list of query results.  The sorted list of query results are
+%% constrained by a size limit, but the facet count will count all results.
+%% Reduce function args are:
+%% InputName(Sort) - attribute name of the term to be used in sorting
+%% InputName(Facet) - attribute name of the terms to be counted
+%% Keep - keep just 'this' attribute (in this case meaning both the sort and
+%% the facet attribute) or all attributes will be kept in the sorted result
+%% list
+%% MaxOrMin - whether the sort should order from the minimum or maximum value
+%% Count - the maximum number of results that will be kept in the result list
 -spec reduce_index_collateresults(list(riak_kv_pipe_index:index_keydata()|
                                         collated_results()),
                                 list()|{attribute_name(),
@@ -661,6 +696,42 @@ add_facet(FacetItem, FacetCountAcc, Incr) ->
         false ->
             lists:ukeysort(1, [{FacetItem, Incr}|FacetCountAcc])
     end.
+
+
+-spec reduce_index_tictac(list(riak_kv_pipe_index:index_keydata()|
+                                    leveled_tictac:tictactree()),
+                                list()|{attribute_name(),
+                                        attribute_name(),
+                                        leveled_tictac:tree_size()}) ->
+                                    [{tictac, leveled_tictactree:tictactree()}].
+reduce_index_tictac(List, ArgPropList) when is_list(ArgPropList) ->
+    reduce_index_tictac(List,
+        element(2, lists:keyfind(args, 1, ArgPropList)));
+reduce_index_tictac(List, {InputNameSeg, InputNameChange, TreeSize}) ->
+    {Trees, Keys} =
+        lists:partition(fun(E) -> leveled_tictac:is_tree(E) end,
+                            lists:flatten(List)),
+    InitAcc =
+        case Trees of
+            [] ->
+                leveled_tictac:new_tree(<<"index_tictac">>, TreeSize);
+            [H|Rest] ->
+                lists:foldl(fun(T, Acc) ->
+                                    leveled_tictac:merge_trees(T, Acc) end,
+                                H,
+                                Rest)
+        end,
+    FoldFun =
+        fun({{_Bucket, _Key}, KeyTermList}, Acc) when is_list(KeyTermList) ->
+            case {lists:keyfind(InputNameSeg, 1, KeyTermList),
+                    lists:keyfind(InputNameChange, 1, KeyTermList)} of
+                {{InputNameSeg, SegHash}, {InputNameChange, SegChangeHash}} ->
+                    leveled_tictac:add_hash(Acc, SegHash, SegChangeHash);
+                _ ->
+                    Acc
+            end
+        end,
+    lists:foldl(FoldFun, InitAcc, Keys).
 
 
 %% @spec reduce_set_union(boolean()) -> reduce_phase_spec()
@@ -947,6 +1018,35 @@ reduce_index_extractregex_test() ->
         {{<<"B2">>, <<"K2">>}, [{surname, <<"Charles">>}, {preferred, <<"John">>}]}],
     ?assertMatch(ExpR0, R0).
 
+reduce_index_extract_split_test() ->
+    A = {{<<"B1">>, <<"K1">>}, [{term, <<"19421209|Bremner|Billy">>}]},
+    B = {{<<"B2">>, <<"K2">>}, [{extract, 26}, {term, <<"19311227|Charles|John">>}]},
+    C = {{<<"B3">>, <<"K3">>}, [{extract, 99}, {term, <<"19431029|Hunter">>}]},
+    D = {{<<"B4">>, <<"K4">>}, undefined},
+    R0 = commassidem_check(fun reduce_index_extractsplit/2,
+                            {term,
+                                [dob, surname, preferred],
+                                this,
+                                <<"|">>},
+                            A, B, C, D),
+    ExpR0 =
+        [{{<<"B1">>, <<"K1">>},
+            [{dob, <<"19421209">>}, {surname, <<"Bremner">>}, {preferred, <<"Billy">>}]},
+        {{<<"B2">>, <<"K2">>},
+            [{dob, <<"19311227">>}, {surname, <<"Charles">>}, {preferred, <<"John">>}]}],
+    ?assertMatch(ExpR0, R0),
+    A1 = {{<<"B1">>, <<"K1">>}, [{term, <<"19421209#Bremner#Billy">>}]},
+    B1 = {{<<"B2">>, <<"K2">>}, [{extract, 26}, {term, <<"19311227#Charles#John">>}]},
+    C1 = {{<<"B3">>, <<"K3">>}, [{extract, 99}, {term, <<"19431029#Hunter">>}]},
+    D1 = {{<<"B4">>, <<"K4">>}, undefined},
+    R1 = commassidem_check(fun reduce_index_extractsplit/2,
+                            {term,
+                                [dob, surname, preferred],
+                                this,
+                                <<"#">>},
+                            A1, B1, C1, D1),
+    ?assertMatch(ExpR0, R1).
+
 reduce_index_byrange_test() ->
     A = {{<<"B1">>, <<"K1">>}, [{extint, 1}]},
     B = {{<<"B2">>, <<"K2">>}, [{extint, 2}]},
@@ -1186,9 +1286,9 @@ reduce_index_extractbuckets_test() ->
 
 reduce_index_extractcoalesce_test() ->
     A = {{<<"B1">>, <<"K1">>}, [{size, <<"small">>}, {int, 1}, {version, <<"v8">>}]},
-    B = {{<<"B1">>, <<"K2">>}, [{size, <<"big">>}, {int, 1}, {version, <<"v7">>}]},
+    B = {{<<"B1">>, <<"K2">>}, [{size, <<"big">>}, {int, 4}, {version, <<"v7">>}]},
     C = {{<<"B1">>, <<"K3">>}, [{size, <<"small">>}, {int, 1}, {version, <<"v7">>}]},
-    D = {{<<"B1">>, <<"K4">>}, [{size, <<"meh">>}, {int, 1}, {version, <<"v7">>}]},
+    D = {{<<"B1">>, <<"K4">>}, [{size, <<"meh">>}, {int, 2}, {version, <<"v7">>}]},
     E = {{<<"B1">>, <<"K5">>}, [{int, 1}, {version, <<"v7">>}]},
     F = {{<<"B1">>, <<"K6">>}, [{size, <<"meh">>}, {int, 1}]},
     R0A = commassidem_check(fun reduce_index_extractcoalesce/2,
@@ -1214,7 +1314,15 @@ reduce_index_extractcoalesce_test() ->
                     {{<<"B1">>, <<"K2">>}, [{vsize, <<"v7|big">>}]},
                     {{<<"B1">>, <<"K5">>}, [{vsize, <<"v7|">>}]},
                     {{<<"B1">>, <<"K6">>}, [{vsize, <<"|meh">>}]}],
-                    R1A).
+                    R1A),
+    R2A = commassidem_check(fun reduce_index_extractcoalesce/2,
+                                {[size, int], combo, this, tuple},
+                                A, B, C, D),
+    ?assertMatch([{{<<"B1">>, <<"K1">>}, [{combo, {<<"small">>, 1}}]},
+                    {{<<"B1">>, <<"K2">>}, [{combo, {<<"big">>, 4}}]},
+                    {{<<"B1">>, <<"K3">>}, [{combo, {<<"small">>, 1}}]},
+                    {{<<"B1">>, <<"K4">>}, [{combo, {<<"meh">>, 2}}]}],
+                    R2A).
 
 reduce_index_collatedresults_test() ->
     A = {{<<"B1">>, <<"K1">>}, [{size, <<"small">>}, {int, 1}, {version, <<"v8">>}]},

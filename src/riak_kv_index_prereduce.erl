@@ -25,7 +25,9 @@
 
 -export([extract_integer/1,
          extract_binary/1,
+         extract_split/1,
          extract_regex/1,
+         extract_binaryop/1,
          extract_mask/1,
          extract_hamming/1,
          extract_hash/1,
@@ -44,7 +46,8 @@
 
 -type keep() :: all|this.
 -type attribute_name() :: atom().
-
+-type attribute_output() :: binary()|integer()|tuple().
+-type binary_op() :: binary().
 
 %% @doc
 %% Extract an integer from a binary term:
@@ -110,6 +113,27 @@ extract_binary({InputTerm, OutputTerm, Keep,
     end.
 
 
+-spec extract_split({attribute_name(),
+                            list(attribute_name()),
+                            keep(),
+                            binary()}) ->
+                        riak_kv_pipe_index:prereduce_fun().
+extract_split({InputTerm, OutputTerms, Keep, Delim}) ->
+    EscapeChrs = [<<"[">>, <<"]">>, <<"(">>, <<")">>, <<"{">>, <<"}">>,
+                    <<"*">>, <<"+">>, <<"?">>, <<"|">>,
+                    <<"^">>, <<"$">>,
+                    <<".">>, <<"\\">>],
+    D =
+        case lists:member(Delim, EscapeChrs) of
+            true -> "\\" ++ binary_to_list(Delim);
+            false -> binary_to_list(Delim)
+        end,
+    FoldFun = fun(OT, Acc) -> Acc ++ "(?<" ++ atom_to_list(OT) ++ ">[^" ++ D ++ "]*)" ++ D end,
+    Re0 = lists:foldl(FoldFun, "", OutputTerms),
+    Re = lists:sublist(Re0, length(Re0) - length(D)),
+    extract_regex({InputTerm, OutputTerms, Keep, Re}).
+    
+
 %% @doc
 %% Extract a list of attribute/value pairs via regular expression, using the
 %% capture feature in regular expressions:
@@ -162,24 +186,71 @@ extract_regex({InputTerm, OutputTerms, Keep, Regex}) ->
                             non_neg_integer()}) ->
                         riak_kv_pipe_index:prereduce_fun().
 extract_mask({InputTerm, OutputTerm, Keep, Mask}) ->
+    extract_binaryop({{InputTerm, Mask}, OutputTerm, Keep, <<"band">>}).
+
+
+-spec extract_binaryop({{attribute_name(), attribute_name()|integer()},
+                            attribute_name(),
+                            keep(),
+                            binary_op()}) ->
+                        riak_kv_pipe_index:prereduce_fun().
+extract_binaryop({{PrimaryInput, SecondaryInput}, OutputTerm, Keep, Op}) ->
+    BinaryOp = get_binary_fun(Op),
     fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
-            case lists:keyfind(InputTerm, 1, KeyTermList) of
-                {InputTerm, Int} when is_integer(Int) ->
-                    Output = {OutputTerm, Int band Mask},
+            SecondaryInt =
+                case is_integer(SecondaryInput) of
+                    true ->
+                        SecondaryInput;
+                    false ->
+                        case lists:keyfind(SecondaryInput, 1, KeyTermList) of
+                            {SecondaryInput, SI} when is_integer(SI) ->
+                                SI;
+                            _ ->
+                                none
+                        end
+                end,
+            PrimaryInt =
+                case lists:keyfind(PrimaryInput, 1, KeyTermList) of
+                    {PrimaryInput, PI} when is_integer(PI) ->
+                        PI;
+                    _ ->
+                        none
+                end,
+            case {SecondaryInt, PrimaryInt} of
+                {A, B} when is_integer(A), is_integer(B) ->
+                    Output = BinaryOp(A, B),
                     KeyTermList0 =
-                        case Keep of
-                            all ->
-                                lists:ukeysort(1, [Output|KeyTermList]);
-                            this ->
-                                [Output]
-                        end,
+                        reduce_keepfun(Keep, {OutputTerm, Output}, KeyTermList),
                     {{Bucket, Key}, KeyTermList0};
-                _Other ->
+                _ ->
                     none
             end;
         (_Other) ->
             none
     end.
+
+
+-spec get_binary_fun(binary_op()) -> fun((integer(), integer()) -> integer()).
+get_binary_fun(<<"mult">>) ->
+    fun(A, B) -> A * B end;
+get_binary_fun(<<"plus">>) ->
+    fun(A, B) -> A + B end;
+get_binary_fun(<<"minus">>) ->
+    fun(A, B) -> A - B end;
+get_binary_fun(<<"div">>) ->
+    fun(A, B) -> A div B end;
+get_binary_fun(<<"rem">>) ->
+    fun(A, B) -> A rem B end;
+get_binary_fun(<<"band">>) ->
+    fun(A, B) -> A band B end;
+get_binary_fun(<<"bor">>) ->
+    fun(A, B) -> A bor B end;
+get_binary_fun(<<"bxor">>) ->
+    fun(A, B) -> A bxor B end;
+get_binary_fun(<<"bsl">>) ->
+    fun(A, B) -> A bsl B end;
+get_binary_fun(<<"bsr">>) ->
+    fun(A, B) -> A bsr B end.
 
 
 %% @doc
@@ -334,15 +405,17 @@ extract_buckets({InputTerm, OutputTerm, Keep, BucketList, MaxOutput}) ->
 %% Take a list of input attributes, and produce an output that joins each
 %% input value together, seperated by a provided delimiter
 %% InputTerms - a list of attribute values to be coalesced, where the attribute
-%% values are required to be binaries
+%% values are required to be binaries (if a delimiter is to be used)
 %% OutputTerm - the name of the attribute for the output
 %% Keep - set to `all` to keep all terms in the output, or `this` to make the
 %% decoded term the only attribute carried forward
-%% Delimiter - a binary used to seperate each input in the output
+%% Delimiter - a binary used to seperate each input in the output, or the
+%% keyword tuple will return the attribute values as a tuple, with undefined
+%% in place of any missing values
 -spec extract_coalesce({list(attribute_name()),
                             attribute_name(),
                             keep(),
-                            binary()}) ->
+                            binary()|tuple}) ->
                         riak_kv_pipe_index:prereduce_fun().
 extract_coalesce({InputTerms, OutputTerm, Keep, Delimiter})
         when is_binary(Delimiter), length(InputTerms) > 0 ->
@@ -361,6 +434,25 @@ extract_coalesce({InputTerms, OutputTerm, Keep, Delimiter})
                 lists:foldl(FoldFun, <<>>, InputTerms),
             KeyTermList0 =
                 reduce_keepfun(Keep, {OutputTerm, OutBin}, KeyTermList),
+            {{Bucket, Key}, KeyTermList0};
+        (_Other) ->
+            none
+    end;
+extract_coalesce({InputTerms, OutputTerm, Keep, tuple})
+                    when length(InputTerms) > 0 ->
+    fun({{Bucket, Key}, KeyTermList}) when is_list(KeyTermList) ->
+            FoldFun =
+                fun(InputTerm, Acc) ->
+                    case lists:keyfind(InputTerm, 1, KeyTermList) of
+                        {InputTerm, InputVal} ->
+                            [InputVal|Acc];
+                        _ ->
+                            [undefined|Acc]
+                    end
+                end,
+            OutT = list_to_tuple(lists:foldr(FoldFun, [], InputTerms)),
+            KeyTermList0 =
+                reduce_keepfun(Keep, {OutputTerm, OutT}, KeyTermList),
             {{Bucket, Key}, KeyTermList0};
         (_Other) ->
             none
@@ -543,10 +635,10 @@ log_identity(Term) ->
 %% @doc
 %% Handle keep in extract prereduce functions 
 -spec reduce_keepfun(keep(),
-                    {attribute_name(), binary()|integer()}|
-                        list({attribute_name(), binary()|integer()}),
-                    list({attribute_name(), binary()|integer()})) ->
-                        list({attribute_name(), binary()|integer()}).
+                    {attribute_name(), attribute_output()}|
+                        list({attribute_name(), attribute_output()}),
+                    list({attribute_name(), attribute_output()})) ->
+                        list({attribute_name(), attribute_output()}).
 reduce_keepfun(all, ExtractOutput, KeyTermList) when is_list(ExtractOutput) ->
     lists:ukeysort(1, KeyTermList ++ ExtractOutput);
 reduce_keepfun(all, ExtractOutput, KeyTermList) ->
@@ -561,7 +653,7 @@ reduce_keepfun(this, ExtractOutput, _KeyTermList) ->
 -spec reduce_keepfun(keep(),
                             {riak_object:bucket(), riak_object:key()},
                             {attribute_name(), binary()|integer()},
-                            list({attribute_name(), binary()|integer()})) ->
+                            list({attribute_name(), attribute_output()})) ->
                         riak_kv_pipe_index:index_keydata().
 reduce_keepfun(all, {Bucket, Key}, _Input, KeyTermList) ->
     {{Bucket, Key}, KeyTermList};

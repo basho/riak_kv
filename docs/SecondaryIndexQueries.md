@@ -206,12 +206,12 @@ To filter the results down, the date of birth needs to be range checked, the mat
 ```
 extract_regex(term) -> [dob, givennames, address]
 
-apply_range(dob) ->
-apply_regex(givennames) ->
+    apply_range(dob) ->
+    apply_regex(givennames) ->
 
-extract_encoded(address) -> address_sim
-extract_hamming(address_sim) -> address_distance
-apply_range(address_distance)
+    extract_encoded(address) -> address_sim
+    extract_hamming(address_sim) -> address_distance
+    apply_range(address_distance)
 
 ```
 
@@ -351,16 +351,17 @@ The sequence of functions required is:
 
 ```
 extract_binary(term) -> dob
-extract_binary(term) -> gpprovider
-extract_binary(term) -> conditions_b64
 
-extract_buckets(dob) -> age
-extract_encoded(conditions_b64) -> conditions_bin
-extract_integer(conditions_bin) -> conditions
-extract_mask(conditions) -> is_diabetic_int
-extract_buckets(is_diabetic_int) -> diabetic_flag
+    extract_binary(term) -> gpprovider
+    extract_binary(term) -> conditions_b64
 
-extract_coalesce([gpprovider, age, diabetic_flag]) -> counting_term
+    extract_buckets(dob) -> age
+    extract_encoded(conditions_b64) -> conditions_bin
+    extract_integer(conditions_bin) -> conditions
+    extract_mask(conditions) -> is_diabetic_int
+    extract_buckets(is_diabetic_int) -> diabetic_flag
+
+    extract_coalesce([gpprovider, age, diabetic_flag]) -> counting_term
 
 ```
 
@@ -474,11 +475,11 @@ The `reduce_index_countby` will produce a facet count for unique `counting_term`
 
 *Notes*
 
-Running this query on a single machine (so with constrained parallelisation), for a non-trivial number of patients (o(100K)) reveals that 30.3 % of the time is spent on the 2i query, 8.6% on the prereduce functions and 61.1% of the time in the reduce function.
+Running this query on a single machine (so with constrained parallelisation), for a non-trivial number of patients (o(100K)) reveals that 30.3% of the time is spent on the 2i query, 8.6% on the prereduce functions and 61.1% of the time in the reduce function.
 
-The response time of this query can be greatly improved by forcing the reduce function to be prereduced; in other words forcing the Map/Reduce system to pre-calculate a partial result locally at each vnode worker before sending to the single reduce function to combine.  This is possible, as all correctly defined reduce functions must be [commutative, associative and idempotent](https://docs.riak.com/riak/kv/latest/developing/app-guide/advanced-mapreduce/index.html#reduce-phase-functions).
+The response time of this query can be greatly improved by forcing the reduce function to be pre-reduced - in other words forcing the Map/Reduce system to pre-calculate a partial result locally at each vnode worker before sending to the single reduce function to combine.  This is possible, as all reduce functions must be commutative, associative and idempotent.
 
-To force a reduce statement to prereduce, *in the case of the first reduce statement in an index Map/Reduce operation*, then the `reduce` keyword should be changed to `prereduce`.
+To force a reduce statement to prereduce, *in the case of the first reduce statement in an index Map/Reduce operation*, then the `reduce` keyword should be changed to `prereduce`:
 
 ```
 {prereduce,
