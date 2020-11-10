@@ -57,6 +57,9 @@
     % interval, to allow exchanges to be re-scheduled.
 -define(EXCHANGE_PAUSE, 1000).
     % Pause between stages of the AAE exchange
+-define(MAX_RESULTS, 256).
+    % Max size of the AAE tree to be repaired each loop
+
 
 -record(state, {slice_allocations = [] :: list(allocation()),
                 slice_set_start :: erlang:timestamp()|undefined,
@@ -73,7 +76,8 @@
                 queue_name :: riak_kv_replrtq_src:queue_name() | undefined,
                 slot_info_fun :: fun(),
                 slice_count = ?SLICE_COUNT :: pos_integer(),
-                is_paused = false :: boolean()
+                is_paused = false :: boolean(),
+                last_exchange_start = os:timestamp() :: erlang:timestamp()
                 }).
 
 -type req_id() :: no_reply|integer().
@@ -319,9 +323,21 @@ handle_call({set_bucketsync, BucketList}, _From, State) ->
         State#state{scope = bucket,
                     bucket_list = BucketList}}.
 
-handle_cast({reply_complete, _ReqID, _Result}, State) ->
-    % Add a stat update in here
-    {noreply, State, ?LOOP_TIMEOUT};
+handle_cast({reply_complete, _ReqID, Result}, State) ->
+    Duration = timer:now_diff(os:timestamp(), State#state.last_exchange_start),
+    Pause = 
+        case Result of
+            {waiting_all_results, _Deltas} ->
+                % If the exchange ends with waiting all results, then consider
+                % this to be equivalent to a crash, and so requiring a full
+                % pause to backoff
+                ?CRASH_TIMEOUT;
+            _ ->
+                % If exchanges start slowing, then start increasing the pauses
+                % Gradually degrade in response to an increased workload
+                max(?LOOP_TIMEOUT, Duration div 1000)
+        end,
+    {noreply, State, Pause};
 handle_cast({no_sync, ReqID, From, _}, State) ->
     case ReqID of
         no_reply ->
@@ -451,6 +467,9 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                 end,
             RepairFun = generate_repairfun(ReqID0, State#state.queue_name),
             
+            MaxResults =
+                app_helper:get_env(riak_kv, ttaaefs_maxresults, ?MAX_RESULTS),
+
             {ok, ExPid, ExID} =
                 aae_exchange:start(Ref,
                                     [{LocalSendFun, all}],
@@ -458,12 +477,15 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                                     RepairFun,
                                     ReplyFun,
                                     Filter, 
-                                    [{transition_pause_ms, ?EXCHANGE_PAUSE}]),
+                                    [{transition_pause_ms, ?EXCHANGE_PAUSE},
+                                        {max_results, MaxResults},
+                                        {scan_timeout, ?CRASH_TIMEOUT div 2}]),
             
             lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
                             [ReqID0, ExID, ExPid]),
             
-            {State#state{bucket_list = NextBucketList},
+            {State#state{bucket_list = NextBucketList,
+                            last_exchange_start = os:timestamp()},
                 ?CRASH_TIMEOUT}
     end.
 

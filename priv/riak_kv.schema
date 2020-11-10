@@ -842,7 +842,7 @@
   {default, disabled}
 ]}.
 
-%% @doc for tictac full-sync what registered queue name on this cluster should
+%% @doc For tictac full-sync what registered queue name on this cluster should
 %% be use for passing references to data which needs to be replicated for AAE
 %% full-sync.  This queue name must be defined as a
 %% `riak_kv.replq<n>_queuename`, but need not be exlusive to full-sync (i.e. a
@@ -850,6 +850,14 @@
 {mapping, "ttaaefs_queuename", "riak_kv.ttaaefs_queuename", [
   {datatype, atom},
   {default, q1_ttaaefs}
+]}.
+
+%% @doc For tictac full-sync what is the maximum number of branches to be
+%% compared per exchange.  Reducing this will speed up clock compare queries,
+%% but will increase the number of exchanges required to complete a repair.
+{mapping, "ttaaefs_maxresults", "riak_kv.ttaaefs_maxresults", [
+  {datatype, integer},
+  {default, 256}
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this
@@ -957,7 +965,7 @@
 %% confirm it is fully sync'd
 {mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [
   {datatype, integer},
-  {default, 100}
+  {default, 24}
 ]}.
 
 %% @doc How many times per 24hour period should no data be checked to
