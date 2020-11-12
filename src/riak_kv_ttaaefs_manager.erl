@@ -600,16 +600,29 @@ local_sender({fetch_clocks, SegmentIDs}, C, ReturnFun, NVal) ->
     end;
 local_sender({merge_tree_range, B, KR, TS, SF, MR, HM}, C, ReturnFun, range) ->
     fun() ->
+        LMR = localise_modrange(MR),
+        %% riak_client expects modified range of form
+        %% {date, non_neg_integer(), non_neg_integer()}
+        %% where as the riak erlang clients just expect 
+        %% {non_neg_integer(), non_neg_integer()}
+        %% They keyword all must also be supported
         {ok, R} =
-            riak_client:aae_fold({merge_tree_range, B, KR, TS, SF, MR, HM}, C),
+            riak_client:aae_fold({merge_tree_range, B, KR, TS, SF, LMR, HM},
+                                    C),
         ReturnFun(R)
     end;
 local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, range) ->
     fun() ->
+        LMR = localise_modrange(MR),
         {ok, R} =
-            riak_client:aae_fold({fetch_clocks_range, B0, KR, SF, MR}, C),
+            riak_client:aae_fold({fetch_clocks_range, B0, KR, SF, LMR}, C),
         ReturnFun(R)
     end.
+
+localise_modrange(all) ->
+    all;
+localise_modrange({LowTime, HighTime}) ->
+    {date, LowTime, HighTime}.
 
 
 %% @doc
