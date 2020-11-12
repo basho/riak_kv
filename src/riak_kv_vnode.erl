@@ -1712,6 +1712,18 @@ handle_aaefold({fetch_clocks_nval, Nval, SegmentIDs},
                                 IndexNs, true, ReturnFun, Cntrl, Sender,
                                 State)
     end;
+handle_aaefold({fetch_clocks_nval, Nval, SegmentIDs, ModifiedRange}, 
+                    InitAcc, Nval,
+                    IndexNs, _Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    handle_aaefold({fetch_clocks_range,
+                        all,
+                        all,
+                        {segments, SegmentIDs, large},
+                        ModifiedRange},
+                    InitAcc, Nval,
+                    IndexNs, true, ReturnFun, Cntrl, Sender,
+                    State);
 handle_aaefold({merge_tree_range, 
                         Bucket, KeyRange, 
                         _TreeSize, 

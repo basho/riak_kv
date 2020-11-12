@@ -174,18 +174,14 @@ init([]) ->
 
     {SliceCount, Schedule} = 
         case Scope of
-            all ->
-                {NoCheck + AllCheck,
-                    [{no_sync, NoCheck}, {all_sync, AllCheck},
-                        {day_sync, 0}, {hour_sync, 0}]};
-            bucket ->
-                {NoCheck + AllCheck + HourCheck + DayCheck,
-                    [{no_sync, NoCheck}, {all_sync, AllCheck},
-                        {day_sync, DayCheck}, {hour_sync, HourCheck}]};
             disabled ->
                 {24, [{no_sync, 24}, {all_sync, 0}, 
-                        {day_sync, 0}, {hour_sync, 0}]}
+                        {day_sync, 0}, {hour_sync, 0}]};
                     % No sync once an hour if disabled
+            _ ->
+                {NoCheck + AllCheck + HourCheck + DayCheck,
+                    [{no_sync, NoCheck}, {all_sync, AllCheck},
+                        {day_sync, DayCheck}, {hour_sync, HourCheck}]}
         end,
 
     State1 = 
@@ -364,15 +360,27 @@ handle_cast({all_sync, ReqID, From, _Now}, State) ->
                         NextBucketList, Ref, State),
     {noreply, State0, Timeout};
 handle_cast({hour_sync, ReqID, From, Now}, State) ->
+    {MegaSecs, Secs, _MicroSecs} = Now,
+    UpperTime = MegaSecs * 1000000  + Secs,
+    LowerTime = UpperTime - 60 * 60,
     case State#state.scope of
         all ->
-            lager:warning("Invalid work_item=hour_sync for Scope=all"),
-            {noreply, State, ?INITIAL_TIMEOUT};
+            Filter =
+                {filter, all, all, small, all,
+                {LowerTime, UpperTime}, pre_hash},
+            {State0, Timeout} =
+                sync_clusters(From,
+                                ReqID,
+                                State#state.local_nval,
+                                State#state.remote_nval,
+                                Filter,
+                                undefined, 
+                                full,
+                                State),
+            {noreply, State0, Timeout};
         bucket ->
             [H|T] = State#state.bucket_list,
-            {MegaSecs, Secs, _MicroSecs} = Now,
-            UpperTime = MegaSecs * 1000000  + Secs,
-            LowerTime = UpperTime - 60 * 60,
+            
             % Note that the tree size is amended as well as the time range.
             % The bigger the time range, the bigger the tree.  Bigger trees
             % are less efficient when there is little change, but can more
@@ -387,15 +395,26 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
             {noreply, State0, Timeout}
     end;
 handle_cast({day_sync, ReqID, From, Now}, State) ->
+    {MegaSecs, Secs, _MicroSecs} = Now,
+    UpperTime = MegaSecs * 1000000  + Secs,
+    LowerTime = UpperTime - 60 * 60 * 24,
     case State#state.scope of
         all ->
-            lager:warning("Invalid work_item=day_sync for Scope=all"),
-            {noreply, State, ?INITIAL_TIMEOUT};
+            Filter =
+                {filter, all, all, small, all,
+                {LowerTime, UpperTime}, pre_hash},
+            {State0, Timeout} =
+                sync_clusters(From,
+                                ReqID,
+                                State#state.local_nval,
+                                State#state.remote_nval,
+                                Filter,
+                                undefined, 
+                                full,
+                                State),
+            {noreply, State0, Timeout};
         bucket ->
             [H|T] = State#state.bucket_list,
-            {MegaSecs, Secs, _MicroSecs} = Now,
-            UpperTime = MegaSecs * 1000000  + Secs,
-            LowerTime = UpperTime - 60 * 60 * 24,
             % Note that the tree size is amended as well as the time range.
             % The bigger the time range, the bigger the tree.  Bigger trees
             % are less efficient when there is little change, but can more
@@ -440,7 +459,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% @doc
 %% Sync two clusters - return an updated loop state and a timeout
 -spec sync_clusters(pid(), integer()|no_reply,
-                nval(), nval(), tuple(), list(), full|partial,
+                nval(), nval(), tuple(), list()|undefined, full|partial,
                 ttaaefs_state()) -> {ttaaefs_state(), pos_integer()}.
 sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
     {RemoteClient, RemoteMod} =
@@ -598,6 +617,14 @@ local_sender({fetch_clocks, SegmentIDs}, C, ReturnFun, NVal) ->
             riak_client:aae_fold({fetch_clocks_nval, NVal, SegmentIDs}, C),
         ReturnFun(R)
     end;
+local_sender({fetch_clocks, SegmentIDs, MR}, C, ReturnFun, NVal) ->
+    LMR = localise_modrange(MR),
+    fun() ->
+        {ok, R} =
+            riak_client:aae_fold({fetch_clocks_nval, NVal, SegmentIDs, LMR},
+                                    C),
+        ReturnFun(R)
+    end;
 local_sender({merge_tree_range, B, KR, TS, SF, MR, HM}, C, ReturnFun, range) ->
     fun() ->
         LMR = localise_modrange(MR),
@@ -651,6 +678,17 @@ remote_sender({fetch_branches, BranchIDs}, Client, Mod, ReturnFun, NVal) ->
 remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs) of
+            {ok, {keysclocks, KeysClocks}} ->
+                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
+                            KeysClocks));
+            {error, Error} ->
+                lager:warning("Error of ~w in clocks request", [Error]),
+                ReturnFun({error, Error})
+        end
+    end;
+remote_sender({fetch_clocks, SegmentIDs, MR}, Client, Mod, ReturnFun, NVal) ->
+    fun() ->
+        case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs, MR) of
             {ok, {keysclocks, KeysClocks}} ->
                 ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
                             KeysClocks));

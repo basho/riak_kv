@@ -104,6 +104,7 @@
         % n-val to give a combined view of those branches across the cluster.
         % This should be a fast, low-overhead operation
     {fetch_clocks_nval, n_val(), segment_filter()}|
+    {fetch_clocks_nval, n_val(), segment_filter(), modified_range()}|
         % Scan over all the keys for a given n_val in the tictac AAE key store
         % (which for native stores will be the actual key store), skipping 
         % those blocks of the store not containing keys in the segment filter,
@@ -111,6 +112,8 @@
         % cluster.  This is a background operation, but will have lower 
         % overheads than traditional store folds, subject to the size of the
         % segment filter being small - ideally o(10) or smaller
+        % Variant supported with a modified range, which will be converted into
+        % a fetch_clocks_range
 
     % Range-based AAE (requiring folds over native/parallel AAE key stores)
     {merge_tree_range, 
@@ -381,7 +384,7 @@ init(From={_, _, _}, [Query, Timeout]) ->
                         end
                 end
         end,
-    
+
     Req = riak_kv_requests:new_aaefold_request(Query, InitAcc, NVal), 
 
     State = #state{from = From, 
