@@ -1686,15 +1686,32 @@ handle_aaefold({merge_branch_nval, Nval, BranchIDs},
                                         ReturnFun),
     {noreply, State};
 handle_aaefold({fetch_clocks_nval, Nval, SegmentIDs}, 
-                    _InitAcc, Nval,
-                    IndexNs, _Filtered, ReturnFun, Cntrl, _Sender,
+                    InitAcc, Nval,
+                    IndexNs, _Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
-    aae_controller:aae_fetchclocks(Cntrl, 
-                                    IndexNs, 
-                                    SegmentIDs, 
-                                    ReturnFun, 
-                                    fun preflistfun/2),
-    {noreply, State};
+    case app_helper:get_env(riak_kv, aae_fetchclocks_repair, false) of
+        true ->
+            aae_controller:aae_fetchclocks(Cntrl, 
+                                            IndexNs, 
+                                            SegmentIDs, 
+                                            ReturnFun, 
+                                            fun preflistfun/2),
+            
+            {noreply, State};
+        false ->
+            %% Using fetch_clocks_range will mean that the AF3_QUEUE will be
+            %% used for scheduling the work not the aae_runner.  Also, the 
+            %% fetch clock query will not attempt to rebuild segments of the
+            %% tree cache - this is left to internal anti-entropy
+            handle_aaefold({fetch_clocks_range,
+                                    all,
+                                    all,
+                                    {segments, SegmentIDs, large},
+                                    all},
+                                InitAcc, Nval,
+                                IndexNs, true, ReturnFun, Cntrl, Sender,
+                                State)
+    end;
 handle_aaefold({merge_tree_range, 
                         Bucket, KeyRange, 
                         _TreeSize, 
@@ -2034,11 +2051,13 @@ handle_aaefold({list_buckets, Nval},
     {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State}.
 
 
--spec aaefold_setrangelimiter(riak_object:bucket(), 
+-spec aaefold_setrangelimiter(riak_object:bucket() | all, 
                                 all | {riak_object:key(), riak_object:key()})
                                     -> aae_keystore:range_limiter().
 %% @doc
 %% Convert the format of the range limiter to one compatible with the aae store
+aaefold_setrangelimiter(all, all) ->
+    all;
 aaefold_setrangelimiter(Bucket, all) ->
     {buckets, [Bucket]};
 aaefold_setrangelimiter(Bucket, {StartKey, EndKey}) ->
