@@ -366,7 +366,7 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
     case State#state.scope of
         all ->
             Filter =
-                {filter, all, all, small, all,
+                {filter, all, all, large, all,
                 {LowerTime, UpperTime}, pre_hash},
             {State0, Timeout} =
                 sync_clusters(From,
@@ -401,7 +401,7 @@ handle_cast({day_sync, ReqID, From, Now}, State) ->
     case State#state.scope of
         all ->
             Filter =
-                {filter, all, all, small, all,
+                {filter, all, all, large, all,
                 {LowerTime, UpperTime}, pre_hash},
             {State0, Timeout} =
                 sync_clusters(From,
