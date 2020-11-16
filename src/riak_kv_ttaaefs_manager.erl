@@ -787,7 +787,7 @@ generate_repairfun(ExchangeID, QueueName) ->
                                 LogRepairs} of
                             {false, true} ->
                                 lager:info(
-                                    "Repair B=~w K=~w SrcVC=~w SnkVC=~w",
+                                    "Repair B=~p K=~p SrcVC=~w SnkVC=~w",
                                         [B, K, SrcVC, SinkVCdecoded]),
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
                             {false, false} ->

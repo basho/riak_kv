@@ -165,7 +165,7 @@
 ]}.
 {mapping, "af3_worker_pool_size", "riak_kv.af3_worker_pool_size", [
   {datatype, integer},
-  {default, 2}
+  {default, 4}
 ]}.
 {mapping, "af4_worker_pool_size", "riak_kv.af4_worker_pool_size", [
   {datatype, integer},
@@ -978,16 +978,21 @@
 ]}.
 
 %% @doc How many times per 24hour period should the last hours data be checked
-%% to confirm it is fully sync'd.  This is relevant for per-bucket sync scope
-%% only, and will be ignored if all sync is enabled
+%% to confirm it is fully sync'd.  If nval (all) sync is used - the initial AAE
+%% comparison will be based on the full AAE tree, but the actual key and clock
+%% compare will consider data modified in the past hour only.  If deltas are
+%% related to older modifications, then this will fail to repair those deltas.
 {mapping, "ttaaefs_hourcheck", "riak_kv.ttaaefs_hourcheck", [
   {datatype, integer},
   {default, 0}
 ]}.
 
 %% @doc How many times per 24hour period should the last 24-hours of data be
-%% checked to confirm it is fully sync'd.  This si relevant for per-bucket
-%% sync scope only, and will be ignored if all sync is enabled
+%% checked to confirm it is fully sync'd.  If nval (all) sync is used - the
+%% initial AAE comparison will be based on the full AAE tree, but the actual
+%% key and clock compare will consider data modified in the past hour only.  If
+%% deltas are related to older modifications, then this will fail to repair
+%% those deltas.
 {mapping, "ttaaefs_daycheck", "riak_kv.ttaaefs_daycheck", [
   {datatype, integer},
   {default, 0}
@@ -996,6 +1001,16 @@
 %% @doc If Tictac AAE full-sync discovers keys to be repaired, should each key
 %% that is repaired be logged
 {mapping, "ttaaefs_logrepairs", "riak_kv.ttaaefs_logrepairs", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc If Tictac AAE sees difference in trees (for nval-based full
+%% comparisons) only, should it attempt to repair those trees as well as
+%% repairing any deltas.  Enabling this setting will change the concurrency
+%% of fetch_clock_nval queries run to find repairs.
+{mapping, "aae_fetchclocks_repair", "riak_kv.aae_fetchclocks_repair", [
     {datatype, {flag, enabled, disabled}},
     {default, disabled},
     {commented, enabled}
