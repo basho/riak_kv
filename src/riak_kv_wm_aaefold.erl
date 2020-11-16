@@ -251,11 +251,11 @@ malformed_cached_tree_request_filter(QType, undefined, _NVal, RD, Ctx) ->
 malformed_cached_tree_request_filter(QType, Filter0, NVal, RD, Ctx) ->
     case validate_cached_tree_filter(Filter0) of
         {invalid, Reason} ->
-            malformed_response("Invalid branch | segment fiter ~p",
+            malformed_response("Invalid branch | segment filter ~p",
                                [Reason],
                                RD,
                                Ctx);
-        {valid, Filter} ->
+        {valid, Filter} when is_list(Filter) ->
             Query =
                 case QType of
                     branch ->
@@ -263,10 +263,22 @@ malformed_cached_tree_request_filter(QType, Filter0, NVal, RD, Ctx) ->
                     keysclocks ->
                         {fetch_clocks_nval, NVal, Filter}
                 end,
-            {false, RD,
-             Ctx#ctx{
-               query = Query
-              }}
+            {false, RD, Ctx#ctx{query = Query}};
+        {valid, Filter} when is_record(Filter, filter) ->
+            case QType of
+                keysclocks ->
+                    Query =
+                        {fetch_clocks_nval,
+                            NVal,
+                            element(2, Filter#filter.segment_filter),
+                            Filter#filter.date_range},
+                    {false, RD, Ctx#ctx{query = Query}};
+                InvalidQType ->
+                    malformed_response("Invalid filter for ~p",
+                            [InvalidQType],
+                            RD,
+                            Ctx)
+            end
     end.
 
 %% @private validate the request for range tree query and populate
@@ -630,13 +642,16 @@ validate_int(String) ->
             {invalid, String}
     end.
 
--spec validate_cached_tree_filter(string()) -> {valid, list(non_neg_integer())} |
-                                               {invalid, Reason::any()}.
+-spec validate_cached_tree_filter(string()) ->
+                                        {valid, list(non_neg_integer())} |
+                                        {valid, filter()} |
+                                        {invalid, Reason::any()}.
 validate_cached_tree_filter(String) ->
     try mochijson2:decode(base64:decode(String)) of
         Filter when is_list(Filter) ->
-            %% TODO: should check all are integer?
             {valid, Filter};
+        {struct, Filter} ->
+            validate_range_filter(Filter, [?SEG_FILT, ?DATE_RANGE], #filter{});
         Other ->
             {invalid, Other}
     catch _:_ ->
