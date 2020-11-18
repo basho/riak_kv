@@ -714,8 +714,6 @@ maybe_delete(StateData=#state{n = N, preflist2=Sent, trace=Trace,
                     ["maybe_delete", "triggered"]),
             riak_kv_vnode:del(IdealNodes, BKey, ReqId);
         _ ->
-            lager:info("DeleteDebug: No delete for ~p as NotCustomN ~w length(N) ~w",
-                        [element(2, BKey), NotCustomN, length(IdealNodes)]),
             ?DTRACE(Trace, ?C_GET_FSM_MAYBE_DELETE, [0],
                     ["maybe_delete", "nop"]),
             nop

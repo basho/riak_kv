@@ -378,8 +378,6 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                        delete;
                    _ ->
                        % maybe_log_old_vclock(Results),
-                       lager:info("DeleteDebug: not all vnodes responded for ~p",
-                                    [riak_object:key(MObj)]),
                        nop
                end;
            [] when ObjState == notfound ->
@@ -387,12 +385,8 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
            [] ->
                % maybe_log_old_vclock(Results),
                nop;
-            _ when ObjState == tombstone ->
-                lager:info("DeleteDebug: Repairs but tombstone for ~p",
-                            [riak_object:key(MObj)]),
-                {read_repair, ReadRepairs, MObj};
-            _ ->
-                {read_repair, ReadRepairs, MObj}
+           _ ->
+               {read_repair, ReadRepairs, MObj}
        end,
     {Action, GetCore#getcore{merged = Merged}}.
 
