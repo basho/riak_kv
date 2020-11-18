@@ -33,6 +33,8 @@
 
 -include("riak_kv_dtrace.hrl").
 
+-define(TOMB_PAUSE, 10).
+
 start_link(ReqId, Bucket, Key, Options, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
                                                Options, Timeout, Client, undefined,
@@ -75,6 +77,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
     end;
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
+    TombPause = app_helper:get_env(riak_kv, tombstone_pause, ?TOMB_PAUSE),
     ?DTRACE(?C_DELETE_INIT2, [0], []),
     case get_w_options(Bucket, Options) of
         {error, Reason} ->
@@ -94,6 +97,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
                     ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
+                    timer:sleep(TombPause),
                     Res = riak_client:get(Bucket, Key, all, AsyncTimeout, C2),
                     ?DTRACE(?C_DELETE_REAPER_GET_DONE, [1], [<<"reap">>]),
                     Res;
