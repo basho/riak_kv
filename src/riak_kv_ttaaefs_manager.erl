@@ -59,6 +59,9 @@
     % Pause between stages of the AAE exchange
 -define(MAX_RESULTS, 256).
     % Max size of the AAE tree to be repaired each loop
+-define(QUIET_FACTOR, 8).
+    % In the absence of repair activity reduce the max results by the quiet
+    % factor
 
 
 -record(state, {slice_allocations = [] :: list(allocation()),
@@ -463,6 +466,30 @@ code_change(_OldVsn, State, _Extra) ->
 %%%============================================================================
 
 
+-spec set_quietener(work_item()) -> ok.
+set_quietener(all_sync) ->
+    application:set_env(riak_kv, ttaaefs_quieten_allsync, true);
+set_quietener(day_sync) ->
+    application:set_env(riak_kv, ttaaefs_quieten_daysync, true);
+set_quietener(hour_sync) ->
+    application:set_env(riak_kv, ttaaefs_quieten_hoursync, true).
+
+-spec get_quietener(work_item()) -> boolean().
+get_quietener(all_sync) ->
+    application:get_env(riak_kv, ttaaefs_quieten_allsync, false);
+get_quietener(day_sync) ->
+    application:get_env(riak_kv, ttaaefs_quieten_daysync, false);
+get_quietener(hour_sync) ->
+    application:get_env(riak_kv, ttaaefs_quieten_hoursync, false).
+
+-spec release_quietener(work_item()) -> ok.
+release_quietener(all_sync) ->
+    application:set_env(riak_kv, ttaaefs_quieten_allsync, false);
+release_quietener(day_sync) ->
+    application:set_env(riak_kv, ttaaefs_quieten_daysync, false);
+release_quietener(hour_sync) ->
+    application:set_env(riak_kv, ttaaefs_quieten_hoursync, false).
+
 %% @doc
 %% Sync two clusters - return an updated loop state and a timeout
 -spec sync_clusters(pid(), integer()|no_reply,
@@ -471,7 +498,7 @@ code_change(_OldVsn, State, _Extra) ->
                 work_item()) ->
                     {ttaaefs_state(), pos_integer()}.
 sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
-                Ref, State, Type) ->
+                Ref, State, WorkType) ->
     {RemoteClient, RemoteMod} =
         init_client(State#state.peer_protocol,
                     State#state.peer_ip,
@@ -495,15 +522,33 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                         ReqID
                 end,
             
+            % When there has been no recent repair activity want to quieten the
+            % max results to improve speed.  When clock_compares are required
+            % but not few repairs result - reducing the max results reduces the
+            % overhead of unnecessary work.
             MaxResults =
                 app_helper:get_env(riak_kv, ttaaefs_maxresults, ?MAX_RESULTS),
+            QuietFactor =
+                app_helper:get_env(riak_kv,
+                                    ttaaefs_quietfactor,
+                                    ?QUIET_FACTOR),
+            QuitenedMaxResults =
+                case {get_quietener(WorkType), MaxResults, QuietFactor} of
+                    {true, MR, QF} when MR >= 8, QF >= 1 ->
+                        MaxResults div QuietFactor;
+                    _ ->
+                        MaxResults
+                end,
+            % Always assume the next query will need to be quietened.  The
+            % boost should be set by the repair fun if not       
+            set_quietener(WorkType),
 
             RepairFun =
                 generate_repairfun(ReqID0,
                                     State#state.queue_name,
-                                    MaxResults,
+                                    QuitenedMaxResults,
                                     Ref,
-                                    Type),
+                                    WorkType),
 
             {ok, ExPid, ExID} =
                 aae_exchange:start(Ref,
@@ -513,7 +558,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                     ReplyFun,
                                     Filter, 
                                     [{transition_pause_ms, ?EXCHANGE_PAUSE},
-                                        {max_results, MaxResults},
+                                        {max_results, QuitenedMaxResults},
                                         {scan_timeout, ?CRASH_TIMEOUT div 2}]),
             
             lager:info("Starting full-sync ReqID=~w exchange=~s pid=~w",
@@ -787,7 +832,7 @@ generate_replyfun(ReqID, From, StopClientFun) ->
                             non_neg_integer(),
                             full|partial,
                             work_item()) -> aae_exchange:repair_fun().
-generate_repairfun(ExchangeID, QueueName, _MaxResults, Ref, WorkType) ->
+generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
     LogRepairs = app_helper:get_env(riak_kv, ttaaefs_logrepairs, false),
     fun(RepairList) ->
         FoldFun =
@@ -817,11 +862,16 @@ generate_repairfun(ExchangeID, QueueName, _MaxResults, Ref, WorkType) ->
             end,
         {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
         lager:info("AAE exchange=~w work_item=~w type=~w shows sink ahead " ++
-                        "for key_count=~w keys", 
-                    [ExchangeID, WorkType, Ref, SinkDCount]),
+                        "for key_count=~w keys limited by max_results=~w", 
+                    [ExchangeID, WorkType, Ref, SinkDCount, MaxResults]),
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
         report_repairs(ExchangeID, ToRepair, Ref, WorkType),
-        ok
+        case length(ToRepair) > MaxResults div 2 of
+            true ->
+                release_quietener(WorkType);
+            false ->
+                ok
+        end
     end.
 
 

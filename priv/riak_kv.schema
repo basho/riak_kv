@@ -118,9 +118,12 @@
 %% conflicting leaves will be compared on each exchange.  If there are issues
 %% with query timeouts this may be halved.  Large backlogs may be reduced
 %% faster by doubling.  There are 1M segments in a standard tree overall.
+%% If an exchange of a given type results in fewer repairs than max results
+%% it will be quietened to request 1/8th the max results until repairs are
+%% generated again.
 {mapping, "tictacaae_maxresults", "riak_kv.tictacaae_maxresults", [
   {datatype, integer},
-  {default, 256},
+  {default, 512},
   hidden
 ]}.
 
