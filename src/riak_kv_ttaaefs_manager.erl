@@ -94,6 +94,8 @@
 -type ttaaefs_state() :: #state{}.
 -type ssl_credentials() :: {string(), string(), string(), string()}.
     %% {cacert_filename, cert_filename, key_filename, username}
+-type repair_reference() ::
+    {riak_object:bucket(), riak_object:key(), vclock:vclock(), any()}.
 
 
 -export_type([work_item/0]).
@@ -818,7 +820,7 @@ generate_repairfun(ExchangeID, QueueName, _MaxResults, Ref, WorkType) ->
                         "for key_count=~w keys", 
                     [ExchangeID, WorkType, Ref, SinkDCount]),
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
-        report_repairs(ExchangeID, RepairList, Ref, WorkType),
+        report_repairs(ExchangeID, ToRepair, Ref, WorkType),
         ok
     end.
 
@@ -842,6 +844,11 @@ decode_clock(none) ->
 decode_clock(EncodedClock) ->
     riak_object:decode_vclock(EncodedClock).
 
+
+-spec report_repairs(integer(),
+                        list(repair_reference()),
+                        full|partial,
+                        work_item()) -> ok.
 report_repairs(ExchangeID, RepairList, Ref, WorkType) ->
     FoldFun =
         fun({B, _K, SrcVC, _Action}, Acc) ->
