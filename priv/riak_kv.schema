@@ -993,7 +993,7 @@
 %% @doc How many times per 24hour period should the last 24-hours of data be
 %% checked to confirm it is fully sync'd.  If nval (all) sync is used - the
 %% initial AAE comparison will be based on the full AAE tree, but the actual
-%% key and clock compare will consider data modified in the past hour only.  If
+%% key and clock compare will consider data modified in the past day only.  If
 %% deltas are related to older modifications, then this will fail to repair
 %% those deltas.
 {mapping, "ttaaefs_daycheck", "riak_kv.ttaaefs_daycheck", [

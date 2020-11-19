@@ -324,7 +324,7 @@ handle_call({set_bucketsync, BucketList}, _From, State) ->
         State#state{scope = bucket,
                     bucket_list = BucketList}}.
 
-handle_cast({reply_complete, _ReqID, Result}, State) ->
+handle_cast({reply_complete, ReqID, Result}, State) ->
     Duration = timer:now_diff(os:timestamp(), State#state.last_exchange_start),
     Pause = 
         case Result of
@@ -332,11 +332,13 @@ handle_cast({reply_complete, _ReqID, Result}, State) ->
                 % If the exchange ends with waiting all results, then consider
                 % this to be equivalent to a crash, and so requiring a full
                 % pause to backoff
+                lager:info("exchange=~w failed to complete in duration=~w s",
+                                [ReqID, Duration div 1000000]),
                 ?CRASH_TIMEOUT;
             _ ->
                 % If exchanges start slowing, then start increasing the pauses
                 % Gradually degrade in response to an increased workload
-                max(?LOOP_TIMEOUT, Duration div 1000)
+                max(?LOOP_TIMEOUT, (Duration div 1000) div 2)
         end,
     {noreply, State, Pause};
 handle_cast({no_sync, ReqID, From, _}, State) ->
@@ -486,8 +488,13 @@ get_quietener(hour_sync) ->
 release_quietener(all_sync) ->
     application:set_env(riak_kv, ttaaefs_quieten_allsync, false);
 release_quietener(day_sync) ->
+    % If making traction with easier syncs - quieten harder ones
+    set_quietener(all_sync),
     application:set_env(riak_kv, ttaaefs_quieten_daysync, false);
 release_quietener(hour_sync) ->
+    % If making traction with easier syncs - quieten harder ones
+    set_quietener(day_sync),
+    set_quietener(all_sync),
     application:set_env(riak_kv, ttaaefs_quieten_hoursync, false).
 
 %% @doc
@@ -561,8 +568,9 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                         {max_results, QuitenedMaxResults},
                                         {scan_timeout, ?CRASH_TIMEOUT div 2}]),
             
-            lager:info("Starting full-sync ReqID=~w exchange=~s pid=~w",
-                            [ReqID0, ExID, ExPid]),
+            lager:info("Starting ~w full-sync work_item=~w " ++ 
+                                "ReqID=~w exchange=~s pid=~w",
+                            [Ref, WorkType, ReqID0, ExID, ExPid]),
             
             {State#state{bucket_list = NextBucketList,
                             last_exchange_start = os:timestamp()},
@@ -961,7 +969,7 @@ take_next_workitem([NextAlloc|T], Wants,
         true ->
             {NextAction, ScheduleSeconds - NowSeconds, T, ScheduleStartTime};
         false ->
-            lager:info("Tictac AAE skipping action ~w as manager running"
+            lager:info("Tictac AAE skipping action ~w as manager running "
                         ++ "~w seconds late",
                         [NextAction, NowSeconds - ScheduleSeconds]),
             take_next_workitem(T, Wants,
