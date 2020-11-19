@@ -357,7 +357,8 @@ handle_cast({all_sync, ReqID, From, _Now}, State) ->
         end,
     {State0, Timeout} =
         sync_clusters(From, ReqID, LNVal, RNVal, Filter,
-                        NextBucketList, Ref, State),
+                        NextBucketList, Ref, State,
+                        all_sync),
     {noreply, State0, Timeout};
 handle_cast({hour_sync, ReqID, From, Now}, State) ->
     {MegaSecs, Secs, _MicroSecs} = Now,
@@ -376,7 +377,8 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
                                 Filter,
                                 undefined, 
                                 full,
-                                State),
+                                State,
+                                hour_sync),
             {noreply, State0, Timeout};
         bucket ->
             [H|T] = State#state.bucket_list,
@@ -391,7 +393,8 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
             NextBucketList = T ++ [H],
             {State0, Timeout} =
                 sync_clusters(From, ReqID, range, range, Filter,
-                                NextBucketList, partial, State),
+                                NextBucketList, partial, State,
+                                hour_sync),
             {noreply, State0, Timeout}
     end;
 handle_cast({day_sync, ReqID, From, Now}, State) ->
@@ -411,7 +414,8 @@ handle_cast({day_sync, ReqID, From, Now}, State) ->
                                 Filter,
                                 undefined, 
                                 full,
-                                State),
+                                State,
+                                day_sync),
             {noreply, State0, Timeout};
         bucket ->
             [H|T] = State#state.bucket_list,
@@ -425,7 +429,8 @@ handle_cast({day_sync, ReqID, From, Now}, State) ->
             NextBucketList = T ++ [H],
             {State0, Timeout} =
                 sync_clusters(From, ReqID, range, range, Filter,
-                                NextBucketList, partial, State),
+                                NextBucketList, partial, State,
+                                day_sync),
             {noreply, State0, Timeout}
     end.
 
@@ -460,8 +465,11 @@ code_change(_OldVsn, State, _Extra) ->
 %% Sync two clusters - return an updated loop state and a timeout
 -spec sync_clusters(pid(), integer()|no_reply,
                 nval(), nval(), tuple(), list()|undefined, full|partial,
-                ttaaefs_state()) -> {ttaaefs_state(), pos_integer()}.
-sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
+                ttaaefs_state(),
+                work_item()) ->
+                    {ttaaefs_state(), pos_integer()}.
+sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
+                Ref, State, Type) ->
     {RemoteClient, RemoteMod} =
         init_client(State#state.peer_protocol,
                     State#state.peer_ip,
@@ -484,10 +492,16 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                     _ ->
                         ReqID
                 end,
-            RepairFun = generate_repairfun(ReqID0, State#state.queue_name),
             
             MaxResults =
                 app_helper:get_env(riak_kv, ttaaefs_maxresults, ?MAX_RESULTS),
+
+            RepairFun =
+                generate_repairfun(ReqID0,
+                                    State#state.queue_name,
+                                    MaxResults,
+                                    Ref,
+                                    Type),
 
             {ok, ExPid, ExID} =
                 aae_exchange:start(Ref,
@@ -500,7 +514,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                                         {max_results, MaxResults},
                                         {scan_timeout, ?CRASH_TIMEOUT div 2}]),
             
-            lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
+            lager:info("Starting full-sync ReqID=~w exchange=~s pid=~w",
                             [ReqID0, ExID, ExPid]),
             
             {State#state{bucket_list = NextBucketList,
@@ -766,12 +780,14 @@ generate_replyfun(ReqID, From, StopClientFun) ->
 %% the object should be repaired by requeueing.  Requeueing will cause the
 %% object to be re-replicated to all destination clusters (not just a specific
 %% sink cluster)
--spec generate_repairfun(integer(), riak_kv_replrtq_src:queue_name())
-                                                -> aae_exchange:repair_fun().
-generate_repairfun(ExchangeID, QueueName) ->
+-spec generate_repairfun(integer(),
+                            riak_kv_replrtq_src:queue_name(),
+                            non_neg_integer(),
+                            full|partial,
+                            work_item()) -> aae_exchange:repair_fun().
+generate_repairfun(ExchangeID, QueueName, _MaxResults, Ref, WorkType) ->
     LogRepairs = app_helper:get_env(riak_kv, ttaaefs_logrepairs, false),
     fun(RepairList) ->
-        lager:info("Repair to list of length ~w", [length(RepairList)]),
         FoldFun =
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
@@ -798,13 +814,12 @@ generate_repairfun(ExchangeID, QueueName) ->
                 end
             end,
         {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
-        lager:info("AAE exchange ~w shows sink ahead for ~w keys", 
-                    [ExchangeID, SinkDCount]),
-        lager:info("AAE exchange ~w outputs ~w keys to be repaired",
-                    [ExchangeID, length(ToRepair)]),
+        lager:info("AAE exchange=~w work_item=~w type=~w shows sink ahead " ++
+                        "for key_count=~w keys", 
+                    [ExchangeID, WorkType, Ref, SinkDCount]),
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
-        lager:info("AAE exchange ~w has requeue complete for ~w keys",
-                    [ExchangeID, length(ToRepair)])
+        report_repairs(ExchangeID, RepairList, Ref, WorkType),
+        ok
     end.
 
 
@@ -826,6 +841,28 @@ decode_clock(none) ->
     none;
 decode_clock(EncodedClock) ->
     riak_object:decode_vclock(EncodedClock).
+
+report_repairs(ExchangeID, RepairList, Ref, WorkType) ->
+    FoldFun =
+        fun({B, _K, SrcVC, _Action}, Acc) ->
+            LMD = vclock:last_modified(SrcVC),
+            case lists:keyfind(B, 1, Acc) of
+                {B, C, LowMD, HighMD} ->
+                    UpdTuple = {B, C + 1, min(LMD, LowMD), max(LMD, HighMD)},
+                    lists:keyreplace(B, 1, Acc, UpdTuple);
+                _ ->
+                    [{B, 1, LMD, LMD}|Acc]
+            end
+        end,
+    PerBucketData = lists:foldl(FoldFun, [], RepairList),
+    LogFun =
+        fun({B, C, MinDT, MaxDT}) ->
+            lager:info("AAE exchange=~w work_item=~w type=~w repaired " ++ 
+                            "key_count=~w for " ++
+                            "bucket=~p with low date ~p high date ~p",
+                        [ExchangeID, WorkType, Ref, C, B, MinDT, MaxDT])
+        end,
+    lists:foreach(LogFun, PerBucketData).
 
 %% @doc
 %% Take the next work item from the list of allocations, assuming that the
