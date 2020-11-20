@@ -221,10 +221,11 @@
 -define(AF2_QUEUE, riak_core_node_worker_pool:af2()).
     %% Assured Forwarding - pool 2
     %% Any other handle_coverage that responds queue (e.g. leveled keylisting)
+    %% Replication AAE queries without time bounds
 -define(AF3_QUEUE, riak_core_node_worker_pool:af3()).
     %% Assured Forwarding - pool 3
-    %% AAE queries (per-bucket with/without key_range).  AAE queries against
-    %% the cached tree do not use a pool (e.g. n_val queries)
+    %% AAE queries (per-bucket with/without key_range).  Time-bound nval-based
+    %% AAE cache queries (all_sync queries are in AF2_QUEUE
 -define(AF4_QUEUE, riak_core_node_worker_pool:af4()).
     %% Assured Forwarding - pool 4
     %% operational information queries (e.g. object_stats).  Replication folds
@@ -1771,7 +1772,8 @@ handle_aaefold({merge_tree_range,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 Elements),
-    {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+    {select_queue(select_replfold_queue(ModifiedRange), State), 
+        {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({fetch_clocks_range, 
                         Bucket, KeyRange, 
                         SegmentFilter, ModifiedRange},
@@ -1795,7 +1797,7 @@ handle_aaefold({fetch_clocks_range,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{clock, null}]),
-    {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+    {select_queue(select_replfold_queue(ModifiedRange), State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({repl_keys_range,
                         Bucket, KeyRange,
                         ModifiedRange,
@@ -2084,6 +2086,13 @@ aaefold_setmodifiedlimiter({date, LowModDate, HighModDate})
     {LowModDate, HighModDate};
 aaefold_setmodifiedlimiter(_) ->
     all.
+
+-spec select_replfold_queue({date, pos_integer(), pos_integer()} | all)
+                            -> riak_core_node_worker_pool:worker_pool().
+select_replfold_queue(all) ->
+    ?AF2_QUEUE;
+select_replfold_queue(_) ->
+    ?AF3_QUEUE.
 
 aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered) ->
     fun(BF, KF, EFs, Acc) ->

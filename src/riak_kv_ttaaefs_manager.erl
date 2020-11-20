@@ -52,7 +52,7 @@
 -define(LOOP_TIMEOUT, 15000).
     % Always wait at least 15s after completing an action before
     % prompting another
--define(CRASH_TIMEOUT, 3600 * 1000).
+-define(CRASH_TIMEOUT, 7200 * 1000).
     % Assume that an exchange has crashed if not response received in this
     % interval, to allow exchanges to be re-scheduled.
 -define(EXCHANGE_PAUSE, 1000).
