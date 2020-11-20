@@ -488,13 +488,8 @@ get_quietener(hour_sync) ->
 release_quietener(all_sync) ->
     application:set_env(riak_kv, ttaaefs_quieten_allsync, false);
 release_quietener(day_sync) ->
-    % If making traction with easier syncs - quieten harder ones
-    set_quietener(all_sync),
     application:set_env(riak_kv, ttaaefs_quieten_daysync, false);
 release_quietener(hour_sync) ->
-    % If making traction with easier syncs - quieten harder ones
-    set_quietener(day_sync),
-    set_quietener(all_sync),
     application:set_env(riak_kv, ttaaefs_quieten_hoursync, false).
 
 %% @doc
