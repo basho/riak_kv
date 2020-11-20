@@ -762,8 +762,11 @@ remote_sender({fetch_clocks, SegmentIDs, MR}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs, MR) of
             {ok, {keysclocks, KeysClocks}} ->
-                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
-                            KeysClocks));
+                MapFun =
+                    fun({{B, K}, VC}) ->
+                        {B, K, decode_clock(VC)}
+                    end,
+                ReturnFun(lists:map(MapFun, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in clocks request", [Error]),
                 ReturnFun({error, Error})
