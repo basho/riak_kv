@@ -748,8 +748,11 @@ remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs) of
             {ok, {keysclocks, KeysClocks}} ->
-                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
-                            KeysClocks));
+                MapFun =
+                    fun({{B, K}, VC}) ->
+                        {B, K, decode_clock(VC)}
+                    end,
+                ReturnFun(lists:map(MapFun, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in clocks request", [Error]),
                 ReturnFun({error, Error})
@@ -847,19 +850,17 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
                 % The erlify_aae_keyclock will have base64 decoded the clock
-                SinkVCdecoded = decode_clock(SinkVC),
-                case vclock_dominates(SinkVCdecoded, SrcVC) of
+                case vclock_dominates(SinkVC, SrcVC) of
                     true ->
                         {SourceL, SinkC + 1};
                     false ->
                         % If the vector clock in the source is not dominated
                         % by the sink, then we should replicate if it differs
-                        case {vclock_equal(SrcVC, SinkVCdecoded),
-                                LogRepairs} of
+                        case {vclock_equal(SrcVC, SinkVC), LogRepairs} of
                             {false, true} ->
                                 lager:info(
                                     "Repair B=~p K=~p SrcVC=~w SnkVC=~w",
-                                        [B, K, SrcVC, SinkVCdecoded]),
+                                        [B, K, SrcVC, SinkVC]),
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
                             {false, false} ->
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
