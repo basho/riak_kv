@@ -855,12 +855,25 @@
   {default, q1_ttaaefs}
 ]}.
 
-%% @doc For tictac full-sync what is the maximum number of branches to be
+%% @doc For tictac full-sync what is the maximum number of AAE segments to be
 %% compared per exchange.  Reducing this will speed up clock compare queries,
 %% but will increase the number of exchanges required to complete a repair.
+%% If using range_sync to speed-up repairs, this can be reduced as the
+%% range_sync maxresults will be boosted by the ttaaefs_rangeboost
 {mapping, "ttaaefs_maxresults", "riak_kv.ttaaefs_maxresults", [
   {datatype, integer},
-  {default, 256}
+  {default, 128}
+]}.
+
+%% @doc For tictac full-sync what is the maximum number of AAE segments to be
+%% compared per exchange.  When running a range_sync query this will be the
+%% ttaaefs_max results * ttaaefs_rangeboost.
+%% When using range_check, a small maxresults can be used, ineffecting making
+%% other *_check syncs can be treated as discovery queries (to find the range_check
+%% for the range_check to do the heavy lifting) 
+{mapping, "ttaaefs_rangeboost", "riak_kv.ttaaefs_rangeboost", [
+  {datatype, integer},
+  {default, 4}
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this
@@ -997,6 +1010,15 @@
 %% deltas are related to older modifications, then this will fail to repair
 %% those deltas.
 {mapping, "ttaaefs_daycheck", "riak_kv.ttaaefs_daycheck", [
+  {datatype, integer},
+  {default, 0}
+]}.
+
+%% @doc How many times per 24hour period should the a range_check be run.  By,
+%% default range_checks will do nothing, but if another check has discovered
+%% a broken range - then the range checks will try and resolve deltas for this
+%% broken range.  Maxresults for range_check are subject to the range_boost.
+{mapping, "ttaaefs_rangecheck", "riak_kv.ttaaefs_rangecheck", [
   {datatype, integer},
   {default, 0}
 ]}.

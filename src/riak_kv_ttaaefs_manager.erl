@@ -57,11 +57,10 @@
     % interval, to allow exchanges to be re-scheduled.
 -define(EXCHANGE_PAUSE, 1000).
     % Pause between stages of the AAE exchange
--define(MAX_RESULTS, 256).
-    % Max size of the AAE tree to be repaired each loop
--define(QUIET_FACTOR, 8).
-    % In the absence of repair activity reduce the max results by the quiet
-    % factor
+-define(MAX_RESULTS, 64).
+    % Max nu,ber of segments in the AAE tree to be repaired each loop
+-define(RANGE_BOOST, 8).
+    % Factor to boost range_check max_results values
 
 
 -record(state, {slice_allocations = [] :: list(allocation()),
@@ -77,7 +76,7 @@
                 local_nval :: pos_integer()|undefined,
                 remote_nval :: pos_integer()|undefined,
                 queue_name :: riak_kv_replrtq_src:queue_name() | undefined,
-                slot_info_fun :: fun(),
+                slot_info_fun :: fun(() -> {pos_integer(), pos_integer()}),
                 slice_count = ?SLICE_COUNT :: pos_integer(),
                 is_paused = false :: boolean(),
                 last_exchange_start = os:timestamp() :: erlang:timestamp()
@@ -88,7 +87,7 @@
 -type client_ip() :: string().
 -type client_port() :: pos_integer().
 -type nval() :: pos_integer()|range. % Range queries do not have an n-val
--type work_item() :: no_sync|all_sync|day_sync|hour_sync.
+-type work_item() :: no_sync|all_sync|day_sync|hour_sync|range_sync.
 -type schedule_want() :: {work_item(), non_neg_integer()}.
 -type slice() :: pos_integer().
 -type allocation() :: {slice(), work_item()}.
@@ -176,17 +175,20 @@ init([]) ->
     AllCheck = app_helper:get_env(riak_kv, ttaaefs_allcheck),
     HourCheck = app_helper:get_env(riak_kv, ttaaefs_hourcheck),
     DayCheck = app_helper:get_env(riak_kv, ttaaefs_daycheck),
+    RangeCheck = app_helper:get_env(riak_kv, ttaaefs_rangecheck),
 
     {SliceCount, Schedule} = 
         case Scope of
             disabled ->
                 {24, [{no_sync, 24}, {all_sync, 0}, 
-                        {day_sync, 0}, {hour_sync, 0}]};
+                        {day_sync, 0}, {hour_sync, 0},
+                        {range_sync, 0}]};
                     % No sync once an hour if disabled
             _ ->
                 {NoCheck + AllCheck + HourCheck + DayCheck,
                     [{no_sync, NoCheck}, {all_sync, AllCheck},
-                        {day_sync, DayCheck}, {hour_sync, HourCheck}]}
+                        {day_sync, DayCheck}, {hour_sync, HourCheck},
+                        {range_sync, RangeCheck}]}
         end,
 
     State1 = 
@@ -367,6 +369,42 @@ handle_cast({all_sync, ReqID, From, _Now}, State) ->
                         NextBucketList, Ref, State,
                         all_sync),
     {noreply, State0, Timeout};
+handle_cast({day_sync, ReqID, From, Now}, State) ->
+    {MegaSecs, Secs, _MicroSecs} = Now,
+    UpperTime = MegaSecs * 1000000  + Secs,
+    LowerTime = UpperTime - 60 * 60 * 24,
+    case State#state.scope of
+        all ->
+            Filter =
+                {filter, all, all, large, all,
+                {LowerTime, UpperTime}, pre_hash},
+            {State0, Timeout} =
+                sync_clusters(From,
+                                ReqID,
+                                State#state.local_nval,
+                                State#state.remote_nval,
+                                Filter,
+                                undefined, 
+                                full,
+                                State,
+                                day_sync),
+            {noreply, State0, Timeout};
+        bucket ->
+            [H|T] = State#state.bucket_list,
+            % Note that the tree size is amended as well as the time range.
+            % The bigger the time range, the bigger the tree.  Bigger trees
+            % are less efficient when there is little change, but can more
+            % accurately reflect bigger changes (with less fasle positives).
+            Filter =
+                {filter, H, all, medium, all,
+                {LowerTime, UpperTime}, pre_hash},
+            NextBucketList = T ++ [H],
+            {State0, Timeout} =
+                sync_clusters(From, ReqID, range, range, Filter,
+                                NextBucketList, partial, State,
+                                day_sync),
+            {noreply, State0, Timeout}
+    end;
 handle_cast({hour_sync, ReqID, From, Now}, State) ->
     {MegaSecs, Secs, _MicroSecs} = Now,
     UpperTime = MegaSecs * 1000000  + Secs,
@@ -404,41 +442,46 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
                                 hour_sync),
             {noreply, State0, Timeout}
     end;
-handle_cast({day_sync, ReqID, From, Now}, State) ->
-    {MegaSecs, Secs, _MicroSecs} = Now,
-    UpperTime = MegaSecs * 1000000  + Secs,
-    LowerTime = UpperTime - 60 * 60 * 24,
-    case State#state.scope of
-        all ->
-            Filter =
-                {filter, all, all, large, all,
-                {LowerTime, UpperTime}, pre_hash},
-            {State0, Timeout} =
-                sync_clusters(From,
-                                ReqID,
-                                State#state.local_nval,
-                                State#state.remote_nval,
-                                Filter,
-                                undefined, 
-                                full,
-                                State,
-                                day_sync),
-            {noreply, State0, Timeout};
-        bucket ->
-            [H|T] = State#state.bucket_list,
-            % Note that the tree size is amended as well as the time range.
-            % The bigger the time range, the bigger the tree.  Bigger trees
-            % are less efficient when there is little change, but can more
-            % accurately reflect bigger changes (with less fasle positives).
-            Filter =
-                {filter, H, all, medium, all,
-                {LowerTime, UpperTime}, pre_hash},
-            NextBucketList = T ++ [H],
-            {State0, Timeout} =
-                sync_clusters(From, ReqID, range, range, Filter,
-                                NextBucketList, partial, State,
-                                day_sync),
-            {noreply, State0, Timeout}
+handle_cast({range_sync, ReqID, From, _Now}, State) ->
+    case get_range() of
+        none ->
+            {noreply, State, ?LOOP_TIMEOUT};
+        {Bucket, LowerTime, UpperTime} ->
+            clear_range(),
+            case State#state.scope of
+                all ->
+                    Filter =
+                        {filter, Bucket, all, large, all,
+                        {LowerTime, UpperTime}, pre_hash},
+                    {State0, Timeout} =
+                        sync_clusters(From,
+                                        ReqID,
+                                        State#state.local_nval,
+                                        State#state.remote_nval,
+                                        Filter,
+                                        undefined, 
+                                        full,
+                                        State,
+                                        range_sync),
+                    {noreply, State0, Timeout};
+                bucket ->
+                    {B, NextBucketList} =
+                        case Bucket of
+                            all ->
+                                [H|T] = State#state.bucket_list,
+                                {H, T ++ [H]};
+                            Bucket ->
+                                {Bucket, State#state.bucket_list}
+                        end,
+                    Filter =
+                        {filter, B, all, small, all,
+                        {LowerTime, UpperTime}, pre_hash},
+                    {State0, Timeout} =
+                        sync_clusters(From, ReqID, range, range, Filter,
+                                        NextBucketList, partial, State,
+                                        hour_sync),
+                    {noreply, State0, Timeout}
+            end
     end.
 
 handle_info(timeout, State) ->
@@ -468,29 +511,28 @@ code_change(_OldVsn, State, _Extra) ->
 %%%============================================================================
 
 
--spec set_quietener(work_item()) -> ok.
-set_quietener(all_sync) ->
-    application:set_env(riak_kv, ttaaefs_quieten_allsync, true);
-set_quietener(day_sync) ->
-    application:set_env(riak_kv, ttaaefs_quieten_daysync, true);
-set_quietener(hour_sync) ->
-    application:set_env(riak_kv, ttaaefs_quieten_hoursync, true).
+-spec set_range(riak_object:bucket()|all,
+                        calendar:datetime(),
+                        calendar:datetime())
+                    -> ok.
+set_range(Bucket, LowDate, HighDate) when is_binary(Bucket); Bucket == all ->
+    EpochTime =
+        calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
+    LowTS = 
+        calendar:datetime_to_gregorian_seconds(LowDate) - EpochTime,
+    HighTS =
+        calendar:datetime_to_gregorian_seconds(HighDate) - EpochTime,
+    true = HighTS >= LowTS,
+    true = LowTS > 0,
+    application:set_env(riak_kv, ttaaefs_rangecheck, {Bucket, LowTS, HighTS}).
 
--spec get_quietener(work_item()) -> boolean().
-get_quietener(all_sync) ->
-    application:get_env(riak_kv, ttaaefs_quieten_allsync, false);
-get_quietener(day_sync) ->
-    application:get_env(riak_kv, ttaaefs_quieten_daysync, false);
-get_quietener(hour_sync) ->
-    application:get_env(riak_kv, ttaaefs_quieten_hoursync, false).
+clear_range() ->
+    application:set_env(riak_kv, ttaaefs_rangecheck, none).
 
--spec release_quietener(work_item()) -> ok.
-release_quietener(all_sync) ->
-    application:set_env(riak_kv, ttaaefs_quieten_allsync, false);
-release_quietener(day_sync) ->
-    application:set_env(riak_kv, ttaaefs_quieten_daysync, false);
-release_quietener(hour_sync) ->
-    application:set_env(riak_kv, ttaaefs_quieten_hoursync, false).
+-spec get_range() ->
+        none|{riak_object:bucket()|all, pos_integer(), pos_integer()}.
+get_range() ->
+    application:get_env(riak_kv, ttaaefs_rangecheck, none).
 
 %% @doc
 %% Sync two clusters - return an updated loop state and a timeout
@@ -524,31 +566,26 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                         ReqID
                 end,
             
-            % When there has been no recent repair activity want to quieten the
-            % max results to improve speed.  When clock_compares are required
-            % but not few repairs result - reducing the max results reduces the
-            % overhead of unnecessary work.
             MaxResults =
-                app_helper:get_env(riak_kv, ttaaefs_maxresults, ?MAX_RESULTS),
-            QuietFactor =
-                app_helper:get_env(riak_kv,
-                                    ttaaefs_quietfactor,
-                                    ?QUIET_FACTOR),
-            QuitenedMaxResults =
-                case {get_quietener(WorkType), MaxResults, QuietFactor} of
-                    {true, MR, QF} when MR >= 8, QF >= 1 ->
-                        MaxResults div QuietFactor;
+                case WorkType of
+                    range_sync ->
+                        RB = app_helper:get_env(riak_kv,
+                                                ttaaefs_rangeboost,
+                                                ?RANGE_BOOST),
+                        MR = app_helper:get_env(riak_kv,
+                                                ttaaefs_maxresults,
+                                                ?MAX_RESULTS),
+                        RB * MR;
                     _ ->
-                        MaxResults
+                        app_helper:get_env(riak_kv,
+                                            ttaaefs_maxresults,
+                                            ?MAX_RESULTS)
                 end,
-            % Always assume the next query will need to be quietened.  The
-            % boost should be set by the repair fun if not       
-            set_quietener(WorkType),
-
+            
             RepairFun =
                 generate_repairfun(ReqID0,
                                     State#state.queue_name,
-                                    QuitenedMaxResults,
+                                    MaxResults,
                                     Ref,
                                     WorkType),
 
@@ -560,7 +597,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                     ReplyFun,
                                     Filter, 
                                     [{transition_pause_ms, ?EXCHANGE_PAUSE},
-                                        {max_results, QuitenedMaxResults},
+                                        {max_results, MaxResults},
                                         {scan_timeout, ?CRASH_TIMEOUT div 2}]),
             
             lager:info("Starting ~w full-sync work_item=~w " ++ 
@@ -872,11 +909,35 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
                         "for key_count=~w keys limited by max_results=~w", 
                     [ExchangeID, WorkType, Ref, SinkDCount, MaxResults]),
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
-        report_repairs(ExchangeID, ToRepair, Ref, WorkType),
-        case length(ToRepair) > MaxResults div 2 of
-            true ->
-                release_quietener(WorkType);
-            false ->
+        PBDL = report_repairs(ExchangeID, ToRepair, Ref, WorkType),
+        SetRange =
+            case {WorkType, length(ToRepair)} of 
+                {range_sync, RepairCount} when RepairCount > 0 ->
+                    true;
+                {_AltSync, RepairCount} when RepairCount > (MaxResults div 2) ->
+                    true;
+                _ ->
+                    false
+            end,
+        case {SetRange, PBDL} of
+            {true, [{B, KC, LowDT, HighDT}]} ->
+                lager:info("Setting range to bucket=~p ~w ~w last_count=~w" ++
+                                " set by work_item=~w",
+                            [B, LowDT, HighDT, KC, WorkType]),
+                set_range(B, LowDT, HighDT),
+                ok;
+            {true, PBDL} ->
+                MapFun = fun({_B, _KC, LD, HD}) -> {LD, HD} end,
+                {LDL, HDL} =
+                    lists:unzip(lists:map(MapFun, PBDL)),
+                LowDT = lists:min(LDL),
+                HighDT = lists:max(HDL),
+                lager:info("Setting range to bucket=all ~w ~w last_count=~w" ++
+                                " set by work_item=~w",
+                            [LowDT, HighDT, length(ToRepair), WorkType]),
+                set_range(all, LowDT, HighDT),
+                ok;
+            _ ->
                 ok
         end
     end.
@@ -905,7 +966,11 @@ decode_clock(EncodedClock) ->
 -spec report_repairs(integer(),
                         list(repair_reference()),
                         full|partial,
-                        work_item()) -> ok.
+                        work_item()) -> 
+                            list({riak_object:bucket(),
+                                    pos_integer(),
+                                    calendar:datetime(),
+                                    calendar:datetime()}).
 report_repairs(ExchangeID, RepairList, Ref, WorkType) ->
     FoldFun =
         fun({B, _K, SrcVC, _Action}, Acc) ->
@@ -926,7 +991,8 @@ report_repairs(ExchangeID, RepairList, Ref, WorkType) ->
                             "bucket=~p with low date ~p high date ~p",
                         [ExchangeID, WorkType, Ref, C, B, MinDT, MaxDT])
         end,
-    lists:foreach(LogFun, PerBucketData).
+    lists:foreach(LogFun, PerBucketData),
+    PerBucketData.
 
 %% @doc
 %% Take the next work item from the list of allocations, assuming that the
@@ -971,6 +1037,8 @@ take_next_workitem([NextAlloc|T], Wants,
             lager:info("Tictac AAE skipping action ~w as manager running "
                         ++ "~w seconds late",
                         [NextAction, NowSeconds - ScheduleSeconds]),
+            lager:info("Clearing any range due to skip to reduce load"),
+            clear_range(),
             take_next_workitem(T, Wants,
                                 ScheduleStartTime, SlotInfo, SliceCount)
     end.
