@@ -1226,11 +1226,11 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                                     tictacaae_maxresults) of
                                 MR when is_integer(MR) ->
                                     [{scan_timeout, ScanTimeout},
-                                        {max_results, MR,
-                                        {purpose, kv_aae}}];
+                                        {max_results, MR},
+                                        {purpose, kv_aae}];
                                 _ ->
-                                    [{scan_timeout, ScanTimeout,
-                                        {purpose, kv_aae}}]
+                                    [{scan_timeout, ScanTimeout},
+                                        {purpose, kv_aae}]
                             end,
                         aae_exchange:start(full,
                                             BlueList, 
