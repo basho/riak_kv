@@ -535,18 +535,18 @@ set_range(Bucket, KeyRange, LowDate, HighDate) ->
         calendar:datetime_to_gregorian_seconds(HighDate) - EpochTime,
     true = HighTS >= LowTS,
     true = LowTS > 0,
-    application:set_env(riak_kv, ttaaefs_rangecheck,
+    application:set_env(riak_kv, ttaaefs_check_range,
                         {Bucket, KeyRange, LowTS, HighTS}).
 
 clear_range() ->
-    application:set_env(riak_kv, ttaaefs_rangecheck, none).
+    application:set_env(riak_kv, ttaaefs_check_range, none).
 
 -spec get_range() ->
         none|{riak_object:bucket()|all, 
                 {riak_object:key(), riak_object:key()}|all,
                 pos_integer(), pos_integer()}.
 get_range() ->
-    application:get_env(riak_kv, ttaaefs_rangecheck, none).
+    application:get_env(riak_kv, ttaaefs_check_range, none).
 
 %% @doc
 %% Sync two clusters - return an updated loop state and a timeout

@@ -859,7 +859,13 @@
 %% compared per exchange.  Reducing this will speed up clock compare queries,
 %% but will increase the number of exchanges required to complete a repair.
 %% If using range_sync to speed-up repairs, this can be reduced as the
-%% range_sync maxresults will be boosted by the ttaaefs_rangeboost
+%% range_sync maxresults will be boosted by the ttaaefs_rangeboost  When using
+%% range_sync a value of 64 is recommended, reducing to 32 or 16 if the cluster
+%% has very a large volume of keys and limited capacity.  Only reduce below
+%% 16 in exceptional circumstances.
+%% More capacity to process sync queries can be added by increaseing the af2
+%% and af3 queue sizes - but this will be at the risk of there being a bigger
+%% impact on KV performance when repairs are required.
 {mapping, "ttaaefs_maxresults", "riak_kv.ttaaefs_maxresults", [
   {datatype, integer},
   {default, 128}
