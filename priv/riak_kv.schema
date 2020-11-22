@@ -168,7 +168,7 @@
 ]}.
 {mapping, "af3_worker_pool_size", "riak_kv.af3_worker_pool_size", [
   {datatype, integer},
-  {default, 4}
+  {default, 6}
 ]}.
 {mapping, "af4_worker_pool_size", "riak_kv.af4_worker_pool_size", [
   {datatype, integer},

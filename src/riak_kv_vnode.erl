@@ -221,11 +221,9 @@
 -define(AF2_QUEUE, riak_core_node_worker_pool:af2()).
     %% Assured Forwarding - pool 2
     %% Any other handle_coverage that responds queue (e.g. leveled keylisting)
-    %% Replication AAE queries without time bounds
 -define(AF3_QUEUE, riak_core_node_worker_pool:af3()).
     %% Assured Forwarding - pool 3
-    %% AAE queries (per-bucket with/without key_range).  Time-bound nval-based
-    %% AAE cache queries (all_sync queries are in AF2_QUEUE
+    %% AAE full-sync queries (per-bucket with/without key_range).
 -define(AF4_QUEUE, riak_core_node_worker_pool:af4()).
     %% Assured Forwarding - pool 4
     %% operational information queries (e.g. object_stats).  Replication folds
@@ -1228,9 +1226,11 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                                     tictacaae_maxresults) of
                                 MR when is_integer(MR) ->
                                     [{scan_timeout, ScanTimeout},
-                                        {max_results, MR}];
+                                        {max_results, MR,
+                                        {purpose, kv_aae}}];
                                 _ ->
-                                    [{scan_timeout, ScanTimeout}]
+                                    [{scan_timeout, ScanTimeout,
+                                        {purpose, kv_aae}}]
                             end,
                         aae_exchange:start(full,
                                             BlueList, 
@@ -1772,8 +1772,7 @@ handle_aaefold({merge_tree_range,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 Elements),
-    {select_queue(select_replfold_queue(ModifiedRange), State), 
-        {fold, Folder, ReturnFun}, Sender, State};
+    {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({fetch_clocks_range, 
                         Bucket, KeyRange, 
                         SegmentFilter, ModifiedRange},
@@ -1797,7 +1796,7 @@ handle_aaefold({fetch_clocks_range,
                                 WrappedFoldFun, 
                                 InitAcc, 
                                 [{clock, null}]),
-    {select_queue(select_replfold_queue(ModifiedRange), State), {fold, Folder, ReturnFun}, Sender, State};
+    {select_queue(?AF3_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({repl_keys_range,
                         Bucket, KeyRange,
                         ModifiedRange,
@@ -2086,13 +2085,6 @@ aaefold_setmodifiedlimiter({date, LowModDate, HighModDate})
     {LowModDate, HighModDate};
 aaefold_setmodifiedlimiter(_) ->
     all.
-
--spec select_replfold_queue({date, pos_integer(), pos_integer()} | all)
-                            -> riak_core_node_worker_pool:worker_pool().
-select_replfold_queue(all) ->
-    ?AF2_QUEUE;
-select_replfold_queue(_) ->
-    ?AF3_QUEUE.
 
 aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered) ->
     fun(BF, KF, EFs, Acc) ->

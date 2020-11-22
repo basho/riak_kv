@@ -65,6 +65,7 @@
     % Max nu,ber of segments in the AAE tree to be repaired each loop
 -define(RANGE_BOOST, 8).
     % Factor to boost range_check max_results values
+-define(MEGA, 1000000).
 
 
 -record(state, {slice_allocations = [] :: list(allocation()),
@@ -375,7 +376,7 @@ handle_cast({all_sync, ReqID, From, _Now}, State) ->
     {noreply, State0, Timeout};
 handle_cast({day_sync, ReqID, From, Now}, State) ->
     {MegaSecs, Secs, _MicroSecs} = Now,
-    UpperTime = MegaSecs * 1000000  + Secs,
+    UpperTime = MegaSecs * ?MEGA  + Secs,
     LowerTime = UpperTime - 60 * 60 * 24,
     case State#state.scope of
         all ->
@@ -411,7 +412,7 @@ handle_cast({day_sync, ReqID, From, Now}, State) ->
     end;
 handle_cast({hour_sync, ReqID, From, Now}, State) ->
     {MegaSecs, Secs, _MicroSecs} = Now,
-    UpperTime = MegaSecs * 1000000  + Secs,
+    UpperTime = MegaSecs * ?MEGA  + Secs,
     LowerTime = UpperTime - 60 * 60,
     case State#state.scope of
         all ->
@@ -612,7 +613,8 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                     Filter, 
                                     [{transition_pause_ms, ?EXCHANGE_PAUSE},
                                         {max_results, MaxResults},
-                                        {scan_timeout, ?CRASH_TIMEOUT div 2}]),
+                                        {scan_timeout, ?CRASH_TIMEOUT div 2},
+                                        {purpose, WorkType}]),
             
             lager:info("Starting ~w full-sync work_item=~w " ++ 
                                 "ReqID=~w exchange id=~s pid=~w",
@@ -1033,8 +1035,8 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
             undefined ->
                 os:timestamp();
             {Mega, Sec, _Micro} ->
-                Seconds = Mega * 1000 + Sec + 86400,
-                {Seconds div 1000, Seconds rem 1000, 0}
+                Seconds = Mega * ?MEGA + Sec + 86400,
+                {Seconds div ?MEGA, Seconds rem ?MEGA, 0}
         end,
     take_next_workitem(NewAllocations, Wants,
                         RevisedStartTime, SlotInfo, SliceCount);
@@ -1046,9 +1048,9 @@ take_next_workitem([NextAlloc|T], Wants,
     {SliceNumber, NextAction} = NextAlloc,
     {Mega, Sec, _Micro} = ScheduleStartTime,
     ScheduleSeconds = 
-        Mega * 1000 + Sec + SlotSeconds + SliceNumber * SliceSeconds,
+        Mega * ?MEGA + Sec + SlotSeconds + SliceNumber * SliceSeconds,
     {MegaNow, SecNow, _MicroNow} = os:timestamp(),
-    NowSeconds = MegaNow * 1000 + SecNow,
+    NowSeconds = MegaNow * ?MEGA + SecNow,
     case ScheduleSeconds > NowSeconds of
         true ->
             {NextAction, ScheduleSeconds - NowSeconds, T, ScheduleStartTime};
@@ -1160,27 +1162,27 @@ choose_schedule_test() ->
 take_first_workitem_test() ->
     Wants = [{no_sync, 100}, {all_sync, 0}, {day_sync, 0}, {hour_sync, 0}, {range_sync, 0}],
     {Mega, Sec, Micro} = os:timestamp(),
-    TwentyFourHoursAgo = Mega * 1000 + Sec - (60 * 60 * 24),
+    TwentyFourHoursAgo = Mega * ?MEGA + Sec - (60 * 60 * 24),
     {NextAction, PromptSeconds, _T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {1, 8},
                             100),
     ?assertMatch(no_sync, NextAction),
-    ?assertMatch(true, ScheduleStartTime > {Mega, Sec, Micro}),
+    ?assertMatch(true, ScheduleStartTime < {Mega, Sec, Micro}),
     ?assertMatch(true, PromptSeconds > 0),
     {NextAction, PromptMoreSeconds, _T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {2, 8},
                             100),
     ?assertMatch(true, PromptMoreSeconds > PromptSeconds),
     {NextAction, PromptEvenMoreSeconds, T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {7, 8},
                             100),
     ?assertMatch(true, PromptEvenMoreSeconds > PromptMoreSeconds),
