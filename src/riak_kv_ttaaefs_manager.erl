@@ -87,7 +87,7 @@
                 slice_count = ?SLICE_COUNT :: pos_integer(),
                 is_paused = false :: boolean(),
                 last_exchange_start = os:timestamp() :: erlang:timestamp(),
-                previous_success = false :: false|erlang:timestamp()
+                previous_success = os:timestamp() :: false|erlang:timestamp()
                 }).
 
 -type req_id() :: no_reply|integer().
