@@ -347,8 +347,8 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
                                     " sync_state=unknown",
                                 [ReqID, Duration div 1000000]),
                 {?CRASH_TIMEOUT, State#state{previous_success = false}};
-            {SyncState, 0} when SyncState == root_complete;
-                                SyncState == branch_complete ->
+            {SyncState, 0} when SyncState == root_compare;
+                                SyncState == branch_compare ->
                 lager:info("exchange=~w complete result=~w in duration=~w s" ++
                                     " sync_state=true",
                                 [ReqID, Result, Duration div 1000000]),

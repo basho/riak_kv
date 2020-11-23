@@ -879,7 +879,7 @@
 %% for the range_check to do the heavy lifting) 
 {mapping, "ttaaefs_rangeboost", "riak_kv.ttaaefs_rangeboost", [
   {datatype, integer},
-  {default, 4}
+  {default, 8}
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this
