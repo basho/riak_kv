@@ -46,7 +46,9 @@
 
 -export([set_range/4,
             clear_range/0,
-            get_range/0]).
+            get_range/0,
+            set_cacherepair/0,
+            reset_cacherepair/0]).
 
 -define(SLICE_COUNT, 100).
 -define(SECONDS_IN_DAY, 86400).
@@ -84,7 +86,8 @@
                 slot_info_fun :: fun(() -> {pos_integer(), pos_integer()}),
                 slice_count = ?SLICE_COUNT :: pos_integer(),
                 is_paused = false :: boolean(),
-                last_exchange_start = os:timestamp() :: erlang:timestamp()
+                last_exchange_start = os:timestamp() :: erlang:timestamp(),
+                previous_success = false :: false|erlang:timestamp()
                 }).
 
 -type req_id() :: no_reply|integer().
@@ -190,7 +193,7 @@ init([]) ->
                         {range_sync, 0}]};
                     % No sync once an hour if disabled
             _ ->
-                {NoCheck + AllCheck + HourCheck + DayCheck,
+                {NoCheck + AllCheck + DayCheck + HourCheck + RangeCheck,
                     [{no_sync, NoCheck}, {all_sync, AllCheck},
                         {day_sync, DayCheck}, {hour_sync, HourCheck},
                         {range_sync, RangeCheck}]}
@@ -332,22 +335,36 @@ handle_call({set_bucketsync, BucketList}, _From, State) ->
                     bucket_list = BucketList}}.
 
 handle_cast({reply_complete, ReqID, Result}, State) ->
-    Duration = timer:now_diff(os:timestamp(), State#state.last_exchange_start),
-    Pause = 
+    LastExchangeStart = State#state.last_exchange_start,
+    Duration = timer:now_diff(os:timestamp(), LastExchangeStart),
+    {Pause, State0} = 
         case Result of
             {waiting_all_results, _Deltas} ->
                 % If the exchange ends with waiting all results, then consider
                 % this to be equivalent to a crash, and so requiring a full
                 % pause to backoff
-                lager:info("exchange=~w failed to complete in duration=~w s",
+                lager:info("exchange=~w failed to complete in duration=~w s" ++
+                                    " sync_state=unknown",
                                 [ReqID, Duration div 1000000]),
-                ?CRASH_TIMEOUT;
+                {?CRASH_TIMEOUT, State#state{previous_success = false}};
+            {SyncState, 0} when SyncState == root_complete;
+                                SyncState == branch_complete ->
+                lager:info("exchange=~w complete result=~w in duration=~w s" ++
+                                    " sync_state=true",
+                                [ReqID, Result, Duration div 1000000]),
+                {?LOOP_TIMEOUT,
+                    State#state{previous_success = LastExchangeStart}};
             _ ->
+                lager:info("exchange=~w complete result=~w in duration=~w s" ++
+                                    " sync_state=false",
+                                [ReqID, Result, Duration div 1000000]),
                 % If exchanges start slowing, then start increasing the pauses
                 % Gradually degrade in response to an increased workload
-                max(?LOOP_TIMEOUT, (Duration div 1000) div 2)
+                {max(?LOOP_TIMEOUT, (Duration div 1000) div 2),
+                    State#state{previous_success = false}}
         end,
-    {noreply, State, Pause};
+    reset_cacherepair(),
+    {noreply, State0, Pause};
 handle_cast({no_sync, ReqID, From, _}, State) ->
     case ReqID of
         no_reply ->
@@ -369,6 +386,7 @@ handle_cast({all_sync, ReqID, From, _Now}, State) ->
                     T ++ [H],
                     partial}
         end,
+    set_cacherepair(),
     {State0, Timeout} =
         sync_clusters(From, ReqID, LNVal, RNVal, Filter,
                         NextBucketList, Ref, State,
@@ -447,8 +465,26 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
                                 hour_sync),
             {noreply, State0, Timeout}
     end;
-handle_cast({range_sync, ReqID, From, _Now}, State) ->
-    case get_range() of
+handle_cast({range_sync, ReqID, From, Now}, State) ->
+    Range =
+        case get_range() of
+            none ->
+                case State#state.previous_success of
+                    false ->
+                        lager:info("No range sync as no range set"),
+                        none;
+                    {PrevMega, PrevSecs, _PrevMS} ->
+                        {MegaSecs, Secs, _MicroSecs} = Now,
+                        NowSecs = MegaSecs * ?MEGA  + Secs,
+                        {all,
+                            all,
+                            PrevMega * ?MEGA + PrevSecs - 60,
+                            NowSecs}
+                end;
+            SetRange ->
+                SetRange
+        end,
+    case Range of
         none ->
             case ReqID of
                 no_reply ->
@@ -503,6 +539,8 @@ handle_info(timeout, State) ->
                             State#state.slice_set_start,
                             SlotInfoFun(),
                             State#state.slice_count),
+    lager:info("Scheduling work_item=~w in ~w seconds remaining=~w",
+                [WorkItem, Wait, length(RemainingSlices)]),
     erlang:send_after(Wait * 1000, self(), {work_item, WorkItem}),
     {noreply, State#state{slice_allocations = RemainingSlices,
                             slice_set_start = ScheduleStartTime}};
@@ -518,10 +556,11 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %%%============================================================================
-%%% Internal functions
+%%% Environment state management functions
 %%%============================================================================
 
-
+%% @doc
+%% Set a specific range to be the target for subsequent range_sync queries
 -spec set_range(riak_object:bucket()|all,
                         {riak_object:key(), riak_object:key()}|all,
                         calendar:datetime(),
@@ -537,8 +576,9 @@ set_range(Bucket, KeyRange, LowDate, HighDate) ->
     true = HighTS >= LowTS,
     true = LowTS > 0,
     application:set_env(riak_kv, ttaaefs_check_range,
-                        {Bucket, KeyRange, LowTS, HighTS}).
+                        {Bucket, KeyRange, LowTS - 1, HighTS + 1}).
 
+-spec clear_range() -> ok.
 clear_range() ->
     application:set_env(riak_kv, ttaaefs_check_range, none).
 
@@ -548,6 +588,33 @@ clear_range() ->
                 pos_integer(), pos_integer()}.
 get_range() ->
     application:get_env(riak_kv, ttaaefs_check_range, none).
+
+%% @doc
+%% On an all_sync, set this node into cache repair mode, this will rebuild the
+%% cache tree for any dirty segments as part of the full-sync.  May resolve
+%% any issues with the broken cache.  When renning all_sync with cache repair
+%% the AF3_QUEUE is not used, instead the aae_runner queue is used - this will
+%% increase the parallelisation and speed of the query.  On nodes with
+%% constrained access to resources (especially CPU), this might impact KV
+%% performance.  By setting only on the node that prompted the query, it is
+%% possible to allow for repairs, with reduced risk to cluster stability, as
+%% the other nodes will continue to use the AF3_QUEUE.
+-spec set_cacherepair() -> ok.
+set_cacherepair() ->
+    application:set_env(riak_kv, aae_fetchclocks_repair, true).
+
+-spec reset_cacherepair() -> ok.
+reset_cacherepair() ->
+    application:set_env(riak_kv,
+                        aae_fetchclocks_repair,
+                        app_helper:get_env(riak_kv,
+                                            aae_fetchclocks_alwaysrepair,
+                                            false)).
+
+
+%%%============================================================================
+%%% Internal functions
+%%%============================================================================
 
 %% @doc
 %% Sync two clusters - return an updated loop state and a timeout
@@ -617,7 +684,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                         {purpose, WorkType}]),
             
             lager:info("Starting ~w full-sync work_item=~w " ++ 
-                                "ReqID=~w exchange id=~s pid=~w",
+                                "reqid=~w exchange id=~s pid=~w",
                             [Ref, WorkType, ReqID0, ExID, ExPid]),
             
             {State#state{bucket_list = NextBucketList,
@@ -874,7 +941,6 @@ generate_replyfun(ReqID, From, StopClientFun) ->
                 % Reply to riak_client
                 From ! {ReqID, Result}
         end,
-        lager:info("Completed full-sync with result=~w", [Result]),
         gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),
         StopClientFun()
     end.
@@ -926,16 +992,19 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
                 end
             end,
         {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
-        lager:info("AAE exchange=~w work_item=~w type=~w shows sink ahead " ++
+        lager:info("AAE reqid=~w work_item=~w type=~w shows sink ahead " ++
                         "for key_count=~w keys limited by max_results=~w", 
                     [ExchangeID, WorkType, Ref, SinkDCount, MaxResults]),
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
         PBDL = report_repairs(ExchangeID, ToRepair, Ref, WorkType),
+        RB = app_helper:get_env(riak_kv, ttaaefs_rangeboost, ?RANGE_BOOST),
         SetRange =
             case {WorkType, length(ToRepair)} of 
-                {range_sync, RepairCount} when RepairCount > 0 ->
+                {range_sync, RepairCount}
+                        when RepairCount > (MaxResults div RB) ->
                     true;
-                {_AltSync, RepairCount} when RepairCount > (MaxResults div 2) ->
+                {_AltSync, RepairCount}
+                        when RepairCount > (MaxResults div 2) ->
                     true;
                 _ ->
                     false
