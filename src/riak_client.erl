@@ -49,6 +49,7 @@
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
 -export([fetch/2, push/4]).
+-export([remove_node_from_coverage/0, reset_node_for_coverage/0]).
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
@@ -878,7 +879,35 @@ ttaaefs_fullsync(WorkItem, SecsTimeout, Now) ->
     wait_for_reqid(ReqId, SecsTimeout * 1000).
 
 
+-spec remove_node_from_coverage() -> ok.
+remove_node_from_coverage() ->
+    F =
+        fun(Ring, _) ->
+            {new_ring, 
+                riak_core_ring:update_member_meta(node(),
+                                                    Ring,
+                                                    node(),
+                                                    participate_in_coverage,
+                                                    false)}
+        end,
+    {ok, _FinalRing} = riak_core_ring_manager:ring_trans(F, undefined),
+    ok.
 
+-spec reset_node_for_coverage() -> ok.
+reset_node_for_coverage() ->
+    ParticipateInCoverage =
+        app_helper:get_env(riak_core,participate_in_coverage),
+    F =
+        fun(Ring, _) ->
+            {new_ring, 
+                riak_core_ring:update_member_meta(node(),
+                                                    Ring,
+                                                    node(),
+                                                    participate_in_coverage,
+                                                    ParticipateInCoverage)}
+        end,
+    {ok, _FinalRing} = riak_core_ring_manager:ring_trans(F, undefined),
+    ok.
 
 %% @doc
 %% Run a hot backup - returns {ok, true} if successful

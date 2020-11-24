@@ -217,7 +217,7 @@
 
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
-    %% Hot backups
+    %% Hot backups.  AAE cached tree rebuilds
 -define(AF2_QUEUE, riak_core_node_worker_pool:af2()).
     %% Assured Forwarding - pool 2
     %% Any other handle_coverage that responds queue (e.g. leveled keylisting)
@@ -229,8 +229,8 @@
     %% operational information queries (e.g. object_stats).  Replication folds
     %% for transition.  Reaping operations
 -define(BE_QUEUE, riak_core_node_worker_pool:be()).
-    %% Best efforts (aka scavenger) pool
-    %% Rebuilds
+    %% Best efforts (aka scavenger) pool.  
+    %% Parallel AAE store rebuilds
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -450,7 +450,7 @@ queue_tictactreerebuild(AAECntrl, Partition, OnlyIfBroken, State) ->
         fun(ok) ->
             ReturnFun(ok)
         end,
-    Pool = select_queue(be_pool, State),
+    Pool = select_queue(?AF1_QUEUE, State),
     riak_core_vnode:queue_work(Pool, 
                                 {fold, FoldFun, JustReturnFun},
                                 Sender,

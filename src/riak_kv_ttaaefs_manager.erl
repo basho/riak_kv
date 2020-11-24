@@ -785,50 +785,39 @@ init_pbclient(IP, Port, Options) ->
 -spec local_sender(any(), riak_client:riak_client(), fun((any()) -> ok), nval())
                                                              -> fun(() -> ok).
 local_sender(fetch_root, C, ReturnFun, NVal) ->
-    fun() ->
-        {ok, R} =
-            riak_client:aae_fold({merge_root_nval, NVal}, C),
-        ReturnFun(R)
-    end;
+    run_localfold({merge_root_nval, NVal}, C, ReturnFun);
 local_sender({fetch_branches, BranchIDs}, C, ReturnFun, NVal) ->
-    fun() ->
-        {ok, R} =
-            riak_client:aae_fold({merge_branch_nval, NVal, BranchIDs}, C),
-        ReturnFun(R)
-    end;
+    run_localfold({merge_branch_nval, NVal, BranchIDs}, C, ReturnFun);
 local_sender({fetch_clocks, SegmentIDs}, C, ReturnFun, NVal) ->
-    fun() ->
-        {ok, R} =
-            riak_client:aae_fold({fetch_clocks_nval, NVal, SegmentIDs}, C),
-        ReturnFun(R)
-    end;
+    run_localfold({fetch_clocks_nval, NVal, SegmentIDs}, C, ReturnFun);
 local_sender({fetch_clocks, SegmentIDs, MR}, C, ReturnFun, NVal) ->
+    %% riak_client expects modified range of form
+    %% {date, non_neg_integer(), non_neg_integer()}
+    %% where as the riak erlang clients just expect 
+    %% {non_neg_integer(), non_neg_integer()}
+    %% They keyword all must also be supported
     LMR = localise_modrange(MR),
-    fun() ->
-        {ok, R} =
-            riak_client:aae_fold({fetch_clocks_nval, NVal, SegmentIDs, LMR},
-                                    C),
-        ReturnFun(R)
-    end;
+    run_localfold({fetch_clocks_nval, NVal, SegmentIDs, LMR}, C, ReturnFun);
 local_sender({merge_tree_range, B, KR, TS, SF, MR, HM}, C, ReturnFun, range) ->
-    fun() ->
-        LMR = localise_modrange(MR),
-        %% riak_client expects modified range of form
-        %% {date, non_neg_integer(), non_neg_integer()}
-        %% where as the riak erlang clients just expect 
-        %% {non_neg_integer(), non_neg_integer()}
-        %% They keyword all must also be supported
-        {ok, R} =
-            riak_client:aae_fold({merge_tree_range, B, KR, TS, SF, LMR, HM},
-                                    C),
-        ReturnFun(R)
-    end;
+    LMR = localise_modrange(MR),
+    run_localfold({merge_tree_range, B, KR, TS, SF, LMR, HM}, C, ReturnFun);
 local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, _NVal) ->
+    LMR = localise_modrange(MR),
+    run_localfold({fetch_clocks_range, B0, KR, SF, LMR}, C, ReturnFun).
+
+
+-spec run_localfold(riak_kv_clusteraae_fsm:query_definition(),
+                        riak_client:riak_client(),
+                        fun((any()) -> ok)) -> 
+                            fun(() -> ok).
+run_localfold(Query, Client, ReturnFun) ->
     fun() ->
-        LMR = localise_modrange(MR),
-        {ok, R} =
-            riak_client:aae_fold({fetch_clocks_range, B0, KR, SF, LMR}, C),
-        ReturnFun(R)
+        case riak_client:aae_fold(Query, Client) of
+            {ok, R} -> 
+                ReturnFun(R);
+            {error, Error} ->
+                ReturnFun({error, Error})
+        end
     end.
 
 localise_modrange(all) ->
