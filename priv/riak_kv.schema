@@ -90,14 +90,14 @@
 
 %% @doc Frequency to prompt exchange per vnode
 %% The number of milliseconds which the vnode must wait between self-pokes to
-%% maybe prompt the next exchange. Default is 4 minutes - check all partitions
-%% when n=3 every 30 minutes.
+%% maybe prompt the next exchange. Default is 8 minutes - check all partitions
+%% when n=3 once every hour (in each direction).
 %% Note if this is to be reduced further the riak_core vnode_inactivity_timeout
 %% should also be reduced or handoffs may be blocked.  To be safe the 
 %% vnode_inactivity_timeout must be < 0.5 * the tictacaae_exchangetick. 
 {mapping, "tictacaae_exchangetick", "riak_kv.tictacaae_exchangetick", [
   {datatype, integer},
-  {default, 240000},
+  {default, 480000},
   hidden
 ]}.
 
@@ -118,12 +118,9 @@
 %% conflicting leaves will be compared on each exchange.  If there are issues
 %% with query timeouts this may be halved.  Large backlogs may be reduced
 %% faster by doubling.  There are 1M segments in a standard tree overall.
-%% If an exchange of a given type results in fewer repairs than max results
-%% it will be quietened to request 1/8th the max results until repairs are
-%% generated again.
 {mapping, "tictacaae_maxresults", "riak_kv.tictacaae_maxresults", [
   {datatype, integer},
-  {default, 512},
+  {default, 256},
   hidden
 ]}.
 
@@ -164,7 +161,7 @@
 ]}.
 {mapping, "af2_worker_pool_size", "riak_kv.af2_worker_pool_size", [
   {datatype, integer},
-  {default, 2}
+  {default, 1}
 ]}.
 {mapping, "af3_worker_pool_size", "riak_kv.af3_worker_pool_size", [
   {datatype, integer},
