@@ -1110,7 +1110,7 @@ handle_command({rebuild_complete, trees, _ST}, _Sender, State) ->
             {noreply, State#state{tictac_rebuilding = false}}
     end;
 
-handle_command({exchange_complete, {_EndState, DeltaCount}, ST},
+handle_command({exchange_complete, {EndState, DeltaCount}, ST},
                                                     _Sender, State) ->
     %% Record how many deltas were seen in the exchange
     %% Revert the skip_count to 0 so that exchanges can be made at the next
@@ -1118,6 +1118,15 @@ handle_command({exchange_complete, {_EndState, DeltaCount}, ST},
     XC = State#state.tictac_exchangecount + 1,
     DC = State#state.tictac_deltacount + DeltaCount,
     XT = State#state.tictac_exchangetime + timer:now_diff(os:timestamp(), ST),
+    case EndState of
+        PositiveState
+            when PositiveState == root_compare;
+                 PositiveState == branch_compare ->
+            ok;
+        UnwelcomeState ->
+            lager:info("Tictac AAE exchange for partition=~w pending_state=~w",
+                        [State#state.idx, UnwelcomeState])
+    end,
     {noreply, State#state{tictac_exchangecount = XC,
                             tictac_deltacount = DC,
                             tictac_exchangetime = XT,
