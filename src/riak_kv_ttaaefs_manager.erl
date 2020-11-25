@@ -95,7 +95,7 @@
 -type client_ip() :: string().
 -type client_port() :: pos_integer().
 -type nval() :: pos_integer()|range. % Range queries do not have an n-val
--type work_item() :: no_sync|all_sync|day_sync|hour_sync|range_sync.
+-type work_item() :: no_check|all_check|day_check|hour_check|range_check.
 -type schedule_want() :: {work_item(), non_neg_integer()}.
 -type slice() :: pos_integer().
 -type allocation() :: {slice(), work_item()}.
@@ -188,15 +188,15 @@ init([]) ->
     {SliceCount, Schedule} = 
         case Scope of
             disabled ->
-                {24, [{no_sync, 24}, {all_sync, 0}, 
-                        {day_sync, 0}, {hour_sync, 0},
-                        {range_sync, 0}]};
+                {24, [{no_check, 24}, {all_check, 0}, 
+                        {day_check, 0}, {hour_check, 0},
+                        {range_check, 0}]};
                     % No sync once an hour if disabled
             _ ->
                 {NoCheck + AllCheck + DayCheck + HourCheck + RangeCheck,
-                    [{no_sync, NoCheck}, {all_sync, AllCheck},
-                        {day_sync, DayCheck}, {hour_sync, HourCheck},
-                        {range_sync, RangeCheck}]}
+                    [{no_check, NoCheck}, {all_check, AllCheck},
+                        {day_check, DayCheck}, {hour_check, HourCheck},
+                        {range_check, RangeCheck}]}
         end,
 
     State1 = 
@@ -289,8 +289,8 @@ handle_call(pause, _From, State) ->
             {reply, {error, already_paused}, State};
         false -> 
             PausedSchedule =
-                [{no_sync, State#state.slice_count}, {all_sync, 0},
-                    {day_sync, 0}, {hour_sync, 0}, {range_sync, 0}],
+                [{no_check, State#state.slice_count}, {all_check, 0},
+                    {day_check, 0}, {hour_check, 0}, {range_check, 0}],
             BackupSchedule = State#state.schedule,
             {reply, ok, State#state{schedule = PausedSchedule,
                                     backup_schedule = BackupSchedule,
@@ -365,15 +365,15 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
         end,
     reset_cacherepair(),
     {noreply, State0, Pause};
-handle_cast({no_sync, ReqID, From, _}, State) ->
+handle_cast({no_check, ReqID, From, _}, State) ->
     case ReqID of
         no_reply ->
             ok;
         _ ->
-            From ! {ReqID, {no_sync, 0}}
+            From ! {ReqID, {no_check, 0}}
     end,
     {noreply, State, ?LOOP_TIMEOUT};
-handle_cast({all_sync, ReqID, From, _Now}, State) ->
+handle_cast({all_check, ReqID, From, _Now}, State) ->
     {LNVal, RNVal, Filter, NextBucketList, Ref} =
         case State#state.scope of
             all ->
@@ -390,9 +390,9 @@ handle_cast({all_sync, ReqID, From, _Now}, State) ->
     {State0, Timeout} =
         sync_clusters(From, ReqID, LNVal, RNVal, Filter,
                         NextBucketList, Ref, State,
-                        all_sync),
+                        all_check),
     {noreply, State0, Timeout};
-handle_cast({day_sync, ReqID, From, Now}, State) ->
+handle_cast({day_check, ReqID, From, Now}, State) ->
     {MegaSecs, Secs, _MicroSecs} = Now,
     UpperTime = MegaSecs * ?MEGA  + Secs,
     LowerTime = UpperTime - 60 * 60 * 24,
@@ -410,7 +410,7 @@ handle_cast({day_sync, ReqID, From, Now}, State) ->
                                 undefined, 
                                 full,
                                 State,
-                                day_sync),
+                                day_check),
             {noreply, State0, Timeout};
         bucket ->
             [H|T] = State#state.bucket_list,
@@ -425,10 +425,10 @@ handle_cast({day_sync, ReqID, From, Now}, State) ->
             {State0, Timeout} =
                 sync_clusters(From, ReqID, range, range, Filter,
                                 NextBucketList, partial, State,
-                                day_sync),
+                                day_check),
             {noreply, State0, Timeout}
     end;
-handle_cast({hour_sync, ReqID, From, Now}, State) ->
+handle_cast({hour_check, ReqID, From, Now}, State) ->
     {MegaSecs, Secs, _MicroSecs} = Now,
     UpperTime = MegaSecs * ?MEGA  + Secs,
     LowerTime = UpperTime - 60 * 60,
@@ -446,7 +446,7 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
                                 undefined, 
                                 full,
                                 State,
-                                hour_sync),
+                                hour_check),
             {noreply, State0, Timeout};
         bucket ->
             [H|T] = State#state.bucket_list,
@@ -462,10 +462,10 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
             {State0, Timeout} =
                 sync_clusters(From, ReqID, range, range, Filter,
                                 NextBucketList, partial, State,
-                                hour_sync),
+                                hour_check),
             {noreply, State0, Timeout}
     end;
-handle_cast({range_sync, ReqID, From, Now}, State) ->
+handle_cast({range_check, ReqID, From, Now}, State) ->
     Range =
         case get_range() of
             none ->
@@ -490,7 +490,7 @@ handle_cast({range_sync, ReqID, From, Now}, State) ->
                 no_reply ->
                     ok;
                 _ ->
-                    From ! {ReqID, {range_sync, 0}}
+                    From ! {ReqID, {range_check, 0}}
             end,
             {noreply, State, ?LOOP_TIMEOUT};
         {Bucket, KeyRange, LowerTime, UpperTime} ->
@@ -509,7 +509,7 @@ handle_cast({range_sync, ReqID, From, Now}, State) ->
                                         undefined, 
                                         full,
                                         State,
-                                        range_sync),
+                                        range_check),
                     {noreply, State0, Timeout};
                 bucket ->
                     {B, NextBucketList} =
@@ -526,7 +526,7 @@ handle_cast({range_sync, ReqID, From, Now}, State) ->
                     {State0, Timeout} =
                         sync_clusters(From, ReqID, range, range, Filter,
                                         NextBucketList, partial, State,
-                                        hour_sync),
+                                        hour_check),
                     {noreply, State0, Timeout}
             end
     end.
@@ -560,7 +560,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%============================================================================
 
 %% @doc
-%% Set a specific range to be the target for subsequent range_sync queries
+%% Set a specific range to be the target for subsequent range_check queries
 -spec set_range(riak_object:bucket()|all,
                         {riak_object:key(), riak_object:key()}|all,
                         calendar:datetime(),
@@ -590,9 +590,9 @@ get_range() ->
     application:get_env(riak_kv, ttaaefs_check_range, none).
 
 %% @doc
-%% On an all_sync, set this node into cache repair mode, this will rebuild the
+%% On an all_check, set this node into cache repair mode, this will rebuild the
 %% cache tree for any dirty segments as part of the full-sync.  May resolve
-%% any issues with the broken cache.  When renning all_sync with cache repair
+%% any issues with the broken cache.  When renning all_check with cache repair
 %% the AF3_QUEUE is not used, instead the aae_runner queue is used - this will
 %% increase the parallelisation and speed of the query.  On nodes with
 %% constrained access to resources (especially CPU), this might impact KV
@@ -639,7 +639,6 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
             StopFun = fun() -> stop_client(RemoteClient, RemoteMod) end,
             RemoteSendFun = generate_sendfun({RemoteClient, RemoteMod}, RNVal),
             LocalSendFun = generate_sendfun(local, LNVal),
-            ReplyFun = generate_replyfun(ReqID, From, StopFun),
             ReqID0 = 
                 case ReqID of
                     no_reply ->
@@ -647,10 +646,12 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                     _ ->
                         ReqID
                 end,
+            ReplyFun =
+                generate_replyfun(ReqID == no_reply, ReqID0, From, StopFun),
             
             MaxResults =
                 case WorkType of
-                    range_sync ->
+                    range_check ->
                         RB = app_helper:get_env(riak_kv,
                                                 ttaaefs_rangeboost,
                                                 ?RANGE_BOOST),
@@ -919,18 +920,18 @@ format_segment_filter({segments, SegList, TreeSize}) ->
 %% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
--spec generate_replyfun(integer()|no_reply, pid(), fun(() -> ok))
+-spec generate_replyfun(boolean(), integer(), pid(), fun(() -> ok))
                                                 -> aae_exchange:reply_fun().
-generate_replyfun(ReqID, From, StopClientFun) ->
+generate_replyfun(Clientless, ReqID, From, StopClientFun) ->
     fun(Result) ->
-        case ReqID of
-            no_reply ->
+        case Clientless of
+            true ->
                 ok;
             _ ->
                 % Reply to riak_client
                 From ! {ReqID, Result}
         end,
-        gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),
+        gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),    
         StopClientFun()
     end.
 
@@ -989,7 +990,7 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
         RB = app_helper:get_env(riak_kv, ttaaefs_rangeboost, ?RANGE_BOOST),
         SetRange =
             case {WorkType, length(ToRepair)} of 
-                {range_sync, RepairCount}
+                {range_check, RepairCount}
                         when RepairCount > (MaxResults div RB) ->
                     true;
                 {_AltSync, RepairCount}
@@ -1128,9 +1129,9 @@ take_next_workitem([NextAlloc|T], Wants,
 %% configured schedule-needs.
 -spec choose_schedule(schedule_wants()) -> list(allocation()).
 choose_schedule(ScheduleWants) ->
-    [{no_sync, NoSync}, {all_sync, AllSync},
-        {day_sync, DaySync}, {hour_sync, HourSync},
-        {range_sync, RangeSync}] = ScheduleWants,
+    [{no_check, NoSync}, {all_check, AllSync},
+        {day_check, DaySync}, {hour_check, HourSync},
+        {range_check, RangeSync}] = ScheduleWants,
     SliceCount = NoSync + AllSync + DaySync + HourSync + RangeSync,
     Slices = lists:seq(1, SliceCount),
     Allocations = [],
@@ -1153,31 +1154,31 @@ choose_schedule(Slices, Allocations, {NoSync, 0, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, no_sync}|Allocations],
+                    [{Allocation, no_check}|Allocations],
                     {NoSync - 1, 0, 0, 0, 0});
 choose_schedule(Slices, Allocations, {NoSync, AllSync, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, all_sync}|Allocations],
+                    [{Allocation, all_check}|Allocations],
                     {NoSync, AllSync - 1, 0, 0, 0});
 choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, day_sync}|Allocations],
+                    [{Allocation, day_check}|Allocations],
                     {NoSync, AllSync, DaySync - 1, 0, 0});
 choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, HourSync, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, hour_sync}|Allocations],
+                    [{Allocation, hour_check}|Allocations],
                     {NoSync, AllSync, DaySync, HourSync - 1, 0});
 choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, HourSync, RangeSync}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, range_sync}|Allocations],
+                    [{Allocation, range_check}|Allocations],
                     {NoSync, AllSync, DaySync, HourSync, RangeSync - 1}).
 
 
@@ -1189,23 +1190,23 @@ choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, HourSync, RangeS
 
 choose_schedule_test() ->
     NoSyncAllSchedule =
-        [{no_sync, 100}, {all_sync, 0}, {day_sync, 0}, {hour_sync, 0}, {range_sync, 0}],
+        [{no_check, 100}, {all_check, 0}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
     NoSyncAll = choose_schedule(NoSyncAllSchedule),
-    ExpNoSyncAll = lists:map(fun(I) -> {I, no_sync} end, lists:seq(1, 100)),
+    ExpNoSyncAll = lists:map(fun(I) -> {I, no_check} end, lists:seq(1, 100)),
     ?assertMatch(NoSyncAll, ExpNoSyncAll),
 
     AllSyncAllSchedule =
-        [{no_sync, 0}, {all_sync, 100}, {day_sync, 0}, {hour_sync, 0}, {range_sync, 0}],
+        [{no_check, 0}, {all_check, 100}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
     AllSyncAll = choose_schedule(AllSyncAllSchedule),
-    ExpAllSyncAll = lists:map(fun(I) -> {I, all_sync} end, lists:seq(1, 100)),
+    ExpAllSyncAll = lists:map(fun(I) -> {I, all_check} end, lists:seq(1, 100)),
     ?assertMatch(AllSyncAll, ExpAllSyncAll),
     
     MixedSyncSchedule = 
-        [{no_sync, 0}, {all_sync, 1}, {day_sync, 4}, {hour_sync, 95}, {range_sync, 0}],
+        [{no_check, 0}, {all_check, 1}, {day_check, 4}, {hour_check, 95}, {range_check, 0}],
     MixedSync = choose_schedule(MixedSyncSchedule),
     ?assertMatch(100, length(MixedSync)),
-    IsSyncFun = fun({_I, Type}) -> Type == hour_sync end,
-    SliceForHourFun = fun({I, hour_sync}) -> I end,
+    IsSyncFun = fun({_I, Type}) -> Type == hour_check end,
+    SliceForHourFun = fun({I, hour_check}) -> I end,
     HourWorkload =
         lists:map(SliceForHourFun, lists:filter(IsSyncFun, MixedSync)),
     ?assertMatch(95, length(lists:usort(HourWorkload))),
@@ -1218,7 +1219,7 @@ choose_schedule_test() ->
     ?assertMatch(true, BiggestI >= 95).
 
 take_first_workitem_test() ->
-    Wants = [{no_sync, 100}, {all_sync, 0}, {day_sync, 0}, {hour_sync, 0}, {range_sync, 0}],
+    Wants = [{no_check, 100}, {all_check, 0}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
     {Mega, Sec, Micro} = os:timestamp(),
     TwentyFourHoursAgo = Mega * ?MEGA + Sec - (60 * 60 * 24),
     {NextAction, PromptSeconds, _T, ScheduleStartTime} = 
@@ -1227,7 +1228,7 @@ take_first_workitem_test() ->
                                 TwentyFourHoursAgo rem ?MEGA, Micro},
                             {1, 8},
                             100),
-    ?assertMatch(no_sync, NextAction),
+    ?assertMatch(no_check, NextAction),
     ?assertMatch(true, ScheduleStartTime < {Mega, Sec, Micro}),
     ?assertMatch(true, PromptSeconds > 0),
     {NextAction, PromptMoreSeconds, _T, ScheduleStartTime} = 
