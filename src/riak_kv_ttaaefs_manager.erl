@@ -988,36 +988,38 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
         PBDL = report_repairs(ExchangeID, ToRepair, Ref, WorkType),
         RB = app_helper:get_env(riak_kv, ttaaefs_rangeboost, ?RANGE_BOOST),
-        SetRange =
-            case {WorkType, length(ToRepair)} of 
-                {range_check, RepairCount}
-                        when RepairCount > (MaxResults div RB) ->
-                    true;
-                {_AltSync, RepairCount}
-                        when RepairCount > (MaxResults div 2) ->
-                    true;
-                _ ->
-                    false
+        TargetForRange = 
+            case WorkType of
+                range_check ->
+                    MaxResults div RB;
+                _AltCheck ->
+                    MaxResults div 2
             end,
-        case {SetRange, PBDL} of
-            {true, [{B, KC, LowDT, HighDT}]} ->
-                lager:info("Setting range to bucket=~p ~w ~w last_count=~w" ++
-                                " set by work_item=~w",
-                            [B, LowDT, HighDT, KC, WorkType]),
-                set_range(B, all, LowDT, HighDT),
-                ok;
-            {true, PBDL} ->
-                MapFun = fun({_B, _KC, LD, HD}) -> {LD, HD} end,
-                {LDL, HDL} =
-                    lists:unzip(lists:map(MapFun, PBDL)),
-                LowDT = lists:min(LDL),
-                HighDT = lists:max(HDL),
-                lager:info("Setting range to bucket=all ~w ~w last_count=~w" ++
-                                " set by work_item=~w",
-                            [LowDT, HighDT, length(ToRepair), WorkType]),
-                set_range(all, all, LowDT, HighDT),
-                ok;
-            _ ->
+        case length(ToRepair) > TargetForRange of
+            true ->
+                % Use the best result from the key count if this alone is
+                % better than the target, otherwise an 'all' bucket range
+                % query should be set
+                {B, KC, LowDT, HighDT} = hd(lists:keysort(2, PBDL)),
+                case KC > TargetForRange of
+                    true ->
+                        lager:info("Setting range to bucket=~p ~w ~w " ++
+                                    " last_count=~w set by work_item=~w",
+                                    [B, LowDT, HighDT, KC, WorkType]),
+                        set_range(B, all, LowDT, HighDT);
+                    false ->
+                        MapFun = fun({_B, _KC, LD, HD}) -> {LD, HD} end,
+                        {LDL, HDL} =
+                            lists:unzip(lists:map(MapFun, PBDL)),
+                        LoDT = lists:min(LDL),
+                        HiDT = lists:max(HDL),
+                        lager:info("Setting range to bucket=all ~w ~w " ++
+                                    " last_count=~w set by work_item=~w",
+                                    [LoDT, HiDT, length(ToRepair), WorkType]),
+                        set_range(all, all, LoDT, HiDT),
+                        ok
+                end;
+            false ->
                 ok
         end
     end.
