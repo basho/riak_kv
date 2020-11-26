@@ -865,7 +865,7 @@
 %% impact on KV performance when repairs are required.
 {mapping, "ttaaefs_maxresults", "riak_kv.ttaaefs_maxresults", [
   {datatype, integer},
-  {default, 128}
+  {default, 64}
 ]}.
 
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
