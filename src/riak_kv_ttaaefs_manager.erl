@@ -1000,7 +1000,7 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
                 % Use the best result from the key count if this alone is
                 % better than the target, otherwise an 'all' bucket range
                 % query should be set
-                {B, KC, LowDT, HighDT} = hd(lists:keysort(2, PBDL)),
+                {B, KC, LowDT, HighDT} = lists:last(lists:keysort(2, PBDL)),
                 case KC > TargetForRange of
                     true ->
                         lager:info("Setting range to bucket=~p ~w ~w " ++
