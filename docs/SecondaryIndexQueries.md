@@ -191,7 +191,7 @@ This query should match the example record, and this can be found by creating a 
 ```
 {index,
     ?BUCKET,
-    <<"psearch_bin">>,
+    <<"pfinder_bin">>,
     <<"SM">>, <<"SM~">>,
     true,
     "^SM[^\|]*KOWSKI\\|"}
