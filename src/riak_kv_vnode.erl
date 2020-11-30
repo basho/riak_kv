@@ -214,6 +214,7 @@
     %% Queue time in ms to prompt a sync ping.
 -define(AAE_SKIP_COUNT, 10).
 -define(AAE_LOADING_WAIT, 5000).
+-define(EXCHANGE_PAUSE_MS, 1000).
 
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
@@ -1230,16 +1231,21 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                                                 {Remote, RN}]),
                         ReplyFun = tictac_returnfun(Idx, exchange),
                         ScanTimeout = ?AAE_SKIP_COUNT * XTick,
+                        ExchangePause =
+                            app_helper:get_env(riak_kv,
+                                                tictacaae_exchangepause,
+                                                ?EXCHANGE_PAUSE_MS),
+                        BaseOptions =
+                            [{scan_timeout, ScanTimeout},
+                                {transition_pause_ms, ExchangePause},
+                                {purpose, kv_aae}],
                         ExchangeOptions =
                             case app_helper:get_env(riak_kv,
                                                     tictacaae_maxresults) of
                                 MR when is_integer(MR) ->
-                                    [{scan_timeout, ScanTimeout},
-                                        {max_results, MR},
-                                        {purpose, kv_aae}];
+                                    BaseOptions ++ [{max_results, MR}];
                                 _ ->
-                                    [{scan_timeout, ScanTimeout},
-                                        {purpose, kv_aae}]
+                                    BaseOptions
                             end,
                         aae_exchange:start(full,
                                             BlueList, 

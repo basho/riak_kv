@@ -61,7 +61,7 @@
 -define(CRASH_TIMEOUT, 7200 * 1000).
     % Assume that an exchange has crashed if not response received in this
     % interval, to allow exchanges to be re-scheduled.
--define(EXCHANGE_PAUSE, 1000).
+-define(EXCHANGE_PAUSE_MS, 1000).
     % Pause between stages of the AAE exchange
 -define(MAX_RESULTS, 64).
     % Max nu,ber of segments in the AAE tree to be repaired each loop
@@ -672,6 +672,10 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                     Ref,
                                     WorkType),
 
+            ExchangePause =
+                app_helper:get_env(riak_kv,
+                                    tictacaae_exchangepause,
+                                    ?EXCHANGE_PAUSE_MS),
             {ok, ExPid, ExID} =
                 aae_exchange:start(Ref,
                                     [{LocalSendFun, all}],
@@ -679,7 +683,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                     RepairFun,
                                     ReplyFun,
                                     Filter, 
-                                    [{transition_pause_ms, ?EXCHANGE_PAUSE},
+                                    [{transition_pause_ms, ExchangePause},
                                         {max_results, MaxResults},
                                         {scan_timeout, ?CRASH_TIMEOUT div 2},
                                         {purpose, WorkType}]),
