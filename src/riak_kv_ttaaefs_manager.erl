@@ -46,9 +46,7 @@
 
 -export([set_range/4,
             clear_range/0,
-            get_range/0,
-            set_cacherepair/0,
-            reset_cacherepair/0]).
+            get_range/0]).
 
 -define(SLICE_COUNT, 100).
 -define(SECONDS_IN_DAY, 86400).
@@ -363,7 +361,6 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
                 {max(?LOOP_TIMEOUT, (Duration div 1000) div 2),
                     State#state{previous_success = false}}
         end,
-    reset_cacherepair(),
     {noreply, State0, Pause};
 handle_cast({no_check, ReqID, From, _}, State) ->
     case ReqID of
@@ -386,7 +383,6 @@ handle_cast({all_check, ReqID, From, _Now}, State) ->
                     T ++ [H],
                     partial}
         end,
-    set_cacherepair(),
     {State0, Timeout} =
         sync_clusters(From, ReqID, LNVal, RNVal, Filter,
                         NextBucketList, Ref, State,
@@ -589,27 +585,7 @@ clear_range() ->
 get_range() ->
     application:get_env(riak_kv, ttaaefs_check_range, none).
 
-%% @doc
-%% On an all_check, set this node into cache repair mode, this will rebuild the
-%% cache tree for any dirty segments as part of the full-sync.  May resolve
-%% any issues with the broken cache.  When renning all_check with cache repair
-%% the AF3_QUEUE is not used, instead the aae_runner queue is used - this will
-%% increase the parallelisation and speed of the query.  On nodes with
-%% constrained access to resources (especially CPU), this might impact KV
-%% performance.  By setting only on the node that prompted the query, it is
-%% possible to allow for repairs, with reduced risk to cluster stability, as
-%% the other nodes will continue to use the AF3_QUEUE.
--spec set_cacherepair() -> ok.
-set_cacherepair() ->
-    application:set_env(riak_kv, aae_fetchclocks_repair, true).
 
--spec reset_cacherepair() -> ok.
-reset_cacherepair() ->
-    application:set_env(riak_kv,
-                        aae_fetchclocks_repair,
-                        app_helper:get_env(riak_kv,
-                                            aae_fetchclocks_alwaysrepair,
-                                            false)).
 
 
 %%%============================================================================
@@ -1001,17 +977,16 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
             end,
         case length(ToRepair) > TargetForRange of
             true ->
-                % Use the best result from the key count if this alone is
-                % better than the target, otherwise an 'all' bucket range
-                % query should be set
-                {B, KC, LowDT, HighDT} = lists:last(lists:keysort(2, PBDL)),
-                case KC > TargetForRange of
-                    true ->
+                % If there is a single bucket, use that as a constraint,
+                % otherwise query over all buckets on the given modified
+                % range
+                case PBDL of
+                    [{B, KC, LowDT, HighDT}] ->
                         lager:info("Setting range to bucket=~p ~w ~w " ++
                                     " last_count=~w set by work_item=~w",
                                     [B, LowDT, HighDT, KC, WorkType]),
                         set_range(B, all, LowDT, HighDT);
-                    false ->
+                    _ ->
                         MapFun = fun({_B, _KC, LD, HD}) -> {LD, HD} end,
                         {LDL, HDL} =
                             lists:unzip(lists:map(MapFun, PBDL)),
