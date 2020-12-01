@@ -24,7 +24,7 @@ The relative negatives of the Riak NextGen replication solution are:
 
 For this getting started, it is assumed that the setup involves:
 
-- 2 8-node clusters where all data is nval=3
+- 2 x 8-node clusters where all data is nval=3
 
 - A requirement to both real-time replicate and full-sync reconcile between clusters;
 
@@ -52,7 +52,7 @@ Running an alternative delete mode, is tested, and will work, but there will be 
 
 ### Enable Tictac AAE
 
-to use the full-sync mechanisms, and the operational tools then TictacAAE must be enabled:
+To use the full-sync mechanisms, and the operational tools then TictacAAE must be enabled:
 
 ```
 tictacaae_active = active
@@ -118,20 +118,19 @@ Once there are peer relationships, a schedule is required, and a capacity must b
 
 ```
 ttaaefs_allcheck = 2
-
 ttaaefs_hourcheck = 0
-
 ttaaefs_daycheck = 10
-
 ttaaefs_rangecheck = 24
 
+ttaaefs_maxresults = 64
+ttaaefs_rangeboost = 8
 ```
 
 The schedule is how many times each 24 hour period to run a check of the defined type.  The schedule is re-shuffled at random each day, and is specific to that nodes peer relationship.
 
 As this is a configuration for nval full-sync, all of the data will always be compared - by merging a cluster-wide tictac tree and comparing the trees of both clusters. If a delta is found by that comparison, the scheduled work item determines what to do next:
 
-- `all` indicates that the whole database should be scanned for all time looking for deltas, but only for deltas in a limited numbe of broken leaves of the merkle tree (the `ttaaefs_maxresults`).
+- `all` indicates that the whole database should be scanned for all time looking for deltas, but only for deltas in a limited number of broken leaves of the merkle tree (the `ttaaefs_maxresults`).
 
 - `hour` or `day` restricts he scan to data modified in the past hour or past 24 hours.
 
@@ -147,6 +146,14 @@ It is possible to enhance the speed of recovery when there is capacity by manual
 
 ### Configure work queues
 
+There are two per-node worker pools which have particular relevance to full-sync:
+
+```
+af1_worker_pool_size = 2
+af3_worker_pool_size = 4
+```
+
+The AF1 pool is used by rebuilds of the AA tree cache.
 
 ### Monitoring full-sync exchanges via logs
 
@@ -171,6 +178,43 @@ If there is a need to investigate further what keys are the cause of the mismatc
 application:set_env(riak_kv, ttaaefs_logrepairs, true).
 ```
 
+This will produce logs for each individual key:
 
+```
+@riak_kv_ttaaefs_manager:generate_repairfun:973 Repair B=<<"domainDocument_T9P3">> K=<<"000154901001742561">> SrcVC=[{<<170,167,80,233,12,35,181,35,0,49,73,147>>,{1,63773035994}},{<<170,167,80,233,12,35,181,35,0,97,246,69>>,{1,63773990260}}] SnkVC=[{<<170,167,80,233,12,35,181,35,0,49,73,147>>,{1,63773035994}}]
+
+@riak_kv_ttaaefs_manager:generate_repairfun:973 Repair B=<<"domainDocument_T9P3">> K=<<"000154850002055021">> SrcVC=[{<<170,167,80,233,12,35,181,35,0,49,67,85>>,{1,63773035957}},{<<170,167,80,233,12,35,181,35,0,97,246,68>>,{1,63773990260}}] SnkVC=[{<<170,167,80,233,12,35,181,35,0,49,67,85>>,{1,63773035957}}]
+
+@riak_kv_ttaaefs_manager:generate_repairfun:973 Repair B=<<"domainDocument_T9P3">> K=<<"000154817001656137">> SrcVC=[{<<170,167,80,233,12,35,181,35,0,49,71,90>>,{1,63773035982}},{<<170,167,80,233,12,35,181,35,0,97,246,112>>,{1,63773990382}}] SnkVC=[{<<170,167,80,233,12,35,181,35,0,49,71,90>>,{1,63773035982}}]
+
+@riak_kv_ttaaefs_manager:generate_repairfun:973 Repair B=<<"domainDocument_T9P3">> K=<<"000154801000955371">> SrcVC=[{<<170,167,80,233,12,35,181,35,0,49,70,176>>,{1,63773035978}},{<<170,167,80,233,12,35,181,35,0,97,246,70>>,{1,63773990260}}] SnkVC=[{<<170,167,80,233,12,35,181,35,0,49,70,176>>,{1,63773035978}}]
+```
+
+At the end of each stage a log EX003 is produced which explains the outcome of the exchange:
+
+```
+log_level=info log_ref=EX003 pid=<0.30710.6> Normal exit for full exchange purpose=day_check in_sync=true  pending_state=root_compare for exchange id=8c11ffa2-13a6-4aca-9c94-0a81c38b4b7a scope of mismatched_segments=0 root_compare_loops=2  branch_compare_loops=0  keys_passed_for_repair=0
+
+log_level=info log_ref=EX003 pid=<0.13013.1264> Normal exit for full exchange purpose=range_check in_sync=false  pending_state=clock_compare for exchange id=921764ea-01ba-4bef-bf5d-5712f4d81ae4 scope of mismatched_segments=1 root_compare_loops=3  branch_compare_loops=2  keys_passed_for_repair=15
+```
+
+The mismatched_segments is an estimate of the scope of damage to the tree.  Even if clock_compare shows no deltas, clusters are not considered in_sync until deltas are not shown with tree comparisons (e.g. root_compare or branch_compare return 0).
 
 ## Useful `remote_console` commands
+
+### Prompting a check
+
+
+### Overriding the range
+
+
+### Re-replicating keys for a given time period
+
+
+### Reaping tombstones
+
+
+### Erasing keys and buckets
+
+
+### Gathering per-bucket object stats
