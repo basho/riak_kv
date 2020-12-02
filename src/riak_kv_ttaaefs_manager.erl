@@ -413,7 +413,7 @@ handle_cast({day_check, ReqID, From, Now}, State) ->
             % Note that the tree size is amended as well as the time range.
             % The bigger the time range, the bigger the tree.  Bigger trees
             % are less efficient when there is little change, but can more
-            % accurately reflect bigger changes (with less fasle positives).
+            % accurately reflect bigger changes (with less false positives).
             Filter =
                 {filter, H, all, medium, all,
                 {LowerTime, UpperTime}, pre_hash},
@@ -835,11 +835,7 @@ remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs) of
             {ok, {keysclocks, KeysClocks}} ->
-                MapFun =
-                    fun({{B, K}, VC}) ->
-                        {B, K, decode_clock(VC)}
-                    end,
-                ReturnFun(lists:map(MapFun, KeysClocks));
+                ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in clocks request", [Error]),
                 ReturnFun({error, Error})
@@ -849,11 +845,7 @@ remote_sender({fetch_clocks, SegmentIDs, MR}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs, MR) of
             {ok, {keysclocks, KeysClocks}} ->
-                MapFun =
-                    fun({{B, K}, VC}) ->
-                        {B, K, decode_clock(VC)}
-                    end,
-                ReturnFun(lists:map(MapFun, KeysClocks));
+                ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in clocks request", [Error]),
                 ReturnFun({error, Error})
@@ -877,16 +869,18 @@ remote_sender({fetch_clocks_range, B0, KR, SF, MR},
     fun() ->
         case Mod:aae_range_clocks(Client, B0, KR, SF0, MR) of
             {ok, {keysclocks, KeysClocks}} ->
-                MapFun =
-                    fun({{B, K}, VC}) ->
-                        {B, K, decode_clock(VC)}
-                    end,
-                ReturnFun(lists:map(MapFun, KeysClocks));
+                ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in segment request", [Error]),
                 ReturnFun({error, Error})
         end
     end.
+
+-spec remote_decode({{riak_object:bucket(), riak_object:key()}, binary()}) ->
+                    {riak_object:bucket(), riak_object:key(), vclock:vclock()}.
+remote_decode({{B, K}, VC}) ->
+    {B, K, decode_clock(VC)}.
+
 
 %% @doc
 %% The segment filter as produced by aae_exchange has a different format to
@@ -1110,9 +1104,10 @@ take_next_workitem([NextAlloc|T], Wants,
 %% configured schedule-needs.
 -spec choose_schedule(schedule_wants()) -> list(allocation()).
 choose_schedule(ScheduleWants) ->
-    [{no_check, NoSync}, {all_check, AllSync},
+    [{all_check, AllSync},
         {day_check, DaySync}, {hour_check, HourSync},
-        {range_check, RangeSync}] = ScheduleWants,
+        {no_check, NoSync},
+        {range_check, RangeSync}] = lists:sort(ScheduleWants),
     SliceCount = NoSync + AllSync + DaySync + HourSync + RangeSync,
     Slices = lists:seq(1, SliceCount),
     Allocations = [],

@@ -857,9 +857,9 @@
 %% but will increase the number of exchanges required to complete a repair.
 %% If using range_check to speed-up repairs, this can be reduced as the
 %% range_check maxresults will be boosted by the ttaaefs_rangeboost  When using
-%% range_check a value of 64 is recommended, reducing to 32 or 16 if the cluster
-%% has very a large volume of keys and limited capacity.  Only reduce below
-%% 16 in exceptional circumstances.
+%% range_check a value of 64 is recommended, which may be reduced to 32 or 16
+%% if the cluster has very a large volume of keys and/or limited capacity. 
+%% Only reduce below 16 in exceptional circumstances.
 %% More capacity to process sync queries can be added by increaseing the af2
 %% and af3 queue sizes - but this will be at the risk of there being a bigger
 %% impact on KV performance when repairs are required.
@@ -871,9 +871,9 @@
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
 %% compared per exchange.  When running a range_check query this will be the
 %% ttaaefs_max results * ttaaefs_rangeboost.
-%% When using range_check, a small maxresults can be used, ineffecting making
-%% other *_check syncs can be treated as discovery queries (to find the range_check
-%% for the range_check to do the heavy lifting) 
+%% When using range_check, a small maxresults can be used, in effect using
+%% other *_check syncs as discovery queries (to find the range_check for the
+%% range_check to do the heavy lifting) 
 {mapping, "ttaaefs_rangeboost", "riak_kv.ttaaefs_rangeboost", [
   {datatype, integer},
   {default, 8}

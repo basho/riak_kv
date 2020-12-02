@@ -218,3 +218,6 @@ The mismatched_segments is an estimate of the scope of damage to the tree.  Even
 
 
 ### Gathering per-bucket object stats
+
+
+## Useful splunk queries
