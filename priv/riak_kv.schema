@@ -858,7 +858,7 @@
 %% If using range_check to speed-up repairs, this can be reduced as the
 %% range_check maxresults will be boosted by the ttaaefs_rangeboost  When using
 %% range_check a value of 64 is recommended, which may be reduced to 32 or 16
-%% if the cluster has very a large volume of keys and/or limited capacity. 
+%% if the cluster has a very large volume of keys and/or limited capacity. 
 %% Only reduce below 16 in exceptional circumstances.
 %% More capacity to process sync queries can be added by increaseing the af2
 %% and af3 queue sizes - but this will be at the risk of there being a bigger
