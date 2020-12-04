@@ -474,7 +474,7 @@ handle_cast({range_check, ReqID, From, Now}, State) ->
                         NowSecs = MegaSecs * ?MEGA  + Secs,
                         {all,
                             all,
-                            PrevMega * ?MEGA + PrevSecs - 60,
+                            PrevMega * ?MEGA + PrevSecs,
                             NowSecs}
                 end;
             SetRange ->
@@ -522,7 +522,7 @@ handle_cast({range_check, ReqID, From, Now}, State) ->
                     {State0, Timeout} =
                         sync_clusters(From, ReqID, range, range, Filter,
                                         NextBucketList, partial, State,
-                                        hour_check),
+                                        range_check),
                     {noreply, State0, Timeout}
             end
     end.
