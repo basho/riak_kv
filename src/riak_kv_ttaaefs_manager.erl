@@ -1104,17 +1104,17 @@ take_next_workitem([NextAlloc|T], Wants,
 %% configured schedule-needs.
 -spec choose_schedule(schedule_wants()) -> list(allocation()).
 choose_schedule(ScheduleWants) ->
-    [{all_check, AllSync},
-        {day_check, DaySync}, {hour_check, HourSync},
-        {no_check, NoSync},
-        {range_check, RangeSync}] = lists:sort(ScheduleWants),
-    SliceCount = NoSync + AllSync + DaySync + HourSync + RangeSync,
+    [{all_check, AllCheck},
+        {day_check, DayCheck}, {hour_check, HourCheck},
+        {no_check, NoCheck},
+        {range_check, RangeCheck}] = lists:sort(ScheduleWants),
+    SliceCount = NoCheck + AllCheck + DayCheck + HourCheck + RangeCheck,
     Slices = lists:seq(1, SliceCount),
     Allocations = [],
     lists:sort(
         choose_schedule(Slices,
                         Allocations,
-                        {NoSync, AllSync, DaySync, HourSync, RangeSync})).
+                        {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck})).
 
 -spec choose_schedule(list(pos_integer()),
                         list({pos_integer(), work_item()}),
@@ -1126,36 +1126,38 @@ choose_schedule(ScheduleWants) ->
                                 list({pos_integer(), work_item()}).
 choose_schedule([], Allocations, {0, 0, 0, 0, 0}) ->
     lists:ukeysort(1, Allocations);
-choose_schedule(Slices, Allocations, {NoSync, 0, 0, 0, 0}) ->
+choose_schedule(Slices, Allocations, {NoCheck, 0, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, no_check}|Allocations],
-                    {NoSync - 1, 0, 0, 0, 0});
-choose_schedule(Slices, Allocations, {NoSync, AllSync, 0, 0, 0}) ->
+                    {NoCheck - 1, 0, 0, 0, 0});
+choose_schedule(Slices, Allocations, {NoCheck, AllCheck, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, all_check}|Allocations],
-                    {NoSync, AllSync - 1, 0, 0, 0});
-choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, 0, 0}) ->
+                    {NoCheck, AllCheck - 1, 0, 0, 0});
+choose_schedule(Slices, Allocations, {NoCheck, AllCheck, DayCheck, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, day_check}|Allocations],
-                    {NoSync, AllSync, DaySync - 1, 0, 0});
-choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, HourSync, 0}) ->
+                    {NoCheck, AllCheck, DayCheck - 1, 0, 0});
+choose_schedule(Slices, Allocations,
+                {NoCheck, AllCheck, DayCheck, HourCheck, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, hour_check}|Allocations],
-                    {NoSync, AllSync, DaySync, HourSync - 1, 0});
-choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, HourSync, RangeSync}) ->
+                    {NoCheck, AllCheck, DayCheck, HourCheck - 1, 0});
+choose_schedule(Slices, Allocations,
+                {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
                     [{Allocation, range_check}|Allocations],
-                    {NoSync, AllSync, DaySync, HourSync, RangeSync - 1}).
+                    {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck - 1}).
 
 
 %%%============================================================================

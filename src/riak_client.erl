@@ -879,8 +879,8 @@ ttaaefs_fullsync(WorkItem, SecsTimeout, Now) ->
     wait_for_reqid(ReqId, SecsTimeout * 1000).
 
 
--spec remove_node_from_coverage() -> ok.
-remove_node_from_coverage() ->
+-spec participate_in_coverage(boolean()) -> ok.
+participate_in_coverage(Participate) ->
     F =
         fun(Ring, _) ->
             {new_ring, 
@@ -888,26 +888,19 @@ remove_node_from_coverage() ->
                                                     Ring,
                                                     node(),
                                                     participate_in_coverage,
-                                                    false)}
+                                                    Participate)}
         end,
     {ok, _FinalRing} = riak_core_ring_manager:ring_trans(F, undefined),
     ok.
 
+-spec remove_node_from_coverage() -> ok.
+remove_node_from_coverage() ->
+    participate_in_coverage(false).
+
 -spec reset_node_for_coverage() -> ok.
 reset_node_for_coverage() ->
-    ParticipateInCoverage =
-        app_helper:get_env(riak_core,participate_in_coverage),
-    F =
-        fun(Ring, _) ->
-            {new_ring, 
-                riak_core_ring:update_member_meta(node(),
-                                                    Ring,
-                                                    node(),
-                                                    participate_in_coverage,
-                                                    ParticipateInCoverage)}
-        end,
-    {ok, _FinalRing} = riak_core_ring_manager:ring_trans(F, undefined),
-    ok.
+    participate_in_coverage(
+        app_helper:get_env(riak_core, participate_in_coverage)).
 
 %% @doc
 %% Run a hot backup - returns {ok, true} if successful
