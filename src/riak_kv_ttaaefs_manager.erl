@@ -781,7 +781,7 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
                 os:timestamp();
             {Mega, Sec, _Micro} ->
                 Seconds = Mega * ?MEGA + Sec + 86400,
-                {Seconds div ?MEGA, Seconds rem 1000, 0}
+                {Seconds div ?MEGA, Seconds rem ?MEGA, 0}
         end,
     take_next_workitem(NewAllocations, Wants,
                         RevisedStartTime, SlotInfo, SliceCount);
