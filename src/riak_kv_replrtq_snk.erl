@@ -425,8 +425,7 @@ code_change(_OldVsn, State, _Extra) ->
 calc_mean(_, 0) ->
     "no_result";
 calc_mean(Time, Count) ->
-    [Mean] = io_lib:format("~.3f",[(Time / Count) / 1000]),
-    Mean.
+    lists:flatten(io_lib:format("~.3f",[(Time / Count) / 1000])).
 
 %% @doc convert the tokenised string of peers from the configuration into actual
 %% usable peer information.

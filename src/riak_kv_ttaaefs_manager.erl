@@ -57,6 +57,8 @@
     % interval, to allow exchanges to be re-scheduled.
 -define(EXCHANGE_PAUSE, 1000).
     % Pause between stages of the AAE exchange
+-define(MEGA, 1000000).
+    % Timestamp conversion helper
 
 -record(state, {slice_allocations = [] :: list(allocation()),
                 slice_set_start :: erlang:timestamp(),
@@ -348,7 +350,7 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
         bucket ->
             [H|T] = State#state.bucket_list,
             {MegaSecs, Secs, _MicroSecs} = Now,
-            UpperTime = MegaSecs * 1000000  + Secs,
+            UpperTime = MegaSecs * ?MEGA  + Secs,
             LowerTime = UpperTime - 60 * 60,
             % Note that the tree size is amended as well as the time range.
             % The bigger the time range, the bigger the tree.  Bigger trees
@@ -371,7 +373,7 @@ handle_cast({day_sync, ReqID, From, Now}, State) ->
         bucket ->
             [H|T] = State#state.bucket_list,
             {MegaSecs, Secs, _MicroSecs} = Now,
-            UpperTime = MegaSecs * 1000000  + Secs,
+            UpperTime = MegaSecs * ?MEGA  + Secs,
             LowerTime = UpperTime - 60 * 60 * 24,
             % Note that the tree size is amended as well as the time range.
             % The bigger the time range, the bigger the tree.  Bigger trees
@@ -570,17 +572,24 @@ local_sender({fetch_clocks, SegmentIDs}, C, ReturnFun, NVal) ->
         ReturnFun(R)
     end;
 local_sender({merge_tree_range, B, KR, TS, SF, MR, HM}, C, ReturnFun, range) ->
+    LMR = localise_modrange(MR),
     fun() ->
         {ok, R} =
-            riak_client:aae_fold({merge_tree_range, B, KR, TS, SF, MR, HM}, C),
+            riak_client:aae_fold({merge_tree_range, B, KR, TS, SF, LMR, HM}, C),
         ReturnFun(R)
     end;
 local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, range) ->
+    LMR = localise_modrange(MR),
     fun() ->
         {ok, R} =
-            riak_client:aae_fold({fetch_clocks_range, B0, KR, SF, MR}, C),
+            riak_client:aae_fold({fetch_clocks_range, B0, KR, SF, LMR}, C),
         ReturnFun(R)
     end.
+
+localise_modrange(all) ->
+    all;
+localise_modrange({LowTime, HighTime}) ->
+    {date, LowTime, HighTime}.
 
 
 %% @doc
@@ -610,8 +619,7 @@ remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs) of
             {ok, {keysclocks, KeysClocks}} ->
-                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
-                            KeysClocks));
+                ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in clocks request", [Error]),
                 ReturnFun({error, Error})
@@ -635,13 +643,18 @@ remote_sender({fetch_clocks_range, B0, KR, SF, MR},
     fun() ->
         case Mod:aae_range_clocks(Client, B0, KR, SF0, MR) of
             {ok, {keysclocks, KeysClocks}} ->
-                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
-                                        KeysClocks));
+                ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in segment request", [Error]),
                 ReturnFun({error, Error})
         end
     end.
+
+-spec remote_decode({{riak_object:bucket(), riak_object:key()}, binary()}) ->
+                    {riak_object:bucket(), riak_object:key(), vclock:vclock()}.
+remote_decode({{B, K}, VC}) ->
+    {B, K, decode_clock(VC)}.
+
 
 %% @doc
 %% The segment filter as produced by aae_exchange has a different format to
@@ -707,7 +720,7 @@ generate_repairfun(ExchangeID, QueueName) ->
                                 LogRepairs} of
                             {false, true} ->
                                 lager:info(
-                                    "Repair B=~w K=~w SrcVC=~w SnkVC=~w",
+                                    "Repair B=~p K=~p SrcVC=~w SnkVC=~w",
                                         [B, K, SrcVC, SinkVCdecoded]),
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
                             {false, false} ->
@@ -767,8 +780,8 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
             undefined ->
                 os:timestamp();
             {Mega, Sec, _Micro} ->
-                Seconds = Mega * 1000 + Sec + 86400,
-                {Seconds div 1000, Seconds rem 1000, 0}
+                Seconds = Mega * ?MEGA + Sec + 86400,
+                {Seconds div ?MEGA, Seconds rem ?MEGA, 0}
         end,
     take_next_workitem(NewAllocations, Wants,
                         RevisedStartTime, SlotInfo, SliceCount);
@@ -780,9 +793,9 @@ take_next_workitem([NextAlloc|T], Wants,
     {SliceNumber, NextAction} = NextAlloc,
     {Mega, Sec, _Micro} = ScheduleStartTime,
     ScheduleSeconds = 
-        Mega * 1000 + Sec + SlotSeconds + SliceNumber * SliceSeconds,
+        Mega * ?MEGA + Sec + SlotSeconds + SliceNumber * SliceSeconds,
     {MegaNow, SecNow, _MicroNow} = os:timestamp(),
-    NowSeconds = MegaNow * 1000 + SecNow,
+    NowSeconds = MegaNow * ?MEGA + SecNow,
     case ScheduleSeconds > NowSeconds of
         true ->
             {NextAction, ScheduleSeconds - NowSeconds, T, ScheduleStartTime};
@@ -876,27 +889,27 @@ choose_schedule_test() ->
 take_first_workitem_test() ->
     Wants = [{no_sync, 100}, {all_sync, 0}, {day_sync, 0}, {hour_sync, 0}],
     {Mega, Sec, Micro} = os:timestamp(),
-    TwentyFourHoursAgo = Mega * 1000 + Sec - (60 * 60 * 24),
+    TwentyFourHoursAgo = Mega * ?MEGA + Sec - (60 * 60 * 24),
     {NextAction, PromptSeconds, _T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {1, 8},
                             100),
     ?assertMatch(no_sync, NextAction),
-    ?assertMatch(true, ScheduleStartTime > {Mega, Sec, Micro}),
+    ?assertMatch(true, ScheduleStartTime < {Mega, Sec, Micro}),
     ?assertMatch(true, PromptSeconds > 0),
     {NextAction, PromptMoreSeconds, _T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {2, 8},
                             100),
     ?assertMatch(true, PromptMoreSeconds > PromptSeconds),
     {NextAction, PromptEvenMoreSeconds, T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {7, 8},
                             100),
     ?assertMatch(true, PromptEvenMoreSeconds > PromptMoreSeconds),
