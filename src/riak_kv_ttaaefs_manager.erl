@@ -897,7 +897,7 @@ take_first_workitem_test() ->
                             {1, 8},
                             100),
     ?assertMatch(no_sync, NextAction),
-    ?assertMatch(true, ScheduleStartTime > {Mega, Sec, Micro}),
+    ?assertMatch(true, ScheduleStartTime < {Mega, Sec, Micro}),
     ?assertMatch(true, PromptSeconds > 0),
     {NextAction, PromptMoreSeconds, _T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
