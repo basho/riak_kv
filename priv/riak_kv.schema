@@ -157,7 +157,7 @@
 ]}.
 {mapping, "af1_worker_pool_size", "riak_kv.af1_worker_pool_size", [
   {datatype, integer},
-  {default, 1}
+  {default, 2}
 ]}.
 {mapping, "af2_worker_pool_size", "riak_kv.af2_worker_pool_size", [
   {datatype, integer},
@@ -165,7 +165,7 @@
 ]}.
 {mapping, "af3_worker_pool_size", "riak_kv.af3_worker_pool_size", [
   {datatype, integer},
-  {default, 2}
+  {default, 4}
 ]}.
 {mapping, "af4_worker_pool_size", "riak_kv.af4_worker_pool_size", [
   {datatype, integer},

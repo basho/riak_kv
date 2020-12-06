@@ -658,7 +658,7 @@ prompt_readrepair(VnodeList, LogRepair) ->
     LogFun = 
         fun({{B, K}, {BlueClock, PinkClock}}) ->
             lager:info(
-                "Prompted read repair Bucket=~w Key=~w Clocks ~w ~w",
+                "Prompted read repair Bucket=~p Key=~p Clocks ~w ~w",
                     [B, K, BlueClock, PinkClock])
         end,
     fun(RepairList) ->
