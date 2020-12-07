@@ -709,19 +709,18 @@ generate_repairfun(ExchangeID, QueueName) ->
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
                 % The erlify_aae_keyclock will have base64 decoded the clock
-                SinkVCdecoded = decode_clock(SinkVC),
-                case vclock_dominates(SinkVCdecoded, SrcVC) of
+                case vclock_dominates(SinkVC, SrcVC) of
                     true ->
                         {SourceL, SinkC + 1};
                     false ->
                         % If the vector clock in the source is not dominated
                         % by the sink, then we should replicate if it differs
-                        case {vclock_equal(SrcVC, SinkVCdecoded),
+                        case {vclock_equal(SrcVC, SinkVC),
                                 LogRepairs} of
                             {false, true} ->
                                 lager:info(
                                     "Repair B=~p K=~p SrcVC=~w SnkVC=~w",
-                                        [B, K, SrcVC, SinkVCdecoded]),
+                                        [B, K, SrcVC, SinkVC]),
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
                             {false, false} ->
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
