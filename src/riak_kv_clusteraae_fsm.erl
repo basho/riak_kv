@@ -34,7 +34,9 @@
 
 -export([json_encode_results/2,
             pb_encode_results/3,
-            hash_function/1]).
+            hash_function/1,
+            convert_fold/1,
+            is_valid_fold/1]).
 
 -define(EMPTY, <<>>).
 
@@ -117,7 +119,8 @@
 
     % Range-based AAE (requiring folds over native/parallel AAE key stores)
     {merge_tree_range, 
-        bucket(), key_range(), 
+        bucket(),
+        key_range(), 
         tree_size(),
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all,
@@ -161,7 +164,8 @@
         % - pre_hash (use the default pre-calculated hash)
         % - {rehash, IV} rehash the vector clock concatenated with an integer
     {fetch_clocks_range, 
-        bucket(), key_range(), 
+        bucket(),
+        key_range(), 
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all}|
         % Return the keys and clocks in the given bucket and key range.
@@ -192,7 +196,8 @@
         % curtailed).  The main downside of large result sets is network over
         % use.  Perhaps compressing the payload may be a better answer?
     {repl_keys_range, 
-        bucket(), key_range(), 
+        bucket(),
+        key_range(), 
         modified_range() | all,
         riak_kv_replrtq_src:queue_name()}|
         % Replicate all the objects in a given key and modified range.  By
@@ -208,7 +213,8 @@
 
     % Operational support functions
     {find_keys, 
-        bucket(), key_range(),
+        bucket(),
+        key_range(),
         modified_range() | all,
         {sibling_count, pos_integer()}|{object_size, pos_integer()}}|
         % Find all the objects in the key range that have more than
@@ -251,12 +257,16 @@
         % If only interested in the outcome of recent modifications,
         % use a modified_range().
 
-    {find_tombs, bucket(), key_range(), 
+    {find_tombs,
+        bucket(),
+        key_range(), 
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all} |
         % Find all tombstones in the range that match the criteria, and
         % return a list of keys and delete_hashes
-    {reap_tombs, bucket(), key_range(),
+    {reap_tombs,
+        bucket(),
+        key_range(),
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all,
         change_method()} |
@@ -264,7 +274,9 @@
         % reaper process, or using the process on each node (local to each
         % vnode fold).  Should return a count of all the tombstones for
         % which a reap request was made
-    {erase_keys, bucket(), key_range(),
+    {erase_keys,
+        bucket(),
+        key_range(),
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all,
         change_method()} |
@@ -768,6 +780,150 @@ merge_countinlists(ResultList, AccList) ->
 
 
 %% ===================================================================
+%% Validation and Conversion functions
+%% ===================================================================
+
+is_bucket({Type, Bucket}) when is_binary(Type), is_binary(Bucket) ->
+    true;
+is_bucket(Bucket) when is_binary(Bucket) ->
+    true;
+is_bucket(_) ->
+    false.
+
+is_keyrange({StartKey, EndKey})
+        when is_binary(StartKey), is_binary(EndKey), EndKey >=StartKey ->
+    true;
+is_keyrange(all) ->
+    true;
+is_keyrange(_) ->
+    false.
+
+is_nval(N) when is_integer(N) ->
+    true;
+is_nval(_) ->
+    false.
+
+is_segment_list(L) when is_list(L) ->
+    lists:all(fun is_integer/1, L);
+is_segment_list(_) ->
+    false. 
+
+is_segment_filter({segments, SegmentList, TreeSize}) ->
+    IsSegmentList = is_segment_list(SegmentList),
+    IsValidSize = leveled_tictac:valid_size(TreeSize),
+    IsSegmentList and IsValidSize;
+is_segment_filter(all) ->
+    true;
+is_segment_filter(_) ->
+    false.
+
+is_modrange({date, LowDT, HighDT})
+        when is_integer(LowDT), is_integer(HighDT), LowDT =< HighDT ->
+    true;
+is_modrange(all) ->
+    true;
+is_modrange(_) ->
+    false.
+
+
+convert_modrange({date, {LowDate, LowTime}, {HighDate, HighTime}}) 
+        when is_tuple(LowDate), is_tuple(LowTime),
+             is_tuple(HighDate), is_tuple(HighTime) ->
+    EpochTime =
+        calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
+    LowTS = 
+        calendar:datetime_to_gregorian_seconds({LowDate, LowTime})
+            - EpochTime,
+    HighTS =
+        calendar:datetime_to_gregorian_seconds({HighDate, HighTime})
+            - EpochTime,
+    {date, LowTS, HighTS};
+convert_modrange(ModRange) ->
+    ModRange.
+
+convert_fold({fetch_clocks_nval, NVal, LeafList, ModRange}) ->
+    {fetch_clocks_nval, NVal, LeafList, convert_modrange(ModRange)};
+convert_fold({merge_tree_range, B, KR, TS, SF, MR, HM}) ->
+    {merge_tree_range, B, KR, TS, SF, convert_modrange(MR), HM};
+convert_fold({fetch_clocks_range, B, KR, SF, MR}) ->
+    {fetch_clocks_range, B, KR, SF, convert_modrange(MR)};
+convert_fold({repl_keys_range, B, KR, MR, QN}) ->
+    {repl_keys_range, B, KR, convert_modrange(MR), QN};
+convert_fold({find_keys, B, KR, MR, L}) ->
+    {find_keys, B, KR, convert_modrange(MR), L};
+convert_fold({object_stats, B, KR, MR}) ->
+    {object_stats, B, KR, convert_modrange(MR)};
+convert_fold({find_tombs, B, KR, SF, MR}) ->
+    {find_tombs, B, KR, SF, convert_modrange(MR)};
+convert_fold({reap_tombs, B, KR, SF, MR, CM}) ->
+    {reap_tombs, B, KR, SF, convert_modrange(MR), CM};
+convert_fold({erase_keys, B, KR, SF, MR, CM}) ->
+    {erase_keys, B, KR, SF, convert_modrange(MR), CM};
+convert_fold(Fold) ->
+    Fold.
+
+is_valid_fold({merge_root_nval, NVal}) ->
+    is_nval(NVal);
+is_valid_fold({merge_branch_nval, NVal, BranchList}) ->
+    is_nval(NVal) and
+        is_segment_list(BranchList);
+is_valid_fold({fetch_clocks_nval, NVal, LeafList}) ->
+    is_nval(NVal) and
+        is_segment_list(LeafList);
+is_valid_fold({fetch_clocks_nval, NVal, LeafList, ModRange}) ->
+    is_nval(NVal) and
+        is_segment_list(LeafList) and
+        is_modrange(ModRange);
+is_valid_fold({merge_tree_range, B, KR, TS, SF, MR, _HM}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        leveled_tictac:valid_size(TS) and
+        is_segment_filter(SF) and
+        is_modrange(MR);
+is_valid_fold({fetch_clocks_range, B, KR, SF, MR}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_segment_filter(SF) and
+        is_modrange(MR);
+is_valid_fold({repl_keys_range, B, KR, MR, _QN}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_modrange(MR);
+is_valid_fold({find_keys, B, KR, MR, {sibling_count, I}}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_modrange(MR) and
+        is_integer(I);
+is_valid_fold({find_keys, B, KR, MR, {object_size, I}}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_modrange(MR) and
+        is_integer(I);
+is_valid_fold({object_stats, B, KR, MR}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_modrange(MR);
+is_valid_fold({find_tombs, B, KR, SF, MR}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_segment_filter(SF) and
+        is_modrange(MR);
+is_valid_fold({reap_tombs, B, KR, SF, MR, _CM}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_segment_filter(SF) and
+        is_modrange(MR);
+is_valid_fold({erase_keys, B, KR, SF, MR, _CM}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_segment_filter(SF) and
+        is_modrange(MR);
+is_valid_fold({list_buckets, NVal}) ->
+    is_nval(NVal);
+is_valid_fold(_InvalidFold) ->
+    false.
+
+%% ===================================================================
 %% EUnit tests
 %% ===================================================================
 -ifdef(TEST).
@@ -816,6 +972,33 @@ hash_function_test() ->
     Hash200 = HashFun200(VC1),
     ?assertMatch(true, is_integer(HashFun100(VC1))),
     ?assertMatch(false, Hash100 == Hash200).
+
+convert_validate_test() ->
+    Q1 = {object_stats, {<<"T">>, <<"B">>}, all, all},
+    Q2 = {object_stats, <<"B">>, all, all},
+    Q3 = {object_stats, <<"B">>, {<<"SK">>, <<"SK_">>}, all},
+    DR1 = {date, {{2020, 1, 1}, {12, 0, 0}}, {{2020, 12, 31}, {12, 0, 0}}},
+    DR2 = {date, 0, 9999999},
+    Q4 = {object_stats, <<"B">>, all, DR1},
+    Q5 = {object_stats, <<"B">>, all, DR2},
+    Q6 = {fetch_clocks_range, <<"B">>, all, all, all},
+    Q7 = {fetch_clocks_range, <<"B">>, all, {segments, lists:seq(1, 64), large}, all},
+    lists:foreach(fun(F) ->
+                        ?assertMatch(true, is_valid_fold(convert_fold(F)))
+                    end,
+                    [Q1, Q2, Q3, Q4, Q5, Q6, Q7]),
+                    
+    IQ1 = {objects_stats, {<<"T">>, <<"B">>}, all, all},
+    IQ2 = {object_stats, all, all, all},
+    IQ3 = {object_stats, <<"B">>, {<<"SK">>, <<"EK">>}, all},
+    IQ4 = {object_stats, <<"B">>, all, {date, element(3, DR1), element(2, DR1)}},
+    IQ5 = {object_stats, <<"B">>, all, {element(2, DR1), element(3, DR1)}},
+    IQ6 = {fetch_clocks_range, <<"B">>, all, {lists:seq(1, 64), large}, all},
+    IQ7 = {fetch_clocks_range, <<"B">>, all, {segments, lists:seq(1, 64), nano}, all},
+    lists:foreach(fun(F) ->
+                        ?assertMatch(false, is_valid_fold(convert_fold(F)))
+                    end,
+                    [IQ1, IQ2, IQ3, IQ4, IQ5, IQ6, IQ7]).
 
 -endif.
 

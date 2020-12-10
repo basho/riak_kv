@@ -846,10 +846,16 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
     TimeOut = ?DEFAULT_FOLD_TIMEOUT,
-    riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node,
-                                                    [{raw, ReqId, Me},
-                                                    [Query, TimeOut]]),
-    wait_for_fold_results(ReqId, TimeOut).
+    Q0 = riak_kv_clusteraae_fsm:convert_fold(Query),
+    case riak_kv_clusteraae_fsm:is_valid_fold(Q0) of
+        true ->
+            riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node,
+                                                            [{raw, ReqId, Me},
+                                                            [Query, TimeOut]]),
+            wait_for_fold_results(ReqId, TimeOut);
+        false ->
+            {error, "Invalid AAE fold definition"}
+    end.
 
 
 %% @doc
