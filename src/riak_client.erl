@@ -38,7 +38,7 @@
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
 -export([aae_fold/1, aae_fold/2]).
--export([ttaaefs_fullsync/2, ttaaefs_fullsync/3]).
+-export([ttaaefs_fullsync/1, ttaaefs_fullsync/2, ttaaefs_fullsync/3]).
 -export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
