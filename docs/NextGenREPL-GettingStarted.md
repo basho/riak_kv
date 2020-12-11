@@ -202,22 +202,125 @@ The mismatched_segments is an estimate of the scope of damage to the tree.  Even
 
 ## Useful `remote_console` commands
 
+By running `riak remote_console` in Riak 3.0, it is possible to attach to the running riak node.  From here it is possible to locally run requests on the cluster from that node.  This section covers some requests which may be useful when operating a cluster with NextGenREPL.
+
 ### Prompting a check
 
+Individual full-syncs between clusters can be triggered outside the standard schedule:
+
+```
+riak_client:ttaaefs_fullsync(all_check).
+```
+
+The `all_check` can be replaced with `hour_check`, `day_check` or `range_check` as required.  The request will uses the standard max_results and range_boost for the node.
+
+## Update the request limits
+
+If there is sufficient capacity to resolve a delta between clusters, but the current schedule is taking too long to resolve - the max_results and range_boost settings on a given node can be overridden.
+
+```
+application:set_env(riak_kv, ttaaefs_maxresults, 256).
+application:set_env(riak_kv, ttaaefs_rangeboost, 16).
+```
+
+Individual repair queries will do more work as these numbers are increased, but will repair more keys per cycle.  This can be used along with prompted checks (especially range checks) to rapidly resolve a delta.
 
 ### Overriding the range
 
+When a query successfully repairs a significant number of keys, it will set the range property to guide any future range queries on that node.  This range can be temporarily overridden, if, for example there exists more specific knowledge of what the range should be.  It may also be necessary to override the range when an even erroneously wipes the range (e.g. falling behind in the schedule will remove the range to force range_checks to throttle back their activity).
+
+To override the range (for the duration of one request):
+
+```
+riak_kv_ttaaefs_manager:set_range({Bucket, KeyRange, ModifiedRange}).
+```
+
+Bucket can be a specific bucket (e.g. `{<<"Type">>, <<"Bucket">>}` or `<<"Bucket">>`) or the keyword `all` to check all buckets (if nval full-sync is configured for this node). The KeyRange may also be `all` or a tuple of StartKey and EndKey.
+
+To remove the range:
+
+```
+riak_kv_ttaaefs_manager:clear_range().
+```
+
+Remember the `range_check` queries will only run if either: the last check on the node found the clusters in sync, or; a range has been defined.  Clearing the range may prevent future range_check queries from running until another check re-assigns a range.
 
 ### Re-replicating keys for a given time period
 
+The aae_fold `repl_keys_range` will replicate any key within the defined range to the clusters consuming from a defined queue.  For exampled, to replicate all keys in the bucket `<<"domainRecord">>` that were last modified between 3am and 4am on a 2020/09/01, to the queue `cluster_b`:
+
+```
+riak_client:aae_fold({repl_keys_range, <<"domainRecord">>, all, {date, {{2020, 9, 1}, {3, 0, 0}}, {{2020, 9, 1}, {4, 0, 0}}}, cluster_b}).
+```
+
+The fold will discover the keys in the defined range, and add them to the replication queue - but with a lower priority than freshly modified items, so the sink-side consumers will only consume these re-replicated items when they have excess capacity over and above that required to keep-up with current replication.
+
+The `all` in the above query may be replaced with a range of keys if that can be specified.  Also if there is a specific modified range, but multiple buckets to be re-replicated the bucket reference can be replaced with `all`.
 
 ### Reaping tombstones
 
 
+With the recommended delete_mode of `keep`, tombstones will be left permanently in the cluster following deletion.  It may be deemed, that a number of days after a set of objects have been deleted, that it is safe to reap tombstones.
+
+Reaping can be achieved through an aae_fold.  However, reaping is local to a cluster.  If full-sync is enabled when reaping from one cluster then a full-sync operation will discover a delta (between the existence of a tombstone, and the non-existence of an object) and then work to repair that delta (by re-replicating the tombstone).
+
+If reaping using aae_fold, it is recommended that the operator:
+
+- should reap in parallel from any clusters kept i sync with this one;
+- should have TTAAE full-sync temporarily suspended during the reap.
+
+To issue a reap fold, for all the tombstones in August, a query like this may be made at the `remote_console`:
+
+```
+riak_client:aae_fold({reap_tombs, all, all, all, {date, {{2020, 8, 1}, {0, 0, 0}}, {{2020, 9, 1}, {0, 0, 0}}}, local}).
+```
+
+Issue the same query with the method `count` in place of `local` if you first wish to count the number of tombstones before reaping them in a separate fold.
+
+
 ### Erasing keys and buckets
 
+It is possible to issue an aae_fold from `remote_console` to erase all the keys in a bucket, or a given key range or last-modified-date range within that bucket.  This is a replicated operation, so as each key is deleted, the delete action will be replicated to any real-time sync'd clusters.
+
+Erasing keys will not happen immediately, the fold will queue the keys at the `riak_kv_eraser` for deletion and they will be deleted one-by-one as a background process.
+
+This is not a reversible operation, once the deletion has been de-queued and acted upon.  The backlog of queue deletes can be cancelled at the `remote_console` on each node in turn using:
+
+```
+riak_kv_eraser:clear_queue(riak_kv_eraser).
+```
+
+See the `riak_kv_cluseraae_fsm` module for further details on how to form an aae_fold that erases keys.
 
 ### Gathering per-bucket object stats
 
+It is useful when considering the tuning of full-sync and replication, to understand the size and scope of data within the cluster.  On a per-bucket basis, object_stats can be discovered via aae_fold from the remote_console.
 
-## Useful splunk queries
+```
+riak_client:aae_fold({object_stats, <<"domainRecord">>, all, all}).
+```
+
+The above fold will return:
+
+- a count of objects in the buckets;
+
+- the total size of all the objects combined;
+
+- a histogram of count by number of siblings sibling;
+
+- a histogram of count by the order of magnitude of object size.
+
+The fold is run as a "best efforts" query on a constrained queue, so may take some time to complete.  A last-modified-date range may be used to get results for objects modified since a recent check.
+
+
+```
+riak_client:aae_fold({object_stats, <<"domainRecord">>, all, {date, {{2020, 8, 1}, {0, 0, 0}}, {{2020, 9, 1}, {0, 0, 0}}}}).
+```
+
+To find all the buckets with objects in the cluster for a given n_val (e.g. n_val = 3):
+
+```
+riak_client:aae_fold({list_buckets, 3}).
+```
+
+To find objects with more than a set number of siblings, and objects over a given size a `find_keys` fold can be used (see `riak_kv_clusteraae_fsm` for further details).  It is possible to run `find_keys` with a last_modified_date range to find only objects which have recently been modified which are of interest due to either their sibling count or object size.

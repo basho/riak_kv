@@ -37,7 +37,7 @@
 -export([stream_list_buckets/1,stream_list_buckets/2,
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
--export([aae_fold/2]).
+-export([aae_fold/1, aae_fold/2]).
 -export([ttaaefs_fullsync/2, ttaaefs_fullsync/3]).
 -export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
@@ -835,6 +835,11 @@ stream_list_buckets(Filter, Timeout, Client, Type,
     {ok, ReqId}.
 
 
+-spec aae_fold(riak_kv_clusteraae_fsm:query_definition())
+                    -> {ok, any()}|{error, timeout}|{error, Err :: term()}.
+aae_fold(Query) ->
+    aae_fold(Query, riak_client:new(node(), adhoc_aaefold)).
+
 %% @doc
 %%
 %% Run a cluster-wide AAE query - which can either access cached AAE
@@ -857,6 +862,10 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
             {error, "Invalid AAE fold definition"}
     end.
 
+
+-spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item()) -> ok.
+ttaaefs_fullsync(WorkItem) ->
+    ttaaefs_fullsync(WorkItem, 900).
 
 %% @doc
 %% Prompt a full-sync based on the current configuration, and using either
