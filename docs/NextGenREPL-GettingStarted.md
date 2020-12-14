@@ -1,6 +1,6 @@
 # Riak (NextGen) Replication - Getting started
 
-The Riak NextGen replication is an alternative to the riak_repl replication solution, with the benefits:
+The Riak NextGen replication is an alternative to the riak_repl replication solution, with these benefits:
 
 - allows for replication between clusters with different ring-sizes and n-vals;
 
@@ -14,11 +14,11 @@ The Riak NextGen replication is an alternative to the riak_repl replication solu
 
 The relative negatives of the Riak NextGen replication solution are:
 
-- greater responsibility on the operator to ensure that the provided configuration provides sufficient capacity and resilience.
+- greater responsibility on the operator to ensure that the configuration supplied across the nodes provides sufficient capacity and resilience.
 
-- very slow to resolve very large deltas between clusters, operator intervention to use alternative tools may be required.
+- slow to resolve very large deltas between clusters, operator intervention to use alternative tools may be required.
 
-- relative little production testing when compared to riak_repl.
+- relative little production testing when compared to `riak_repl`.
 
 ## Getting started
 
@@ -42,11 +42,9 @@ There are three possible delete modes for riak
 
 - Immediate.
 
-When running replication, it is strongly recommended to change from the default setting, and use to the delete mode of `keep`.  This needs to be added via a `riak_kv` section of the advanced.config file (there is no way of setting the delete mode via riak.conf).
+When running replication, it is strongly recommended to change from the default setting, and use to the delete mode of `keep`.  This needs to be added via a `riak_kv` section of the advanced.config file (there is no way of setting the delete mode via riak.conf).  Running `keep` will retain semi-permanent tombstones after deletion, that are important to avoid issues of object resurrection when running bi-directional replication between clusters.
 
-Running `keep` will retain semi-permanent tombstones after deletion, that are important to avoid issues of object resurrection when running bi-directional replication between clusters.
-
-When running Tictac AAE, the tombstones can now be reaped using the `reap_tomb` aae_fold query.  This allows for tombstones to be reaped after a long delay (e.g. 1 week).  Note though, that tombstone reaping needs to be conducted concurrently on replicating clusters, ideally with full-sync replication temporarily disabled - there is no automatic replication-friendly way of reaping tombstones.
+When running Tictac AAE, the tombstones can now be reaped using the `reap_tomb` aae_fold query.  This allows for tombstones to be reaped after a long delay (e.g. 1 week).  Note though, that tombstone reaping needs to be conducted concurrently on replicating clusters, ideally with full-sync replication temporarily disabled.  There is no fully-automated replication-friendly way of reaping tombstones.
 
 Running an alternative delete mode, is tested, and will work, but there will be a significantly increased probability of false-negative reconciliation events, that may consume resource on the cluster.
 
@@ -112,7 +110,7 @@ ttaaefs_peerport = 8087
 ttaaefs_peerprotocol = pb
 ```
 
-Unlike when configuring a real-time replication sink, each node can only have a single peer relationship with another node in the remote cluster.  note though, that all full-sync commands run across the whole cluster - so if a single peer relationship dies, some full-sync capacity is lost, but other peer relationships between different nodes still each cover the whole data set.
+Unlike when configuring a real-time replication sink, each node can only have a single peer relationship with another node in the remote cluster.  Note though, that all full-sync commands run across the whole cluster.  If a single peer relationship dies, some full-sync capacity is lost, but other peer relationships between different nodes will still cover the whole data set.
 
 Once there are peer relationships, a schedule is required, and a capacity must be defined.
 
@@ -126,7 +124,7 @@ ttaaefs_maxresults = 64
 ttaaefs_rangeboost = 8
 ```
 
-The schedule is how many times each 24 hour period to run a check of the defined type.  The schedule is re-shuffled at random each day, and is specific to that nodes peer relationship.
+The schedule is how many times each 24 hour period to run a check of the defined type.  The schedule is re-shuffled at random each day, and is specific to that node's peer relationship.
 
 As this is a configuration for nval full-sync, all of the data will always be compared - by merging a cluster-wide tictac tree and comparing the trees of both clusters. If a delta is found by that comparison, the scheduled work item determines what to do next:
 
@@ -136,7 +134,7 @@ As this is a configuration for nval full-sync, all of the data will always be co
 
 - `range`  is a "smart" check.  It will not be run when past queries have indicated nothing can be done to resolve the delta (for example as the other cluster is ahead, and only the source cluster can prompt fixes).  If past queries have shown the clusters to be synchronised, but then a delta occurs, the range_check will only scan for deltas since the last successful synchronisation.  If another check discovers the majority of deltas are in a certain bucket or modified range, the range query will switch to using this as a constraint for the scan.
 
-Each check is constrained by `ttaaefs_maxresults`, so that it only tries to resolve issues in a subset of broken leave sin the tree of that scale (there are o(1M) leaves to the tree overall).  However, the range checks will try and resolve more (as they are constrained by the range) - this will be the multiple of `ttaaefs_maxresults` and `ttaaefs_ranegboost`.
+Each check is constrained by `ttaaefs_maxresults`, so that it only tries to resolve issues in a subset of broken leaves in the tree of that scale (there are o(1M) leaves to the tree overall).  However, the range checks will try and resolve more (as they are constrained by the range) - this will be the multiple of `ttaaefs_maxresults` and `ttaaefs_ranegboost`.
 
 It is normally preferable to under-configure the schedule.  When over-configuring the schedule, i.e. setting too much repair work than capacity of the cluster allows, there are protections to queue those schedule items there is no capacity to serve, and proactively cancel items once the manager falls behind in the schedule.  However, those cancellations will reset range_checks and so may delay the overall time to recover.
 
@@ -224,7 +222,7 @@ riak_client:ttaaefs_fullsync(all_check).
 
 The `all_check` can be replaced with `hour_check`, `day_check` or `range_check` as required.  The request will uses the standard max_results and range_boost for the node.
 
-## Update the request limits
+### Update the request limits
 
 If there is sufficient capacity to resolve a delta between clusters, but the current schedule is taking too long to resolve - the max_results and range_boost settings on a given node can be overridden.
 
@@ -350,3 +348,29 @@ riak_client:reset_node_for_coverage()
 ```
 
 The `remove_node_from_coverage` function will push the local node out of any coverage plans being generated within the cluster (the equivalent of setting participate_in_coverage to false).  The `reset_node_for_coverage` will return the node to its configured setting (in the riak.conf file loaded at start up).
+
+### Increasing Sink Workers
+
+If queues are forming on the src cluster, more sink worker capacity might be required.  On each node the number of sink workers can be altered using:
+
+```
+riak_kv_replrtq_snk:set_workercount(replq, 32)
+```
+
+In this case `replq` is the name of the source-side queue from which this sink consumes, and 32 is the new number of workers to consume from this queue on that node.
+
+### Suspend full-sync
+
+If there are issues with full-sync and its resource consumption, it maybe suspended:
+
+```
+riak_kv_ttaaefs_manager:pause()
+```
+
+when full-sync is ready to be resumed on a node:
+
+```
+riak_kv_ttaaefs_manager:resume()
+```
+
+These run-time changes are relevant to the local node only and its peer relationships.  The node may still participate in full-sync operations prompted by a remote cluster even when full-sync is paused locally.
