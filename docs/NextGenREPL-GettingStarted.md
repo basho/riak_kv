@@ -87,7 +87,7 @@ For each node in the source there should be multiple sink nodes that have that n
 
 Sink workers can tolerate communication with dead peers in the source cluster, so sink configuration should be added in before expanding source clusters.
 
-The number of replrtq_sinkworkers needs to be tuned for each installation.  Higher throughput nodes may require more sinkworkers to be added.  If insufficient sink workers are added queues will build up.  The size of replication queue is logged as follows:
+The number of replrtq_sinkworkers needs to be tuned for each installation.  Higher throughput nodes may require more sink workers to be added.  If insufficient sink workers are added queues will build up.  The size of replication queue is logged as follows:
 
 `@riak_kv_replrtq_src:handle_info:414 QueueName=replq has queue sizes p1=0 p2=0 p3=0`
 
@@ -119,8 +119,8 @@ Once there are peer relationships, a schedule is required, and a capacity must b
 ```
 ttaaefs_allcheck = 2
 ttaaefs_hourcheck = 0
-ttaaefs_daycheck = 10
-ttaaefs_rangecheck = 24
+ttaaefs_daycheck = 22
+ttaaefs_rangecheck = 36
 
 ttaaefs_maxresults = 64
 ttaaefs_rangeboost = 8
@@ -138,11 +138,21 @@ As this is a configuration for nval full-sync, all of the data will always be co
 
 Each check is constrained by `ttaaefs_maxresults`, so that it only tries to resolve issues in a subset of broken leave sin the tree of that scale (there are o(1M) leaves to the tree overall).  However, the range checks will try and resolve more (as they are constrained by the range) - this will be the multiple of `ttaaefs_maxresults` and `ttaaefs_ranegboost`.
 
-The max results, the range boost can be updated at run-time via the `remote_console`.  Individual checks can also be prompted by the console to be unr in addition to the scheduled checks.
-
 It is normally preferable to under-configure the schedule.  When over-configuring the schedule, i.e. setting too much repair work than capacity of the cluster allows, there are protections to queue those schedule items there is no capacity to serve, and proactively cancel items once the manager falls behind in the schedule.  However, those cancellations will reset range_checks and so may delay the overall time to recover.
 
-It is possible to enhance the speed of recovery when there is capacity by manually requesting additional checks, or by temporarily overriding `ttaaefs_maxresults` and/or `ttaaefs_ranegboost`.
+It is possible to enhance the speed of recovery when there is capacity by manually requesting additional checks, or by temporarily overriding `ttaaefs_maxresults` and/or `ttaaefs_rangeboost`.
+
+In a cluster with 1bn keys, under a steady load including 2K PUTs per second, relative timings to complete different sync checks (assuming there exists a delta):
+
+- all_sync 150s - 200s;
+
+- day_sync 20s - 30s;
+
+- hour_sync 2s - 5s;
+
+- range_sync (depends on how recent the low point in the modified range is).
+
+Timings will vary depending on the total number of keys in the cluster, the rate of changes, the size of the delta and the precise hardware used.  Full-sync repairs tend to be relatively demanding of CPU (rather than disk I/O), so available CPU capacity is important.
 
 ### Configure work queues
 
@@ -324,3 +334,19 @@ riak_client:aae_fold({list_buckets, 3}).
 ```
 
 To find objects with more than a set number of siblings, and objects over a given size a `find_keys` fold can be used (see `riak_kv_clusteraae_fsm` for further details).  It is possible to run `find_keys` with a last_modified_date range to find only objects which have recently been modified which are of interest due to either their sibling count or object size.
+
+### Participate in Coverage
+
+The full-sync comparisons between clusters are based on coverage plans - a plan which returns a set of vnode to give r=1 coverage of the whole cluster.  When a node is known not to be in a good state (perhaps following a crash), it can be rejoined to the cluster, but made ineligible for coverage plans by using the `participate_in_coverage` configuration option.
+
+This can be useful when tree caches have not been rebuilt after a crash. The `participate_in_coverage` option can also be controlled without a re-start via the `riak remote_console`:
+
+```
+riak_client:remove_node_from_coverage()
+```
+
+```
+riak_client:reset_node_for_coverage()
+```
+
+The `remove_node_from_coverage` function will push the local node out of any coverage plans being generated within the cluster (the equivalent of setting participate_in_coverage to false).  The `reset_node_for_coverage` will return the node to its configured setting (in the riak.conf file loaded at start up).
