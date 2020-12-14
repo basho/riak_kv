@@ -29,9 +29,13 @@
 -endif.
 -include("riak_kv_wm_raw.hrl").
 
--export([start_link/6, start_link/7, start_link/8, delete/8]).
+-export([start_link/6, start_link/7, start_link/8, delete/8, generate_tombstone/2]).
 
 -include("riak_kv_dtrace.hrl").
+
+-define(TOMB_PAUSE, 10).
+
+
 
 start_link(ReqId, Bucket, Key, Options, Timeout, Client) ->
     {ok, proc_lib:spawn_link(?MODULE, delete, [ReqId, Bucket, Key,
@@ -75,14 +79,14 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,undefined) ->
     end;
 delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
     riak_core_dtrace:put_tag(io_lib:format("~p,~p", [Bucket, Key])),
+    TombPause = app_helper:get_env(riak_kv, tombstone_pause, ?TOMB_PAUSE),
     ?DTRACE(?C_DELETE_INIT2, [0], []),
     case get_w_options(Bucket, Options) of
         {error, Reason} ->
             ?DTRACE(?C_DELETE_INIT2, [-1], []),
             send_reply(Client, ReqId, {error, Reason});
         {W, PW, DW, PassThruOptions} ->
-            Obj0 = riak_object:new(Bucket, Key, <<>>, dict:store(?MD_DELETED,
-                                                                 "true", dict:new())),
+            Obj0 = generate_tombstone(Bucket, Key),
             Tombstone = riak_object:set_vclock(Obj0, VClock),
             {ok, C} = riak:local_client(ClientId),
             PutOpts = [{w,W}, {pw,PW}, {dw, DW}, {timeout,Timeout}] ++ PassThruOptions,
@@ -94,6 +98,7 @@ delete(ReqId,Bucket,Key,Options,Timeout,Client,ClientId,VClock) ->
                     ?DTRACE(?C_DELETE_INIT2, [1], [<<"reap">>]),
                     {ok, C2} = riak:local_client(),
                     AsyncTimeout = 60*1000,     % Avoid client-specified value
+                    timer:sleep(TombPause),
                     Res = riak_client:get(Bucket, Key, all, AsyncTimeout, C2),
                     ?DTRACE(?C_DELETE_REAPER_GET_DONE, [1], [<<"reap">>]),
                     Res;
@@ -200,6 +205,22 @@ get_w_options(Bucket, Options) ->
 extract_passthru_options(Options) ->
     [Opt || {K, _} = Opt <- Options,
             K == sloppy_quorum orelse K == n_val].
+
+-spec generate_tombstone(riak_object:bucket(), riak_object:key())
+                                                -> riak_object:riak_object().
+generate_tombstone(Bucket, Key) ->
+    TombLegacy =
+        riak_object:new(Bucket,
+                            Key,
+                            <<>>,
+                            dict:store(?MD_DELETED,"true", dict:new())),
+    case app_helper:get_env(riak_kv, tombstone_timestamp, true) of
+        true ->
+            riak_object:apply_updates(
+                riak_object:update_last_modified(TombLegacy));
+        _ ->
+            TombLegacy
+    end.
 
 %% ===================================================================
 %% EUnit tests
@@ -320,5 +341,12 @@ setup() ->
 cleanup() ->
     riak_kv_test_util:common_cleanup(?MODULE, fun configure/1).
 
+
+modifieddate_test() ->
+    T1 = generate_tombstone(<<"testb">>, <<"testk">>),
+    ?assertMatch(true,
+        riak_object:get_last_modified(
+            riak_object:get_metadata(T1)) 
+                    > {0, 0, 0}).
 
 -endif.

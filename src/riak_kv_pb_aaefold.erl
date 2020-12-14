@@ -77,7 +77,16 @@ process(#rpbaaefoldmergerootnvalreq{n_val = N}, State) ->
 process(#rpbaaefoldmergebranchnvalreq{n_val = N, id_filter = BF}, State) ->
     Query = {merge_branch_nval, N, BF},
     process_query(Query, State);
-process(#rpbaaefoldfetchclocksnvalreq{n_val = N, id_filter = SF}, State) ->
+process(#rpbaaefoldfetchclocksnvalreq{n_val = N,
+                                        id_filter = SF,
+                                        modified_range = IsModR,
+                                        last_mod_start = LMS,
+                                        last_mod_end = LME}, State)
+                                            when IsModR == true ->
+    Query = {fetch_clocks_nval, N, SF, {date, LMS, LME}},
+    process_query(Query, State);
+process(#rpbaaefoldfetchclocksnvalreq{n_val = N,
+                                        id_filter = SF}, State) ->
     Query = {fetch_clocks_nval, N, SF},
     process_query(Query, State);
 process(#rpbaaefoldmergetreesrangereq{type = T,
