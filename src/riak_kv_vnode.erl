@@ -214,24 +214,24 @@
     %% Queue time in ms to prompt a sync ping.
 -define(AAE_SKIP_COUNT, 10).
 -define(AAE_LOADING_WAIT, 5000).
+-define(EXCHANGE_PAUSE_MS, 1000).
 
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
-    %% Hot backups
+    %% Hot backups.  AAE cached tree rebuilds
 -define(AF2_QUEUE, riak_core_node_worker_pool:af2()).
     %% Assured Forwarding - pool 2
     %% Any other handle_coverage that responds queue (e.g. leveled keylisting)
 -define(AF3_QUEUE, riak_core_node_worker_pool:af3()).
     %% Assured Forwarding - pool 3
-    %% AAE queries (per-bucket with/without key_range).  AAE queries against
-    %% the cached tree do not use a pool (e.g. n_val queries)
+    %% AAE full-sync queries (per-bucket with/without key_range).
 -define(AF4_QUEUE, riak_core_node_worker_pool:af4()).
     %% Assured Forwarding - pool 4
     %% operational information queries (e.g. object_stats).  Replication folds
     %% for transition.  Reaping operations
 -define(BE_QUEUE, riak_core_node_worker_pool:be()).
-    %% Best efforts (aka scavenger) pool
-    %% Rebuilds
+    %% Best efforts (aka scavenger) pool.  
+    %% Parallel AAE store rebuilds
 
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
@@ -451,7 +451,7 @@ queue_tictactreerebuild(AAECntrl, Partition, OnlyIfBroken, State) ->
         fun(ok) ->
             ReturnFun(ok)
         end,
-    Pool = select_queue(be_pool, State),
+    Pool = select_queue(?AF1_QUEUE, State),
     riak_core_vnode:queue_work(Pool, 
                                 {fold, FoldFun, JustReturnFun},
                                 Sender,
@@ -1111,7 +1111,7 @@ handle_command({rebuild_complete, trees, _ST}, _Sender, State) ->
             {noreply, State#state{tictac_rebuilding = false}}
     end;
 
-handle_command({exchange_complete, {_EndState, DeltaCount}, ST},
+handle_command({exchange_complete, {EndState, DeltaCount}, ST},
                                                     _Sender, State) ->
     %% Record how many deltas were seen in the exchange
     %% Revert the skip_count to 0 so that exchanges can be made at the next
@@ -1119,6 +1119,15 @@ handle_command({exchange_complete, {_EndState, DeltaCount}, ST},
     XC = State#state.tictac_exchangecount + 1,
     DC = State#state.tictac_deltacount + DeltaCount,
     XT = State#state.tictac_exchangetime + timer:now_diff(os:timestamp(), ST),
+    case EndState of
+        PositiveState
+            when PositiveState == root_compare;
+                 PositiveState == branch_compare ->
+            ok;
+        UnwelcomeState ->
+            lager:info("Tictac AAE exchange for partition=~w pending_state=~w",
+                        [State#state.idx, UnwelcomeState])
+    end,
     {noreply, State#state{tictac_exchangecount = XC,
                             tictac_deltacount = DC,
                             tictac_exchangetime = XT,
@@ -1222,14 +1231,21 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                                                 {Remote, RN}]),
                         ReplyFun = tictac_returnfun(Idx, exchange),
                         ScanTimeout = ?AAE_SKIP_COUNT * XTick,
+                        ExchangePause =
+                            app_helper:get_env(riak_kv,
+                                                tictacaae_exchangepause,
+                                                ?EXCHANGE_PAUSE_MS),
+                        BaseOptions =
+                            [{scan_timeout, ScanTimeout},
+                                {transition_pause_ms, ExchangePause},
+                                {purpose, kv_aae}],
                         ExchangeOptions =
                             case app_helper:get_env(riak_kv,
                                                     tictacaae_maxresults) of
                                 MR when is_integer(MR) ->
-                                    [{scan_timeout, ScanTimeout},
-                                        {max_results, MR}];
+                                    BaseOptions ++ [{max_results, MR}];
                                 _ ->
-                                    [{scan_timeout, ScanTimeout}]
+                                    BaseOptions
                             end,
                         aae_exchange:start(full,
                                             BlueList, 
@@ -1686,15 +1702,44 @@ handle_aaefold({merge_branch_nval, Nval, BranchIDs},
                                         ReturnFun),
     {noreply, State};
 handle_aaefold({fetch_clocks_nval, Nval, SegmentIDs}, 
-                    _InitAcc, Nval,
-                    IndexNs, _Filtered, ReturnFun, Cntrl, _Sender,
+                    InitAcc, Nval,
+                    IndexNs, _Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
-    aae_controller:aae_fetchclocks(Cntrl, 
-                                    IndexNs, 
-                                    SegmentIDs, 
-                                    ReturnFun, 
-                                    fun preflistfun/2),
-    {noreply, State};
+    case app_helper:get_env(riak_kv, aae_fetchclocks_repair, false) of
+        true ->
+            aae_controller:aae_fetchclocks(Cntrl, 
+                                            IndexNs, 
+                                            SegmentIDs, 
+                                            ReturnFun, 
+                                            fun preflistfun/2),
+            
+            {noreply, State};
+        false ->
+            %% Using fetch_clocks_range will mean that the AF3_QUEUE will be
+            %% used for scheduling the work not the aae_runner.  Also, the 
+            %% fetch clock query will not attempt to rebuild segments of the
+            %% tree cache - this is left to internal anti-entropy
+            handle_aaefold({fetch_clocks_range,
+                                    all,
+                                    all,
+                                    {segments, SegmentIDs, large},
+                                    all},
+                                InitAcc, Nval,
+                                IndexNs, true, ReturnFun, Cntrl, Sender,
+                                State)
+    end;
+handle_aaefold({fetch_clocks_nval, Nval, SegmentIDs, ModifiedRange}, 
+                    InitAcc, Nval,
+                    IndexNs, _Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    handle_aaefold({fetch_clocks_range,
+                        all,
+                        all,
+                        {segments, SegmentIDs, large},
+                        ModifiedRange},
+                    InitAcc, Nval,
+                    IndexNs, true, ReturnFun, Cntrl, Sender,
+                    State);
 handle_aaefold({merge_tree_range, 
                         Bucket, KeyRange, 
                         _TreeSize, 
@@ -2034,11 +2079,13 @@ handle_aaefold({list_buckets, Nval},
     {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State}.
 
 
--spec aaefold_setrangelimiter(riak_object:bucket(), 
+-spec aaefold_setrangelimiter(riak_object:bucket() | all, 
                                 all | {riak_object:key(), riak_object:key()})
                                     -> aae_keystore:range_limiter().
 %% @doc
 %% Convert the format of the range limiter to one compatible with the aae store
+aaefold_setrangelimiter(all, all) ->
+    all;
 aaefold_setrangelimiter(Bucket, all) ->
     {buckets, [Bucket]};
 aaefold_setrangelimiter(Bucket, {StartKey, EndKey}) ->

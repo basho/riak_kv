@@ -216,11 +216,13 @@ The queue to write the discovery of any updates where *this* cluster has objects
 The queue defined here must also be defined in `replrtq_srcqueue`, and consumed by a `riak_kv_replrtq_snk` configured on another cluster.  The `replrtq_enablesrc` does NOT need to be enabled for this queue to function.  There will be need for a node on the remote cluster to have `replrtq_enablesink` enabled for the differences discovered by this full-sync to be pulled in to the remote cluster.
 
 `ttaaefs_bucketfilter_name = sample_bucketname`
+
 `ttaaefs_bucketfilter_type = default`
 
 To be configured if `ttaaefs_scope` is restricted to `bucket` - allows the bucket name to be configured, as well as the type if the type is not default.
 
 `ttaaefs_localnval = 3`
+
 `ttaaefs_remotenval = 3`
 
 To be configured if `ttaaefs_scope` is set to all.  The peer relationship will full-sync for all buckets/keys, but restricted to those buckets with this n_val.  There needs to be a 1:1 relationship between the clusters on n_vals - sets of buckets with an n_val can map to the same sets on a different cluster with a consistently different n_val.  If there are buckets with both n_val 3 and n_val 5 on a source cluster, it cannot sync if all buckets are n_val 1 on the sink cluster - but could sync if n_val 3 buckets mapped to n_val 1 buckets and n_val 5 buckets mapped to n_val 3 buckets on the sink.
@@ -237,15 +239,15 @@ The IP port and protocol to be used when communicating with the sink cluster.  T
 
 If it is necessary to encrypt the communication in transit, then the `pb` peer protocol must be used (and TLS security configured on the sink cluster `pb` api).  The port is the standard port of the application-facing Riak API for that cluster.
 
-`ttaaefs_allcheck = 100`
+`ttaaefs_allcheck = 24`
 
 `ttaaefs_nocheck = 0`
 
 If `all` is the scope for cluster full-sync, then only the `allcheck` and `nocheck` counts should be configured.  This is the number of times per day to run a sync operation (or in the case of `nocheck` to skip a sync operation).  It is preferable that the total number of sync's configured per-node within the cluster is the same for each node - this will allow for the cluster to best schedule work to avoid overlapping sync operations.  The `ttaaefs_nocheck` exists to allow these numbers to be evened up.
 
-For example if this cluster has a peer relationship with `cluster_b` with which it is expected to sync 100 times per day, and another node has a peer relationship with `cluster_c` and a requirement to sync 30 times per day - the second peer relationship should have 70 `ttaaefs_nocheck` syncs configured to balance the schedule within the cluster.
+For example if this cluster has a peer relationship with `cluster_b` with which it is expected to sync 24 times per day, and another node has a peer relationship with `cluster_c` and a requirement to sync 6 times per day - the second peer relationship should have 18 `ttaaefs_nocheck` syncs configured to balance the schedule within the cluster.
 
-`ttaaefs_allcheck = 100`
+`ttaaefs_allcheck = 24`
 
 `ttaaefs_nocheck = 0`
 
@@ -253,7 +255,7 @@ For example if this cluster has a peer relationship with `cluster_b` with which 
 
 `ttaaefs_daycheck = 0`
 
-If `bucket` or `type` is the scope for this node, then two additional sync counts can be configured.  The `hourcheck` and `daycheck` will be configured to sync only for objects modified in the past hour or day (as determined by the objects last_modified metadata).  When running a full-sync check restricted to a bucket or type, this is less efficient than running a check for an entire n_val as cached trees may not be used.  Running a `ttaaefs_allcheck` may take o(hour) on a large bucket, whereas `ttaaefs_daycheck` may be o(minute) and `ttaaefs_hourcheck` may be o(second).  so it would be preferable to frequently check recent modifications have synced correctly, and less frequently check that older modifications have synchronised.
+If `bucket` or `type` is the scope for this node, then two additional sync counts can be configured.  The `hourcheck` and `daycheck` will be configured to sync only for objects modified in the past hour or day (as determined by the objects last_modified metadata).  When running a full-sync check restricted to a bucket or type, this is less efficient than running a check for an entire n_val as cached trees may not be used.  Running a `ttaaefs_allcheck` may take o(hour) on a large bucket, whereas `ttaaefs_daycheck` may be o(minute) and `ttaaefs_hourcheck` may be o(second).  So it would be preferable to frequently check recent modifications have synced correctly, and less frequently check that older modifications have synchronised.
 
 A random distribution of checks is used, based on the allocated counts.  If a check count of 1 of N is set for a given check type, there is no pre-determination of when in the day that check will run.
 
@@ -262,6 +264,10 @@ If a previous check is still running when the allocated scheduled time for the n
 `ttaaefs_logrepairs = enabled`
 
 By default the `riak_kv_ttaaefs_manager` will log counts of keys repaired on each sync.  Enabling `ttaaefs_logrepairs` will log the Bucket and Key of every key re-queued for synchronisation via full-sync.
+
+`ttaaefs_maxresults = 256`
+
+A negative aspect of the Tictac AAE full-sync solution is that deltas are relatively slow to be fixed.  The Merkle tree used to represent the cluster has 1M segments, but only `ttaaefs_maxresults` segments will be repaired each cycle.  This means that if there are 100K discrepancies, and we assume these discrepancies are evenly distributed around the Merkle tree - it will take 400 full-sync cycles to complete the repair of the delta.
 
 *Replication Source [`riak_kv_replrtq_src`](https://github.com/martinsumner/riak_kv/blob/mas-i1691-ttaaefullsync/src/riak_kv_replrtq_src.erl)*
 

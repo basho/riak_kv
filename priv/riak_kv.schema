@@ -90,14 +90,15 @@
 
 %% @doc Frequency to prompt exchange per vnode
 %% The number of milliseconds which the vnode must wait between self-pokes to
-%% maybe prompt the next exchange. Default is 4 minutes - check all partitions
-%% when n=3 every 30 minutes.
+%% maybe prompt the next exchange. Default is 8 minutes - check all partitions
+%% when n=3 once every hour (in each direction).  A cycle of exchanges will
+%% take (n - 1) * n + 1 exchange ticks for each nval.  
 %% Note if this is to be reduced further the riak_core vnode_inactivity_timeout
 %% should also be reduced or handoffs may be blocked.  To be safe the 
 %% vnode_inactivity_timeout must be < 0.5 * the tictacaae_exchangetick. 
 {mapping, "tictacaae_exchangetick", "riak_kv.tictacaae_exchangetick", [
   {datatype, integer},
-  {default, 240000},
+  {default, 480000},
   hidden
 ]}.
 
@@ -153,11 +154,11 @@
 %% AAE rebuilds at present 
 {mapping, "node_worker_pool_size", "riak_kv.node_worker_pool_size", [
   {datatype, integer},
-  {default, 2}
+  {default, 4}
 ]}.
 {mapping, "af1_worker_pool_size", "riak_kv.af1_worker_pool_size", [
   {datatype, integer},
-  {default, 1}
+  {default, 2}
 ]}.
 {mapping, "af2_worker_pool_size", "riak_kv.af2_worker_pool_size", [
   {datatype, integer},
@@ -165,7 +166,7 @@
 ]}.
 {mapping, "af3_worker_pool_size", "riak_kv.af3_worker_pool_size", [
   {datatype, integer},
-  {default, 2}
+  {default, 4}
 ]}.
 {mapping, "af4_worker_pool_size", "riak_kv.af4_worker_pool_size", [
   {datatype, integer},
@@ -842,7 +843,7 @@
   {default, disabled}
 ]}.
 
-%% @doc for tictac full-sync what registered queue name on this cluster should
+%% @doc For tictac full-sync what registered queue name on this cluster should
 %% be use for passing references to data which needs to be replicated for AAE
 %% full-sync.  This queue name must be defined as a
 %% `riak_kv.replq<n>_queuename`, but need not be exlusive to full-sync (i.e. a
@@ -850,6 +851,33 @@
 {mapping, "ttaaefs_queuename", "riak_kv.ttaaefs_queuename", [
   {datatype, atom},
   {default, q1_ttaaefs}
+]}.
+
+%% @doc For tictac full-sync what is the maximum number of AAE segments to be
+%% compared per exchange.  Reducing this will speed up clock compare queries,
+%% but will increase the number of exchanges required to complete a repair.
+%% If using range_check to speed-up repairs, this can be reduced as the
+%% range_check maxresults will be boosted by the ttaaefs_rangeboost  When using
+%% range_check a value of 64 is recommended, which may be reduced to 32 or 16
+%% if the cluster has a very large volume of keys and/or limited capacity. 
+%% Only reduce below 16 in exceptional circumstances.
+%% More capacity to process sync queries can be added by increaseing the af2
+%% and af3 queue sizes - but this will be at the risk of there being a bigger
+%% impact on KV performance when repairs are required.
+{mapping, "ttaaefs_maxresults", "riak_kv.ttaaefs_maxresults", [
+  {datatype, integer},
+  {default, 64}
+]}.
+
+%% @doc For tictac full-sync what is the maximum number of AAE segments to be
+%% compared per exchange.  When running a range_check query this will be the
+%% ttaaefs_max results * ttaaefs_rangeboost.
+%% When using range_check, a small maxresults can be used, in effect using
+%% other *_check syncs as discovery queries (to find the range_check for the
+%% range_check to do the heavy lifting) 
+{mapping, "ttaaefs_rangeboost", "riak_kv.ttaaefs_rangeboost", [
+  {datatype, integer},
+  {default, 8}
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this
@@ -954,10 +982,20 @@
 ]}.
 
 %% @doc How many times per 24hour period should all the data be checked to
-%% confirm it is fully sync'd
+%% confirm it is fully sync'd.  When running a full (i.e. nval) sync this will
+%% check all the data under that nval between the clusters, and when the trees
+%% are out of alignment, will check across all data where the nval matches the
+%% specified nval.
+%% On large clusters (in terms of key count), this may take a long time - so
+%% allcheck should be scheduled infrequently, as other checks may be delayed by
+%% consumption of queue resource by the allcheck.
+%% The af3_queue size, and the ttaaefs_maxresults, both need to be tuned to
+%% ensure that the allcheck can run wihtin the 30 minute timeout.
+%% For per-bucket replication all is a reference to all of the data for that
+%% bucket, and warnings about sizing are specially relevant. 
 {mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [
   {datatype, integer},
-  {default, 100}
+  {default, 24}
 ]}.
 
 %% @doc How many times per 24hour period should no data be checked to
@@ -970,17 +1008,48 @@
 ]}.
 
 %% @doc How many times per 24hour period should the last hours data be checked
-%% to confirm it is fully sync'd.  This is relevant for per-bucket sync scope
-%% only, and will be ignored if all sync is enabled
+%% to confirm it is fully sync'd.
+%% For per-bucket replication, the tree comparison prompted by this will be
+%% constrained by the time period, as well as the keys and clocks checked for
+%% repair. For full, nval, replication - the tree comparison is across all
+%% time, but the keys and clocks checked for repair are constrained by the time
+%% period.
+%% Once deltas are outside of the last hour, an hourcheck can do
+%% nothing to resolve the data, but will still consume resource.
 {mapping, "ttaaefs_hourcheck", "riak_kv.ttaaefs_hourcheck", [
   {datatype, integer},
   {default, 0}
 ]}.
 
 %% @doc How many times per 24hour period should the last 24-hours of data be
-%% checked to confirm it is fully sync'd.  This si relevant for per-bucket
-%% sync scope only, and will be ignored if all sync is enabled
+%% checked to confirm it is fully sync'd.
+%% For per-bucket replication, the tree comparison prompted by this will be
+%% constrained by the time period, as well as the keys and clocks checked for
+%% repair. For full, nval, replication - the tree comparison is across all
+%% time, but the keys and clocks checked for repair are constrained by the time
+%% period.
+%% Once deltas are outside of the last hour, a daycheck can do
+%% nothing to resolve the data, but will still consume resource.
 {mapping, "ttaaefs_daycheck", "riak_kv.ttaaefs_daycheck", [
+  {datatype, integer},
+  {default, 0}
+]}.
+
+%% @doc How many times per 24hour period should the a range_check be run.  The
+%% range_check is intended to be a smart check, in that it will:
+%% - use a last_modified range starting from the last successful check as its
+%% range if the last check was successful (i.e. showed the clusters to be 
+%% in sync);
+%% - use a range identified by the last check (a last modified range, and
+%% perhaps also a specific Bucket) if a range to limit the issues has been
+%% identified by a previous failure
+%% - Not run at all if the clusters are out of sync and no range has been
+%% discovered (this may be the case when running on a sink which is behind a
+%% source cluster).
+%% For full, nval, sync operations the range is only relevant to the search
+%% for objects to repair - the tree comparison is always between all data for
+%% that nval.
+{mapping, "ttaaefs_rangecheck", "riak_kv.ttaaefs_rangecheck", [
   {datatype, integer},
   {default, 0}
 ]}.
@@ -988,6 +1057,16 @@
 %% @doc If Tictac AAE full-sync discovers keys to be repaired, should each key
 %% that is repaired be logged
 {mapping, "ttaaefs_logrepairs", "riak_kv.ttaaefs_logrepairs", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc If Tictac AAE sees difference in trees (for nval-based full
+%% comparisons) only, should it attempt to repair those trees as well as
+%% repairing any deltas.  Enabling this setting will change the concurrency
+%% of fetch_clock_nval queries run to find repairs.
+{mapping, "aae_fetchclocks_repair", "riak_kv.aae_fetchclocks_repair", [
     {datatype, {flag, enabled, disabled}},
     {default, disabled},
     {commented, enabled}

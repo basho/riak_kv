@@ -37,8 +37,8 @@
 -export([stream_list_buckets/1,stream_list_buckets/2,
          stream_list_buckets/3,stream_list_buckets/4, stream_list_buckets/5]).
 -export([get_index/4,get_index/3]).
--export([aae_fold/2]).
--export([ttaaefs_fullsync/2, ttaaefs_fullsync/3]).
+-export([aae_fold/1, aae_fold/2]).
+-export([ttaaefs_fullsync/1, ttaaefs_fullsync/2, ttaaefs_fullsync/3]).
 -export([hotbackup/4]).
 -export([stream_get_index/4,stream_get_index/3]).
 -export([set_bucket/3,get_bucket/2,reset_bucket/2]).
@@ -49,6 +49,7 @@
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
 -export([fetch/2, push/4]).
+-export([remove_node_from_coverage/0, reset_node_for_coverage/0]).
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
@@ -834,6 +835,11 @@ stream_list_buckets(Filter, Timeout, Client, Type,
     {ok, ReqId}.
 
 
+-spec aae_fold(riak_kv_clusteraae_fsm:query_definition())
+                    -> {ok, any()}|{error, timeout}|{error, Err :: term()}.
+aae_fold(Query) ->
+    aae_fold(Query, riak_client:new(node(), adhoc_aaefold)).
+
 %% @doc
 %%
 %% Run a cluster-wide AAE query - which can either access cached AAE
@@ -845,11 +851,21 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
     TimeOut = ?DEFAULT_FOLD_TIMEOUT,
-    riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node,
-                                                    [{raw, ReqId, Me},
-                                                    [Query, TimeOut]]),
-    wait_for_fold_results(ReqId, TimeOut).
+    Q0 = riak_kv_clusteraae_fsm:convert_fold(Query),
+    case riak_kv_clusteraae_fsm:is_valid_fold(Q0) of
+        true ->
+            riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node,
+                                                            [{raw, ReqId, Me},
+                                                            [Query, TimeOut]]),
+            wait_for_fold_results(ReqId, TimeOut);
+        false ->
+            {error, "Invalid AAE fold definition"}
+    end.
 
+
+-spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item()) -> ok.
+ttaaefs_fullsync(WorkItem) ->
+    ttaaefs_fullsync(WorkItem, 900).
 
 %% @doc
 %% Prompt a full-sync based on the current configuration, and using either
@@ -878,7 +894,28 @@ ttaaefs_fullsync(WorkItem, SecsTimeout, Now) ->
     wait_for_reqid(ReqId, SecsTimeout * 1000).
 
 
+-spec participate_in_coverage(boolean()) -> ok.
+participate_in_coverage(Participate) ->
+    F =
+        fun(Ring, _) ->
+            {new_ring, 
+                riak_core_ring:update_member_meta(node(),
+                                                    Ring,
+                                                    node(),
+                                                    participate_in_coverage,
+                                                    Participate)}
+        end,
+    {ok, _FinalRing} = riak_core_ring_manager:ring_trans(F, undefined),
+    ok.
 
+-spec remove_node_from_coverage() -> ok.
+remove_node_from_coverage() ->
+    participate_in_coverage(false).
+
+-spec reset_node_for_coverage() -> ok.
+reset_node_for_coverage() ->
+    participate_in_coverage(
+        app_helper:get_env(riak_core, participate_in_coverage)).
 
 %% @doc
 %% Run a hot backup - returns {ok, true} if successful

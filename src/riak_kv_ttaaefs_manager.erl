@@ -44,6 +44,10 @@
             enable_ssl/2,
             process_workitem/3]).
 
+-export([set_range/4,
+            clear_range/0,
+            get_range/0]).
+
 -define(SLICE_COUNT, 100).
 -define(SECONDS_IN_DAY, 86400).
 -define(INITIAL_TIMEOUT, 60000).
@@ -52,11 +56,17 @@
 -define(LOOP_TIMEOUT, 15000).
     % Always wait at least 15s after completing an action before
     % prompting another
--define(CRASH_TIMEOUT, 3600 * 1000).
-    % Assume that an exchange has crashed if not response received in this
+-define(CRASH_TIMEOUT, 7200 * 1000).
+    % Assume that an exchange has crashed if no response received in this
     % interval, to allow exchanges to be re-scheduled.
--define(EXCHANGE_PAUSE, 1000).
+-define(EXCHANGE_PAUSE_MS, 1000).
     % Pause between stages of the AAE exchange
+-define(MAX_RESULTS, 64).
+    % Max nu,ber of segments in the AAE tree to be repaired each loop
+-define(RANGE_BOOST, 8).
+    % Factor to boost range_check max_results values
+-define(MEGA, 1000000).
+
 
 -record(state, {slice_allocations = [] :: list(allocation()),
                 slice_set_start :: erlang:timestamp()|undefined,
@@ -71,9 +81,11 @@
                 local_nval :: pos_integer()|undefined,
                 remote_nval :: pos_integer()|undefined,
                 queue_name :: riak_kv_replrtq_src:queue_name() | undefined,
-                slot_info_fun :: fun(),
+                slot_info_fun :: fun(() -> {pos_integer(), pos_integer()}),
                 slice_count = ?SLICE_COUNT :: pos_integer(),
-                is_paused = false :: boolean()
+                is_paused = false :: boolean(),
+                last_exchange_start = os:timestamp() :: erlang:timestamp(),
+                previous_success = os:timestamp() :: false|erlang:timestamp()
                 }).
 
 -type req_id() :: no_reply|integer().
@@ -81,7 +93,7 @@
 -type client_ip() :: string().
 -type client_port() :: pos_integer().
 -type nval() :: pos_integer()|range. % Range queries do not have an n-val
--type work_item() :: no_sync|all_sync|day_sync|hour_sync.
+-type work_item() :: no_check|all_check|day_check|hour_check|range_check.
 -type schedule_want() :: {work_item(), non_neg_integer()}.
 -type slice() :: pos_integer().
 -type allocation() :: {slice(), work_item()}.
@@ -90,6 +102,8 @@
 -type ttaaefs_state() :: #state{}.
 -type ssl_credentials() :: {string(), string(), string(), string()}.
     %% {cacert_filename, cert_filename, key_filename, username}
+-type repair_reference() ::
+    {riak_object:bucket(), riak_object:key(), vclock:vclock(), any()}.
 
 
 -export_type([work_item/0]).
@@ -167,21 +181,20 @@ init([]) ->
     AllCheck = app_helper:get_env(riak_kv, ttaaefs_allcheck),
     HourCheck = app_helper:get_env(riak_kv, ttaaefs_hourcheck),
     DayCheck = app_helper:get_env(riak_kv, ttaaefs_daycheck),
+    RangeCheck = app_helper:get_env(riak_kv, ttaaefs_rangecheck),
 
     {SliceCount, Schedule} = 
         case Scope of
-            all ->
-                {NoCheck + AllCheck,
-                    [{no_sync, NoCheck}, {all_sync, AllCheck},
-                        {day_sync, 0}, {hour_sync, 0}]};
-            bucket ->
-                {NoCheck + AllCheck + HourCheck + DayCheck,
-                    [{no_sync, NoCheck}, {all_sync, AllCheck},
-                        {day_sync, DayCheck}, {hour_sync, HourCheck}]};
             disabled ->
-                {24, [{no_sync, 24}, {all_sync, 0}, 
-                        {day_sync, 0}, {hour_sync, 0}]}
+                {24, [{no_check, 24}, {all_check, 0}, 
+                        {day_check, 0}, {hour_check, 0},
+                        {range_check, 0}]};
                     % No sync once an hour if disabled
+            _ ->
+                {NoCheck + AllCheck + DayCheck + HourCheck + RangeCheck,
+                    [{no_check, NoCheck}, {all_check, AllCheck},
+                        {day_check, DayCheck}, {hour_check, HourCheck},
+                        {range_check, RangeCheck}]}
         end,
 
     State1 = 
@@ -274,8 +287,8 @@ handle_call(pause, _From, State) ->
             {reply, {error, already_paused}, State};
         false -> 
             PausedSchedule =
-                [{no_sync, State#state.slice_count}, {all_sync, 0},
-                    {day_sync, 0}, {hour_sync, 0}],
+                [{no_check, State#state.slice_count}, {all_check, 0},
+                    {day_check, 0}, {hour_check, 0}, {range_check, 0}],
             BackupSchedule = State#state.schedule,
             {reply, ok, State#state{schedule = PausedSchedule,
                                     backup_schedule = BackupSchedule,
@@ -319,18 +332,45 @@ handle_call({set_bucketsync, BucketList}, _From, State) ->
         State#state{scope = bucket,
                     bucket_list = BucketList}}.
 
-handle_cast({reply_complete, _ReqID, _Result}, State) ->
-    % Add a stat update in here
-    {noreply, State, ?LOOP_TIMEOUT};
-handle_cast({no_sync, ReqID, From, _}, State) ->
+handle_cast({reply_complete, ReqID, Result}, State) ->
+    LastExchangeStart = State#state.last_exchange_start,
+    Duration = timer:now_diff(os:timestamp(), LastExchangeStart),
+    {Pause, State0} = 
+        case Result of
+            {waiting_all_results, _Deltas} ->
+                % If the exchange ends with waiting all results, then consider
+                % this to be equivalent to a crash, and so requiring a full
+                % pause to backoff
+                lager:info("exchange=~w failed to complete in duration=~w s" ++
+                                    " sync_state=unknown",
+                                [ReqID, Duration div 1000000]),
+                {?CRASH_TIMEOUT, State#state{previous_success = false}};
+            {SyncState, 0} when SyncState == root_compare;
+                                SyncState == branch_compare ->
+                lager:info("exchange=~w complete result=~w in duration=~w s" ++
+                                    " sync_state=true",
+                                [ReqID, Result, Duration div 1000000]),
+                {?LOOP_TIMEOUT,
+                    State#state{previous_success = LastExchangeStart}};
+            _ ->
+                lager:info("exchange=~w complete result=~w in duration=~w s" ++
+                                    " sync_state=false",
+                                [ReqID, Result, Duration div 1000000]),
+                % If exchanges start slowing, then start increasing the pauses
+                % Gradually degrade in response to an increased workload
+                {max(?LOOP_TIMEOUT, (Duration div 1000) div 2),
+                    State#state{previous_success = false}}
+        end,
+    {noreply, State0, Pause};
+handle_cast({no_check, ReqID, From, _}, State) ->
     case ReqID of
         no_reply ->
             ok;
         _ ->
-            From ! {ReqID, {no_sync, 0}}
+            From ! {ReqID, {no_check, 0}}
     end,
     {noreply, State, ?LOOP_TIMEOUT};
-handle_cast({all_sync, ReqID, From, _Now}, State) ->
+handle_cast({all_check, ReqID, From, _Now}, State) ->
     {LNVal, RNVal, Filter, NextBucketList, Ref} =
         case State#state.scope of
             all ->
@@ -345,18 +385,68 @@ handle_cast({all_sync, ReqID, From, _Now}, State) ->
         end,
     {State0, Timeout} =
         sync_clusters(From, ReqID, LNVal, RNVal, Filter,
-                        NextBucketList, Ref, State),
+                        NextBucketList, Ref, State,
+                        all_check),
     {noreply, State0, Timeout};
-handle_cast({hour_sync, ReqID, From, Now}, State) ->
+handle_cast({day_check, ReqID, From, Now}, State) ->
+    {MegaSecs, Secs, _MicroSecs} = Now,
+    UpperTime = MegaSecs * ?MEGA  + Secs,
+    LowerTime = UpperTime - 60 * 60 * 24,
     case State#state.scope of
         all ->
-            lager:warning("Invalid work_item=hour_sync for Scope=all"),
-            {noreply, State, ?INITIAL_TIMEOUT};
+            Filter =
+                {filter, all, all, large, all,
+                {LowerTime, UpperTime}, pre_hash},
+            {State0, Timeout} =
+                sync_clusters(From,
+                                ReqID,
+                                State#state.local_nval,
+                                State#state.remote_nval,
+                                Filter,
+                                undefined, 
+                                full,
+                                State,
+                                day_check),
+            {noreply, State0, Timeout};
         bucket ->
             [H|T] = State#state.bucket_list,
-            {MegaSecs, Secs, _MicroSecs} = Now,
-            UpperTime = MegaSecs * 1000000  + Secs,
-            LowerTime = UpperTime - 60 * 60,
+            % Note that the tree size is amended as well as the time range.
+            % The bigger the time range, the bigger the tree.  Bigger trees
+            % are less efficient when there is little change, but can more
+            % accurately reflect bigger changes (with less false positives).
+            Filter =
+                {filter, H, all, medium, all,
+                {LowerTime, UpperTime}, pre_hash},
+            NextBucketList = T ++ [H],
+            {State0, Timeout} =
+                sync_clusters(From, ReqID, range, range, Filter,
+                                NextBucketList, partial, State,
+                                day_check),
+            {noreply, State0, Timeout}
+    end;
+handle_cast({hour_check, ReqID, From, Now}, State) ->
+    {MegaSecs, Secs, _MicroSecs} = Now,
+    UpperTime = MegaSecs * ?MEGA  + Secs,
+    LowerTime = UpperTime - 60 * 60,
+    case State#state.scope of
+        all ->
+            Filter =
+                {filter, all, all, large, all,
+                {LowerTime, UpperTime}, pre_hash},
+            {State0, Timeout} =
+                sync_clusters(From,
+                                ReqID,
+                                State#state.local_nval,
+                                State#state.remote_nval,
+                                Filter,
+                                undefined, 
+                                full,
+                                State,
+                                hour_check),
+            {noreply, State0, Timeout};
+        bucket ->
+            [H|T] = State#state.bucket_list,
+            
             % Note that the tree size is amended as well as the time range.
             % The bigger the time range, the bigger the tree.  Bigger trees
             % are less efficient when there is little change, but can more
@@ -367,31 +457,74 @@ handle_cast({hour_sync, ReqID, From, Now}, State) ->
             NextBucketList = T ++ [H],
             {State0, Timeout} =
                 sync_clusters(From, ReqID, range, range, Filter,
-                                NextBucketList, partial, State),
+                                NextBucketList, partial, State,
+                                hour_check),
             {noreply, State0, Timeout}
     end;
-handle_cast({day_sync, ReqID, From, Now}, State) ->
-    case State#state.scope of
-        all ->
-            lager:warning("Invalid work_item=day_sync for Scope=all"),
-            {noreply, State, ?INITIAL_TIMEOUT};
-        bucket ->
-            [H|T] = State#state.bucket_list,
-            {MegaSecs, Secs, _MicroSecs} = Now,
-            UpperTime = MegaSecs * 1000000  + Secs,
-            LowerTime = UpperTime - 60 * 60 * 24,
-            % Note that the tree size is amended as well as the time range.
-            % The bigger the time range, the bigger the tree.  Bigger trees
-            % are less efficient when there is little change, but can more
-            % accurately reflect bigger changes (with less fasle positives).
-            Filter =
-                {filter, H, all, medium, all,
-                {LowerTime, UpperTime}, pre_hash},
-            NextBucketList = T ++ [H],
-            {State0, Timeout} =
-                sync_clusters(From, ReqID, range, range, Filter,
-                                NextBucketList, partial, State),
-            {noreply, State0, Timeout}
+handle_cast({range_check, ReqID, From, Now}, State) ->
+    Range =
+        case get_range() of
+            none ->
+                case State#state.previous_success of
+                    false ->
+                        lager:info("No range sync as no range set"),
+                        none;
+                    {PrevMega, PrevSecs, _PrevMS} ->
+                        {MegaSecs, Secs, _MicroSecs} = Now,
+                        NowSecs = MegaSecs * ?MEGA  + Secs,
+                        {all,
+                            all,
+                            PrevMega * ?MEGA + PrevSecs,
+                            NowSecs}
+                end;
+            SetRange ->
+                SetRange
+        end,
+    case Range of
+        none ->
+            case ReqID of
+                no_reply ->
+                    ok;
+                _ ->
+                    From ! {ReqID, {range_check, 0}}
+            end,
+            {noreply, State, ?LOOP_TIMEOUT};
+        {Bucket, KeyRange, LowerTime, UpperTime} ->
+            clear_range(),
+            case State#state.scope of
+                all ->
+                    Filter =
+                        {filter, Bucket, all, large, all,
+                        {LowerTime, UpperTime}, pre_hash},
+                    {State0, Timeout} =
+                        sync_clusters(From,
+                                        ReqID,
+                                        State#state.local_nval,
+                                        State#state.remote_nval,
+                                        Filter,
+                                        undefined, 
+                                        full,
+                                        State,
+                                        range_check),
+                    {noreply, State0, Timeout};
+                bucket ->
+                    {B, NextBucketList} =
+                        case Bucket of
+                            all ->
+                                [H|T] = State#state.bucket_list,
+                                {H, T ++ [H]};
+                            Bucket ->
+                                {Bucket, State#state.bucket_list}
+                        end,
+                    Filter =
+                        {filter, B, KeyRange, small, all,
+                        {LowerTime, UpperTime}, pre_hash},
+                    {State0, Timeout} =
+                        sync_clusters(From, ReqID, range, range, Filter,
+                                        NextBucketList, partial, State,
+                                        range_check),
+                    {noreply, State0, Timeout}
+            end
     end.
 
 handle_info(timeout, State) ->
@@ -402,6 +535,8 @@ handle_info(timeout, State) ->
                             State#state.slice_set_start,
                             SlotInfoFun(),
                             State#state.slice_count),
+    lager:info("Scheduling work_item=~w in ~w seconds remaining=~w",
+                [WorkItem, Wait, length(RemainingSlices)]),
     erlang:send_after(Wait * 1000, self(), {work_item, WorkItem}),
     {noreply, State#state{slice_allocations = RemainingSlices,
                             slice_set_start = ScheduleStartTime}};
@@ -417,16 +552,55 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %%%============================================================================
-%%% Internal functions
+%%% Environment state management functions
 %%%============================================================================
 
+%% @doc
+%% Set a specific range to be the target for subsequent range_check queries
+-spec set_range(riak_object:bucket()|all,
+                        {riak_object:key(), riak_object:key()}|all,
+                        calendar:datetime(),
+                        calendar:datetime())
+                    -> ok.
+set_range(Bucket, KeyRange, LowDate, HighDate) ->
+    EpochTime =
+        calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
+    LowTS = 
+        calendar:datetime_to_gregorian_seconds(LowDate) - EpochTime,
+    HighTS =
+        calendar:datetime_to_gregorian_seconds(HighDate) - EpochTime,
+    true = HighTS >= LowTS,
+    true = LowTS > 0,
+    application:set_env(riak_kv, ttaaefs_check_range,
+                        {Bucket, KeyRange, LowTS - 1, HighTS + 1}).
+
+-spec clear_range() -> ok.
+clear_range() ->
+    application:set_env(riak_kv, ttaaefs_check_range, none).
+
+-spec get_range() ->
+        none|{riak_object:bucket()|all, 
+                {riak_object:key(), riak_object:key()}|all,
+                pos_integer(), pos_integer()}.
+get_range() ->
+    application:get_env(riak_kv, ttaaefs_check_range, none).
+
+
+
+
+%%%============================================================================
+%%% Internal functions
+%%%============================================================================
 
 %% @doc
 %% Sync two clusters - return an updated loop state and a timeout
 -spec sync_clusters(pid(), integer()|no_reply,
-                nval(), nval(), tuple(), list(), full|partial,
-                ttaaefs_state()) -> {ttaaefs_state(), pos_integer()}.
-sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
+                nval(), nval(), tuple(), list()|undefined, full|partial,
+                ttaaefs_state(),
+                work_item()) ->
+                    {ttaaefs_state(), pos_integer()}.
+sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
+                Ref, State, WorkType) ->
     {RemoteClient, RemoteMod} =
         init_client(State#state.peer_protocol,
                     State#state.peer_ip,
@@ -441,7 +615,6 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
             StopFun = fun() -> stop_client(RemoteClient, RemoteMod) end,
             RemoteSendFun = generate_sendfun({RemoteClient, RemoteMod}, RNVal),
             LocalSendFun = generate_sendfun(local, LNVal),
-            ReplyFun = generate_replyfun(ReqID, From, StopFun),
             ReqID0 = 
                 case ReqID of
                     no_reply ->
@@ -449,8 +622,36 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                     _ ->
                         ReqID
                 end,
-            RepairFun = generate_repairfun(ReqID0, State#state.queue_name),
+            ReplyFun =
+                generate_replyfun(ReqID == no_reply, ReqID0, From, StopFun),
             
+            MaxResults =
+                case WorkType of
+                    range_check ->
+                        RB = app_helper:get_env(riak_kv,
+                                                ttaaefs_rangeboost,
+                                                ?RANGE_BOOST),
+                        MR = app_helper:get_env(riak_kv,
+                                                ttaaefs_maxresults,
+                                                ?MAX_RESULTS),
+                        RB * MR;
+                    _ ->
+                        app_helper:get_env(riak_kv,
+                                            ttaaefs_maxresults,
+                                            ?MAX_RESULTS)
+                end,
+            
+            RepairFun =
+                generate_repairfun(ReqID0,
+                                    State#state.queue_name,
+                                    MaxResults,
+                                    Ref,
+                                    WorkType),
+
+            ExchangePause =
+                app_helper:get_env(riak_kv,
+                                    tictacaae_exchangepause,
+                                    ?EXCHANGE_PAUSE_MS),
             {ok, ExPid, ExID} =
                 aae_exchange:start(Ref,
                                     [{LocalSendFun, all}],
@@ -458,12 +659,17 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList, Ref, State) ->
                                     RepairFun,
                                     ReplyFun,
                                     Filter, 
-                                    [{transition_pause_ms, ?EXCHANGE_PAUSE}]),
+                                    [{transition_pause_ms, ExchangePause},
+                                        {max_results, MaxResults},
+                                        {scan_timeout, ?CRASH_TIMEOUT div 2},
+                                        {purpose, WorkType}]),
             
-            lager:info("Starting full-sync ReqID=~w id=~s pid=~w",
-                            [ReqID0, ExID, ExPid]),
+            lager:info("Starting ~w full-sync work_item=~w " ++ 
+                                "reqid=~w exchange id=~s pid=~w",
+                            [Ref, WorkType, ReqID0, ExID, ExPid]),
             
-            {State#state{bucket_list = NextBucketList},
+            {State#state{bucket_list = NextBucketList,
+                            last_exchange_start = os:timestamp()},
                 ?CRASH_TIMEOUT}
     end.
 
@@ -557,42 +763,54 @@ init_pbclient(IP, Port, Options) ->
             {no_client, riakc_pb_socket}
     end.
 
--spec local_sender(any(), riak_client:riak_client(), fun(), nval()) -> fun().
+-spec local_sender(any(), riak_client:riak_client(), fun((any()) -> ok), nval())
+                                                             -> fun(() -> ok).
 local_sender(fetch_root, C, ReturnFun, NVal) ->
-    fun() ->
-        {ok, R} =
-            riak_client:aae_fold({merge_root_nval, NVal}, C),
-        ReturnFun(R)
-    end;
+    run_localfold({merge_root_nval, NVal}, C, ReturnFun);
 local_sender({fetch_branches, BranchIDs}, C, ReturnFun, NVal) ->
-    fun() ->
-        {ok, R} =
-            riak_client:aae_fold({merge_branch_nval, NVal, BranchIDs}, C),
-        ReturnFun(R)
-    end;
+    run_localfold({merge_branch_nval, NVal, BranchIDs}, C, ReturnFun);
 local_sender({fetch_clocks, SegmentIDs}, C, ReturnFun, NVal) ->
-    fun() ->
-        {ok, R} =
-            riak_client:aae_fold({fetch_clocks_nval, NVal, SegmentIDs}, C),
-        ReturnFun(R)
-    end;
+    run_localfold({fetch_clocks_nval, NVal, SegmentIDs}, C, ReturnFun);
+local_sender({fetch_clocks, SegmentIDs, MR}, C, ReturnFun, NVal) ->
+    %% riak_client expects modified range of form
+    %% {date, non_neg_integer(), non_neg_integer()}
+    %% where as the riak erlang clients just expect 
+    %% {non_neg_integer(), non_neg_integer()}
+    %% They keyword all must also be supported
+    LMR = localise_modrange(MR),
+    run_localfold({fetch_clocks_nval, NVal, SegmentIDs, LMR}, C, ReturnFun);
 local_sender({merge_tree_range, B, KR, TS, SF, MR, HM}, C, ReturnFun, range) ->
+    LMR = localise_modrange(MR),
+    run_localfold({merge_tree_range, B, KR, TS, SF, LMR, HM}, C, ReturnFun);
+local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, _NVal) ->
+    LMR = localise_modrange(MR),
+    run_localfold({fetch_clocks_range, B0, KR, SF, LMR}, C, ReturnFun).
+
+
+-spec run_localfold(riak_kv_clusteraae_fsm:query_definition(),
+                        riak_client:riak_client(),
+                        fun((any()) -> ok)) -> 
+                            fun(() -> ok).
+run_localfold(Query, Client, ReturnFun) ->
     fun() ->
-        {ok, R} =
-            riak_client:aae_fold({merge_tree_range, B, KR, TS, SF, MR, HM}, C),
-        ReturnFun(R)
-    end;
-local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, range) ->
-    fun() ->
-        {ok, R} =
-            riak_client:aae_fold({fetch_clocks_range, B0, KR, SF, MR}, C),
-        ReturnFun(R)
+        case riak_client:aae_fold(Query, Client) of
+            {ok, R} -> 
+                ReturnFun(R);
+            {error, Error} ->
+                ReturnFun({error, Error})
+        end
     end.
+
+localise_modrange(all) ->
+    all;
+localise_modrange({LowTime, HighTime}) ->
+    {date, LowTime, HighTime}.
 
 
 %% @doc
 %% Translate aae_Exchange messages into riak erlang http client requests
--spec remote_sender(any(), rhc:rhc()|pid(), module(), fun(), nval()) -> fun().
+-spec remote_sender(any(), rhc:rhc()|pid(), module(), fun((any()) -> ok), nval())
+                                                            -> fun(() -> ok).
 remote_sender(fetch_root, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         case Mod:aae_merge_root(Client, NVal) of
@@ -617,8 +835,17 @@ remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs) of
             {ok, {keysclocks, KeysClocks}} ->
-                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
-                            KeysClocks));
+                ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
+            {error, Error} ->
+                lager:warning("Error of ~w in clocks request", [Error]),
+                ReturnFun({error, Error})
+        end
+    end;
+remote_sender({fetch_clocks, SegmentIDs, MR}, Client, Mod, ReturnFun, NVal) ->
+    fun() ->
+        case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs, MR) of
+            {ok, {keysclocks, KeysClocks}} ->
+                ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in clocks request", [Error]),
                 ReturnFun({error, Error})
@@ -637,18 +864,23 @@ remote_sender({merge_tree_range, B, KR, TS, SF, MR, HM},
         end
     end;
 remote_sender({fetch_clocks_range, B0, KR, SF, MR},
-                    Client, Mod, ReturnFun, range) ->
+                    Client, Mod, ReturnFun, _NVal) ->
     SF0 = format_segment_filter(SF),
     fun() ->
         case Mod:aae_range_clocks(Client, B0, KR, SF0, MR) of
             {ok, {keysclocks, KeysClocks}} ->
-                ReturnFun(lists:map(fun({{B, K}, VC}) -> {B, K, VC} end,
-                                        KeysClocks));
+                ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
             {error, Error} ->
                 lager:warning("Error of ~w in segment request", [Error]),
                 ReturnFun({error, Error})
         end
     end.
+
+-spec remote_decode({{riak_object:bucket(), riak_object:key()}, binary()}) ->
+                    {riak_object:bucket(), riak_object:key(), vclock:vclock()}.
+remote_decode({{B, K}, VC}) ->
+    {B, K, decode_clock(VC)}.
+
 
 %% @doc
 %% The segment filter as produced by aae_exchange has a different format to
@@ -662,19 +894,18 @@ format_segment_filter({segments, SegList, TreeSize}) ->
 %% @doc
 %% Generate a reply fun (as there is nothing to reply to this will simply
 %% update the stats for Tictac AAE full-syncs
--spec generate_replyfun(integer()|no_reply, pid(), fun())
+-spec generate_replyfun(boolean(), integer(), pid(), fun(() -> ok))
                                                 -> aae_exchange:reply_fun().
-generate_replyfun(ReqID, From, StopClientFun) ->
+generate_replyfun(Clientless, ReqID, From, StopClientFun) ->
     fun(Result) ->
-        case ReqID of
-            no_reply ->
+        case Clientless of
+            true ->
                 ok;
             _ ->
                 % Reply to riak_client
                 From ! {ReqID, Result}
         end,
-        lager:info("Completed full-sync with result=~w", [Result]),
-        gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),
+        gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),    
         StopClientFun()
     end.
 
@@ -693,29 +924,29 @@ generate_replyfun(ReqID, From, StopClientFun) ->
 %% the object should be repaired by requeueing.  Requeueing will cause the
 %% object to be re-replicated to all destination clusters (not just a specific
 %% sink cluster)
--spec generate_repairfun(integer(), riak_kv_replrtq_src:queue_name())
-                                                -> aae_exchange:repair_fun().
-generate_repairfun(ExchangeID, QueueName) ->
+-spec generate_repairfun(integer(),
+                            riak_kv_replrtq_src:queue_name(),
+                            non_neg_integer(),
+                            full|partial,
+                            work_item()) -> aae_exchange:repair_fun().
+generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
     LogRepairs = app_helper:get_env(riak_kv, ttaaefs_logrepairs, false),
     fun(RepairList) ->
-        lager:info("Repair to list of length ~w", [length(RepairList)]),
         FoldFun =
             fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
                 % how are the vector clocks encoded at this point?
                 % The erlify_aae_keyclock will have base64 decoded the clock
-                SinkVCdecoded = decode_clock(SinkVC),
-                case vclock_dominates(SinkVCdecoded, SrcVC) of
+                case vclock_dominates(SinkVC, SrcVC) of
                     true ->
                         {SourceL, SinkC + 1};
                     false ->
                         % If the vector clock in the source is not dominated
                         % by the sink, then we should replicate if it differs
-                        case {vclock_equal(SrcVC, SinkVCdecoded),
-                                LogRepairs} of
+                        case {vclock_equal(SrcVC, SinkVC), LogRepairs} of
                             {false, true} ->
                                 lager:info(
-                                    "Repair B=~w K=~w SrcVC=~w SnkVC=~w",
-                                        [B, K, SrcVC, SinkVCdecoded]),
+                                    "Repair B=~p K=~p SrcVC=~w SnkVC=~w",
+                                        [B, K, SrcVC, SinkVC]),
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
                             {false, false} ->
                                 {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
@@ -725,13 +956,45 @@ generate_repairfun(ExchangeID, QueueName) ->
                 end
             end,
         {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
-        lager:info("AAE exchange ~w shows sink ahead for ~w keys", 
-                    [ExchangeID, SinkDCount]),
-        lager:info("AAE exchange ~w outputs ~w keys to be repaired",
-                    [ExchangeID, length(ToRepair)]),
+        lager:info("AAE reqid=~w work_item=~w type=~w shows sink ahead " ++
+                        "for key_count=~w keys limited by max_results=~w", 
+                    [ExchangeID, WorkType, Ref, SinkDCount, MaxResults]),
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
-        lager:info("AAE exchange ~w has requeue complete for ~w keys",
-                    [ExchangeID, length(ToRepair)])
+        PBDL = report_repairs(ExchangeID, ToRepair, Ref, WorkType),
+        RB = app_helper:get_env(riak_kv, ttaaefs_rangeboost, ?RANGE_BOOST),
+        TargetForRange = 
+            case WorkType of
+                range_check ->
+                    MaxResults div RB;
+                _AltCheck ->
+                    MaxResults div 2
+            end,
+        case length(ToRepair) > TargetForRange of
+            true ->
+                % If there is a single bucket, use that as a constraint,
+                % otherwise query over all buckets on the given modified
+                % range
+                case PBDL of
+                    [{B, KC, LowDT, HighDT}] ->
+                        lager:info("Setting range to bucket=~p ~w ~w " ++
+                                    " last_count=~w set by work_item=~w",
+                                    [B, LowDT, HighDT, KC, WorkType]),
+                        set_range(B, all, LowDT, HighDT);
+                    _ ->
+                        MapFun = fun({_B, _KC, LD, HD}) -> {LD, HD} end,
+                        {LDL, HDL} =
+                            lists:unzip(lists:map(MapFun, PBDL)),
+                        LoDT = lists:min(LDL),
+                        HiDT = lists:max(HDL),
+                        lager:info("Setting range to bucket=all ~w ~w " ++
+                                    " last_count=~w set by work_item=~w",
+                                    [LoDT, HiDT, length(ToRepair), WorkType]),
+                        set_range(all, all, LoDT, HiDT),
+                        ok
+                end;
+            false ->
+                ok
+        end
     end.
 
 
@@ -754,6 +1017,38 @@ decode_clock(none) ->
 decode_clock(EncodedClock) ->
     riak_object:decode_vclock(EncodedClock).
 
+
+-spec report_repairs(integer(),
+                        list(repair_reference()),
+                        full|partial,
+                        work_item()) -> 
+                            list({riak_object:bucket(),
+                                    pos_integer(),
+                                    calendar:datetime(),
+                                    calendar:datetime()}).
+report_repairs(ExchangeID, RepairList, Ref, WorkType) ->
+    FoldFun =
+        fun({B, _K, SrcVC, _Action}, Acc) ->
+            LMD = vclock:last_modified(SrcVC),
+            case lists:keyfind(B, 1, Acc) of
+                {B, C, LowMD, HighMD} ->
+                    UpdTuple = {B, C + 1, min(LMD, LowMD), max(LMD, HighMD)},
+                    lists:keyreplace(B, 1, Acc, UpdTuple);
+                _ ->
+                    [{B, 1, LMD, LMD}|Acc]
+            end
+        end,
+    PerBucketData = lists:foldl(FoldFun, [], RepairList),
+    LogFun =
+        fun({B, C, MinDT, MaxDT}) ->
+            lager:info("AAE exchange=~w work_item=~w type=~w repaired " ++ 
+                            "key_count=~w for " ++
+                            "bucket=~p with low date ~p high date ~p",
+                        [ExchangeID, WorkType, Ref, C, B, MinDT, MaxDT])
+        end,
+    lists:foreach(LogFun, PerBucketData),
+    PerBucketData.
+
 %% @doc
 %% Take the next work item from the list of allocations, assuming that the
 %% starting time for that work item has not alreasy passed.  If there are no
@@ -774,8 +1069,8 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
             undefined ->
                 os:timestamp();
             {Mega, Sec, _Micro} ->
-                Seconds = Mega * 1000 + Sec + 86400,
-                {Seconds div 1000, Seconds rem 1000, 0}
+                Seconds = Mega * ?MEGA + Sec + 86400,
+                {Seconds div ?MEGA, Seconds rem ?MEGA, 0}
         end,
     take_next_workitem(NewAllocations, Wants,
                         RevisedStartTime, SlotInfo, SliceCount);
@@ -787,16 +1082,18 @@ take_next_workitem([NextAlloc|T], Wants,
     {SliceNumber, NextAction} = NextAlloc,
     {Mega, Sec, _Micro} = ScheduleStartTime,
     ScheduleSeconds = 
-        Mega * 1000 + Sec + SlotSeconds + SliceNumber * SliceSeconds,
+        Mega * ?MEGA + Sec + SlotSeconds + SliceNumber * SliceSeconds,
     {MegaNow, SecNow, _MicroNow} = os:timestamp(),
-    NowSeconds = MegaNow * 1000 + SecNow,
+    NowSeconds = MegaNow * ?MEGA + SecNow,
     case ScheduleSeconds > NowSeconds of
         true ->
             {NextAction, ScheduleSeconds - NowSeconds, T, ScheduleStartTime};
         false ->
-            lager:info("Tictac AAE skipping action ~w as manager running"
+            lager:info("Tictac AAE skipping action ~w as manager running "
                         ++ "~w seconds late",
                         [NextAction, NowSeconds - ScheduleSeconds]),
+            lager:info("Clearing any range due to skip to reduce load"),
+            clear_range(),
             take_next_workitem(T, Wants,
                                 ScheduleStartTime, SlotInfo, SliceCount)
     end.
@@ -807,41 +1104,60 @@ take_next_workitem([NextAlloc|T], Wants,
 %% configured schedule-needs.
 -spec choose_schedule(schedule_wants()) -> list(allocation()).
 choose_schedule(ScheduleWants) ->
-    [{no_sync, NoSync}, {all_sync, AllSync},
-        {day_sync, DaySync}, {hour_sync, HourSync}] = ScheduleWants,
-    SliceCount = NoSync + AllSync + DaySync + HourSync,
+    [{all_check, AllCheck},
+        {day_check, DayCheck}, {hour_check, HourCheck},
+        {no_check, NoCheck},
+        {range_check, RangeCheck}] = lists:sort(ScheduleWants),
+    SliceCount = NoCheck + AllCheck + DayCheck + HourCheck + RangeCheck,
     Slices = lists:seq(1, SliceCount),
     Allocations = [],
-    lists:sort(choose_schedule(Slices,
-                                Allocations,
-                                {NoSync, AllSync, DaySync, HourSync})).
+    lists:sort(
+        choose_schedule(Slices,
+                        Allocations,
+                        {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck})).
 
-choose_schedule([], Allocations, {0, 0, 0, 0}) ->
+-spec choose_schedule(list(pos_integer()),
+                        list({pos_integer(), work_item()}),
+                        {non_neg_integer(),
+                            non_neg_integer(),
+                            non_neg_integer(),
+                            non_neg_integer(),
+                            non_neg_integer()}) ->
+                                list({pos_integer(), work_item()}).
+choose_schedule([], Allocations, {0, 0, 0, 0, 0}) ->
     lists:ukeysort(1, Allocations);
-choose_schedule(Slices, Allocations, {NoSync, 0, 0, 0}) ->
+choose_schedule(Slices, Allocations, {NoCheck, 0, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, no_sync}|Allocations],
-                    {NoSync - 1, 0, 0, 0});
-choose_schedule(Slices, Allocations, {NoSync, AllSync, 0, 0}) ->
+                    [{Allocation, no_check}|Allocations],
+                    {NoCheck - 1, 0, 0, 0, 0});
+choose_schedule(Slices, Allocations, {NoCheck, AllCheck, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, all_sync}|Allocations],
-                    {NoSync, AllSync - 1, 0, 0});
-choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, 0}) ->
+                    [{Allocation, all_check}|Allocations],
+                    {NoCheck, AllCheck - 1, 0, 0, 0});
+choose_schedule(Slices, Allocations, {NoCheck, AllCheck, DayCheck, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, day_sync}|Allocations],
-                    {NoSync, AllSync, DaySync - 1, 0});
-choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, HourSync}) ->
+                    [{Allocation, day_check}|Allocations],
+                    {NoCheck, AllCheck, DayCheck - 1, 0, 0});
+choose_schedule(Slices, Allocations,
+                {NoCheck, AllCheck, DayCheck, HourCheck, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, hour_sync}|Allocations],
-                    {NoSync, AllSync, DaySync, HourSync - 1}).
+                    [{Allocation, hour_check}|Allocations],
+                    {NoCheck, AllCheck, DayCheck, HourCheck - 1, 0});
+choose_schedule(Slices, Allocations,
+                {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck}) ->
+    {HL, [Allocation|TL]} =
+        lists:split(rand:uniform(length(Slices)) - 1, Slices),
+    choose_schedule(HL ++ TL,
+                    [{Allocation, range_check}|Allocations],
+                    {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck - 1}).
 
 
 %%%============================================================================
@@ -852,23 +1168,23 @@ choose_schedule(Slices, Allocations, {NoSync, AllSync, DaySync, HourSync}) ->
 
 choose_schedule_test() ->
     NoSyncAllSchedule =
-        [{no_sync, 100}, {all_sync, 0}, {day_sync, 0}, {hour_sync, 0}],
+        [{no_check, 100}, {all_check, 0}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
     NoSyncAll = choose_schedule(NoSyncAllSchedule),
-    ExpNoSyncAll = lists:map(fun(I) -> {I, no_sync} end, lists:seq(1, 100)),
+    ExpNoSyncAll = lists:map(fun(I) -> {I, no_check} end, lists:seq(1, 100)),
     ?assertMatch(NoSyncAll, ExpNoSyncAll),
 
     AllSyncAllSchedule =
-        [{no_sync, 0}, {all_sync, 100}, {day_sync, 0}, {hour_sync, 0}],
+        [{no_check, 0}, {all_check, 100}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
     AllSyncAll = choose_schedule(AllSyncAllSchedule),
-    ExpAllSyncAll = lists:map(fun(I) -> {I, all_sync} end, lists:seq(1, 100)),
+    ExpAllSyncAll = lists:map(fun(I) -> {I, all_check} end, lists:seq(1, 100)),
     ?assertMatch(AllSyncAll, ExpAllSyncAll),
     
     MixedSyncSchedule = 
-        [{no_sync, 0}, {all_sync, 1}, {day_sync, 4}, {hour_sync, 95}],
+        [{no_check, 0}, {all_check, 1}, {day_check, 4}, {hour_check, 95}, {range_check, 0}],
     MixedSync = choose_schedule(MixedSyncSchedule),
     ?assertMatch(100, length(MixedSync)),
-    IsSyncFun = fun({_I, Type}) -> Type == hour_sync end,
-    SliceForHourFun = fun({I, hour_sync}) -> I end,
+    IsSyncFun = fun({_I, Type}) -> Type == hour_check end,
+    SliceForHourFun = fun({I, hour_check}) -> I end,
     HourWorkload =
         lists:map(SliceForHourFun, lists:filter(IsSyncFun, MixedSync)),
     ?assertMatch(95, length(lists:usort(HourWorkload))),
@@ -881,29 +1197,29 @@ choose_schedule_test() ->
     ?assertMatch(true, BiggestI >= 95).
 
 take_first_workitem_test() ->
-    Wants = [{no_sync, 100}, {all_sync, 0}, {day_sync, 0}, {hour_sync, 0}],
+    Wants = [{no_check, 100}, {all_check, 0}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
     {Mega, Sec, Micro} = os:timestamp(),
-    TwentyFourHoursAgo = Mega * 1000 + Sec - (60 * 60 * 24),
+    TwentyFourHoursAgo = Mega * ?MEGA + Sec - (60 * 60 * 24),
     {NextAction, PromptSeconds, _T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {1, 8},
                             100),
-    ?assertMatch(no_sync, NextAction),
-    ?assertMatch(true, ScheduleStartTime > {Mega, Sec, Micro}),
+    ?assertMatch(no_check, NextAction),
+    ?assertMatch(true, ScheduleStartTime < {Mega, Sec, Micro}),
     ?assertMatch(true, PromptSeconds > 0),
     {NextAction, PromptMoreSeconds, _T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {2, 8},
                             100),
     ?assertMatch(true, PromptMoreSeconds > PromptSeconds),
     {NextAction, PromptEvenMoreSeconds, T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div 1000,
-                                TwentyFourHoursAgo rem 1000, Micro},
+                            {TwentyFourHoursAgo div ?MEGA,
+                                TwentyFourHoursAgo rem ?MEGA, Micro},
                             {7, 8},
                             100),
     ?assertMatch(true, PromptEvenMoreSeconds > PromptMoreSeconds),
