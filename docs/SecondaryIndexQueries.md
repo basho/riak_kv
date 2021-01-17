@@ -14,7 +14,7 @@ The current secondary index features are explained within the Riak documents - h
 
 In the early days of Riak, there were no secondary indexes, but there was an indexing solution which partially replicated the Solr API and was built in Erlang using the [`merge_index` backend](https://github.com/basho/merge_index).  Then secondary indexes were introduced, and recommended as a simpler option with less side effects when compare to Riak Search - in particular as Riak search was considered to have the potential to be eventually inconsistent due to a lack of anti-entropy mechanisms.
 
-At some stage, an investment was made in integrating Riak with the off-the-shelf Solr product: with the hope that this would offer-up the improved query power and performance of Solr, whilst freeing up Riak development time to focus on ensuring eventual consistency between the stores.  This effort produced the [yokozuna extension to Riak](https://github.com/basho/yokozuna), and this lead to a recommendation that this should be the preferred method of querying Riak data not secondary indexes.
+At some stage, an investment was made in integrating Riak with the off-the-shelf Solr product: with the hope that this would offer-up the improved query power and performance of Solr, whilst freeing up Riak development time to focus on ensuring eventual consistency between the stores.  This effort produced the [yokozuna extension to Riak](https://github.com/basho/yokozuna), and this lead to a recommendation that this should be the preferred method of querying Riak data instead of secondary indexes.
 
 There are overheads in maintaining the integration between Riak and Solr as both these products evolve over time, though.  In particular there are significant overheads in maintaining tests that demonstrate the safe migration from one version to another.  There has not been sufficient development bandwidth to maintain those tests, so the use of yokozuna is deprecated with version 3.0 of Riak, until such time as that test maintenance backlog can be addressed.
 
@@ -39,7 +39,7 @@ Indexes have two types, integers and binary indexes.  Binary indexes can be any 
 
 ### Projected Attributes - Equivalent Feature
 
-Riak has no direct implementation of Projected Attributes on secondary indexes.  However, there is equivalent functionality available (albeit at a lower level of developer convenience) through the ability to overload secondary index terms.  
+Riak has no direct implementation of Projected Attributes on secondary indexes.  However, there is equivalent functionality available (albeit at a lower level of developer convenience) through the ability to overload secondary index terms.
 
 In Riak all queries are range queries, there is no underlying difference between the implementation of querying for a range of terms, and querying for a single term.  As there are no constraints on constructing secondary index terms, those terms can be overloaded by appending additional information, and in Riak there exists a `return_terms` feature that means that terms will be returned as well as Keys in the query results.  This allows for the application to decompose the overloaded information on the term and make additional filtering decisions based on that information.
 
@@ -51,7 +51,7 @@ However, if there is potentially additional information; such as postcode histor
 
 `YoBFamilyName_bin : 1982SMITH|LS1_4BT.LS6_1BN|19820328|MARY.JAI.JADE`
 
-This allows for simple concatenation queries by combining index ranges and filters, just as with projected attributes, and without the overheads of fetching the original objects from disk.  
+This allows for simple concatenation queries by combining index ranges and filters, just as with projected attributes, and without the overheads of fetching the original objects from disk.
 
 The flexibility of allowing the developer to compose any index term with a schema they control, does though also require that the developer plan for and manage index changes and migrations.  The indexes are not defined by the database, and so cannot be smoothly transitioned between versions by the database, the transition must be managed from within the application.
 
@@ -67,11 +67,11 @@ Regular expressions can provide for powerful filtering of terms, but poorly-defi
 
 ## Extending Projected Attributes
 
-More complex manipulation of query results can, in theory, be managed in riak using the [Map/Reduce](https://docs.riak.com/riak/kv/2.2.3/developing/app-guide/advanced-mapreduce.1.html) capability.  However, in Riak 2.x and Riak 3.0 - only Buckets and Keys can be outputted from an index query in a Map/Reduce flow.  Given this constraint, Map/Reduce can only be efficiently used to count (rather than return) query results, whilst potentially applying filters based on the object key.  
+More complex manipulation of query results can, in theory, be managed in riak using the [Map/Reduce](https://docs.riak.com/riak/kv/2.2.3/developing/app-guide/advanced-mapreduce.1.html) capability.  However, in Riak 2.x and Riak 3.0 - only Buckets and Keys can be outputted from an index query in a Map/Reduce flow.  Given this constraint, Map/Reduce can only be efficiently used to count (rather than return) query results, whilst potentially applying filters based on the object key.
 
 Any more complex operations would require a Map function, and Map functions will always promp an object fetch - and the distributed object fetches in Map/Reduce queries can lead to overheads in production that are difficult to control.  Historically, although Basho advertised Map/Reduce as a feature, the operational team within Basho actively discouraged its use because of the problems controlling the overheads of distributed object fetches, especially as those fetches are not necessarily aligned-with and optimised-for the on-disk layout of objects.
 
-A proposed improvement has been developed to allow for the Map/Reduce framework to be used with secondary index queries, and `return_terms` to allow for a more simple and flexible way to develop solutions that utilise distributed computations on Projected Attributes (passed as an overloaded term).  
+A proposed improvement has been developed to allow for the Map/Reduce framework to be used with secondary index queries, and `return_terms` to allow for a more simple and flexible way to develop solutions that utilise distributed computations on Projected Attributes (passed as an overloaded term).
 
 For this feature, the current Map/Reduce index query API has been extended from `{index, Bucket, Index, StartKey, EndKey}` to `{index, Bucket, Index, StartKey, EndKey, ReturnTerms, TermRegex, PreReduceFuns}` where:
 
@@ -85,16 +85,25 @@ Once a subset of results has been returned from a secondary index query in the n
 
 - Returned as a list of results back to the client;
 
-- Or fitted to map or reduce pipes for further processing.  
+- Or fitted to map or reduce pipes for further processing.
 
 ## Extending Projected Attributes - Examples
 
 
 ### Pre-defined Functions
 
+In order to make secondary-indexing more powerful, we introduce a number of primitive functions that can be used to create a query. There are a number of pre-reduce functions defined that just manipulate the indices, without obtaining the real object from disk.
+
+The input to a pre-reduce funtion is the complete index term of an object. This index term can be split in named components, for example a date of birth component and a name component. These components are hard wired in the index terms by the application level, but by naming them we can manipulate them. For example, we can manipulate a date of birth component into an age component, or filter a name component with a "sounds like" filter.
+Thus, the initial input of a pre-reduce function is the index-term in the database, this is then split in a set of named index terms. Each consecutive pre-reduce function either manipulates one of the index terms by changing the content and adding one more term to the set of index terms (`extract` functions), or filters (`filter` functions)  using a specific index term, meaning that only objects for which the filter holds are considered for further processing. For performance optimizations, but in particular for manipulating the final result of a pre-reduce, there are two functions `with` and `without` to reduce the set of index terms one works with.
+
 There are a number of predefined functions in the `riak_kv_index_prereduce` module (for prereduce functions) and the `riak_kv_mapreduce` (for reduce functions) which can be used to implement advanced queries.  The aim is to be able to form pipelines of these simple functions at the reduce stage, to support potentially complex filtering and enrichment tasks, and greatly expanding the scope of what could otherwise be achieved with projected attributes.
 
-The following prereduce *extract* functions are available:
+
+
+The following prereduce *extract* functions are available. Each of the extract functions takes as input the name of one specific index entry, the name of the resulting index term and one additional argument.
+
+- `extract_split_index`: Splits the input field in list of new additional index fields and names each field by provided list of names. The number of fields present in the splitted index term must be equal to the number of names provided.
 
 - `extract_integer`: Extract an integer from a binary term by position
 
@@ -104,15 +113,15 @@ The following prereduce *extract* functions are available:
 
 - `extract_mask`: Extract a subset of a bitmap using a bitmap mask
 
-- `extract_hamming`: Calculate then extract hamming distance by comparison to a simhash
+- `extract_hamming_simhash`: Calculate then extract hamming distance by comparison to a simhash
 
-- `extract_hash`: Calculate the hash of a key or term
+- `extract_hamming`: Extract hamming distance by comparison to a provided hash
 
-- `extract_encoded`: Decode a base64 encoded term into a binary
+- `extract_hash`: Create a new index term with  the hash of term
+
+- `extract_decode`: Decode a base64 encoded term into a binary
 
 - `extract_buckets`: Provide a mapping to categorise the sizes of value (e.g. for histogram production)
-
-- `extract_coalesce`: Create  a new term by merging one or more existing terms together
 
 
 The following prereduce *filter* functions are available:
@@ -125,8 +134,15 @@ The following prereduce *filter* functions are available:
 
 - `apply_remotebloom`: Filter either the key or an attribute value by checking for existence in a passed-in bloom filter
 
+The following pre-reduce *indices*  functions exist, these functions work on all indices at once, returning a new set of indices.
 
-Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is a list of {attribute, value} tuples.  
+- `indices_with`:  Reduces the set of named index terms to the once provided in the argument
+
+- `indices_without`: Reduces the set of named index terms to all but provided in the argument
+
+- `indices_coalesce`: Replaces the set of provided named index terms into one new index term with provided name. This is the inverse of `extract_split_index`
+
+Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is the list of all index terms resulting from the pre-reduce functions, The index terms are encoded as a list of {attribute, value} tuples, where the attirbute is the earlier mentioned index term name and value is the actual index term.
 
 If no map or reduce functions are added to the map/reduce pipe (i.e. an empty list is the pipeline), an unsorted set of results will be returned back to the client in the {{Bucket, Key}, IndexData} format.  Other reduce functions can be applied to refine ad reformat the results, although it should be noted that due to re-reduce overheads there may be a variable impact on response time from adding reduce functions.
 
@@ -134,7 +150,7 @@ If no map or reduce functions are added to the map/reduce pipe (i.e. an empty li
 
 - `reduce_index_sort(attribute_name()|key)`.  Sort the results before returning, using the atom `key` as the single function argument to sort by key, or an attribute name to sort on the values of that attribute.
 
-- `reduce_index_max({attribute_name(), MaxCount})`.  Return the MaxCount results with the highest value for the identified attribute.  Ties are resolved by returning the higher keys.  
+- `reduce_index_max({attribute_name(), MaxCount})`.  Return the MaxCount results with the highest value for the identified attribute.  Ties are resolved by returning the higher keys.
 
 - `reduce_index_min({attribute_name(), MinCount})`.  Return the MinCount results with the lowest value for the identified attribute.  Ties are resolved by returning the lower keys.
 
@@ -162,7 +178,7 @@ Let us say we want to produce a compact index that supports queries across a lar
 - Current Address (approximate matches supported).
 
 
-To support this we add a pipe-delimited index entry for each customer, like this:
+To support this the application level has added a pipe-delimited index entry for each customer, like this:
 
 `<<"pfinder_bin">> : FamilyName|DateOfBirth|GivenNameSoundexCodes|AddressHash`
 
@@ -186,52 +202,51 @@ If we now have a query for:
 
 This query should match the example record, and this can be found by creating a Map/Reduce query.  The required query builds a set of results with projected attributes from an index query - and then manipulates those projected attributes through prereduce functions to filter and refine the results down.
 
-*Stage 1 - Query:*
 
-```
-{index,
-    ?BUCKET,
-    <<"psearch_bin">>,
-    <<"SM">>, <<"SM~">>,
-    true,
-    "^SM[^\|]*KOWSKI\\|"}
-```
-
-This will perform a range query for all the family names beginning with `SM`, but apply an additional regular expression to filter for only those names ending in `KOWSKI` (exploiting the fact that `|` is the delimiter used to separate the family name from the other fields).
-
-*Stage 2 - Index Prereduce Functions*
+*Stage 1 - Index Prereduce Functions*
 
 To filter the results down, the date of birth needs to be range checked, the matched name needs to be checked against the set of given name codes and finally there is a need to see how "close" lexicographically the address is to the query address.  The sequence of prereduce functions required to complete these tasks are:
 
 ```
-extract_regex(term) -> [dob, givennames, address]
+extract_split_index([family_name, dob, givennames, address])  -> [family_name, dob, givennames, address]
+   apply_regex(family_name, "^SM.*KOWSKI") -> only family_names matching "^SM.*KOWSKI" in  [family_name, dob, givennames, address]
+   indices_without([family_name]) -> [dob, givennames, address]
 
-    apply_range(dob) ->
-    apply_regex(givennames) ->
+    apply_range(dob, [0, 19401231]) -> only people born before 1941 in [dob, givennames, address]
+    apply_regex(givennames, "S000") -> only names sounding like Sue in [dob, givennames, address]
+    indices_with([address]) -> only keep [address] for further index manipulations
 
-    extract_encoded(address) -> address_sim
-    extract_hamming(address_sim) -> address_distance
-    apply_range(address_distance)
-
+    extract_decode(address, decoded_address, base64) -> [address, decoded_address] where address_sim is base64 decoded address
+    extract_hamming_simhash(decoded_address, address_distance, "Acecia Avenue, Manchester") -> [address, decoded_address, address_distance] distance between decoded address and "Acecia Avenue, Manchester"
+    apply_range(address_distance, [0,50]) -> only addresses that are at most 50 away from "Acecia Avenue, Manchester" in [address, decoded_address, address_distance]
+    indices_with([decoded_address]) -> only pass on [decoded_address] to next stage
 ```
 
-Detail of each function within Stage 2:
+Detail of each function within Stage 1:
 
 ```
 {riak_kv_index_prereduce,
-    extract_regex,
-    {term,
-        [dob, givennames, address],
-        this,
-        "[^\|]*\\|(?<dob>[0-9]{8})\\|(?<givennames>[A-Z0-9]+)\\|(?<address>.*)"}
+    extract_split_index,
+    {term, [family_name,  dob,  givennames, address],
+      "|"}}
 ```
 
-The first stage is to take the term which is delimited using "|", and split it into three parts.  After this extract has been made, the next stage will see four projected attributes - term (the original attribute), dob, givennames and address.
+The first stage is to take the term which is delimited using "|", and split it into four parts.  The original index term is replaced by those components (in order to be the inverse of `indices_coalesce`).
+After this extract, the next stage will see four projected attributes - `family_name`, `dob`, `givennames` and `address`. The used function `extract_split_index` with one argument maps to this more general version.
+
+```
+{riak_kv_index_prereduce,
+    apply_regex,
+    {family_name,
+       "^SM.*KOWSKI"}}
+```
+Filter all family names starting with SM and ending with KOWSKI. Then free some memory by onbly carrying around 3 of the four index fields, since we don't need the index term in family name any more.
 
 ```
 {riak_kv_index_prereduce,
     apply_range,
-    {dob, all, <<"0">>, <<"19401231">>}}
+    {dob,
+        [0, 19401231]}}
 ```
 
 Now we have extracted the dob, we can filter out all the dates of birth outside of the range (i.e. we only want those that are born before 1941).
@@ -239,46 +254,47 @@ Now we have extracted the dob, we can filter out all the dates of birth outside 
 ```
 {riak_kv_index_prereduce,
     apply_regex,
-    {givennames, all, "S000"}}
+    {givennames,
+       "S000"}}
 ```
 
 Use a regular expression to only include those results with a given name which sounds like Sue (which would map to S000 in Soundex).
 
 ```
 {riak_kv_index_prereduce,
-    extract_encoded,
-    {address, address_sim, this}}
+    extract_decoded,
+    {address, address_sim,
+        base64}}
 ```
 
 The address sim has been base64 encoded, so this will decode.  As all other projected attributes have been used, only the outcome of this extract (address_sim) now needs be taken forward; hence the 'Keep' input is set to `this`.
 
 ```
 {riak_kv_index_prereduce,
-    extract_hamming,
-    {address_sim,
-        address_distance,
-        this,
+    extract_hamming
+    {address_sim, address_distance,
         riak_kv_index_prereduce:simhash(<<"Acecia Avenue, Manchester">>)}}
 ```
 
-This generates a new projected attribute address_distance which is the hamming distance between the query and the indexed address.
+This generates a new projected attribute address_distance which is the hamming distance between the query and the indexed address. Note that `extract_hamming_simhash` is shorthand for using the simhash function on the provided argument.
 
 ```
 {riak_kv_index_prereduce,
     apply_range,
-    {address_distance, this, 0, 50}}
+    {address_distance,
+        [0, 50]}}
 ```
 
 Filter out any result where the hamming distance to the query address is more than 50.
 
-*Stage 3 - Map and reduce functions*
+*Stage 2 - Map and reduce functions*
 
 ```
 reduce_index_min ->
     map_identity
 ```
 
-Detail of each function within Stage 3:
+Detail of each function within Stage 2:
 
 ```
 {reduce,
