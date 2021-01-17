@@ -227,6 +227,7 @@ extract_split_index([family_name, dob, givennames, address])  -> [term, family_n
    apply_regex(family_name, "^SM.*KOWSKI") -> only family_names matching "^SM.*KOWSKI" in  [term, family_name, dob, givennames, address]
    indices_without([term, family_name]) -> keep only the index terms [dob, givennames, address]
 
+
     apply_range(dob, [0, 19401231]) -> only people born before 1941 in [dob, givennames, address]
     apply_regex(givennames, "S000") -> only names sounding like Sue in [dob, givennames, address]
     indices_with([address]) -> only keep [address] for further index manipulations
@@ -311,7 +312,7 @@ Now we are only interested in this last index term to enter stage 2. Therefore, 
 ```
 
 
-*Stage 2 - Map and reduce functions*
+*Stage 3 - Map and reduce functions*
 
 ```
 reduce_index_min ->
