@@ -140,7 +140,7 @@ The following pre-reduce *indices*  functions exist, these functions work on all
 
 - `indices_without`: Reduces the set of named index terms to all but provided in the argument
 
-- `indices_coalesce`: Replaces the set of provided named index terms into one new index term with provided name. This is the inverse of `extract_split_index`
+- `indices_coalesce`: Replaces the set of provided named index terms into one new index term with provided name.
 
 Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is the list of all index terms resulting from the pre-reduce functions, The index terms are encoded as a list of {attribute, value} tuples, where the attirbute is the earlier mentioned index term name and value is the actual index term.
 
@@ -202,15 +202,30 @@ If we now have a query for:
 
 This query should match the example record, and this can be found by creating a Map/Reduce query.  The required query builds a set of results with projected attributes from an index query - and then manipulates those projected attributes through prereduce functions to filter and refine the results down.
 
+*Stage 1 - Query:*
 
-*Stage 1 - Index Prereduce Functions*
-
-To filter the results down, the date of birth needs to be range checked, the matched name needs to be checked against the set of given name codes and finally there is a need to see how "close" lexicographically the address is to the query address.  The sequence of prereduce functions required to complete these tasks are:
+We start with one query over the full index term (before splitting it and looking into details):
 
 ```
-extract_split_index([family_name, dob, givennames, address])  -> [family_name, dob, givennames, address]
-   apply_regex(family_name, "^SM.*KOWSKI") -> only family_names matching "^SM.*KOWSKI" in  [family_name, dob, givennames, address]
-   indices_without([family_name]) -> [dob, givennames, address]
+{index,
+    ?BUCKET,
+    <<"pfinder_bin">>,
+    <<"SM">>, <<"SM~">>,
+    true,
+    undefined}
+```
+
+This will perform a range query for all the family names beginning with `SM`.
+
+*Stage 2 - Index Prereduce Functions*
+
+To filter the results down, we check that the family name ends on "KOWSKI" using a regular expression matcher. Alternatively we coud have used a filter to check that the name does contain "KOWASKI".
+To continue, the date of birth needs to be range checked, the matched name needs to be checked against the set of given name codes and finally there is a need to see how "close" lexicographically the address is to the query address.  The sequence of prereduce functions required to complete these tasks are:
+
+```
+extract_split_index([family_name, dob, givennames, address])  -> [term, family_name, dob, givennames, address]
+   apply_regex(family_name, "^SM.*KOWSKI") -> only family_names matching "^SM.*KOWSKI" in  [term, family_name, dob, givennames, address]
+   indices_without([term, family_name]) -> keep only the index terms [dob, givennames, address]
 
     apply_range(dob, [0, 19401231]) -> only people born before 1941 in [dob, givennames, address]
     apply_regex(givennames, "S000") -> only names sounding like Sue in [dob, givennames, address]
@@ -222,20 +237,20 @@ extract_split_index([family_name, dob, givennames, address])  -> [family_name, d
     indices_with([decoded_address]) -> only pass on [decoded_address] to next stage
 ```
 
-Detail of each function within Stage 1:
+Detail of each function within Stage 2:
 
 ```
-{riak_kv_index_prereduce,
+{riak_kv_index_prereduce, extract,
     extract_split_index,
-    {term, [family_name,  dob,  givennames, address],
-      "|"}}
+    {term,
+        [family_name,  dob,  givennames, address]}}
 ```
 
-The first stage is to take the term which is delimited using "|", and split it into four parts.  The original index term is replaced by those components (in order to be the inverse of `indices_coalesce`).
-After this extract, the next stage will see four projected attributes - `family_name`, `dob`, `givennames` and `address`. The used function `extract_split_index` with one argument maps to this more general version.
+The first stage is to take the term which is delimited using "|", and split it into four parts.  The original index term `term` is kept.
+After this extract, the next stage will see five projected attributes - `term`, `family_name`, `dob`, `givennames` and `address`. The used function `extract_split_index` with one argument maps to this more general version.
 
 ```
-{riak_kv_index_prereduce,
+{riak_kv_index_prereduce, extract,
     apply_regex,
     {family_name,
        "^SM.*KOWSKI"}}
@@ -243,7 +258,7 @@ After this extract, the next stage will see four projected attributes - `family_
 Filter all family names starting with SM and ending with KOWSKI. Then free some memory by onbly carrying around 3 of the four index fields, since we don't need the index term in family name any more.
 
 ```
-{riak_kv_index_prereduce,
+{riak_kv_index_prereduce, filter,
     apply_range,
     {dob,
         [0, 19401231]}}
@@ -252,7 +267,7 @@ Filter all family names starting with SM and ending with KOWSKI. Then free some 
 Now we have extracted the dob, we can filter out all the dates of birth outside of the range (i.e. we only want those that are born before 1941).
 
 ```
-{riak_kv_index_prereduce,
+{riak_kv_index_prereduce, filter,
     apply_regex,
     {givennames,
        "S000"}}
@@ -261,7 +276,7 @@ Now we have extracted the dob, we can filter out all the dates of birth outside 
 Use a regular expression to only include those results with a given name which sounds like Sue (which would map to S000 in Soundex).
 
 ```
-{riak_kv_index_prereduce,
+{riak_kv_index_prereduce, extract,
     extract_decoded,
     {address, address_sim,
         base64}}
@@ -270,7 +285,7 @@ Use a regular expression to only include those results with a given name which s
 The address sim has been base64 encoded, so this will decode.  As all other projected attributes have been used, only the outcome of this extract (address_sim) now needs be taken forward; hence the 'Keep' input is set to `this`.
 
 ```
-{riak_kv_index_prereduce,
+{riak_kv_index_prereduce, extract,
     extract_hamming
     {address_sim, address_distance,
         riak_kv_index_prereduce:simhash(<<"Acecia Avenue, Manchester">>)}}
@@ -279,7 +294,7 @@ The address sim has been base64 encoded, so this will decode.  As all other proj
 This generates a new projected attribute address_distance which is the hamming distance between the query and the indexed address. Note that `extract_hamming_simhash` is shorthand for using the simhash function on the provided argument.
 
 ```
-{riak_kv_index_prereduce,
+{riak_kv_index_prereduce, filter,
     apply_range,
     {address_distance,
         [0, 50]}}
@@ -294,7 +309,7 @@ reduce_index_min ->
     map_identity
 ```
 
-Detail of each function within Stage 2:
+Detail of each function within Stage 3:
 
 ```
 {reduce,
