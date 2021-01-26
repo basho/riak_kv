@@ -302,7 +302,7 @@ This generates a new projected attribute address_distance which is the hamming d
         [<<"0">>, <<"50">>]}}
 ```
 Filter out any result where the hamming distance to the query address is more than 50.
-Now we are only interested in this last index term to enter stage 2. Therefore, we only keep that one.
+Now we are only interested in this last index term to enter stage 3. Therefore, we only keep that one.
 
 ```
 {riak_kv_index_prereduce, indices,
