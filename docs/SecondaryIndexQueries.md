@@ -101,7 +101,7 @@ There are a number of predefined functions in the `riak_kv_index_prereduce` modu
 
 
 
-The following prereduce *extract* functions are available. Each of the extract functions takes as input the name of one specific index entry, the name of the resulting index term and one additional argument.
+The following prereduce *extract* functions are available. Each of the extract functions takes as input the name of one specific index entry, the name of the resulting index term and a list of additional arguments. All the arguments are provided as binary encoded strings to enable user defined extensions on  a coherent http API. Thus, an integer 12 is represented as <<"12">> and is parsed by the function that gets this argument.
 
 - `extract_split_index`: Splits the input field in list of new additional index fields and names each field by provided list of names. The number of fields present in the splitted index term must be equal to the number of names provided.
 
@@ -119,12 +119,12 @@ The following prereduce *extract* functions are available. Each of the extract f
 
 - `extract_hash`: Create a new index term with  the hash of term
 
-- `extract_decode`: Decode a base64 encoded term into a binary
+- `extract_decode_base64`: Decode a base64 encoded term into a binary
 
 - `extract_buckets`: Provide a mapping to categorise the sizes of value (e.g. for histogram production)
 
 
-The following prereduce *filter* functions are available:
+The following prereduce *filter* functions are available. Filters  are applied to one provided named index term and take a list of arguments specific for this filter. The arguments are again stringes represented as binaries.
 
 - `apply_range`: Filter by range testing an attribute
 
@@ -136,11 +136,11 @@ The following prereduce *filter* functions are available:
 
 The following pre-reduce *indices*  functions exist, these functions work on all indices at once, returning a new set of indices.
 
-- `indices_with`:  Reduces the set of named index terms to the once provided in the argument
+- `indices_with`:  Reduces the set of named index terms to the once provided
 
-- `indices_without`: Reduces the set of named index terms to all but provided in the argument
+- `indices_without`: Reduces the set of named index terms to all but provided
 
-- `indices_coalesce`: Replaces the set of provided named index terms into one new index term with provided name.
+- `indices_coalesce`: Replaces the set of provided named index terms into one new index term given as argument
 
 Once extracts and filters have been applied the Map/Reduce pipe will pass on a list of {{Bucket, Key}, IndexData} tuples to the next stage, where IndexData is the list of all index terms resulting from the pre-reduce functions, The index terms are encoded as a list of {attribute, value} tuples, where the attirbute is the earlier mentioned index term name and value is the actual index term.
 
@@ -243,7 +243,7 @@ Detail of each function within Stage 2:
 {riak_kv_index_prereduce, extract,
     extract_split_index,
     {term,
-        [family_name,  dob,  givennames, address]}}
+        [<<"family_name">>, <<" dob">>, <<"givennames">>, <<"address">>]}}
 ```
 
 The first stage is to take the term which is delimited using "|", and split it into four parts.  The original index term `term` is kept.
@@ -253,7 +253,7 @@ After this extract, the next stage will see five projected attributes - `term`, 
 {riak_kv_index_prereduce, extract,
     apply_regex,
     {family_name,
-       "^SM.*KOWSKI"}}
+       [<<"^SM.*KOWSKI">>]}}
 ```
 Filter all family names starting with SM and ending with KOWSKI. Then free some memory by onbly carrying around 3 of the four index fields, since we don't need the index term in family name any more.
 
@@ -261,46 +261,55 @@ Filter all family names starting with SM and ending with KOWSKI. Then free some 
 {riak_kv_index_prereduce, filter,
     apply_range,
     {dob,
-        [0, 19401231]}}
+        [<<"0">>, <<"19401231">>]}}
 ```
 
 Now we have extracted the dob, we can filter out all the dates of birth outside of the range (i.e. we only want those that are born before 1941).
+Note that the arguments are passed in as strings. The first thing that happens inside the `apply_range` function is that the arguments are interpreted. This enables easy extension with user defined filters, each of which will always get a list of binaries as input.
 
 ```
 {riak_kv_index_prereduce, filter,
     apply_regex,
     {givennames,
-       "S000"}}
+       [<<"S000">>]}}
 ```
 
 Use a regular expression to only include those results with a given name which sounds like Sue (which would map to S000 in Soundex).
 
 ```
 {riak_kv_index_prereduce, extract,
-    extract_decoded,
-    {address, address_sim,
-        base64}}
+    extract_decoded_base64,
+    {address, decoded_address,
+        []}}
 ```
 
-The address sim has been base64 encoded, so this will decode.  As all other projected attributes have been used, only the outcome of this extract (address_sim) now needs be taken forward; hence the 'Keep' input is set to `this`.
+The address has been base64 encoded, so this will decode that term.  Note that this extract filter has no additional arguments.
 
 ```
 {riak_kv_index_prereduce, extract,
-    extract_hamming
-    {address_sim, address_distance,
-        riak_kv_index_prereduce:simhash(<<"Acecia Avenue, Manchester">>)}}
+    extract_hamming_simhash
+    {decoded_address, address_distance,
+        [<<"Acecia Avenue, Manchester">>]}}
 ```
 
-This generates a new projected attribute address_distance which is the hamming distance between the query and the indexed address. Note that `extract_hamming_simhash` is shorthand for using the simhash function on the provided argument.
+This generates a new projected attribute address_distance which is the hamming distance between the query and the indexed address. Note that `extract_hamming_simhash` is shorthand for using the simhash function on the provided argument and then computing the hash distance.
 
 ```
 {riak_kv_index_prereduce, filter,
     apply_range,
     {address_distance,
-        [0, 50]}}
+        [<<"0">>, <<"50">>]}}
+```
+Filter out any result where the hamming distance to the query address is more than 50.
+Now we are only interested in this last index term to enter stage 2. Therefore, we only keep that one.
+
+```
+{riak_kv_index_prereduce, indices,
+    indices_with,
+    {[address_distance],
+        []}}
 ```
 
-Filter out any result where the hamming distance to the query address is more than 50.
 
 *Stage 2 - Map and reduce functions*
 
