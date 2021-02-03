@@ -105,6 +105,8 @@ The following prereduce *extract* functions are available. Each of the extract f
 
 - `extract_split_index`: Splits the input field in list of new additional index fields and names each field by provided list of names. The number of fields present in the splitted index term must be equal to the number of names provided.
 
+- `extract_width_index`: Splits the input field in a new additional index field where the index-separator is added at the provided positions. This allows an `extract_split_index` on this new term afterward.
+
 - `extract_integer`: Extract an integer from a binary term by position
 
 - `extract_binary`: Extract a binary from a binary term by position
@@ -224,14 +226,15 @@ To continue, the date of birth needs to be range checked, the matched name needs
 
 ```
 extract_split_index([family_name, dob, givennames, address])  -> [term, family_name, dob, givennames, address]
-   apply_regex(family_name, "^SM.*KOWSKI") -> only family_names matching "^SM.*KOWSKI" in  [term, family_name, dob, givennames, address]
-   indices_without([term, family_name]) -> keep only the index terms [dob, givennames, address]
+    apply_regex(family_name, "^SM.*KOWSKI") -> only family_names matching "^SM.*KOWSKI" in  [term, family_name, dob, givennames, address]
+    indices_without([term, family_name]) -> keep only the index terms [dob, givennames, address]
+
 
     apply_range(dob, [0, 19401231]) -> only people born before 1941 in [dob, givennames, address]
     apply_regex(givennames, "S000") -> only names sounding like Sue in [dob, givennames, address]
     indices_with([address]) -> only keep [address] for further index manipulations
 
-    extract_decode(address, decoded_address, base64) -> [address, decoded_address] where address_sim is base64 decoded address
+    extract_decode_base64(address, decoded_address) -> [address, decoded_address] where address_sim is base64 decoded address
     extract_hamming_simhash(decoded_address, address_distance, "Acecia Avenue, Manchester") -> [address, decoded_address, address_distance] distance between decoded address and "Acecia Avenue, Manchester"
     apply_range(address_distance, [0,50]) -> only addresses that are at most 50 away from "Acecia Avenue, Manchester" in [address, decoded_address, address_distance]
     indices_with([decoded_address]) -> only pass on [decoded_address] to next stage
@@ -301,7 +304,7 @@ This generates a new projected attribute address_distance which is the hamming d
         [<<"0">>, <<"50">>]}}
 ```
 Filter out any result where the hamming distance to the query address is more than 50.
-Now we are only interested in this last index term to enter stage 2. Therefore, we only keep that one.
+Now we are only interested in this last index term to enter stage 3. Therefore, we only keep that one.
 
 ```
 {riak_kv_index_prereduce, indices,
@@ -311,7 +314,7 @@ Now we are only interested in this last index term to enter stage 2. Therefore, 
 ```
 
 
-*Stage 2 - Map and reduce functions*
+*Stage 3 - Map and reduce functions*
 
 ```
 reduce_index_min ->
@@ -366,13 +369,15 @@ In this case we will consider each record to be a clinical history for the patie
 - Common significant conditions (it maybe that there are many common conditions that can be represented as a bitmap, with each bit set to 1 if the condition is true for that patient, and 0 if false; this is then base64 encoded before being added to the index to avoid issues with the HTTP API)
 
 
-To support this we add a fixed-width index entry for each customer, like this [size in bytes]:
+To support this we add a fixed-width index entry for each patient, like this [size in bytes]:
 
 `<<"conditions_bin">> : <DateOfBirth[8]><GPProvider>[6]<EncodedConditionsBitmap>[*]`
 
 For example, it may now be required to understand the spread of diabetes amongst the elderly across the estate by age group.  The requirement is to have a count of those with and without diabetes by age and GP Provider.  This can be supported using the following Map/Reduce query:
 
 *Stage 1 - Query*
+
+We start with a date range query over the full index term.
 
 ```
 {index,
@@ -387,116 +392,113 @@ In this example the requirement is only to count patients over the age of 65, an
 
 *Stage 2 - Index Prereduce Functions*
 
-The sequence of functions required is:
+To filter the results, we split the index term and look at the different parts. In those parts we make use of the mapping of a set of values to a set of different values. For example, we want to map the date of birth into a patient age. For this we need to provide a general function to do the mapping in the `extract_buckets` function. Alternatively, there might be pre-defined functions, such as `extract_age` which would do that without the complexity of having to supply a function.  Here we demonstrate the most flexible form in which fully cutomizable partial functions can be provided. Similarly to extracting the age from the date of birth, we could also create a mapping function from the binary conditions to whether or not a patient is diabetic. In this example, however, we do this in smaller steps of provided primitives and show the more complex mapping function as a second possiblity later.
 
 ```
-extract_binary(term) -> dob
+extract_width_index(term, split_term, [8, 8+6] -> adds a new index term [term, split_term] where term is seprated after 8th and 14th byte.
+extract_split_index(split_term, [dob, gpprovider, conditions_b64]) -> [term, split_term, dob, gpprovider, conditions_b64]
 
-    extract_binary(term) -> gpprovider
-    extract_binary(term) -> conditions_b64
+    extract_decode_base64(conditions_b64, conditions) ->  [term, split_term, dob, gpprovider, conditions_b64, conditions]
+    indices_with([dob, gpprovider, conditions]) -> [dob, gpprovider, conditions] get rid of some unused terms
 
-    extract_buckets(dob) -> age
-    extract_encoded(conditions_b64) -> conditions_bin
-    extract_integer(conditions_bin) -> conditions
-    extract_mask(conditions) -> is_diabetic_int
-    extract_buckets(is_diabetic_int) -> diabetic_flag
+    extract_buckets(dob, age, AgeMap) -> [dob, gpprovider, conditions, age] in which date-of-birth has been translated to an age
 
-    extract_coalesce([gpprovider, age, diabetic_flag]) -> counting_term
+    extract_integer(conditions, condition, [0, 8]) -> reads the conditions position 0 for 8 bits as an integer  [dob, gpprovider, conditions, age, condition]
+    extract_mask(condition, is_diabetic_int, [1]) -> [dob, gpprovider, conditions, age, condition, is_diabetic_int] where is_diabetic_int is one when patient is diabetic, zero otherwise
+    indices_with([gpprovider, age, is_diabetic_int]) -> [gpprovider, age, is_diabetic_int] get rid of some unused terms
 
+   extract_buckets(is_diabetic_int, diabetic_flag, DiabeticMap) ->  [gpprovider, age, is_diabetic_int, diabetic_flag]
+
+    indices_coalesce([gpprovider, age, diabetic_flag], counting_term) ->  [is_diabetic_int, counting_term]
+    indices_with([counting_term]) -> [counting_term] keep only the counting term (including age, gpprovider and diabetic_flag)
 ```
+
+After this, the index term for the next phase is a binary that contains:
+`<<"counting_term">> : <GPProvider>|<Age>|<IsDiabetic>`
+
 
 Detail of each function within Stage 2:
 
 ```
-{riak_kv_index_prereduce,
-                extract_binary,
-                {term,
-                    dob,
-                    all,
-                    0, 8}},
-{riak_kv_index_prereduce,
-    extract_binary,
-    {term,
-        gpprovider,
-        all,
-        8, 6}},
-{riak_kv_index_prereduce,
-    extract_binary,
-    {term,
-        conditions_b64,
-        all,
-        14, all}}
+{riak_kv_index_prereduce, extract
+     extract_width_inxed,
+     {term, split_term
+        [<<"8">>, <<"14">>]}},
 ```
-
-The index term is broken up into binaries using the fact that the first two elements are fixed width.
-
+Split the original term in three parts now named `split_term`. this term can be used with `extract_split_index` to devide this in three parts.
 ```
-{riak_kv_index_prereduce,
-    extract_buckets,
-    {dob,
-        age,
-        all,
-        AgeMap,
-        <<"Unexpected">>}}
+{riak_kv_index_prereduce, extract,
+     extract_split_index,
+     {split_term,
+         [<<"dob">>, <<"gpprovider">>, <<"conditions_b64">>]}},
 ```
+Clearly we could provide in the future a single entry to split with width and then split the index, but these are the low level building blocks that can be combined.
 
-Take each date of birth, and map it to an Age category.  There should not be results over the highest Date Of Birth in the Age Map (i.e. people younger than 65).  The query should not produce results for anyone under 65 - so any dob over the highest date of birth in the AgeMap would be "Unexpected", and so this tag is used.
+The conditions are base64 encoded and need to be decoded.
+```
+{riak_kv_index_prereduce, extract,
+    extract_decode_base64,
+    {conditions_b64, conditions,
+        []}}
+```
+We then have six terms of which we only want to keep three in memory when we proceed. This might or might not give any advantage, here it mainly simplifies describing the example.
+In theory, it is completely possible for a query optimizer to automatically include such reduction in terms by analysis on what is still needed further on.
 
-In this case the AgeMap is a list of tuples mapping a date of birth high-point to an Age"
-
+Now we want to derive the age of a patient from the date of birth. Somehow we need to pass a function that takes the difference between the day we run this query and the date of birth and from those derive the age of the patient. We use `extract_bucket` which takes a list of ranges and a value to return for the first range the date of birth fits to.
+Thus, `extract_bucket` always gets a list of ranges over binary terms. The functions may be partial, where the default value for values on which the map is not defined is `<<"Unexpected">>`.
+Here the AgeMap given would be:
 ```
 AgeMap =
-    [{<<"19301027">>, <<"Over90">>}|
-        lists:map(fun(Y) -> {iolist_to_binary(io_lib:format("~4..0B", [Y]) ++ "1027"),
-                                iolist_to_binary(io_lib:format("Age~2..0B", [2020 - Y]))}
-                            end,
-                        lists:seq(1931, 1955))],
+  [ {<<"0">>, <<"19301027">>, <<"Over90">>},
+    {<<"19301027", <<"19311027">>, <<"Age89">>},
+    {<<"19311027", <<"19321027">>, <<"Age88">>},
+    ...
+    {<<"19541027", <<"19551027">>, <<"Age65">>}].
 ```
+Where the dots contain many additional ranges. Since we don't expect any dates of birth after 19551027, due to our initial query, we don't havce to specify a mapping for those.
+If we had made a mistake in the query and were we to get a value not fitting in any date range, then the default `<<"Unexpected">>` would be the mapped value.
 
-The next phase requires the conditions bitmap to be decoded, and converted to be usable:
+Clearly the user does not want to write a AgeMap like this by hand each time a query is performed. Typically this map is generated by a library function or a user specified function.
 
 ```
-{riak_kv_index_prereduce,
-    extract_encoded,
-    {conditions_b64,
-        conditions_bin,
-        all}},
-
-{riak_kv_index_prereduce,
-    extract_integer,
-    {conditions_bin,
-        conditions,
-        all,
-        0, 8}},
-
-{riak_kv_index_prereduce,
-    extract_mask,
-    {conditions,
-        is_diabetic_int,
-        all,
-        1}},
-
-{riak_kv_index_prereduce,
+{riak_kv_index_prereduce, extract,
     extract_buckets,
-    {is_diabetic_int,
-        is_diabetic,
-        all,
-        [{0, <<"NotD">>}, {1, <<"IsD">>}],
-        <<"Unexpected">>}}
+    {dob,  age
+       [AgeMap]}}
 ```
 
-The bitmap is base64 encoded as a binary, but then needs to be converted to an integer.  Once it is an integer, only the least significant bit is interesting (the one that represents whether or not a patient is diabetic), and so this is extracted with a mask.  Finally the 1 or 0 is mapped back into a binary tag.
+The next phase requires to extract the right condition for daibetes from the binary conditions. First we read eight bits from position zero from the conditions and then look whether the least significant bit is a 0 (not diabetic) or a 1 (diabetic). We could write a DiabeticMap that maps each even number to "NotD" and each odd number to "IsD", but it might be clearer to first mask out the last bit and be left with two possible values, zero and one.
 
 ```
-{riak_kv_index_prereduce,
-    extract_coalesce,
-    {[gpprovider, age, is_diabetic],
-        counting_term,
-        this,
-        <<"|">>}}
+{riak_kv_index_prereduce, extract,
+    extract_integer,
+    {conditions, condition,
+        [<<"0">>, <<"8">>]}},
+
+{riak_kv_index_prereduce, extract,
+    extract_mask,
+    {condition, is_diabetic_int,
+        [<<1>>]}},
+
+{riak_kv_index_prereduce, extract,
+    extract_buckets,
+    {is_diabetic_int, diabetic_flag,
+    [[{<<0>>, <<0>>, "NotD">>},
+      {<<1>>, <<1>>, <<"IsD">>}]]}}
 ```
 
-A combined term is then made by merging together these flags, and it is these terms that need to be counted.  As none of the previous terms are interesting for the reduce function, the keep attribute is set to `this` so those terms are discarded and only the `counting_term` will be passed forward.
+So finally the 1 or 0 is mapped back into a binary tag and now we coalesce those and only pass on the coalesced term.
+
+```
+{riak_kv_index_prereduce, indices
+    indices_coalesce,
+    {[gpprovider, age, diabetic_flag], counting_term}},
+
+{riak_kv_index_prereduce, indices
+    indices_with,
+    {[counting_term]}},
+```
+
 
 *Stage 3 - Map and reduce functions*
 
