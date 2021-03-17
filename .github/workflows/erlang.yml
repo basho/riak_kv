@@ -1,8 +1,7 @@
 name: Erlang CI
 
 on:
-  push:
-    branches: [ develop-3.0 ]
+  push
   pull_request:
     branches: [ develop-3.0 ]
 
