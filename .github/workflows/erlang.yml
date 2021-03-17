@@ -18,6 +18,6 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Compile
-      run: rebar3 compile
+      run: ./rebar3 compile
     - name: Run tests
-      run: rebar3 do xref, dialyzer, eunit
+      run: ./rebar3 do xref, dialyzer, eunit
