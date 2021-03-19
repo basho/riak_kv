@@ -479,6 +479,8 @@ assign_vnodeid_restart_earlier_ts_test() ->
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
     ?assertEqual(<<1, 2, 3, 4, 70,116,143,251>>, Vid2).
 
+-ifndef(GITHUBACTIONS).
+
 %% Test
 vnode_status_test_() ->
     {setup,
@@ -528,7 +530,7 @@ vnode_status_test_() ->
              end),
       ?_test(begin % update failure
                 TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
-                file:change_mode(TestPath ++ "/0", 8#00000),
+                ?cmd("chmod -r " ++ TestPath ++ "/0"),
                 Index = 0,
                 File = vnode_status_filename(Index, TestPath),
                 ?assertEqual({ok, []},  read_vnode_status(File))
@@ -536,6 +538,8 @@ vnode_status_test_() ->
             )
 
      ]}.
+
+-endif.
 
 -ifdef(EQC).
 
