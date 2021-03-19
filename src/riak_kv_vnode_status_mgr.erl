@@ -479,7 +479,7 @@ assign_vnodeid_restart_earlier_ts_test() ->
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
     ?assertEqual(<<1, 2, 3, 4, 70,116,143,251>>, Vid2).
 
--ifndef(GITHUBACTIONS).
+-ifndef(GITHUBEXCLUDE).
 
 %% Test
 vnode_status_test_() ->
