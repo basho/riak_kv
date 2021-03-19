@@ -17,4 +17,4 @@ jobs:
     - name: Compile
       run: ./rebar3 compile
     - name: Run tests
-      run: ./rebar3 do xref, dialyzer, eunit
+      run: ./rebar3 do xref, eunit --module=riak_kv_vnode_status_mgr
