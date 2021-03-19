@@ -13,9 +13,9 @@ jobs:
       image: erlang:22.3.3
 
     steps:
-    - uses: actions/checkout@v2
-    - shell: bash
-    - name: Compile
-      run: ./rebar3 compile
-    - name: Run tests
-      run: ./rebar3 do xref, eunit --module=riak_kv_vnode_status_mgr
+      - uses: actions/checkout@v2
+      - name: Compile
+        run: ./rebar3 compile
+      - name: Run tests
+        shell: bash
+        run: ./rebar3 do xref, eunit --module=riak_kv_vnode_status_mgr
