@@ -526,8 +526,7 @@ vnode_status_test_() ->
              end),
       ?_test(begin % update failure
                 TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
-                ?cmd("chmod 000 " ++ TestPath ++ "/0"),
-                ?cmd("chmod 500 " ++ TestPath),
+                ?cmd("chmod -wrx " ++ TestPath),
                 Index = 0,
                 File = vnode_status_filename(Index, TestPath),
                 ?assertEqual({ok, []},  read_vnode_status(File))
