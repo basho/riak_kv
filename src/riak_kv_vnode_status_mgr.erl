@@ -512,7 +512,7 @@ vnode_status_test_() ->
                     catch _Err:{badmatch, Reason} ->
                         Reason
                     end,
-                    ?assertEqual({error, eacces}, R)
+                ?assertEqual({error, eacces}, R)
              end),
       ?_test(begin % create successfully
                 TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
