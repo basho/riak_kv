@@ -17,8 +17,6 @@ jobs:
       - name: Compile
         run: ./rebar3 compile
       - name: Run xref and dialyzer
-        run: rebar3 do xref
+        run: rebar3 do xref, dialyzer
       - name: Run eunit
-        env:
-          GITHUBEXCLUDE: true
-        run: rebar3 eunit
+        run: rebar3 as gha do eunit
