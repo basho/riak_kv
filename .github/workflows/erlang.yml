@@ -14,6 +14,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - shell: bash
     - name: Compile
       run: ./rebar3 compile
     - name: Run tests
