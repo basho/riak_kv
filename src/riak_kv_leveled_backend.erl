@@ -116,7 +116,7 @@ start(Partition, Config) ->
     CMM = app_helper:get_prop_or_env(compression_method, Config, leveled),
     CMP = app_helper:get_prop_or_env(compression_point, Config, leveled),
     CRD = app_helper:get_prop_or_env(compaction_runs_perday, Config, leveled),
-    CSP = max(app_helper:get_prop_or_env(compaction_scores_perday, Config, leveled), 1),
+    CSP = max(app_helper:get_prop_or_env(compaction_scores_perday, Config, leveled, 1), 1),
     CLH = app_helper:get_prop_or_env(compaction_low_hour, Config, leveled),
     CTH = app_helper:get_prop_or_env(compaction_top_hour, Config, leveled),
     MRL = app_helper:get_prop_or_env(max_run_length, Config, leveled),

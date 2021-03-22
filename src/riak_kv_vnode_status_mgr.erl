@@ -479,6 +479,8 @@ assign_vnodeid_restart_earlier_ts_test() ->
     {Vid2, _Status3} = assign_vnodeid(Now2, NodeId, Status2),
     ?assertEqual(<<1, 2, 3, 4, 70,116,143,251>>, Vid2).
 
+-ifndef(GITHUBEXCLUDE).
+
 %% Test
 vnode_status_test_() ->
     {setup,
@@ -504,11 +506,13 @@ vnode_status_test_() ->
                 ?cmd("chmod -w " ++ TestPath),
                 Index = 0,
                 File = vnode_status_filename(Index, TestPath),
-                try
-                    write_vnode_status(orddict:new(), File, ?VNODE_STATUS_VERSION)
-                catch _Err:{badmatch, Reason} ->
-                        ?assertEqual({error, eacces}, Reason)
-                end
+                R =
+                    try
+                        write_vnode_status(orddict:new(), File, ?VNODE_STATUS_VERSION)
+                    catch _Err:{badmatch, Reason} ->
+                        Reason
+                    end,
+                ?assertEqual({error, eacces}, R)
              end),
       ?_test(begin % create successfully
                 TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
@@ -526,14 +530,16 @@ vnode_status_test_() ->
              end),
       ?_test(begin % update failure
                 TestPath = riak_kv_test_util:get_test_dir("kv_vnode_status_test"),
-                ?cmd("chmod -w " ++ TestPath ++ "/0"),
-                ?cmd("chmod -wrx " ++ TestPath),
+                ?cmd("chmod -r " ++ TestPath ++ "/0"),
                 Index = 0,
                 File = vnode_status_filename(Index, TestPath),
                 ?assertEqual({ok, []},  read_vnode_status(File))
-             end)
+             end
+            )
 
      ]}.
+
+-endif.
 
 -ifdef(EQC).
 
