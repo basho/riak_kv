@@ -1,7 +1,11 @@
 name: Erlang CI
 
 on:
-  pull_request
+  push:
+    branches: [ develop-3.0 ]
+  pull_request:
+    branches: [ develop-3.0 ]
+
 
 jobs:
 
