@@ -42,6 +42,7 @@
 -export([
          init/1,
          service_available/2,
+         allowed_methods/2,
          malformed_request/2,
          content_types_provided/2,
          produce_queue_fetch/2,
@@ -85,6 +86,10 @@ service_available(RD, Ctx=#ctx{riak=RiakProps}) ->
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx}
     end.
+
+
+allowed_methods(RD, Ctx) ->
+    {['GET', 'POST'], RD, Ctx}.
 
 -spec malformed_request(#wm_reqdata{}, context()) ->
     {boolean(), #wm_reqdata{}, context()}.
