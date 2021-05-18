@@ -33,7 +33,9 @@
 %%
 %% POST /queuename/QueueName
 %%
-%% Body should be a JSON in the format `[{Bucket:[{Key, Clock}]}]`
+%% Body should be a JSON in the format returned from
+%% riak_kv_clusteraae_fsm:json_encode_results(fetch_clocks_range, KeysNClocks).
+%%
 %% ```
 
 -module(riak_kv_wm_queue).
@@ -48,6 +50,10 @@
          produce_queue_fetch/2,
          produce_requeue/2
         ]).
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 
 -record(ctx, {
             client,         %% riak_client() - the store client
@@ -101,7 +107,9 @@ malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'GET' ->
     {false, RD, Ctx#ctx{queuename = QueueName, object_format = ObjectFormat}};
 malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST' ->
     QueueName = malformed_queuename(RD),
-    KeyClockList = malformed_keyclocklist(wrq:req_body(RD)),
+    KeyClockList =
+        lists:map(fun({B, K, C}) -> {B, K, C, to_fetch} end, 
+                    malformed_keyclocklist(wrq:req_body(RD))),
     {false, RD, Ctx#ctx{queuename = QueueName, keyclocklist = KeyClockList}}.
 
 -spec malformed_queuename(#wm_reqdata{}) -> atom().
@@ -109,21 +117,45 @@ malformed_queuename(RD) ->
     QueueNameRaw = wrq:path_info(queuename, RD),
     list_to_atom(riak_kv_wm_utils:maybe_decode_uri(RD, QueueNameRaw)).
 
--spec malformed_keyclocklist(iolist()) -> list(riak_kv_replrtq_src:rpel_entry()).
+-spec malformed_keyclocklist(iolist()) -> list(riak_kv_replrtq_src:repl_entry()).
 malformed_keyclocklist(ReqBody) ->
-    DecodeBKLFun =
-        fun({B, [{struct, KCL}]}) ->
-            ReplEntryFun = 
-                fun({K, C}) ->
-                    {B,
-                        K,
-                        riak_object:decode_vclock(base64:decode(C)),
-                        to_fetch}
-                end,
-            lists:map(ReplEntryFun, KCL)
+    {struct, [{<<"keys-clocks">>, KCL}]} = mochijson2:decode(ReqBody),
+    lists:foldl(fun decode_bucketkeyclock/2, [], KCL).
+
+decode_bucketkeyclock({struct, BKC}, Acc) ->
+    B = 
+        case lists:keyfind(<<"bucket">>, 1, BKC) of
+            {<<"bucket">>, Bucket} when is_binary(Bucket) ->
+                case lists:keyfind(<<"bucket-type">>, 1, BKC) of
+                    {<<"bucket-type">>, BucketType} ->
+                        {BucketType, Bucket};
+                    false ->
+                        Bucket
+                end;
+            false ->
+                false
         end,
-    {struct, BKL} = mochijson2:decode(ReqBody),
-    lists:flatten(lists:map(DecodeBKLFun, BKL)).
+    case B of
+        false ->
+            Acc;
+        _ ->
+            case lists:keyfind(<<"key">>, 1, BKC) of
+                {<<"key">>, K} when is_binary(K) ->
+                    case lists:keyfind(<<"clock">>, 1, BKC) of
+                        {<<"clock">>, EncodedClock} ->
+                            DC =
+                                riak_object:decode_vclock(
+                                    base64:decode(EncodedClock)),
+                            [{B, K, DC}|Acc];
+                        false ->
+                            Acc
+                    end;
+                false ->
+                    Acc
+            end
+    end;
+decode_bucketkeyclock(_, Acc) ->
+    Acc.
 
 
 -spec content_types_provided(#wm_reqdata{}, context()) ->
@@ -212,3 +244,19 @@ make_binarykey({Type, Bucket}, Key)
     <<Type/binary, Bucket/binary, Key/binary>>;
 make_binarykey(Bucket, Key) when is_binary(Bucket), is_binary(Key) ->
     <<Bucket/binary, Key/binary>>.
+
+-ifdef(TEST).
+
+json_encode_keys_test() ->
+    A = vclock:fresh(),
+    B = vclock:fresh(),
+    A1 = vclock:increment(a, A),
+    B1 = vclock:increment(b, B),
+    E1 = {<<"B1">>, <<"K1">>, A1},
+    E2 = {{<<"T">>, <<"B2">>}, <<"K2">>, B1},
+    KCL = lists:sort([E1, E2]),
+    KCEncoded =
+        riak_kv_clusteraae_fsm:json_encode_results(fetch_clocks_range, KCL),
+    ?assertMatch(KCL, lists:sort(malformed_keyclocklist(KCEncoded))).
+
+-endif.
