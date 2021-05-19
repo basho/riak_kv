@@ -47,8 +47,8 @@
          allowed_methods/2,
          malformed_request/2,
          content_types_provided/2,
-         produce_queue_fetch/2,
-         produce_requeue/2
+         process_post/2,
+         produce_queue_fetch/2
         ]).
 
 -ifdef(TEST).
@@ -165,15 +165,18 @@ decode_bucketkeyclock(_, Acc) ->
 content_types_provided(RD, Ctx) when Ctx#ctx.method =:= 'GET' ->
     {[{"application/octet-stream", produce_queue_fetch}], RD, Ctx};
 content_types_provided(RD, Ctx) when Ctx#ctx.method =:= 'POST' ->
-    {[{"application/text", produce_requeue}], RD, Ctx}.
+    {[{"text/html", to_html}], RD, Ctx}.
 
--spec produce_requeue(#wm_reqdata{}, context()) ->
-    {iolist()|{error, any()}, #wm_reqdata{}, context()}.
-produce_requeue(RD, Ctx) ->
+
+-spec process_post(#wm_reqdata{}, context()) ->
+    {true, #wm_reqdata{}, context()}.
+%% @doc Pass-through for key-level requests to allow POST to function
+%%      as PUT for clients that do not support PUT.
+process_post(RD, Ctx) -> 
     QueueName = Ctx#ctx.queuename,
     KeyClockList = Ctx#ctx.keyclocklist,
     ok = riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, KeyClockList),
-    {"ok " ++ integer_to_list(length(KeyClockList)), RD, Ctx}.
+    {true, RD, Ctx}.
 
 -spec produce_queue_fetch(#wm_reqdata{}, context()) ->
     {binary()|{error, any()}, #wm_reqdata{}, context()}.
@@ -185,7 +188,7 @@ produce_queue_fetch(RD, Ctx) ->
                         riak_client:fetch(QueueName, Client),
                         RD,
                         Ctx).
-    
+
 format_response(_, {ok, queue_empty}, RD, Ctx) ->
     {<<0:8/integer>>, RD, Ctx};
 format_response(_, {error, Reason}, RD, Ctx) ->
