@@ -86,6 +86,14 @@
          %% pipe ('true'), or serially via a helper process
          %% ('false' or undefined).  Set to 'false' or leave
          %% undefined during a rolling upgrade from 1.0.
-         {mapred_2i_pipe, true}
+         {mapred_2i_pipe, true},
+
+         %% @doc The object_hash_version should default to 0.  When a node
+         %% has started and gossipped some capabilities, but not yet the
+         %% object_hash_version, the riak_core_capability process on another 
+         %% node in the cluster, may enquire as to what the object_hash_version
+         %% environment variable is on this node.  Set it here so as to avoid
+         %% a default to legacy
+         {object_hash_version, 0}
         ]}
  ]}.

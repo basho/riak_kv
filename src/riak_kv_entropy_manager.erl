@@ -323,9 +323,12 @@ init([]) ->
     {ok, State2}.
 
 register_capabilities() ->
-    riak_core_capability:register({riak_kv, object_hash_version},
-                                  [0, legacy],
-                                  legacy),
+    case app_helper:get_env(riak_kv, object_hash_version) of
+        0 ->
+            riak_core_capability:register({riak_kv, object_hash_version},
+                                            [0, legacy],
+                                            legacy)
+    end,
     riak_core_capability:register({riak_kv, anti_entropy},
                                   [enabled_v1, disabled],
                                   disabled).
