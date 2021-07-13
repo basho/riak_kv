@@ -161,11 +161,10 @@ decode_bucketkeyclock(_, Acc) ->
 -spec content_types_provided(#wm_reqdata{}, context()) ->
     {[{ContentType::string(), Producer::atom()}], #wm_reqdata{}, context()}.
 %% @doc List the content types available for representing this resource.
-%%      "application/json" is the content-type for bucket lists.
 content_types_provided(RD, Ctx) when Ctx#ctx.method =:= 'GET' ->
     {[{"application/octet-stream", produce_queue_fetch}], RD, Ctx};
 content_types_provided(RD, Ctx) when Ctx#ctx.method =:= 'POST' ->
-    {[{"text/html", to_html}], RD, Ctx}.
+    {[{"text/plain", nop}], RD, Ctx}.
 
 
 -spec process_post(#wm_reqdata{}, context()) ->
@@ -176,7 +175,18 @@ process_post(RD, Ctx) ->
     QueueName = Ctx#ctx.queuename,
     KeyClockList = Ctx#ctx.keyclocklist,
     ok = riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, KeyClockList),
-    {true, RD, Ctx}.
+    R = 
+        case riak_kv_replrtq_src:length_rtq(QueueName) of
+            {QueueName, {FL, FSL, RTL}} ->
+                io_lib:format("Queue ~w: ~w ~w ~w", [QueueName, FL, FSL, RTL]);
+            _ ->
+                io_lib:format("No queue stats", [])
+        end,
+    {true,
+        wrq:set_resp_body(
+               iolist_to_binary(R),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+        Ctx}.
 
 -spec produce_queue_fetch(#wm_reqdata{}, context()) ->
     {binary()|{error, any()}, #wm_reqdata{}, context()}.
@@ -188,6 +198,7 @@ produce_queue_fetch(RD, Ctx) ->
                         riak_client:fetch(QueueName, Client),
                         RD,
                         Ctx).
+
 
 format_response(_, {ok, queue_empty}, RD, Ctx) ->
     {<<0:8/integer>>, RD, Ctx};
