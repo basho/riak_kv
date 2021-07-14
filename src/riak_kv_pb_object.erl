@@ -257,14 +257,14 @@ process(#rpbpushreq{queuename = QueueNameBin, keys_value = KVL}, State) ->
         {QueueName, {FL, FSL, RTL}} ->
             {reply,
                 #rpbpushresp{queue_exists = true,
-                                queuename = QueueName,
+                                queuename = QueueNameBin,
                                 foldq_length = FL,
                                 fsync_length = FSL,
                                 realt_length = RTL},
                 State};
         _ ->
             {reply,
-                #rpbpushresp{queue_exists = false, queuename = QueueName},
+                #rpbpushresp{queue_exists = false, queuename = QueueNameBin},
                 State}
     end;
 
