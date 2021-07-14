@@ -180,7 +180,7 @@ process_post(RD, Ctx) ->
             {QueueName, {FL, FSL, RTL}} ->
                 io_lib:format("Queue ~w: ~w ~w ~w", [QueueName, FL, FSL, RTL]);
             _ ->
-                io_lib:format("No queue stats", [])
+                io_lib:format("No queue ~w", [QueueName])
         end,
     {true,
         wrq:set_resp_body(

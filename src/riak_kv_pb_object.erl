@@ -29,6 +29,8 @@
 %%  9 - RpbGetReq
 %% 11 - RpbPutReq
 %% 13 - RpbDelReq
+%% 202 - RpbFetchReq
+%% 204 - RpbPushReq
 %% </pre>
 %%
 %% <p>This service produces the following responses:</p>
@@ -39,6 +41,8 @@
 %% 10 - RpbGetResp
 %% 12 - RpbPutResp - 0 length
 %% 14 - RpbDelResp
+%% 203 - RpbFetchResp
+%% 205 - RpbPushResp
 %% </pre>
 %%
 %% <p>The semantics are unchanged from their original
@@ -245,6 +249,25 @@ process(#rpbfetchreq{queuename = QueueName, encoding = EncodingBin},
             {error, {format, Reason}, State}
     end;
 
+process(#rpbpushreq{queuename = QueueNameBin, keys_value = KVL}, State) ->
+    QueueName = binary_to_existing_atom(QueueNameBin, utf8),
+    KeyClockList = lists:map(fun unpack_keyclock_fun/1, KVL),
+    ok = riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, KeyClockList),
+    case riak_kv_replrtq_src:length_rtq(QueueName) of
+        {QueueName, {FL, FSL, RTL}} ->
+            {reply,
+                #rpbpushresp{queue_exists = true,
+                                queuename = QueueName,
+                                foldq_length = FL,
+                                fsync_length = FSL,
+                                realt_length = RTL},
+                State};
+        _ ->
+            {reply,
+                #rpbpushresp{queue_exists = false, queuename = QueueName},
+                State}
+    end;
+
 process(#rpbputreq{bucket = <<>>}, State) ->
     {error, "Bucket cannot be zero-length", State};
 process(#rpbputreq{key = <<>>}, State) ->
@@ -414,6 +437,21 @@ process_stream(_,_,State) ->
 -spec make_binarykey(riak_object:riak_object()) -> binary().
 make_binarykey(RObj) ->
     make_binarykey(riak_object:bucket(RObj), riak_object:key(RObj)).
+
+-spec unpack_keyclock_fun(#rpbkeysvalue{}) ->
+        {riak_object:bucket(RObj), riak_object:key(RObj), vclock:vclock()}.
+unpack_keyclock_fun(RpbKeysClock) ->
+    case RpbKeysClock#rpbkeysvalue.type of
+        undefined ->
+            {RpbKeysClock#rpbkeysvalue.bucket,
+                RpbKeysClock#rpbkeysvalue.key,
+                riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value)};
+        T ->
+            {{T,
+                RpbKeysClock#rpbkeysvalue.bucket},
+                RpbKeysClock#rpbkeysvalue.key,
+                riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value)}
+    end.
 
 -spec make_binarykey(riak_object:bucket(), riak_object:key()) -> binary().
 %% @doc

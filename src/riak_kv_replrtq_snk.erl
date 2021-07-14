@@ -497,8 +497,7 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
     GenClientFun = 
         case Protocol of
             http ->
-                InitClientFun =
-                    fun() -> rhc:create(Host, Port, "riak", []) end,
+                InitClientFun = client_start(http, Host, Port, []),
                 fun() ->
                     HTC = InitClientFun(),
                     fun(Request) ->
@@ -530,18 +529,7 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
                                 {certfile, CertfiicateFilename},
                                 {keyfile, KeyFilename}]
                     end,
-                InitClientFun =
-                    fun() ->
-                        case riakc_pb_socket:start(Host, Port, Opts) of
-                            {ok, PBpid} ->
-                                PBpid;
-                            _ ->
-                                lager:info("No client initialised -"
-                                                ++ " not reachable ~s ~w",
-                                            [Host, Port]),
-                                no_pid
-                        end
-                    end,
+                InitClientFun = client_start(pb, Host, Port, Opts),
                 fun() ->
                     PBC = InitClientFun(),
                     fun(Request) ->
@@ -562,6 +550,22 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
         end,
     {{QueueName, Iteration, PeerID},
         LocalClient, GenClientFun(), GenClientFun}.
+
+-spec client_start(pb|http, string(), pos_integer(), list()) 
+                    -> fun(() -> rhc:rhc()|pid()|no_pid).
+client_start(pb, Host, Port, Opts) ->
+    fun() ->
+        case riakc_pb_socket:start(Host, Port, Opts) of
+            {ok, PBpid} ->
+                PBpid;
+            _ ->
+                lager:info("No client initialised -" ++ " not reachable ~s ~w",
+                            [Host, Port]),
+                no_pid
+        end
+    end;
+client_start(http, Host, Port, Opts) ->
+    fun() -> rhc:create(Host, Port, "riak", Opts) end.
 
 check_pbc_client(no_pid) ->
     false;
