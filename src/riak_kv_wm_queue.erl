@@ -120,7 +120,7 @@ malformed_queuename(RD) ->
 -spec malformed_keyclocklist(iolist()) -> list(riak_kv_replrtq_src:repl_entry()).
 malformed_keyclocklist(ReqBody) ->
     {struct, [{<<"keys-clocks">>, KCL}]} = mochijson2:decode(ReqBody),
-    lists:foldl(fun decode_bucketkeyclock/2, [], KCL).
+    lists:reverse(lists:foldl(fun decode_bucketkeyclock/2, [], KCL)).
 
 decode_bucketkeyclock({struct, BKC}, Acc) ->
     B = 
