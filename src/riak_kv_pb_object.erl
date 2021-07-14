@@ -445,12 +445,14 @@ unpack_keyclock_fun(RpbKeysClock) ->
         undefined ->
             {RpbKeysClock#rpbkeysvalue.bucket,
                 RpbKeysClock#rpbkeysvalue.key,
-                riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value)};
+                riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value),
+                to_fetch};
         T ->
             {{T,
                 RpbKeysClock#rpbkeysvalue.bucket},
                 RpbKeysClock#rpbkeysvalue.key,
-                riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value)}
+                riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value),
+                to_fetch}
     end.
 
 -spec make_binarykey(riak_object:bucket(), riak_object:key()) -> binary().
