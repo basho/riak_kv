@@ -178,7 +178,7 @@ process(#rpbgetreq{bucket=B0, type=T, key=K, r=R0, pr=PR0,
             {error, {format,Reason}, State}
     end;
 
-process(#rpbfetchreq{queuename = QueueName},
+process(#rpbfetchreq{queuename = QueueName, encoding = EncodingBin},
         #state{client=C, repl_compress=ToCompress} = State) ->
     Result = 
         try
@@ -186,29 +186,61 @@ process(#rpbfetchreq{queuename = QueueName},
         catch _:badarg ->
             {error, queue_not_defined}
         end,
+    Encoding =
+        case EncodingBin of
+            undefined ->
+                internal;
+            <<"internal">> ->
+                internal;
+            <<"internal_aaehash">> ->
+                internal_aaehash
+        end,
     case Result of
         {ok, queue_empty} ->
             {reply, #rpbfetchresp{queue_empty = true}, State};
-        {ok, {deleted, Vclock, RObj}} ->
+        {ok, {deleted, TombClock, RObj}} ->
             % Never bother compressing tombstones, they're practically empty
             EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, false),
             CRC32 = erlang:crc32(EncObj),
-            {reply,
+            Resp =
                 #rpbfetchresp{queue_empty = false,
                                 deleted = true,
                                 replencoded_object = EncObj,
                                 crc_check = CRC32,
-                                deleted_vclock = pbify_rpbvc(Vclock)},
-                State};
+                                deleted_vclock = pbify_rpbvc(TombClock)},
+            case Encoding of
+                internal ->
+                    {reply, Resp, State};
+                internal_aaehash ->
+                    BK = make_binarykey(RObj),
+                    {SegID, SegHash} =
+                        leveled_tictac:tictac_hash(BK, lists:sort(TombClock)),
+                    {reply,
+                        Resp#rpbfetchresp{segment_id = SegID,
+                                            segment_hash = SegHash},
+                        State}
+            end;
         {ok, RObj} ->
             EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, ToCompress),
             CRC32 = erlang:crc32(EncObj),
-            {reply,
+            Resp =
                 #rpbfetchresp{queue_empty = false,
                                 deleted = false,
                                 replencoded_object = EncObj,
                                 crc_check = CRC32},
-                State};
+            case Encoding of
+                internal ->
+                    {reply, Resp, State};
+                internal_aaehash ->
+                    BK = make_binarykey(RObj),
+                    Clock = lists:sort(riak_object:vclock(RObj)),
+                    {SegID, SegHash} =
+                        leveled_tictac:tictac_hash(BK, Clock),
+                    {reply,
+                        Resp#rpbfetchresp{segment_id = SegID,
+                                            segment_hash = SegHash},
+                        State}
+            end;
         {error, Reason} ->
             {error, {format, Reason}, State}
     end;
@@ -378,6 +410,20 @@ process_stream(_,_,State) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+-spec make_binarykey(riak_object:riak_object()) -> binary().
+make_binarykey(RObj) ->
+    make_binarykey(riak_object:bucket(RObj), riak_object:key(RObj)).
+
+-spec make_binarykey(riak_object:bucket(), riak_object:key()) -> binary().
+%% @doc
+%% Convert Bucket and Key into a single binary 
+make_binarykey({Type, Bucket}, Key)
+                    when is_binary(Type), is_binary(Bucket), is_binary(Key) ->
+    <<Type/binary, Bucket/binary, Key/binary>>;
+make_binarykey(Bucket, Key) when is_binary(Bucket), is_binary(Key) ->
+    <<Bucket/binary, Key/binary>>.
+
 
 %% Update riak_object with the pbcontent provided
 update_rpbcontent(O0, RpbContent) ->
