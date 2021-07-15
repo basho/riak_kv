@@ -154,23 +154,21 @@ malformed_queuename(RD) ->
 -spec malformed_keyclocklist(iolist()) ->
         list(riak_kv_replrtq_src:repl_entry())|false.
 malformed_keyclocklist(ReqBody) ->
-    %% If individual elements of the Key Clock list are malformed
-    %% they are filtered, rather than calling the request malformed
-    %% with a log raise to indicate that the filtering has occurred 
+    %% If individual elements of the Key Clock list are malformed then
+    %% the whole request is considered malformed
     case mochijson2:decode(ReqBody) of
         {struct, [{<<"keys-clocks">>, KCL}]} ->
             KeyClockList = 
                 lists:foldl(fun decode_bucketkeyclock/2, [], KCL),
             case {length(KeyClockList), length(KCL)} of
                 {N, N} ->
-                    ok;
+                    KeyClockList;
                 {N, M} ->
                     lager:info(
-                        "~w Malformed requests filtered from push of ~w",
+                        "Malformed requests ~w within push of ~w",
                         [M - N, M]),
-                    ok
-            end,
-            KeyClockList;
+                    false
+            end;
         _ ->
             false
     end.
