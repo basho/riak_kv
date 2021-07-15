@@ -25,7 +25,7 @@
 %% ```
 %% GET /queuename/QueueName
 %%
-%% Will return an object if an object is present on the queue
+%% Will return an object if an object is present in the queue
 %%
 %% Parameters to pass:
 %% object_format - internal (return object in internal repl format)
