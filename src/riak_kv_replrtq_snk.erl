@@ -512,7 +512,7 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
             pb ->
                 CaCertificateFilename =
                     app_helper:get_env(riak_kv, repl_cacert_filename),
-                CertfiicateFilename =
+                CertificateFilename =
                     app_helper:get_env(riak_kv, repl_cert_filename),
                 KeyFilename =
                     app_helper:get_env(riak_kv, repl_key_filename),
@@ -526,7 +526,7 @@ map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
                             [{silence_terminate_crash, true},
                                 {credentials, SecuritySitename, ""},
                                 {cacertfile, CaCert},
-                                {certfile, CertfiicateFilename},
+                                {certfile, CertificateFilename},
                                 {keyfile, KeyFilename}]
                     end,
                 InitClientFun = client_start(pb, Host, Port, Opts),

@@ -442,19 +442,17 @@ make_binarykey(RObj) ->
         {riak_object:bucket(RObj), riak_object:key(RObj), vclock:vclock(),
             to_fetch}.
 unpack_keyclock_fun(RpbKeysClock) ->
-    case RpbKeysClock#rpbkeysvalue.type of
-        undefined ->
-            {RpbKeysClock#rpbkeysvalue.bucket,
-                RpbKeysClock#rpbkeysvalue.key,
-                riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value),
-                to_fetch};
-        T ->
-            {{T,
-                RpbKeysClock#rpbkeysvalue.bucket},
-                RpbKeysClock#rpbkeysvalue.key,
-                riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value),
-                to_fetch}
-    end.
+    Bucket =
+        case RpbKeysClock#rpbkeysvalue.type of
+            undefined ->
+                RpbKeysClock#rpbkeysvalue.bucket;
+            T ->
+                {T, RpbKeysClock#rpbkeysvalue.bucket}
+        end,
+    {Bucket,
+        RpbKeysClock#rpbkeysvalue.key,
+        riak_object:decode_vclock(RpbKeysClock#rpbkeysvalue.value),
+        to_fetch}.
 
 -spec make_binarykey(riak_object:bucket(), riak_object:key()) -> binary().
 %% @doc

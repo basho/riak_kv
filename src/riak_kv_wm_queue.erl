@@ -100,62 +100,80 @@ allowed_methods(RD, Ctx) ->
 -spec malformed_request(#wm_reqdata{}, context()) ->
     {boolean(), #wm_reqdata{}, context()}.
 %% @doc Determine whether request is well-formed
-malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'GET' ->
-    QueueName = malformed_queuename(RD),
-    ObjectFormatRaw = wrq:get_qs_value(?Q_OBJECT_FORMAT, "internal", RD),
-    ObjectFormat = list_to_atom(ObjectFormatRaw),
-    {false, RD, Ctx#ctx{queuename = QueueName, object_format = ObjectFormat}};
-malformed_request(RD, Ctx) when Ctx#ctx.method =:= 'POST' ->
-    QueueName = malformed_queuename(RD),
-    KeyClockList =
-        lists:map(fun({B, K, C}) -> {B, K, C, to_fetch} end, 
-                    malformed_keyclocklist(wrq:req_body(RD))),
-    {false, RD, Ctx#ctx{queuename = QueueName, keyclocklist = KeyClockList}}.
+malformed_request(RD, Ctx) ->
+    RDForError = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD),
+    case wrq:method(RD) of
+        'GET' ->
+            QueueName = malformed_queuename(RD),
+            ObjectFormatRaw =
+                wrq:get_qs_value(?Q_OBJECT_FORMAT, "internal", RD),
+            case existing_atom(ObjectFormatRaw) of
+                false ->
+                    ErrorBody =
+                        io_lib:format("Format ~w not defined~n",
+                            [ObjectFormatRaw]),
+                    {true,
+                        wrq:append_to_resp_body(ErrorBody, RDForError),
+                        Ctx};
+                ObjectFormat ->
+                    {false,
+                        RD,
+                        Ctx#ctx{queuename = QueueName,
+                                object_format = ObjectFormat}}
+            end;
+        'POST' ->
+            case malformed_queuename(RD) of
+                false ->
+                    ErrorBody =
+                        io_lib:format("Queue name ~w not defined~n",
+                            [wrq:path_info(queuename, RD)]),
+                    {true,
+                        wrq:append_to_resp_body(ErrorBody, RDForError),
+                     Ctx};
+                QueueName ->
+                    case malformed_keyclocklist(wrq:req_body(RD)) of
+                        false ->
+                            ErrorBody = "Malformed Keyclock list~n",
+                            {true,
+                                wrq:append_to_resp_body(ErrorBody, RDForError),
+                                Ctx};
+                        KeyClockList ->
+                            {false,
+                                RD, 
+                                Ctx#ctx{queuename = QueueName,
+                                        keyclocklist = KeyClockList}}
+                    end
+            end
+    end.
 
--spec malformed_queuename(#wm_reqdata{}) -> atom().
+-spec malformed_queuename(#wm_reqdata{}) -> atom()|false.
 malformed_queuename(RD) ->
     QueueNameRaw = wrq:path_info(queuename, RD),
-    list_to_atom(riak_kv_wm_utils:maybe_decode_uri(RD, QueueNameRaw)).
+    existing_atom(riak_kv_wm_utils:maybe_decode_uri(RD, QueueNameRaw)).
 
--spec malformed_keyclocklist(iolist()) -> list(riak_kv_replrtq_src:repl_entry()).
+-spec malformed_keyclocklist(iolist()) ->
+        list(riak_kv_replrtq_src:repl_entry())|false.
 malformed_keyclocklist(ReqBody) ->
-    {struct, [{<<"keys-clocks">>, KCL}]} = mochijson2:decode(ReqBody),
-    lists:reverse(lists:foldl(fun decode_bucketkeyclock/2, [], KCL)).
-
-decode_bucketkeyclock({struct, BKC}, Acc) ->
-    B = 
-        case lists:keyfind(<<"bucket">>, 1, BKC) of
-            {<<"bucket">>, Bucket} when is_binary(Bucket) ->
-                case lists:keyfind(<<"bucket-type">>, 1, BKC) of
-                    {<<"bucket-type">>, BucketType} ->
-                        {BucketType, Bucket};
-                    false ->
-                        Bucket
-                end;
-            false ->
-                false
-        end,
-    case B of
-        false ->
-            Acc;
+    %% If individual elements of the Key Clock list are malformed
+    %% they are filtered, rather than calling the request malformed
+    %% with a log raise to indicate that the filtering has occurred 
+    case mochijson2:decode(ReqBody) of
+        {struct, [{<<"keys-clocks">>, KCL}]} ->
+            KeyClockList = 
+                lists:foldl(fun decode_bucketkeyclock/2, [], KCL),
+            case {length(KeyClockList), length(KCL)} of
+                {N, N} ->
+                    ok;
+                {N, M} ->
+                    lager:info(
+                        "~w Malformed requests filtered from push of ~w",
+                        [M - N, M]),
+                    ok
+            end,
+            KeyClockList;
         _ ->
-            case lists:keyfind(<<"key">>, 1, BKC) of
-                {<<"key">>, K} when is_binary(K) ->
-                    case lists:keyfind(<<"clock">>, 1, BKC) of
-                        {<<"clock">>, EncodedClock} ->
-                            DC =
-                                riak_object:decode_vclock(
-                                    base64:decode(EncodedClock)),
-                            [{B, K, DC}|Acc];
-                        false ->
-                            Acc
-                    end;
-                false ->
-                    Acc
-            end
-    end;
-decode_bucketkeyclock(_, Acc) ->
-    Acc.
+            false
+    end.
 
 
 -spec content_types_provided(#wm_reqdata{}, context()) ->
@@ -173,7 +191,9 @@ content_types_provided(RD, Ctx) when Ctx#ctx.method =:= 'POST' ->
 %%      as PUT for clients that do not support PUT.
 process_post(RD, Ctx) -> 
     QueueName = Ctx#ctx.queuename,
-    KeyClockList = Ctx#ctx.keyclocklist,
+    KeyClockList = 
+        lists:map(fun({B, K, C}) -> {B, K, C, to_fetch} end,
+                    lists:reverse(Ctx#ctx.keyclocklist)),
     ok = riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, KeyClockList),
     R = 
         case riak_kv_replrtq_src:length_rtq(QueueName) of
@@ -199,6 +219,60 @@ produce_queue_fetch(RD, Ctx) ->
                         RD,
                         Ctx).
 
+decode_bucketkeyclock({struct, BKC}, Acc) ->
+    B = 
+        case lists:keyfind(<<"bucket">>, 1, BKC) of
+            {<<"bucket">>, Bucket} when is_binary(Bucket) ->
+                case lists:keyfind(<<"bucket-type">>, 1, BKC) of
+                    {<<"bucket-type">>, BucketType} ->
+                        {BucketType, Bucket};
+                    false ->
+                        Bucket
+                end;
+            false ->
+                false
+        end,
+    case B of
+        false ->
+            Acc;
+        _ ->
+            case lists:keyfind(<<"key">>, 1, BKC) of
+                {<<"key">>, K} when is_binary(K) ->
+                    case lists:keyfind(<<"clock">>, 1, BKC) of
+                        {<<"clock">>, EncodedClock} ->
+                            case decode_clock(EncodedClock) of
+                                false ->
+                                    Acc;
+                                VC ->
+                                    [{B, K, VC}|Acc]
+                            end;
+                        false ->
+                            Acc
+                    end;
+                false ->
+                    Acc
+            end
+    end;
+decode_bucketkeyclock(_, Acc) ->
+    Acc.
+
+-spec existing_atom(list()) -> atom()|false.
+existing_atom(ListToConvert)->
+    try
+        list_to_existing_atom(ListToConvert)
+    catch
+        _:_ ->
+            false
+    end.
+
+-spec decode_clock(list()) -> vclock:vclock()|false.
+decode_clock(EncodedClock) ->
+    try
+        riak_object:decode_vclock(base64:decode(EncodedClock))
+    catch
+        _:_ ->
+            false
+    end.
 
 format_response(_, {ok, queue_empty}, RD, Ctx) ->
     {<<0:8/integer>>, RD, Ctx};
@@ -261,16 +335,40 @@ make_binarykey(Bucket, Key) when is_binary(Bucket), is_binary(Key) ->
 
 -ifdef(TEST).
 
-json_encode_keys_test() ->
+test_kcl() ->
     A = vclock:fresh(),
     B = vclock:fresh(),
     A1 = vclock:increment(a, A),
     B1 = vclock:increment(b, B),
     E1 = {<<"B1">>, <<"K1">>, A1},
     E2 = {{<<"T">>, <<"B2">>}, <<"K2">>, B1},
-    KCL = lists:sort([E1, E2]),
+    [E1, E2].
+
+json_encode_keys_test() ->
+    KCL = lists:sort(test_kcl()),
     KCEncoded =
         riak_kv_clusteraae_fsm:json_encode_results(fetch_clocks_range, KCL),
     ?assertMatch(KCL, lists:sort(malformed_keyclocklist(KCEncoded))).
+
+malformed_clock_test() ->
+    KCL = lists:sort(test_kcl()),
+    KCEncoded =
+        riak_kv_clusteraae_fsm:json_encode_results(fetch_clocks_range, KCL),
+    {struct, [{<<"keys-clocks">>, EncKCL}]} =
+        mochijson2:decode(KCEncoded),
+    BadEncoded =
+        mochijson2:encode({struct, [{<<"keys-xxx-clocks">>, EncKCL}]}),
+    ?assertMatch(false, malformed_keyclocklist(BadEncoded)),
+    Q = q1_ttaaefs,
+    ?assertMatch(Q, existing_atom("q1_ttaaefs")),
+    ?assertMatch(false, existing_atom("q1_xxx_ttaaefs")),
+    VC = 
+        base64:encode(
+            riak_object:encode_vclock(
+                vclock:increment(a, vclock:fresh()))),
+    Garbage =
+        <<"zzz">>,
+    ?assertMatch(false, decode_clock(<<VC/binary, Garbage/binary>>)).
+
 
 -endif.
