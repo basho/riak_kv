@@ -251,7 +251,8 @@
                   readrepair=false :: boolean(),
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
-                  hash_ops = no_hash_ops
+                  hash_ops = no_hash_ops,
+                  sync_on_write = undefined :: undefined | atom()
                  }).
 -type putargs() :: #putargs{}.
 
@@ -1046,6 +1047,7 @@ handle_command({refresh_index_data, BKey, OldIdxData}, Sender,
                         {false, undefined, [], UpModState}
                 end,
             IndexSpecs = riak_object:diff_index_data(OldIdxData, IdxData),
+
             {Reply, ModState3} =
             case Mod:put(Bucket, Key, IndexSpecs, undefined, ModState2) of
                 {ok, UpModState2} ->
@@ -2650,6 +2652,7 @@ do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                         StartTime
                 end,
     Coord = proplists:get_value(coord, Options, false),
+    SyncOnWrite = proplists:get_value(sync_on_write, Options, undefined),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
     PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
                        coord=Coord,
@@ -2661,7 +2664,8 @@ do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
                        starttime=StartTime,
                        readrepair = ReadRepair,
                        prunetime=PruneTime,
-                       crdt_op = CRDTOp},
+                       crdt_op = CRDTOp,
+                       sync_on_write = SyncOnWrite},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -2962,30 +2966,45 @@ perform_put({true, {_Obj, _OldObj}=Objects},
             #putargs{returnbody=RB,
                      bkey=BKey,
                      reqid=ReqID,
+                     coord=Coord,
                      index_specs=IndexSpecs,
                      readrepair=ReadRepair,
-                     coord=Coord}) ->
+                     coord=Coord,
+                     sync_on_write=SyncOnWrite}) ->
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
       false ->
         MaxCheckFlag = do_max_check
     end,
-    actual_put(BKey, Objects, IndexSpecs,
-                RB, ReqID, MaxCheckFlag, Coord, State).
+    case SyncOnWrite of
+        all ->
+           Sync = true;
+        %% 'one' does not override the backend value for the other nodes
+        %% therefore is only useful if the backend is configured to not sync-on-write
+        one ->
+           Sync = Coord;
+        _ ->
+           %% anything but all or one means do the default configured backend write
+           Sync = false
+    end,
+    {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, Sync, State),
+    {Reply, State2}.
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, {Obj, OldObj}, IndexSpecs,
-                RB, ReqID, do_max_check, false, State).
+    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, false, State).
 
-actual_put(BKey={Bucket, Key}, {Obj, OldObj}, IndexSpecs,
-            RB, ReqID, MaxCheckFlag, Coord,
+actual_put(BKey={Bucket, Key},
+            {Obj, OldObj},
+            IndexSpecs,
+            RB, ReqID,
+            MaxCheckFlag, Sync,
             State=#state{idx=Idx,
                             mod=Mod,
                             modstate=ModState,
                             update_hook=UpdateHook}) ->
     case encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
-                       MaxCheckFlag) of
+                       MaxCheckFlag, Sync) of
         {{ok, UpdModState}, EncodedVal} ->
             aae_update(Bucket, Key, Obj, OldObj, EncodedVal, State),
             nextgenrepl(Bucket, Key, Obj, size(EncodedVal),
@@ -3554,7 +3573,7 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
             end,
             {_, State2, DiffObj2} = maybe_new_actor_epoch(DiffObj, StateData),
             case encode_and_put(DiffObj2, Mod, Bucket, Key,
-                                IndexSpecs, ModState, no_max_check) of
+                                IndexSpecs, ModState, no_max_check, false) of
                 {{ok, UpdModState}, EncodedVal} ->
                     aae_update(Bucket, Key, 
                                 DiffObj2, confirmed_no_old_object, EncodedVal, 
@@ -3582,7 +3601,8 @@ do_diffobj_put({Bucket, Key}=BKey, DiffObj,
                             IndexSpecs = []
                     end,
                     case encode_and_put(AMObj, Mod, Bucket, Key,
-                                        IndexSpecs, ModState, no_max_check) of
+                                        IndexSpecs, ModState,
+                                        no_max_check, false) of
                         {{ok, UpdModState}, EncodedVal} ->
                             aae_update(Bucket, Key, 
                                         AMObj, OldObj, EncodedVal, 
@@ -3932,13 +3952,13 @@ return_encoded_binary_object(Method, EncodedObject) ->
     term_to_binary({ Method, EncodedObject }).
 
 -spec encode_and_put(
-      Obj::riak_object:riak_object(), Mod::term(), Bucket::riak_object:bucket(),
-      Key::riak_object:key(), IndexSpecs::list(), ModState::term(),
-       MaxCheckFlag::no_max_check | do_max_check) ->
+        Obj::riak_object:riak_object(), Mod::term(), Bucket::riak_object:bucket(),
+        Key::riak_object:key(), IndexSpecs::list(), ModState::term(),
+        MaxCheckFlag::no_max_check | do_max_check, Sync::boolean()) ->
            {{ok, UpdModState::term()}, EncodedObj::binary()} |
            {{error, Reason::term(), UpdModState::term()}, EncodedObj::binary()}.
 
-encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag) ->
+encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag, Sync) ->
     DoMaxCheck = MaxCheckFlag == do_max_check,
     NumSiblings = riak_object:value_count(Obj),
     case DoMaxCheck andalso
@@ -3957,11 +3977,11 @@ encode_and_put(Obj, Mod, Bucket, Key, IndexSpecs, ModState, MaxCheckFlag) ->
                     ok
             end,
             encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs,
-                                        ModState, MaxCheckFlag)
+                                        ModState, MaxCheckFlag, Sync)
     end.
 
 encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
-                            MaxCheckFlag) ->
+                            MaxCheckFlag, Sync) ->
     DoMaxCheck = MaxCheckFlag == do_max_check,
     case uses_r_object(Mod, ModState, Bucket) of
         true ->
@@ -3990,10 +4010,25 @@ encode_and_put_no_sib_check(Obj, Mod, Bucket, Key, IndexSpecs, ModState,
                         false ->
                             ok
                     end,
-                    PutRet = Mod:put(Bucket, Key, IndexSpecs, EncodedVal,
-                                     ModState),
+                    PutFun = select_put_fun(Mod, ModState, Sync),
+                    PutRet = PutFun(Bucket, Key, IndexSpecs, EncodedVal, ModState),
                     {PutRet, EncodedVal}
             end
+    end.
+
+-spec select_put_fun(Mod::term(), ModState::term(), Sync::boolean()) -> fun().
+select_put_fun(Mod, ModState, Sync) ->
+    case Sync of
+        true ->
+            {ok, Capabilities} = Mod:capabilities(ModState),
+            case lists:member(flush_put, Capabilities) of
+                true ->
+                    fun Mod:flush_put/5;
+                _ ->
+                    fun Mod:put/5
+            end;
+        _ ->
+            fun Mod:put/5
     end.
 
 uses_r_object(Mod, ModState, Bucket) ->

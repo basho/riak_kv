@@ -30,6 +30,7 @@
          start/2,
          stop/1,
          get/3,
+         flush_put/5,
          put/5,
          async_put/5,
          delete/4,
@@ -66,8 +67,9 @@
 -endif.
 
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold, indexes, index_reformat, size,
-        iterator_refresh, snap_prefold]).
+-define(CAPABILITIES,
+        [async_fold, indexes, index_reformat, size,
+            iterator_refresh, snap_prefold, flush_put]).
 -define(FIXED_INDEXES_KEY, fixed_indexes).
 
 -record(state, {ref :: eleveldb:db_ref() | undefined,
@@ -173,18 +175,43 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
             {error, Reason, State}
     end.
 
-%% @doc Insert an object into the eleveldb backend.
 -type index_spec() :: {add, Index, SecondaryKey} | {remove, Index, SecondaryKey}.
+
+%% @doc Normal put, use existing option, do not modify write options
 -spec put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
-put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
+put(Bucket, PrimaryKey, IndexSpecs, Val, State) ->
+    Sync = false,
+    do_put(Bucket, PrimaryKey, IndexSpecs, Val, Sync, State).
+
+%% @doc put_flush capability - do a put with a flush to disk
+-spec flush_put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+flush_put(Bucket, PrimaryKey, IndexSpecs, Val, State) ->
+    Sync = true,
+    do_put(Bucket, PrimaryKey, IndexSpecs, Val, Sync, State).
+
+%% @doc Insert an object into the eleveldb backend.
+-spec do_put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), boolean(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+do_put(Bucket, PrimaryKey, IndexSpecs, Val, Sync, #state{ref=Ref,
                                                 write_opts=WriteOpts,
                                                 legacy_indexes=WriteLegacy,
                                                 fixed_indexes=FixedIndexes}=State) ->
     %% Create the KV update...
     StorageKey = to_object_key(Bucket, PrimaryKey),
     Updates1 = [{put, StorageKey, Val} || Val /= undefined],
+
+    %% Setup write options...
+    WriteOpts2 = case Sync of
+        true ->
+            lists:keyreplace(sync,1,WriteOpts, {sync,Sync});
+        _ ->
+            WriteOpts
+    end,
 
     %% Convert IndexSpecs to index updates...
     F = fun({add, Field, Value}) ->
@@ -200,7 +227,7 @@ put(Bucket, PrimaryKey, IndexSpecs, Val, #state{ref=Ref,
     Updates2 = lists:flatmap(F, IndexSpecs),
 
     %% Perform the write...
-    case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts) of
+    case eleveldb:write(Ref, Updates1 ++ Updates2, WriteOpts2) of
         ok ->
             {ok, State};
         {error, Reason} ->

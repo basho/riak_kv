@@ -31,6 +31,7 @@
          fallback/4,
          expand_value/3,
          expand_rw_value/4,
+         expand_sync_on_write/2,
          normalize_rw_value/2,
          make_request/2,
          get_index_n/1,
@@ -159,6 +160,20 @@ expand_value(Type, default, BucketProps) ->
     get_bucket_option(Type, BucketProps);
 expand_value(_Type, Value, _BucketProps) ->
     Value.
+
+expand_sync_on_write(default, BucketProps) ->
+    normalize_value(get_bucket_option(sync_on_write, BucketProps));
+expand_sync_on_write(Value, _BucketProps) ->
+    Value.
+
+normalize_value(Val) when is_atom(Val) ->
+    Val;
+normalize_value(Val) when is_binary(Val) ->
+    try
+        binary_to_existing_atom(Val, utf8)
+    catch _:badarg ->
+        error
+    end.
 
 expand_rw_value(Type, default, BucketProps, N) ->
     normalize_rw_value(get_bucket_option(Type, BucketProps), N);
