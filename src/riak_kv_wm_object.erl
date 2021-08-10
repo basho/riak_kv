@@ -422,7 +422,10 @@ malformed_rw_params(RD, Ctx) ->
     Res2 =
     lists:foldl(fun malformed_custom_param/2,
                  Res,
-                 [{#ctx.sync_on_write, "sync_on_write", "default", [default, backend, one, all]}]),
+                 [{#ctx.sync_on_write,
+                     "sync_on_write",
+                     "default",
+                     [default, backend, one, all]}]),
     lists:foldl(fun malformed_boolean_param/2,
                 Res2,
                 [{#ctx.basic_quorum, "basic_quorum", "default"},
@@ -449,21 +452,31 @@ malformed_rw_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
              Ctx}
     end.
 
--spec malformed_custom_param({Idx::integer(), Name::string(), Default::string(), AllowedValues::[atom()]},
-                             {boolean(), #wm_reqdata{}, context()}) ->
+-spec malformed_custom_param({Idx::integer(),
+                                    Name::string(),
+                                    Default::string(),
+                                    AllowedValues::[atom()]},
+                                {boolean(), #wm_reqdata{}, context()}) ->
    {boolean(), #wm_reqdata{}, context()}.
 %% @doc Check that a custom parameter is one of the AllowedValues
 %% Store its result in context() if it is, or print an error message
 %% in #wm_reqdata{} if it is not.
 malformed_custom_param({Idx, Name, Default, AllowedValues}, {Result, RD, Ctx}) ->
     AllowedValueTuples = [{V} || V <- AllowedValues],
-    Option=lists:keyfind(list_to_atom(string:to_lower(wrq:get_qs_value(Name, Default, RD))),1, AllowedValueTuples),
+    Option=
+        lists:keyfind(
+            list_to_atom(
+                string:to_lower(
+                    wrq:get_qs_value(Name, Default, RD))),
+                1, 
+                AllowedValueTuples),
     case Option of
         false ->
+            ErrorText =
+                "~s query parameter must be one of the following words: ~p~n",
             {true,
              wrq:append_to_resp_body(
-               io:format("~s query parameter must be one of the following words: ~p~n",
-                             [Name, AllowedValues]),
+               io_lib:format(ErrorText, [Name, AllowedValues]),
                wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
              Ctx};
         _ ->

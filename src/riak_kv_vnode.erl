@@ -2969,7 +2969,6 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                      coord=Coord,
                      index_specs=IndexSpecs,
                      readrepair=ReadRepair,
-                     coord=Coord,
                      sync_on_write=SyncOnWrite}) ->
     case ReadRepair of
       true ->
@@ -2988,17 +2987,21 @@ perform_put({true, {_Obj, _OldObj}=Objects},
            %% anything but all or one means do the default configured backend write
            Sync = false
     end,
-    {Reply, State2} = actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag, Sync, State),
+    {Reply, State2} =
+        actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag,
+                    {Coord, Sync}, State),
     {Reply, State2}.
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check, false, State).
+    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check,
+                {false, false}, State).
 
 actual_put(BKey={Bucket, Key},
             {Obj, OldObj},
             IndexSpecs,
             RB, ReqID,
-            MaxCheckFlag, Sync,
+            MaxCheckFlag,
+            {Coord, Sync},
             State=#state{idx=Idx,
                             mod=Mod,
                             modstate=ModState,
