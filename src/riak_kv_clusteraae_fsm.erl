@@ -38,14 +38,18 @@
             convert_fold/1,
             is_valid_fold/1]).
 
+-export([repair_fun/1]).
+
 -define(EMPTY, <<>>).
 
 -define(NVAL_QUERIES, 
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval,
                 list_buckets]).
 -define(RANGE_QUERIES, 
-            [merge_tree_range, fetch_clocks_range, repl_keys_range,
-                find_keys, object_stats, find_tombs, reap_tombs, erase_keys]).
+            [merge_tree_range, fetch_clocks_range,
+                repl_keys_range, repair_keys_range,
+                find_keys, object_stats,
+                find_tombs, reap_tombs, erase_keys]).
 -define(LIST_ACCUMULATE_QUERIES,
             [fetch_clocks_nval, fetch_clocks_range, find_keys, find_tombs,
                 list_buckets]).
@@ -56,6 +60,7 @@
                 start_time :: erlang:timestamp()}).
 
 -define(REPL_BATCH_SIZE, 128).
+-define(REPAIR_BATCH_SIZE, 128).
 -define(DELETE_BATCH_SIZE, 1024).
 
 -type from() :: {atom(), req_id(), pid()}.
@@ -88,7 +93,8 @@
     %% find_tombs/find_keys to accumulate/sort a large list for counting. 
 -type query_types() :: 
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
-    merge_tree_range|fetch_clocks_range|repl_keys_range|find_keys|object_stats|
+    merge_tree_range|fetch_clocks_range|repl_keys_range|repair_keys_range|
+    find_keys|object_stats|
     find_tombs|reap_tombs|erase_keys|
     list_buckets.
 
@@ -209,7 +215,18 @@
         % This is expected to be used when transitioning buckets between
         % clusters, and also when repairing a cluster from a known outage in
         % real-time repl (utilising a modified range)
-        
+    {repair_keys_range,
+        bucket(),
+        key_range(),
+        modified_range() | all,
+        all}|
+        % Read repair all keys in the range.  Keys will be read in batches
+        % and then repaired by the fold worker performing a fetch within the
+        % fold.
+        % Will default to repairing all keys (i.e. all of those fetched and a
+        % delta is discovered).  Scope to support not_in_coverage later - i.e.
+        % only attempt to read those keys where a primary vnode is not
+        % participating in coverage
 
     % Operational support functions
     {find_keys, 
@@ -373,6 +390,8 @@ init(From={_, _, _}, [Query, Timeout]) ->
                         leveled_tictac:new_tree(range_tree, TreeSize);
                     repl_keys_range ->
                         {[], 0, element(5, Query), ?REPL_BATCH_SIZE};
+                    repair_keys_range ->
+                        {[], 0, element(5, Query), ?REPAIR_BATCH_SIZE};
                     object_stats ->
                         [{total_count, 0}, 
                             {total_size, 0},
@@ -444,6 +463,15 @@ process_results(Results, State) ->
                         % the list, not when is is pushed to the queue
                         {_EL, AccCount, QueueName, RBS} = Acc,
                         {[], AccCount + Count, QueueName, RBS};
+                    repair_keys_range ->
+                        {ok, C} = riak:local_client(),
+                        FetchFun = repair_fun(C),
+                        {RepairTail, Count, all, RBS} = Results,
+                        lists:foreach(FetchFun, RepairTail),
+                        % Count is incremented when the Repair attempt is added
+                        % to the list, not when is is pushed to the queue
+                        {_EL, AccCount, all, RBS} = Acc,
+                        {[], AccCount + Count, all, RBS};
                     object_stats ->
                         [{total_count, R_TC}, 
                             {total_size, R_TS},
@@ -542,6 +570,9 @@ json_encode_results(fetch_clocks_range, KeysNClocks) ->
 json_encode_results(repl_keys_range, ReplResult) ->
     R = {struct, [{<<"dispatched_count">>, element(2, ReplResult)}]},
     mochijson2:encode(R);
+json_encode_results(repair_keys_range, ReplResult) ->
+    R = {struct, [{<<"dispatched_count">>, element(2, ReplResult)}]},
+    mochijson2:encode(R);
 json_encode_results(find_keys, Result) ->
     Keys = {struct, [{<<"results">>, [{struct, encode_find_key(Key, Int)} || {_Bucket, Key, Int} <- Result]}
                     ]},
@@ -607,6 +638,12 @@ pb_encode_results(fetch_clocks_range, _QD, KeysNClocks) ->
 pb_encode_results(repl_keys_range, _QD, ReplResult) ->
     R = element(2, ReplResult),
     #rpbaaefoldkeycountresp{response_type = <<"repl_keys">>, 
+                            keys_count =
+                                [#rpbkeyscount{tag = <<"dispatched_count">>,
+                                                count = R}]};
+pb_encode_results(repair_keys_range, _QD, ReplResult) ->
+    R = element(2, ReplResult),
+    #rpbaaefoldkeycountresp{response_type = <<"repair_keys">>, 
                             keys_count =
                                 [#rpbkeyscount{tag = <<"dispatched_count">>,
                                                 count = R}]};
@@ -751,6 +788,20 @@ handle_in_batches(Type, [Ref|RestRefs], BatchCount, Worker) ->
             ok = riak_kv_eraser:request_delete(Worker, Ref)
     end,
     handle_in_batches(Type, RestRefs, BatchCount + 1, Worker).
+
+%% ===================================================================
+%% Query helper functions
+%% ===================================================================
+
+repair_fun(RiakClient) ->
+    fun({B, K}) ->
+        case riak_kv_util:consistent_object(B) of
+            true ->
+                riak_kv_exchange_fsm:repair_consistent({B, K});
+            false ->
+                riak_client:get(B, K, RiakClient)
+        end
+    end.
 
 %% ===================================================================
 %% Internal functions

@@ -26,6 +26,8 @@
 %% GET /cachedtrees/nvals/NVal/keysclocks?filter
 %% GET /rangetrees/[types/Type/]buckets/Bucket/trees/Size?filter
 %% GET /rangetrees/[types/Type/]buckets/Bucket/keysclocks?filter
+%% GET /rangerepl/[types/Type/]bucket/Bucket?filter
+%% GET /rangerepair/[types/Type/]bucket/Bucket?filter
 %% GET /siblings/[types/Type/]buckets/Bucket/counts/Cnt?filter
 %% GET /objectsizes/[types/Type/]buckets/Bucket/sizes/Size?filter
 %% GET /objectstats/[types/Type/]buckets/Bucket?filter
@@ -81,12 +83,13 @@
 %%          the merkle tree. If absent then the default hash fun is used.
 %%   </li>
 %%   <li><tt>change_method=count|local|{job, Integer}</tt><br />
-%%          rangetrees trees query only
-%%          an integer that is an initialisation vector for the hash
-%%          method for the trees. Useful for avoiding hash collision,
-%%          this IV will be used to initialise the hash function that
-%%          will be used to hash version vectors that go into creating
-%%          the merkle tree. If absent then the default hash fun is used.
+%%          Used only on reape and erase queries.  If the change_method is set
+%%          to count, then no reaps or erases will be performed - a count will
+%%          simply be taken.  local will mean that on each node participating
+%%          in the query, that node's eraser/reaper queue will be used for that
+%%          nodes's share of the query.  {job, Integer} will set up a specific
+%%          reap/erase worker for this job, identified in logs by Integer, and
+%%          running on the node coordinating the query
 %%   </li>
 %% </ul>
 
@@ -189,6 +192,7 @@ malformed_request(RD, Ctx) ->
         "cachedtrees" -> malformed_cached_tree_request(RD, Ctx);
         "rangetrees" -> malformed_range_tree_request(RD, Ctx);
         "rangerepl" -> malformed_range_repl_request(RD, Ctx);
+        "rangerepair" -> malformed_range_repair_request(RD, Ctx);
         "siblings" -> malformed_find_keys_request({sibling_count, count}, RD, Ctx);
         "objectsizes" -> malformed_find_keys_request({object_size, size}, RD, Ctx);
         "objectstats" -> malformed_object_stats_request(RD, Ctx);
@@ -559,6 +563,48 @@ malformed_range_repl_request(Filter0, QN0, RD, Ctx) ->
                         QN},
             {false, RD, Ctx#ctx{query= Query}}
     end.
+
+%% @private validate and parse a range repair request
+%% Needs a bucket as minimum - plus also maybe a key range and a
+%% date range
+-spec malformed_range_repair_request(#wm_reqdata{},
+                                    context()) ->
+                                        {boolean(), #wm_reqdata{}, context()}.
+malformed_range_repair_request(RD, Ctx) ->
+    case wrq:path_info(bucket, RD) of
+        undefined ->
+            malformed_response("Bucket required", [], RD, Ctx);
+        Bucket0 ->
+            Bucket =
+                erlang:list_to_binary(
+                       riak_kv_wm_utils:maybe_decode_uri(RD, Bucket0)),
+            Filter0 = wrq:get_qs_value(?Q_AAEFOLD_FILTER, RD),
+            malformed_range_repair_request(Filter0,
+                                            RD,
+                                            Ctx#ctx{bucket=Bucket})
+    end.
+
+-spec malformed_range_repair_request(undefined | string(),
+                                    #wm_reqdata{},
+                                    context()) ->
+                                        {boolean(), #wm_reqdata{}, context()}.
+malformed_range_repair_request(Filter0, RD, Ctx) ->
+    case validate_range_filter(Filter0) of
+        {invalid, Reason} ->
+            malformed_response("Invalid range filter ~p",
+                               [Reason],
+                               RD,
+                               Ctx);
+        {valid, Filter} ->
+            QBucket = query_bucket(Ctx),
+            Query = {repair_keys_range,
+                        QBucket,
+                        Filter#filter.key_range,
+                        Filter#filter.date_range,
+                        all},
+            {false, RD, Ctx#ctx{query= Query}}
+    end.
+
 
 %% @private validate and populate the object stats query
 -spec malformed_object_stats_request(#wm_reqdata{}, context()) ->

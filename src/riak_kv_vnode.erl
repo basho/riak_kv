@@ -1845,6 +1845,39 @@ handle_aaefold({repl_keys_range,
                                 InitAcc, 
                                 [{clock, null}]),
     {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
+handle_aaefold({repair_keys_range,
+                        Bucket, KeyRange,
+                        ModifiedRange,
+                        all},
+                    InitAcc, _Nval,
+                    IndexNs, Filtered, ReturnFun, Cntrl, Sender,
+                    State) ->
+    {ok, C} = riak:local_client(),
+    FetchFun = riak_kv_clusteraae_fsm:repair_fun(C),
+    FoldFun =
+        fun(BF, KF, _EFs, Acc) ->
+            {AccL, Count, all, BatchSize} = Acc,
+            case Count rem BatchSize of
+                0 ->
+                    lists:foreach(FetchFun, AccL), 
+                    {[{BF, KF}], Count + 1, all, BatchSize};
+                _ ->
+                    {[{BF, KF}|AccL], Count + 1, all, BatchSize}
+            end
+        end,
+    WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
+    RangeLimiter = aaefold_setrangelimiter(Bucket, KeyRange),
+    ModifiedLimiter = aaefold_setmodifiedlimiter(ModifiedRange),
+    {async, Folder} = 
+        aae_controller:aae_fold(Cntrl, 
+                                RangeLimiter,
+                                all,
+                                ModifiedLimiter,
+                                false,
+                                WrappedFoldFun, 
+                                InitAcc, 
+                                []),
+    {select_queue(?AF4_QUEUE, State), {fold, Folder, ReturnFun}, Sender, State};
 handle_aaefold({find_keys, 
                         Bucket, KeyRange,
                         ModifiedRange,
