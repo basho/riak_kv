@@ -139,6 +139,9 @@ raw_dispatch(Name) ->
      {["rangerepl"] ++ Prefix ++ ["buckets", bucket, "queuename", queuename],
       riak_kv_wm_aaefold, Props},
 
+     {["rangerepair"] ++ Prefix ++ ["buckets", bucket],
+      riak_kv_wm_aaefold, Props},
+
      {["siblings"] ++ Prefix ++ ["buckets", bucket, "counts", count],
       riak_kv_wm_aaefold, Props},
 
