@@ -940,6 +940,10 @@ is_valid_fold({repl_keys_range, B, KR, MR, _QN}) ->
     is_bucket(B) and
         is_keyrange(KR) and
         is_modrange(MR);
+is_valid_fold({repair_keys_range, B, KR, MR, all}) ->
+    is_bucket(B) and
+        is_keyrange(KR) and
+        is_modrange(MR);
 is_valid_fold({find_keys, B, KR, MR, {sibling_count, I}}) ->
     is_bucket(B) and
         is_keyrange(KR) and
