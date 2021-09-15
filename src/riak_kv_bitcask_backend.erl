@@ -31,6 +31,7 @@
          stop/1,
          get/3,
          put/5,
+         flush_put/5,
          delete/4,
          drop/1,
          fold_buckets/4,
@@ -61,7 +62,7 @@
 -define(MERGE_FILE, "merge.txt").
 -define(VERSION_FILE, "version.txt").
 -define(API_VERSION, 1).
--define(CAPABILITIES, [async_fold,size]).
+-define(CAPABILITIES, [async_fold, size, flush_put]).
 -define(TERMINAL_POSIX_ERRORS, [eacces, erofs, enodev, enospc]).
 
 %% must not be 131, otherwise will match t2b in error
@@ -245,6 +246,22 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
                     lists:member(element(2, Reason), ?TERMINAL_POSIX_ERRORS),
             {error, Reason, State}
     end.
+
+%% @doc Insert an object into the bitcask backend, and flush to disk.
+%% Should only flush when the bitcask backend does not default to flush.
+-spec flush_put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
+                 {ok, state()} |
+                 {error, term(), state()}.
+flush_put(Bucket, PrimaryKey, IndexSpecs, Val, State) ->
+    R = put(Bucket, PrimaryKey, IndexSpecs, Val, State),
+    case {element(1, R), application:get_env(bitcask, sync_strategy)} of
+        {ok, Strategy} when Strategy =/= {ok, o_sync} ->
+            bitcask:sync(State#state.ref);
+        _ ->
+            ok
+    end,
+    R.
+
 
 %% @doc Delete an object from the bitcask backend
 %% NOTE: The bitcask backend does not currently support
