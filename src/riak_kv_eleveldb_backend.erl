@@ -182,16 +182,14 @@ get(Bucket, Key, #state{read_opts=ReadOpts,
                  {ok, state()} |
                  {error, term(), state()}.
 put(Bucket, PrimaryKey, IndexSpecs, Val, State) ->
-    Sync = false,
-    do_put(Bucket, PrimaryKey, IndexSpecs, Val, Sync, State).
+    do_put(Bucket, PrimaryKey, IndexSpecs, Val, false, State).
 
 %% @doc put_flush capability - do a put with a flush to disk
 -spec flush_put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), state()) ->
                  {ok, state()} |
                  {error, term(), state()}.
 flush_put(Bucket, PrimaryKey, IndexSpecs, Val, State) ->
-    Sync = true,
-    do_put(Bucket, PrimaryKey, IndexSpecs, Val, Sync, State).
+    do_put(Bucket, PrimaryKey, IndexSpecs, Val, true, State).
 
 %% @doc Insert an object into the eleveldb backend.
 -spec do_put(riak_object:bucket(), riak_object:key(), [index_spec()], binary(), boolean(), state()) ->

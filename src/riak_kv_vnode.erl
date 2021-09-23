@@ -2976,17 +2976,20 @@ perform_put({true, {_Obj, _OldObj}=Objects},
       false ->
         MaxCheckFlag = do_max_check
     end,
-    case SyncOnWrite of
-        all ->
-           Sync = true;
-        %% 'one' does not override the backend value for the other nodes
-        %% therefore is only useful if the backend is configured to not sync-on-write
-        one ->
-           Sync = Coord;
-        _ ->
-           %% anything but all or one means do the default configured backend write
-           Sync = false
-    end,
+    Sync = 
+        case SyncOnWrite of
+            all ->
+                true;
+            %% 'one' does not override the backend value for the other nodes
+            %% therefore is only useful if the backend is configured to not 
+            %% sync-on-write
+            one ->
+                Coord;
+            _ ->
+            %% anything but all or one means do the default configured backend
+            %% write
+                false
+        end,
     {Reply, State2} =
         actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag,
                     {Coord, Sync}, State),
