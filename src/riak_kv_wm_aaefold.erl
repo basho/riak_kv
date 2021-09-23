@@ -26,8 +26,8 @@
 %% GET /cachedtrees/nvals/NVal/keysclocks?filter
 %% GET /rangetrees/[types/Type/]buckets/Bucket/trees/Size?filter
 %% GET /rangetrees/[types/Type/]buckets/Bucket/keysclocks?filter
-%% GET /rangerepl/[types/Type/]bucket/Bucket?filter
-%% GET /rangerepair/[types/Type/]bucket/Bucket?filter
+%% GET /rangerepl/[types/Type/]buckets/Bucket?filter
+%% GET /rangerepair/[types/Type/]buckets/Bucket?filter
 %% GET /siblings/[types/Type/]buckets/Bucket/counts/Cnt?filter
 %% GET /objectsizes/[types/Type/]buckets/Bucket/sizes/Size?filter
 %% GET /objectstats/[types/Type/]buckets/Bucket?filter
@@ -83,7 +83,7 @@
 %%          the merkle tree. If absent then the default hash fun is used.
 %%   </li>
 %%   <li><tt>change_method=count|local|{job, Integer}</tt><br />
-%%          Used only on reape and erase queries.  If the change_method is set
+%%          Used only on reap and erase queries.  If the change_method is set
 %%          to count, then no reaps or erases will be performed - a count will
 %%          simply be taken.  local will mean that on each node participating
 %%          in the query, that node's eraser/reaper queue will be used for that

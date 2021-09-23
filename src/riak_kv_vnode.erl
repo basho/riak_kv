@@ -1826,6 +1826,8 @@ handle_aaefold({repl_keys_range,
             {AccL, Count, QueueName, BatchSize} = Acc,
             case Count rem BatchSize of
                 0 ->
+                    % Reading in batch, then processing in batch assumed 
+                    % to be more efficient
                     riak_kv_replrtq_src:replrtq_aaefold(QueueName, AccL),
                     {[RE], Count + 1, QueueName, BatchSize};
                 _ ->
@@ -1859,6 +1861,8 @@ handle_aaefold({repair_keys_range,
             {AccL, Count, all, BatchSize} = Acc,
             case Count rem BatchSize of
                 0 ->
+                    % Reading in batch, then processing in batch assumed 
+                    % to be more efficient
                     lists:foreach(FetchFun, AccL), 
                     {[{BF, KF}], Count + 1, all, BatchSize};
                 _ ->
