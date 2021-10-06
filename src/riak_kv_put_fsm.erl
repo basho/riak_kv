@@ -69,6 +69,8 @@
         %% Request additional details about request added as extra
         %% element at the end of result tuple
         {details, detail()} |
+        %% Sync-on-write setting, backend, one(co-ordinating) or all
+        {sync_on_write, atom()} |
         %% Put the value as-is, do not increment the vclocks
         %% to make the value a frontier.
         asis |
@@ -110,6 +112,7 @@
                 dw :: non_neg_integer() | undefined,
                 pw :: non_neg_integer() | undefined,
                 node_confirms :: non_neg_integer() | undefined,
+                sync_on_write :: atom(),
                 coord_pl_entry :: {integer(), atom()} | undefined,
                 preflist2 :: riak_core_apl:preflist_ann() | undefined,
                 bkey :: {riak_object:bucket(), riak_object:key()},
@@ -327,10 +330,12 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
     NodeConfirms0 = get_option(node_confirms, Options0, default),
     W0 = get_option(w, Options0, default),
     DW0 = get_option(dw, Options0, default),
+    SyncOnWrite0 = get_option(sync_on_write, Options0, default),
 
     PW = riak_kv_util:expand_rw_value(pw, PW0, BucketProps, N),
     NodeConfirms = riak_kv_util:expand_rw_value(node_confirms, NodeConfirms0, BucketProps, N),
     W = riak_kv_util:expand_rw_value(w, W0, BucketProps, N),
+    SyncOnWrite = riak_kv_util:expand_sync_on_write(SyncOnWrite0, BucketProps),
 
     %% Expand the DW value, but also ensure that DW <= W
     DW1 = riak_kv_util:expand_rw_value(dw, DW0, BucketProps, N),
@@ -395,7 +400,9 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                             AllowMult,
                                             ReturnBody,
                                             IdxType),
-            VNodeOpts = handle_options(Options, VNodeOpts0),
+            Options1 = lists:keydelete(sync_on_write, 1, Options),
+            Options2 = [{sync_on_write, SyncOnWrite}|Options1],
+            VNodeOpts = handle_options(Options2, VNodeOpts0),
             StateData = StateData0#state{n=N,
                                          w=W,
                                          pw=PW, node_confirms=NodeConfirms, dw=DW,
@@ -477,7 +484,7 @@ execute_local(StateData=#state{robj=RObj, req_id = ReqId, bkey=BKey,
                                vnode_options=VnodeOptions,
                                trace = Trace,
                                starttime = StartTime}) ->
-    StateData1 = 
+    StateData1 =
         case Trace of 
             true ->
                 ?DTRACE(?C_PUT_FSM_EXECUTE_LOCAL, [], [atom2list(Node)]),
@@ -756,6 +763,9 @@ handle_options([], Acc) ->
     Acc;
 handle_options([{returnbody, true}|T], Acc) ->
     VNodeOpts = [{returnbody, true} | Acc],
+    handle_options(T, VNodeOpts);
+handle_options([{sync_on_write, Val}|T], Acc) ->
+    VNodeOpts = [{sync_on_write, Val} | Acc],
     handle_options(T, VNodeOpts);
 handle_options([{counter_op, _Amt}=COP|T], Acc) ->
     VNodeOpts = [COP | Acc],

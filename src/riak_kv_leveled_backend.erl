@@ -24,6 +24,7 @@
          stop/1,
          get/3,
          put/5,
+         flush_put/5,
          delete/4,
          drop/1,
          fold_buckets/4,
@@ -59,6 +60,7 @@
                         async_fold,
                         fold_heads,
                         snap_prefold,
+                        flush_put,
                         hot_backup,
                         leveled]).
 -define(API_VERSION, 1).
@@ -232,6 +234,17 @@ head(Bucket, Key, #state{bookie=Bookie}=State) ->
 -type index_spec() :: {add, Index, SecondaryKey} |
                         {remove, Index, SecondaryKey}.
 
+-spec flush_put(riak_object:bucket(),
+                    riak_object:key(),
+                    [index_spec()],
+                    binary(),
+                    state()) ->
+                         {ok, state()} |
+                         {error, term(), state()}.
+flush_put(Bucket, Key, IndexSpecs, Val, State) ->
+    do_put(Bucket, Key, IndexSpecs, Val, true, State).
+
+
 -spec put(riak_object:bucket(),
                     riak_object:key(),
                     [index_spec()],
@@ -239,19 +252,9 @@ head(Bucket, Key, #state{bookie=Bookie}=State) ->
                     state()) ->
                          {ok, state()} |
                          {error, term(), state()}.
-put(Bucket, Key, IndexSpecs, Val, #state{bookie=Bookie}=State) ->
-    case leveled_bookie:book_put(Bookie,
-                                    Bucket, Key, Val, IndexSpecs,
-                                    ?RIAK_TAG) of
-        ok ->
-            {ok, State};
-        pause ->
-            lager:warning("Backend ~w paused for ~w ms in response to put",
-                            [State#state.partition,
-                                State#state.backend_pause_ms]),
-            timer:sleep(State#state.backend_pause_ms),
-            {ok, State}
-    end.
+put(Bucket, Key, IndexSpecs, Val, State) ->
+    do_put(Bucket, Key, IndexSpecs, Val, false, State).
+
 
 %% @doc Delete an object from the leveled backend
 -spec delete(riak_object:bucket(),
@@ -631,6 +634,32 @@ callback(Ref, UnexpectedCallback, State) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+%% @private
+%% Complete a PUT, with the sync option true/false depending on whether 
+%% flush_put or put has been called
+-spec do_put(riak_object:bucket(),
+                    riak_object:key(),
+                    [index_spec()],
+                    binary(),
+                    boolean(),
+                    state()) ->
+                         {ok, state()} |
+                         {error, term(), state()}.
+do_put(Bucket, Key, IndexSpecs, Val, Sync, #state{bookie=Bookie}=State) ->
+    case leveled_bookie:book_put(Bookie,
+                                    Bucket, Key, Val, IndexSpecs,
+                                    ?RIAK_TAG,
+                                    infinity, Sync) of
+        ok ->
+            {ok, State};
+        pause ->
+            lager:warning("Backend ~w paused for ~w ms in response to put",
+                            [State#state.partition,
+                                State#state.backend_pause_ms]),
+            timer:sleep(State#state.backend_pause_ms),
+            {ok, State}
+    end.
 
 %% @private
 %% Create the directory for this partition's files

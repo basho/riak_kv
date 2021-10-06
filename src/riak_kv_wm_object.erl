@@ -169,6 +169,7 @@
               basic_quorum, %% boolean() - whether to use basic_quorum
               notfound_ok,  %% boolean() - whether to treat notfounds as successes
               asis,         %% boolean() - whether to send the put without modifying the vclock
+              sync_on_write,%% string() - sync on write behaviour to pass to backend
               prefix,       %% string() - prefix for resource uris
               riak,         %% local | {node(), atom()} - params for riak client
               doc,          %% {ok, riak_object()}|{error, term()} - the object found
@@ -418,8 +419,15 @@ malformed_rw_params(RD, Ctx) ->
                  {#ctx.pw, "pw", "default"},
                  {#ctx.node_confirms, "node_confirms", "default"},
                  {#ctx.pr, "pr", "default"}]),
+    Res2 =
+    lists:foldl(fun malformed_custom_param/2,
+                 Res,
+                 [{#ctx.sync_on_write,
+                     "sync_on_write",
+                     "default",
+                     [default, backend, one, all]}]),
     lists:foldl(fun malformed_boolean_param/2,
-                Res,
+                Res2,
                 [{#ctx.basic_quorum, "basic_quorum", "default"},
                  {#ctx.notfound_ok, "notfound_ok", "default"},
                  {#ctx.asis, "asis", "false"}]).
@@ -444,9 +452,38 @@ malformed_rw_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
              Ctx}
     end.
 
--spec malformed_boolean_param({Idx::integer(), Name::string(), Default::string()},
-                              {boolean(), #wm_reqdata{}, context()}) ->
-    {boolean(), #wm_reqdata{}, context()}.
+-spec malformed_custom_param({Idx::integer(),
+                                    Name::string(),
+                                    Default::string(),
+                                    AllowedValues::[atom()]},
+                                {boolean(), #wm_reqdata{}, context()}) ->
+   {boolean(), #wm_reqdata{}, context()}.
+%% @doc Check that a custom parameter is one of the AllowedValues
+%% Store its result in context() if it is, or print an error message
+%% in #wm_reqdata{} if it is not.
+malformed_custom_param({Idx, Name, Default, AllowedValues}, {Result, RD, Ctx}) ->
+    AllowedValueTuples = [{V} || V <- AllowedValues],
+    Option=
+        lists:keyfind(
+            list_to_atom(
+                string:to_lower(
+                    wrq:get_qs_value(Name, Default, RD))),
+                1, 
+                AllowedValueTuples),
+    case Option of
+        false ->
+            ErrorText =
+                "~s query parameter must be one of the following words: ~p~n",
+            {true,
+             wrq:append_to_resp_body(
+               io_lib:format(ErrorText, [Name, AllowedValues]),
+               wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
+             Ctx};
+        _ ->
+            {Value} = Option,
+            {Result, RD, setelement(Idx, Ctx, Value)}
+    end.
+
 %% @doc Check that a specific query param is a
 %%      string-encoded boolean.  Store its result in context() if it
 %%      is, or print an error message in #wm_reqdata{} if it is not.
@@ -467,6 +504,7 @@ malformed_boolean_param({Idx, Name, Default}, {Result, RD, Ctx}) ->
              Ctx}
     end.
 
+normalize_rw_param("backend") -> backend;
 normalize_rw_param("default") -> default;
 normalize_rw_param("one") -> one;
 normalize_rw_param("quorum") -> quorum;
@@ -1262,9 +1300,11 @@ handle_common_error(Reason, RD, Ctx) ->
 
 make_options(Prev, Ctx) ->
     NewOpts0 = [{rw, Ctx#ctx.rw}, {r, Ctx#ctx.r}, {w, Ctx#ctx.w},
-                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw},
-                {node_confirms, Ctx#ctx.node_confirms}, {dw, Ctx#ctx.dw},
-                {timeout, Ctx#ctx.timeout}, {asis, Ctx#ctx.asis}],
+                {pr, Ctx#ctx.pr}, {pw, Ctx#ctx.pw}, {dw, Ctx#ctx.dw},
+                {node_confirms, Ctx#ctx.node_confirms},
+                {sync_on_write, Ctx#ctx.sync_on_write},
+                {timeout, Ctx#ctx.timeout},
+                {asis, Ctx#ctx.asis}],
     NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],
     Prev ++ NewOpts.
