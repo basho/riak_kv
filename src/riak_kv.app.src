@@ -72,6 +72,10 @@
          % generate a warning in the logs
          {max_siblings, 100},
 
+         %% Object hash version should be 0 by default.  Without the
+         %% environment variable being set at stratup - it could by default
+         %% revert to being considered as legacy - Github Issue 1656
+         {object_hash_version, 0},
 
          %% @doc http_url_encoding determines how Riak treats URL encoded
          %% buckets, keys, and links over the REST API. When set to 'on' Riak
