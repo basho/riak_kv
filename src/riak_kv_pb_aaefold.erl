@@ -139,6 +139,18 @@ process(#rpbaaefoldreplkeysreq{type = T,
     QueueName = binary_to_atom(QN, utf8),
     Query = {repl_keys_range, maybe_bucket_type(T, B), KR, MR, QueueName},
     process_query(Query, State);
+process(#rpbaaefoldrepairkeysreq{type = T,
+                                    bucket = B, 
+                                    key_range = IsKR,
+                                    start_key = SK,
+                                    end_key = EK,
+                                    modified_range = IsModR,
+                                    last_mod_start = LMS,
+                                    last_mod_end = LME}, State) ->
+    KR = case IsKR of true -> {SK, EK}; false -> all end,
+    MR = case IsModR of true -> {date, LMS, LME}; false -> all end,
+    Query = {repair_keys_range, maybe_bucket_type(T, B), KR, MR, all},
+    process_query(Query, State);
 process(#rpbaaefoldfindkeysreq{type = T,
                                 bucket = B, 
                                 key_range = IsKR,
