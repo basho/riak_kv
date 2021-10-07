@@ -73,8 +73,9 @@
          {max_siblings, 100},
 
          %% Object hash version should be 0 by default.  Without the
-         %% environment variable being set at stratup - it could by default
-         %% revert to being considered as legacy - Github Issue 1656
+         %% environment variable being set at startup, it could by default
+         %% revert to being considered as legacy even when the whole cluster
+         %% has support for version 0 - Github Issue 1656
          {object_hash_version, 0},
 
          %% @doc http_url_encoding determines how Riak treats URL encoded
