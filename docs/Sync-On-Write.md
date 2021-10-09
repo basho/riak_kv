@@ -12,7 +12,7 @@ Forcing each and every write to be flushed to disk at the backend in order to be
 
 Further more with backend sync enabled, all writes are flushes, not just writes being currently receieved from the application.  So writes during transfers, read repairs and replication events all trigger flushes.  These overheads combined, had led to a recommendation that sync should not be enabled on Riak backends - but guarantees of a flush are still useful to applications with exacting durability requirements. 
 
-For the NHS, when we considered the actual durability need, the specific requirement was that:
+For the NHS Spine project, when we considered the actual durability need, the specific requirement was that:
 
 - For some buckets, assuming node diversity, it was necessary to know that a PUT had been flushed at least once before acknowledgement (to protect against concurrent and immediate power failure of multiple nodes).
 
@@ -24,7 +24,7 @@ Considering the requirement, more than 90% of the sync events in the database we
 
 ## The Solution
 
-In Riak 3.0.8 the bucket property `sync_on_write` has been added.  Like other PUT-related bucket properties it can be over-written via the API on an individual PUT.  There are three possible values:
+In [Riak 3.0.8 the bucket property `sync_on_write` has been added](https://github.com/basho/riak_kv/pull/1794).  Like other PUT-related bucket properties it can be over-written via the API on an individual PUT.  There are three possible values:
 
 - 'All'; flush on all n-val nodes for each PUT.
 
