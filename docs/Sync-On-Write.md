@@ -2,9 +2,9 @@
 
 ## Background
 
-The _Sync on Write_ feature, also known as _Selective Sync_ is the second of two features added to Riak intended to optimise the write path.  These optimisations have been evolved to better support the durability and availability guarantees required by the NHS Spine project.  See Node-Diversity.md#node-diversity for information on the first feature.
+The _Sync on Write_ feature, also known as _Selective Sync_ is the second of two features added to Riak intended to optimise the write path.  These optimisations have been evolved to better support the durability and availability guarantees required by the NHS Spine project.  
 
-The node diversity feature allows Riak users to be explicit about how many physical devices should have received a write, before a write is acknowledged.  However, to complete assurance about durability it is also necessary to be clearer about when writes have actually been persisted to disk.
+The first improvement made in the Riak 2.9 release, was to add the [node diversity](Node-Diversity.md#node-diversity) feature.  Node diversity allows Riak users to be explicit about how many physical devices should have received a write, before a write is acknowledged.  To complete assurance about durability, it is also necessary to be clearer about when writes have actually been persisted to disk.
 
 For Riak prior to release 3.0.8, being specific about persistence required synchronisation to be enabled on the backend (i.e. leveled, bitcask or eleveldb).  The Riak put process supports the `dw` value, which nominally denotes how many nodes on which the write has been made durable - however the meaning of durability in this case is "with the backend", it offers no information as to whether physical persistence has actually been forced.  The `dw` parameter will mean with the backend *and* flushed to disk, if and only if synchronisation of each and every write is enabled at the backend.
 
