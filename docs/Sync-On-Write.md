@@ -2,23 +2,23 @@
 
 ## Background
 
-The _Sync on Write_ feature, also known as _Selective Sync_ is the second of two features added to Riak intended to optimise the write path.  These optimisations have been evolved to better support the durability and availability guarantees required by the NHS Spine project.  
+The _Sync on Write_ feature, also known as _Selective Sync_, is the second of two features added to Riak intended to optimise the write path.  These optimisations have been devoloped to better support the durability and availability guarantees required by the NHS Spine project.  
 
 The first improvement made in the Riak 2.9 release, was to add the [node diversity](Node-Diversity.md#node-diversity) feature.  Node diversity allows Riak users to be explicit about how many physical devices should have received a write, before a write is acknowledged.  To complete assurance about durability, it is also necessary to be clearer about when writes have actually been persisted to disk.
 
 For Riak prior to release 3.0.8, being specific about persistence required synchronisation to be enabled on the backend (i.e. leveled, bitcask or eleveldb).  The Riak put process supports the `dw` value, which nominally denotes how many nodes on which the write has been made durable - however the meaning of durability in this case is "with the backend", it offers no information as to whether physical persistence has actually been forced.  The `dw` parameter will mean with the backend *and* flushed to disk, if and only if synchronisation of each and every write is enabled at the backend.
 
-Forcing each and every write to be flushed to disk at the backend in order to be sure that at least `dw` writes have been persisted is expensive.  With two clusters, and an n-val of 3 it requires 6 flushes for every write.  This volume of disk sync actions can occur significant direct I/O charges in cloud environments.  In other hosted environments, the costs can be mitigated by employing specialist hardware such as flash-backed write caches, but these devices can have a significant impact on node reliability due to battery issues.
+Forcing each and every write to be flushed to disk at the backend, in order to be sure that at least `dw` writes have been persisted, is expensive.  With two clusters, and an n-val of 3 it requires 6 flushes for every write.  This volume of disk sync actions can result in significant direct I/O charges in cloud environments.  In other hosted environments, the costs can be mitigated by employing specialist hardware such as flash-backed write caches, but these devices can have a notable negative impact on node reliability.
 
-Further more with backend sync enabled, all writes are flushes, not just writes being currently receieved from the application.  So writes during transfers, read repairs and replication events all trigger flushes.  These overheads combined, had led to a recommendation that sync should not be enabled on Riak backends - but guarantees of a flush are still useful to applications with exacting durability requirements. 
+Further, with backend sync enabled, all writes are flushes not just writes being currently receieved from the application.  So writes during transfers, read repairs and replication events all trigger disk syncs.  These overheads combined, had led to a recommendation that sync should not be enabled on Riak backends; but guarantees of a flush are still useful to applications with exacting durability requirements. 
 
-For the NHS Spine project, when we considered the actual durability need, the specific requirement was that:
+For the NHS Spine project, when we considered the actual durability need, the specific requirements were that:
 
 - For some buckets, assuming node diversity, it was necessary to know that a PUT had been flushed at least once before acknowledgement (to protect against concurrent and immediate power failure of multiple nodes).
 
 - For some buckets it was acceptable to simply rely on node diversity and the regular flushing of the file system.
 
-- It was explicity not desirable to flush to disk background writes (such as those reuslting from handoffs).
+- It was explicity not desirable to flush to disk background writes (such as those resulting from handoffs).
 
 Considering the requirement, more than 90% of the sync events in the database were unnecessary.  Greater efficiency is clearly possible.
 
@@ -40,7 +40,7 @@ This allows for the backend policy to be left to *not* sync on write, but still 
 
 The three most common persisted backends - bitcask, eleveldb and leveled - have been updated to support this feature.  
 
-Using a `sync_on_write` bucket property of `one` is complimentatary to the [vnode mailbox check feature](https://github.com/basho/riak_kv/pull/1670) added in Riak 2.9.  The feature allows the size of the vnode queues to effect the choice of coordinator for a PUT.  Having the coordinator only apply the flush now leads to reduce disk I/O load on nodes that are running slow (and have longer vnode mailbox queues), diverting this overhead and balancing work in the cluster to nodes with more current capacity.
+Using a `sync_on_write` bucket property of `one` is complimentary to the [vnode mailbox check feature](https://github.com/basho/riak_kv/pull/1670) added in Riak 2.9.  The feature allows the size of the vnode queues to influence the choice of coordinator for a PUT.  Having the coordinator only apply the flush now leads to reduce disk I/O load on nodes that are running slow (and have longer vnode mailbox queues), diverting this overhead and balancing work in the cluster to nodes with more current capacity.
 
 ## Notes on Flushing
 
