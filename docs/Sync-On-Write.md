@@ -18,7 +18,7 @@ For the NHS Spine project, when we considered the actual durability need, the sp
 
 - For some buckets it was acceptable to simply rely on node diversity and the regular flushing of the file system.
 
-- It was explicity not desirable to flush to disk background writes (such as those resulting from handoffs).
+- It was explicitly not desirable to flush to disk background writes (such as those resulting from handoffs).
 
 To meet these requirements backend sync is currently enabled, but considering the actual requirement, more than 90% of the sync events in the database are unnecessary.  Greater efficiency is clearly possible.
 
@@ -26,11 +26,11 @@ To meet these requirements backend sync is currently enabled, but considering th
 
 In [Riak 3.0.8 the bucket property `sync_on_write` has been added](https://github.com/basho/riak_kv/pull/1794).  Like other PUT-related bucket properties it can be over-written via the API on an individual PUT.  There are three possible values:
 
-- 'All'; flush on all n-val nodes for each PUT.
+- `all`; flush on all n-val nodes for each PUT.
 
-- 'One'; flush only on the co-ordinating vnode, on other nodes the default backend policy will be followed.
+- `one`; flush only on the co-ordinating vnode, on other nodes the default backend policy will be followed.
 
-- 'Backend'; follow in all cases the backend policy (the current behaviour, and default property).
+- `backend`; follow in all cases the backend policy (the current behaviour, and default property).
 
 For PUTs not initiated by a client via the PUT API (e.g. replication events, read repairs, handoffs etc), then the backend policy will be honoured as before.
 
@@ -40,7 +40,7 @@ This allows for the backend policy to be left to *not* sync on write, but still 
 
 The three most common persisted backends - bitcask, eleveldb and leveled - have been updated to support this feature.  
 
-Using a `sync_on_write` bucket property of `one` is complimentary to the [vnode mailbox check feature](https://github.com/basho/riak_kv/pull/1670) added in Riak 2.9.  The feature allows the size of the vnode queues to influence the choice of coordinator for a PUT.  Having the coordinator only apply the flush now leads to reduce disk I/O load on nodes that are running slow (and have longer vnode mailbox queues), diverting this overhead and balancing work in the cluster to nodes with more current capacity.
+Using a `sync_on_write` bucket property of `one` is complimentary to the [vnode mailbox check feature](https://github.com/basho/riak_kv/pull/1670) added in Riak 2.9.  The feature allows the size of the vnode queues to influence the choice of coordinator for a PUT.  Having the coordinator only apply the flush now leads to reduce disk I/O load on nodes that are running slow (and have longer vnode mailbox queues), diverting this overhead and balancing work in the cluster to nodes that currently have more available capacity.
 
 ## Notes on Flushing
 
