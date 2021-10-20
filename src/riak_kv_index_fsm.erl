@@ -288,7 +288,7 @@ log_timings(Timings, Bucket) ->
 log_timings(_Timings, _Bucket, false) ->
     ok;
 log_timings(Timings, Bucket, true) ->
-    lager:info("Index query on bucket=~p" ++
+    lager:info("Index query on bucket=~p " ++
                 "max_vnodeq=~w min_vnodeq=~w sum_vnodeq=~w count_vnodeq=~w " ++
                 "slow_count_vnodeq=~w fast_count_vnodeq=~w",
                 [Bucket,
