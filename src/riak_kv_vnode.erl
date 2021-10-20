@@ -2247,7 +2247,8 @@ handle_coverage_fold(FoldType, Bucket, ItemFilter, ResultFun,
     case list(FoldFun, FinishFun, Mod, FoldType, ModState, Opts, Buffer) of
         {async, AsyncWork} ->
             % This work should be sent to the vnode_worker_pool
-            {async, {fold, AsyncWork, FinishFun}, Sender, State};
+            TimingFun = timing_finish_fun(FinishFun, Index),
+            {async, {fold, AsyncWork, TimingFun}, Sender, State};
         {queue, DeferrableWork} ->
             % This work should be sent to the core node_worker_pool
             {select_queue(?AF2_QUEUE, State), 
@@ -3453,6 +3454,16 @@ finish_fun(BufferMod, Sender) ->
             finish_fold(BufferMod, Buffer, Sender)
     end.
 
+%% @doc
+%% Time the finishing of a fold, and update the associated riak_kv_stat
+timing_finish_fun(FinishFun, Idx) ->
+    ST = os:timestamp(),
+    fun(Buffer) ->
+        update_vnode_stats(vnode_workerfold, Idx, ST),
+        FinishFun(Buffer)
+    end.
+
+
 %% @private
 finish_fold(BufferMod, Buffer, Sender) ->
     BufferMod:flush(Buffer),
@@ -3932,8 +3943,9 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
     end.
 
 %% @private
--spec update_vnode_stats(vnode_get | vnode_put | vnode_head, 
-                            partition(), erlang:timestamp()) ->
+-spec update_vnode_stats(vnode_get|vnode_put|vnode_head|vnode_workerfold,
+                            partition(),
+                            erlang:timestamp()) ->
                                 ok.
 update_vnode_stats(Op, Idx, StartTS) ->
     ok = riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).

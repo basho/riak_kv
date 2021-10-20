@@ -1173,7 +1173,7 @@
     {default, 24}
 ]}.
 
-%% @doc The maximume number of workers to be for any given peer may be
+%% @doc The maximum number of workers to be for any given peer may be
 %% configured - if not configured will default to the number of sinkworkers
 {mapping, "replrtq_sinkpeerlimit", "riak_kv.replrtq_sinkpeerlimit", [
     {datatype, integer},
@@ -1195,6 +1195,13 @@
 %% journal, whereas the `recalc` strategy discards that history, but will redo
 %% a diff_index_specs calculation when reloading each object.
 {mapping, "leveled_reload_recalc", "riak_kv.leveled_reload_recalc", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc Enable logging of query timings in the index_fsm
+{mapping, "log_index_fsm", "riak_kv.log_index_fsm", [
     {datatype, {flag, enabled, disabled}},
     {default, disabled},
     {commented, enabled}

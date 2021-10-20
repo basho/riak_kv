@@ -206,6 +206,8 @@ do_update({vnode_index_delete, Postings}) ->
     P = riak_core_stat:prefix(),
     ok = exometer:update([P, ?APP, vnode, index, deletes], Postings),
     exometer:update([P, ?APP, vnode, index, deletes, postings], Postings);
+do_update({vnode_workerfold, _Idx, USecs}) ->
+    ok = create_or_update([?PFX, ?APP, vnode, worker_folds, time], USecs, histogram);
 do_update({vnode_dt_update, Mod, Micros}) ->
     P = ?PFX,
     Type = riak_kv_crdt:from_mod(Mod),
@@ -533,6 +535,11 @@ stats() ->
                                             {count, vnode_index_deletes_total}]},
      {[vnode, index, deletes, postings], spiral, [], [{one  , vnode_index_deletes_postings},
                                                       {count, vnode_index_deletes_postings_total}]},
+     {[vnode, worker_folds, time], histogram, [], [{mean, vnode_workerfold_time_mean},
+                                                    {median, vnode_workerfold_time_median},
+                                                    {95    , vnode_workerfold_time_95},
+                                                    {99    , vnode_workerfold_time_99},
+                                                    {max   , vnode_workerfold_time_100}]},
      {[vnode, counter, update], spiral, [], [{one  , vnode_counter_update},
                                              {count, vnode_counter_update_total}]},
      {[vnode, counter, update, time], histogram, [], [{mean  , vnode_counter_update_time_mean},
