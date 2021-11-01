@@ -69,7 +69,7 @@
                 fast_count = 0 :: non_neg_integer(),
                 slow_time = ?SLOW_TIME,
                 fast_time = ?FAST_TIME}).
--type index_timings() :: #timings{}.
+-type timings() :: #timings{}.
 
 
 -record(state, {from :: from(),
@@ -77,7 +77,7 @@
                 merge_sort_buffer = undefined :: sms:sms() | undefined,
                 max_results :: all | pos_integer(),
                 results_per_vnode = dict:new() :: riak_kv_index_fsm_dict(),
-                timings = #timings{} :: index_timings(),
+                timings = #timings{} :: timings(),
                 bucket :: riak_object:buckey() | undefined,
                 results_sent = 0 :: non_neg_integer()}).
 
@@ -229,7 +229,9 @@ finish(clean,
        State=#state{from={raw, ReqId, ClientPid},
                     merge_sort_buffer=undefined}) ->
     ClientPid ! {ReqId, done},
-    log_timings(State#state.timings, State#state.bucket),
+    log_timings(State#state.timings,
+                State#state.bucket,
+                State#state.results_sent),
     {stop, normal, State};
 finish(clean,
        State=#state{from={raw, ReqId, ClientPid},
@@ -237,15 +239,19 @@ finish(clean,
                     results_sent=ResultsSent,
                     max_results=MaxResults}) ->
     LastResults = sms:done(MergeSortBuffer),
-    DownTheWire = case (ResultsSent + length(LastResults)) > MaxResults of
-                      true ->
-                          lists:sublist(LastResults, MaxResults - ResultsSent);
-                      false ->
-                          LastResults
-                  end,
+    TotalResults = length(LastResults) + ResultsSent,
+    DownTheWire =
+        case TotalResults > MaxResults of
+            true ->
+                lists:sublist(LastResults, MaxResults - ResultsSent);
+            false ->
+                LastResults
+        end,
     ClientPid ! {ReqId, {results, DownTheWire}},
     ClientPid ! {ReqId, done},
-    log_timings(State#state.timings, State#state.bucket),
+    log_timings(State#state.timings,
+                State#state.bucket,
+                min(MaxResults, TotalResults)),
     {stop, normal, State}.
 
 %% ===================================================================
@@ -255,6 +261,7 @@ finish(clean,
 process_query_results(_Bucket, Results, ReqId, ClientPid) ->
     ClientPid ! {ReqId, {results, Results}}.
 
+-spec update_timings(timings()) -> timings().
 update_timings(Timings) ->
     MS = timer:now_diff(os:timestamp(), Timings#timings.start_time) div 1000,
     SlowCount =
@@ -280,18 +287,23 @@ update_timings(Timings) ->
         fast_count = FastCount 
     }.
 
-log_timings(Timings, Bucket) ->
+-spec log_timings(timings(), riak_object:bucket(), non_neg_integer()) -> ok.
+log_timings(Timings, Bucket, ResultCount) ->
+    Duration = timer:now_diff(os:timestamp(), Timings#timings.start_time),
+    ok = riak_kv_stat:update({index_fsm_time, Duration, ResultCount}),
     log_timings(Timings,
                 Bucket,
+                ResultCount,
                 application:get_env(riak_kv, log_index_fsm, false)).
 
-log_timings(_Timings, _Bucket, false) ->
+log_timings(_Timings, _Bucket, _ResultCount, false) ->
     ok;
-log_timings(Timings, Bucket, true) ->
+log_timings(Timings, Bucket, ResultCount, true) ->
     lager:info("Index query on bucket=~p " ++
                 "max_vnodeq=~w min_vnodeq=~w sum_vnodeq=~w count_vnodeq=~w " ++
-                "slow_count_vnodeq=~w fast_count_vnodeq=~w",
+                "slow_count_vnodeq=~w fast_count_vnodeq=~w result_count=~w",
                 [Bucket,
                     Timings#timings.max, Timings#timings.min,
                     Timings#timings.sum, Timings#timings.count,
-                    Timings#timings.slow_count, Timings#timings.fast_count]).
+                    Timings#timings.slow_count, Timings#timings.fast_count,
+                    ResultCount]).

@@ -265,6 +265,11 @@ do_update({put_fsm_time, Bucket,  Microsecs, Stages, PerBucket, CRDTMod}) ->
     ok = create_or_update([P, ?APP, node, puts, Type, time], Microsecs, histogram),
     ok = do_stages([P, ?APP, node, puts, Type, time], Stages),
     do_put_bucket(PerBucket, {Bucket, Microsecs, Stages, Type});
+do_update({index_fsm_time, Microsecs, ResultCount}) ->
+    P = ?PFX,
+    ok = exometer:update([P, ?APP, index, fsm, complete], 1),
+    ok = exometer:update([P, ?APP, index, fsm, results], ResultCount),
+    ok = exometer:update([P, ?APP, index, fsm, time], Microsecs);
 do_update({read_repairs, Indices, Preflist}) ->
     ok = exometer:update([?PFX, ?APP, node, gets, read_repairs], 1),
     do_repairs(Indices, Preflist);
@@ -736,6 +741,18 @@ stats() ->
      {[index, fsm, create], spiral, [], [{one, index_fsm_create}]},
      {[index, fsm, create, error], spiral, [], [{one, index_fsm_create_error}]},
      {[index, fsm, active], counter, [], [{value, index_fsm_active}]},
+     {[index, fsm, complete], spiral, [], [{one, index_fsm_complete}]},
+     {[index, fsm, results], histogram, [], [{mean, index_fsm_results_mean},
+                                                {median, index_fsm_results_median},
+                                                {95    , index_fsm_results_95},
+                                                {99    , index_fsm_results_99},
+                                                {max   , index_fsm_results_100}]},
+     {[index, fsm, time], histogram, [], [{mean , index_fsm_time_mean},
+                                               {median, index_fsm_time_median},
+                                               {95    , index_fsm_time_95},
+                                               {99    , index_fsm_time_99},
+                                               {max   , index_fsm_time_100}]},
+
      {[list, fsm, create], spiral, [], [{one  , list_fsm_create},
 					{count, list_fsm_create_total}]},
      {[list, fsm, create, error], spiral, [], [{one  , list_fsm_create_error},
