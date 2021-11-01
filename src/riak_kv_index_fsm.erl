@@ -180,8 +180,9 @@ process_results(VNode, done, State = #state{pagination_sort=true}) ->
 process_results(_VNode, {_Bucket, Results}, State) ->
     #state{from={raw, ReqId, ClientPid}} = State,
     send_results(ClientPid, ReqId, Results),
+    ResultsSent = length(Results) + State#state.results_sent,
     UpdTimings = update_timings(State#state.timings),
-    {ok, State#state{timings = UpdTimings}};
+    {ok, State#state{timings = UpdTimings, results_sent = ResultsSent}};
 process_results(_VNode, done, State) ->
     {done, State}.
 
