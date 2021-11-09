@@ -96,6 +96,9 @@
 %% Magic Tree id for 2i data.
 -define(INDEX_2I_N, {0, 0}).
 
+% gen_server call timeout for sync stop
+-define(SYNC_STOP_TIMEOUT, 60000).
+
 %% Throttle used when folding over K/V data to build AAE trees: {Limit, Wait}.
 %% After traversing Limit bytes, the fold will sleep for Wait milliseconds.
 %% Default: 1 MB limit / 100 ms wait
@@ -244,7 +247,7 @@ stop(Tree) ->
 sync_stop(undefined) ->
     ok;
 sync_stop(Tree) ->
-    gen_server:call(Tree, stop).
+    gen_server:call(Tree, stop, ?SYNC_STOP_TIMEOUT).
 
 %% @doc Destroy the specified index_hashtree, which will destroy all
 %%      associated hashtrees and terminate.
