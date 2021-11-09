@@ -105,10 +105,14 @@ init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, all]);
 init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults]) ->
     init(From, [Bucket, ItemFilter, Query, Timeout, MaxResults, undefined]);
-init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults, PgSort0]) ->
+init(From={_, _, _}, [Bucket, ItemFilter, Query, Timeout, MaxResults0, PgSort0]) ->
     %% Get the bucket n_val for use in creating a coverage plan
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     NVal = proplists:get_value(n_val, BucketProps),
+    MaxResults =
+        case is_integer(MaxResults0) of true -> MaxResults0; false -> all end,
+        % Force MaxResults to only be the expected all/integer() - and not
+        % undefined 
     Paginating = is_integer(MaxResults) andalso MaxResults > 0, 
     PgSort = case {Paginating, PgSort0} of
         {true, _} ->
@@ -140,14 +144,13 @@ process_results(VNode, {From, Bucket, Results}, State) ->
     case process_results(VNode, {Bucket, Results}, State) of
         {ok, State2 = #state{pagination_sort=true}} ->
             #state{results_per_vnode=PerNode, max_results=MaxResults} = State2,
-            VNodeCount = dict:fetch(VNode, PerNode),
-            case VNodeCount < MaxResults of
-                true ->
-                    _ = riak_kv_vnode:ack_keys(From),
-                    {ok, State2};
-                false ->
+            case {dict:fetch(VNode, PerNode), MaxResults} of
+                {VnodeCount, MR} when is_integer(MR), VnodeCount >= MR ->
                     riak_kv_vnode:stop_fold(From),
-                    {done, State2}
+                    {done, State2};
+                _ ->
+                    _ = riak_kv_vnode:ack_keys(From),
+                    {ok, State2}
             end;
         {ok, State2} ->
             _ = riak_kv_vnode:ack_keys(From),
@@ -241,7 +244,12 @@ finish(clean,
                     max_results=MaxResults}) ->
     LastResults = sms:done(MergeSortBuffer),
     DownTheWire =
-        lists:sublist(LastResults, MaxResults - ResultsSent),
+        case MaxResults of
+            all ->
+                LastResults;
+            _ ->
+                lists:sublist(LastResults, MaxResults - ResultsSent)
+        end,
     ClientPid ! {ReqId, {results, DownTheWire}},
     ClientPid ! {ReqId, done},
     log_timings(State#state.timings,
