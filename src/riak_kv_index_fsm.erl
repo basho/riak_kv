@@ -240,19 +240,13 @@ finish(clean,
                     results_sent=ResultsSent,
                     max_results=MaxResults}) ->
     LastResults = sms:done(MergeSortBuffer),
-    TotalResults = length(LastResults) + ResultsSent,
     DownTheWire =
-        case TotalResults > MaxResults of
-            true ->
-                lists:sublist(LastResults, MaxResults - ResultsSent);
-            false ->
-                LastResults
-        end,
+        lists:sublist(LastResults, MaxResults - ResultsSent),
     ClientPid ! {ReqId, {results, DownTheWire}},
     ClientPid ! {ReqId, done},
     log_timings(State#state.timings,
                 State#state.bucket,
-                min(MaxResults, TotalResults)),
+                ResultsSent + length(DownTheWire)),
     {stop, normal, State}.
 
 %% ===================================================================
