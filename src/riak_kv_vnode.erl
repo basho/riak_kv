@@ -3932,8 +3932,9 @@ wait_for_vnode_status_results(PrefLists, ReqId, Acc) ->
     end.
 
 %% @private
--spec update_vnode_stats(vnode_get | vnode_put | vnode_head, 
-                            partition(), erlang:timestamp()) ->
+-spec update_vnode_stats(vnode_get|vnode_put|vnode_head,
+                            partition(),
+                            erlang:timestamp()) ->
                                 ok.
 update_vnode_stats(Op, Idx, StartTS) ->
     ok = riak_kv_stat:update({Op, Idx, timer:now_diff( os:timestamp(), StartTS)}).
