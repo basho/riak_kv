@@ -1209,7 +1209,7 @@
 
 %% @doc Set the vnode worker pool size
 %% This is a pool of workers per-vnode, to be used for general queries, in
-%% particular secondary index queries.  This now defaults to 4 workers, prior
+%% particular secondary index queries.  This now defaults to 5 workers, prior
 %% to release 3.0.9 it was set to a default of 10.
 %% The number of concurrent index queries that can be supported in the cluster
 %% will be equal to n_val * worker_count.
@@ -1219,15 +1219,15 @@
 %%  (1000000 div worker_vnode_pool_worktime) * n_val * worker_count
 %% It should normally be possible to support >> 100 queries per second with 
 %% just a single worker per vnode.
-%% The statistic workervnode_pool_queuetime_mean will track the average time
+%% The statistic worker_vnode_pool_queuetime_mean will track the average time
 %% a query is spending on a queue, should the vnode pool be exhausted.
 %% If using tictac_aae this should be set to at least 2, as tree rebuilds use
 %% this pool as well as queries.  Also consider that long-running legacy
-%% legacy queries (list keys and list buckets, not using aae_fold) also use
+%% queries (list keys and list buckets, not using aae_fold) also use
 %% this pool.  All aae_fold type queries will use the alternative
 %% node_worker_pool, unless none is used for the worker_pool_strategy, in which
 %% case the vnode pool is also used for aae_folds.
 {mapping, "worker_pool_size", "riak_kv.worker_pool_size", [
     {datatype, integer},
-    {default, 4}
+    {default, 5}
 ]}.
