@@ -707,12 +707,11 @@ prompt_readrepair(VnodeList, IndexN, MaxResults,
                         [LocalVnode, RemoteVnode] = VnodeList,
                         ReplyFun =
                             fun(ExchangeResult) ->
-                                lager:info("AAE exchange_result=~w " ++
-                                        "following repair cycle type=~p at " ++
-                                        "LoopCount=~w",
-                                        [ExchangeResult,
-                                            FilterType,
-                                            LoopCount])
+                                riak_kv_util:log_tictac_result(
+                                    ExchangeResult,
+                                    FilterType,
+                                    LoopCount,
+                                    element(1, IndexN))
                             end,
                         riak_kv_util:prompt_tictac_exchange(
                             LocalVnode, RemoteVnode, IndexN,
@@ -736,19 +735,26 @@ prompt_readrepair(VnodeList, IndexN, MaxResults,
 %% fetch_clock queries to be substantially faster (unless there happens to
 %% be no majority bucket, and a low last_modified time)
 -spec analyse_repairs(keyclock_list(), non_neg_integer()) ->
-        {false|bucket|time, aae_exchange:filters()}.
+        {false|bucket|modtime, aae_exchange:filters()}.
 analyse_repairs(KeyClockList, MaxRepairs) ->
     ByBucketAcc = lists:foldl(fun analyse_repair/2, [], KeyClockList),
+    EnableKeyRange =
+        app_helper:get_env(riak_kv, tictacaae_enablekeyrange, false),
     case lists:reverse(lists:keysort(2, ByBucketAcc)) of
         [Candidate|_Rest] ->
-            Threshold = MaxRepairs div 2,
+            Threshold = MaxRepairs div 3,
             case Candidate of
-                {B, CandCount, KL, MTL} when CandCount > Threshold ->
+                {B, CandCount, KL, MTL} when CandCount > (2 * Threshold) ->
                     [FirstKey|RestKeys] = lists:sort(KL),
                     LastKey = lists:last(RestKeys),
+                    KeyRange =
+                        case EnableKeyRange of 
+                            true -> {FirstKey, LastKey};
+                            false -> all
+                        end,
                     {bucket,
                         {filter,
-                            B, {FirstKey, LastKey}, large, all,
+                            B, KeyRange, large, all,
                             get_modified_range(MTL),
                             pre_hash}};
                 _ ->
@@ -756,7 +762,7 @@ analyse_repairs(KeyClockList, MaxRepairs) ->
                     MTL = lists:sort(lists:foldl(FoldFun, [], ByBucketAcc)),
                     case length(MTL) of
                         CandCount when CandCount > Threshold ->
-                            {time, 
+                            {modtime, 
                                 {filter,
                                     all, all, large, all,
                                     get_modified_range(MTL),

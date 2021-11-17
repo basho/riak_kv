@@ -934,6 +934,17 @@ handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
                                                     SegmentIDs,
                                                     ReturnFun,
                                                     IndexNFun);
+                {fetch_clocks, SegmentIDs, MR} ->
+                    IndexNFun = 
+                        fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
+                    ModifiedLimiter = aaefold_setmodifiedlimiter(MR),
+                    aae_controller:aae_fetchclocks(Cntrl,
+                                                    IndexNs,
+                                                    all,
+                                                    SegmentIDs,
+                                                    ModifiedLimiter,
+                                                    ReturnFun,
+                                                    IndexNFun);
                 {fetch_clocks_range, Bucket, KR, SF, MR} ->
                     IndexNFun = 
                         fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
@@ -1128,23 +1139,18 @@ handle_command({rebuild_complete, trees, _ST}, _Sender, State) ->
             {noreply, State#state{tictac_rebuilding = false}}
     end;
 
-handle_command({exchange_complete, {EndState, DeltaCount}, ST},
+handle_command({exchange_complete, ExchangeResult, ST},
                                                     _Sender, State) ->
     %% Record how many deltas were seen in the exchange
     %% Revert the skip_count to 0 so that exchanges can be made at the next
     %% prompt.
     XC = State#state.tictac_exchangecount + 1,
-    DC = State#state.tictac_deltacount + DeltaCount,
+    DC = State#state.tictac_deltacount + element(2, ExchangeResult),
     XT = State#state.tictac_exchangetime + timer:now_diff(os:timestamp(), ST),
-    case EndState of
-        PositiveState
-            when PositiveState == root_compare;
-                 PositiveState == branch_compare ->
-            ok;
-        UnwelcomeState ->
-            lager:info("Tictac AAE exchange for partition=~w pending_state=~w",
-                        [State#state.idx, UnwelcomeState])
-    end,
+    ok = riak_kv_util:log_tictac_result(ExchangeResult,
+                                        exchange,
+                                        initial,
+                                        State#state.idx),
     {noreply, State#state{tictac_exchangecount = XC,
                             tictac_deltacount = DC,
                             tictac_exchangetime = XT,
@@ -1212,7 +1218,8 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                             State#state.tictac_deltacount,
                             State#state.tictac_exchangetime div (1000 * 1000),
                             LoopDuration div (1000 * 1000)]),
-            {noreply, State#state{tictac_exchangequeue = Exchanges,
+            {noreply, State#state{tictac_exchangequeue =
+                                        riak_kv_util:shuffle_list(Exchanges),
                                     tictac_exchangecount = 0,
                                     tictac_deltacount = 0,
                                     tictac_exchangetime = 0,

@@ -271,6 +271,10 @@ do_update({index_fsm_time, Microsecs, ResultCount}) ->
 do_update({read_repairs, Indices, Preflist}) ->
     ok = exometer:update([?PFX, ?APP, node, gets, read_repairs], 1),
     do_repairs(Indices, Preflist);
+do_update({tictac_aae, ExchangeState}) ->
+    ok = exometer:update([?PFX, ?APP, node, tictacaae, ExchangeState], 1);
+do_update({tictac_aae, ExchangeType, RepairCount}) ->
+    ok = exometer:update([?PFX, ?APP, node, tictacaae, ExchangeType], RepairCount);
 do_update(ngrfetch_nofetch) ->
     ok = exometer:update([?PFX, ?APP, node, gets, ngrfetch_nofetch], 1);
 do_update(ngrfetch_prefetch) ->
@@ -582,6 +586,24 @@ stats() ->
                                                {count, read_repairs_total}]},
      {[node, gets, skipped_read_repairs], spiral, [], [{one, skipped_read_repairs},
                                                        {count, skipped_read_repairs_total}]},
+     {[node, tictacaae, root_compare], spiral, [],
+        [{one, tictacaae_root_compare}, {count, tictacaae_root_compare_total}]},
+     {[node, tictacaae, branch_compare], spiral, [],
+        [{one, tictacaae_branch_compare}, {count, tictacaae_branch_compare_total}]},
+     {[node, tictacaae, clock_compare], spiral, [],
+        [{one, tictacaae_clock_compare}, {count, tictacaae_clock_compare_total}]},
+     {[node, tictacaae, not_supported], spiral, [],
+        [{one, tictacaae_not_supported}, {count, tictacaae_not_supported_total}]},
+     {[node, tictacaae, error], spiral, [],
+        [{one, tictacaae_error}, {count, tictacaae_error_total}]},
+     {[node, tictacaae, timeout], spiral, [],
+        [{one, tictacaae_timeout}, {count, tictacaae_timeout_total}]},
+     {[node, tictacaae, bucket], spiral, [], 
+        [{one, tictacaae_bucket}, {count, tictacaae_bucket_total}]},
+     {[node, tictacaae, modtime], spiral, [], 
+        [{one, tictacaae_modtime}, {count, tictacaae_modtime_total}]},
+     {[node, tictacaae, exchange], spiral, [], 
+        [{one, tictacaae_exchange}, {count, tictacaae_exchange_total}]},
      {[node, gets, ngrfetch_nofetch], spiral, [], [{one, ngrfetch_nofetch},
                                                     {count, ngrfetch_nofetch_total}]},
      {[node, gets, ngrfetch_prefetch], spiral, [], [{one, ngrfetch_prefetch},

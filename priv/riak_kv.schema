@@ -142,6 +142,17 @@
   hidden
 ]}.
 
+%% @doc Multiplier when following an exchange with a range-limited one
+%% After eache xchange where sufficient deltas are discovered there will be
+%% `tictacaae_repairloops` number of range-limited queries (assuming
+%% sufficient results continue to be found).  Each of these may have the
+%% the number of max results boosted by this integer factor.
+{mapping, "tictacaae_rangeboost", "riak_kv.tictacaae_rangeboost", [
+  {datatype, integer},
+  {default, 2},
+  hidden
+]}.
+
 %% @doc Exchange only between primary vnodes
 %% Setting this to false allows Tictac AAE exchanges between both primary and
 %% fallback vnodes.

@@ -50,7 +50,9 @@
         overload_reply/1,
         get_backend_config/3,
         is_modfun_allowed/2,
-        prompt_tictac_exchange/7]).
+        prompt_tictac_exchange/7,
+        log_tictac_result/4,
+        shuffle_list/1]).
 -export([report_hashtree_tokens/0, reset_hashtree_tokens/2]).
 
 -include_lib("riak_kv_vnode.hrl").
@@ -61,6 +63,7 @@
 
 -define(EXCHANGE_PAUSE_MS, 1000).
 -define(AAE_MAX_RESULTS, 128).
+-define(AAE_RANGE_BOOST, 2).
 
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
 -type index() :: non_neg_integer().
@@ -516,13 +519,21 @@ prompt_tictac_exchange(LocalVnode, RemoteVnode, IndexN,
         app_helper:get_env(riak_kv,
                             tictacaae_exchangepause,
                             ?EXCHANGE_PAUSE_MS),
-    MaxResults = 
-        case app_helper:get_env(riak_kv,
-                                tictacaae_maxresults) of
-            MR when is_integer(MR) ->
-                MR;
+    RangeBoost =
+        case Filter of
+            none ->
+                1;
             _ ->
-                ?AAE_MAX_RESULTS
+                app_helper:get_env(riak_kv,
+                                    tictacaae_rangeboost,
+                                    ?AAE_RANGE_BOOST)
+        end,
+    MaxResults = 
+        case app_helper:get_env(riak_kv, tictacaae_maxresults) of
+            MR when is_integer(MR) ->
+                MR * RangeBoost;
+            _ ->
+                ?AAE_MAX_RESULTS * RangeBoost
         end,
     ExchangeOptions =
         [{scan_timeout, ScanTimeout},
@@ -560,6 +571,55 @@ prompt_tictac_exchange(LocalVnode, RemoteVnode, IndexN,
         lager:debug("Exchange prompted with exchange_id=~s between ~w and ~w",
                 [AAExid, LocalVnode, RemoteVnode]),
     ok.
+
+
+-spec log_tictac_result(
+    {root_compare|branch_compare|clock_compare|
+        error|timeout|not_supported, non_neg_integer()},
+    bucket|modtime|exchange,
+    non_neg_integer()|initial,
+    partition()) -> ok.
+log_tictac_result(ExchangeResult, FilterType, LoopCount, Index) ->
+    PotentialRepairs =
+        case element(2, ExchangeResult) of
+            N when is_integer(N), N > 0 ->
+                riak_kv_stat:update({tictac_aae, FilterType, N}),
+                N;
+            _ ->
+                0
+        end,
+    ExchangeState =
+        element(1, ExchangeResult),
+    case expected_aae_state(ExchangeState) of
+        true ->
+            riak_kv_stat:update({tictac_aae, ExchangeState});
+        _ ->
+            ok
+    end,
+    case ExchangeState of
+        PositiveState
+            when PositiveState == root_compare;
+                    PositiveState == branch_compare ->
+            ok;
+        ExchangeState ->
+            lager:info("Tictac AAE exchange for partition=~w " ++
+                        "pending_state=~w filter_type=~w loop_count=~w " ++
+                        "potential_repairs=~w",
+                        [Index,
+                            ExchangeState, FilterType, LoopCount,
+                            PotentialRepairs])
+    end,
+    ok.
+
+expected_aae_state(ExchangeState) ->
+    lists:member(ExchangeState, 
+        [root_compare, branch_compare, clock_compare,
+            error, timeout, not_supported]).
+
+-spec shuffle_list(list()) -> list().
+shuffle_list(L) ->
+    lists:map(fun({_R, X0}) -> X0 end,
+        lists:keysort(1, lists:map(fun(X) -> {rand:uniform(), X} end, L))).
 
 %% ===================================================================
 %% EUnit tests
