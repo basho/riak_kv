@@ -26,30 +26,31 @@
 
 
 -export([is_x_deleted/1,
-         obj_not_deleted/1,
-         try_cast/3,
-         fallback/4,
-         expand_value/3,
-         expand_rw_value/4,
-         expand_sync_on_write/2,
-         normalize_rw_value/2,
-         make_request/2,
-         get_index_n/1,
-         preflist_siblings/1,
-         fix_incorrect_index_entries/1,
-         fix_incorrect_index_entries/0,
-         responsible_preflists/1,
-         responsible_preflists/2,
-         responsible_preflists/3,
-         make_vtag/1,
-         puts_active/0,
-         exact_puts_active/0,
-         gets_active/0,
-         consistent_object/1,
-         get_write_once/1,
-         overload_reply/1,
-         get_backend_config/3,
-         is_modfun_allowed/2]).
+        obj_not_deleted/1,
+        try_cast/3,
+        fallback/4,
+        expand_value/3,
+        expand_rw_value/4,
+        expand_sync_on_write/2,
+        normalize_rw_value/2,
+        make_request/2,
+        get_index_n/1,
+        preflist_siblings/1,
+        fix_incorrect_index_entries/1,
+        fix_incorrect_index_entries/0,
+        responsible_preflists/1,
+        responsible_preflists/2,
+        responsible_preflists/3,
+        make_vtag/1,
+        puts_active/0,
+        exact_puts_active/0,
+        gets_active/0,
+        consistent_object/1,
+        get_write_once/1,
+        overload_reply/1,
+        get_backend_config/3,
+        is_modfun_allowed/2,
+        prompt_tictac_exchange/7]).
 -export([report_hashtree_tokens/0, reset_hashtree_tokens/2]).
 
 -include_lib("riak_kv_vnode.hrl").
@@ -57,6 +58,9 @@
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
+
+-define(EXCHANGE_PAUSE_MS, 1000).
+-define(AAE_MAX_RESULTS, 128).
 
 -type riak_core_ring() :: riak_core_ring:riak_core_ring().
 -type index() :: non_neg_integer().
@@ -498,6 +502,64 @@ is_modfun_allowed(Mod, _Fun) ->
             true
     end.
 
+
+-spec prompt_tictac_exchange({riak_core_ring:partition_id(), node()},
+                        {riak_core_ring:partition_id(), node()},
+                        {non_neg_integer(), pos_integer()},
+                        pos_integer(), pos_integer(),
+                        fun((term()) -> ok),
+                        aae_exchange:filters()) -> ok.
+prompt_tictac_exchange(LocalVnode, RemoteVnode, IndexN,
+                    ScanTimeout, LoopCount,
+                    ReplyFun, Filter) ->
+    ExchangePause =
+        app_helper:get_env(riak_kv,
+                            tictacaae_exchangepause,
+                            ?EXCHANGE_PAUSE_MS),
+    MaxResults = 
+        case app_helper:get_env(riak_kv,
+                                tictacaae_maxresults) of
+            MR when is_integer(MR) ->
+                MR;
+            _ ->
+                ?AAE_MAX_RESULTS
+        end,
+    ExchangeOptions =
+        [{scan_timeout, ScanTimeout},
+            {transition_pause_ms, ExchangePause},
+            {purpose, kv_aae},
+            {max_results, MaxResults}],
+    
+    BlueList = 
+        [{riak_kv_vnode:aae_send(LocalVnode), [IndexN]}],
+    PinkList = 
+        [{riak_kv_vnode:aae_send(RemoteVnode), [IndexN]}],
+    PromptRehash =
+        case Filter of
+            none ->
+                true;
+            _ ->
+                false
+        end,
+    RepairFun = 
+        riak_kv_get_fsm:prompt_readrepair([LocalVnode, RemoteVnode],
+                                            IndexN,
+                                            MaxResults,
+                                            LoopCount,
+                                            PromptRehash,
+                                            os:timestamp()),
+    {ok, _AAEPid, AAExid} =
+        aae_exchange:start(full,
+                        BlueList, 
+                        PinkList, 
+                        RepairFun, 
+                        ReplyFun,
+                        Filter,
+                        ExchangeOptions),
+    _ = 
+        lager:debug("Exchange prompted with exchange_id=~s between ~w and ~w",
+                [AAExid, LocalVnode, RemoteVnode]),
+    ok.
 
 %% ===================================================================
 %% EUnit tests

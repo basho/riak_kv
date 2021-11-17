@@ -121,7 +121,24 @@
 %% faster by doubling.  There are 1M segments in a standard tree overall.
 {mapping, "tictacaae_maxresults", "riak_kv.tictacaae_maxresults", [
   {datatype, integer},
-  {default, 256},
+  {default, 128},
+  hidden
+]}.
+
+%% @doc Max number of repair loops per exchange
+%% Each exchange will attempt a repair of tictacaae_maxresults, and will
+%% analyse those repairs to see if there exists the potential for more repairs.
+%% If there exists this potential, then repair loops will be run, but in these
+%% repair loops a more efficient repair will be run:
+%% - with a bucket, key_range or last_modified range (at least) to restrict the
+%% scope of the fetch_clocks queries
+%% - without rebuilding the segments in the AAE hash tree
+%% - without checking for presence of th eobject in the journal
+%% Problems related to invalid hash trees will need to be detected through the
+%% initial loop of the exchange, not repair loops
+{mapping, "tictacaae_repairloops", "riak_kv.tictacaae_repairloops", [
+  {datatype, integer},
+  {default, 8},
   hidden
 ]}.
 
