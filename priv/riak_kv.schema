@@ -138,7 +138,7 @@
 %% initial loop of the exchange, not repair loops
 {mapping, "tictacaae_repairloops", "riak_kv.tictacaae_repairloops", [
   {datatype, integer},
-  {default, 8},
+  {default, 4},
   hidden
 ]}.
 

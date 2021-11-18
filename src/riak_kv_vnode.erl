@@ -1147,10 +1147,10 @@ handle_command({exchange_complete, ExchangeResult, ST},
     XC = State#state.tictac_exchangecount + 1,
     DC = State#state.tictac_deltacount + element(2, ExchangeResult),
     XT = State#state.tictac_exchangetime + timer:now_diff(os:timestamp(), ST),
-    ok = riak_kv_util:log_tictac_result(ExchangeResult,
-                                        exchange,
-                                        initial,
-                                        State#state.idx),
+    riak_kv_tictacaae_repairs:log_tictac_result(ExchangeResult,
+                                                exchange,
+                                                initial,
+                                                State#state.idx),
     {noreply, State#state{tictac_exchangecount = XC,
                             tictac_deltacount = DC,
                             tictac_exchangetime = XT,
@@ -1256,8 +1256,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                                     ?AAE_REPAIR_LOOPS
                             end,
                         ReplyFun = tictac_returnfun(Idx, exchange),
-                        ok = 
-                            riak_kv_util:prompt_tictac_exchange(
+                        riak_kv_tictacaae_repairs:prompt_tictac_exchange(
                                 {Local, LN}, {Remote, RN}, IndexN,
                                 ScanTimeout, LoopCount, ReplyFun, none),
                         
