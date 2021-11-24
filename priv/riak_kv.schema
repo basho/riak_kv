@@ -121,8 +121,7 @@
 %% faster by doubling.  There are 1M segments in a standard tree overall.
 {mapping, "tictacaae_maxresults", "riak_kv.tictacaae_maxresults", [
   {datatype, integer},
-  {default, 128},
-  hidden
+  {default, 64}
 ]}.
 
 %% @doc Max number of repair loops per exchange
