@@ -87,13 +87,7 @@ prompt_tictac_exchange(LocalVnode, RemoteVnode, IndexN,
         [{riak_kv_vnode:aae_send(LocalVnode), [IndexN]}],
     PinkList = 
         [{riak_kv_vnode:aae_send(RemoteVnode), [IndexN]}],
-    PromptRehash =
-        case Filter of
-            none ->
-                true;
-            _ ->
-                false
-        end,
+    PromptRehash = Filter == none,
     RepairFun = 
         prompt_readrepair([LocalVnode, RemoteVnode],
                             IndexN,
@@ -349,12 +343,12 @@ analyse_repair({{B, K}, {BlueClock, PinkClock}}, ByBucketAcc) ->
     BlueTime = last_modified(BlueClock),
     PinkTime = last_modified(PinkClock),
     ModTime = 
-        case {BlueTime, PinkTime} of
-            {BlueTime, PinkTime} when BlueTime > PinkTime ->
+        if 
+            BlueTime > PinkTime ->
                 BlueTime;
-            {BlueTime, PinkTime} when PinkTime > BlueTime ->
+            PinkTime > BlueTime ->
                 PinkTime;
-            _ ->
+            true ->
                 false
         end,
     case ModTime of
