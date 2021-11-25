@@ -132,7 +132,7 @@
 %% - with a bucket, key_range or last_modified range (at least) to restrict the
 %% scope of the fetch_clocks queries
 %% - without rebuilding the segments in the AAE hash tree
-%% - without checking for presence of th eobject in the journal
+%% - without checking for presence of the object in the journal
 %% Problems related to invalid hash trees will need to be detected through the
 %% initial loop of the exchange, not repair loops
 {mapping, "tictacaae_repairloops", "riak_kv.tictacaae_repairloops", [
@@ -142,7 +142,7 @@
 ]}.
 
 %% @doc Multiplier when following an exchange with a range-limited one
-%% After eache xchange where sufficient deltas are discovered there will be
+%% After each exchange where sufficient deltas are discovered there will be
 %% `tictacaae_repairloops` number of range-limited queries (assuming
 %% sufficient results continue to be found).  Each of these may have the
 %% the number of max results boosted by this integer factor.
