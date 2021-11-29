@@ -233,6 +233,10 @@ start(_Type, _StartArgs) ->
             riak_core_capability:register({riak_kv, put_soft_limit},
                                           [true, false],
                                           false),
+            
+            riak_core_capability:register({riak_kv, tictacaae_prompted_repairs},
+                                            [true, false],
+                                            false),
 
             HealthCheckOn = app_helper:get_env(riak_kv, enable_health_checks, false),
             %% Go ahead and mark the riak_kv service as up in the node watcher.

@@ -119,9 +119,48 @@
 %% conflicting leaves will be compared on each exchange.  If there are issues
 %% with query timeouts this may be halved.  Large backlogs may be reduced
 %% faster by doubling.  There are 1M segments in a standard tree overall.
+%% Performance tuning can also be made by adjusting the `tictacaae_repairloops`
+%% and `tictacaae_rangeboost` - but `tictacaae_maxresults` is the simplest
+%% factor that is likely to result in a relatively predictable (and linear) 
+%% outcome in terms of both CPU cost and repair speed.
 {mapping, "tictacaae_maxresults", "riak_kv.tictacaae_maxresults", [
   {datatype, integer},
-  {default, 256},
+  {default, 64}
+]}.
+
+%% @doc Max number of repair loops per exchange
+%% Each exchange will attempt a repair of tictacaae_maxresults, and will
+%% analyse those repairs to see if there exists the potential for more repairs.
+%% If there exists this potential, then repair loops will be run, but in these
+%% repair loops a more efficient repair will be run:
+%% - with a bucket, key_range or last_modified range (at least) to restrict the
+%% scope of the fetch_clocks queries
+%% - without rebuilding the segments in the AAE hash tree
+%% - without checking for presence of the object in the journal
+%% Problems related to invalid hash trees will need to be detected through the
+%% initial loop of the exchange, not repair loops
+{mapping, "tictacaae_repairloops", "riak_kv.tictacaae_repairloops", [
+  {datatype, integer},
+  {default, 4},
+  hidden
+]}.
+
+%% @doc Multiplier to the `tictcaaae_maxresults` when following an initial AAE 
+%% exchange with a range-limited exchange.
+%% After each exchange, where sufficient deltas are discovered there will be a
+%% `tictacaae_repairloops` number of range-limited queries (assuming
+%% sufficient results continue to be found).  Each of these may have the
+%% the number of max results boosted by this integer factor.  
+%% For example, if `tictacaae_maxresuts` is set to 64, and
+%% `tictacaae_repairloops` is set to 4, and the `tictacaae_rangeboost` is set
+%% to 2 - the initial loop will use `tictacaae_maxresuts` of 64, but any
+%% AAE exchanges on loops 1 to 4 will use 128.
+%% Exchanges with range-limited queries are more efficient, and so more tree
+%% segments can be fetched without creating significant CPU overheads, hence 
+%% the use of this boost to maxresults.
+{mapping, "tictacaae_rangeboost", "riak_kv.tictacaae_rangeboost", [
+  {datatype, integer},
+  {default, 2},
   hidden
 ]}.
 

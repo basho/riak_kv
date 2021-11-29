@@ -37,8 +37,6 @@
             waiting_vnode_r/2,
             waiting_read_repair/2]).
 
--export([prompt_readrepair/1]).
-
 -type detail() :: timing |
                   vnodes.
 -type details() :: [detail()].
@@ -48,8 +46,6 @@
                   {basic_quorum, boolean()} |  %% Whether to use basic quorum (return early
                                                %% in some failure cases.
                   {notfound_ok, boolean()}  |  %% Count notfound responses as successful.
-                  {force_aae, boolean()}    |  %% Force there to be be an AAE exchange for the
-                                               %% preflist after the GEt has been completed 
                   {timeout, pos_integer() | infinity} | %% Timeout for vnode responses
                   {details, details()} |       %% Return extra details as a 3rd element
                   {details, true} |
@@ -63,8 +59,6 @@
 -type request_type() :: head | get | update.
 
 -export_type([options/0, option/0]).
-
-
 
 -record(state, {from :: {raw, req_id(), pid()},
                 options=[] :: options(),
@@ -87,7 +81,6 @@
                                        [{StateName::atom(), TimeUSecs::non_neg_integer()}]} | undefined,
                 crdt_op :: undefined | true,
                 request_type :: undefined | request_type(),
-                force_aae = false :: boolean(),
                 override_vnodes = [] :: list(),
                 return_tombstone = false :: boolean(),
                 expected_fetchclock = false :: false | vclock:vclock()
@@ -101,8 +94,6 @@
 -define(DEFAULT_RT, head).
 -define(DEFAULT_NC, 0).
 -define(QUEUE_EMPTY_LOOPS, 8).
--define(MIN_REPAIRTIME_MS, 10000).
--define(MIN_REPAIRPAUSE_MS, 10).
 
 %% ===================================================================
 %% Public API
@@ -271,7 +262,6 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
     DocIdx = riak_core_util:chash_key(BKey, BucketProps),
     Bucket_N = get_option(n_val, BucketProps),
     CrdtOp = get_option(crdt_op, Options),
-    ForceAAE = get_option(force_aae, Options, false),
     N = case get_option(n_val, Options) of
             undefined ->
                 Bucket_N;
@@ -305,8 +295,7 @@ prepare(timeout, StateData=#state{bkey=BKey={Bucket,_Key},
                                             preflist2 = Preflist2,
                                             tracked_bucket = StatTracked,
                                             crdt_op = CrdtOp,
-                                            request_type=RequestType,
-                                            force_aae = ForceAAE})
+                                            request_type=RequestType})
     end.
 
 %% @private
@@ -605,9 +594,7 @@ maybe_finalize(StateData=#state{get_core = GetCore}) ->
         false -> {next_state,waiting_read_repair,StateData}
     end.
 
-finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
-                            preflist2 = PL, bkey = {B, K}, 
-                            force_aae = ForceAAE}) ->
+finalize(StateData=#state{get_core = GetCore, trace = Trace}) ->
     {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
     UpdStateData = StateData#state{get_core = UpdGetCore},
     case Action of
@@ -619,85 +606,7 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace, req_id = ReqID,
             ?DTRACE(Trace, ?C_GET_FSM_FINALIZE, [], ["finalize"]),
             ok
     end,
-    case ForceAAE of 
-        true ->
-            Primaries = 
-                [{I, Node} || {{I, Node}, primary} <- PL],
-            case length(Primaries) of 
-                L when L < 2 ->
-                    lager:info("Insufficient Primaries to support force AAE request", []),
-                    ok;
-                L ->
-                    BlueP = lists:nth((ReqID rem L) + 1, Primaries),
-                    PinkP = lists:nth(((ReqID + 1) rem L) + 1, Primaries),
-                    IndexN = riak_kv_util:get_index_n({B, K}),
-                    BlueList = [{riak_kv_vnode:aae_send(BlueP), [IndexN]}], 
-                    PinkList = [{riak_kv_vnode:aae_send(PinkP), [IndexN]}], 
-                    aae_exchange:start(BlueList, 
-                                        PinkList, 
-                                        prompt_readrepair([BlueP, PinkP]), 
-                                        fun reply_fun/1)
-            end;
-        false ->
-            ok
-    end,
     {stop,normal,StateData}.
-
--spec prompt_readrepair([{riak_core_ring:partition_id(), node()}]) ->
-    fun((list({{riak_object:bucket(), riak_object:key()},
-                {vclock:vclock(), vclock:vclock()}})) -> ok).
-prompt_readrepair(VnodeList) ->
-    prompt_readrepair(VnodeList, 
-                        app_helper:get_env(riak_kv, log_readrepair, false)).
-
-prompt_readrepair(VnodeList, LogRepair) ->
-    {ok, C} = riak:local_client(),
-    FetchFun = 
-        fun({{B, K}, {_BlueClock, _PinkClock}}) ->
-            case riak_kv_util:consistent_object(B) of
-                true ->
-                    riak_kv_exchange_fsm:repair_consistent({B, K});
-                false ->
-                    riak_client:get(B, K, C)
-            end
-        end,
-    LogFun = 
-        fun({{B, K}, {BlueClock, PinkClock}}) ->
-            lager:info(
-                "Prompted read repair Bucket=~p Key=~p Clocks ~w ~w",
-                    [B, K, BlueClock, PinkClock])
-        end,
-    fun(RepairList) ->
-        SW = os:timestamp(),
-        RepairCount = length(RepairList),
-        lager:info("Repairing key_count=~w between ~w",
-                    [RepairCount, VnodeList]),
-        Pause =
-            max(?MIN_REPAIRPAUSE_MS,
-                ?MIN_REPAIRTIME_MS div max(1, RepairCount)),
-        RehashFun = 
-            fun({{B, K}, {_BlueClock, _PinkClock}}) ->
-                timer:sleep(Pause),
-                riak_kv_vnode:rehash(VnodeList, B, K)
-            end,
-        lists:foreach(FetchFun, RepairList),
-        lists:foreach(RehashFun, RepairList),
-        case LogRepair of
-            true ->
-                lists:foreach(LogFun, RepairList);
-            false ->
-                ok
-        end,
-        lager:info("Repaired key_count=~w " ++ 
-                        "in repair_time=~w ms with pause_time=~w ms",
-                    [RepairCount,
-                        timer:now_diff(os:timestamp(), SW) div 1000,
-                        RepairCount * Pause])
-    end.
-
-reply_fun({EndStateName, DeltaCount}) ->
-    lager:info("AAE Reached end_state=~w with delta_count=~w", 
-                [EndStateName, DeltaCount]).
 
 
 %% Maybe issue deletes if all primary nodes are available.

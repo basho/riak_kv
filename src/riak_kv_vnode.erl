@@ -214,7 +214,7 @@
     %% Queue time in ms to prompt a sync ping.
 -define(AAE_SKIP_COUNT, 10).
 -define(AAE_LOADING_WAIT, 5000).
--define(EXCHANGE_PAUSE_MS, 1000).
+-define(AAE_REPAIR_LOOPS, 8).
 
 -define(AF1_QUEUE, riak_core_node_worker_pool:af1()).
     %% Assured Forwarding - pool 1
@@ -385,7 +385,8 @@ determine_aaedata_root(Partition) ->
 preflistfun(Bucket, Key) -> riak_kv_util:get_index_n({Bucket, Key}).
 
 
--spec tictac_returnfun(partition(), store|trees|exchange) -> fun().
+-spec tictac_returnfun(partition(), store|trees|exchange) -> 
+                    fun((term()) -> ok).
 %% @doc
 %% Function to be passed to return a response once an operation is complete
 tictac_returnfun(Partition, exchange) ->
@@ -932,7 +933,32 @@ handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
                                                     IndexNs,
                                                     SegmentIDs,
                                                     ReturnFun,
+                                                    IndexNFun);
+                {fetch_clocks, SegmentIDs, MR} ->
+                    IndexNFun = 
+                        fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
+                    ModifiedLimiter = aaefold_setmodifiedlimiter(MR),
+                    aae_controller:aae_fetchclocks(Cntrl,
+                                                    IndexNs,
+                                                    all,
+                                                    SegmentIDs,
+                                                    ModifiedLimiter,
+                                                    ReturnFun,
+                                                    IndexNFun);
+                {fetch_clocks_range, Bucket, KR, SF, MR} ->
+                    IndexNFun = 
+                        fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
+                    RangeLimiter = aaefold_setrangelimiter(Bucket, KR),
+                    ModifiedLimiter = aaefold_setmodifiedlimiter(MR),
+                    SegmentIDs = element(2, SF),
+                    aae_controller:aae_fetchclocks(Cntrl,
+                                                    IndexNs,
+                                                    RangeLimiter,
+                                                    SegmentIDs,
+                                                    ModifiedLimiter,
+                                                    ReturnFun,
                                                     IndexNFun)
+                    
             end
     end,
     {noreply, State};
@@ -1113,23 +1139,18 @@ handle_command({rebuild_complete, trees, _ST}, _Sender, State) ->
             {noreply, State#state{tictac_rebuilding = false}}
     end;
 
-handle_command({exchange_complete, {EndState, DeltaCount}, ST},
+handle_command({exchange_complete, ExchangeResult, ST},
                                                     _Sender, State) ->
     %% Record how many deltas were seen in the exchange
     %% Revert the skip_count to 0 so that exchanges can be made at the next
     %% prompt.
     XC = State#state.tictac_exchangecount + 1,
-    DC = State#state.tictac_deltacount + DeltaCount,
+    DC = State#state.tictac_deltacount + element(2, ExchangeResult),
     XT = State#state.tictac_exchangetime + timer:now_diff(os:timestamp(), ST),
-    case EndState of
-        PositiveState
-            when PositiveState == root_compare;
-                 PositiveState == branch_compare ->
-            ok;
-        UnwelcomeState ->
-            lager:info("Tictac AAE exchange for partition=~w pending_state=~w",
-                        [State#state.idx, UnwelcomeState])
-    end,
+    riak_kv_tictacaae_repairs:log_tictac_result(ExchangeResult,
+                                                exchange,
+                                                initial,
+                                                State#state.idx),
     {noreply, State#state{tictac_exchangecount = XC,
                             tictac_deltacount = DC,
                             tictac_exchangetime = XT,
@@ -1197,7 +1218,8 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                             State#state.tictac_deltacount,
                             State#state.tictac_exchangetime div (1000 * 1000),
                             LoopDuration div (1000 * 1000)]),
-            {noreply, State#state{tictac_exchangequeue = Exchanges,
+            {noreply, State#state{tictac_exchangequeue =
+                                        riak_kv_util:shuffle_list(Exchanges),
                                     tictac_exchangecount = 0,
                                     tictac_deltacount = 0,
                                     tictac_exchangetime = 0,
@@ -1224,38 +1246,20 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
                         lists:keyfind(Remote, 1, PL)} of
                     {{Local, LN}, {Remote, RN}} ->
                         IndexN = {DocIdx, N},
-                        BlueList = 
-                            [{riak_kv_vnode:aae_send({Local, LN}), [IndexN]}],
-                        PinkList = 
-                            [{riak_kv_vnode:aae_send({Remote, RN}), [IndexN]}],
-                        RepairFun = 
-                            riak_kv_get_fsm:prompt_readrepair([{Local, LN}, 
-                                                                {Remote, RN}]),
-                        ReplyFun = tictac_returnfun(Idx, exchange),
                         ScanTimeout = ?AAE_SKIP_COUNT * XTick,
-                        ExchangePause =
-                            app_helper:get_env(riak_kv,
-                                                tictacaae_exchangepause,
-                                                ?EXCHANGE_PAUSE_MS),
-                        BaseOptions =
-                            [{scan_timeout, ScanTimeout},
-                                {transition_pause_ms, ExchangePause},
-                                {purpose, kv_aae}],
-                        ExchangeOptions =
+                        LoopCount = 
                             case app_helper:get_env(riak_kv,
-                                                    tictacaae_maxresults) of
-                                MR when is_integer(MR) ->
-                                    BaseOptions ++ [{max_results, MR}];
+                                                    tictacaae_repairloops) of
+                                LC when is_integer(LC) ->
+                                    LC;
                                 _ ->
-                                    BaseOptions
+                                    ?AAE_REPAIR_LOOPS
                             end,
-                        aae_exchange:start(full,
-                                            BlueList, 
-                                            PinkList, 
-                                            RepairFun, 
-                                            ReplyFun,
-                                            none,
-                                            ExchangeOptions),
+                        ReplyFun = tictac_returnfun(Idx, exchange),
+                        riak_kv_tictacaae_repairs:prompt_tictac_exchange(
+                                {Local, LN}, {Remote, RN}, IndexN,
+                                ScanTimeout, LoopCount, ReplyFun, none),
+                        
                         ?AAE_SKIP_COUNT;
                     _ ->
                         lager:warning("Proposed exchange between ~w and ~w " ++ 
@@ -2130,11 +2134,17 @@ aaefold_setrangelimiter(Bucket, all) ->
 aaefold_setrangelimiter(Bucket, {StartKey, EndKey}) ->
     {key_range, Bucket, StartKey, EndKey}.
 
--spec aaefold_setmodifiedlimiter({date, pos_integer(), pos_integer()} | all)
+-spec aaefold_setmodifiedlimiter(
+        {date, pos_integer(), pos_integer()} | 
+            all | 
+            aae_keystore:modified_limiter())
                                     -> aae_keystore:modified_limiter().
 %% @doc
 %% Convert the format of the date limiter to one compatible with the aae store
 aaefold_setmodifiedlimiter({date, LowModDate, HighModDate}) 
+                        when is_integer(LowModDate), is_integer(HighModDate) ->
+    {LowModDate, HighModDate};
+aaefold_setmodifiedlimiter({LowModDate, HighModDate})
                         when is_integer(LowModDate), is_integer(HighModDate) ->
     {LowModDate, HighModDate};
 aaefold_setmodifiedlimiter(_) ->
