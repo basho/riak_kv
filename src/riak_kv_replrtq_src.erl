@@ -36,7 +36,8 @@
         handle_cast/2,
         handle_info/2,
         terminate/2,
-        code_change/3]).
+        code_change/3,
+        format_status/2]).
 
 -export([start_link/0,
             replrtq_aaefold/2,
@@ -86,7 +87,7 @@
 -record(state,  {
             queue_filtermap = [] :: list(queue_filtermap()),
             queue_countmap = [] :: list(queue_countmap()),
-            queue_map = [] :: list(queue_map()),
+            queue_map = [] :: list(queue_map())|not_logged,
             queue_limit = ?QUEUE_LIMIT :: pos_integer(),
             object_limit = ?OBJECT_LIMIT :: non_neg_integer(),
             log_frequency_in_ms = ?LOG_TIMER_SECONDS * 1000 :: pos_integer()
@@ -418,6 +419,11 @@ handle_info(log_queue, State) ->
     erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),
     {noreply, State}.
 
+format_status(normal, [_PDict, State]) ->
+    State;
+format_status(terminate, [_PDict, State]) ->
+    State#state{queue_map = not_logged}.
+
 terminate(_Reason, _State) ->
     ok.
 
@@ -627,6 +633,17 @@ generate_replentryfun(Bucket) ->
     fun(SQN) ->
         {Bucket, <<SQN:32/integer>>, vclock:fresh(test, SQN), to_fetch}
     end.
+
+
+format_status_test() ->
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []),
+    {status, _, {module, gen_server}, SItemL} =
+        sys:get_status(riak_kv_replrtq_src),
+    S = lists:keyfind(state, 1, lists:nth(5, SItemL)),
+    ?assert(is_list(S#state.queue_map)),
+    ST = format_status(terminate, [dict:new(), S]),
+    ?assertMatch(not_logged, ST#state.queue_map),
+    stop().
 
 basic_singlequeue_test() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []),
