@@ -388,7 +388,7 @@ disklog_filename(RootPath, GUID) ->
 -ifdef(TEST).
 
 clean_dir(DirPath) ->
-    ok = filelib:ensure_dir(DirPath),
+    ok = filelib:ensure_dir(DirPath ++ "/"),
     {ok, Files} = file:list_dir(DirPath),
     lists:foreach(fun(FN) ->
                         File = filename:join(DirPath, FN),
