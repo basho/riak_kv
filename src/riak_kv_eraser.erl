@@ -21,21 +21,17 @@
 %% @doc Queue up and act on delete requests, such as delete requests prompted
 %% by aae_folds
 
-
 -module(riak_kv_eraser).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--behaviour(gen_server).
+-behaviour(riak_kv_queue_manager).
 
--export([init/1,
-        handle_call/3,
-        handle_cast/2,
-        handle_info/2,
-        terminate/2,
-        code_change/3,
-        format_status/2]).
+-define(QUEUE_LIMIT, 100000).
+-define(OVERFLOW_LIMIT, 10000000).
+-define(REDO_TIMEOUT, 2000).
+-define(DELETE_TIMEOUT, 10000).
 
 -export([start_link/0,
             start_job/1,
@@ -46,44 +42,14 @@
             clear_queue/1,
             stop_job/1]).
 
--define(QUEUE_LIMIT, 1000000).
--define(LOG_TICK, 60000).
--define(REDO_TIMEOUT, 2000).
--define(MAX_BATCH_SIZE, 100).
--define(DELETE_TIMEOUT, 10000).
--define(STND_ERASE_PRIORITY, 2).
--define(REDO_ERASE_PRIORITY, 1).
+-export([action/2,
+            get_limits/0,
+            redo/0]).
 
--record(state,  {
-            delete_queue = riak_core_priority_queue:new()
-                :: pqueue()|not_logged,
-            pqueue_length = {0, 0} :: queue_length(),
-            delete_attempts = 0 :: non_neg_integer(),
-            delete_aborts = 0 :: non_neg_integer(),
-            delete_drops = 0 :: non_neg_integer(),
-            redo_drops = 0 :: non_neg_integer(),
-            job_id :: non_neg_integer(), % can be 0 for named eraser
-            pending_close = false :: boolean(),
-            last_tick_time = os:timestamp() :: erlang:timestamp(),
-            erase_fun :: erase_fun(),
-            redo_deletes = false :: boolean(),
-            redo_timeout :: non_neg_integer(),
-            queue_limit :: non_neg_integer()
-}).
-
--type priority() :: 1..2.
--type squeue() :: {queue, [any()], [any()]}.
--type pqueue() ::  squeue() | {pqueue, [{priority(), squeue()}]}.
--type queue_length() :: {non_neg_integer(), non_neg_integer()}.
 -type delete_reference() ::
     {{riak_object:bucket(), riak_object:key()}, vclock:vclock()}.
+
 -type job_id() :: pos_integer().
-
--type delete_stats() :: {non_neg_integer(), non_neg_integer(), queue_length()}.
-
--type eraser_state() :: #state{}.
--type erase_fun() :: fun((delete_reference(), boolean()) -> boolean()).
-
 
 -export_type([delete_reference/0, job_id/0]).
 
@@ -91,265 +57,68 @@
 %%% API
 %%%============================================================================
 
+-spec start_link() -> {ok, pid()}.
 start_link() ->
-    DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
-    gen_server:start_link({local, ?MODULE}, ?MODULE,
-                            [0, fun erase/2, DeleteMode], []).
+    riak_kv_queue_manager:start_link(?MODULE).
 
-%% @doc
-%% To be used when starting a eraser for a specific workload
 -spec start_job(job_id()) -> {ok, pid()}.
+%% @doc
+%% To be used when starting a reaper for a specific workload
 start_job(JobID) ->
-    DeleteMode = app_helper:get_env(riak_kv, delete_mode, 3000),
-    gen_server:start_link(?MODULE, [JobID, fun erase/2, DeleteMode], []).
+   riak_kv_queue_manager:start_job(JobID, ?MODULE).
 
 -spec request_delete(delete_reference()) -> ok.
 request_delete(DeleteReference) ->
-    request_delete(?MODULE, DeleteReference, ?STND_ERASE_PRIORITY).
+    request_delete(?MODULE, DeleteReference).
 
--spec request_delete(pid(), delete_reference()) -> ok.
+-spec request_delete(pid()|module(), delete_reference()) -> ok.
 request_delete(Pid, DeleteReference) ->
-    request_delete(Pid, DeleteReference, ?STND_ERASE_PRIORITY).
+    riak_kv_queue_manager:request(Pid, DeleteReference).
 
-%% @doc
-%% Priority of Deletes is by default 2. 1 is reserved for redo of deletes
--spec request_delete(pid()|atom(), delete_reference(), priority()) -> ok.
-request_delete(Pid, DelReference, Priority)
-                                        when Priority == ?REDO_ERASE_PRIORITY;
-                                            Priority == ?STND_ERASE_PRIORITY ->
-    gen_server:cast(Pid, {request_delete, DelReference, Priority}).
-
--spec delete_stats(pid()) -> delete_stats().
+-spec delete_stats(pid()) ->
+    list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
 delete_stats(Pid) ->
-    gen_server:call(Pid, delete_stats, infinity).
+    riak_kv_queue_manager:stats(Pid).
 
 %% @doc
 %% If delete_mode is not keep, but it is still preferred to attempt deletes
 %% during unavailbaility of primaries then use override_redo to force this.
 -spec override_redo(boolean()) -> ok.
 override_redo(Redo) ->
-    gen_server:call(?MODULE, {override_redo, Redo}, infinity).
+    riak_kv_queue_manager:override_redo(?MODULE, Redo).
 
 -spec clear_queue(pid()|riak_kv_eraser) -> ok.
-clear_queue(Eraser) ->
-    gen_server:call(Eraser, clear_queue, infinity).
+clear_queue(Pid) ->
+    riak_kv_queue_manager:clear_queue(Pid).
 
 %% @doc
 %% Stop the job once the queue is empty
 -spec stop_job(pid()) -> ok.
 stop_job(Pid) ->
-    gen_server:call(Pid, stop_job).
+    riak_kv_queue_manager:stop_job(Pid).
+
 
 %%%============================================================================
-%%% gen_server callbacks
+%%% Callback functions
 %%%============================================================================
 
-init([JobID, DelFun, DeleteMode]) ->
-    erlang:send_after(?LOG_TICK, self(), log_queue),
-    Redo =
-        case DeleteMode of
-            keep ->
-                %% Tombstones are kept, so a delete attempted during failure
-                %% will eventually happen and not be resurrected.  So if
-                %% primaries are not available no need to defer deletion to
-                %% avoid resurrection of tombstones.
-                false;
-            _ ->
-                true
-        end,
+-spec get_limits() -> {pos_integer(), pos_integer(), pos_integer(), string()}.
+get_limits() ->
     RedoTimeout =
         app_helper:get_env(riak_kv, eraser_redo_timeout, ?REDO_TIMEOUT),
     QueueLimit =
         app_helper:get_env(riak_kv, eraser_queue_limit, ?QUEUE_LIMIT),
-    {ok, #state{job_id = JobID,
-                erase_fun = DelFun,
-                redo_deletes = Redo,
-                redo_timeout = RedoTimeout,
-                queue_limit = QueueLimit}, 0}.
-
-handle_call(Msg, _From, State) ->
-    {reply, R, S0} = handle_sync_message(Msg, State),
-    {reply, R, S0, 0}.
-
-handle_cast(Msg, State) ->
-    {noreply, S0} = handle_async_message(Msg, State),
-    {noreply, S0, 0}.
-
-handle_info(Msg, State) ->
-    case handle_async_message(Msg, State) of
-        {override_timeout, none, R} ->
-            R;
-        {override_timeout, T0, {noreply, S0}} ->
-            {noreply, S0, T0};
-        {noreply, S0} ->
-            {noreply, S0, 0}
-    end.
-
-format_status(normal, [_PDict, State]) ->
-    State;
-format_status(terminate, [_PDict, State]) ->
-    State#state{delete_queue = not_logged}.
-
-terminate(_Reason, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-
-%%%============================================================================
-%%% Actual Callbacks
-%%%============================================================================
-
-%% Handle a call message - with a reply.  The handle_call function will enforce
-%% the addition of an immediate timeout
--spec handle_sync_message(any(), eraser_state()) ->
-        {reply, any(), eraser_state()}.
-handle_sync_message(delete_stats, State) ->
-    Stats =
-        {State#state.delete_attempts,
-            State#state.delete_aborts,
-            State#state.pqueue_length},
-    {reply, Stats, State};
-handle_sync_message({override_redo, Redo}, State) ->
-    {reply, ok, State#state{redo_deletes = Redo}};
-handle_sync_message(clear_queue, State) ->
-    {reply,
-        ok,
-        State#state{delete_queue = riak_core_priority_queue:new(),
-                    pqueue_length = {0, 0}}};
-handle_sync_message(stop_job, State) ->
-    {reply, ok, State#state{pending_close = true}}.
-
-%% Handle a cast or info message - with a reply.  The handle_cast function
-%% will expect a {noreply, State} response and will override the return with
-%% an immediate timeout.  the handle_info may also receive a reply with an
-%% overrride to the timeout.
--spec handle_async_message(any(), eraser_state()) ->
-        {noreply, eraser_state()}|
-        {override_timeout, none|pos_integer(), tuple()}.
-handle_async_message({request_delete, DelReference, Priority}, State) ->
-    QueueLimit = State#state.queue_limit,
-    CurrentQL = element(Priority, State#state.pqueue_length),
-    if
-        CurrentQL >= QueueLimit ->
-            case Priority of
-                ?STND_ERASE_PRIORITY ->
-                    {noreply,
-                        State#state{delete_drops =
-                                        State#state.delete_drops + 1}};
-                ?REDO_ERASE_PRIORITY ->
-                    {noreply,
-                        State#state{redo_drops =
-                                        State#state.redo_drops + 1}}
-            end;
-        true ->
-            UpdQL =
-                setelement(Priority, State#state.pqueue_length,CurrentQL + 1),
-            UpdQ =
-                riak_core_priority_queue:in(DelReference,
-                                            Priority,
-                                            State#state.delete_queue),
-            {noreply,
-                State#state{pqueue_length = UpdQL, delete_queue = UpdQ}}
-    end;
-handle_async_message(timeout, State) ->
-    DelFun = State#state.erase_fun,
-    case State#state.pqueue_length of
-        {0, 0} ->
-            case State#state.pending_close of
-                true ->
-                    {override_timeout, none, {stop, normal, State}};
-                false ->
-                    %% No timeout here, as no work to do
-                    {override_timeout, none, {noreply, State}}
-            end;
-        {RedoQL, 0} ->
-            %% Work a single item on the redo queue, and no immediate timeout
-            %% if it aborts
-            case riak_core_priority_queue:out(State#state.delete_queue) of
-                {{value, DelRef}, Q0} ->
-                    case DelFun(DelRef, State#state.redo_deletes) of
-                        true ->
-                            AT0 = State#state.delete_attempts + 1,
-                            QL0 = {RedoQL - 1, 0},
-                            {noreply,
-                                State#state{delete_queue = Q0,
-                                            delete_attempts = AT0,
-                                            pqueue_length = QL0}};
-                        false ->
-                            AB0 = State#state.delete_aborts + 1,
-                            Q1 = riak_core_priority_queue:in(DelRef, 1, Q0),
-                            {override_timeout,
-                                 State#state.redo_timeout,
-                                {noreply,
-                                    State#state{delete_queue = Q1,
-                                                delete_aborts = AB0}}}
-                    end;
-                {empty, Q0} ->
-                    %% This shoudn't happen - must have miscalulated
-                    %% queue lengths
-                    {noreply,
-                        State#state{delete_queue = Q0,
-                                    pqueue_length = {0, 0}}}
-            end;
-        {RedoQL, DeleteQL} ->
-            %% Work a batch of items from the erase queue before yielding
-            BatchSize = min(DeleteQL, ?MAX_BATCH_SIZE),
-            BatchFun =
-                fun(_X, {Q, AT, AB}) ->
-                    case riak_core_priority_queue:out(Q) of
-                        {{value, DelRef}, Q0} ->
-                            case DelFun(DelRef, State#state.redo_deletes) of
-                                true ->
-                                    {Q0, AT + 1, AB};
-                                false ->
-                                    request_delete(self(), 
-                                                    DelRef, 
-                                                    ?REDO_ERASE_PRIORITY),
-                                    {Q0, AT, AB + 1}
-                            end;
-                        {empty, Q0} ->
-                            %% This shouldn't happen
-                            {Q0, AT, AB}
-                    end
-                end,
-            {UpdQ, AT0, AB0} =
-                lists:foldl(BatchFun,
-                            {State#state.delete_queue,
-                                State#state.delete_attempts,
-                                State#state.delete_aborts},
-                            lists:seq(1, BatchSize)),
-            {noreply,
-                State#state{delete_queue = UpdQ,
-                            delete_attempts = AT0,
-                            delete_aborts = AB0,
-                            pqueue_length = {RedoQL, DeleteQL - BatchSize}}}
-    end;
-handle_async_message(log_queue, State) ->
-    lager:info("Eraser job ~w has queue lengths ~w " ++
-                    "delete_attempts=~w delete_aborts=~w " ++ 
-                    "delete_drops=~w redo_drops=~w",
-                [State#state.job_id,
-                    State#state.pqueue_length,
-                    State#state.delete_attempts,
-                    State#state.delete_aborts,
-                    State#state.delete_drops,
-                    State#state.redo_drops]),
-    erlang:send_after(?LOG_TICK, self(), log_queue),
-    {noreply,
-        State#state{delete_attempts = 0, delete_aborts = 0, delete_drops = 0}}.
-
-
-%%%============================================================================
-%%% Internal functions
-%%%============================================================================
+    OverflowLimit =
+        app_helper:get_env(riak_kv, eraser_overflow_limit, ?OVERFLOW_LIMIT),
+    RootPath =
+        app_helper:get_env(riak_kv, eraser_dataroot),
+    {RedoTimeout, QueueLimit, OverflowLimit, RootPath}.
 
 %% @doc
 %% Try and delete the key.  If Redo is true, this should only be attempted if
 %% all primaries are up
--spec erase(delete_reference(), boolean()) -> boolean().
-erase({{Bucket, Key}, VectorClock}, true) ->
+-spec action(delete_reference(), boolean()) -> boolean().
+action({{Bucket, Key}, VectorClock}, true) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     {n_val, N} = lists:keyfind(n_val, 1, BucketProps),
@@ -364,12 +133,24 @@ erase({{Bucket, Key}, VectorClock}, true) ->
         _ ->
             false
     end;
-erase({{Bucket, Key}, VectorClock}, false) ->
+action({{Bucket, Key}, VectorClock}, false) ->
     riak_kv_delete:delete(eraser,
                             Bucket, Key,
                             [], ?DELETE_TIMEOUT, undefined, eraser,
                             VectorClock),
     true.
+
+redo() ->
+    case app_helper:get_env(riak_kv, delete_mode, 3000) of
+        keep ->
+            %% Tombstones are kept, so a delete attempted during failure
+            %% will eventually happen and not be resurrected.  So if
+            %% primaries are not available no need to defer deletion to
+            %% avoid resurrection of tombstones.
+            false;
+        _ ->
+            true
+    end.
 
 
 %%%============================================================================
@@ -378,58 +159,41 @@ erase({{Bucket, Key}, VectorClock}, false) ->
 
 -ifdef(TEST).
 
-start_test(JobID, DelFun) ->
-    gen_server:start_link(?MODULE, [JobID, DelFun, immediate], []).
-
-
-test_1inNdeletefun(N) ->
-    fun(DelRef, _Redo) ->
-        case erlang:phash2({DelRef, os:timestamp()}) rem N of
-            0 -> false;
-            _ -> true
-        end
-    end.
-
-test_100delete(_DelRef, _Redo) ->
+test_100delete(_DeleteRef, _Bool) ->
     true.
 
 standard_eraser_test_() ->
     {timeout, 30, fun standard_eraser_tester/0}.
 
-failure_eraser_test_() ->
-    {timeout, 60, fun somefail_eraser_tester/0}.
-
-format_status_test() ->
-    {ok, P} = start_test(1, fun test_100delete/2),
-    {status, P, {module, gen_server}, SItemL} = sys:get_status(P),
-    S = lists:keyfind(state, 1, lists:nth(5, SItemL)),
-    ?assert(S#state.delete_queue == riak_core_priority_queue:new()),
-    ST = format_status(terminate, [dict:new(), S]),
-    ?assertMatch(not_logged, ST#state.delete_queue),
-    ok = stop_job(P).
-
 standard_eraser_tester() ->
     NumberOfRefs = 1000,
-    {ok, P} = start_test(1, fun test_100delete/2),
+    {ok, Pid} = start_link(),
+    ?assert(is_process_alive(Pid)),
+    ok = gen_server:call(Pid, {override_action, fun test_100delete/2}),
     B = {<<"type1">>, <<"B1">>},
     RefList =
-        lists:map(fun(X) ->
-                        {{B, term_to_binary(X)}, vclock:fresh(test, X)}
-                    end,
+        lists:map(fun(X) -> {{B, term_to_binary(X)}, erlang:phash2(X)} end,
                     lists:seq(1, NumberOfRefs)),
     spawn(fun() ->
-                lists:foreach(fun(R) -> request_delete(P, R, 2) end, RefList)
+                lists:foreach(fun(R) ->
+                                request_delete(?MODULE, R)
+                            end,
+                            RefList)
             end),
     WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->
                     timer:sleep(Sleep),
-                    {AT, AB, L} = delete_stats(P),
+                    [{mqueue_lengths,[{1,RedoQL},{2,ReapQL}]},
+                        {overflow_lengths,[{2,0},{1,0}]},
+                        {overflow_discards,[{2,0},{1,0}]},
+                        {attempts,AT},
+                        {aborts,AB}] = delete_stats(?MODULE),
                     case AT of
                         NumberOfRefs ->
                             ?assertMatch(0, AB),
-                            ?assertMatch({0, 0}, L),
+                            ?assertMatch({0, 0}, {RedoQL, ReapQL}),
                             true;
                         _ ->
                             false
@@ -438,56 +202,9 @@ standard_eraser_tester() ->
                     true
             end
         end,
-    ?assertMatch(true, lists:foldl(WaitFun, false, lists:seq(101, 200))),
-    ok = stop_job(P),
+    lists:foldl(WaitFun, false, lists:seq(101, 200)),
+    ok = stop_job(?MODULE),
     timer:sleep(100),
-    ?assertMatch(false, is_process_alive(P)).
-
-somefail_eraser_tester() ->
-    somefail_eraser_tester(4),
-    somefail_eraser_tester(16),
-    somefail_eraser_tester(64).
-
-
-somefail_eraser_tester(N) ->
-    NumberOfRefs = 1000,
-    {ok, P} = start_test(1, test_1inNdeletefun(N)),
-    B = {<<"type1">>, <<"B1">>},
-    RefList =
-        lists:map(fun(X) ->
-                        {{B, term_to_binary(X)}, vclock:fresh(test, X)}
-                    end,
-                    lists:seq(1, NumberOfRefs)),
-    spawn(fun() ->
-                lists:foreach(fun(R) -> request_delete(P, R, 2) end, RefList)
-            end),
-    WaitFun =
-        fun(Sleep, Done) ->
-            case Done of
-                false ->
-                    timer:sleep(Sleep),
-                    {AT, AB, {RedoQL, DelQL}} = delete_stats(P),
-                    case (AT + AB >= NumberOfRefs) of
-                        true ->
-                            ?assertMatch(true, AB > 0),
-                            ?assertMatch(true, AT > 0),
-                            ?assertMatch(true, AT > AB),
-                            ?assertMatch(true, RedoQL >= 0),
-                            ?assertMatch(NumberOfRefs, AT + RedoQL),
-                            ?assertMatch(0, DelQL),
-                            true;
-                        false ->
-                            false
-                    end;
-                true ->
-                    true
-            end
-        end,
-    ?assertMatch(true, lists:foldl(WaitFun, false, lists:seq(101, 500))),
-    ok = clear_queue(P),
-    ok = stop_job(P),
-    timer:sleep(100),
-    ?assertMatch(false, is_process_alive(P)).
-
+    ?assertMatch(false, is_process_alive(Pid)).
 
 -endif.

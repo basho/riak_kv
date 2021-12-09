@@ -47,6 +47,18 @@
   {datatype, directory}
 ]}.
 
+%% @doc A path under which the eraser overload queue will be stored.
+{mapping, "eraser_dataroot", "riak_kv.eraser_dataroot", [
+  {default, "$(platform_data_dir)/kv_eraser"},
+  {datatype, directory}
+]}.
+
+%% @doc A path under which the reaper overload queue will be stored.
+{mapping, "reaper_dataroot", "riak_kv.reaper_dataroot", [
+  {default, "$(platform_data_dir)/kv_reaper"},
+  {datatype, directory}
+]}.
+
 %% @doc Parallel key store type
 %% When running in parallel mode, which will be the default if the backend does
 %% not support native tictac aae (i.e. is not leveled), what type of parallel 
