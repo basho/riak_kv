@@ -61,14 +61,21 @@
 %%% API
 %%%============================================================================
 
+-spec start_link() -> {ok, pid()}.
 start_link() ->
-    riak_kv_queue_manager:start_link(?MODULE).
+    start_link(app_helper:get_env(riak_kv, reaper_dataroot)).
+
+start_link(FilePath) ->
+    riak_kv_queue_manager:start_link(?MODULE, FilePath).
 
 -spec start_job(job_id()) -> {ok, pid()}.
 %% @doc
 %% To be used when starting a reaper for a specific workload
 start_job(JobID) ->
-   riak_kv_queue_manager:start_job(JobID, ?MODULE).
+    start_job(JobID, app_helper:get_env(riak_kv, reaper_dataroot)).
+
+start_job(JobID, FilePath) ->
+   riak_kv_queue_manager:start_job(JobID, ?MODULE, FilePath).
 
 -spec request_reap(reap_reference()) -> ok.
 request_reap(ReapReference) ->
@@ -101,7 +108,7 @@ stop_job(Pid) ->
 %%% Callback functions
 %%%============================================================================
 
--spec get_limits() -> {pos_integer(), pos_integer(), pos_integer(), string()}.
+-spec get_limits() -> {pos_integer(), pos_integer(), pos_integer()}.
 get_limits() ->
     RedoTimeout =
         app_helper:get_env(riak_kv, reaper_redo_timeout, ?REDO_TIMEOUT),
@@ -109,9 +116,7 @@ get_limits() ->
         app_helper:get_env(riak_kv, reaper_queue_limit, ?QUEUE_LIMIT),
     OverflowLimit =
         app_helper:get_env(riak_kv, reaper_overflow_limit, ?OVERFLOW_LIMIT),
-    RootPath =
-        app_helper:get_env(riak_kv, reaper_dataroot),
-    {RedoTimeout, QueueLimit, OverflowLimit, RootPath}.
+    {RedoTimeout, QueueLimit, OverflowLimit}.
 
 %% @doc
 %% If all primaries are up try and reap the tombstone.  The reap may fail, but
@@ -162,7 +167,7 @@ failure_reaper_test_() ->
 
 standard_reaper_tester() ->
     NumberOfRefs = 1000,
-    {ok, P} = start_job(1),
+    {ok, P} = start_job(1, riak_kv_test_util:get_test_dir("std_reaper")),
     ok = gen_server:call(P, {override_action, fun test_100reap/2}),
     B = {<<"type1">>, <<"B1">>},
     RefList =
@@ -206,7 +211,7 @@ somefail_reaper_tester() ->
 
 somefail_reaper_tester(N) ->
     NumberOfRefs = 1000,
-    {ok, P} = start_job(1),
+    {ok, P} = start_job(1, riak_kv_test_util:get_test_dir("err_reaper")),
     ok = gen_server:call(P, {override_action, test_1inNreapfun(N)}),
     B = {<<"type1">>, <<"B1">>},
     RefList =

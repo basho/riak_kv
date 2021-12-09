@@ -36,8 +36,8 @@
         code_change/3,
         format_status/2]).
 
--export([start_link/1,
-            start_job/2,
+-export([start_link/2,
+            start_job/3,
             request/2,
             stats/1,
             immediate_action/2,
@@ -59,7 +59,7 @@
 -callback start_job(pos_integer()) -> {ok, pid()}.
 
 -callback get_limits() ->
-    {non_neg_integer(), pos_integer(), pos_integer(), string()}.
+    {non_neg_integer(), pos_integer(), pos_integer()}.
 
 -callback action(term(), boolean()) -> boolean().
 
@@ -74,6 +74,7 @@
             pending_close = false :: boolean(),
             redo = true :: boolean(),
             action_fun = none :: action_fun() | none,
+            file_path :: string(),
             redo_timeout :: non_neg_integer()
 }).
 
@@ -83,17 +84,17 @@
 %%%============================================================================
 
 
--spec start_link(atom()) -> {ok, pid()}.
-start_link(Module) ->
+-spec start_link(atom(), string()) -> {ok, pid()}.
+start_link(Module, RootPath) ->
     gen_server:start_link(
-        {local, Module}, ?MODULE, [0, Module], []).
+        {local, Module}, ?MODULE, [0, Module, RootPath], []).
 
 %% @doc
 %% To be used when starting a reaper for a specific workload
--spec start_job(pos_integer(), atom()) -> {ok, pid()}.
-start_job(JobID, Module) ->
+-spec start_job(pos_integer(), atom(), string()) -> {ok, pid()}.
+start_job(JobID, Module, RootPath) ->
     gen_server:start_link(
-        ?MODULE, [JobID, Module], []).
+        ?MODULE, [JobID, Module, RootPath], []).
 
 -spec request(pid()|module(), term()) -> ok.
 request(Pid, Reference) ->
@@ -126,14 +127,15 @@ stop_job(Pid) ->
 %%%============================================================================
 
 
-init([JobID, Module]) ->
+init([JobID, Module, FilePath]) ->
     erlang:send_after(?LOG_TICK, self(), log_queue),
-    {OverflowQueue, RedoTimeout} = create_queue(Module),
+    {OverflowQueue, RedoTimeout} = create_queue(FilePath, Module),
     {ok,
         #state{callback_mod = Module,
                 job_id = JobID,
                 redo = Module:redo(),
                 redo_timeout = RedoTimeout,
+                file_path = FilePath,
                 queue = OverflowQueue},
         0}.
 
@@ -148,8 +150,9 @@ handle_call({override_action, ActionFun}, _From, State) ->
     %% the callback module's default action function
     {reply, ok, State#state{action_fun = ActionFun}, 0};
 handle_call(clear_queue, _From, State) ->
-    ok = riak_kv_overflow_queue:close(State#state.queue),
-    {OverflowQueue, RedoTimeout} = create_queue(State#state.callback_mod),
+    riak_kv_overflow_queue:close(State#state.file_path, State#state.queue),
+    {OverflowQueue, RedoTimeout} =
+        create_queue(State#state.file_path, State#state.callback_mod),
     S0 = State#state{queue = OverflowQueue, redo_timeout = RedoTimeout},
     {reply, ok, S0, 0};
 handle_call(stop_job, _From, State) ->
@@ -216,7 +219,7 @@ format_status(terminate, [_PDict, S]) ->
     S#state{queue = riak_kv_overflow_queue:format_state(S#state.queue)}.
 
 terminate(_Reason, State) ->
-    riak_kv_overflow_queue:close(State#state.queue),
+    riak_kv_overflow_queue:close(State#state.file_path, State#state.queue),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -226,11 +229,10 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal Functions
 %%%============================================================================
 
--spec create_queue(module()) ->
+-spec create_queue(string(), module()) ->
     {riak_kv_overflow_queue:overflowq(), non_neg_integer()}.
-create_queue(Module)->
-    {RedoTimeout, QueueLimit, OverflowLimit, RootPath} = Module:get_limits(),
-    riak_kv_overflow_queue:clean_dir(RootPath),
+create_queue(RootPath, Module)->
+    {RedoTimeout, QueueLimit, OverflowLimit} = Module:get_limits(),
     OverflowQueue =
         riak_kv_overflow_queue:new(
             ?PRIORITY_LIST, RootPath, QueueLimit, OverflowLimit),
@@ -245,7 +247,8 @@ create_queue(Module)->
 -ifdef(TEST).
 
 format_status_test() ->
-    {ok, P} = start_job(1, riak_kv_reaper),
+    RootPath = riak_kv_test_util:get_test_dir("reaper_format_status/"),
+    {ok, P} = start_job(1, riak_kv_reaper, RootPath),
     {status, P, {module, gen_server}, SItemL} = sys:get_status(P),
     S = lists:keyfind(state, 1, lists:nth(5, SItemL)),
     MQ = riak_kv_overflow_queue:get_mqueue(S#state.queue),

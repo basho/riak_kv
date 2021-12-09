@@ -59,13 +59,19 @@
 
 -spec start_link() -> {ok, pid()}.
 start_link() ->
-    riak_kv_queue_manager:start_link(?MODULE).
+    start_link(app_helper:get_env(riak_kv, eraser_dataroot)).
+
+start_link(FilePath) ->
+    riak_kv_queue_manager:start_link(?MODULE, FilePath).
 
 -spec start_job(job_id()) -> {ok, pid()}.
 %% @doc
 %% To be used when starting a reaper for a specific workload
 start_job(JobID) ->
-   riak_kv_queue_manager:start_job(JobID, ?MODULE).
+    start_job(JobID, app_helper:get_env(riak_kv, eraser_dataroot)).
+
+start_job(JobID, FilePath) ->
+   riak_kv_queue_manager:start_job(JobID, ?MODULE, FilePath).
 
 -spec request_delete(delete_reference()) -> ok.
 request_delete(DeleteReference) ->
@@ -102,7 +108,7 @@ stop_job(Pid) ->
 %%% Callback functions
 %%%============================================================================
 
--spec get_limits() -> {pos_integer(), pos_integer(), pos_integer(), string()}.
+-spec get_limits() -> {pos_integer(), pos_integer(), pos_integer()}.
 get_limits() ->
     RedoTimeout =
         app_helper:get_env(riak_kv, eraser_redo_timeout, ?REDO_TIMEOUT),
@@ -110,9 +116,7 @@ get_limits() ->
         app_helper:get_env(riak_kv, eraser_queue_limit, ?QUEUE_LIMIT),
     OverflowLimit =
         app_helper:get_env(riak_kv, eraser_overflow_limit, ?OVERFLOW_LIMIT),
-    RootPath =
-        app_helper:get_env(riak_kv, eraser_dataroot),
-    {RedoTimeout, QueueLimit, OverflowLimit, RootPath}.
+    {RedoTimeout, QueueLimit, OverflowLimit}.
 
 %% @doc
 %% Try and delete the key.  If Redo is true, this should only be attempted if
@@ -167,7 +171,7 @@ standard_eraser_test_() ->
 
 standard_eraser_tester() ->
     NumberOfRefs = 1000,
-    {ok, Pid} = start_link(),
+    {ok, Pid} = start_link(riak_kv_test_util:get_test_dir("std_eraser/")),
     ?assert(is_process_alive(Pid)),
     ok = gen_server:call(Pid, {override_action, fun test_100delete/2}),
     B = {<<"type1">>, <<"B1">>},

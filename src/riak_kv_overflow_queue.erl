@@ -37,8 +37,7 @@
         work/4,
         stats/1,
         format_state/1,
-        close/1,
-        clean_dir/1]).
+        close/2]).
 
 -define(QUEUE_LIMIT, 1000).
 -define(OVERFLOW_LIMIT, 1000000).
@@ -89,7 +88,7 @@ new(Priorities, FilePath, QueueLimit, OverflowLimit) ->
     InitCounts = lists:map(fun(P) -> {P, 0} end, Priorities),
     InitFiles = lists:map(fun(P) -> {P, {none, start}} end, Priorities),
     InitQueues = lists:map(fun(P) -> {P, queue:new()} end, Priorities),
-    clean_dir(FilePath),
+    ok = filelib:ensure_dir(FilePath),
 
     #overflowq{mqueues = InitQueues,
                 mqueue_limit = QueueLimit,
@@ -235,19 +234,18 @@ work([{P, BatchSize}|Rest], ApplyFun, RequeueFun, FlowQ) ->
 format_state(FlowQ) ->
     FlowQ#overflowq{mqueues = not_logged}.
 
--spec clean_dir(string()) -> ok.
-clean_dir(DirPath) ->
-    ok = filelib:ensure_dir(DirPath),
-    {ok, Files} = file:list_dir(DirPath),
-    lists:foreach(fun(FN) ->
-                        File = filename:join(DirPath, FN),
-                        _ = file:delete(File)
-                    end,
-                    Files).
-
--spec close(overflowq()) -> ok.
-close(FlowQ) ->
-    CloseFun = fun({_P, {DL, _DC}}) -> disk_log:close(DL) end,
+-spec close(string(), overflowq()) -> ok.
+close(FilePath, FlowQ) ->
+    CloseFun =
+        fun({_P, {DL, _DC}}) ->
+            case DL of
+                none ->
+                    ok;
+                _ ->
+                    disk_log:close(DL),
+                    file:delete(disklog_filename(FilePath, DL))
+            end
+        end,
     lists:foreach(CloseFun, FlowQ#overflowq.overflow_files).
 
 %%%============================================================================
@@ -389,11 +387,21 @@ disklog_filename(RootPath, GUID) ->
 
 -ifdef(TEST).
 
+clean_dir(DirPath) ->
+    ok = filelib:ensure_dir(DirPath),
+    {ok, Files} = file:list_dir(DirPath),
+    lists:foreach(fun(FN) ->
+                        File = filename:join(DirPath, FN),
+                        _ = file:delete(File)
+                    end,
+                    Files).
+
 get_mqueue(OverflowQ) ->
     OverflowQ#overflowq.mqueues.
 
 basic_inmemory_test() ->
     RootPath = riak_kv_test_util:get_test_dir("overflow_inmem/"),
+    clean_dir(RootPath),
     io:format("~p", [RootPath]),
     FlowQ0 = new([1, 2], RootPath, 1000, 5000),
     Refs = lists:seq(1, 100),
@@ -423,6 +431,7 @@ basic_inmemory_test() ->
 
 basic_overflow_test() ->
     RootPath = riak_kv_test_util:get_test_dir("overflow_disk/"),
+    clean_dir(RootPath),
     FlowQ0 = new([1, 2], RootPath, 1000, 5000),
     Refs = lists:seq(1, 2000),
     FlowQ1 =
@@ -437,11 +446,11 @@ basic_overflow_test() ->
         lists:keyfind(overflow_lengths, 1, stats(FlowQ2)),
     ?assertMatch([{1, 1000}, {2, 0}], OQL1),
 
-    close(FlowQ2),
+    close(RootPath, FlowQ2),
 
     ok = filelib:ensure_dir(RootPath),
     {ok, Files1} = file:list_dir(RootPath),
-    ?assertMatch(1, length(Files1)),
+    ?assertMatch(0, length(Files1)),
     
     FlowQ_NEW = new([1, 2], RootPath, 1000, 5000),
     {mqueue_lengths, MQL2} =
@@ -455,6 +464,7 @@ basic_overflow_test() ->
 
 underover_overflow_test() ->
     RootPath = riak_kv_test_util:get_test_dir("underover_disk/"),
+    clean_dir(RootPath),
     FlowQ0 = new([1, 2], RootPath, 1000, 5000),
     Refs = lists:seq(1, 7000),
     FlowQ1 =
@@ -524,6 +534,7 @@ underover_overflow_test() ->
 
     ok = filelib:ensure_dir(RootPath),
     {ok, Files1} = file:list_dir(RootPath),
+    io:format("Files1 ~p", [Files1]),
     ?assertMatch(1, length(Files1)),
 
     {B12, FlowQ14} = fetch_batch(1, 800, FlowQ13),
@@ -547,7 +558,7 @@ underover_overflow_test() ->
         lists:keyfind(overflow_discards, 1, stats(FlowQ15)),
     ?assertMatch([{1, 1200}, {2, 0}], OQD2),
 
-    close(FlowQ15).
+    close(RootPath, FlowQ15).
 
 
 -endif.
