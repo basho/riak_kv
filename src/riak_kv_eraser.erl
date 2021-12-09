@@ -171,7 +171,7 @@ standard_eraser_test_() ->
 
 standard_eraser_tester() ->
     NumberOfRefs = 1000,
-    {ok, Pid} = start_link(riak_kv_test_util:get_test_dir("std_eraser/")),
+    {ok, Pid} = start_link(riak_kv_test_util:get_test_dir("std_eraser")),
     ?assert(is_process_alive(Pid)),
     ok = gen_server:call(Pid, {override_action, fun test_100delete/2}),
     B = {<<"type1">>, <<"B1">>},

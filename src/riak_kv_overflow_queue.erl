@@ -88,7 +88,7 @@ new(Priorities, FilePath, QueueLimit, OverflowLimit) ->
     InitCounts = lists:map(fun(P) -> {P, 0} end, Priorities),
     InitFiles = lists:map(fun(P) -> {P, {none, start}} end, Priorities),
     InitQueues = lists:map(fun(P) -> {P, queue:new()} end, Priorities),
-    ok = filelib:ensure_dir(FilePath),
+    ok = filelib:ensure_dir(FilePath ++ "/"),
 
     #overflowq{mqueues = InitQueues,
                 mqueue_limit = QueueLimit,
@@ -400,7 +400,7 @@ get_mqueue(OverflowQ) ->
     OverflowQ#overflowq.mqueues.
 
 basic_inmemory_test() ->
-    RootPath = riak_kv_test_util:get_test_dir("overflow_inmem/"),
+    RootPath = riak_kv_test_util:get_test_dir("overflow_inmem"),
     clean_dir(RootPath),
     io:format("~p", [RootPath]),
     FlowQ0 = new([1, 2], RootPath, 1000, 5000),
@@ -463,7 +463,7 @@ basic_overflow_test() ->
 
 
 underover_overflow_test() ->
-    RootPath = riak_kv_test_util:get_test_dir("underover_disk/"),
+    RootPath = riak_kv_test_util:get_test_dir("underover_disk"),
     clean_dir(RootPath),
     FlowQ0 = new([1, 2], RootPath, 1000, 5000),
     Refs = lists:seq(1, 7000),
