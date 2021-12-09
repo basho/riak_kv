@@ -124,7 +124,7 @@ log(Type, JobID, Attempts, Aborts, Queue) ->
                     Queue#overflowq.overflow_discards),
 
     _ = lager:info("~p job_id=~p has " ++
-                        "delete_attempts=~w delete_aborts=~w " ++
+                        "attempts=~w aborts=~w " ++
                         QueueLengths ++ OverflowLengths ++ DiscardCounts,
                     [Type, JobID, Attempts, Aborts]),
     
