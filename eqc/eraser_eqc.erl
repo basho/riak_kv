@@ -18,8 +18,16 @@ start_args(_S) ->
   [gen_delete_mode()].
 
 start(DelMode) ->
-  {ok, Pid} = gen_server:start_link(riak_kv_eraser, [eqc_job, fun erase/2, DelMode], []),
-  Pid.
+    FilePath = riak_kv_test_util:get_test_dir("eraser_eqc"),
+    {ok, Pid} = riak_kv_eraser:start_link(FilePath),
+    case DelMode of
+        keep ->
+            riak_kv_eraser:override_redo(false);
+        immediate ->
+            riak_kv_eraser:override_redo(true)
+    end,
+    ok = gen_server:call(Pid, {override_action, fun erase/2}),
+    Pid.
 
 start_next(S, Pid, [DelMode]) ->
   S#{ delete_mode => DelMode, pid => Pid }.

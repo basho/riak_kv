@@ -24,6 +24,7 @@
 -module(riak_kv_eraser).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-export([start_link/1]).
 -endif.
 
 -behaviour(riak_kv_queue_manager).
