@@ -159,7 +159,7 @@ handle_call(stop_job, _From, State) ->
     {reply, ok, State#state{pending_close = true}, 0};
 handle_call({immediate_action, Reference}, _From, State) ->
     Mod = State#state.callback_mod,
-    {reply, Mod:action(Reference), State, 0}.
+    {reply, Mod:action(Reference, false), State, 0}.
 
 
 handle_cast({request, Reference, Priority}, State) ->
