@@ -54,16 +54,37 @@
 
 -type action_fun() :: fun((term(), boolean()) -> boolean()).
 
--callback start_link() -> {ok, pid()}.
-
--callback start_job(pos_integer()) -> {ok, pid()}.
 
 -callback get_limits() ->
     {non_neg_integer(), pos_integer(), pos_integer()}.
+%% A callback function which will be called at startup to return the default
+%% values of:
+%% - Redo Timeout
+%% - Queue Limit
+%% - Overflow Limit
+%% The redo timeout is a backoff (in ms) to be used when `redo() = true` and
+%% applying the action function to a reference has resulted in abort. No
+%% further work will be applied until the timeout has expired (i.e. wait for
+%% the fault to potentially clear).
+%% The queue limit is the limit to the size (by count of references) of the
+%% in-memory part of the queue.
+%% The overflow limit is the limit to the size of the on-disk portion of the
+%% queue.
 
 -callback action(term(), boolean()) -> boolean().
+%% The queue manager needs to define an action function to be applied to the
+%% queued references.  The action function takes as inputs the reference, and
+%% also a redo boolean().
+%% A redo value of `true` is used to indicate that the function should
+%% validate pre-requisites for successful completion before applying the
+%% action - and report an abort (i.e. responding `false`) on failure, in order
+%% for a redo of the queued item to be performed.
+%% With a redo value of `false` the action should be performed, and always
+%% respond `true`, and hence no redo will be triggered. 
 
 -callback redo() -> boolean().
+%% A callback function to return the default value of the redo boolean() to be
+%% passed into the action function.
 
 -record(state,  {
             callback_mod :: atom(),

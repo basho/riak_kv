@@ -44,7 +44,9 @@
             request_reap/1,
             request_reap/2,
             direct_reap/1,
+            reap_stats/0,
             reap_stats/1,
+            clear_queue/0,
             clear_queue/1,
             stop_job/1]).
 
@@ -86,7 +88,11 @@ request_reap(ReapReference) ->
 request_reap(Pid, ReapReference) ->
     riak_kv_queue_manager:request(Pid, ReapReference).
 
--spec reap_stats(pid()) -> 
+-spec reap_stats() ->
+    list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
+reap_stats() -> reap_stats(?MODULE).
+
+-spec reap_stats(pid()|module()) -> 
     list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
 reap_stats(Pid) ->
     riak_kv_queue_manager:stats(Pid).
@@ -95,7 +101,10 @@ reap_stats(Pid) ->
 direct_reap(ReapReference) ->
     riak_kv_queue_manager:immediate_action(?MODULE, ReapReference).
 
--spec clear_queue(pid()|riak_kv_reaper) -> ok.
+-spec clear_queue() -> ok.
+clear_queue() -> clear_queue(?MODULE).
+
+-spec clear_queue(pid()|module()) -> ok.
 clear_queue(Reaper) ->
    riak_kv_queue_manager:clear_queue(Reaper).
 

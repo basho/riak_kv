@@ -199,7 +199,11 @@ addto_queue(Priority, Item, FlowQ) ->
     end.
 
 
-%% @doc Look at queue by priority and batch size, and apply
+%% @doc Look at queue by priority and batch size, and apply the passed in
+%% function to a batch of up to batch size available on the queue for that
+%% priority.
+%% If the ApplyFun returns true to indicate an attempt has been made, count
+%% as such.  Otherwise, count as an abort and requeue.
 -spec work(list({pos_integer(), pos_integer()}),
             fun((term()) -> boolean()),
             fun((term()) -> ok),
