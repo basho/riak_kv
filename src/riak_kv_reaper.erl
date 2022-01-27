@@ -38,6 +38,7 @@
 -define(QUEUE_LIMIT, 100000).
 -define(OVERFLOW_LIMIT, 10000000).
 -define(REDO_TIMEOUT, 2000).
+-define(OVERLOAD_PAUSE_MS, 10000).
 
 -export([start_link/0,
             start_job/1,
@@ -141,14 +142,46 @@ action({{Bucket, Key}, DeleteHash}, Redo) ->
     case length(PrefList) of
         N ->
             PL0 = lists:map(fun({Target, primary}) -> Target end, PrefList),
-            ok = riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
-            true;
+            case check_all_mailboxes(PL0) of
+                ok ->
+                    riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
+                    true;
+                soft_loaded ->
+                    timer:sleep(?OVERLOAD_PAUSE_MS),
+                    if Redo -> false; true -> true end
+            end;
         _ ->
             if Redo -> false; true -> true end
     end.
 
 -spec redo() -> boolean().
 redo() -> true.
+
+%%%============================================================================
+%%% Internal functions
+%%%============================================================================
+
+-type preflist_entry() :: {non_neg_integer(), node()}.
+
+%% Protect against overloading the system when not reaping should any
+%% mailbox be in soft overload state
+-spec check_all_mailboxes(list(preflist_entry())) -> ok|soft_loaded.
+check_all_mailboxes([]) ->
+    ok;
+check_all_mailboxes([H|Rest]) ->
+    case check_mailbox(H) of
+        ok ->
+            check_all_mailboxes(Rest);
+        soft_loaded ->
+            riak_kv_stat:update(soft_loaded_vnode_mbox),
+            soft_loaded
+    end.
+
+%% Call off to vnode proxy for mailbox status.
+-spec check_mailbox(preflist_entry()) -> ok|soft_loaded.
+check_mailbox({Idx, Node}) ->
+    RegName = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx, Node),
+    element(1, riak_core_vnode_proxy:call(RegName, mailbox_size)).
 
 %%%============================================================================
 %%% Test
