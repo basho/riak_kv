@@ -40,6 +40,8 @@
 
 -export([repair_fun/1]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -define(EMPTY, <<>>).
 
 -define(NVAL_QUERIES, 
@@ -422,7 +424,7 @@ init(From={_, _, _}, [Query, Timeout]) ->
                     acc = InitAcc, 
                     start_time = os:timestamp(),
                     query_type = QueryType},
-    lager:info("AAE fold prompted of type=~w", [QueryType]),
+    ?LOG_INFO("AAE fold prompted of type=~w", [QueryType]),
     {Req, all, NVal, 1, 
         riak_kv, riak_kv_vnode_master, 
         Timeout, 
@@ -430,7 +432,7 @@ init(From={_, _, _}, [Query, Timeout]) ->
         
 
 process_results({error, Reason}, _State) ->
-    lager:warning("Failure to process fold results due to ~w", [Reason]),
+    ?LOG_WARNING("Failure to process fold results due to ~w", [Reason]),
     {error, Reason};
 process_results(Results, State) ->
     % Results are received as a one-off for each vnode in this case, and so 
@@ -508,14 +510,14 @@ process_results(Results, State) ->
 finish({error, Error}, State=#state{from={raw, ReqId, ClientPid}}) ->
     % Notify the requesting client that an error
     % occurred or the timeout has elapsed.
-    lager:warning("Failure to finish process fold due to ~w", [Error]),
+    ?LOG_WARNING("Failure to finish process fold due to ~w", [Error]),
     ClientPid ! {ReqId, {error, Error}},
     {stop, normal, State};
 finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
     % The client doesn't expect results in increments only the final result, 
     % so no need for a seperate send of a 'done' message
     QueryDuration = timer:now_diff(os:timestamp(), State#state.start_time),
-    lager:info("Finished aaefold of type=~w with fold_time=~w seconds", 
+    ?LOG_INFO("Finished aaefold of type=~w with fold_time=~w seconds", 
                 [State#state.query_type, QueryDuration/1000000]),
     Results =
         case State#state.query_type of

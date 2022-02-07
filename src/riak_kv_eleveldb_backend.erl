@@ -54,6 +54,8 @@
                    to_index_key/4, from_index_key/1
                   ]}).
 
+-include_lib("kernel/include/logger.hrl").
+
 -include("riak_kv_index.hrl").
 
 -ifdef(EQC).
@@ -419,7 +421,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
     Itr =
         case lists:member(snap_prefold, Opts) of
             true ->
-                lager:info("Snapping database for deferred query"),
+                ?LOG_INFO("Snapping database for deferred query"),
                 {ok, Itr0} = eleveldb:iterator(Ref, FoldOpts1, keys_only),
                 Itr0;
             false ->
@@ -434,7 +436,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{fold_opts=FoldOpts,
                         not_snapped ->
                             eleveldb:fold_keys(Ref, FoldFun, Acc, FoldOpts1);
                         _ ->
-                            lager:info("Deferred fold initiated on previous snap"),
+                            ?LOG_INFO("Deferred fold initiated on previous snap"),
                             eleveldb:do_fold(Itr, FoldFun, Acc, FoldOpts1)
                     end
                 catch
@@ -657,7 +659,7 @@ init_state(DataRoot, Config) ->
     BS = proplists:get_value(block_size, OpenOpts, false),
     case BS /= false andalso SSTBS == false of
         true ->
-            lager:warning("eleveldb block_size has been renamed sst_block_size "
+            ?LOG_WARNING("eleveldb block_size has been renamed sst_block_size "
                           "and the current setting of ~p is being ignored.  "
                           "Changing sst_block_size is strongly cautioned "
                           "against unless you know what you are doing.  Remove "
@@ -668,7 +670,7 @@ init_state(DataRoot, Config) ->
     end,
 
     %% Generate a debug message with the options we'll use for each operation
-    lager:debug("Datadir ~s options for LevelDB: ~p\n",
+    ?LOG_DEBUG("Datadir ~s options for LevelDB: ~p\n",
                 [DataRoot, [{open, OpenOpts}, {read, ReadOpts}, {write, WriteOpts}, {fold, FoldOpts}]]),
     #state { data_root = DataRoot,
              open_opts = OpenOpts,
@@ -696,7 +698,7 @@ open_db(State0, RetriesLeft, _) ->
             case lists:prefix("IO error: lock ", OpenErr) of
                 true ->
                     SleepFor = app_helper:get_env(riak_kv, eleveldb_open_retry_delay, 2000),
-                    lager:debug("Leveldb backend retrying ~p in ~p ms after error ~s\n",
+                    ?LOG_DEBUG("Leveldb backend retrying ~p in ~p ms after error ~s\n",
                                 [State0#state.data_root, SleepFor, OpenErr]),
                     timer:sleep(SleepFor),
                     open_db(State0, RetriesLeft - 1, Reason);
@@ -950,7 +952,7 @@ to_object_key(Bucket, Key) ->
 from_object_key(LKey) ->
     case (catch sext:decode(LKey)) of
         {'EXIT', _} ->
-            lager:warning("Corrupted object key, discarding"),
+            ?LOG_WARNING("Corrupted object key, discarding"),
             ignore;
         {o, Bucket, Key} ->
             {Bucket, Key};
@@ -967,7 +969,7 @@ to_legacy_index_key(Bucket, Key, Field, Term) -> %% encode with legacy bignum en
 from_index_key(LKey) ->
     case (catch sext:decode(LKey)) of
         {'EXIT', _} ->
-            lager:warning("Corrupted index key, discarding"),
+            ?LOG_WARNING("Corrupted index key, discarding"),
             ignore;
         {i, Bucket, Field, Term, Key} ->
             {Bucket, Key, Field, Term};

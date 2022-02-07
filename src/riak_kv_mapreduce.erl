@@ -47,6 +47,8 @@
          reduce_plist_sum/2,
          reduce_count_inputs/2]).
 
+-include_lib("kernel/include/logger.hrl").
+
 %-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 %-endif.
@@ -150,7 +152,7 @@ reduce_identity(List, _) ->
                 [[Bucket, Key]|Acc];
            (Other, _Acc) ->
                 %% Fail loudly on anything unexpected.
-                lager:error("Unhandled entry: ~p", [Other]),
+                ?LOG_ERROR("Unhandled entry: ~p", [Other]),
                 throw({unhandled_entry, Other})
         end,
     lists:foldl(F, [], List).

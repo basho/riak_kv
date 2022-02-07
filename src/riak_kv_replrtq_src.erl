@@ -56,6 +56,7 @@
           replrtq_ttaaefs/3 ]).
 -endif.
 
+-include_lib("kernel/include/logger.hrl").
 
 -define(BACKOFF_PAUSE, 1000).
     % Pause in ms in the case the last addition to the queue took the queue's
@@ -357,7 +358,7 @@ handle_call({register_rtq, QueueName, QueueFilter}, _From, State) ->
     QCount = State#state.queue_countmap,
     case lists:keyfind(QueueName, 1, QFilter) of
         {QueueName, _, _} ->
-            lager:warning("Attempt to register queue already present ~w",
+            ?LOG_WARNING("Attempt to register queue already present ~w",
                             [QueueName]),
             {reply, false, State};
         false ->
@@ -411,7 +412,7 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
 handle_info(log_queue, State) ->
     LogFun =
         fun({QueueName, {P1Q, P2Q, P3Q}}) ->
-            lager:info("QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
+            ?LOG_INFO("QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
                         [QueueName, P1Q, P2Q, P3Q])
         end,
     lists:foreach(LogFun, State#state.queue_countmap),
@@ -592,13 +593,13 @@ tokenise_queuedefn(QueueDefnString) ->
                                 {buckettype, list_to_binary(Type)},
                                 active}|Acc];
                         Unexpected ->
-                            lager:warning(
+                            ?LOG_WARNING(
                                 "Unsupported queue definition ~w ignored",
                                 [Unexpected]),
                             Acc
                     end;
                 Unexpected ->
-                    lager:warning(
+                    ?LOG_WARNING(
                                 "Unsupported queue definition ~w ignored",
                                 [Unexpected]),
                     Acc

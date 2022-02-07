@@ -43,6 +43,8 @@
 
 -export([data_size/1]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([prop_bitcask_backend/0]).
@@ -158,7 +160,7 @@ start(Partition, Config0) ->
     %% Get the data root directory
     case app_helper:get_prop_or_env(data_root, Config, bitcask) of
         undefined ->
-            lager:error("Failed to create bitcask dir: data_root is not set"),
+            ?LOG_ERROR("Failed to create bitcask dir: data_root is not set"),
             {error, data_root_unset};
         DataRoot ->
             %% Check if a directory exists for the partition
@@ -181,12 +183,12 @@ start(Partition, Config0) ->
                                         partition=Partition,
                                         key_vsn=KeyVsn}};
                         {error, Reason1} ->
-                            lager:error("Failed to start bitcask backend: ~p\n",
+                            ?LOG_ERROR("Failed to start bitcask backend: ~p\n",
                                         [Reason1]),
                             {error, Reason1}
                     end;
                 {error, Reason} ->
-                    lager:error("Failed to start bitcask backend: ~p\n",
+                    ?LOG_ERROR("Failed to start bitcask backend: ~p\n",
                                 [Reason]),
                     {error, Reason}
             end
@@ -215,7 +217,7 @@ get(Bucket, Key, #state{ref=Ref, key_vsn=KVers}=State) ->
         not_found  ->
             {error, not_found, State};
         {error, bad_crc}  ->
-            lager:warning("Unreadable object ~p/~p discarded",
+            ?LOG_WARNING("Unreadable object ~p/~p discarded",
                           [Bucket,Key]),
             {error, not_found, State};
         {error, nofile}  ->
@@ -239,7 +241,7 @@ put(Bucket, PrimaryKey, _IndexSpecs, Val,
         ok ->
             {ok, State};
         {error, Reason} ->
-            lager:warning("Backend put error ~p", [Reason]),
+            ?LOG_WARNING("Backend put error ~p", [Reason]),
             % Should crash if the error is a permanent file system error
             false =
                 is_tuple(Reason) and
@@ -455,7 +457,7 @@ callback(Ref,
             BitcaskRoot = filename:join(DataRoot, DataDir),
             merge_check(Ref, BitcaskRoot, BitcaskOpts);
         false ->
-            lager:debug("Skipping merge check: KV service not yet up"),
+            ?LOG_DEBUG("Skipping merge check: KV service not yet up"),
             ok
     end,
     schedule_merge(Ref),
@@ -470,18 +472,18 @@ callback(Ref,
         finished ->
             case finalize_upgrade(BitcaskRoot) of
                 {ok, Vsn} ->
-                    lager:info("Finished upgrading to Bitcask ~s in ~s",
+                    ?LOG_INFO("Finished upgrading to Bitcask ~s in ~s",
                                [version_to_str(Vsn), BitcaskRoot]),
                     {ok, State};
                 {error, EndErr} ->
-                    lager:error("Finalizing backend upgrade : ~p", [EndErr]),
+                    ?LOG_ERROR("Finalizing backend upgrade : ~p", [EndErr]),
                     {ok, State}
             end;
         pending ->
             _ = schedule_upgrade_check(Ref),
             {ok, State};
         {error, Reason} ->
-            lager:error("Aborting upgrade in ~s : ~p", [BitcaskRoot, Reason]),
+            ?LOG_ERROR("Aborting upgrade in ~s : ~p", [BitcaskRoot, Reason]),
             {ok, State}
     end;
 %% Ignore callbacks for other backends so multi backend works
@@ -505,7 +507,7 @@ merge_check(Ref, BitcaskRoot, BitcaskOpts) ->
                     ok
             end;
         _ ->
-            lager:debug("Skipping merge check: Pending merges"),
+            ?LOG_DEBUG("Skipping merge check: Pending merges"),
             ok
     end.
 
@@ -519,7 +521,7 @@ check_fcntl() ->
         {undefined,{ok,o_sync}} ->
             case riak_core_util:is_arch(linux) of
                 true ->
-                    lager:warning("{sync_strategy,o_sync} not implemented on Linux"),
+                    ?LOG_WARNING("{sync_strategy,o_sync} not implemented on Linux"),
                     application:set_env(riak_kv,o_sync_warning_logged,true);
                 _ ->
                     ok
@@ -592,7 +594,7 @@ maybe_schedule_sync(Ref) when is_reference(Ref) ->
         {ok, o_sync} ->
             ok;
         BadStrategy ->
-            lager:notice("Ignoring invalid bitcask sync strategy: ~p",
+            ?LOG_NOTICE("Ignoring invalid bitcask sync strategy: ~p",
                          [BadStrategy]),
             ok
     end.
@@ -607,7 +609,7 @@ schedule_merge(Ref) when is_reference(Ref) ->
                                     ?MERGE_CHECK_JITTER),
     Jitter = Interval * JitterPerc,
     FinalInterval = Interval + trunc(2 * rand:uniform() * Jitter - Jitter),
-    lager:debug("Scheduling Bitcask merge check in ~pms", [FinalInterval]),
+    ?LOG_DEBUG("Scheduling Bitcask merge check in ~pms", [FinalInterval]),
     riak_kv_backend:callback_after(FinalInterval, Ref, merge_check).
 
 -spec schedule_upgrade_check(reference()) -> reference().
@@ -636,7 +638,7 @@ make_data_dir(PartitionFile) ->
         ok ->
             {ok, DataDir};
         {error, Reason} ->
-            lager:error("Failed to create bitcask dir ~s: ~p",
+            ?LOG_ERROR("Failed to create bitcask dir ~s: ~p",
                         [DataDir, Reason]),
             {error, Reason}
     end.
@@ -724,7 +726,7 @@ maybe_start_upgrade(Dir) ->
             % No, maybe if previous data needs upgrade
             maybe_start_upgrade_if_bitcask_files(Dir);
         _ ->
-            lager:info("Continuing upgrade to version ~s in ~s",
+            ?LOG_INFO("Continuing upgrade to version ~s in ~s",
                        [version_to_str(UpgradingVsn), Dir]),
             {upgrading, UpgradingVsn}
     end.
@@ -744,11 +746,11 @@ maybe_start_upgrade_if_bitcask_files(Dir) ->
                         ok ->
                             UpgradeFile = filename:join(Dir, ?UPGRADE_FILE),
                             write_version(UpgradeFile, NewVsn),
-                            lager:info("Starting upgrade to version ~s in ~s",
+                            ?LOG_INFO("Starting upgrade to version ~s in ~s",
                                        [NewVsnStr, Dir]),
                             {upgrading, NewVsn};
                         {error, UpgradeErr} ->
-                            lager:error("Failed to start upgrade to version ~s"
+                            ?LOG_ERROR("Failed to start upgrade to version ~s"
                                         " in ~s : ~p",
                                         [NewVsnStr, Dir, UpgradeErr]),
                             no_upgrade
@@ -766,7 +768,7 @@ maybe_start_upgrade_if_bitcask_files(Dir) ->
             write_version(VersionFile, NewVsn),
             no_upgrade;
         {error, Err} ->
-            lager:error("Failed to check for bitcask files in ~s."
+            ?LOG_ERROR("Failed to check for bitcask files in ~s."
                         " Can not determine if an upgrade is needed : ~p",
                         [Dir, Err]),
             no_upgrade

@@ -50,6 +50,8 @@
 -export([use_ack_backpressure/0,
          req/3]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -type from() :: {atom(), req_id(), pid()}.
 -type req_id() :: non_neg_integer().
 
@@ -302,7 +304,7 @@ log_timings(Timings, Bucket, ResultCount) ->
 log_timings(_Timings, _Bucket, _ResultCount, false) ->
     ok;
 log_timings(Timings, Bucket, ResultCount, true) ->
-    lager:info("Index query on bucket=~p " ++
+    ?LOG_INFO("Index query on bucket=~p " ++
                 "max_vnodeq=~w min_vnodeq=~w sum_vnodeq=~w count_vnodeq=~w " ++
                 "slow_count_vnodeq=~w fast_count_vnodeq=~w result_count=~w",
                 [Bucket,

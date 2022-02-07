@@ -29,7 +29,6 @@
 -include_lib("riak_kv_vnode.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_types.hrl").
--include("stacktrace.hrl").
 
 -compile({nowarn_deprecated_function, 
             [{gen_fsm, start_link, 3},
@@ -50,6 +49,8 @@
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
+
+-include_lib("kernel/include/logger.hrl").
 
 -type detail_info() :: timing.
 -type detail() :: true |
@@ -182,7 +183,7 @@ start_link(From, Object, PutOptions) -> start(From, Object, PutOptions).
 set_put_coordinator_failure_timeout(MS) when is_integer(MS), MS >= 0 ->
     application:set_env(riak_kv, put_coordinator_failure_timeout, MS);
 set_put_coordinator_failure_timeout(Bad) ->
-    lager:error("~s:set_put_coordinator_failure_timeout(~p) invalid",
+    ?LOG_ERROR("~s:set_put_coordinator_failure_timeout(~p) invalid",
                 [?MODULE, Bad]),
     set_put_coordinator_failure_timeout(3000).
 
@@ -228,14 +229,14 @@ monitor_remote_coordinator(true = _UseAckP, MiddleMan, CoordNode, StateData) ->
                 CoordNode ->
                     ok;
                 _ ->
-                    lager:warning("unexpected forward-ack from ~p, expected from ~p",
+                    ?LOG_WARNING("unexpected forward-ack from ~p, expected from ~p",
                                   [CoordNodeFinal, CoordNode])
             end,
             {stop, normal, StateData}
     after StateData#state.coordinator_timeout ->
             exit(MiddleMan, kill),
             Bad = StateData#state.bad_coordinators,
-            lager:warning("timed out waiting for forward-ack, adding ~p to bad coordinators",
+            ?LOG_WARNING("timed out waiting for forward-ack, adding ~p to bad coordinators",
                           [CoordNode]),
             prepare(timeout, StateData#state{bad_coordinators=[CoordNode|Bad]})
     end.
@@ -814,22 +815,22 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
         fail ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-1], []),
             ok = riak_kv_stat:update(precommit_fail),
-            lager:debug("Pre-commit hook ~p:~p failed, no reason given",
+            ?LOG_DEBUG("Pre-commit hook ~p:~p failed, no reason given",
                         [Mod, Fun]),
             fail;
         {fail, Reason} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-2], 
                     [dtrace_errstr(Reason)]),
             ok = riak_kv_stat:update(precommit_fail),
-            lager:debug("Pre-commit hook ~p:~p failed with reason ~p",
+            ?LOG_DEBUG("Pre-commit hook ~p:~p failed with reason ~p",
                         [Mod, Fun, Reason]),
             Result;
         {'EXIT',  Mod, Fun, Class, Exception} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-3],
                     [dtrace_errstr({Mod, Fun, Class, Exception})]),
             ok = riak_kv_stat:update(precommit_fail),
-            lager:debug("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
-                        [Mod,Fun,Class,Exception, ?_current_stacktrace_()]),
+            ?LOG_DEBUG("Problem invoking pre-commit hook ~p:~p -> ~p:~p~n~p",
+                        [Mod,Fun,Class,Exception]),
             {fail, {hook_crashed, {Mod, Fun, Class, Exception}}};
         Obj ->
             try
@@ -838,7 +839,7 @@ decode_precommit({erlang, {Mod, Fun}, Result}, Trace) ->
                     ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-4],
                                     [dtrace_errstr({Mod, Fun, X, Y})]),
                     ok = riak_kv_stat:update(precommit_fail),
-                    lager:debug("Problem invoking pre-commit hook ~p:~p,"
+                    ?LOG_DEBUG("Problem invoking pre-commit hook ~p:~p,"
                                 " invalid return ~p",
                                 [Mod, Fun, Result]),
                     {fail, {invalid_return, {Mod, Fun, Result}}}
@@ -849,7 +850,7 @@ decode_precommit({error, Reason}, Trace) ->
     ?DTRACE(Trace, ?C_PUT_FSM_DECODE_PRECOMMIT, [-8], 
             [dtrace_errstr(Reason)]),
     ok = riak_kv_stat:update(precommit_fail),
-    lager:debug("Problem invoking pre-commit hook: ~p", [Reason]),
+    ?LOG_DEBUG("Problem invoking pre-commit hook: ~p", [Reason]),
     {fail, Reason}.
 
 decode_postcommit({erlang, {M,F}, Res}, Trace) ->
@@ -857,21 +858,20 @@ decode_postcommit({erlang, {M,F}, Res}, Trace) ->
         fail ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-1], []),
             ok = riak_kv_stat:update(postcommit_fail),
-            lager:debug("Post-commit hook ~p:~p failed, no reason given",
+            ?LOG_DEBUG("Post-commit hook ~p:~p failed, no reason given",
                        [M, F]);
         {fail, Reason} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-2],
                     [dtrace_errstr(Reason)]),
             ok = riak_kv_stat:update(postcommit_fail),
-            lager:debug("Post-commit hook ~p:~p failed with reason ~p",
+            ?LOG_DEBUG("Post-commit hook ~p:~p failed with reason ~p",
                         [M, F, Reason]);
         {'EXIT', _, _, Class, Ex} ->
             ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-3],
                     [dtrace_errstr({M, F, Class, Ex})]),
             ok = riak_kv_stat:update(postcommit_fail),
-            Stack = ?_current_stacktrace_(),
-            lager:debug("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
-                        [M, F, Class, Ex, Stack]),
+            ?LOG_DEBUG("Problem invoking post-commit hook ~p:~p -> ~p:~p~n~p",
+                        [M, F, Class, Ex]),
             ok;
         _ ->
             ok
@@ -879,7 +879,7 @@ decode_postcommit({erlang, {M,F}, Res}, Trace) ->
 decode_postcommit({error, {invalid_hook_def, Def}}, Trace) ->
     ?DTRACE(Trace, ?C_PUT_FSM_DECODE_POSTCOMMIT, [-4], [dtrace_errstr(Def)]),
     ok = riak_kv_stat:update(postcommit_fail),
-    lager:debug("Invalid post-commit hook definition ~p", [Def]).
+    ?LOG_DEBUG("Invalid post-commit hook definition ~p", [Def]).
 
 
 get_hooks(HookType, BucketProps) ->
@@ -1122,7 +1122,7 @@ select_least_loaded_coordinator([]=_LocalMboxData, RemoteMBoxData) ->
     {forward, Node};
 select_least_loaded_coordinator(LocalMBoxData, _RemoteMBoxData) ->
     [{Entry, _, _} | _Rest] = lists:sort(fun mbox_data_sort/2, LocalMBoxData),
-    lager:warning("soft-loaded local coordinator"),
+    ?LOG_WARNING("soft-loaded local coordinator"),
     riak_kv_stat:update(coord_local_soft_loaded),
     {local, Entry}.
 
@@ -1163,7 +1163,7 @@ check_mailboxes(Preflist) ->
             %% all replies in, none are below soft-limit
             {false, MBoxData};
         {timeout, MBoxData0} ->
-            lager:warning("Mailbox soft-load poll timout ~p",
+            ?LOG_WARNING("Mailbox soft-load poll timout ~p",
                           [?DEFAULT_MBOX_CHECK_TIMEOUT_MILLIS]),
             MBoxData = add_errors_to_mbox_data(Preflist, MBoxData0),
             {false, MBoxData}
@@ -1197,7 +1197,7 @@ join_mbox_replies(HowMany, TimeLimit, Acc) ->
             join_mbox_replies(HowMany-1, TimeLimit,
                  [{Entry, MBox, Limit} | Acc])
     after TimeOut ->
-            lager:warning("soft-limit mailbox check timeout"),
+            ?LOG_WARNING("soft-limit mailbox check timeout"),
             riak_kv_stat:update(vnode_mbox_check_timeout),
             {timeout, Acc}
     end.
@@ -1210,7 +1210,7 @@ add_errors_to_mbox_data(Preflist, Acc) ->
     lists:map(fun(Entry) ->
                       case lists:keyfind(Entry, 1, Acc) of
                           false ->
-                              lager:warning("Mailbox for ~p did not return in time", [Entry]),
+                              ?LOG_WARNING("Mailbox for ~p did not return in time", [Entry]),
                               {Entry, error, error};
                           Res ->
                               Res
@@ -1291,11 +1291,11 @@ forward(CoordNode, State) ->
         monitor_remote_coordinator(UseAckP, MiddleMan,
                                    CoordNode, State)
     catch
-        ?_exception_(_, Reason, StackToken) ->
+        _Class:Reason:Stacktrace ->
             ?DTRACE(Trace, ?C_PUT_FSM_PREPARE, [-2],
                     ["prepare", dtrace_errstr(Reason)]),
-            lager:error("Unable to forward put for ~p to ~p - ~p @ ~p\n",
-                        [BKey, CoordNode, Reason, ?_get_stacktrace_(StackToken)]),
+            ?LOG_ERROR("Unable to forward put for ~p to ~p - ~p @ ~p\n",
+                        [BKey, CoordNode, Reason, Stacktrace]),
             process_reply({error, {coord_handoff_failed, Reason}}, State)
     end.
 

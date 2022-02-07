@@ -80,6 +80,8 @@
 
 -export_type([delete_reference/0, job_id/0]).
 
+-include_lib("kernel/include/logger.hrl").
+
 %%%============================================================================
 %%% API
 %%%============================================================================
@@ -292,7 +294,7 @@ handle_async_message(timeout, State) ->
                             pqueue_length = {RedoQL, DeleteQL - BatchSize}}}
     end;
 handle_async_message(log_queue, State) ->
-    lager:info("Eraser job ~w has queue lengths ~w " ++
+    ?LOG_INFO("Eraser job ~w has queue lengths ~w " ++
                     "delete_attempts=~w delete_aborts=~w ",
                 [State#state.job_id,
                     State#state.pqueue_length,

@@ -51,6 +51,8 @@
          produce_queue_fetch/2
         ]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -164,7 +166,7 @@ malformed_keyclocklist(ReqBody) ->
                 {N, N} ->
                     KeyClockList;
                 {N, M} ->
-                    lager:info(
+                    ?LOG_INFO(
                         "Malformed requests ~w within push of ~w",
                         [M - N, M]),
                     false
@@ -275,7 +277,7 @@ decode_clock(EncodedClock) ->
 format_response(_, {ok, queue_empty}, RD, Ctx) ->
     {<<0:8/integer>>, RD, Ctx};
 format_response(_, {error, Reason}, RD, Ctx) ->
-    lager:warning("Fetch error ~w", [Reason]),
+    ?LOG_WARNING("Fetch error ~w", [Reason]),
     {{error, Reason}, RD, Ctx};
 format_response(internal_aaehash, {ok, {deleted, TombClock, RObj}}, RD, Ctx) ->
     BK = make_binarykey(riak_object:bucket(RObj), riak_object:key(RObj)),

@@ -537,7 +537,7 @@ pipe_phase_index(I)          -> I.
 %% human-readable string
 -spec trunc_print(term()) -> binary().
 trunc_print(Term) ->
-    {Msg, _Len} = lager_trunc_io:print(Term, 500),
+    Msg = io_lib:format("~p", [Term], [{chars_limit, 500}]),
     iolist_to_binary(Msg).
 
 %% @doc Pull a field out of a proplist, and possibly transform it.

@@ -544,16 +544,16 @@ validate_update_consistent_props(Existing, New) ->
     case {NewConsistent, OldNVal, NewNVal} of
         {undefined, _, undefined} ->
             {Unvalidated, [], []};
-        {undefined, _N, _N} ->
+        {undefined, _, _} ->
             {Unvalidated, [{n_val, NewNVal}], []};
-        {true, _N, _N} ->
+        {true, _, _} ->
             {Unvalidated, [{n_val, NewNVal}, {consistent, true}], []};
-        {C, _N, _N} when C =/= undefined orelse
+        {C, _, _} when C =/= undefined orelse
                          C =/= true ->
             {Unvalidated, [{n_val, NewNVal}], [{consistent, CErr}]};
-        {undefined, _OldN, _NewN} ->
+        {undefined, _, _} ->
             {Unvalidated, [], [{n_val, NErr}]};
-        {true, _OldN, _NewN} ->
+        {true, _, _} ->
             {Unvalidated, [{consistent, true}], [{n_val, NErr}]};
         {_, _, _} ->
             {Unvalidated, [], [{n_val, NErr}, {consistent, CErr}]}

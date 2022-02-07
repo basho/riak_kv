@@ -292,7 +292,7 @@ datatype_compression_validator_test() ->
     Conf = [{["datatypes", "compression_level"], 10}],
     Config = cuttlefish_unit:generate_templated_config(
                ["priv/riak_kv.schema", "priv/multi_backend.schema"], Conf, context(), predefined_schema()),
-    cuttlefish_unit:assert_error_in_phase(Config, validation),
+    ?assertMatch({error, validation, {errorlist, _}}, Config),
     ok.
 
 correct_error_handling_by_multibackend_test() ->

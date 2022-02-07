@@ -43,6 +43,8 @@
 
 -include("riak_kv_index.hrl").
 
+-include_lib("kernel/include/logger.hrl").
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([prop_leveled_backend/0]).
@@ -147,7 +149,7 @@ start(Partition, Config) ->
                     {false, true} ->
                         {ok, TS} = file:read_file(FN),
                         LockTS = calendar:now_to_datetime(binary_to_term(TS)),
-                        lager:error("Cannot start in retain mode " ++
+                        ?LOG_ERROR("Cannot start in retain mode " ++
                                         "due to recalc being set on ~w " ++
                                         "see FN ~s",
                                         [LockTS, FN]),
@@ -188,7 +190,7 @@ start(Partition, Config) ->
                         valid_hours = ValidHours,
                         backend_pause_ms = BackendPause}};
         {error, Reason} ->
-            lager:error("Failed to start leveled backend: ~p\n",
+            ?LOG_ERROR("Failed to start leveled backend: ~p\n",
                             [Reason]),
             {error, Reason}
     end.
@@ -270,7 +272,7 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
         ok ->
             {ok, State};
         pause ->
-            lager:warning("Backend ~w paused for ~w ms in response to delete",
+            ?LOG_WARNING("Backend ~w paused for ~w ms in response to delete",
                             [State#state.partition,
                                 State#state.backend_pause_ms]),
             timer:sleep(State#state.backend_pause_ms),                 
@@ -586,7 +588,7 @@ hot_backup(#state{bookie=Bookie, partition=Partition, db_path=DBP}, BackupRoot) 
     {ok, BackupDir} = get_data_dir(BackupRoot, integer_to_list(Partition)),
     case BackupDir == DBP of
         true ->
-            lager:warning("Attempt to backup to own path ~s", [BackupRoot]),
+            ?LOG_WARNING("Attempt to backup to own path ~s", [BackupRoot]),
             {error, invalid_path};
         false ->
             % Don't check anything else about the path, as an invalid path
@@ -626,7 +628,7 @@ callback(Ref, compact_journal, State) ->
              {ok, State}
     end;
 callback(Ref, UnexpectedCallback, State) ->
-    lager:info("Ignoring unexpected callback ~w with ref ~w " ++
+    ?LOG_INFO("Ignoring unexpected callback ~w with ref ~w " ++
                 "may be expected if multi-backend",
                 [UnexpectedCallback, Ref]),
     {ok, State}.
@@ -654,7 +656,7 @@ do_put(Bucket, Key, IndexSpecs, Val, Sync, #state{bookie=Bookie}=State) ->
         ok ->
             {ok, State};
         pause ->
-            lager:warning("Backend ~w paused for ~w ms in response to put",
+            ?LOG_WARNING("Backend ~w paused for ~w ms in response to put",
                             [State#state.partition,
                                 State#state.backend_pause_ms]),
             timer:sleep(State#state.backend_pause_ms),
@@ -669,7 +671,7 @@ get_data_dir(DataRoot, Partition) ->
         ok ->
             {ok, PartitionDir};
         {error, Reason} ->
-            lager:error("Failed to create leveled dir ~s: ~p",
+            ?LOG_ERROR("Failed to create leveled dir ~s: ~p",
                             [PartitionDir, Reason]),
             {error, Reason}
     end.
@@ -681,7 +683,7 @@ schedule_journalcompaction(Ref, PartitionID, PerDay, ValidHours) when is_referen
     Interval = leveled_iclerk:schedule_compaction(ValidHours,
                                                     PerDay,
                                                     os:timestamp()),
-    lager:info("Schedule compaction for interval ~w on partition ~w",
+    ?LOG_INFO("Schedule compaction for interval ~w on partition ~w",
                     [Interval, PartitionID]),
     riak_kv_backend:callback_after(Interval * 1000, % callback interval in ms
                                     Ref,

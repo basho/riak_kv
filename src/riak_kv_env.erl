@@ -41,9 +41,10 @@
                        {"net.ipv4.tcp_window_scaling",          1, eq}
                       ]).
 
+-include_lib("kernel/include/logger.hrl").
 
 doc_env() ->
-    lager:info("Environment and OS variables:"),
+    ?LOG_INFO("Environment and OS variables:"),
     Ulimits = check_ulimits(),
     ErlLimits = check_erlang_limits(),
     OSLimits = case os:type() of
@@ -57,7 +58,7 @@ doc_env() ->
                        [{warn, "Unknown OS type, no platform specific info", []}]
                end,
     lists:map(fun({F, Fmt, Args}) ->
-                      lager:debug("Term: ~p", [{F, Fmt, Args}]),
+                      ?LOG_DEBUG("Term: ~p", [{F, Fmt, Args}]),
                       %% fake out lager a bit here
                       F1 = case F of
                                info -> info_msg;

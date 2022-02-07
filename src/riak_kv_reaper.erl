@@ -50,6 +50,8 @@
             clear_queue/1,
             stop_job/1]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -define(QUEUE_LIMIT, 100000).
 -define(LOG_TICK, 60000).
 -define(REDO_TIMEOUT, 2000).
@@ -275,7 +277,7 @@ handle_async_message(timeout, State) ->
                             pqueue_length = {RedoQL, ReapQL - BatchSize}}}
     end;
 handle_async_message(log_queue, State) ->
-    lager:info("Reaper Job ~w has queue lengths ~w " ++
+    ?LOG_INFO("Reaper Job ~w has queue lengths ~w " ++
                     " reap_attempts=~w reap_aborts=~w ",
                 [State#state.job_id,
                     State#state.pqueue_length,

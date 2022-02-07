@@ -46,6 +46,8 @@
          process/2,
          process_stream/3]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -record(state, {req,
                 req_ctx}).
 
@@ -164,7 +166,7 @@ process_stream({'DOWN', Ref, process, Pid, Reason}, _PipeRef,
             %% something went wrong sending inputs - tell the client
             %% about it, and shutdown the pipe
             destroy_pipe(PipeCtx),
-            lager:error("Error sending inputs: ~p", [Reason]),
+            ?LOG_ERROR("Error sending inputs: ~p", [Reason]),
             {error, {format, "Error sending inputs: ~p", [Reason]},
              clear_state_req(State)}
     end;
@@ -174,7 +176,7 @@ process_stream({'DOWN', Mon, process, Pid, Reason}, _PipeRef,
     %% the sink died, which it shouldn't be able to do before
     %% delivering our final results
     destroy_pipe(PipeCtx),
-    lager:error("Error receiving outputs: ~p", [Reason]),
+    ?LOG_ERROR("Error receiving outputs: ~p", [Reason]),
     {error,
      {format, "Error receiving outputs: ~p", [Reason]},
      clear_state_req(State)};

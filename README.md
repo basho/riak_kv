@@ -1,7 +1,7 @@
 * riak_kv
 ** Overview
 
-[[https://github.com/basho/riak_kv/actions][Build Status]] - [[https://github.com/basho/riak_kv/actions/workflows/erlang.yml/badge.svg?branch=develop-3.0]]
+[![Erlang CI Actions Status](https://github.com/basho/riak_kv/workflows/Erlang%20CI/badge.svg)](https://github.com/basho/riak_kv/actions)
 
 Riak KV is an open source Erlang application that is distributed using the  [[https://github.com/basho/riak_core][riak_core]] Erlang 
 library. Riak KV provides a key/value datastore and features MapReduce, lightweight data relations, and several different client APIs. 

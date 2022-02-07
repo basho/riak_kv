@@ -53,6 +53,8 @@
          aae_repair_status/1,
          aae_tree_status/1]).
 
+-include_lib("kernel/include/logger.hrl").
+
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
          "Sent join request to ~s~n", [NodeStr]).
@@ -92,7 +94,7 @@ join(NodeStr, JoinFn, SuccessFmt, SuccessArgs) ->
         end
     catch
         Exception:Reason ->
-            lager:error("Join failed ~p:~p", [Exception, Reason]),
+            ?LOG_ERROR("Join failed ~p:~p", [Exception, Reason]),
             io:format("Join failed, see log for details~n"),
             error
     end.
@@ -119,7 +121,7 @@ leave([]) ->
         end
     catch
         Exception:Reason ->
-            lager:error("Leave failed ~p:~p", [Exception, Reason]),
+            ?LOG_ERROR("Leave failed ~p:~p", [Exception, Reason]),
             io:format("Leave failed, see log for details~n"),
             error
     end.
@@ -140,7 +142,7 @@ remove([Node]) ->
         end
     catch
         Exception:Reason ->
-            lager:error("Remove failed ~p:~p", [Exception, Reason]),
+            ?LOG_ERROR("Remove failed ~p:~p", [Exception, Reason]),
             io:format("Remove failed, see log for details~n"),
             error
     end.
@@ -164,7 +166,7 @@ down([Node]) ->
         end
     catch
         Exception:Reason ->
-            lager:error("Down failed ~p:~p", [Exception, Reason]),
+            ?LOG_ERROR("Down failed ~p:~p", [Exception, Reason]),
             io:format("Down failed, see log for details~n"),
             error
     end.
@@ -179,7 +181,7 @@ status([]) ->
 	io:format("~s\n", [StatString])
     catch
         Exception:Reason ->
-            lager:error("Status failed ~p:~p", [Exception,
+            ?LOG_ERROR("Status failed ~p:~p", [Exception,
                     Reason]),
             io:format("Status failed, see log for details~n"),
             error
@@ -198,7 +200,7 @@ vnode_status([]) ->
         end
     catch
         Exception:Reason ->
-            lager:error("Backend status failed ~p:~p", [Exception,
+            ?LOG_ERROR("Backend status failed ~p:~p", [Exception,
                     Reason]),
             io:format("Backend status failed, see log for details~n"),
             error
@@ -248,7 +250,7 @@ ringready([]) ->
         end
     catch
         Exception:Reason ->
-            lager:error("Ringready failed ~p:~p", [Exception,
+            ?LOG_ERROR("Ringready failed ~p:~p", [Exception,
                     Reason]),
             io:format("Ringready failed, see log for details~n"),
             error
@@ -270,7 +272,7 @@ cluster_info([OutFile|Rest]) ->
         error:{badmatch, {error, enotdir}} ->
             io:format("Cluster_info failed, not a directory ~p~n", [filename:dirname(OutFile)]);
         Exception:Reason ->
-            lager:error("Cluster_info failed ~p:~p",
+            ?LOG_ERROR("Cluster_info failed ~p:~p",
                 [Exception, Reason]),
             io:format("Cluster_info failed, see log for details~n"),
             error
@@ -441,7 +443,7 @@ run_reformat(M, F, A) ->
     try erlang:apply(M, F, A)
     catch
         Err:Reason ->
-            lager:error("index reformat crashed with error type ~p and reason: ~p",
+            ?LOG_ERROR("index reformat crashed with error type ~p and reason: ~p",
                         [Err, Reason])
     end.
 
@@ -629,7 +631,7 @@ repair_2i(["kill"]) ->
                 riak_kv_2i_aae:stop(60000)
             catch
                 _:_->
-                    lager:warning("Asking nicely did not work."
+                    ?LOG_WARNING("Asking nicely did not work."
                                   " Will try a hammer"),
                     ok
             end,
@@ -637,7 +639,7 @@ repair_2i(["kill"]) ->
             exit(Pid, kill),
             receive
                 {'DOWN', Mon, _, _, _} ->
-                    lager:info("2i repair process has been killed by user"
+                    ?LOG_INFO("2i repair process has been killed by user"
                                " request"),
                     io:format("The 2i repair process has ceased to be.\n"
                               "Since it was killed forcibly, you may have to "

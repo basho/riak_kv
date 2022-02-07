@@ -40,8 +40,6 @@
 -export([init/1, handle_event/3, handle_sync_event/4, handle_info/3,
          terminate/3, code_change/4]).
 
--include("stacktrace.hrl").
-
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), pos_integer()}.
 -type vnode() :: {index(), node()}.
@@ -61,6 +59,8 @@
 
 %% Use occasional calls to disk_log:log() for some backpressure periodically
 -define(LOG_BATCH_SIZE, 5000).
+
+-include_lib("kernel/include/logger.hrl").
 
 %%%===================================================================
 %%% API
@@ -86,7 +86,7 @@ init([LocalVN, RemoteVN, IndexN, LocalTree, Manager]) ->
                    timeout=Timeout,
                    built=0},
     gen_fsm:send_event(self(), start_exchange),
-    lager:debug("Starting exchange: ~p", [LocalVN]),
+    ?LOG_DEBUG("Starting exchange: ~p", [LocalVN]),
     {ok, prepare_exchange, State}.
 
 handle_event(_Event, StateName, State) ->
@@ -157,22 +157,22 @@ update_trees(start_exchange, State=#state{local=LocalVN,
                                           local_tree=LocalTree,
                                           remote_tree=RemoteTree,
                                           index_n=IndexN}) ->
-    lager:debug("Sending to ~p", [LocalVN]),
-    lager:debug("Sending to ~p", [RemoteVN]),
+    ?LOG_DEBUG("Sending to ~p", [LocalVN]),
+    ?LOG_DEBUG("Sending to ~p", [RemoteVN]),
 
     update_request(LocalTree, LocalVN, IndexN),
     update_request(RemoteTree, RemoteVN, IndexN),
     {next_state, update_trees, State};
 
 update_trees({not_responsible, VNodeIdx, IndexN}, State) ->
-    lager:debug("VNode ~p does not cover preflist ~p", [VNodeIdx, IndexN]),
+    ?LOG_DEBUG("VNode ~p does not cover preflist ~p", [VNodeIdx, IndexN]),
     send_exchange_status({not_responsible, VNodeIdx, IndexN}, State),
     {stop, normal, State};
 update_trees({tree_built, _, _}, State) ->
     Built = State#state.built + 1,
     case Built of
         2 ->
-            lager:debug("Moving to key exchange"),
+            ?LOG_DEBUG("Moving to key exchange"),
             {next_state, key_exchange, State, 0};
         _ ->
             {next_state, update_trees, State#state{built=Built}}
@@ -185,8 +185,8 @@ key_exchange(timeout, State=#state{local=LocalVN,
                                    local_tree=LocalTree,
                                    remote_tree=RemoteTree,
                                    index_n=IndexN}) ->
-    lager:debug("Starting key exchange between ~p and ~p", [LocalVN, RemoteVN]),
-    lager:debug("Exchanging hashes for preflist ~p", [IndexN]),
+    ?LOG_DEBUG("Starting key exchange between ~p and ~p", [LocalVN, RemoteVN]),
+    ?LOG_DEBUG("Exchanging hashes for preflist ~p", [IndexN]),
 
     TmpDir = tmp_dir(),
     {NA, NB, NC} = Now = WriteLog = os:timestamp(),
@@ -214,7 +214,7 @@ key_exchange(timeout, State=#state{local=LocalVN,
                 (start_exchange_segments, _Segments) ->
                      ok;
                 (_X, _Y) ->
-                     lager:error("~s LINE ~p: ~p ~p", [?MODULE, ?LINE, _X, _Y]),
+                     ?LOG_ERROR("~s LINE ~p: ~p ~p", [?MODULE, ?LINE, _X, _Y]),
                      ok
              end,
 
@@ -250,7 +250,7 @@ key_exchange(timeout, State=#state{local=LocalVN,
             %% likely to be nearby on disk of block N+1.
             StartTime = os:timestamp(),
             ok = sort_disk_log(LogFile1, LogFile2),
-            lager:debug("~s:key_exchange: sorting time = ~p seconds\n",
+            ?LOG_DEBUG("~s:key_exchange: sorting time = ~p seconds\n",
                         [?MODULE, timer:now_diff(os:timestamp(), StartTime) / 1000000]),
             {ok, ReadLog} = open_disk_log(Now, LogFile2, read_only),
             FoldRes =
@@ -264,12 +264,12 @@ key_exchange(timeout, State=#state{local=LocalVN,
                     Complete = true,
                     ok;
                true ->
-                    lager:error("~s:key_exchange: Count ~p /= FoldRes ~p\n",
+                    ?LOG_ERROR("~s:key_exchange: Count ~p /= FoldRes ~p\n",
                                 [?MODULE, Count, FoldRes]),
                     send_exchange_status(failed, State),
                     Complete = false
             end,
-            lager:info("Repaired ~b keys during active anti-entropy exchange "
+            ?LOG_INFO("Repaired ~b keys during active anti-entropy exchange "
                        "of ~p between ~p and ~p",
                        [Count, IndexN, LocalVN, RemoteVN])
     end,
@@ -296,7 +296,7 @@ read_repair_keydiff(RC, LocalVN, RemoteVN, {Bucket, Key, _Reason}) ->
     %%       spammy. Should this just be removed? We can always use
     %%       redbug to trace read_repair_keydiff when needed. Of course,
     %%       users can't do that.
-    %% lager:debug("Anti-entropy forced read repair: ~p/~p", [Bucket, Key]),
+    ?LOG_DEBUG("Anti-entropy forced read repair: ~p/~p", [Bucket, Key]),
     case riak_kv_util:consistent_object(Bucket) of
         true ->
             BKey = {Bucket, Key},
@@ -348,7 +348,7 @@ as_event(F) ->
 do_timeout(State=#state{local=LocalVN,
                         remote=RemoteVN,
                         index_n=IndexN}) ->
-    lager:info("Timeout during exchange between (local) ~p and (remote) ~p, "
+    ?LOG_INFO("Timeout during exchange between (local) ~p and (remote) ~p, "
                "(preflist) ~p", [LocalVN, RemoteVN, IndexN]),
     send_exchange_status({timeout, RemoteVN, IndexN}, State),
     {stop, normal, State#state{timer=undefined}}.
@@ -427,9 +427,9 @@ fold_disk_log(eof, _Fun, Acc, _DiskLog) ->
 fold_disk_log({Cont, Terms}, Fun, Acc, DiskLog) ->
     Acc2 = try
                lists:foldl(Fun, Acc, Terms)
-    catch ?_exception_(X, Y, StackToken) ->
-            lager:error("~s:fold_disk_log: caught ~p ~p @ ~p\n",
-                        [?MODULE, X, Y, ?_get_stacktrace_(StackToken)]),
+    catch Class:Reason:Stacktrace ->
+            ?LOG_ERROR("~s:fold_disk_log: caught ~p ~p @ ~p\n",
+                        [?MODULE, Class, Reason, Stacktrace]),
             Acc
     end,
     fold_disk_log(disk_log:chunk(DiskLog, Cont), Fun, Acc2, DiskLog).

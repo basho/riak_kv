@@ -28,7 +28,6 @@
          enable/0,
          disable/0,
          set_mode/1,
-         set_debug/1,
          cancel_exchange/1,
          cancel_exchanges/0,
          get_lock/1,
@@ -60,6 +59,8 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
+
+-include_lib("kernel/include/logger.hrl").
 
 -ifdef(TEST).
 -export([query_and_set_aae_throttle/1]).        % for eunit twiddle-testing
@@ -191,23 +192,6 @@ set_mode(Mode=automatic) ->
 set_mode(Mode=manual) ->
     ok = gen_server:call(?MODULE, {set_mode, Mode}, infinity).
 
-%% @doc Toggle debug mode, which prints verbose AAE information to the console.
--spec set_debug(boolean()) -> ok.
-set_debug(Enabled) ->
-    Modules = [riak_kv_index_hashtree,
-               riak_kv_entropy_manager,
-               riak_kv_exchange_fsm],
-    case Enabled of
-        true ->
-            [lager:trace_console([{module, Mod}]) || Mod <- Modules];
-        false ->
-            [begin
-                 {ok, Trace} = lager:trace_console([{module, Mod}]),
-                 lager:stop_trace(Trace)
-             end || Mod <- Modules]
-    end,
-    ok.
-
 -spec enable() -> ok.
 enable() ->
     gen_server:call(?MODULE, enable, infinity).
@@ -311,7 +295,6 @@ init([]) ->
                false ->
                    automatic
            end,
-    set_debug(proplists:is_defined(debug, Opts)),
     State = #state{mode=Mode,
                    trees=[],
                    tree_queue=[],
@@ -420,7 +403,7 @@ handle_info({'DOWN', _, _, Pid, Status}, #state{vnode_status_pid=Pid}=State) ->
             State2 = query_and_set_aae_throttle3(RES, State#state{vnode_status_pid=undefined}),
             {noreply, State2};
         Else ->
-            lager:error("query_and_set_aae_throttle error: ~p",[Else]),
+            ?LOG_ERROR("query_and_set_aae_throttle error: ~p",[Else]),
             {noreply, State}
     end;
 handle_info({'DOWN', Ref, _, Obj, Status}, State) ->
@@ -472,7 +455,7 @@ settings() ->
         {off, Opts} ->
             {false, Opts};
         X ->
-            lager:warning("Invalid setting for riak_kv/anti_entropy: ~p", [X]),
+            ?LOG_WARNING("Invalid setting for riak_kv/anti_entropy: ~p", [X]),
             application:set_env(riak_kv, anti_entropy, {off, []}),
             {false, []}
     end.
@@ -611,7 +594,7 @@ maybe_clear_exchange(Ref, Status, State) ->
         false ->
             State;
         {value, {Idx,Ref,_Pid}, Exchanges} ->
-            lager:debug("Untracking exchange: ~p :: ~p", [Idx, Status]),
+            ?LOG_DEBUG("Untracking exchange: ~p :: ~p", [Idx, Status]),
             State#state{exchanges=Exchanges}
     end.
 
@@ -719,7 +702,7 @@ maybe_upgrade(State=#state{trees_version = VTrees}) ->
             check_remote_upgraded(State);
         %% Upgrade already started, set pending_version
         _ ->
-            lager:notice("Hashtree upgrade already in-process, setting pending_version to 0"),
+            ?LOG_NOTICE("Hashtree upgrade already in-process, setting pending_version to 0"),
             ets:insert(?ETS, {pending_version, 0}),
             State#state{pending_version=0}
     end.
@@ -729,7 +712,7 @@ check_remote_upgraded(State) ->
     Nodes = riak_core_ring:all_members(Ring),
     case lists:any(fun do_check_remote_upgraded/1, Nodes) of
         true ->
-            lager:notice("Starting AAE hashtree upgrade"),
+            ?LOG_NOTICE("Starting AAE hashtree upgrade"),
             ets:insert(?ETS, {pending_version, 0}),
             State#state{pending_version=0};
         _ ->
@@ -753,7 +736,7 @@ check_exchanges_and_upgrade(State, Nodes) ->
             %% Now check nodes who havent reported success in the ETS table
             case check_all_remote_exchanges_complete(Nodes) of
                 true ->
-                    lager:notice("Starting AAE hashtree upgrade"),
+                    ?LOG_NOTICE("Starting AAE hashtree upgrade"),
                     ets:insert(?ETS, {pending_version, 0}),
                     State#state{pending_version=0};
                 _ ->
@@ -804,7 +787,7 @@ check_upgrade(State=#state{pending_version=PendingVersion,trees_version=VTrees})
                 [] ->
                     State;
                 Trees when length(Trees) == length(VTrees) ->
-                    lager:notice("Local AAE hashtrees have completed upgrade to version: ~p",[PendingVersion]),
+                    ?LOG_NOTICE("Local AAE hashtrees have completed upgrade to version: ~p",[PendingVersion]),
                     ets:insert(?ETS, {version, PendingVersion}),
                     ets:insert(?ETS, {pending_version, legacy}),
                     State#state{version=PendingVersion, pending_version=legacy};
@@ -828,7 +811,7 @@ do_exchange_status(_Pid, LocalVN, RemoteVN, IndexN, Reply, State) ->
         ok ->
             State;
         {remote, anti_entropy_disabled} ->
-            lager:warning("Active anti-entropy is disabled on ~p", [RemoteNode]),
+            ?LOG_WARNING("Active anti-entropy is disabled on ~p", [RemoteNode]),
             State;
         _ ->
             State2 = requeue_exchange(LocalIdx, RemoteIdx, IndexN, State),
@@ -885,7 +868,7 @@ start_exchange(LocalVN, {RemoteIdx, IndexN}, Ring, State) ->
             end
     catch
         error:{badmatch,_} ->
-            lager:warning("ignoring exchange to non-existent index: ~p", [RemoteIdx]),
+            ?LOG_WARNING("ignoring exchange to non-existent index: ~p", [RemoteIdx]),
             {ok, State}
     end.
 
@@ -988,7 +971,7 @@ maybe_exchange(Ring, State) ->
                                                     {RemoteIdx, IndexN}, 
                                                     Ring, 
                                                     State2),
-                    lager:info("Attempt to start exchange between ~w and ~w" 
+                    ?LOG_INFO("Attempt to start exchange between ~w and ~w" 
                                     ++ " resulted in ~w",
                                 [IndexN, RemoteIdx, R]),
                     State3
@@ -1031,7 +1014,7 @@ requeue_exchange(LocalIdx, RemoteIdx, IndexN, State) ->
         true ->
             State;
         false ->
-            lager:debug("Requeue: ~p", [{LocalIdx, RemoteIdx, IndexN}]),
+            ?LOG_DEBUG("Requeue: ~p", [{LocalIdx, RemoteIdx, IndexN}]),
             Exchanges = State#state.exchange_queue ++ [Exchange],
             State#state{exchange_queue=Exchanges}
     end.
@@ -1110,7 +1093,7 @@ query_and_set_aae_throttle3({result, {MaxNds, BadNds}}, State) ->
                 %% If that node is actually down, then the net_kernel
                 %% will mark it down for us soon, and then we'll
                 %% calculate a real value after that.
-                lager:info("Could not determine mailbox sizes for nodes: ~p",
+                ?LOG_INFO("Could not determine mailbox sizes for nodes: ~p",
                            [BadNds]),
                 {max, BadNodes}
         end,

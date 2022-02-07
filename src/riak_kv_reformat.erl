@@ -21,28 +21,30 @@
 
 -export([run/2]).
 
+-include_lib("kernel/include/logger.hrl").
+
 run(ObjectVsn, Opts) ->
     Concurrency = proplists:get_value(concurrency, Opts, 2),
     KillHandoffs = proplists:get_value(kill_handoffs, Opts, true),
-    lager:info("Starting object reformat with concurrency: ~p", [Concurrency]),
-    lager:info("Setting preferred object format to ~p", [ObjectVsn]),
+    ?LOG_INFO("Starting object reformat with concurrency: ~p", [Concurrency]),
+    ?LOG_INFO("Setting preferred object format to ~p", [ObjectVsn]),
     set_capabilities(ObjectVsn),
-    lager:info("Preferred object format set to ~p", [ObjectVsn]),
+    ?LOG_INFO("Preferred object format set to ~p", [ObjectVsn]),
     case KillHandoffs of
         true ->
-            lager:info("Killing any inbound and outbound handoffs", []);
+            ?LOG_INFO("Killing any inbound and outbound handoffs", []);
         false ->
-            lager:info("Waiting on any in-flight inbound and outbound handoffs", [])
+            ?LOG_INFO("Waiting on any in-flight inbound and outbound handoffs", [])
     end,
     kill_or_wait_on_handoffs(KillHandoffs, 0),
 
     %% migrate each running vnode
     Running = riak_core_vnode_manager:all_vnodes(riak_kv_vnode),
     Counts = riak_core_util:pmap(fun({riak_kv_vnode, Idx, _}) ->
-                                         lager:info("Reformatting objects on partition ~p",
+                                         ?LOG_INFO("Reformatting objects on partition ~p",
                                                     [Idx]),
                                          {S, I, E} = reformat_partition(Idx),
-                                         lager:info("Completed reformatting objects on "
+                                         ?LOG_INFO("Completed reformatting objects on "
                                                     "partition ~p. Success: ~p. Ignored: ~p. "
                                                     "Error: ~p", [Idx, S, I, E]),
                                          {S, I, E}
@@ -52,10 +54,10 @@ run(ObjectVsn, Opts) ->
     SuccessTotal = lists:sum(SuccessCounts),
     IgnoredTotal = lists:sum(IgnoredCounts),
     ErrorTotal = lists:sum(ErrorCounts),
-    lager:info("Completed reformating all partitions to ~p. Success: ~p. Ignored: ~p. Error: ~p",
+    ?LOG_INFO("Completed reformating all partitions to ~p. Success: ~p. Ignored: ~p. Error: ~p",
                [ObjectVsn, SuccessTotal, IgnoredTotal, ErrorTotal]),
     if ErrorTotal > 0 ->
-            lager:info("There were errors reformatting ~p keys. Re-run before dowgrading",
+            ?LOG_INFO("There were errors reformatting ~p keys. Re-run before dowgrading",
                        [ErrorTotal]);
        true -> ok
     end,
@@ -79,7 +81,7 @@ kill_or_wait_on_handoffs(false, CheckCount) ->
         0 -> kill_or_wait_on_handoffs(true, CheckCount);
         N ->
             case CheckCount rem 10 of
-                0 -> lager:info("~p handoffs still outstanding", [N]);
+                0 -> ?LOG_INFO("~p handoffs still outstanding", [N]);
                 _ -> ok
             end,
             timer:sleep(1000),

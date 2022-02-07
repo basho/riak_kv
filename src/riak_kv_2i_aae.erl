@@ -49,6 +49,8 @@
 
 -export_type([status/0, partition_result/0, worker_status/0]).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% How many items to scan before possibly pausing to obey speed throttle
 -define(DEFAULT_SCAN_BATCH, 1000).
 -define(MAX_DUTY_CYCLE, 100).
@@ -146,7 +148,7 @@ get_status() ->
 
 init([Partitions, Speed, Caller]) ->
     process_flag(trap_exit, true),
-    lager:info("Starting 2i repair at speed ~p for partitions ~p",
+    ?LOG_INFO("Starting 2i repair at speed ~p for partitions ~p",
                [Speed, Partitions]),
     {ok, first_partition, #state{partitions=Partitions, remaining=Partitions,
                                  speed=Speed, caller=Caller}, 0}.
@@ -167,7 +169,7 @@ next_partition(State=#state{remaining=[]}) ->
     %% We are done. Report results
     Status = to_simple_state(State),
     Report = to_report(Status),
-    lager:info("Finished 2i repair:\n~s", [Report]),
+    ?LOG_INFO("Finished 2i repair:\n~s", [Report]),
     {stop, normal, State};
 next_partition(State=#state{remaining=[Partition|_]}) ->
     ReqId = make_ref(),
@@ -180,7 +182,7 @@ next_partition(State=#state{remaining=[Partition|_]}) ->
 wait_for_aae_pid(aae_pid_timeout, State) ->
     State2 = maybe_notify(State, {error, no_aae_pid}),
     State3 = add_result(#partition_result{status=error, error=no_aae_pid}, State2),
-    lager:error("AAE pid request timed out"),
+    ?LOG_ERROR("AAE pid request timed out"),
     next_partition(State3#state{aae_pid_timer=undefined});
 % This is apparently a weird condition seen in the wild, change to error.
 wait_for_aae_pid({ReqId, {ok, undefined}},
@@ -192,7 +194,7 @@ wait_for_aae_pid({ReqId, {error, Err}}, State=#state{aae_pid_req_id=ReqId,
     State2 = State#state{aae_pid_timer=undefined},
     State3 = add_result(#partition_result{status=error, error={no_aae_pid, Err}}, State2),
     State4 = maybe_notify(State3, {error, {no_aae_pid, Err}}),
-    lager:error("AAE pid request failed"),
+    ?LOG_ERROR("AAE pid request failed"),
     next_partition(State4);
 wait_for_aae_pid({ReqId, {ok, TreePid}},
                  State=#state{aae_pid_req_id=ReqId, speed=Speed,
@@ -266,9 +268,9 @@ wait_for_repair({close_db, DBRef}, State = #state{open_dbs=DBs}) ->
 repair_partition(Partition, DutyCycle, From, TreePid) ->
     case get_hashtree_lock(TreePid, ?LOCK_RETRIES) of
         ok ->
-            lager:info("Acquired lock on partition ~p", [Partition]),
+            ?LOG_INFO("Acquired lock on partition ~p", [Partition]),
             gen_fsm:sync_send_event(From, {lock_acquired, Partition}, infinity),
-            lager:info("Repairing indexes in partition ~p", [Partition]),
+            ?LOG_INFO("Repairing indexes in partition ~p", [Partition]),
             case create_index_data_db(Partition, DutyCycle) of
                 {ok, {DBDir, DBRef, IndexDBCount}} ->
                     Res =
@@ -297,14 +299,14 @@ repair_partition(Partition, DutyCycle, From, TreePid) ->
                                               index_scan_count=IndexDBCount}
                     end,
                     _ = destroy_index_data_db(DBDir, DBRef),
-                    lager:info("Finished repairing indexes in partition ~p",
+                    ?LOG_INFO("Finished repairing indexes in partition ~p",
                                [Partition]),
                     Res;
                 {error, CreateDBErr} ->
                     #partition_result{status=error, error=CreateDBErr}
             end;
         LockErr ->
-            lager:error("Failed to acquire hashtree lock on partition ~p",
+            ?LOG_ERROR("Failed to acquire hashtree lock on partition ~p",
                         [Partition]),
             #partition_result{status=error, error=LockErr}
     end.
@@ -333,7 +335,7 @@ create_index_data_db(Partition, DutyCycle) ->
     end.
 
 create_index_data_db(Partition, DutyCycle, DBDir) ->
-    lager:info("Creating temporary database of 2i data in ~s", [DBDir]),
+    ?LOG_INFO("Creating temporary database of 2i data in ~s", [DBDir]),
     DBOpts = leveldb_opts(),
     case eleveldb:open(DBDir, DBOpts) of
         {ok, DBRef} ->
@@ -370,7 +372,7 @@ create_index_data_db(Partition, DutyCycle, DBDir, DBRef) ->
             end,
             Count2
     end,
-    lager:info("Grabbing all index data for partition ~p", [Partition]),
+    ?LOG_INFO("Grabbing all index data for partition ~p", [Partition]),
     Ref = make_ref(),
     Sender = {raw, Ref, Client},
     StartTime = os:timestamp(),
@@ -384,7 +386,7 @@ create_index_data_db(Partition, DutyCycle, DBDir, DBRef) ->
             _ = destroy_index_data_db(DBDir, DBRef),
             Err;
         _ ->
-            lager:info("Grabbed ~p index data entries from partition ~p",
+            ?LOG_INFO("Grabbed ~p index data entries from partition ~p",
                        [NumFound, Partition]),
             {ok, {DBDir, DBRef, NumFound}}
     end.
@@ -457,7 +459,7 @@ data_root() ->
 %% @doc Builds a temporary hashtree based on the 2i data fetched from the
 %% backend.
 build_tmp_tree(Index, DBRef, DutyCycle) ->
-    lager:info("Building tree for 2i data on disk for partition ~p", [Index]),
+    ?LOG_INFO("Building tree for 2i data on disk for partition ~p", [Index]),
     %% Build temporary hashtree with this index data.
     TreeId = <<0:176/integer>>,
     Path = filename:join(data_root(), integer_to_list(Index)),
@@ -487,7 +489,7 @@ build_tmp_tree(Index, DBRef, DutyCycle) ->
             send_event({hashtree_population_update, 0}),
             {Count, Tree2, _} = eleveldb:fold(DBRef, FoldFun,
                                               {0, Tree, os:timestamp()}, []),
-            lager:info("Done building temporary tree for 2i data "
+            ?LOG_INFO("Done building temporary tree for 2i data "
                        "with ~p entries",
                        [Count]),
             {ok, {Tree2, Count}};
@@ -497,7 +499,7 @@ build_tmp_tree(Index, DBRef, DutyCycle) ->
 
 %% @doc Remove all traces of the temporary hashtree for 2i index data.
 remove_tmp_tree(Partition, Tree) ->
-    lager:debug("Removing temporary AAE 2i tree for partition ~p", [Partition]),
+    ?LOG_DEBUG("Removing temporary AAE 2i tree for partition ~p", [Partition]),
     hashtree:close(Tree),
     hashtree:destroy(Tree).
 
@@ -505,11 +507,11 @@ remove_tmp_tree(Partition, Tree) ->
 -spec do_exchange(integer(), eleveldb:db_ref(), hashtree:hashtree(), pid()) ->
     {ok, integer()} | {error, any()}.
 do_exchange(Partition, DBRef, TmpTree0, TreePid) ->
-    lager:info("Reconciling 2i data"),
+    ?LOG_INFO("Reconciling 2i data"),
     IndexN2i = riak_kv_index_hashtree:index_2i_n(),
-    lager:debug("Updating the vnode tree"),
+    ?LOG_DEBUG("Updating the vnode tree"),
     ok = riak_kv_index_hashtree:update(IndexN2i, TreePid),
-    lager:debug("Updating the temporary 2i AAE tree"),
+    ?LOG_DEBUG("Updating the temporary 2i AAE tree"),
     TmpTree = hashtree:update_tree(TmpTree0),
     Remote =
     fun(get_bucket, {L, B}) ->
@@ -540,11 +542,11 @@ do_exchange(Partition, DBRef, TmpTree0, TreePid) ->
     end,
     try
         NumDiff = hashtree:compare(TmpTree, Remote, AccFun, 0),
-        lager:info("Found ~p differences", [NumDiff]),
+        ?LOG_INFO("Found ~p differences", [NumDiff]),
         {ok, NumDiff}
     catch
         CmpErrClass:CmpErr ->
-            lager:error("Hashtree exchange failed ~p, ~p", [CmpErrClass, CmpErr]),
+            ?LOG_ERROR("Hashtree exchange failed ~p, ~p", [CmpErrClass, CmpErr]),
             case CmpErrClass of
                 error ->
                     {error, CmpErr};
@@ -666,7 +668,7 @@ handle_info({'EXIT', _From, _Reason}, StateName, State) ->
     {next_state, StateName, State};
 handle_info({'DOWN', Mon, _, _, Reason}, _StateName,
             State=#state{worker_monitor=Mon, remaining=[Partition|_]}) ->
-    lager:error("Index repair of partition ~p failed : ~p",
+    ?LOG_ERROR("Index repair of partition ~p failed : ~p",
                 [Partition, Reason]),
     {stop, {partition_failed, Reason}, State};
 handle_info({'DOWN', _Mon, _, _, _Reason}, StateName, State) ->

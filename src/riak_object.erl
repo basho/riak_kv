@@ -31,6 +31,8 @@
 
 -export_type([riak_object/0, proxy_object/0, bucket/0, key/0, value/0, binary_version/0, index_value/0]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -type key() :: binary().
 -type bucket() :: binary() | {binary(), binary()}.
 %% -type bkey() :: {bucket(), key()}.
@@ -1059,12 +1061,12 @@ vclock_header(Doc) ->
 %% @deprecated use `riak_object_json:encode' directly
 -spec to_json(riak_object()) -> {struct, list(any())}.
 to_json(Obj) ->
-    lager:warning("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
+    ?LOG_WARNING("Change uses of riak_object:to_json/1 to riak_object_json:encode/1"),
     riak_object_json:encode(Obj).
 
 %% @deprecated Use `riak_object_json:decode' now.
 from_json(JsonObj) ->
-    lager:warning("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
+    ?LOG_WARNING("Change uses of riak_object:from_json/1 to riak_object_json:decode/1"),
     riak_object_json:decode(JsonObj).
 
 is_updated(_Object=#r_object{updatemetadata=M,updatevalue=V}) ->
@@ -1651,7 +1653,7 @@ decode_vclock(Method, VClock) ->
     case Method of
         encode_raw  -> VClock;
         encode_zlib -> binary_to_term(zlib:unzip(VClock));
-        _           -> lager:error("Bad vclock encoding method ~p", [Method]),
+        _ -> ?LOG_ERROR("Bad vclock encoding method ~p", [Method]),
                        throw(bad_vclock_encoding_method)
     end.
 

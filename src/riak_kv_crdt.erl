@@ -34,6 +34,8 @@
          is_crdt_supported/1,
          operation/3]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -include("riak_kv_wm_raw.hrl").
 -include("riak_object.hrl").
 -include_lib("riak_kv_types.hrl").
@@ -267,10 +269,10 @@ log_merge_errors(Bucket, Key, CRDTs, Errors) ->
 log_errors(_, _, []) ->
     ok;
 log_errors(Bucket, Key, Errors) ->
-    lager:error("Error(s) deserializing CRDT at ~p ~p: ~p~n", [Bucket, Key, Errors]).
+    ?LOG_ERROR("Error(s) deserializing CRDT at ~p ~p: ~p~n", [Bucket, Key, Errors]).
 
 maybe_log_sibling_crdts(Bucket, Key, CRDTs) when length(CRDTs) > 1 ->
-    lager:error("Sibling CRDTs at ~p ~p: ~p~n",
+    ?LOG_ERROR("Sibling CRDTs at ~p ~p: ~p~n",
                 [Bucket, Key, orddict:fetch_keys(CRDTs)]);
 maybe_log_sibling_crdts(_, _, _) ->
     ok.

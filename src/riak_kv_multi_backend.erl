@@ -79,6 +79,8 @@
 
 -export([head/3]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -ifdef(EQC).
 -include_lib("eqc/include/eqc.hrl").
 -export([prop_multi_backend_sample/0, prop_multi_backend_async_fold/0]).
@@ -438,7 +440,7 @@ backend_fix_index({_, Mod, ModState}, Bucket, StorageKey, ForUpgrade) ->
         {reply, Reply, _UpModState} ->
             Reply;
         {error, Reason} ->
-           lager:error("Failed to fix index for bucket ~p, key ~p, backend ~p: ~p",
+           ?LOG_ERROR("Failed to fix index for bucket ~p, key ~p, backend ~p: ~p",
                        [Bucket, StorageKey, Mod, Reason]),
             {0, 0, length(StorageKey)}
     end.

@@ -48,6 +48,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -define(SERVER, ?MODULE).
 %% only 32 bits per counter, when you hit that, get a new vnode id
 -define(MAX_CNTR, 4294967295).
@@ -371,17 +373,17 @@ read_vnode_status(File) ->
                 Er ->
                     %% "corruption" error, some other posix error, unreadable:
                     %% Log, and start anew
-                    lager:error("Failed to override_consult vnode-status file ~p ~p", [File, Er]),
+                    ?LOG_ERROR("Failed to override_consult vnode-status file ~p ~p", [File, Er]),
                     {ok, orddict:new()}
             end;
         Er ->
             %% "corruption" error, some other posix error, unreadable:
             %% Log, and start anew
-            lager:error("Failed to consult vnode-status file ~p ~p", [File, Er]),
+            ?LOG_ERROR("Failed to consult vnode-status file ~p ~p", [File, Er]),
             {ok, orddict:new()}
     catch C:T ->
             %% consult threw
-            lager:error("Failed to consult vnode-status file ~p ~p ~p", [File, C, T]),
+            ?LOG_ERROR("Failed to consult vnode-status file ~p ~p ~p", [File, C, T]),
             {ok, orddict:new()}
     end.
 

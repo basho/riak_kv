@@ -45,6 +45,8 @@
          method_to_perm/1
         ]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 
@@ -258,7 +260,7 @@ is_forbidden(RD) ->
     % TODO: what log level(s) here?
     case is_null_origin(RD) of
         true ->
-            _ = lager:info(
+            ?LOG_INFO(
                     "Request from ~p denied due to null origin",
                     [{wrq:scheme(RD), wrq:peer(RD)}]),
             true;
@@ -266,7 +268,7 @@ is_forbidden(RD) ->
             case app_helper:get_env(riak_kv, secure_referer_check, true)
                     andalso not is_valid_referer(RD) of
                 true ->
-                    _ = lager:info(
+                    ?LOG_INFO(
                             "Request from ~p denied due to invalid referrer",
                             [{wrq:scheme(RD), wrq:peer(RD)}]),
                     true;
@@ -324,12 +326,12 @@ is_valid_referer(RD) ->
         undefined ->
             true;
         {invalid, Url} ->
-            lager:debug("WM unparsable referer: ~s\n", [Url]),
+            ?LOG_DEBUG("WM unparsable referer: ~s\n", [Url]),
             false;
         OriginTuple ->
             true;
         RefererTuple ->
-            lager:debug("WM referrer not origin.  Origin ~p != Referer ~p\n", [OriginTuple, RefererTuple]),
+            ?LOG_DEBUG("WM referrer not origin.  Origin ~p != Referer ~p\n", [OriginTuple, RefererTuple]),
             false
     end.
 
@@ -338,10 +340,10 @@ referer_tuple(RD) ->
         undefined ->
             undefined;
         Url ->
-            case http_uri:parse(Url) of
-                {ok, {Scheme, _, Host, Port, _, _}} -> %R15+
+            case uri_string:parse(Url) of
+                #{scheme := Scheme, host := Host, port := Port} ->
                     {Scheme, Host, Port};
-                {error, _} ->
+                {error, _, _} ->
                     {invalid, Url}
             end
     end.

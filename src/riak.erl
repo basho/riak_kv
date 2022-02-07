@@ -29,6 +29,8 @@
          join/1]).
 -export([code_hash/0]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -40,7 +42,7 @@ stop() -> stop("riak stop requested").
 stop(Reason) ->
     % we never do an application:stop because that makes it very hard
     %  to really halt the runtime, which is what we need here.
-    lager:notice("~p",[Reason]),
+    ?LOG_NOTICE("~p",[Reason]),
     init:stop().
     
 %% @spec get_app_env() -> [{Key :: atom(), Value :: term()}]

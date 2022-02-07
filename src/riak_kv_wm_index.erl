@@ -82,6 +82,8 @@
          }).
 -type context() :: #ctx{}.
 
+-include_lib("kernel/include/logger.hrl").
+
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
 -include("riak_kv_index.hrl").
@@ -444,7 +446,7 @@ clear_index_fsm_msgs(ReqID) ->
     end.
 
 stream_error(Error, Boundary) ->
-    lager:error("Error in index wm: ~p", [Error]),
+    ?LOG_ERROR("Error in index wm: ~p", [Error]),
     ErrorJson = encode_error(Error),
     Body = ["\r\n--", Boundary, "\r\n",
             "Content-Type: application/json\r\n\r\n",

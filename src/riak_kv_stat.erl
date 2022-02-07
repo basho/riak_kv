@@ -52,6 +52,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, monitor_loop/1]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -record(state, {repair_mon, monitors}).
 
 -define(SERVER, ?MODULE).
@@ -92,7 +94,7 @@ maybe_dispatch_to_sidejob(false, Arg) ->
     ok.
 
 stat_update_error(Arg, Class, Error) ->
-    lager:debug("Failed to update stat ~p due to (~p) ~p.", [Arg, Class, Error]).
+    ?LOG_DEBUG("Failed to update stat ~p due to (~p) ~p.", [Arg, Class, Error]).
 
 %% @doc
 %% Callback used by a {@link riak_kv_stat_worker} to perform actual update
@@ -154,7 +156,7 @@ handle_cast({monitor, Type, Pid}, State) ->
     case proplists:get_value(Type, State#state.monitors) of
         Monitor when is_pid(Monitor) ->
             Monitor ! {add_pid, Pid};
-        _ -> lager:error("Couldn't find process for ~p to add monitor", [Type])
+        _ -> ?LOG_ERROR("Couldn't find process for ~p to add monitor", [Type])
     end,
     {noreply, State};
 handle_cast(stop, State) ->
@@ -1089,7 +1091,7 @@ create_or_update_histogram_test() ->
         ok = repeat_create_or_update(Metric, 1, histogram, 100),
         ?assertNotEqual(exometer:get_value(Metric), 0),
         Stats = get_stats(),
-        %%lager:info("stats prop list ~s", [Stats]),
+        ?LOG_INFO("stats prop list ~s", [Stats]),
         ?assertNotEqual(proplists:get_value({node_put_fsm_counter_time_mean}, Stats), 0)
     after
         ok = stop_exometer_test_env()
