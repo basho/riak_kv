@@ -411,7 +411,7 @@ buffer_size_test_helper(Name, {FillName, FillFun}, Size, Options, AppEnv) ->
             application:load(riak_kv),
             [ application:set_env(riak_kv, K, V) || {K, V} <- AppEnv ],
             
-            %% start up our sink
+            %% Start up our sink
             Ref = make_ref(),
             S = spawn(?MODULE, receiver, [Size, Ref, self()]),
             {ok, Sink} = ?MODULE:start_link(S, Options),
@@ -420,26 +420,29 @@ buffer_size_test_helper(Name, {FillName, FillFun}, Size, Options, AppEnv) ->
                          sink=#fitting{pid=Sink, ref=Ref}},
             ?MODULE:use_pipe(Sink, Pipe),
 
-            %% fill its buffer
+            %% Fill the buffer
             [ ok = FillFun(
                      Sink,
                      #pipe_result{from=tester, ref=Ref, result=I})
               || I <- lists:seq(1, Size) ],
             
-            %% Trigger call to next after sleep, sleep required to provde that
-            %% the next call is blocked
-            S ! Sink,
+            %% Trigger call to ?MODULE:next/1 after sleep, with the sleep
+            %% required to show a delay in the response to the following
+            %% sync_send_event
+            Delay = 1000, 
+            S ! {Sink, Delay},
 
             %% Ensure extra result will block, as timer indicates it was not
-            %% released before sleep on receiver Pid has completes 
+            %% released before sleep on receiver Pid has completed
             {T, ok} = 
                 timer:tc(gen_fsm, sync_send_event,
                             [Sink, #pipe_result{from=tester,
                                     ref=Ref,
                                     result=Size+1}]),
-            
-            %% Delay was at least half the sleep - should be very close to 1s
-            true = T > 500 * 1000,
+            %% Delay was at least half the sleep - should be very close to the
+            %% sleep, but half sleep to avoid intermittent failures due to very
+            %% short pauses
+            true = T > (Delay div 2) * 1000,
 
             %% Get confirmation results recieved
             receive
@@ -453,8 +456,8 @@ receiver(Size, Ref, ReplyPid) ->
         #kv_mrc_sink{ref=Ref, results=[{tester,R}]} ->
             ?assertEqual(Size+1, length(R)),
             ReplyPid ! ok;
-        Sink ->
-            timer:sleep(1000),
+        {Sink, Delay} ->
+            timer:sleep(Delay),
             ?MODULE:next(Sink),
             receiver(Size, Ref, ReplyPid)
     end.
