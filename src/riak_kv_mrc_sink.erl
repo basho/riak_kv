@@ -233,7 +233,7 @@ maybe_ack(From, #state{buffer_left=Left, delayed_acks=Delayed}=State) ->
     %% not actually necessary to update buffer_left, but it could make
     %% for interesting stats
     {next_state, collect_output,
-    State#state{buffer_left=Left-1, delayed_acks=[From|Delayed]}}.
+     State#state{buffer_left=Left-1, delayed_acks=[From|Delayed]}}.
 
 %% send_output: waiting for output to send, after having been asked
 %% for some while there wasn't any
@@ -338,7 +338,6 @@ send_to_owner(#state{owner=Owner, ref=Ref,
                          results=finish_results(Results),
                          logs=lists:reverse(Logs),
                          done=Done},
-    ct:pal("~p", [Delayed]),
     _ = [ gen_fsm:reply(From, ok) || From <- Delayed ],
     State#state{results=[], logs=[],
                 buffer_left=Max, delayed_acks=[]}.
@@ -392,12 +391,12 @@ buffer_size_app_env() ->
 -ifdef(TEST).
 
 buffer_size_test_() ->
-    Tests = [ {"buffer option", 5, [{buffer, 5}], []}],
-    %%          {"buffer app env", 5, [], [{mrc_sink_buffer, 5}]},
-    %%          {"buffer default", ?BUFFER_SIZE_DEFAULT, [], []} ],
-    FillFuns = [ {"send_event", fun gen_fsm:send_event/2}],
-    %%             {"sync_send_event", fun gen_fsm:sync_send_event/2},
-    %%             {"erlang:send", fun(S, R) -> S ! R, ok end} ],
+    Tests = [ {"buffer option", 5, [{buffer, 5}], []},
+              {"buffer app env", 5, [], [{mrc_sink_buffer, 5}]},
+              {"buffer default", ?BUFFER_SIZE_DEFAULT, [], []} ],
+    FillFuns = [ {"send_event", fun gen_fsm:send_event/2},
+                 {"sync_send_event", fun gen_fsm:sync_send_event/2},
+                 {"erlang:send", fun(S, R) -> S ! R, ok end} ],
     {foreach,
      fun() -> application:load(riak_kv) end,
      fun(_) -> application:unload(riak_kv) end,
@@ -437,16 +436,12 @@ buffer_size_test_helper(Name, {FillName, FillFun}, Size, Options, AppEnv) ->
             %% make sure that all results were received, including
             %% blocked one
             receive
-                #kv_mrc_sink{ref=Ref, results=[{tester,R}]} = Msg ->
-                    ct:pal("received: ~p", [Msg]),
-                    ct:pal("me: ~p", [self()]),
+                #kv_mrc_sink{ref=Ref, results=[{tester,R}]} ->
                     ?assertEqual(Size+1, length(R))
             end,
             %% make sure that the delayed ack was received
-            ct:pal("we here: ~p", [self()]),
             receive
-                Msg1 ->
-                    ct:pal("now we here: ~p", [Msg1]),
+                {GenFsmRef, ok} when is_reference(GenFsmRef) ->
                     ok
             end
      end}.
