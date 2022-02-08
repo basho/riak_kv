@@ -4,7 +4,6 @@
 
 -include_lib("eqc/include/eqc.hrl").
 -include_lib("eunit/include/eunit.hrl").
--include("../src/stacktrace.hrl").
 
 -compile([export_all, nowarn_export_all]).
 
@@ -281,8 +280,8 @@ exec(S) ->
                 exec(inc_step(deliver_req(Cid, S)))
         end
     catch
-        ?_exception_(What, Reason, StackToken) ->
-            {What, {Reason, ?_get_stacktrace_(StackToken)}, Next, S}
+        What:Reason:Stack  ->
+            {What, {Reason, Stack}, Next, S}
     end.
 
 status(#state{verbose = true} = S, Next) ->

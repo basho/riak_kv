@@ -55,7 +55,6 @@
          {w, quorum},
          {dw, quorum}]).
 -define(HOOK_SAYS_NO, <<"the hook says no">>).
--define(LAGER_LOGFILE, "put_fsm_eqc_lager.log").
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) -> io:format(user, Str, Args) end, P)).
 
@@ -86,16 +85,7 @@ setup() ->
     error_logger:tty(false),
     error_logger:logfile({open, Path ++ "/put_fsm_eqc.log"}),
 
-    %% Exometer starts lager.  Therefore, we need start it before lager to ensure
-    %% that configuration customizations in this test case are not inadvertantly
-    %% overwritten ...
     ok = exometer:start(),
-    application:stop(lager),
-    application:load(lager),
-    application:set_env(lager, handlers,
-                        [{lager_file_backend,
-                        [{Path ++ "/" ++ ?LAGER_LOGFILE, info, 10485760,"$D0",5}]}]),
-    ok = lager:start(),
 
     %% Start up mock servers and dependencies
     fsm_eqc_util:start_mock_servers(),
@@ -113,8 +103,6 @@ setup() ->
     fun() -> cleanup(State) end.
 
 cleanup(running) ->
-    application:stop(lager),
-    application:unload(lager),
     meck:unload(riak_core_bucket),
     fsm_eqc_util:cleanup_mock_servers(),
     os:cmd("rm -rf *putfsmeqc*"),
@@ -238,16 +226,12 @@ prop_basic_put() ->
            ?FORALL({PWSeed, WSeed, DWSeed,
                     Objects, ObjectIdxSeed,
                     VPutResp,
-                    Options0, AllowMult, Precommit, Postcommit,
-                    LogLevel}, 
+                    Options0, AllowMult, Precommit, Postcommit}, 
                    {w_dw_seed(), w_dw_seed(), w_dw_seed(),
                     fsm_eqc_util:riak_objects(), fsm_eqc_util:largenat(),
                     vnodeputresps(),
-                    options(),bool(), precommit_hooks(), postcommit_hooks(),
-                    oneof([info, debug])},
+                    options(),bool(), precommit_hooks(), postcommit_hooks()},
                    begin
-                       lager:set_loglevel(lager_file_backend, ?LAGER_LOGFILE, LogLevel),
-
                        N = length(VPutResp),
                        {PW, RealPW} = pw_val(N, 1000000, PWSeed),
                        %% DW is always at least 1 because of coordinating puts

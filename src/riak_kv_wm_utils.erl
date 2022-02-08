@@ -342,7 +342,15 @@ referer_tuple(RD) ->
         Url ->
             case uri_string:parse(Url) of
                 #{scheme := Scheme, host := Host, port := Port} ->
-                    {Scheme, Host, Port};
+                    Scheme0 = 
+                        case Scheme of
+                            "http" -> http;
+                            "HTTP" -> http;
+                            "https" -> https;
+                            "HTTPS" -> https;
+                            Scheme ->  Scheme
+                        end,
+                    {Scheme0, Host, Port};
                 {error, _, _} ->
                     {invalid, Url}
             end
