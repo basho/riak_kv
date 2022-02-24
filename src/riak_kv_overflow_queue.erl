@@ -106,26 +106,28 @@ new(Priorities, FilePath, QueueLimit, OverflowLimit) ->
 log(Type, JobID, Attempts, Aborts, Queue) ->
     QueueLengths =
         lists:foldl(fun({P, L}, Acc) ->
-                        Acc ++ io_lib:format("queue_p~w=~w ", [P, L])
+                        [Acc, io_lib:format("queue_p~w=~w ", [P, L])]
                     end,
                     "Queue lengths ",
                     Queue#overflowq.mqueue_lengths),
     OverflowLengths =
         lists:foldl(fun({P, L}, Acc) ->
-                        Acc ++ io_lib:format("overflow_p~w=~w ", [P, L])
+                        [Acc, io_lib:format("overflow_p~w=~w ", [P, L])]
                     end,
                     "Overflow lengths ",
                     Queue#overflowq.overflow_lengths),
     DiscardCounts =
         lists:foldl(fun({P, L}, Acc) ->
-                        Acc ++ io_lib:format("discard_p~w=~w ", [P, L])
+                        [Acc, io_lib:format("discard_p~w=~w ", [P, L])]
                     end,
                     "Discard counts ",
                     Queue#overflowq.overflow_discards),
 
-    _ = lager:info("~p job_id=~p has " ++
-                        "attempts=~w aborts=~w " ++
-                        QueueLengths ++ OverflowLengths ++ DiscardCounts,
+    _ = lager:info(lists:flatten(["~p job_id=~p has ",
+                        "attempts=~w aborts=~w ",
+                        QueueLengths,
+                        OverflowLengths,
+                        DiscardCounts]),
                     [Type, JobID, Attempts, Aborts]),
     
     ResetDiscards =
@@ -371,12 +373,23 @@ update_plist(UpdateTuple, PriorityList) ->
 
 -spec open_overflow(string()) -> {filename(), start}.
 open_overflow(RootPath) ->
-    GUID = leveled_util:generate_uuid(),
+    GUID = generate_ordered_guid(),
     {ok, OverflowQueue} =
         disk_log:open([{name, GUID},
             {file, disklog_filename(RootPath, GUID)},
             {repair, false}]),
     {OverflowQueue, start}.
+
+%% @doc Use a doctored GUID that includes creation time, to make it easier
+%% for the operator to clean any accumulated garbage.
+-spec generate_ordered_guid() -> iolist().
+generate_ordered_guid() ->
+    {{Year, Month, Day}, {H, M, _S}} =
+        calendar:now_to_datetime(os:timestamp()),
+    <<C:16, D:16, E:48>> = crypto:strong_rand_bytes(10),
+    io_lib:format(
+        "~4.10.0B~2.10.0B~2.10.0B-~2.10.0B~2.10.0B-4~3.16.0b-~4.16.0b-~12.16.0b",
+        [Year, Month, Day, H, M, C band 16#0fff, D band 16#3fff bor 16#8000, E]).
 
 
 -spec disklog_filename(string(), string()) -> filename:filename().
