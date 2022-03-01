@@ -48,7 +48,7 @@
 -export([get_client_id/1]).
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
--export([fetch/2, push/4]).
+-export([fetch/2, push/4, membership_request/1]).
 -export([remove_node_from_coverage/0, reset_node_for_coverage/0]).
 
 -compile({no_auto_import,[put/2]}).
@@ -137,6 +137,20 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
             ok
     end.
 
+-spec membership_request(pb|http) -> list().
+membership_request(Protocol) ->
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    lists:foldl(membership_request_fun(Protocol), [], UpNodes).
+
+membership_request_fun(Protocol) ->
+    fun(Node, Acc) ->
+        case rpc:call(Node, application, get_env, [riak_api, Protocol]) of
+            {ok, {IP, Port}} when is_integer(Port) ->
+                [{IP, Port}|Acc];
+            _ ->
+                Acc
+        end
+    end.
 
 %% @doc Fetch the next item from the replication queue
 -spec fetch(riak_kv_replrtq_src:queue_name(), riak_client()) ->

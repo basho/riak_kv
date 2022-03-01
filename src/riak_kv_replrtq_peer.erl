@@ -78,7 +78,7 @@ prompt_discovery({QueueName, PeerInfo}) ->
 %%%============================================================================
 
 init([]) ->
-    case app_helper:get_env(riak_kv, replrtq_peer_disocvery, false) of
+    case app_helper:get_env(riak_kv, replrtq_peer_discovery, false) of
         true -> 
             SinkPeers = app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
             DefaultQueue = app_helper:get_env(riak_kv, replrtq_sinkqueue),

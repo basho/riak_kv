@@ -268,6 +268,15 @@ process(#rpbpushreq{queuename = QueueNameBin, keys_value = KVL}, State) ->
                 State}
     end;
 
+process(#rpbmembershipreq{}, State) ->
+    MembershipList =
+        lists:map(
+            fun({IP, Port}) ->
+                #rpbclustermemberentry{ip = IP, port = Port}
+            end,
+            riak_client:membership_request(pb)),
+    {reply, #rpbmembershipresp{up_nodes = MembershipList}, State};
+
 process(#rpbputreq{bucket = <<>>}, State) ->
     {error, "Bucket cannot be zero-length", State};
 process(#rpbputreq{key = <<>>}, State) ->
