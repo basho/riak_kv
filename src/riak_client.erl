@@ -145,7 +145,7 @@ membership_request(Protocol) ->
 membership_request_fun(Protocol) ->
     fun(Node, Acc) ->
         case rpc:call(Node, application, get_env, [riak_api, Protocol]) of
-            {ok, {IP, Port}} when is_integer(Port) ->
+            {ok, [{IP, Port}]} when is_integer(Port) ->
                 [{IP, Port}|Acc];
             _ ->
                 Acc
