@@ -159,15 +159,21 @@ code_change(_OldVsn, State, _Extra) ->
             update|regular|count_change) -> boolean().
 prompt_discovery(QueueName, PeerInfo, Type) ->
     {SnkWorkerCount, PerPeerLimit} = riak_kv_replrtq_snk:get_worker_counts(),
+    StartDelayMS = riak_kv_replrtq_snk:starting_delay(),
     CurrentPeers = 
         case Type of
             count_change ->
                 %% Ignore current peers, to update worker counts
                 [];
             _ ->
-                riak_kv_replrtq_snk:current_peers(QueueName)
+                lists:usort(
+                    lists:map(
+                        fun({ID, _D, H, P, Prot}) ->
+                            {ID, StartDelayMS, H, P, Prot}
+                        end,
+                        riak_kv_replrtq_snk:current_peers(QueueName)))
         end,
-    case discover_peers(PeerInfo) of
+    case discover_peers(PeerInfo, StartDelayMS) of
         CurrentPeers ->
             lager:info("Type=~w discovery led to no change", [Type]),
             false;
@@ -188,18 +194,17 @@ prompt_discovery(QueueName, PeerInfo, Type) ->
             true
     end.
 
--spec discover_peers(list(riak_kv_replrtq_snk:peer_info()))
+-spec discover_peers(list(riak_kv_replrtq_snk:peer_info()), pos_integer())
             -> list(riak_kv_replrtq_snk:peer_info()).
-discover_peers(PeerInfo) ->
-    Peers = lists:usort(lists:foldl(fun discover_from_peer/2, [], PeerInfo)),
-    StartingDelayMS = riak_kv_replrtq_snk:starting_delay(),
+discover_peers(PeerInfo, StartingDelayMS) ->
+    Peers = lists:foldl(fun discover_from_peer/2, [], PeerInfo),
     ConvertToPeerInfoFun =
         fun({IP, Port, Protocol}, Acc) ->
             [{length(Acc) + 1,
                 StartingDelayMS,
                 binary_to_list(IP), Port, Protocol}|Acc]
         end,
-    lists:foldl(ConvertToPeerInfoFun, [], Peers).
+    lists:usort(lists:foldl(ConvertToPeerInfoFun, [], Peers)).
 
     
 -spec discover_from_peer(
@@ -218,13 +223,14 @@ discover_from_peer(PeerInfo, Acc) ->
                         lists:map(
                             fun({IPa, Pa}) -> {IPa, Pa, Protocol} end,
                             lists:usort(IPPorts));
-                _ ->
+                R ->
+                    lager:info("Unexpected peer discovery response ~p", [R]),
                     Acc
             end
         catch
             Type:Exception ->
                 lager:warning(
-                    "Peer discovery failed at Peer ~p due to ~w error ~w",
+                    "Peer discovery failed at Peer ~p due to ~w ~w",
                     [PeerInfo, Type, Exception]),
                 Acc
         end,

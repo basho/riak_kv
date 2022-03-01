@@ -268,7 +268,7 @@ process(#rpbpushreq{queuename = QueueNameBin, keys_value = KVL}, State) ->
                 State}
     end;
 
-process(#rpbmembershipreq{}, State) ->
+process(rpbmembershipreq, State) ->
     MembershipList =
         lists:map(
             fun({IP, Port}) ->

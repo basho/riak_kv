@@ -326,6 +326,7 @@ handle_call({add, QueueN, Peers, WorkerCount, PerPeerLimit}, _From, State) ->
                     max_worker_count = WorkerCount},
     W0 =
         lists:keystore(QueueN, 1, State#state.work, {QueueN, Iteration, SnkW}),
+    log_queue_addition(QueueN, Peers, WorkerCount, PerPeerLimit),
     prompt_work(),
     {reply, ok, State#state{work = W0, iteration = Iteration, enabled = true}};
 handle_call({worker_count, QueueN, WorkerCount, PerPeerLimit}, _From, State) ->
@@ -857,6 +858,14 @@ log_mapfun({QueueName, Iteration, SinkWork}) ->
     lager:info("Queue=~w has peer delays of~s", [QueueName, PeerDelays]),
     {QueueName, Iteration, SinkWork#sink_work{queue_stats = ?ZERO_STATS}}.
 
+-spec log_queue_addition(
+    queue_name(), list(peer_info()), pos_integer(), pos_integer()) -> ok.
+log_queue_addition(_QN, [], _WC, _PPL) ->
+    ok;
+log_queue_addition(QueueN, [Peer|OtherPeers], WorkerCount, PerPeerLimit) ->
+    lager:info("Queue=~w added peer ~p with worker_count=~w per_peer_limit=~w",
+        [QueueN, Peer, WorkerCount, PerPeerLimit]),
+    log_queue_addition(QueueN, OtherPeers, WorkerCount, PerPeerLimit).
 
 %%%============================================================================
 %%% Test
