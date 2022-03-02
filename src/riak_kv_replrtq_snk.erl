@@ -428,7 +428,14 @@ handle_info({prompt_requeue, WorkItem}, State) ->
     requeue_work(WorkItem),
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    Work = State#state.work,
+    WorkItems = Work#sink_work.work_queue,
+    CloseFun = 
+        fun({{_QN, _Iter, _Peer}, _LocalC, RemoteFun, _RCF}) ->
+            RemoteFun(close)
+        end,
+    lists:foreach(CloseFun, WorkItems),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
