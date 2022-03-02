@@ -451,8 +451,8 @@ get_worker_counts() ->
     {SnkWorkerCount, PerPeerLimit}.
 
 set_worker_counts(SnkWorkerCount, PerPeerLimit) ->
-    application:set_env(ria_kv, replrtq_sinkworkers, SnkWorkerCount),
-    application:set_env(ria_kv, replrtq_sinkpeerlimit, PerPeerLimit).
+    application:set_env(riak_kv, replrtq_sinkworkers, SnkWorkerCount),
+    application:set_env(riak_kv, replrtq_sinkpeerlimit, PerPeerLimit).
 
 starting_delay() ->
     ?STARTING_DELAYMS.
