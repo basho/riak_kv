@@ -429,11 +429,14 @@ handle_info({prompt_requeue, WorkItem}, State) ->
     {noreply, State}.
 
 terminate(_Reason, State) ->
-    Work = State#state.work,
-    WorkItems = Work#sink_work.work_queue,
+    WorkItems = lists:map(fun(SW) -> element(3, SW) end, State#state.work),
     CloseFun = 
-        fun({{_QN, _Iter, _Peer}, _LocalC, RemoteFun, _RCF}) ->
-            RemoteFun(close)
+        fun(SinkWork) ->
+            lists:foreach(
+                fun({{_QN, _Iter, _Peer}, _LocalC, RemoteFun, _RCF}) ->
+                    RemoteFun(close)
+                end,
+                SinkWork#sink_work.work_queue)
         end,
     lists:foreach(CloseFun, WorkItems),
     ok.
