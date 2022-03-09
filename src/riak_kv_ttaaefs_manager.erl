@@ -368,9 +368,11 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
                 lager:info("exchange=~w failed to complete in duration=~w s" ++
                                     " sync_state=unknown",
                                 [ReqID, Duration div 1000000]),
+                riak_kv_stat:update({ttaaefs, sync_fail, Duration}),
                 {?CRASH_TIMEOUT, State#state{previous_success = false}};
             {SyncState, 0} when SyncState == root_compare;
                                 SyncState == branch_compare ->
+                riak_kv_stat:update({ttaaefs, sync_sync, Duration}),
                 lager:info("exchange=~w complete result=~w in duration=~w s" ++
                                     " sync_state=true",
                                 [ReqID, Result, Duration div 1000000]),
@@ -380,6 +382,7 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
                 lager:info("exchange=~w complete result=~w in duration=~w s" ++
                                     " sync_state=false",
                                 [ReqID, Result, Duration div 1000000]),
+                riak_kv_stat:update({ttaaefs, sync_nosync, Duration}),
                 % If exchanges start slowing, then start increasing the pauses
                 % Gradually degrade in response to an increased workload
                 {max(?LOOP_TIMEOUT, (Duration div 1000) div 2),
@@ -705,6 +708,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
             lager:info("Starting ~w full-sync work_item=~w " ++ 
                                 "reqid=~w exchange id=~s pid=~w",
                             [Ref, WorkType, ReqID0, ExID, ExPid]),
+            riak_kv_stat:update({ttaaefs, WorkType}),
             
             {State#state{bucket_list = NextBucketList,
                             last_exchange_start = os:timestamp()},
@@ -997,6 +1001,8 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
         lager:info("AAE reqid=~w work_item=~w type=~w shows sink ahead " ++
                         "for key_count=~w keys limited by max_results=~w", 
                     [ExchangeID, WorkType, Ref, SinkDCount, MaxResults]),
+        riak_kv_stat:update({ttaaefs, snk_ahead, SinkDCount}),
+        riak_kv_stat:update({ttaaefs, src_ahead, length(ToRepair)}),
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
         PBDL = report_repairs(ExchangeID, ToRepair, Ref, WorkType),
         RB = app_helper:get_env(riak_kv, ttaaefs_rangeboost, ?RANGE_BOOST),
