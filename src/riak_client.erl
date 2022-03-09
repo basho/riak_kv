@@ -869,10 +869,12 @@ ttaaefs_fullsync(WorkItem) ->
 
 %% @doc
 %% Prompt a full-sync based on the current configuration, and using either
-%% - null_sync (a no op)
-%% - all_sync (sync over all time - only permissible sync if not bucket-based)
-%% - hour_sync (sync over past hour, only allowed if bucket-based sync)
-%% - day_sync (sync over past day, only allowed if bucket-based sync)
+%% - null_check (a no op)
+%% - all_check (sync over all time - only permissible sync if not bucket-based)
+%% - hour_check (sync over past hour, only allowed if bucket-based sync)
+%% - day_check (sync over past day, only allowed if bucket-based sync)
+%% - range_check (sync over a range if one has been discovered by a previour sync)
+%% - auto_check (sync over range if one is present, otherwise use all if within window, otherwise day)
 -spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item(), integer()) -> ok.
 ttaaefs_fullsync(WorkItem, SecsTimeout) ->
     ReqId = mk_reqid(),
