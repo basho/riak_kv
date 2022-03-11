@@ -1093,6 +1093,69 @@
   {default, 0}
 ]}.
 
+%% @doc How many times per 24hour period should the an auto_check be run.  The
+%% auto_check is intended to be an adaptive check, in that it will:
+%% - use a range_check if the revious check has identified a range;
+%% - use an all_check if no range is identified, and the current time is inside
+%% the all_check window;
+%% - use a day_check otherwise
+%% For full, nval, sync operations the range is only relevant to the search
+%% for objects to repair - the tree comparison is always between all data for
+%% that nval.
+{mapping, "ttaaefs_autocheck", "riak_kv.ttaaefs_autocheck", [
+  {datatype, integer},
+  {default, 0}
+]}.
+
+%% @doc Lets you specify when during the day auto_check may run all_check
+%% rather than the less expensive day_check, when no range has been identified.
+%% This constrains fixing entropy between cluster sof no recently-modified data
+%% to this window:
+%%
+%% * `always` (default) No restrictions
+%% * `never` never convert an auto_check to an all_check
+%% * `window` Hours during which merging is permitted, where
+%%   `ttaaefs_allcheck.window.start` and `ttaaefs_allcheck.window.end` are
+%%   integers between 0 and 23.
+%%
+%% If all_check has a significant impact on performance of your cluster,
+%% or your cluster has quiet periods in which little storage activity
+%% occurs, you may want to change this setting from the default.
+{mapping, "ttaaefs_allcheck.policy", "ttaaefs_allcheck_window", [
+  {default, always},
+  {datatype, {enum, [always, never, window]}},
+  hidden
+]}.
+
+%% @see All check window
+{mapping, "ttaaefs_allcheck.window.start", "ttaaefs_allcheck_window", [
+  {default, 0},
+  {datatype, integer},
+  hidden
+]}.
+
+%% @see All check window
+{mapping, "ttaaefs_allcheck.window.end", "ttaaefs_allcheck_window", [
+  {default, 23},
+  {datatype, integer},
+  hidden
+]}.
+
+{translation,
+ "ttaaefs_allcheck_window",
+ fun(Conf) ->
+  Setting = cuttlefish:conf_get("ttaaefs_allcheck.policy", Conf),
+    case Setting of
+      always -> always;
+      never -> never;
+      window ->
+        Start = cuttlefish:conf_get("ttaaefs_allcheck.window.start", Conf, undefined),
+        End = cuttlefish:conf_get("ttaaefs_allcheck.window.end", Conf, undefined),
+        {Start, End};
+      _Default -> always
+    end
+ end}.
+
 %% @doc If Tictac AAE full-sync discovers keys to be repaired, should each key
 %% that is repaired be logged
 {mapping, "ttaaefs_logrepairs", "riak_kv.ttaaefs_logrepairs", [

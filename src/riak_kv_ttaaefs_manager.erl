@@ -214,7 +214,7 @@ init([]) ->
         end,
     
     CheckWindow =
-        app_helper:get_env(riak_kv, ttaaefs_checkwindow, always),
+        app_helper:get_env(riak_kv, ttaaefs_allcheck_window),
 
     State1 = 
         case Scope of
