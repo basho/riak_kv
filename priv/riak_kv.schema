@@ -1121,28 +1121,27 @@
 %% If all_check has a significant impact on performance of your cluster,
 %% or your cluster has quiet periods in which little storage activity
 %% occurs, you may want to change this setting from the default.
-{mapping, "ttaaefs_allcheck.policy", "ttaaefs_allcheck_window", [
+{mapping, "ttaaefs_allcheck.policy", "riak_kv.ttaaefs_allcheck_window", [
   {default, always},
-  {datatype, {enum, [always, never, window]}},
-  hidden
+  {datatype, {enum, [always, never, window]}}
 ]}.
 
 %% @see All check window
-{mapping, "ttaaefs_allcheck.window.start", "ttaaefs_allcheck_window", [
+{mapping, "ttaaefs_allcheck.window.start", "riak_kv.ttaaefs_allcheck_window", [
   {default, 0},
   {datatype, integer},
   hidden
 ]}.
 
 %% @see All check window
-{mapping, "ttaaefs_allcheck.window.end", "ttaaefs_allcheck_window", [
+{mapping, "ttaaefs_allcheck.window.end", "riak_kv.ttaaefs_allcheck_window", [
   {default, 23},
   {datatype, integer},
   hidden
 ]}.
 
 {translation,
- "ttaaefs_allcheck_window",
+ "riak_kv.ttaaefs_allcheck_window",
  fun(Conf) ->
   Setting = cuttlefish:conf_get("ttaaefs_allcheck.policy", Conf),
     case Setting of

@@ -72,7 +72,7 @@ basic_schema_test() ->
     cuttlefish_unit:assert_config(Config, "riak_kv.warn_siblings", 25),
     cuttlefish_unit:assert_config(Config, "riak_kv.max_siblings", 100),
 
-    cuttlefish_unit:assert_config(Config, "ttaaefs_allcheck_window", always),
+    cuttlefish_unit:assert_config(Config, "riak_kv.ttaaefs_allcheck_window", always),
 
     %% Default Bucket Properties
     cuttlefish_unit:assert_config(Config, "riak_core.default_bucket_props.pr", 0),
@@ -281,7 +281,7 @@ all_check_window_test() ->
     Config = cuttlefish_unit:generate_templated_config(
         ["priv/riak_kv.schema"], Conf, context(), predefined_schema()),
     
-    cuttlefish_unit:assert_config(Config, "ttaaefs_allcheck_window", {18, 5}).
+    cuttlefish_unit:assert_config(Config, "riak_kv.ttaaefs_allcheck_window", {18, 5}).
 
 commit_hooks_test() ->
     Conf = [
