@@ -37,7 +37,8 @@
         work/4,
         stats/1,
         format_state/1,
-        close/2]).
+        close/2,
+        fetch_batch/3]).
 
 -define(QUEUE_LIMIT, 1000).
 -define(OVERFLOW_LIMIT, 1000000).
@@ -254,16 +255,12 @@ close(FilePath, FlowQ) ->
         end,
     lists:foreach(CloseFun, FlowQ#overflowq.overflow_files).
 
-%%%============================================================================
-%%% Internal functions
-%%%============================================================================
-
 %% @doc Fetch a batch of items from the queue.  If there are less than batch
 %% size items on the queue, then the queue may first be re-loaded with items
 %% from the overflow file, if such a file exists.
-%% The batch will be taken from the given priority queue with items are
-%% available.  An incomplete batch does not mean there are not items still
-%% ready to be processed.
+%% The batch will be taken from the given priority queue with items available.
+%% An incomplete batch does not mean there are not items still ready to be
+%% processed.
 %% In some cases, when overflow files are not in use, items may also come from
 %% a lower priority queue
 -spec fetch_batch(pos_integer(), pos_integer(), overflowq()) ->
@@ -298,6 +295,11 @@ fetch_batch(Priority, MaxBatchSize, FlowQ) ->
                 UpdFlowQ#overflowq{mqueues = UpdMQueues,
                                     mqueue_lengths=UpdMQueueLengths}}
     end.
+
+%%%============================================================================
+%%% Internal functions
+%%%============================================================================
+
 
 -spec maybereload_queue(pos_integer(), pos_integer(), overflowq()) ->
                             overflowq().

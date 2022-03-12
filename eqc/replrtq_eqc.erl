@@ -55,7 +55,8 @@ start_args(_S) ->
     [].
 
 start() ->
-    {ok, Pid} = riak_kv_replrtq_src:start_link(),
+    FilePath = riak_kv_test_util:get_test_dir("replrtq_eqc"),
+    {ok, Pid} = riak_kv_replrtq_src:start_link(FilePath),
     unlink(Pid),
     Pid.
 
@@ -146,7 +147,7 @@ tictac(QueueName, Entries) ->
                      ({Bucket, Key, VClock, ObjRef}) ->
                           {list_to_binary(Bucket), Key, VClock, ObjRef}
                   end, Entries),
-    riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ReplEntries, 0).
+    riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ReplEntries).
 
 tictac_callouts(_S, [QueueName, Entries]) ->
     ?APPLY(put_prio, [2, QueueName, Entries]).
@@ -200,7 +201,7 @@ aaefold(QueueName, Entries) ->
                      ({Bucket, Key, VClock, ObjRef}) ->
                           {list_to_binary(Bucket), Key, VClock, ObjRef}
                   end, Entries),
-    riak_kv_replrtq_src:replrtq_aaefold(QueueName, ReplEntries, 0).
+    riak_kv_replrtq_src:replrtq_aaefold(QueueName, ReplEntries).
 
 aaefold_callouts(_S, [QueueName, Entries]) ->
     ?APPLY(put_prio, [1, QueueName, Entries]).
