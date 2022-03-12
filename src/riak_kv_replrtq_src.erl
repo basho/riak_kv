@@ -490,7 +490,7 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
             {QueueName, LQ} =
                 lists:keyfind(QueueName, 1, AccState#state.queue_local),
             case element(?RTQ_PRIORITY, LQ) of
-                {_Q, IsE, N} when N >= State#state.object_limit; not IsE ->
+                {Q, IsE, N} when N >= State#state.object_limit; not IsE ->
                     {QueueName, OverflowQ} =
                         lists:keyfind(
                             QueueName,
@@ -507,7 +507,19 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
                             1,
                             AccState#state.queue_overflow,
                             {QueueName, UpdOverflowQ}),
-                    AccState#state{queue_overflow = UpdOverflowQueues};
+                    UpdLQs =
+                        lists:keyreplace(
+                            QueueName,
+                            1,
+                            AccState#state.queue_local,
+                            {QueueName,
+                                setelement(
+                                    ?RTQ_PRIORITY,
+                                    LQ,
+                                    {Q, false, N})}),
+                    AccState#state{
+                        queue_overflow = UpdOverflowQueues,
+                        queue_local = UpdLQs};
                 {Q, true, N} ->
                     UpdLQs =
                         lists:keyreplace(
