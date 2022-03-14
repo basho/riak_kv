@@ -646,7 +646,12 @@ format_status(terminate, [_PDict, State]) ->
         queue_local = not_logged,
         queue_overflow = not_logged}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    lists:foreach(
+        fun({_QN, OQ}) ->
+            riak_kv_overflow_queue:close(State#state.root_path, OQ)
+        end,
+        State#state.queue_overflow),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
