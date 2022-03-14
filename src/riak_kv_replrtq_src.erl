@@ -64,10 +64,25 @@
     % If the priority queue is bigger than the object limit, and the object
     % reference is {object, Object} then the object reference will be converted
     % into a fetch request.  Manages the number of objects being held in
-    % memory.  The object limit can be altered using
+    % memory.  The object limit can be altered using:
     % riak_kv.replrtq_srcobjectlimit
+    %
+    % The object limit is implemented by limiting the size of the local queue
+    % cache, and not allowing any objects onto the riak_kv_overflow_queue.  As
+    % there may be non-objects on the local queue cache, this means that it is
+    % possible that objects may be stripped below the limit.
+    %
+    % The object limit is tracked separately for each queue name.
+
 -define(QUEUE_LIMIT, 1000000).
+    % This is the limit on the size of the queue for a given queue name and
+    % priority.  the queue limit can be altered using:
+    % riak_kv.replrtq_srcqueuelimit
+
 -define(MEMORY_LIMIT, 10000).
+    % This is the limit on the size of the queue in-memory within the overflow
+    % queue for a given queue name and priority
+
 -endif.
 
 
@@ -89,6 +104,7 @@
             queue_overflow = [] :: list(queue_overflow())|not_logged,
             queue_local = [] :: list(queue_local())|not_logged,
             object_limit = ?OBJECT_LIMIT :: non_neg_integer(),
+            queue_limit = ?QUEUE_LIMIT :: non_neg_integer(),
             log_frequency_in_ms = ?LOG_TIMER_SECONDS * 1000 :: pos_integer(),
             root_path :: string()
 }).
@@ -122,7 +138,10 @@
     % The length of the cache queue, the main queue and the overflow queue
 -type queue_overflow() ::
     {queue_name(), riak_kv_overflow_queue:overflowq()}.
--type queue_local_detail() :: {queue:queue(), boolean(), non_neg_integer()}.
+-type queue_local_detail() ::
+    {queue:queue(), non_neg_integer(), non_neg_integer()}.
+    % Local queue, and two integers tracking the size of first the local queue
+    % and second the overflow queue
 -type queue_local() ::
     {queue_name(),
         {
@@ -131,11 +150,11 @@
             queue_local_detail()
         }
     }.
-    % The local queue has a queue_cache, a queue_empty boolean() and the
-    % current queue length (to avoid having to perform order n operation to
-    % check the length), for each of the 3 priorities supported.  The
-    % queue_cache is a cache of the next entries to be sent, and the boolean
-    % indicates if the overflow queue is empty for that priority.
+    % The local queue has a queue_cache, the current queue_cache length (to
+    % avoid having to perform order n operation to check the length), and the
+    % current overflow queue length.  There are three such tuples, one for
+    % each of the 3 priorities supported.  The queue_cache is a cache of the
+    % next entries to be sent.
     %
     % If a priority 3 item is pushed to the queue and the length of the
     % queue_cache is less than the object limit, and the overflowq is empty
@@ -147,12 +166,11 @@
     % an object - this will be sripped back to to_fetch.
     %
     % If a priority 1 or 2 repl_entry is received, then it will always be
-    % added first to the overflowq (changing the queue_empty boolean to false
-    % if it is presently true).
+    % added first to the overflowq .
     %
     % If a fetch request is received and the priority 3 queue_cache is
     % non-empty then the next entry from this queue will be returned.  
-    % If the queue_empty boolean is true, then an attempt will be made to
+    % If the overflow queue is empty, then an attempt will be made to
     % return a batch from the overflowq, to add to the queue_cache.
     %
     % If the Priority 3 queue is empty (both cache an overflow), then the
@@ -286,7 +304,12 @@ init([FilePath]) ->
     QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
     QFM = tokenise_queuedefn(QueueDefnString),
 
-    OL = app_helper:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT), 
+    QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
+
+    OL = min(app_helper:get_env(
+                riak_kv,
+                replrtq_srcobjectlimit,
+                ?OBJECT_LIMIT), QL),
 
     MapToQOverflow =
         fun({QueueName, _QF, _QA}) ->
@@ -309,6 +332,7 @@ init([FilePath]) ->
                 queue_overflow = QO,
                 queue_local = QC,
                 object_limit = OL,
+                queue_limit = QL,
                 log_frequency_in_ms = LogFreq,
                 root_path = FilePath}}.
 
@@ -317,36 +341,44 @@ handle_call({bulk_add, Priority, QueueName, ReplEntries}, _From, State) ->
         {QueueName, _QueueFilter, active} ->
             {QueueName, OverflowQueue} =
                 lists:keyfind(QueueName, 1, State#state.queue_overflow),
+            {QueueName, LocalQueues} =
+                lists:keyfind(QueueName, 1, State#state.queue_local),
+            {Q, LC, OC} = element(Priority, LocalQueues),
+            EntriesToAdd =
+                case LC + OC + length(ReplEntries) of
+                    TC when TC =< State#state.queue_limit ->
+                        ReplEntries;
+                    TC ->
+                        OverLimit = TC - State#state.queue_limit,
+                        {ToThrow, ToQueue} =
+                            lists:split(max(OverLimit, 0), ReplEntries),
+                        _ = riak_kv_stat:update(
+                            {ngrrepl_srcdiscard, length(ToThrow)}),
+                        ToQueue
+                end,
             UpdOverflowQueue =
                 lists:foldr(
                     fun(RE, Acc) ->
                         riak_kv_overflow_queue:addto_queue(Priority, RE, Acc)
                     end,
                     OverflowQueue,
-                    ReplEntries),
+                    EntriesToAdd),
             UpdOverflowQueues =
                 lists:keyreplace(
                     QueueName,
                     1,
                     State#state.queue_overflow,
                     {QueueName, UpdOverflowQueue}),
-            {QueueName, LocalQueues} =
-                lists:keyfind(QueueName, 1, State#state.queue_local),
             UpdLocalQueues =
-                case element(Priority, LocalQueues) of
-                    {_Q, false, _N} ->
-                        State#state.queue_local;
-                    {Q, true, N} ->
-                        lists:keyreplace(
-                            QueueName,
-                            1,
-                            State#state.queue_local,
-                            {QueueName,
-                                setelement(
-                                    Priority,
-                                    LocalQueues,
-                                    {Q, false, N})})
-                end,
+                lists:keyreplace(
+                        QueueName,
+                        1,
+                        State#state.queue_local,
+                        {QueueName,
+                            setelement(
+                                Priority,
+                                LocalQueues,
+                                {Q, LC, OC + length(EntriesToAdd)})}),
             {reply,
                 ok,
                 State#state{
@@ -360,8 +392,7 @@ handle_call({length_rtq, QueueName}, _From, State) ->
         {QueueName, LocalQueues} ->
             MapFun =
                 fun(I) ->
-                    queue_lengths(
-                        QueueName, LocalQueues, State#state.queue_overflow, I)
+                    queue_lengths(LocalQueues, I)
                 end,
             {reply,
                 {QueueName,
@@ -380,41 +411,89 @@ handle_call({popfrom_rtq, QName}, _From, State) ->
     case lists:keyfind(QName, 1, State#state.queue_local) of
         {QName, LocalQueues} ->
             case LocalQueues of
-                {{_Q1, true, 0}, {_Q2, true, 0}, {_Q3, true, 0}} ->
+                {{_Q1, 0, 0}, {_Q2, 0, 0}, {_Q3, 0, 0}} ->
                     {reply, queue_empty, State};
-                {P1, P2, {Q3, IsE, N}} when N > 0 ->
+                {P1, P2, {Q3, LC, OC}} when LC > 0 ->
                     {{value, RE}, UpdQ} = queue:out(Q3),
                     UpdLQs =
                         lists:keyreplace(
                             QName,
                             1,
                             State#state.queue_local,
-                            {QName, {P1, P2, {UpdQ, IsE, max(N - 1, 0)}}}),
+                            {QName, {P1, P2, {UpdQ, LC - 1, OC}}}),
                     {reply, RE, State#state{queue_local = UpdLQs}};
-                _ ->
-                    {QName, OFlowQ} =
-                        lists:keyfind(QName, 1, State#state.queue_overflow),
-                    {R, UpdLQ, UpdOFlowQ} =
-                        fetch_from_local(
-                            [?RTQ_PRIORITY, ?AAE_PRIORITY, ?FLD_PRIORITY],
-                            LocalQueues,
-                            OFlowQ),
+                {P1, P2, {Q3, 0, OC}} when OC > 0 ->
+                    {RE, UpdLQ, UpdOFlowQs} =
+                        fetch_from_overflow(
+                            ?RTQ_PRIORITY,
+                            QName,
+                            State#state.queue_overflow,
+                            {Q3, 0, OC}),
                     UpdLQs =
                         lists:keyreplace(
                             QName,
                             1,
                             State#state.queue_local,
-                            {QName, UpdLQ}),
-                    UpdOQs =
+                            {QName, {P1, P2, UpdLQ}}),
+                    {reply,
+                        RE,
+                        State#state{
+                            queue_local = UpdLQs,
+                            queue_overflow = UpdOFlowQs}};
+                {P1, {Q2, LC, OC}, P3} when LC > 0 ->
+                    {{value, RE}, UpdQ} = queue:out(Q2),
+                    UpdLQs =
                         lists:keyreplace(
                             QName,
                             1,
+                            State#state.queue_local,
+                            {QName, {P1, {UpdQ, LC - 1, OC}, P3}}),
+                    {reply, RE, State#state{queue_local = UpdLQs}};
+                {P1, {Q2, 0, OC}, P3} when OC > 0 ->
+                    {RE, UpdLQ, UpdOFlowQs} =
+                        fetch_from_overflow(
+                            ?AAE_PRIORITY,
+                            QName,
                             State#state.queue_overflow,
-                            {QName, UpdOFlowQ}),
+                            {Q2, 0, OC}),
+                    UpdLQs =
+                        lists:keyreplace(
+                            QName,
+                            1,
+                            State#state.queue_local,
+                            {QName, {P1, UpdLQ, P3}}),
                     {reply,
-                        R,
-                        State#state{queue_local = UpdLQs,
-                            queue_overflow = UpdOQs}}
+                        RE,
+                        State#state{
+                            queue_local = UpdLQs,
+                            queue_overflow = UpdOFlowQs}};
+                {{Q1, LC, OC}, P2, P3} when LC > 0 ->
+                    {{value, RE}, UpdQ} = queue:out(Q1),
+                    UpdLQs =
+                        lists:keyreplace(
+                            QName,
+                            1,
+                            State#state.queue_local,
+                            {QName, {{UpdQ, LC - 1, OC}, P2, P3}}),
+                    {reply, RE, State#state{queue_local = UpdLQs}};
+                {{Q1, 0, OC}, P2, P3} when OC > 0 ->
+                    {RE, UpdLQ, UpdOFlowQs} =
+                        fetch_from_overflow(
+                            ?FLD_PRIORITY,
+                            QName,
+                            State#state.queue_overflow,
+                            {Q1, 0, OC}),
+                    UpdLQs =
+                        lists:keyreplace(
+                            QName,
+                            1,
+                            State#state.queue_local,
+                            {QName, {UpdLQ, P2, P3}}),
+                    {reply,
+                        RE,
+                        State#state{
+                            queue_local = UpdLQs,
+                            queue_overflow = UpdOFlowQs}}
             end;
         false ->
             {reply, queue_empty, State}
@@ -490,7 +569,10 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
             {QueueName, LQ} =
                 lists:keyfind(QueueName, 1, AccState#state.queue_local),
             case element(?RTQ_PRIORITY, LQ) of
-                {Q, IsE, N} when N >= State#state.object_limit; not IsE ->
+                {_Q, LC, OC} when (LC + OC) >= State#state.queue_limit ->
+                    _ = riak_kv_stat:update({ngrrepl_srcdiscard, 1}),
+                    AccState;
+                {Q, LC, OC} when LC >= State#state.object_limit; OC > 0 ->
                     {QueueName, OverflowQ} =
                         lists:keyfind(
                             QueueName,
@@ -516,11 +598,11 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
                                 setelement(
                                     ?RTQ_PRIORITY,
                                     LQ,
-                                    {Q, false, N})}),
+                                    {Q, LC, OC + 1})}),
                     AccState#state{
                         queue_overflow = UpdOverflowQueues,
                         queue_local = UpdLQs};
-                {Q, true, N} ->
+                {Q, LC, 0} ->
                     UpdLQs =
                         lists:keyreplace(
                             QueueName,
@@ -530,7 +612,7 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
                                 setelement(
                                     ?RTQ_PRIORITY,
                                     LQ,
-                                    {queue:in(ReplEntry, Q), false, N + 1})}),
+                                    {queue:in(ReplEntry, Q), LC + 1, 0})}),
                     AccState#state{queue_local = UpdLQs}
             end
         end,
@@ -543,8 +625,7 @@ handle_info(log_queue, State) ->
                 lists:keyfind(QueueName, 1, State#state.queue_local),
             MapFun =
                 fun(I) ->
-                    queue_lengths(
-                        QueueName, QLs, State#state.queue_overflow, I)
+                    queue_lengths(QLs, I)
                 end,
             [P1L, P2L, P3L] =
                 lists:map(
@@ -570,7 +651,6 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
 
 %%%============================================================================
 %%% Internal functions
@@ -665,78 +745,46 @@ tokenise_queuedefn(QueueDefnString) ->
     lists:foldl(SplitQueueDefnFun, [], QueueStrings).
 
 -spec queue_lengths(
-    queue_name(),
     {queue_local_detail(), queue_local_detail(), queue_local_detail()},
-    list(queue_overflow()),
     queue_priority()) -> non_neg_integer().
-queue_lengths(QueueName, LocalQueues, QueueOverflow, Priority) ->
-    LC = element(3, element(Priority, LocalQueues)),
-    {QueueName, OverflowQueue} =
-        lists:keyfind(QueueName, 1, QueueOverflow),
-    [{mqueue_lengths, MQL},
-        {overflow_lengths, OQL},
-        {overflow_discards, _ODS}] = riak_kv_overflow_queue:stats(OverflowQueue),
-    {Priority, MQ} =
-        lists:keyfind(Priority, 1, MQL),
-    {Priority, OQ} =
-        lists:keyfind(Priority, 1, OQL),
-    LC + MQ + OQ.
+queue_lengths(LocalQueues, Priority) ->
+    {_Q, LC, OC} = element(Priority, LocalQueues),
+    LC + OC.
 
-
--spec fetch_from_local(
-    list(pos_integer()),
-    {queue_local_detail(), queue_local_detail(), queue_local_detail()},
-    riak_kv_overflow_queue:overflowq()) ->
-        {queue_empty|{found, repl_entry()},
-        {queue_local_detail(), queue_local_detail(), queue_local_detail()},
-        riak_kv_overflow_queue:overflowq()}.
-fetch_from_local([], LocalQueues, FlowQueues) ->
-    {queue_empty, LocalQueues, FlowQueues};
-fetch_from_local([Priority|Rest], LocalQueues, FlowQueues) ->
-    case element(Priority, LocalQueues) of
-        {Q, IsE, N} when N > 0 ->
-            {{value, RE}, UpdQ} = queue:out(Q),
-            UpdLQ = 
-                setelement(
-                    Priority,
-                    LocalQueues,
-                    {UpdQ, IsE, max(N - 1, 0)}),
-            {RE, UpdLQ, FlowQueues};
-        {_Q, true, 0} ->
-            fetch_from_local(Rest, LocalQueues, FlowQueues);
-        {_Q, false, 0} ->
-            case fetch_from_overflow(Priority, LocalQueues, FlowQueues) of
-                {queue_empty, UpdLocalQueue, UpdFlowQ} ->
-                    fetch_from_local(Rest, UpdLocalQueue, UpdFlowQ);
-                {RE, UpdLocalQueue, UpdFlowQ} ->
-                    {RE, UpdLocalQueue, UpdFlowQ}
-            end
-    end.
-
-fetch_from_overflow(Priority, LocalQueues, OFlowQs) ->
-    case riak_kv_overflow_queue:fetch_batch(Priority, ?BATCH_SIZE, OFlowQs) of
-        {empty, UpdFlowQueue} ->
-            {queue_empty,
-                setelement(
-                    Priority,
-                    LocalQueues,
-                    {queue:new(), true, 0}),
-                UpdFlowQueue};
-        {[Head|Rest], UpdFlowQueue} ->
-            {LQ, false, _N}  = element(Priority, LocalQueues),
+-spec fetch_from_overflow(
+    queue_priority(),
+    queue_name(),
+    list(queue_overflow()),
+    queue_local_detail()) ->
+        {repl_entry(),
+            queue_local_detail(),
+            list(queue_overflow())}.
+fetch_from_overflow(Priority, QName, OFlowQs, {Q, 0, OC}) ->
+    {QName, OFlowQ} = lists:keyfind(QName, 1, OFlowQs),
+    case riak_kv_overflow_queue:fetch_batch(Priority, ?BATCH_SIZE, OFlowQ) of
+        {[Head|Rest], UpdOFlowQ} ->
             UpdLQ =
-                lists:foldl(fun(RE, Acc) -> queue:in(RE, Acc) end, LQ, Rest),
+                lists:foldl(fun(RE, AccQ) -> queue:in(RE, AccQ) end, Q, Rest),
+            UpdOFlowQs =
+                lists:keyreplace(QName, 1, OFlowQs, {QName, UpdOFlowQ}),
             {Head,
-                setelement(
-                    Priority,
-                    LocalQueues,
-                    {UpdLQ, false, length(Rest)}),
-                UpdFlowQueue}
+                {UpdLQ, length(Rest), OC - length(Rest) - 1},
+                UpdOFlowQs};
+        {empty, UpdOFlowQ} ->
+            UpdOFlowQs =
+                lists:keyreplace(QName, 1, OFlowQs, {QName, UpdOFlowQ}),
+            {queue_empty,
+                {Q, 0, 0},
+                UpdOFlowQs}
     end.
 
+-spec empty_local_queue() ->
+    {queue_local_detail(), queue_local_detail(), queue_local_detail()}.
 empty_local_queue() ->
-    {{queue:new(), true, 0}, {queue:new(), true, 0}, {queue:new(), true, 0}}.
+    {{queue:new(), 0, 0}, {queue:new(), 0, 0}, {queue:new(), 0, 0}}.
 
+-spec empty_overflow_queue(queue_name(), string())
+        -> riak_kv_overflow_queue:overflowq(). 
 empty_overflow_queue(QueueName, FilePath) ->
     QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
     Priorities = [?FLD_PRIORITY, ?AAE_PRIORITY, ?RTQ_PRIORITY],
@@ -745,8 +793,7 @@ empty_overflow_queue(QueueName, FilePath) ->
                     Priorities,
                     filename:join(FilePath, atom_to_list(QueueName)),
                     MemLimit,
-                    QL - MemLimit - 1).
-
+                    QL).
 
 %%%============================================================================
 %%% Test
@@ -956,22 +1003,84 @@ limit_coordput_test() ->
     % If we now consume from the queue, the next addition can be made
     {{?TT1, ?TB1}, <<1:32/integer>>, _VC1, to_fetch} = popfrom_rtq(?QN1),
     ?assertMatch({?QN1, {0, 0, 99999}}, length_rtq(?QN1)),
-
-    % Have to drain at least the object limit  and the memory limit
-    % before another object will be taken
     ok = replrtq_coordput(NextAddition),
-    ?assertMatch({?QN1, {0, 0, 99999}}, length_rtq(?QN1)),
-    lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1,11000)),
-    ?assertMatch({?QN1, {0, 0, 88999}}, length_rtq(?QN1)),
-    % there should now be a single space in the overflow queue
-    ok = replrtq_coordput(NextAddition),
-    ?assertMatch({?QN1, {0, 0, 89000}}, length_rtq(?QN1)),
+    ?assertMatch({?QN1, {0, 0, 100000}}, length_rtq(?QN1)),
+    stop().
 
-    % There is a loss of predictability here as the limit is reached, the
-    % layers of in-memory queues means that the limit moves depending on
-    % history.  However, the limit should be hte correct order of magnitude.
+limit_aaefold_test() ->
+    start_rtq(),
+    ?assertMatch(true, register_rtq(?QN1, any)),
+    GenB1 = generate_replentryfun({?TT1, ?TB1}),
+    Grp1 = lists:map(GenB1, lists:seq(1, 90000)),
+    Grp2 = lists:map(GenB1, lists:seq(1, 9000)),
+    Grp3 = lists:map(GenB1, lists:seq(1, 2000)),
+    Grp4 = lists:map(GenB1, lists:seq(1, 2000)),
+
+    ok = replrtq_aaefold(?QN1, Grp1),
+    ?assertMatch({?QN1, {90000, 0, 0}}, length_rtq(?QN1)),
+    ok = replrtq_aaefold(?QN1, Grp2),
+    ?assertMatch({?QN1, {99000, 0, 0}}, length_rtq(?QN1)),
+
+    lists:foreach(fun replrtq_coordput/1, Grp3),
+    ?assertMatch({?QN1, {99000, 0, 2000}}, length_rtq(?QN1)),
+
+    ok = replrtq_aaefold(?QN1, Grp4),
+    ?assertMatch({?QN1, {100000, 0, 2000}}, length_rtq(?QN1)),
+    
+    lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 4000)),
+    ?assertMatch({?QN1, {98000, 0, 0}}, length_rtq(?QN1)),
+
+    ok = replrtq_aaefold(?QN1, Grp4),
+    ?assertMatch({?QN1, {100000, 0, 0}}, length_rtq(?QN1)),
+    stop().
+
+limit_ttaaefs_test() ->
+    start_rtq(),
+    ?assertMatch(true, register_rtq(?QN1, any)),
+    GenB1 = generate_replentryfun({?TT1, ?TB1}),
+    Grp1 = lists:map(GenB1, lists:seq(1, 90000)),
+    Grp2 = lists:map(GenB1, lists:seq(1, 9000)),
+    Grp3 = lists:map(GenB1, lists:seq(1, 2000)),
+    Grp4 = lists:map(GenB1, lists:seq(1, 2000)),
+
+    ok = replrtq_ttaaefs(?QN1, Grp1),
+    ?assertMatch({?QN1, {0, 90000, 0}}, length_rtq(?QN1)),
+    ok = replrtq_ttaaefs(?QN1, Grp2),
+    ?assertMatch({?QN1, {0, 99000, 0}}, length_rtq(?QN1)),
+
+    lists:foreach(fun replrtq_coordput/1, Grp3),
+    ?assertMatch({?QN1, {0, 99000, 2000}}, length_rtq(?QN1)),
+
+    ok = replrtq_ttaaefs(?QN1, Grp4),
+    ?assertMatch({?QN1, {0, 100000, 2000}}, length_rtq(?QN1)),
+    
+    lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 4000)),
+    ?assertMatch({?QN1, {0, 98000, 0}}, length_rtq(?QN1)),
+
+    ok = replrtq_ttaaefs(?QN1, Grp4),
+    ?assertMatch({?QN1, {0, 100000, 0}}, length_rtq(?QN1)),
+
+    lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 100000)),
+    ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
+
+    ok = replrtq_ttaaefs(?QN1, Grp4),
+    ?assertMatch({?QN1, {0, 2000, 0}}, length_rtq(?QN1)),
+    
+    lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 2000)),
+    ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
+
+    ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
 
     stop().
+
+wrong_overflowq_size_test() ->
+    FilePath = riak_kv_test_util:get_test_dir("replrtq_eunit"),
+    OFlowQs = [{?QN1, empty_overflow_queue(?QN1, FilePath)}],
+    fetch_from_overflow(?RTQ_PRIORITY, ?QN1, OFlowQs, {queue:new(), 0, 2}),
+    {queue_empty, {_Q, 0, 0}, _OFQ} =
+        fetch_from_overflow(?RTQ_PRIORITY, ?QN1, OFlowQs, {queue:new(), 0, 2}).
+
+
 
 parse_queuedefinition_test() ->
     Str1 = "cluster_a:bucketprefix.user|cluster_b:any|" ++
