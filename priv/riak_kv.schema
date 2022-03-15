@@ -1231,6 +1231,27 @@
     {commented, 24}
 ]}.
 
+%% @doc Enable this node to perform peer discovery for real time replication
+%% With peer discovery the configured peers will be used to discover more peers
+%% within those clusters.  The peer discovery process will re-discover at a
+%% random interval between 60s and `replrtq_prompt_max_seconds`.  Unexpected
+%% events will result in the configured peers being used, and discovered peers
+%% being ignored.  If disabled the peer discovery process will be initialised,
+%% but will remain idle
+{mapping, "replrtq_peer_discovery", "riak_kv.replrtq_peer_discovery", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc The maximum number of seconds to wait before re-prompting peer
+%% discovery.  Defaults to 15 minutes.  An immediate cluster-wide update can be
+%% prompted via `remote_console` using `riak_client:replrtq_reset_all_peers/1`.
+{mapping, "replrtq_prompt_max_seconds", "riak_kv.replrtq_prompt_max_seconds", [
+    {datatype, integer},
+    {commented, 900}
+]}.
+
 %% @doc Enable the `recalc` compaction strategy within the leveled backend in
 %% riak.  The default (when disabled) is `retain`, but this will leave
 %% uncollected garbage within the, journal. 

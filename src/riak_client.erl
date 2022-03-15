@@ -49,6 +49,7 @@
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
 -export([fetch/2, push/4]).
+-export([membership_request/1, replrtq_reset_all_peers/1, replrtq_reset_all_workercounts/2]).
 -export([remove_node_from_coverage/0, reset_node_for_coverage/0]).
 
 -compile({no_auto_import,[put/2]}).
@@ -137,6 +138,51 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
             ok
     end.
 
+%% @doc Find the active nodes in the cluster, and return the API IP/Port for
+%% those nodes.  Used in peer discovery for nextgenrepl real-time.
+-spec membership_request(pb|http) -> list({string(), pos_integer()}).
+membership_request(Protocol) ->
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    lists:foldl(membership_request_fun(Protocol), [], UpNodes).
+
+membership_request_fun(Protocol) ->
+    fun(Node, Acc) ->
+        case rpc:call(Node, application, get_env, [riak_api, Protocol]) of
+            {ok, [{IP, Port}]} when is_integer(Port) ->
+                [{IP, Port}|Acc];
+            _ ->
+                Acc
+        end
+    end.
+
+%% @doc Reset the discovered peers on each up node, returning
+%% a list of nodes to which the change was successfully applied
+-spec replrtq_reset_all_peers(
+    riak_kv_replrtq_snk:queue_name()) -> list(node()).
+replrtq_reset_all_peers(QueueName) ->
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    lists:foldl(replrtq_resetpeer_fun(QueueName), [], UpNodes).
+
+replrtq_resetpeer_fun(QueueN) ->
+    fun(Node, Acc) ->
+        B = rpc:call(Node, riak_kv_replrtq_peer, update_discovery, [QueueN]),
+        if B -> [Node|Acc]; true -> Acc end
+    end. 
+
+%% @doc Reset the worker count and per peer limit on each up node, returning
+%% a list of nodes to which the change was successfully applied
+-spec replrtq_reset_all_workercounts(
+    non_neg_integer(),
+    non_neg_integer()) -> list(node()).
+replrtq_reset_all_workercounts(WorkerC, PerPeerL) ->
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    lists:foldl(replrtq_resetcount_fun(WorkerC, PerPeerL), [], UpNodes).
+
+replrtq_resetcount_fun(WC, PPL) ->
+    fun(Node, Acc) ->
+        B = rpc:call(Node, riak_kv_replrtq_peer, update_workers, [WC, PPL]),
+        if B -> [Node|Acc]; true -> Acc end
+    end. 
 
 %% @doc Fetch the next item from the replication queue
 -spec fetch(riak_kv_replrtq_src:queue_name(), riak_client()) ->
