@@ -55,7 +55,8 @@ start_args(_S) ->
     [].
 
 start() ->
-    {ok, Pid} = riak_kv_replrtq_src:start_link(),
+    FilePath = riak_kv_test_util:get_test_dir("replrtq_eqc"),
+    {ok, Pid} = riak_kv_replrtq_src:start_link(FilePath),
     unlink(Pid),
     Pid.
 
@@ -146,34 +147,39 @@ tictac(QueueName, Entries) ->
                      ({Bucket, Key, VClock, ObjRef}) ->
                           {list_to_binary(Bucket), Key, VClock, ObjRef}
                   end, Entries),
-    riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ReplEntries, 0).
+    riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ReplEntries).
 
 tictac_callouts(_S, [QueueName, Entries]) ->
     ?APPLY(put_prio, [2, QueueName, Entries]).
 
-put_prio_post(S, [Prio, QueueName, Entries], Res) ->
+put_prio_post(S, [_Prio, QueueName, _Entries], Res) ->
     Queues = maps:get(priority_queues, S),
-    Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
     case maps:get(QueueName, Queues, undefined) of
-        #{status := active} = PQueues ->
-            PQueue = maps:get(Prio, PQueues, []),
-            case length(Entries) + length(PQueue) < Limit div 2 of
-                true -> eq(Res, ok);
-                false -> eq(Res, pause)
-            end;
-        _ ->
+        #{status := active} ->
             eq(Res, ok)
     end.
 
-%% More than 50% full is pause
+
 put_prio_callouts(S, [Prio, QueueName, Entries]) ->
     Queues = maps:get(priority_queues, S),
     Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
     case maps:get(QueueName, Queues, undefined) of
         #{status := active} = PQueues ->
             PQueue = maps:get(Prio, PQueues, []),
-            ?WHEN(length(Entries) + length(PQueue) =< Limit,
-                  ?APPLY(add_prio, [Prio, QueueName, Entries]));
+            {_NextC, ToAdd} =
+                lists:foldr(
+                    fun(X, {C, Acc}) ->
+                        case C of
+                            Limit ->
+                                {C, Acc};
+                            _ ->
+                                {C + 1, [X|Acc]}
+                        end
+                    end,
+                    {length(PQueue), []},
+                    Entries),
+            ?WHEN(length(ToAdd) + length(PQueue) =< Limit,
+                  ?APPLY(add_prio, [Prio, QueueName, ToAdd]));
         _ ->
             ?EMPTY
     end.
@@ -200,7 +206,7 @@ aaefold(QueueName, Entries) ->
                      ({Bucket, Key, VClock, ObjRef}) ->
                           {list_to_binary(Bucket), Key, VClock, ObjRef}
                   end, Entries),
-    riak_kv_replrtq_src:replrtq_aaefold(QueueName, ReplEntries, 0).
+    riak_kv_replrtq_src:replrtq_aaefold(QueueName, ReplEntries).
 
 aaefold_callouts(_S, [QueueName, Entries]) ->
     ?APPLY(put_prio, [1, QueueName, Entries]).

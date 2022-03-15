@@ -287,6 +287,8 @@ do_update(ngrrepl_object) ->
     ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_object], 1);
 do_update(ngrrepl_error) ->
     ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_error], 1);
+do_update({ngrrepl_srcdiscard, C}) ->
+    ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_srcdiscard], C);
 do_update({ttaaefs, all_check}) ->
     ok = exometer:update([?PFX, ?APP, ttaaefs_manager, all_check], 1);
 do_update({ttaaefs, day_check}) ->
@@ -772,7 +774,8 @@ stats() ->
                                                     {count, ngrrepl_object_total}]},
      {[node, puts, ngrrepl_error], spiral, [], [{one, ngrrepl_error},
                                                     {count, ngrrepl_error_total}]},
-
+     {[node, puts, ngrrepl_srcdiscard], spiral, [], [{one, ngrrepl_srcdiscard},
+                                                    {count, ngrrepl_srcdiscard_total}]},
      %% index & list{keys,buckets} & clusteraae stats
      {[index, fsm, create], spiral, [], [{one, index_fsm_create}]},
      {[index, fsm, create, error], spiral, [], [{one, index_fsm_create_error}]},
