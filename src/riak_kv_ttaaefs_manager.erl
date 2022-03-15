@@ -85,7 +85,8 @@
                 slice_count = ?SLICE_COUNT :: pos_integer(),
                 is_paused = false :: boolean(),
                 last_exchange_start = os:timestamp() :: erlang:timestamp(),
-                previous_success = os:timestamp() :: false|erlang:timestamp()
+                previous_success = os:timestamp() :: false|erlang:timestamp(),
+                check_window = always :: check_window()
                 }).
 
 -type req_id() :: no_reply|integer().
@@ -93,7 +94,8 @@
 -type client_ip() :: string().
 -type client_port() :: pos_integer().
 -type nval() :: pos_integer()|range. % Range queries do not have an n-val
--type work_item() :: no_check|all_check|day_check|hour_check|range_check.
+-type work_item() ::
+    no_check|all_check|day_check|hour_check|range_check|auto_check.
 -type schedule_want() :: {work_item(), non_neg_integer()}.
 -type slice() :: pos_integer().
 -type allocation() :: {slice(), work_item()}.
@@ -104,6 +106,7 @@
     %% {cacert_filename, cert_filename, key_filename, username}
 -type repair_reference() ::
     {riak_object:bucket(), riak_object:key(), vclock:vclock(), any()}.
+-type check_window() :: always|never|{0..23,0..23}.
 
 
 -export_type([work_item/0]).
@@ -124,7 +127,11 @@ start_link() ->
 %% tests.
 -spec process_workitem(work_item(), req_id(), erlang:timestamp()) -> ok.
 process_workitem(WorkItem, ReqID, Now) ->
-    gen_server:cast(?MODULE, {WorkItem, ReqID, self(), Now}).
+    process_workitem(WorkItem, ReqID, self(), Now).
+
+-spec process_workitem(work_item(), req_id(), pid(), erlang:timestamp()) -> ok.
+process_workitem(WorkItem, ReqID, From, Now) ->
+    gen_server:cast(?MODULE, {WorkItem, ReqID, From, Now}).
 
 %% @doc
 %% Pause the management of full-sync from this node 
@@ -182,20 +189,32 @@ init([]) ->
     HourCheck = app_helper:get_env(riak_kv, ttaaefs_hourcheck),
     DayCheck = app_helper:get_env(riak_kv, ttaaefs_daycheck),
     RangeCheck = app_helper:get_env(riak_kv, ttaaefs_rangecheck),
+    AutoCheck = app_helper:get_env(riak_kv, ttaaefs_autocheck),
 
     {SliceCount, Schedule} = 
         case Scope of
             disabled ->
-                {24, [{no_check, 24}, {all_check, 0}, 
-                        {day_check, 0}, {hour_check, 0},
-                        {range_check, 0}]};
+                {24,
+                    [{no_check, 24},
+                        {all_check, 0}, 
+                        {day_check, 0},
+                        {hour_check, 0},
+                        {range_check, 0},
+                        {auto_check, 0}]};
                     % No sync once an hour if disabled
             _ ->
-                {NoCheck + AllCheck + DayCheck + HourCheck + RangeCheck,
-                    [{no_check, NoCheck}, {all_check, AllCheck},
-                        {day_check, DayCheck}, {hour_check, HourCheck},
-                        {range_check, RangeCheck}]}
+                {NoCheck + AllCheck + DayCheck
+                    + HourCheck + RangeCheck + AutoCheck,
+                    [{no_check, NoCheck},
+                        {all_check, AllCheck},
+                        {day_check, DayCheck},
+                        {hour_check, HourCheck},
+                        {range_check, RangeCheck},
+                        {auto_check, AutoCheck}]}
         end,
+    
+    CheckWindow =
+        app_helper:get_env(riak_kv, ttaaefs_allcheck_window),
 
     State1 = 
         case Scope of
@@ -276,7 +295,8 @@ init([]) ->
                         peer_port = PeerPort,
                         peer_protocol = PeerProtocol,
                         ssl_credentials = SSLCredentials,
-                        queue_name = SrcQueueName},
+                        queue_name = SrcQueueName,
+                        check_window = CheckWindow},
     
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
     {ok, State2, ?INITIAL_TIMEOUT}.
@@ -287,8 +307,12 @@ handle_call(pause, _From, State) ->
             {reply, {error, already_paused}, State};
         false -> 
             PausedSchedule =
-                [{no_check, State#state.slice_count}, {all_check, 0},
-                    {day_check, 0}, {hour_check, 0}, {range_check, 0}],
+                [{no_check, State#state.slice_count},
+                    {all_check, 0},
+                    {day_check, 0},
+                    {hour_check, 0},
+                    {range_check, 0},
+                    {auto_check, 0}],
             BackupSchedule = State#state.schedule,
             {reply, ok, State#state{schedule = PausedSchedule,
                                     backup_schedule = BackupSchedule,
@@ -344,9 +368,11 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
                 lager:info("exchange=~w failed to complete in duration=~w s" ++
                                     " sync_state=unknown",
                                 [ReqID, Duration div 1000000]),
+                riak_kv_stat:update({ttaaefs, sync_fail, Duration}),
                 {?CRASH_TIMEOUT, State#state{previous_success = false}};
             {SyncState, 0} when SyncState == root_compare;
                                 SyncState == branch_compare ->
+                riak_kv_stat:update({ttaaefs, sync_sync, Duration}),
                 lager:info("exchange=~w complete result=~w in duration=~w s" ++
                                     " sync_state=true",
                                 [ReqID, Result, Duration div 1000000]),
@@ -356,6 +382,7 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
                 lager:info("exchange=~w complete result=~w in duration=~w s" ++
                                     " sync_state=false",
                                 [ReqID, Result, Duration div 1000000]),
+                riak_kv_stat:update({ttaaefs, sync_nosync, Duration}),
                 % If exchanges start slowing, then start increasing the pauses
                 % Gradually degrade in response to an increased workload
                 {max(?LOOP_TIMEOUT, (Duration div 1000) div 2),
@@ -525,7 +552,21 @@ handle_cast({range_check, ReqID, From, Now}, State) ->
                                         range_check),
                     {noreply, State0, Timeout}
             end
-    end.
+    end;
+handle_cast({auto_check, ReqID, From, Now}, State) ->
+    case get_range() of
+        none ->
+            case in_window(Now, State#state.check_window) of
+                true ->
+                    process_workitem(all_check, ReqID, From, Now);
+                false ->
+                    process_workitem(day_check, ReqID, From, Now)
+            end;
+        _SetRange ->
+            process_workitem(range_check, ReqID, From, Now)
+    end,
+    {noreply, State, timeout}.
+
 
 handle_info(timeout, State) ->
     SlotInfoFun = State#state.slot_info_fun,
@@ -667,6 +708,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
             lager:info("Starting ~w full-sync work_item=~w " ++ 
                                 "reqid=~w exchange id=~s pid=~w",
                             [Ref, WorkType, ReqID0, ExID, ExPid]),
+            riak_kv_stat:update({ttaaefs, WorkType}),
             
             {State#state{bucket_list = NextBucketList,
                             last_exchange_start = os:timestamp()},
@@ -959,6 +1001,8 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
         lager:info("AAE reqid=~w work_item=~w type=~w shows sink ahead " ++
                         "for key_count=~w keys limited by max_results=~w", 
                     [ExchangeID, WorkType, Ref, SinkDCount, MaxResults]),
+        riak_kv_stat:update({ttaaefs, snk_ahead, SinkDCount}),
+        riak_kv_stat:update({ttaaefs, src_ahead, length(ToRepair)}),
         riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
         PBDL = report_repairs(ExchangeID, ToRepair, Ref, WorkType),
         RB = app_helper:get_env(riak_kv, ttaaefs_rangeboost, ?RANGE_BOOST),
@@ -1105,16 +1149,19 @@ take_next_workitem([NextAlloc|T], Wants,
 -spec choose_schedule(schedule_wants()) -> list(allocation()).
 choose_schedule(ScheduleWants) ->
     [{all_check, AllCheck},
-        {day_check, DayCheck}, {hour_check, HourCheck},
+        {auto_check, AutoCheck},
+        {day_check, DayCheck},
+        {hour_check, HourCheck},
         {no_check, NoCheck},
         {range_check, RangeCheck}] = lists:sort(ScheduleWants),
-    SliceCount = NoCheck + AllCheck + DayCheck + HourCheck + RangeCheck,
+    SliceCount =
+        NoCheck + AllCheck + DayCheck + HourCheck + RangeCheck + AutoCheck,
     Slices = lists:seq(1, SliceCount),
     Allocations = [],
     lists:sort(
         choose_schedule(Slices,
-                        Allocations,
-                        {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck})).
+            Allocations,
+            {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck, AutoCheck})).
 
 -spec choose_schedule(list(pos_integer()),
                         list({pos_integer(), work_item()}),
@@ -1122,43 +1169,79 @@ choose_schedule(ScheduleWants) ->
                             non_neg_integer(),
                             non_neg_integer(),
                             non_neg_integer(),
+                            non_neg_integer(),
                             non_neg_integer()}) ->
                                 list({pos_integer(), work_item()}).
-choose_schedule([], Allocations, {0, 0, 0, 0, 0}) ->
+choose_schedule([],Allocations, {0, 0, 0, 0, 0, 0}) ->
     lists:ukeysort(1, Allocations);
-choose_schedule(Slices, Allocations, {NoCheck, 0, 0, 0, 0}) ->
+choose_schedule(Slices, Allocations, {NoCheck, 0, 0, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, no_check}|Allocations],
-                    {NoCheck - 1, 0, 0, 0, 0});
-choose_schedule(Slices, Allocations, {NoCheck, AllCheck, 0, 0, 0}) ->
+        [{Allocation, no_check}|Allocations],
+        {NoCheck - 1, 0, 0, 0, 0, 0});
+choose_schedule(Slices, Allocations, {NoCheck, AllCheck, 0, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, all_check}|Allocations],
-                    {NoCheck, AllCheck - 1, 0, 0, 0});
-choose_schedule(Slices, Allocations, {NoCheck, AllCheck, DayCheck, 0, 0}) ->
+        [{Allocation, all_check}|Allocations],
+        {NoCheck, AllCheck - 1, 0, 0, 0, 0});
+choose_schedule(Slices, Allocations, {NoCheck, AllCheck, DayCheck, 0, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, day_check}|Allocations],
-                    {NoCheck, AllCheck, DayCheck - 1, 0, 0});
+        [{Allocation, day_check}|Allocations],
+        {NoCheck, AllCheck, DayCheck - 1, 0, 0, 0});
 choose_schedule(Slices, Allocations,
-                {NoCheck, AllCheck, DayCheck, HourCheck, 0}) ->
+                {NoCheck, AllCheck, DayCheck, HourCheck, 0, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, hour_check}|Allocations],
-                    {NoCheck, AllCheck, DayCheck, HourCheck - 1, 0});
-choose_schedule(Slices, Allocations,
-                {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck}) ->
+        [{Allocation, hour_check}|Allocations],
+        {NoCheck, AllCheck, DayCheck, HourCheck - 1, 0, 0});
+choose_schedule(Slices,
+        Allocations,
+        {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck, 0}) ->
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-                    [{Allocation, range_check}|Allocations],
-                    {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck - 1}).
+        [{Allocation, range_check}|Allocations],
+        {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck - 1, 0});
+choose_schedule(Slices,
+        Allocations,
+        {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck, AutoCheck}) ->
+    {HL, [Allocation|TL]} =
+        lists:split(rand:uniform(length(Slices)) - 1, Slices),
+    choose_schedule(HL ++ TL,
+        [{Allocation, range_check}|Allocations],
+        {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck, AutoCheck - 1}).
 
+-spec in_window(erlang:timestamp(), check_window()) -> boolean().
+in_window(_Now, always) ->
+    true;
+in_window(_Now, never) ->
+    false;
+in_window(Now, {Start, End}) when Start > End ->
+    case calendar:now_to_datetime(Now) of
+        {_Date, {HH, _MM, _SS}} when HH >= Start; HH < End ->
+            true;
+        _ ->
+            false
+    end;
+in_window(Now, {SingleHour, SingleHour}) ->
+    case calendar:now_to_datetime(Now) of
+        {_Date, {SingleHour, _MM, _SS}} ->
+            true;
+        _ ->
+            false
+    end;
+in_window(Now, {Start, End}) ->
+    case calendar:now_to_datetime(Now) of
+        {_Date, {HH, _MM, _SS}} when HH >= Start, HH < End ->
+            true;
+        _ ->
+            false
+    end.
 
 %%%============================================================================
 %%% Test
@@ -1168,19 +1251,34 @@ choose_schedule(Slices, Allocations,
 
 choose_schedule_test() ->
     NoSyncAllSchedule =
-        [{no_check, 100}, {all_check, 0}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
+        [{no_check, 100},
+            {all_check, 0},
+            {auto_check, 0},
+            {day_check, 0},
+            {hour_check, 0},
+            {range_check, 0}],
     NoSyncAll = choose_schedule(NoSyncAllSchedule),
     ExpNoSyncAll = lists:map(fun(I) -> {I, no_check} end, lists:seq(1, 100)),
     ?assertMatch(NoSyncAll, ExpNoSyncAll),
 
     AllSyncAllSchedule =
-        [{no_check, 0}, {all_check, 100}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
+        [{no_check, 0},
+            {all_check, 100},
+            {auto_check, 0},
+            {day_check, 0},
+            {hour_check, 0},
+            {range_check, 0}],
     AllSyncAll = choose_schedule(AllSyncAllSchedule),
     ExpAllSyncAll = lists:map(fun(I) -> {I, all_check} end, lists:seq(1, 100)),
     ?assertMatch(AllSyncAll, ExpAllSyncAll),
     
     MixedSyncSchedule = 
-        [{no_check, 0}, {all_check, 1}, {day_check, 4}, {hour_check, 95}, {range_check, 0}],
+        [{no_check, 0},
+            {all_check, 1},
+            {auto_check, 0},
+            {day_check, 4},
+            {hour_check, 95},
+            {range_check, 0}],
     MixedSync = choose_schedule(MixedSyncSchedule),
     ?assertMatch(100, length(MixedSync)),
     IsSyncFun = fun({_I, Type}) -> Type == hour_check end,
@@ -1197,7 +1295,13 @@ choose_schedule_test() ->
     ?assertMatch(true, BiggestI >= 95).
 
 take_first_workitem_test() ->
-    Wants = [{no_check, 100}, {all_check, 0}, {day_check, 0}, {hour_check, 0}, {range_check, 0}],
+    Wants =
+        [{no_check, 100},
+        {all_check, 0}, 
+        {auto_check, 0},
+        {day_check, 0},
+        {hour_check, 0},
+        {range_check, 0}],
     {Mega, Sec, Micro} = os:timestamp(),
     TwentyFourHoursAgo = Mega * ?MEGA + Sec - (60 * 60 * 24),
     {NextAction, PromptSeconds, _T, ScheduleStartTime} = 
@@ -1227,6 +1331,31 @@ take_first_workitem_test() ->
         take_next_workitem(T, Wants, ScheduleStartTime, {1, 8}, 100),
     ?assertMatch(true, PromptYetMoreSeconds > PromptEvenMoreSeconds).
 
+window_test() ->
+    NowSecs0 =
+        calendar:datetime_to_gregorian_seconds(
+            {{2000, 1, 1}, {0, 59, 59}}),
+    Now0 = {NowSecs0 div ?MEGA, NowSecs0 rem ?MEGA, 0},
+    ?assert(in_window(Now0, {0, 1})),
+    ?assertNot(in_window(Now0, {1, 2})),
+    ?assert(in_window(Now0, {23, 1})),
+    ?assertNot(in_window(Now0, {23, 0})),
+    ?assert(in_window(Now0, {0, 0})),
+    ?assertNot(in_window(Now0, {1, 1})),
+    ?assertNot(in_window(Now0, {23, 23})),
+    
+    NowSecs1 =
+        calendar:datetime_to_gregorian_seconds(
+            {{2000, 1, 1}, {23, 59, 59}}),
+    Now1 = {NowSecs1 div ?MEGA, NowSecs1 rem ?MEGA, 0},
+    ?assert(in_window(Now1, {23, 0})),
+    ?assertNot(in_window(Now1, {22, 23})),
+    ?assert(in_window(Now1, {22, 1})),
+    ?assertNot(in_window(Now1, {0, 1})),
+    ?assert(in_window(Now1, {23, 23})),
+    ?assertNot(in_window(Now1, {1, 1})),
 
+    ?assert(in_window(Now1, always)),
+    ?assertNot(in_window(Now1, never)).
 
 -endif.
