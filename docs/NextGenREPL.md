@@ -255,17 +255,27 @@ For example if this cluster has a peer relationship with `cluster_b` with which 
 
 `ttaaefs_daycheck = 0`
 
+`ttaaefs_rangecheck = 0`
+
+`ttaaefs_autocheck = 0`
+
 If `bucket` or `type` is the scope for this node, then two additional sync counts can be configured.  The `hourcheck` and `daycheck` will be configured to sync only for objects modified in the past hour or day (as determined by the objects last_modified metadata).  When running a full-sync check restricted to a bucket or type, this is less efficient than running a check for an entire n_val as cached trees may not be used.  Running a `ttaaefs_allcheck` may take o(hour) on a large bucket, whereas `ttaaefs_daycheck` may be o(minute) and `ttaaefs_hourcheck` may be o(second).  So it would be preferable to frequently check recent modifications have synced correctly, and less frequently check that older modifications have synchronised.
 
 A random distribution of checks is used, based on the allocated counts.  If a check count of 1 of N is set for a given check type, there is no pre-determination of when in the day that check will run.
 
 If a previous check is still running when the allocated scheduled time for the next check on this node occurs, the following check will not be run.  Checks are skipped if the node falls behind schedule.
 
+The `ttaaefs_rangecheck` and `ttaaefs_autocheck` are smart checks, the adapt to previous results.  If the previous sync event was successful, and the `ttaaefs_rangecheck` discovers a discrepancy, it will assume that the discrepancy must be for data with a last modified date since the last successful sync.  If the previous sync showed a discrepancy, it will assume the discrepancy in the nexy sync event is in the "same data" (either bucket, or last modified date range) as the previous check.  If the discrepancy was largely unresolvable (i.e. because the sink was ahead in most cases), the `ttaaefs_rangecheck` will not a different type of check discovers that this has changed.
+
+The `ttaaefs_autocheck` will morph into another check when the check is called.  It will morph into a `ttaaefs_rangecheck` if a range of resolvable discrepancies had been discovered by the previous sync event.  Otherwise it will either run a `ttaaefs_allcheck` or `ttaaefs_daycheck` depending on whether the time is inside or outside of the `ttaaefs_allcheck.window`.
+
+To be efficient the use of `ttaaefs_autocheck` and `ttaaefs_rangecheck` should be preferred over other checks, however in some cases, the adaptive nature of these checks may be confusing for the operator.  Full-sync should not be configured with *just* `ttaaefs_rangecheck`, as in some cases delta will never be resolved.
+
 `ttaaefs_logrepairs = enabled`
 
 By default the `riak_kv_ttaaefs_manager` will log counts of keys repaired on each sync.  Enabling `ttaaefs_logrepairs` will log the Bucket and Key of every key re-queued for synchronisation via full-sync.
 
-`ttaaefs_maxresults = 256`
+`ttaaefs_maxresults = 64`
 
 A negative aspect of the Tictac AAE full-sync solution is that deltas are relatively slow to be fixed.  The Merkle tree used to represent the cluster has 1M segments, but only `ttaaefs_maxresults` segments will be repaired each cycle.  This means that if there are 100K discrepancies, and we assume these discrepancies are evenly distributed around the Merkle tree - it will take 400 full-sync cycles to complete the repair of the delta.
 

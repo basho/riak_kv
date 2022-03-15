@@ -115,13 +115,18 @@ Unlike when configuring a real-time replication sink, each node can only have a 
 Once there are peer relationships, a schedule is required, and a capacity must be defined.
 
 ```
-ttaaefs_allcheck = 2
+ttaaefs_allcheck = 0
 ttaaefs_hourcheck = 0
-ttaaefs_daycheck = 22
-ttaaefs_rangecheck = 36
+ttaaefs_daycheck = 0
+ttaaefs_autocheck = 12
+ttaaefs_rangecheck = 12
 
 ttaaefs_maxresults = 64
 ttaaefs_rangeboost = 8
+
+ttaaefs_allcheck.policy = window
+ttaaefs_allcheck.window.start = 22
+ttaaefs_allcheck.window.end = 6
 ```
 
 The schedule is how many times each 24 hour period to run a check of the defined type.  The schedule is re-shuffled at random each day, and is specific to that node's peer relationship.
@@ -133,6 +138,8 @@ As this is a configuration for nval full-sync, all of the data will always be co
 - `hour` or `day` restricts he scan to data modified in the past hour or past 24 hours.
 
 - `range`  is a "smart" check.  It will not be run when past queries have indicated nothing can be done to resolve the delta (for example as the other cluster is ahead, and only the source cluster can prompt fixes).  If past queries have shown the clusters to be synchronised, but then a delta occurs, the range_check will only scan for deltas since the last successful synchronisation.  If another check discovers the majority of deltas are in a certain bucket or modified range, the range query will switch to using this as a constraint for the scan.
+
+- `auto` is a variation on the range "smart" check.  If a range has been determined by a previous query, then a rnage check will be run.  Otherwise it will run an `all` check if the current time is within the ttaaefs_allcheck.window.  When outside the window it will run a `day` check.  
 
 Each check is constrained by `ttaaefs_maxresults`, so that it only tries to resolve issues in a subset of broken leaves in the tree of that scale (there are o(1M) leaves to the tree overall).  However, the range checks will try and resolve more (as they are constrained by the range) - this will be the multiple of `ttaaefs_maxresults` and `ttaaefs_ranegboost`.
 
@@ -151,6 +158,8 @@ In a cluster with 1bn keys, under a steady load including 2K PUTs per second, re
 - range_sync (depends on how recent the low point in the modified range is).
 
 Timings will vary depending on the total number of keys in the cluster, the rate of changes, the size of the delta and the precise hardware used.  Full-sync repairs tend to be relatively demanding of CPU (rather than disk I/O), so available CPU capacity is important.
+
+If there are 24 sync events scheduled a day, and default `ttaaefs_maxresults` and `ttaaefs_rangeboost` settings are used, and an 8-node cluster is in use - repairs via ttaaefs full-sync will happen at a rate of about 100K per day.  It is therefore expected that where a large delta emerges it may be necessary to schedule a `range_repl` fold, or intervene to raise the `ttaaefs_rangeboost` to speed up the closing of the delta. 
 
 ### Configure work queues
 

@@ -1034,7 +1034,7 @@
 %% bucket, and warnings about sizing are specially relevant. 
 {mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [
   {datatype, integer},
-  {default, 24}
+  {default, 0}
 ]}.
 
 %% @doc How many times per 24hour period should no data be checked to
@@ -1090,7 +1090,7 @@
 %% that nval.
 {mapping, "ttaaefs_rangecheck", "riak_kv.ttaaefs_rangecheck", [
   {datatype, integer},
-  {default, 0}
+  {default, 12}
 ]}.
 
 %% @doc How many times per 24hour period should the an auto_check be run.  The
@@ -1104,7 +1104,7 @@
 %% that nval.
 {mapping, "ttaaefs_autocheck", "riak_kv.ttaaefs_autocheck", [
   {datatype, integer},
-  {default, 0}
+  {default, 12}
 ]}.
 
 %% @doc Lets you specify when during the day auto_check may run all_check
