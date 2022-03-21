@@ -51,6 +51,7 @@
     length_rtq/1,
     popfrom_rtq/1,
     waitforpop_rtq/2,
+    clear_rtq/1,
     stop/0]).
 
 -ifdef(TEST).
@@ -244,7 +245,7 @@ delist_rtq(QueueName) ->
 %% @doc
 %% Suspend a queue form receiving further updates, all attempted updates after
 %% the suspension will be discarded.  The queue will remain listed, and
-%% consumption form the queue may continue
+%% consumption from the queue may continue
 -spec suspend_rtq(queue_name()) -> ok|not_found.
 suspend_rtq(QueueName) ->
     gen_server:call(?MODULE, {suspend_rtq, QueueName}, infinity).
@@ -262,6 +263,14 @@ resume_rtq(QueueName) ->
 -spec length_rtq(queue_name()) -> {queue_name(), queue_length()}|false.
 length_rtq(QueueName) ->
     gen_server:call(?MODULE, {length_rtq, QueueName}).
+
+%% @doc
+%% Clear an existing queue and overflow queue, and start a new queue.  This
+%% will also reset the size of the overflow queue to the current configuration
+%% based on the riak_kv.replrtq_srcqueuelimit
+-spec clear_rtq(queue_name()) -> ok.
+clear_rtq(QueueName) ->
+    gen_server:call(?MODULE, {clear_rtq, QueueName}).
 
 %% @doc
 %% Pop an entry from the queue with given queue name.  The entry will be taken
@@ -556,6 +565,38 @@ handle_call({resume_rtq, QueueName}, _From, State) ->
             {reply, ok, State#state{queue_filtermap = QF0}};
         false ->
             {reply, not_found, State}
+    end;
+handle_call({clear_rtq, QueueName}, _From, State) ->
+    case lists:keyfind(QueueName, 1, State#state.queue_filtermap) of
+        false ->
+            lager:warning("Attempt to clear queue not present ~w",
+                            [QueueName]),
+            {reply, ok, State};
+        {QueueName, _, _} ->
+            {QueueName, _LQ} =
+                lists:keyfind(QueueName, 1, State#state.queue_local),
+            {QueueName, OQ} =
+                lists:keyfind(QueueName, 1, State#state.queue_overflow),
+            LQs =
+                lists:keyreplace(
+                    QueueName,
+                    1,
+                    State#state.queue_local,
+                    {QueueName, empty_local_queue()}),
+            RootPath = State#state.root_path,
+            ok = riak_kv_overflow_queue:close(RootPath, OQ),
+            OQs =
+                lists:keyreplace(
+                    QueueName,
+                    1,
+                    State#state.queue_overflow,
+                    {QueueName,
+                        empty_overflow_queue(QueueName, RootPath)}),
+            {reply,
+                ok,
+                State#state{
+                    queue_local = LQs,
+                    queue_overflow = OQs}}
     end;
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State}.
@@ -1072,6 +1113,29 @@ limit_ttaaefs_test() ->
     ?assertMatch({?QN1, {0, 2000, 0}}, length_rtq(?QN1)),
     
     lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 2000)),
+    ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
+
+    ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
+
+    stop().
+
+clear_queue_test() ->
+    start_rtq(),
+    ?assertMatch(true, register_rtq(?QN1, any)),
+    GenB1 = generate_replentryfun({?TT1, ?TB1}),
+    Grp1 = lists:map(GenB1, lists:seq(1, 100000)),
+    Grp2 = lists:map(GenB1, lists:seq(1, 100000)),
+
+    ok = replrtq_ttaaefs(?QN1, Grp1),
+    ?assertMatch({?QN1, {0, 100000, 0}}, length_rtq(?QN1)),
+
+    ok = clear_rtq(?QN1),
+    ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
+
+    ok = replrtq_ttaaefs(?QN1, Grp2),
+    ?assertMatch({?QN1, {0, 100000, 0}}, length_rtq(?QN1)),
+
+    lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 100000)),
     ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
 
     ?assertMatch(queue_empty, popfrom_rtq(?QN1)),
