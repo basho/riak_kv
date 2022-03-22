@@ -54,6 +54,11 @@
 -define(LOG_TICK, 60000).
 -define(REDO_TIMEOUT, 2000).
 -define(MAX_BATCH_SIZE, 100).
+-define(TOMB_PAUSE, 2).
+    % Used as flow control in the reaper, shared configuration with the delete
+    % process where the pause has a dual-purpose, for both flow control and for
+    % improving the probability that tombstone PUTs are propogated before a
+    % reap attempt is prompted.
 
 -record(state,  {
             reap_queue = riak_core_priority_queue:new() :: pqueue(),
@@ -299,10 +304,12 @@ reap({{Bucket, Key}, DeleteHash}) ->
     DocIdx = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     {n_val, N} = lists:keyfind(n_val, 1, BucketProps),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
+    TombPause = app_helper:get_env(riak_kv, tombstone_pause, ?TOMB_PAUSE),
     case length(PrefList) of
         N ->
             PL0 = lists:map(fun({Target, primary}) -> Target end, PrefList),
             ok = riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
+            timer:sleep(TombPause),
             true;
         _ ->
             false
