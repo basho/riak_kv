@@ -55,6 +55,32 @@
             get_limits/0,
             redo/0]).
 
+-define(QUEUE_LIMIT, 100000).
+-define(LOG_TICK, 60000).
+-define(REDO_TIMEOUT, 2000).
+-define(MAX_BATCH_SIZE, 100).
+-define(TOMB_PAUSE, 2).
+    % Used as flow control in the reaper, shared configuration with the delete
+    % process where the pause has a dual-purpose, for both flow control and for
+    % improving the probability that tombstone PUTs are propogated before a
+    % reap attempt is prompted.
+
+-record(state,  {
+            reap_queue = riak_core_priority_queue:new() :: pqueue(),
+            pqueue_length = {0, 0} :: queue_length(),
+            reap_attempts = 0 :: non_neg_integer(),
+            reap_aborts = 0 :: non_neg_integer(),
+            job_id :: non_neg_integer(), % can be 0 for named reaper
+            pending_close = false :: boolean(),
+            last_tick_time = os:timestamp() :: erlang:timestamp(),
+            reap_fun :: reap_fun(),
+            redo_timeout :: non_neg_integer()
+}).
+
+-type priority() :: 1..2.
+-type squeue() :: {queue, [any()], [any()]}.
+-type pqueue() ::  squeue() | {pqueue, [{priority(), squeue()}]}.
+-type queue_length() :: {non_neg_integer(), non_neg_integer()}.
 -type reap_reference() ::
     {{riak_object:bucket(), riak_object:key()}, non_neg_integer()}.
 -type job_id() :: pos_integer().
@@ -139,12 +165,14 @@ action({{Bucket, Key}, DeleteHash}, Redo) ->
     DocIdx = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     {n_val, N} = lists:keyfind(n_val, 1, BucketProps),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
+    TombPause = app_helper:get_env(riak_kv, tombstone_pause, ?TOMB_PAUSE),
     case length(PrefList) of
         N ->
             PL0 = lists:map(fun({Target, primary}) -> Target end, PrefList),
             case check_all_mailboxes(PL0) of
                 ok ->
                     riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
+                    timer:sleep(TombPause),
                     true;
                 soft_loaded ->
                     timer:sleep(?OVERLOAD_PAUSE_MS),
