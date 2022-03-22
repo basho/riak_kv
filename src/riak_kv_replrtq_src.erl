@@ -78,7 +78,7 @@
 -define(QUEUE_LIMIT, 1000000).
     % This is the limit on the size of the queue for a given queue name and
     % priority.  the queue limit can be altered using:
-    % riak_kv.replrtq_srcqueuelimit
+    % riak_kv.replrtq_overflow_limit
 
 -define(MEMORY_LIMIT, 10000).
     % This is the limit on the size of the queue in-memory within the overflow
@@ -267,7 +267,7 @@ length_rtq(QueueName) ->
 %% @doc
 %% Clear an existing queue and overflow queue, and start a new queue.  This
 %% will also reset the size of the overflow queue to the current configuration
-%% based on the riak_kv.replrtq_srcqueuelimit
+%% based on the riak_kv.replrtq_overflow_limit
 -spec clear_rtq(queue_name()) -> ok.
 clear_rtq(QueueName) ->
     gen_server:call(?MODULE, {clear_rtq, QueueName}).
@@ -313,7 +313,7 @@ init([FilePath]) ->
     QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
     QFM = tokenise_queuedefn(QueueDefnString),
 
-    QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
+    QL = app_helper:get_env(riak_kv, replrtq_overflow_limit, ?QUEUE_LIMIT),
 
     OL = min(app_helper:get_env(
                 riak_kv,
@@ -832,7 +832,7 @@ empty_local_queue() ->
 -spec empty_overflow_queue(queue_name(), string())
         -> riak_kv_overflow_queue:overflowq(). 
 empty_overflow_queue(QueueName, FilePath) ->
-    QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
+    QL = app_helper:get_env(riak_kv, replrtq_overflow_limit, ?QUEUE_LIMIT),
     Priorities = [?FLD_PRIORITY, ?AAE_PRIORITY, ?RTQ_PRIORITY],
     MemLimit = min(?MEMORY_LIMIT, QL div 10),
     riak_kv_overflow_queue:new(

@@ -65,6 +65,27 @@
   {datatype, directory}
 ]}.
 
+%% @doc the maximum size of the oevrflow queue for the eraser.  If the queue
+%% goes beyond this point, new additions will be discarded.
+{mapping, "eraser_overflow_limit", "riak_kv.eraser_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
+
+%% @doc the maximum size of the oevrflow queue for the reaper.  If the queue
+%% goes beyond this point, new additions will be discarded.
+{mapping, "reaper_overflow_limit", "riak_kv.reaper_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
+
+%% @doc the maximum size of the oevrflow queue for the real-time replication
+%% queue (nextgen repl only).  If the queue goes beyond this point, new
+%% additions will be discarded.
+{mapping, "replrtq_overflow_limit", "riak_kv.replrtq_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
 
 %% @doc Parallel key store type
 %% When running in parallel mode, which will be the default if the backend does
