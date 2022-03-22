@@ -65,6 +65,39 @@
   {datatype, directory}
 ]}.
 
+%% @doc The maximum size of the overflow queue for the eraser.  If the queue
+%% goes beyond this point, new additions will be discarded.
+%% To update this at run-time, the configuration item can be changed via
+%% remote_console, then `riak_kv_eraser:clear_queue()` can be called to clear
+%% the existing queue and start a new queue with the new limit.
+{mapping, "eraser_overflow_limit", "riak_kv.eraser_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
+
+%% @doc The maximum size of the overflow queue for the reaper.  If the queue
+%% goes beyond this point, new additions will be discarded.
+%% To update this at run-time, the configuration item can be changed via
+%% remote_console, then `riak_kv_reaper:clear_queue()` can be called to clear
+%% the existing queue and start a new queue with the new limit.
+{mapping, "reaper_overflow_limit", "riak_kv.reaper_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
+
+%% @doc The maximum size of the overflow queue for the real-time replication
+%% queue (nextgen repl only).  If the queue goes beyond this point, new
+%% additions will be discarded.
+%% For replrtq the queue is sized per QueueName (and priority), so differently
+%% named queues on the host will each independently inherit this limit, for
+%% each of the queue priorities.
+%% To update this at run-time, the configuration item can be changed via
+%% remote_console, then `riak_kv_replrtq_src:clear_rtq(QueueName)` can be
+%% called to clear the existing queue and start a new queue with the new limit.
+{mapping, "replrtq_overflow_limit", "riak_kv.replrtq_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
 
 %% @doc Parallel key store type
 %% When running in parallel mode, which will be the default if the backend does
