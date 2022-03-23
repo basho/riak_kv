@@ -176,13 +176,18 @@ replrtq_resetpeer_fun(QueueN) ->
     non_neg_integer()) -> list(node()).
 replrtq_reset_all_workercounts(WorkerC, PerPeerL) ->
     UpNodes = riak_core_node_watcher:nodes(riak_kv),
-    lists:foldl(replrtq_resetcount_fun(WorkerC, PerPeerL), [], UpNodes).
-
-replrtq_resetcount_fun(WC, PPL) ->
-    fun(Node, Acc) ->
-        B = rpc:call(Node, riak_kv_replrtq_peer, update_workers, [WC, PPL]),
-        if B -> [Node|Acc]; true -> Acc end
-    end. 
+    FoldFun =
+        fun(Node, Acc) ->
+            UpdateSuccess = 
+                rpc:call(
+                    Node,
+                    riak_kv_replrtq_peer,
+                    update_workers,
+                    [WorkerC, PerPeerL]),
+            if UpdateSuccess -> [Node|Acc]; true -> Acc end
+        end,
+    lists:foldl(FoldFun, [], UpNodes).
+     
 
 %% @doc Fetch the next item from the replication queue
 -spec fetch(riak_kv_replrtq_src:queue_name(), riak_client()) ->
