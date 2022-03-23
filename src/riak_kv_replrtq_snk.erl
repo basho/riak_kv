@@ -248,11 +248,11 @@ set_workercount(QueueName, WorkerCount, PerPeerLimit)
 %%%============================================================================
 
 init([]) ->
-    SinkEnabled = app_helper:get_env(riak_kv, replrtq_enablesink, false),
+    SinkEnabled = application:get_env(riak_kv, replrtq_enablesink, false),
     case SinkEnabled of
         true ->
-            SinkPeers = app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
-            DefaultQueue = app_helper:get_env(riak_kv, replrtq_sinkqueue),
+            SinkPeers = application:get_env(riak_kv, replrtq_sinkpeers, ""),
+            DefaultQueue = application:get_env(riak_kv, replrtq_sinkqueue),
             SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
             {SnkWorkerCount, PerPeerLimit} = get_worker_counts(),
             Iteration = 1,
@@ -451,11 +451,11 @@ code_change(_OldVsn, State, _Extra) ->
 
 get_worker_counts() ->
     SnkWorkerCount =
-        app_helper:get_env(riak_kv,
+        application:get_env(riak_kv,
                             replrtq_sinkworkers,
                             ?DEFAULT_WORKERCOUNT),
     PerPeerLimit =
-        app_helper:get_env(riak_kv,
+        application:get_env(riak_kv,
                                 replrtq_sinkpeerlimit,
                                 SnkWorkerCount),
     {SnkWorkerCount, PerPeerLimit}.
@@ -572,13 +572,13 @@ remote_client_fun(http, Host, Port) ->
     end;
 remote_client_fun(pb, Host, Port) ->
     CaCertificateFilename =
-        app_helper:get_env(riak_kv, repl_cacert_filename),
+        application:get_env(riak_kv, repl_cacert_filename),
     CertificateFilename =
-        app_helper:get_env(riak_kv, repl_cert_filename),
+        application:get_env(riak_kv, repl_cert_filename),
     KeyFilename =
-        app_helper:get_env(riak_kv, repl_key_filename),
+        application:get_env(riak_kv, repl_key_filename),
     SecuritySitename = 
-        app_helper:get_env(riak_kv, repl_username),
+        application:get_env(riak_kv, repl_username),
     Opts = 
         case CaCertificateFilename of
             undefined ->
