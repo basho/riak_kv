@@ -248,11 +248,14 @@ set_workercount(QueueName, WorkerCount, PerPeerLimit)
 %%%============================================================================
 
 init([]) ->
-    SinkEnabled = app_helper:get_env(riak_kv, replrtq_enablesink, false),
+    SinkEnabled =
+        app_helper:get_env(riak_kv, replrtq_enablesink, false),
     case SinkEnabled of
         true ->
-            SinkPeers = app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
-            DefaultQueue = app_helper:get_env(riak_kv, replrtq_sinkqueue),
+            SinkPeers =
+                app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
+            DefaultQueue =
+                app_helper:get_env(riak_kv, replrtq_sinkqueue),
             SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
             {SnkWorkerCount, PerPeerLimit} = get_worker_counts(),
             Iteration = 1,
