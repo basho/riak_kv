@@ -427,19 +427,15 @@ concurrent_fetches([{T1, E} | Trace], T0, N, Status, Acc) ->
 %% -- API-spec ---------------------------------------------------------------
 api_spec() ->
     #api_spec{ language = erlang, mocking = eqc_mocking,
-               modules = [ app_helper_spec(), lager_spec(), rhc_spec(),
+               modules = [ lager_spec(), rhc_spec(),
                            riak_client_spec(), mock_spec(), riak_kv_stat_spec() ] }.
-
-app_helper_spec() ->
-    #api_module{ name = app_helper, fallback = ?MODULE }.
-
-get_env(App, Key, Default) ->
-    application:get_env(App, Key, Default).
-
-get_env(App, Key) -> get_env(App, Key, undefined).
 
 lager_spec() ->
     #api_module{ name = lager, fallback = ?MODULE }.
+
+info(_F, _As) ->
+    %% io:format(F++"\n", As),
+    ok.
 
 warning(_F, _As) ->
     %% io:format(F++"\n", As),

@@ -248,11 +248,14 @@ set_workercount(QueueName, WorkerCount, PerPeerLimit)
 %%%============================================================================
 
 init([]) ->
-    SinkEnabled = application:get_env(riak_kv, replrtq_enablesink, false),
+    SinkEnabled =
+        app_helper:get_env(riak_kv, replrtq_enablesink, false),
     case SinkEnabled of
         true ->
-            SinkPeers = application:get_env(riak_kv, replrtq_sinkpeers, ""),
-            DefaultQueue = application:get_env(riak_kv, replrtq_sinkqueue),
+            SinkPeers =
+                app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
+            DefaultQueue =
+                app_helper:get_env(riak_kv, replrtq_sinkqueue),
             SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
             {SnkWorkerCount, PerPeerLimit} = get_worker_counts(),
             Iteration = 1,
@@ -451,11 +454,11 @@ code_change(_OldVsn, State, _Extra) ->
 
 get_worker_counts() ->
     SnkWorkerCount =
-        application:get_env(riak_kv,
+        app_helper:get_env(riak_kv,
                             replrtq_sinkworkers,
                             ?DEFAULT_WORKERCOUNT),
     PerPeerLimit =
-        application:get_env(riak_kv,
+        app_helper:get_env(riak_kv,
                                 replrtq_sinkpeerlimit,
                                 SnkWorkerCount),
     {SnkWorkerCount, PerPeerLimit}.
@@ -572,13 +575,13 @@ remote_client_fun(http, Host, Port) ->
     end;
 remote_client_fun(pb, Host, Port) ->
     CaCertificateFilename =
-        application:get_env(riak_kv, repl_cacert_filename),
+        app_helper:get_env(riak_kv, repl_cacert_filename),
     CertificateFilename =
-        application:get_env(riak_kv, repl_cert_filename),
+        app_helper:get_env(riak_kv, repl_cert_filename),
     KeyFilename =
-        application:get_env(riak_kv, repl_key_filename),
+        app_helper:get_env(riak_kv, repl_key_filename),
     SecuritySitename = 
-        application:get_env(riak_kv, repl_username),
+        app_helper:get_env(riak_kv, repl_username),
     Opts = 
         case CaCertificateFilename of
             undefined ->
