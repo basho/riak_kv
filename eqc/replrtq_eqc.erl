@@ -30,15 +30,15 @@ config_pre(S) ->
 
 config_args(_S) ->
     [[{replrtq_srcqueue, queuedef()},
-      {replrtq_srcqueuelimit, choose(0,100)}  %% length of each individual queue
+      {replrtq_overflow_limit, choose(0,100)}  %% length of each individual queue
      ]].
 
 config(Config) ->
     QueueDefs = pp_queuedefs(proplists:get_value(replrtq_srcqueue, Config)),
     application:set_env(riak_kv, replrtq_srcqueue,
                         QueueDefs),
-    application:set_env(riak_kv, replrtq_srcqueuelimit,
-                        proplists:get_value(replrtq_srcqueuelimit, Config)),
+    application:set_env(riak_kv, replrtq_overflow_limit,
+                        proplists:get_value(replrtq_overflow_limit, Config)),
     application:set_env(riak_kv, replrtq_logfrequency, 500000),
     maps:from_list(Config),
     QueueDefs.
@@ -162,7 +162,7 @@ put_prio_post(S, [_Prio, QueueName, _Entries], Res) ->
 
 put_prio_callouts(S, [Prio, QueueName, Entries]) ->
     Queues = maps:get(priority_queues, S),
-    Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
+    Limit = maps:get(replrtq_overflow_limit, maps:get(config, S)),
     case maps:get(QueueName, Queues, undefined) of
         #{status := active} = PQueues ->
             PQueue = maps:get(Prio, PQueues, []),
@@ -414,7 +414,7 @@ queue_pop_highest(PQueue) ->
 
 
 applicable_queues(S, Priority, Bucket) ->
-    Limit = maps:get(replrtq_srcqueuelimit, maps:get(config, S)),
+    Limit = maps:get(replrtq_overflow_limit, maps:get(config, S)),
     Queues = maps:get(priority_queues, S, #{}),
     QueueDefs = [ {Name, Filter} || {Name, #{filter := Filter, status := active}} <- maps:to_list(Queues) ],
     %% if filter matches and limit is not reached

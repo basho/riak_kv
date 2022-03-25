@@ -313,12 +313,7 @@ init([FilePath]) ->
     QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
     QFM = tokenise_queuedefn(QueueDefnString),
 
-    QL = app_helper:get_env(riak_kv, replrtq_overflow_limit, ?QUEUE_LIMIT),
-
-    OL = min(app_helper:get_env(
-                riak_kv,
-                replrtq_srcobjectlimit,
-                ?OBJECT_LIMIT), QL),
+    {OL, QL} = get_limits(),
 
     MapToQOverflow =
         fun({QueueName, _QF, _QA}) ->
@@ -592,11 +587,14 @@ handle_call({clear_rtq, QueueName}, _From, State) ->
                     State#state.queue_overflow,
                     {QueueName,
                         empty_overflow_queue(QueueName, RootPath)}),
+            {OL, QL} = get_limits(),
             {reply,
                 ok,
                 State#state{
                     queue_local = LQs,
-                    queue_overflow = OQs}}
+                    queue_overflow = OQs,
+                    object_limit = OL,
+                    queue_limit = QL}}
     end;
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State}.
@@ -832,7 +830,7 @@ empty_local_queue() ->
 -spec empty_overflow_queue(queue_name(), string())
         -> riak_kv_overflow_queue:overflowq(). 
 empty_overflow_queue(QueueName, FilePath) ->
-    QL = app_helper:get_env(riak_kv, replrtq_overflow_limit, ?QUEUE_LIMIT),
+    {_OL, QL} = get_limits(),
     Priorities = [?FLD_PRIORITY, ?AAE_PRIORITY, ?RTQ_PRIORITY],
     MemLimit = min(?MEMORY_LIMIT, QL div 10),
     riak_kv_overflow_queue:new(
@@ -840,6 +838,15 @@ empty_overflow_queue(QueueName, FilePath) ->
                     filename:join(FilePath, atom_to_list(QueueName)),
                     MemLimit,
                     QL).
+
+-spec get_limits() -> {non_neg_integer(), non_neg_integer()}.
+get_limits() ->
+    QL = app_helper:get_env(riak_kv, replrtq_overflow_limit, ?QUEUE_LIMIT),
+    OL = min(app_helper:get_env(
+                riak_kv,
+                replrtq_srcobjectlimit,
+                ?OBJECT_LIMIT), QL),
+    {OL, QL}.
 
 %%%============================================================================
 %%% Test
