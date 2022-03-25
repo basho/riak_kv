@@ -81,7 +81,7 @@ init([]) ->
     case application:get_env(riak_kv, replrtq_peer_discovery, false) of
         true -> 
             SinkPeers = application:get_env(riak_kv, replrtq_sinkpeers, ""),
-            DefaultQueue = application:get_env(riak_kv, replrtq_sinkqueue),
+            DefaultQueue = app_helper:get_env(riak_kv, replrtq_sinkqueue),
             SnkQueuePeerInfo =
                 riak_kv_replrtq_snk:tokenise_peers(DefaultQueue, SinkPeers),
 
