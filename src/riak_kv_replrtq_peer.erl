@@ -158,7 +158,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% Prompt the riak_kv_replrtq_peer to discover peers for a given queue name 
 -spec prompt_discovery(riak_kv_replrtq_snk:queue_name()) -> ok.
 prompt_discovery(QueueName) ->
-    gen_server:cast(?MODULE, {scheduled_discovery, QueueName}).
+    gen_server:cast(?MODULE, {prompt_discovery, QueueName}).
 
 %% @doc
 %% Schedule the current riak_kv_replrtq_peer to discover peers for a given
