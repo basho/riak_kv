@@ -1170,13 +1170,6 @@
     {commented, enabled}
 ]}.
 
-%% @doc Limit the size of replication queues (for a queue and priority, i.e.
-%% each priority on each queue will have this as the limit)
-{mapping, "replrtq_srcqueuelimit", "riak_kv.replrtq_srcqueuelimit", [
-  {datatype, integer},
-  {default, 10000000}
-]}.
-
 %% @doc Limit the number of objects to be cached on the replication queue,
 %% with objects queued when the priority queue is beyond this limit stored as
 %% clocks only to be fetched on replication
