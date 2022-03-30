@@ -1090,21 +1090,25 @@
 %% that nval.
 {mapping, "ttaaefs_rangecheck", "riak_kv.ttaaefs_rangecheck", [
   {datatype, integer},
-  {default, 12}
+  {default, 0}
 ]}.
 
 %% @doc How many times per 24hour period should the an autocheck be run.  The
 %% autocheck is intended to be an adaptive check, in that it will:
-%% - use a rangecheck if the previous check has identified a range;
+%% - use a rangecheck if the previous check has identified a range, or;
+%% - use a rangecheck if the previous check was a successful sync, using the
+%% timestamp of the previous success as low modified date, or;
+%% - use a nocheck if the previous check did not sync, but also did not lead
+%% to any repairs (e.g. because the sink was ahead), or;
 %% - use an allcheck if no range is identified, and the current time is inside
-%% the all_check window;
+%% the all_check window, or;
 %% - use a daycheck otherwise
 %% For full, nval, sync operations the range is only relevant to the search
-%% for objects to repair - the tree comparison is always between all data for
+%% for objects to repair, the tree comparison is always between all data for
 %% that nval.
 {mapping, "ttaaefs_autocheck", "riak_kv.ttaaefs_autocheck", [
   {datatype, integer},
-  {default, 12}
+  {default, 24}
 ]}.
 
 %% @doc Lets you specify when during the day autocheck may run allcheck

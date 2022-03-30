@@ -46,7 +46,9 @@
 
 -export([set_range/4,
             clear_range/0,
-            get_range/0]).
+            get_range/0,
+            autocheck_suppress/0,
+            autocheck_suppress/1]).
 
 -define(SLICE_COUNT, 100).
 -define(SECONDS_IN_DAY, 86400).
@@ -62,11 +64,13 @@
 -define(EXCHANGE_PAUSE_MS, 1000).
     % Pause between stages of the AAE exchange
 -define(MAX_RESULTS, 64).
-    % Max nu,ber of segments in the AAE tree to be repaired each loop
+    % Max number of segments in the AAE tree to be repaired each loop
 -define(RANGE_BOOST, 8).
     % Factor to boost range_check max_results values
 -define(MEGA, 1000000).
-
+-define(AUTOCHECK_SUPPRESS, 2).
+    % How many autocheck checks to suppress following a failure to sync,
+    % combines with a failure to find repair work
 
 -record(state, {slice_allocations = [] :: list(allocation()),
                 slice_set_start :: erlang:timestamp()|undefined,
@@ -554,15 +558,23 @@ handle_cast({range_check, ReqID, From, Now}, State) ->
             end
     end;
 handle_cast({auto_check, ReqID, From, Now}, State) ->
-    case get_range() of
-        none ->
-            case in_window(Now, State#state.check_window) of
-                true ->
-                    process_workitem(all_check, ReqID, From, Now);
-                false ->
-                    process_workitem(day_check, ReqID, From, Now)
-            end;
-        _SetRange ->
+    case {get_range(),
+            State#state.previous_success,
+            in_window(Now, State#state.check_window),
+            drop_next_autocheck()} of
+        {none, false, true, false} ->
+            lager:info("Auto check prompts all_check reqid=~w", [ReqID]),
+            process_workitem(all_check, ReqID, From, Now);
+        {none, false, false, false} ->
+            lager:info("Auto check prompts day_check reqid=~w", [ReqID]),
+            process_workitem(day_check, ReqID, From, Now);
+        {none, false, _, true} ->
+            lager:info(
+                "Auto check prompts no_check reqid=~w as sink ahead",
+                [ReqID]),
+            process_workitem(no_check, ReqID, From, Now);
+        _ ->
+            lager:info("Auto check prompts range_check reqid=~w", [ReqID]),
             process_workitem(range_check, ReqID, From, Now)
     end,
     {noreply, State, timeout}.
@@ -627,6 +639,27 @@ get_range() ->
     application:get_env(riak_kv, ttaaefs_check_range, none).
 
 
+-spec autocheck_suppress() -> ok.
+autocheck_suppress() ->
+    autocheck_suppress(
+        application:get_env(
+            riak_kv,
+            ttaaefs_autocheck_suppress_count,
+            ?AUTOCHECK_SUPPRESS)).
+
+-spec autocheck_suppress(non_neg_integer()) -> ok.
+autocheck_suppress(SuppressCount) ->
+    application:set_env(riak_kv, ttaaefs_autocheck_dropnext, SuppressCount).
+
+-spec drop_next_autocheck() -> boolean().
+drop_next_autocheck() ->
+    case application:get_env(riak_kv, ttaaefs_autocheck_dropnext, 0) of
+        SC when SC > 0 ->
+            autocheck_suppress(SC - 1),
+            true;
+        _ ->
+            false
+    end.
 
 
 %%%============================================================================
@@ -1013,8 +1046,8 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
                 _AltCheck ->
                     MaxResults div 2
             end,
-        case length(ToRepair) > TargetForRange of
-            true ->
+        case length(ToRepair) of
+            R when R > TargetForRange ->
                 % If there is a single bucket, use that as a constraint,
                 % otherwise query over all buckets on the given modified
                 % range
@@ -1032,12 +1065,19 @@ generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
                         HiDT = lists:max(HDL),
                         lager:info("Setting range to bucket=all ~w ~w " ++
                                     " last_count=~w set by work_item=~w",
-                                    [LoDT, HiDT, length(ToRepair), WorkType]),
+                                    [LoDT, HiDT, R, WorkType]),
                         set_range(all, all, LoDT, HiDT),
                         ok
                 end;
-            false ->
-                ok
+            0 ->
+                lager:info(
+                    "Suppressing auto_checks as no repairs for work_item=~w",
+                    [WorkType]),
+                autocheck_suppress();
+            R ->
+                lager:info(
+                    "No range set for last_count=~w repairs by work_item=~w",
+                    [R, WorkType])
         end
     end.
 
