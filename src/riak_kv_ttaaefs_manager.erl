@@ -559,16 +559,15 @@ handle_cast({range_check, ReqID, From, Now}, State) ->
     end;
 handle_cast({auto_check, ReqID, From, Now}, State) ->
     case {get_range(),
-            State#state.previous_success,
             in_window(Now, State#state.check_window),
             drop_next_autocheck()} of
-        {none, false, true, false} ->
+        {none, true, false} ->
             lager:info("Auto check prompts all_check reqid=~w", [ReqID]),
             process_workitem(all_check, ReqID, From, Now);
-        {none, false, false, false} ->
+        {none, false, false} ->
             lager:info("Auto check prompts day_check reqid=~w", [ReqID]),
             process_workitem(day_check, ReqID, From, Now);
-        {none, false, _, true} ->
+        {none, _, true} ->
             lager:info(
                 "Auto check prompts no_check reqid=~w as sink ahead",
                 [ReqID]),
