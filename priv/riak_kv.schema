@@ -1093,12 +1093,12 @@
   {default, 12}
 ]}.
 
-%% @doc How many times per 24hour period should the an auto_check be run.  The
-%% auto_check is intended to be an adaptive check, in that it will:
-%% - use a range_check if the revious check has identified a range;
-%% - use an all_check if no range is identified, and the current time is inside
+%% @doc How many times per 24hour period should the an autocheck be run.  The
+%% autocheck is intended to be an adaptive check, in that it will:
+%% - use a rangecheck if the previous check has identified a range;
+%% - use an allcheck if no range is identified, and the current time is inside
 %% the all_check window;
-%% - use a day_check otherwise
+%% - use a daycheck otherwise
 %% For full, nval, sync operations the range is only relevant to the search
 %% for objects to repair - the tree comparison is always between all data for
 %% that nval.
@@ -1107,10 +1107,13 @@
   {default, 12}
 ]}.
 
-%% @doc Lets you specify when during the day auto_check may run all_check
-%% rather than the less expensive day_check, when no range has been identified.
-%% This constrains fixing entropy between cluster sof no recently-modified data
-%% to this window:
+%% @doc Lets you specify when during the day autocheck may run allcheck
+%% rather than the less expensive daycheck, when no range has been identified.
+%% This restricts the fixing entropy between clusters of non recently-modified
+%% data to this window (and hence ensures the cost of fixing this entropy does
+%% not fall in prime hours).  Note this window applies to `ttaaefs_autocheck`,
+%% which will adapt to the window - any `ttaaefs_allcheck` count that has been
+%% configured will ignore the window:
 %%
 %% * `always` (default) No restrictions
 %% * `never` never convert an auto_check to an all_check
