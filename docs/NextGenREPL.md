@@ -239,15 +239,15 @@ The IP port and protocol to be used when communicating with the sink cluster.  T
 
 If it is necessary to encrypt the communication in transit, then the `pb` peer protocol must be used (and TLS security configured on the sink cluster `pb` api).  The port is the standard port of the application-facing Riak API for that cluster.
 
-`ttaaefs_allcheck = 24`
+For full-sync the checks must also be configured.  These are a series of counts in the form `ttaaefs_<type>check`, which represents how many times per 24-hour period should that type of check be performed.  e.g. `ttaaefs_allcheck =24`.
 
-`ttaaefs_nocheck = 0`
-
-If `all` is the scope for cluster full-sync, then only the `allcheck` and `nocheck` counts should be configured.  This is the number of times per day to run a sync operation (or in the case of `nocheck` to skip a sync operation).  It is preferable that the total number of sync's configured per-node within the cluster is the same for each node - this will allow for the cluster to best schedule work to avoid overlapping sync operations.  The `ttaaefs_nocheck` exists to allow these numbers to be evened up.
+The most basic check is `ttaaefs_allcheck`, which will, whenever a discrepancy is discovered, always try and resolve all discrepancy regardless of the recency of the data,  For the simplest configuration, the `allcheck` and `nocheck` counts should be configured.  This is the number of times per day to run a sync operation (or in the case of `nocheck` to skip a sync operation).  It is preferable that the total number of sync's configured per-node within the cluster is the same for each node - this will allow for the cluster to best schedule work to avoid overlapping sync operations.  The `ttaaefs_nocheck` exists to allow these numbers to be evened up.
 
 For example if this cluster has a peer relationship with `cluster_b` with which it is expected to sync 24 times per day, and another node has a peer relationship with `cluster_c` and a requirement to sync 6 times per day - the second peer relationship should have 18 `ttaaefs_nocheck` syncs configured to balance the schedule within the cluster.
 
-`ttaaefs_allcheck = 24`
+The default settings are:
+
+`ttaaefs_allcheck = 0`
 
 `ttaaefs_nocheck = 0`
 
@@ -255,21 +255,29 @@ For example if this cluster has a peer relationship with `cluster_b` with which 
 
 `ttaaefs_daycheck = 0`
 
-`ttaaefs_rangecheck = 0`
+`ttaaefs_rangecheck = 12`
 
-`ttaaefs_autocheck = 0`
+`ttaaefs_autocheck = 12`
 
-If `bucket` or `type` is the scope for this node, then two additional sync counts can be configured.  The `hourcheck` and `daycheck` will be configured to sync only for objects modified in the past hour or day (as determined by the objects last_modified metadata).  When running a full-sync check restricted to a bucket or type, this is less efficient than running a check for an entire n_val as cached trees may not be used.  Running a `ttaaefs_allcheck` may take o(hour) on a large bucket, whereas `ttaaefs_daycheck` may be o(minute) and `ttaaefs_hourcheck` may be o(second).  So it would be preferable to frequently check recent modifications have synced correctly, and less frequently check that older modifications have synchronised.
+There are four additional sync type counts which can be configured, and these are of particular importance if `bucket` or `type` is the scope of full-sync for this node.  There are two stages to the full-sync - the tree comparison, and then the clock comparison (comparing the objects ona  subset of the damaged portion of the tree).  If the scope of the full-sync is `all` the data, then the tree comparison is very low cost (based on cached trees).  If the scope of the full-sync is `bucket` or `type` then the cost of the tree comparison increases with the number of keys in the bucket.  The clock comparison also with the size of the database (of the buckets covered by the scope).
 
-A random distribution of checks is used, based on the allocated counts.  If a check count of 1 of N is set for a given check type, there is no pre-determination of when in the day that check will run.
+Setting the check type can reduce the cost of both the tree comparison and the clock comparison (in the case of `bucket` and `type` scope), and the clock comparison (in the case of the `all` scope).  The cost reduction is made by looking only at data modified within a given range.
 
-If a previous check is still running when the allocated scheduled time for the next check on this node occurs, the following check will not be run.  Checks are skipped if the node falls behind schedule.
+The `hourcheck` and `daycheck` will be configured to sync only for objects modified in the past hour or day (as determined by the objects last_modified metadata).  Running a `ttaaefs_allcheck` may take o(hour) on a large bucket, whereas `ttaaefs_daycheck` may be o(minute) and `ttaaefs_hourcheck` may be o(second).  So it would be preferable to frequently check recent modifications have synced correctly, and less frequently check that older modifications have synchronised.
 
-The `ttaaefs_rangecheck` and `ttaaefs_autocheck` are smart checks, the adapt to previous results.  If the previous sync event was successful, and the `ttaaefs_rangecheck` discovers a discrepancy, it will assume that the discrepancy must be for data with a last modified date since the last successful sync.  If the previous sync showed a discrepancy, it will assume the discrepancy in the nexy sync event is in the "same data" (either bucket, or last modified date range) as the previous check.  If the discrepancy was largely unresolvable (i.e. because the sink was ahead in most cases), the `ttaaefs_rangecheck` will not a different type of check discovers that this has changed.
+The `ttaaefs_rangecheck` and `ttaaefs_autocheck` are smart checks, they adapt to previous results.
+
+If the previous sync event was successful, and the `ttaaefs_rangecheck` discovers a discrepancy, it will assume that the discrepancy must be for data with a last modified date since the last successful sync.  If the previous sync showed a discrepancy, it will assume the discrepancy in the next sync event is in the "same data" (either bucket, or last modified date range) as the previous check.  
+
+If the discrepancy was largely unresolvable (i.e. because the sink was ahead in most cases), then no range can be identified.  In this case `ttaaefs_rangecheck` will not continue to attempt to resolve discrepancies, until such that time that another check type on the node discovers there is a resolvable discrepancy in this direction.  This is to handle the situation where ClusterA has data not present in ClusterB for a given time range - resource needs to be prioritised to resolving this discrepancy from ClusterA (which can re-replicate) in that time range, not discovering the discrepancy from ClusterB which is powerless to resolve.    
 
 The `ttaaefs_autocheck` will morph into another check when the check is called.  It will morph into a `ttaaefs_rangecheck` if a range of resolvable discrepancies had been discovered by the previous sync event.  Otherwise it will either run a `ttaaefs_allcheck` or `ttaaefs_daycheck` depending on whether the time is inside or outside of the `ttaaefs_allcheck.window`.
 
-To be efficient the use of `ttaaefs_autocheck` and `ttaaefs_rangecheck` should be preferred over other checks, however in some cases, the adaptive nature of these checks may be confusing for the operator.  Full-sync should not be configured with *just* `ttaaefs_rangecheck`, as in some cases delta will never be resolved.
+To be efficient the use of `ttaaefs_autocheck` and `ttaaefs_rangecheck` should be preferred over other checks, however in some cases, the adaptive nature of these checks may be confusing for the operator.  For example with the `all` scope, discrepancies may be discovered between cached trees (which have no concept of time ranges), but repairs not triggered as the discrepancy is outside of the time range of the check.  Full-sync should not be configured with *just* `ttaaefs_rangecheck`, as in some cases delta will never be resolved.
+
+A random distribution of checks is used, based on the configured counts.  If a check count of 1 of N is set for a given check type, there is no pre-determination of when in the day that check will run.
+
+If a previous check is still running when the allocated scheduled time for the next check on this node occurs, the following check will not be run.  Checks are skipped if the node falls behind schedule.
 
 `ttaaefs_logrepairs = enabled`
 
