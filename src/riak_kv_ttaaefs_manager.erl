@@ -582,12 +582,6 @@ handle_cast({auto_check, ReqID, From, Now}, State) ->
             in_window(Now, State#state.check_window),
             drop_next_autocheck(),
             State#state.peer_queue_name} of
-        {none, false, true, false, _} ->
-            lager:info("Auto check prompts all_check reqid=~w", [ReqID]),
-            process_workitem(all_check, ReqID, From, Now);
-        {none, false, false, false, _} ->
-            lager:info("Auto check prompts day_check reqid=~w", [ReqID]),
-            process_workitem(day_check, ReqID, From, Now);
         {none, false, _, true, disabled} ->
             % As there is no peer queue defined, this manager cannot repair
             % discovered differences when the remote cluster is in advance
@@ -597,6 +591,12 @@ handle_cast({auto_check, ReqID, From, Now}, State) ->
                 "Auto check prompts no_check reqid=~w as sink ahead",
                 [ReqID]),
             process_workitem(no_check, ReqID, From, Now);
+        {none, false, true, _DN, _QN} ->
+            lager:info("Auto check prompts all_check reqid=~w", [ReqID]),
+            process_workitem(all_check, ReqID, From, Now);
+        {none, false, false, _DN, _QN} ->
+            lager:info("Auto check prompts day_check reqid=~w", [ReqID]),
+            process_workitem(day_check, ReqID, From, Now);
         Clause ->
             % Whenever there is a range defined of the last check was
             % successful, a range check is the optimal way of proceeding
@@ -761,18 +761,17 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                         State#state.peer_port,
                                         State#state.ssl_credentials),
                         EncodeClockFun =
+                            encode_clock_fun(State#state.peer_protocol),
+                        EncodeKeyClockFun =
                             fun({B, K, C, to_fetch}) ->
-                                {B,
-                                    K,
-                                    base64:encode_to_string(
-                                        riak_object:encode_vclock(C))}
+                                {B, K, EncodeClockFun(C)}
                             end,
                         fun(RepairList) ->
                             PeerMod:push(
                                 PeerClient,
                                 atom_to_binary(PeerQueueName, utf8),
                                 lists:map(
-                                    EncodeClockFun,
+                                    EncodeKeyClockFun,
                                     RepairList)),
                             stop_client(PeerClient, PeerMod),
                             RepairList
@@ -812,6 +811,15 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                 ?CRASH_TIMEOUT}
     end.
 
+
+encode_clock_fun(http) ->
+    fun(C) ->
+        base64:encode_to_string(riak_object:encode_vclock(C))
+    end;
+encode_clock_fun(pb) ->
+    fun(C) ->
+        riak_object:encode_vclock(C)
+    end.
 
 %% @doc
 %% Check the slot info - how many nodes are there active in the cluster, and
