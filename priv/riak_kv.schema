@@ -892,6 +892,21 @@
   {default, q1_ttaaefs}
 ]}.
 
+%% @doc Tictac full-sync repair is by default uni-directional - each full-sync
+%% operation managed from a given cluster will only attempt to prompt repair
+%% where that cluster is in advance (i.e the src of a more advanced value).
+%% From Riak 3.0.10 it can be bi-directional, and by configuring the queuename
+%% of the remote peer that this cluster is consuming from, repairs will be
+%% prompted in both directions.
+%% This change reduces the waste associated with discovery work that does not
+%% lead to repair activity.  To revert back to pre-3.0.10 uni-directional
+%% behaviour use the keyword disabled as the peer queuename.
+{mapping, "ttaaefs_queuename_peer", "riak_kv.ttaaefs_queuename_peer", [
+  {datatype, atom},
+  {default, disabled}
+]}.
+
+
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
 %% compared per exchange.  Reducing this will speed up clock compare queries,
 %% but will increase the number of exchanges required to complete a repair.

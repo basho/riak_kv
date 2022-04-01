@@ -84,7 +84,10 @@
                 bucket_list :: list()|undefined,
                 local_nval :: pos_integer()|undefined,
                 remote_nval :: pos_integer()|undefined,
-                queue_name :: riak_kv_replrtq_src:queue_name() | undefined,
+                queue_name ::
+                    riak_kv_replrtq_src:queue_name() | undefined,
+                peer_queue_name ::
+                    riak_kv_replrtq_src:queue_name() | disabled,
                 slot_info_fun :: fun(() -> {pos_integer(), pos_integer()}),
                 slice_count = ?SLICE_COUNT :: pos_integer(),
                 is_paused = false :: boolean(),
@@ -100,6 +103,7 @@
 -type nval() :: pos_integer()|range. % Range queries do not have an n-val
 -type work_item() ::
     no_check|all_check|day_check|hour_check|range_check|auto_check.
+-type work_scope() :: partial|full.
 -type schedule_want() :: {work_item(), non_neg_integer()}.
 -type slice() :: pos_integer().
 -type allocation() :: {slice(), work_item()}.
@@ -111,7 +115,13 @@
 -type repair_reference() ::
     {riak_object:bucket(), riak_object:key(), vclock:vclock(), any()}.
 -type check_window() :: always|never|{0..23,0..23}.
-
+-type do_repair_fun() ::
+    fun((list(repair_reference())) -> list(repair_reference())).
+-type repair_summary() ::
+    {riak_object:bucket(),
+        pos_integer(),
+        calendar:datetime(),
+        calendar:datetime()}.
 
 -export_type([work_item/0]).
 
@@ -293,6 +303,8 @@ init([]) ->
     
     % Queue name to be used for AAE exchanges on this cluster
     SrcQueueName = app_helper:get_env(riak_kv, ttaaefs_queuename),
+    PeerQueueName =
+        application:get_env(riak_kv, ttaaefs_queuename_peer, disabled),
 
     State2 = 
         State1#state{peer_ip = PeerIP,
@@ -300,6 +312,7 @@ init([]) ->
                         peer_protocol = PeerProtocol,
                         ssl_credentials = SSLCredentials,
                         queue_name = SrcQueueName,
+                        peer_queue_name = PeerQueueName,
                         check_window = CheckWindow},
     
     lager:info("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
@@ -492,7 +505,7 @@ handle_cast({hour_check, ReqID, From, Now}, State) ->
                                 hour_check),
             {noreply, State0, Timeout}
     end;
-handle_cast({range_check, ReqID, From, Now}, State) ->
+handle_cast({range_check, ReqID, From, _Now}, State) ->
     Range =
         case get_range() of
             none ->
@@ -501,8 +514,14 @@ handle_cast({range_check, ReqID, From, Now}, State) ->
                         lager:info("No range sync as no range set"),
                         none;
                     {PrevMega, PrevSecs, _PrevMS} ->
-                        {MegaSecs, Secs, _MicroSecs} = Now,
-                        NowSecs = MegaSecs * ?MEGA  + Secs,
+                        % Add to the high time, and arbitrary 5s, as the last
+                        % success time will be a timestamp set within
+                        % sync_clusters/9 function, and it is preferable to
+                        % ensure this query went beyond that time so that there
+                        % should not be a gap between this queries high time,
+                        % and the low time of the next
+                        {MegaSecs, Secs, _MicroSecs} = os:timestamp(),
+                        NowSecs = MegaSecs * ?MEGA  + Secs + 5,
                         {all,
                             all,
                             PrevMega * ?MEGA + PrevSecs,
@@ -559,21 +578,31 @@ handle_cast({range_check, ReqID, From, Now}, State) ->
     end;
 handle_cast({auto_check, ReqID, From, Now}, State) ->
     case {get_range(),
+            State#state.previous_success,
             in_window(Now, State#state.check_window),
-            drop_next_autocheck()} of
-        {none, true, false} ->
+            drop_next_autocheck(),
+            State#state.peer_queue_name} of
+        {none, false, true, false, _} ->
             lager:info("Auto check prompts all_check reqid=~w", [ReqID]),
             process_workitem(all_check, ReqID, From, Now);
-        {none, false, false} ->
+        {none, false, false, false, _} ->
             lager:info("Auto check prompts day_check reqid=~w", [ReqID]),
             process_workitem(day_check, ReqID, From, Now);
-        {none, _, true} ->
+        {none, false, _, true, disabled} ->
+            % As there is no peer queue defined, this manager cannot repair
+            % discovered differences when the remote cluster is in advance
+            % of this cluster.  This skips checks as previous discovery work
+            % has gone to waste
             lager:info(
                 "Auto check prompts no_check reqid=~w as sink ahead",
                 [ReqID]),
             process_workitem(no_check, ReqID, From, Now);
-        _ ->
-            lager:info("Auto check prompts range_check reqid=~w", [ReqID]),
+        Clause ->
+            % Whenever there is a range defined of the last check was
+            % successful, a range check is the optimal way of proceeding
+            lager:info(
+                "Auto check prompts range_check reqid=~w due to clause ~p",
+                [ReqID, Clause]),
             process_workitem(range_check, ReqID, From, Now)
     end,
     {noreply, State, timeout}.
@@ -668,7 +697,7 @@ drop_next_autocheck() ->
 %% @doc
 %% Sync two clusters - return an updated loop state and a timeout
 -spec sync_clusters(pid(), integer()|no_reply,
-                nval(), nval(), tuple(), list()|undefined, full|partial,
+                nval(), nval(), tuple(), list()|undefined, work_scope(),
                 ttaaefs_state(),
                 work_item()) ->
                     {ttaaefs_state(), pos_integer()}.
@@ -714,12 +743,48 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                             ?MAX_RESULTS)
                 end,
             
+            LocalRepairFun =
+                fun(RepairList) ->
+                    riak_kv_replrtq_src:replrtq_ttaaefs(
+                        State#state.queue_name,
+                        RepairList),
+                    RepairList
+                end,
+            RemoteRepairFun =
+                case State#state.peer_queue_name of
+                    disabled ->
+                        fun(_RepairList) -> [] end;
+                    PeerQueueName ->
+                        {PeerClient, PeerMod} =
+                            init_client(State#state.peer_protocol,
+                                        State#state.peer_ip,
+                                        State#state.peer_port,
+                                        State#state.ssl_credentials),
+                        EncodeClockFun =
+                            fun({B, K, C, to_fetch}) ->
+                                {B,
+                                    K,
+                                    base64:encode_to_string(
+                                        riak_object:encode_vclock(C))}
+                            end,
+                        fun(RepairList) ->
+                            PeerMod:push(
+                                PeerClient,
+                                atom_to_binary(PeerQueueName, utf8),
+                                lists:map(
+                                    EncodeClockFun,
+                                    RepairList)),
+                            stop_client(PeerClient, PeerMod),
+                            RepairList
+                        end
+                end,
+
             RepairFun =
-                generate_repairfun(ReqID0,
-                                    State#state.queue_name,
-                                    MaxResults,
-                                    Ref,
-                                    WorkType),
+                generate_repairfun(
+                    LocalRepairFun,
+                    RemoteRepairFun,
+                    MaxResults,
+                    {ReqID0, Ref, WorkType}),
 
             ExchangePause =
                 app_helper:get_env(riak_kv,
@@ -917,6 +982,7 @@ remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     end;
 remote_sender({fetch_clocks, SegmentIDs, MR}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
+        lager:info("fetch_clocks with MR ~p", [MR]),
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs, MR) of
             {ok, {keysclocks, KeysClocks}} ->
                 ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
@@ -998,88 +1064,103 @@ generate_replyfun(Clientless, ReqID, From, StopClientFun) ->
 %% the object should be repaired by requeueing.  Requeueing will cause the
 %% object to be re-replicated to all destination clusters (not just a specific
 %% sink cluster)
--spec generate_repairfun(integer(),
-                            riak_kv_replrtq_src:queue_name(),
+-spec generate_repairfun(do_repair_fun(),
+                            do_repair_fun(),
                             non_neg_integer(),
-                            full|partial,
-                            work_item()) -> aae_exchange:repair_fun().
-generate_repairfun(ExchangeID, QueueName, MaxResults, Ref, WorkType) ->
+                            {non_neg_integer(), work_scope(), work_item()})
+                        -> aae_exchange:repair_fun().
+generate_repairfun(LocalRepairFun, RemoteRepairFun, MaxResults, LogInfo) ->
     LogRepairs = app_helper:get_env(riak_kv, ttaaefs_logrepairs, false),
+    {ExchangeID, WorkScope, WorkItem} = LogInfo,
     fun(RepairList) ->
         FoldFun =
-            fun({{B, K}, {SrcVC, SinkVC}}, {SourceL, SinkC}) ->
-                % how are the vector clocks encoded at this point?
-                % The erlify_aae_keyclock will have base64 decoded the clock
-                case vclock_dominates(SinkVC, SrcVC) of
+            fun({{B, K}, {SrcVC, SnkVC}}, {SourceL, SinkL}) ->
+                case vclock_equal(SrcVC, SnkVC) of
                     true ->
-                        {SourceL, SinkC + 1};
+                        {SourceL, SinkL};
                     false ->
-                        % If the vector clock in the source is not dominated
-                        % by the sink, then we should replicate if it differs
-                        case {vclock_equal(SrcVC, SinkVC), LogRepairs} of
-                            {false, true} ->
-                                lager:info(
-                                    "Repair B=~p K=~p SrcVC=~w SnkVC=~w",
-                                        [B, K, SrcVC, SinkVC]),
-                                {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
-                            {false, false} ->
-                                {[{B, K, SrcVC, to_fetch}|SourceL], SinkC};
-                            {true, _} ->
-                                {SourceL, SinkC}
+                        maybe_log_repair(LogRepairs, {B, K, SrcVC, SnkVC}),
+                        case vclock_dominates(SnkVC, SrcVC) of
+                            true ->
+                                {SourceL, [{B, K, SnkVC, to_fetch}|SinkL]};
+                            false ->
+                                {[{B, K, SrcVC, to_fetch}|SourceL], SinkL}
                         end
                 end
             end,
-        {ToRepair, SinkDCount} = lists:foldl(FoldFun, {[], 0}, RepairList),
-        lager:info("AAE reqid=~w work_item=~w type=~w shows sink ahead " ++
-                        "for key_count=~w keys limited by max_results=~w", 
-                    [ExchangeID, WorkType, Ref, SinkDCount, MaxResults]),
-        riak_kv_stat:update({ttaaefs, snk_ahead, SinkDCount}),
-        riak_kv_stat:update({ttaaefs, src_ahead, length(ToRepair)}),
-        riak_kv_replrtq_src:replrtq_ttaaefs(QueueName, ToRepair),
-        PBDL = report_repairs(ExchangeID, ToRepair, Ref, WorkType),
+        {SrcRepair, SnkRepair} = lists:foldl(FoldFun, {[], []}, RepairList),
+        lager:info(
+            "AAE reqid=~w work_item=~w scope=~w shows sink ahead " ++
+                "for key_count=~w keys limited by max_results=~w", 
+            [ExchangeID, WorkItem, WorkScope, length(SnkRepair), MaxResults]),
+        lager:info(
+            "AAE reqid=~w work_item=~w scope=~w shows source ahead " ++
+                "for key_count=~w keys limited by max_results=~w", 
+            [ExchangeID, WorkItem, WorkScope, length(SrcRepair), MaxResults]),
+        riak_kv_stat:update({ttaaefs, snk_ahead, length(SnkRepair)}),
+        riak_kv_stat:update({ttaaefs, src_ahead, length(SrcRepair)}),
+        AllRepairs = LocalRepairFun(SrcRepair) ++ RemoteRepairFun(SnkRepair),
+        PBDL = summarise_repairs(ExchangeID, AllRepairs, WorkScope, WorkItem),
         RB = app_helper:get_env(riak_kv, ttaaefs_rangeboost, ?RANGE_BOOST),
         TargetForRange = 
-            case WorkType of
+            case WorkItem of
                 range_check ->
                     MaxResults div RB;
                 _AltCheck ->
                     MaxResults div 2
             end,
-        case length(ToRepair) of
-            R when R > TargetForRange ->
-                % If there is a single bucket, use that as a constraint,
-                % otherwise query over all buckets on the given modified
-                % range
-                case PBDL of
-                    [{B, KC, LowDT, HighDT}] ->
-                        lager:info("Setting range to bucket=~p ~w ~w " ++
-                                    " last_count=~w set by work_item=~w",
-                                    [B, LowDT, HighDT, KC, WorkType]),
-                        set_range(B, all, LowDT, HighDT);
-                    _ ->
-                        MapFun = fun({_B, _KC, LD, HD}) -> {LD, HD} end,
-                        {LDL, HDL} =
-                            lists:unzip(lists:map(MapFun, PBDL)),
-                        LoDT = lists:min(LDL),
-                        HiDT = lists:max(HDL),
-                        lager:info("Setting range to bucket=all ~w ~w " ++
-                                    " last_count=~w set by work_item=~w",
-                                    [LoDT, HiDT, R, WorkType]),
-                        set_range(all, all, LoDT, HiDT),
-                        ok
-                end;
-            0 ->
-                lager:info(
-                    "Suppressing auto_checks as no repairs for work_item=~w",
-                    [WorkType]),
-                autocheck_suppress();
-            R ->
-                lager:info(
-                    "No range set for last_count=~w repairs by work_item=~w",
-                    [R, WorkType])
-        end
+        determine_next_action(
+            length(AllRepairs), TargetForRange, WorkScope, WorkItem, PBDL)
     end.
 
+
+%% @doc Examine the number of repairs, and the repair summary and determine
+%% what to do next e.g. set a range for the next range_check 
+-spec determine_next_action(
+    non_neg_integer(), 
+    pos_integer(),
+    work_scope(), work_item(),
+    list(repair_summary())) -> ok.
+determine_next_action(0, _Target, full, WorkItem, _RepairRanges) ->
+    % Only do this if the scope is full, otherwise may suppress checks for
+    % other buckets where those checks could have been successful.
+    % This action is in support of environments where bi-directional repair
+    % is not enabled (i.e. the peer queue_name is set to disabled).
+    lager:info(
+        "Suppressing auto_checks as no repairs for work_item=~w",
+        [WorkItem]),
+    autocheck_suppress();
+determine_next_action(
+    RepairCount, Target, _Scope, WorkItem, [{B, KC, LowDT, HighDT}])
+        when RepairCount > Target ->
+    lager:info(
+        "Setting range to bucket=~p ~w ~w last_count=~w set by work_item=~w",
+        [B, LowDT, HighDT, KC, WorkItem]),
+    set_range(B, all, LowDT, HighDT);
+determine_next_action(
+    RepairCount, Target, _Scope, WorkItem, RepairRanges)
+        when RepairCount > Target ->
+    MapFun = fun({_B, _KC, LD, HD}) -> {LD, HD} end,
+    {LDL, HDL} =
+        lists:unzip(lists:map(MapFun, RepairRanges)),
+    LoDT = lists:min(LDL),
+    HiDT = lists:max(HDL),
+    lager:info(
+        "Setting range to bucket=all ~w ~w last_count=~w set by work_item=~w",
+        [LoDT, HiDT, RepairCount, WorkItem]),
+    set_range(all, all, LoDT, HiDT);
+determine_next_action(RepairCount, _Target, _Scope, WorkItem, _RepairRanges) ->
+    lager:info(
+        "No range set for last_count=~w repairs by work_item=~w",
+        [RepairCount, WorkItem]),
+    ok.
+
+maybe_log_repair(false, _) ->
+    ok;
+maybe_log_repair(true, {B, K, SrcVC, SnkVC}) ->
+    lager:info(
+        "Repair B=~p K=~p SrcVC=~w SnkVC=~w",
+        [B, K, SrcVC, SnkVC]).
 
 vclock_dominates(none, _SrcVC)  ->
     false;
@@ -1101,15 +1182,13 @@ decode_clock(EncodedClock) ->
     riak_object:decode_vclock(EncodedClock).
 
 
--spec report_repairs(integer(),
+%% @doc Summarise the repairs by bucket and modified rnane
+-spec summarise_repairs(integer(),
                         list(repair_reference()),
-                        full|partial,
+                        work_scope(),
                         work_item()) -> 
-                            list({riak_object:bucket(),
-                                    pos_integer(),
-                                    calendar:datetime(),
-                                    calendar:datetime()}).
-report_repairs(ExchangeID, RepairList, Ref, WorkType) ->
+                            list(repair_summary()).
+summarise_repairs(ExchangeID, RepairList, WorkScope, WorkItem) ->
     FoldFun =
         fun({B, _K, SrcVC, _Action}, Acc) ->
             LMD = vclock:last_modified(SrcVC),
@@ -1124,10 +1203,10 @@ report_repairs(ExchangeID, RepairList, Ref, WorkType) ->
     PerBucketData = lists:foldl(FoldFun, [], RepairList),
     LogFun =
         fun({B, C, MinDT, MaxDT}) ->
-            lager:info("AAE exchange=~w work_item=~w type=~w repaired " ++ 
-                            "key_count=~w for " ++
-                            "bucket=~p with low date ~p high date ~p",
-                        [ExchangeID, WorkType, Ref, C, B, MinDT, MaxDT])
+            lager:info(
+                "AAE exchange=~w work_item=~w type=~w repaired " ++ 
+                    "key_count=~w for bucket=~p with low date ~p high date ~p",
+                [ExchangeID, WorkScope, WorkItem, C, B, MinDT, MaxDT])
         end,
     lists:foreach(LogFun, PerBucketData),
     PerBucketData.
@@ -1252,7 +1331,7 @@ choose_schedule(Slices,
     {HL, [Allocation|TL]} =
         lists:split(rand:uniform(length(Slices)) - 1, Slices),
     choose_schedule(HL ++ TL,
-        [{Allocation, range_check}|Allocations],
+        [{Allocation, auto_check}|Allocations],
         {NoCheck, AllCheck, DayCheck, HourCheck, RangeCheck, AutoCheck - 1}).
 
 -spec in_window(erlang:timestamp(), check_window()) -> boolean().
@@ -1312,26 +1391,36 @@ choose_schedule_test() ->
     ?assertMatch(AllSyncAll, ExpAllSyncAll),
     
     MixedSyncSchedule = 
-        [{no_check, 0},
+        [{no_check, 6},
             {all_check, 1},
-            {auto_check, 0},
+            {auto_check, 3},
             {day_check, 4},
-            {hour_check, 95},
-            {range_check, 0}],
+            {hour_check, 84},
+            {range_check, 2}],
     MixedSync = choose_schedule(MixedSyncSchedule),
     ?assertMatch(100, length(MixedSync)),
     IsSyncFun = fun({_I, Type}) -> Type == hour_check end,
     SliceForHourFun = fun({I, hour_check}) -> I end,
     HourWorkload =
         lists:map(SliceForHourFun, lists:filter(IsSyncFun, MixedSync)),
-    ?assertMatch(95, length(lists:usort(HourWorkload))),
+    ?assertMatch(84, length(lists:usort(HourWorkload))),
     FoldFun = 
         fun(I, Acc) ->
             true = I > Acc,
             I
         end,
     BiggestI = lists:foldl(FoldFun, 0, HourWorkload),
-    ?assertMatch(true, BiggestI >= 95).
+    ?assertMatch(true, BiggestI >= 84),
+    
+    CountFun =
+        fun({_I, Type}, Acc) ->
+            {Type, CD} = lists:keyfind(Type, 1, Acc),
+            lists:ukeysort(1, [{Type, CD - 1}|Acc])
+        end,
+    ?assertMatch(
+        [{all_check, 0}, {auto_check, 0}, {day_check, 0},
+            {hour_check, 0}, {no_check, 0}, {range_check, 0}],
+            lists:foldl(CountFun, MixedSyncSchedule, MixedSync)).
 
 take_first_workitem_test() ->
     Wants =
