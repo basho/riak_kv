@@ -967,9 +967,18 @@
 %% behaviour use the keyword disabled as the peer queuename.
 {mapping, "ttaaefs_queuename_peer", "riak_kv.ttaaefs_queuename_peer", [
   {datatype, atom},
-  {default, disabled}
+  {default, disabled},
+  {commented, q1_ttaaefs}
 ]}.
 
+%% @doc Tictac cluster slice number.  Each cluster can be configued with a
+%% slice number to space out full-sync events.  The numbers can be 1..4.  For
+%% example when doing bi-directional replication give one cluster a slice
+%% number of 1, and another a slice number of 3 (or alternatively use 2 and 4)
+{mapping, "ttaaefs_cluster_slice", "riak_kv.ttaaefs_cluster_slice", [
+    {datatype, integer},
+    {default, 1}
+]}.
 
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
 %% compared per exchange.  Reducing this will speed up clock compare queries,
@@ -984,7 +993,7 @@
 %% impact on KV performance when repairs are required.
 {mapping, "ttaaefs_maxresults", "riak_kv.ttaaefs_maxresults", [
   {datatype, integer},
-  {default, 64}
+  {default, 32}
 ]}.
 
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
@@ -995,7 +1004,7 @@
 %% range_check to do the heavy lifting) 
 {mapping, "ttaaefs_rangeboost", "riak_kv.ttaaefs_rangeboost", [
   {datatype, integer},
-  {default, 8}
+  {default, 16}
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this
@@ -1062,15 +1071,20 @@
 %% @doc The port to be used when connecting to the remote peer cluster
 {mapping, "ttaaefs_peerport", "riak_kv.ttaaefs_peerport", [
   {datatype, integer},
-  {commented, 8098}
+  {commented, 8087}
 ]}.
 
 %% @doc The protocol to be used when conecting to the peer in the remote
-%% cluster.  Could be http or pb (but only http currently being tested)
-%% TODO: Support for SSL?  Support for pb.
+%% cluster.  Could be http or pb, with pb being relatively efficient.  Adding
+%% TLS security is possible with the pb protocol by setting the following
+%% configuration items:
+%% - riak_kv, repl_cacert_filename
+%% - riak_kv, repl_cert_filename
+%% - riak_kv, repl_key_filename,
+%% - riak_kv, repl_username
 {mapping, "ttaaefs_peerprotocol", "riak_kv.ttaaefs_peerprotocol", [
   {datatype, {enum, [http, pb]}},
-  {default, http}
+  {default, pb}
 ]}.
 
 %% @doc The filepath for the ca certificate to validate the ssl connection
@@ -1344,7 +1358,7 @@
 %% to the single queue specified in replrtq_sinkqueue is strongly recommended.
 {mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sinkpeers", [
     {datatype, string},
-    {commented, "127.0.0.1:8098:http"}
+    {commented, "127.0.0.1:8087:pb"}
 ]}.
 
 %% @doc The number of workers to be used for each queue must be configured.

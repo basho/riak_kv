@@ -122,12 +122,14 @@ ttaaefs_daycheck = 0
 ttaaefs_autocheck = 24
 ttaaefs_rangecheck = 0
 
-ttaaefs_maxresults = 64
-ttaaefs_rangeboost = 8
+ttaaefs_maxresults = 32
+ttaaefs_rangeboost = 16
 
 ttaaefs_allcheck.policy = window
 ttaaefs_allcheck.window.start = 22
 ttaaefs_allcheck.window.end = 6
+
+ttaaefs_cluster_slice = 1
 ```
 
 The schedule is how many times each 24 hour period to run a check of the defined type.  The schedule is re-shuffled at random each day, and is specific to that node's peer relationship.  It is recommended that only `ttaaefs_autocheck` be used in schedules by default, `ttaaefs_autocheck` is an adaptive check designed to be efficient in a variety of scenarios.  The other checks should only be used if there is specific test evidence to demonstrate that they are more efficient.
@@ -163,6 +165,8 @@ Timings will vary depending on the total number of keys in the cluster, the rate
 The `ttaaefs_queuename` is the name of the queue on this node, to which deltas should be written (assuming the remote cluster being compared has sink workers fetching from this queue).  If the `ttaaefs_queuename_peer` is set to disabled, when repairs are discovered, but it is the peer node that has the superior value, then these repairs are ignored.  It is expected these repairs will be picked up instead by discovery initiated from the peer.  Setting the `ttaaefs_queuename_peer` to the name of a queue on the peer which this node has a sink worker enabled to fetch from will actually trigger repairs when the peer cluster is superior.  It is strongly recommended to make full-sync repair bi-directionally in this way.
 
 If there are 24 sync events scheduled a day, and default `ttaaefs_maxresults` and `ttaaefs_rangeboost` settings are used, and an 8-node cluster is in use - repairs via ttaaefs full-sync will happen at a rate of about 100K per day.  It is therefore expected that where a large delta emerges it may be necessary to schedule a `range_repl` fold, or intervene to raise the `ttaaefs_rangeboost` to speed up the closing of the delta.
+
+To help space out queries between clusters - i.e. stop two clusters with identical schedules from mutual full-syncs at the same time - each cluster may be configured with `ttaaefs_cluster_slice` number between 1 and 4.
 
 ### Configure work queues
 
