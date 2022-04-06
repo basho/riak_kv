@@ -71,6 +71,10 @@
 -define(AUTOCHECK_SUPPRESS, 2).
     % How many autocheck checks to suppress following a failure to sync,
     % combines with a failure to find repair work
+-define(RANGE_DIVISOR, 2).
+    % Reset the range if the number of results for repair are less than
+    % MaxResults div ?RANGE_DIVISOR.  Either all the results have been
+    % returned, or the range has narrowed and is no longer effective
 
 -record(state, {slice_allocations = [] :: list(allocation()),
                 slice_set_start :: erlang:timestamp()|undefined,
@@ -990,7 +994,6 @@ remote_sender({fetch_clocks, SegmentIDs}, Client, Mod, ReturnFun, NVal) ->
     end;
 remote_sender({fetch_clocks, SegmentIDs, MR}, Client, Mod, ReturnFun, NVal) ->
     fun() ->
-        lager:info("fetch_clocks with MR ~p", [MR]),
         case Mod:aae_fetch_clocks(Client, NVal, SegmentIDs, MR) of
             {ok, {keysclocks, KeysClocks}} ->
                 ReturnFun(lists:map(fun remote_decode/1, KeysClocks));
@@ -1109,16 +1112,12 @@ generate_repairfun(LocalRepairFun, RemoteRepairFun, MaxResults, LogInfo) ->
         riak_kv_stat:update({ttaaefs, src_ahead, length(SrcRepair)}),
         AllRepairs = LocalRepairFun(SrcRepair) ++ RemoteRepairFun(SnkRepair),
         PBDL = summarise_repairs(ExchangeID, AllRepairs, WorkScope, WorkItem),
-        RB = app_helper:get_env(riak_kv, ttaaefs_rangeboost, ?RANGE_BOOST),
-        TargetForRange = 
-            case WorkItem of
-                range_check ->
-                    MaxResults div RB;
-                _AltCheck ->
-                    MaxResults div 2
-            end,
         determine_next_action(
-            length(AllRepairs), TargetForRange, WorkScope, WorkItem, PBDL)
+            length(AllRepairs),
+            MaxResults div ?RANGE_DIVISOR,
+            WorkScope,
+            WorkItem,
+            PBDL)
     end.
 
 
