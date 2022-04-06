@@ -907,6 +907,14 @@
   {commented, q1_ttaaefs}
 ]}.
 
+%% @doc Tictac cluster slice number.  Each cluster can be configued with a
+%% slice number to space out full-sync events.  The numbers can be 1..4.  For
+%% example when doing bi-directional replication give one cluster a slice
+%% number of 1, and another a slice number of 3 (or alternatively use 2 and 4)
+{mapping, "ttaaefs_cluster_slice", "riak_kv.ttaaefs_cluster_slice", [
+    {datatype, integer},
+    {default, 1}
+]}.
 
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
 %% compared per exchange.  Reducing this will speed up clock compare queries,
@@ -921,7 +929,7 @@
 %% impact on KV performance when repairs are required.
 {mapping, "ttaaefs_maxresults", "riak_kv.ttaaefs_maxresults", [
   {datatype, integer},
-  {default, 64}
+  {default, 32}
 ]}.
 
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
@@ -932,7 +940,7 @@
 %% range_check to do the heavy lifting) 
 {mapping, "ttaaefs_rangeboost", "riak_kv.ttaaefs_rangeboost", [
   {datatype, integer},
-  {default, 8}
+  {default, 16}
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this

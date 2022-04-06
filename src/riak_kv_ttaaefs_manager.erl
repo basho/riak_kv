@@ -92,7 +92,7 @@
                     riak_kv_replrtq_src:queue_name() | undefined,
                 peer_queue_name ::
                     riak_kv_replrtq_src:queue_name() | disabled,
-                slot_info_fun :: fun(() -> {pos_integer(), pos_integer()}),
+                slot_info_fun :: slot_info_fun(),
                 slice_count = ?SLICE_COUNT :: pos_integer(),
                 is_paused = false :: boolean(),
                 last_exchange_start = os:timestamp() :: erlang:timestamp(),
@@ -112,7 +112,9 @@
 -type slice() :: pos_integer().
 -type allocation() :: {slice(), work_item()}.
 -type schedule_wants() :: [schedule_want()].
--type node_info() :: {pos_integer(), pos_integer()}. % Node and node count
+-type node_info() ::
+    {pos_integer(), pos_integer(), 1..4}.
+    % Node, node count, cluster slice (of 4)
 -type ttaaefs_state() :: #state{}.
 -type ssl_credentials() :: {string(), string(), string(), string()}.
     %% {cacert_filename, cert_filename, key_filename, username}
@@ -126,6 +128,8 @@
         pos_integer(),
         calendar:datetime(),
         calendar:datetime()}.
+-type slot_info_fun() ::
+    fun(() -> node_info()).
 
 -export_type([work_item/0]).
 
@@ -834,7 +838,9 @@ encode_clock_fun(pb) ->
 get_slotinfo() ->
     UpNodes = lists:sort(riak_core_node_watcher:nodes(riak_kv)),
     NotMe = lists:takewhile(fun(N) -> N /= node() end, UpNodes),
-    {length(NotMe) + 1, length(UpNodes)}.
+    ClusterSlice = 
+        max(min(app_helper:get_env(riak_kv, ttaaefs_cluster_slice, 1), 4), 1),
+    {length(NotMe) + 1, length(UpNodes), ClusterSlice}.
 
 %% @doc
 %% Return a function which will send aae_exchange messages to a remote
@@ -1245,9 +1251,13 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
                         RevisedStartTime, SlotInfo, SliceCount);
 take_next_workitem([NextAlloc|T], Wants,
                         ScheduleStartTime, SlotInfo, SliceCount) ->
-    {NodeNumber, NodeCount} = SlotInfo,
+    {NodeNumber, NodeCount, ClusterSlice} = SlotInfo,
     SliceSeconds = ?SECONDS_IN_DAY div max(SliceCount, 1),
-    SlotSeconds = (NodeNumber - 1) * (SliceSeconds div max(NodeCount, 1)),
+    NodeSliceSeconds = SliceSeconds div max(NodeCount, 1),
+    ClusterSliceSeconds = NodeSliceSeconds div 4,
+    SlotSeconds =
+        (NodeNumber - 1) * NodeSliceSeconds
+        + (ClusterSlice - 1) * ClusterSliceSeconds,
     {SliceNumber, NextAction} = NextAlloc,
     {Mega, Sec, _Micro} = ScheduleStartTime,
     ScheduleSeconds = 
@@ -1443,7 +1453,7 @@ take_first_workitem_test() ->
         take_next_workitem([], Wants,
                             {TwentyFourHoursAgo div ?MEGA,
                                 TwentyFourHoursAgo rem ?MEGA, Micro},
-                            {1, 8},
+                            {1, 8, 1},
                             100),
     ?assertMatch(no_check, NextAction),
     ?assertMatch(true, ScheduleStartTime < {Mega, Sec, Micro}),
@@ -1452,19 +1462,30 @@ take_first_workitem_test() ->
         take_next_workitem([], Wants,
                             {TwentyFourHoursAgo div ?MEGA,
                                 TwentyFourHoursAgo rem ?MEGA, Micro},
-                            {2, 8},
+                            {2, 8, 1},
                             100),
     ?assertMatch(true, PromptMoreSeconds > PromptSeconds),
     {NextAction, PromptEvenMoreSeconds, T, ScheduleStartTime} = 
         take_next_workitem([], Wants,
                             {TwentyFourHoursAgo div ?MEGA,
                                 TwentyFourHoursAgo rem ?MEGA, Micro},
-                            {7, 8},
+                            {7, 8, 1},
                             100),
     ?assertMatch(true, PromptEvenMoreSeconds > PromptMoreSeconds),
     {NextAction, PromptYetMoreSeconds, _T0, ScheduleStartTime} = 
-        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8}, 100),
-    ?assertMatch(true, PromptYetMoreSeconds > PromptEvenMoreSeconds).
+        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8, 1}, 100),
+    ?assertMatch(true, PromptYetMoreSeconds > PromptEvenMoreSeconds),
+    {NextAction, PromptS2YetMoreSeconds, _, ScheduleStartTime} = 
+        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8, 2}, 100),
+    {NextAction, PromptS3YetMoreSeconds, _, ScheduleStartTime} = 
+        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8, 3}, 100),
+    {NextAction, PromptS4YetMoreSeconds, _, ScheduleStartTime} = 
+        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8, 4}, 100),
+    {NextAction, PromptN2YetMoreSeconds, _, ScheduleStartTime} = 
+        take_next_workitem(T, Wants, ScheduleStartTime, {2, 8, 1}, 100),
+    ?assertMatch(true, PromptS4YetMoreSeconds > PromptS3YetMoreSeconds),
+    ?assertMatch(true, PromptS3YetMoreSeconds > PromptS2YetMoreSeconds),
+    ?assertMatch(true, PromptN2YetMoreSeconds > PromptS4YetMoreSeconds).
 
 window_test() ->
     NowSecs0 =
