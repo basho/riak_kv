@@ -105,7 +105,7 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
   * Real-time replicated objects are the highest priority items to be queued, and are placed on __every queue whose data filtering rules are matched__ by the object.  If the priority queue has grown beyond a limited number of items (the number being defined in `riak_kv.replrtq_srcobjectlimt`), then any {object, Object} references is stripped and replaced with `to_fetch`.  This is to help limit the memory consumed by the queue during failure conditions i.e. when a sink has stopped consuming from the source queue.
 
-  * Changes identified by __AAE full-sync replication__ processes run by the `riak_kv_ttaaefs` manager on the local node are sent to the `riak_kv_replrtq_src` as references, and queued as the second highest priority.  These changes are queued only on __a single queue defined within the configuration__ of `riak_kv_ttaaefs_manager`.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object.
+  * Changes identified by __AAE full-sync replication__ processes run by the `riak_kv_ttaaefs_manager` on the local node are sent to the `riak_kv_replrtq_src` as references, and queued as the second highest priority.  These changes are queued only on __a single queue defined within the configuration__ of `riak_kv_ttaaefs_manager`.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object.
 
   * Changes identified by __AAE fold operations__ for administrator initiated transition or repair operations (e.g. fold over a bucket or key-range, or for a given range of modified dates), are sent to the `riak_kv_replrtq_src` to be queued as the lowest priority onto __a single queue defined by the administrator when initiating the AAE fold operation__.  The changes queued are only references to the object (Bucket, Key and Clock) not the actual object - and are only the changes discovered through the fold running on vnodes local to this node.
 
@@ -127,6 +127,8 @@ Each node in `riak_kv` starts three processes that manage the inter-cluster repl
 
   * The administrator may at run-time suspend or resume the consuming of data from specific queues or peers via the `riak_kv_replrtq_snk`.
 
+  * There exists a peer discovery process, which when enabled, will discover all the IP addresses of other nodes within the cluster not just the configured peers, and attempt to for peer relationships with all nodes (not compatbile with NAT).
+
 
 ### Real-time Replication - Step by Step
 
@@ -144,7 +146,7 @@ Replication is fired within the `riak_kv_vnode` `actual_put/8`.  On condition of
 
 - The `{Bucket, Key, Clock, ObjectReference}` is cast to the `riak_kv_replrtq_src` and placed by the `riak_kv_replrtq_src` on the priority queue.
 
-- The queue has a configurable absolute limit, that is applied individually for each priority.  The limit is configured via `riak_kv.replrtq_srcqueuelimit` and defaults to 300,000 references (5 minutes of traffic at 1,000 PUTs per second).  When this limit is reached, new replication references are discarded on receipt rather than queued - these discarded references will need to eventually be re-replicated via full-sync.
+- The queue has a configurable absolute limit, that is applied individually for each priority.  The limit is configured via `riak_kv.replrtq_overflow_limit` and defaults to 10,00,000 references.  When this limit is reached, new replication references are discarded on receipt rather than queued - these discarded references will need to eventually be re-replicated via full-sync.  The queue is written to disk to avoid retaining a large number of references in memory, but persistence is not supported across riak re-starts.
 
 The reference now needs to be handled by the `riak_kv_replrtq_src`.  The task list for this process is:
 
@@ -187,7 +189,9 @@ The `riak_kv_ttaaefs_manager` has a schedule of work obtained from the configura
 
 - Reconcile changes that have occurred in the past hour;
 
-- Reconcile changes that have occurred in the past day.
+- Reconcile changes that have occurred in the past day;
+
+- Use a smart check that will 'auto' determine what the optimal replication work is at the point the work item is executed.
 
 On startup, the manager looks at these wants and provides a random distribution of work across slots.  The day is divided into slots evenly distributed so there is a slot for each want in the schedule.  It will run work for the slot at an offset from the start of the slot, based on the place this node has in the sorted list of currently active nodes.  So if each node is configured with the same total number of wants, work will be synchronised to have limited overlapping work within the cluster.
 
@@ -211,7 +215,11 @@ There are no constraints, other than resource, with regards to running full-sync
 
 `ttaaefs_queuename = q1_ttaaefs`
 
-The queue to write the discovery of any updates where *this* cluster has objects in advance of the remote peer's cluster.  Any configured queue is split by priority, with full-sync updates being a lower priority than real-time updates (and updates related to adhoc `aae_fold` queries being a lower priority still).  There should be no need to define separate queue names to manage priority - this `ttaaefs_queuename` can be the same as defined for real-time replication..
+The queue to write the discovery of any updates where *this* cluster has objects in advance of the remote peer's cluster.  Any configured queue is split by priority, with full-sync updates being a lower priority than real-time updates (and updates related to adhoc `aae_fold` queries being a lower priority still).  There should be no need to define separate queue names to manage priority - this `ttaaefs_queuename` can be the same as defined for real-time replication.
+
+`ttaaefs_queuename_peer = disabled`
+
+It is possible for full-sync replictaion to be bi-directional (e.g. regardless of whcich cluster is ahead like either the snk or src manager repair).  To have bi-directional behaviour replace the `ttaaefs_queuename_peer` with the name of the queue on the remote peer that this cluster consumes from.  Setting `ttaaefs_queuename_peer` to the special queuename of `disabled` will mean that the `riak_kv_ttaaefs_manager` will only attempt to repair deltas where this cluster is ahead of the remote cluster.
 
 The queue defined here must also be defined in `replrtq_srcqueue`, and consumed by a `riak_kv_replrtq_snk` configured on another cluster.  The `replrtq_enablesrc` does NOT need to be enabled for this queue to function.  There will be need for a node on the remote cluster to have `replrtq_enablesink` enabled for the differences discovered by this full-sync to be pulled in to the remote cluster.
 
@@ -255,11 +263,11 @@ The default settings are:
 
 `ttaaefs_daycheck = 0`
 
-`ttaaefs_rangecheck = 12`
+`ttaaefs_rangecheck = 0`
 
-`ttaaefs_autocheck = 12`
+`ttaaefs_autocheck = 24`
 
-There are four additional sync type counts which can be configured, and these are of particular importance if `bucket` or `type` is the scope of full-sync for this node.  There are two stages to the full-sync - the tree comparison, and then the clock comparison (comparing the objects ona  subset of the damaged portion of the tree).  If the scope of the full-sync is `all` the data, then the tree comparison is very low cost (based on cached trees).  If the scope of the full-sync is `bucket` or `type` then the cost of the tree comparison increases with the number of keys in the bucket.  The clock comparison also with the size of the database (of the buckets covered by the scope).
+There are four additional sync type counts which can be configured, and these are of particular importance if `bucket` or `type` is the scope of full-sync for this node.  There are two stages to the full-sync - the tree comparison, and then the clock comparison (comparing the objects on a  subset of the damaged portion of the tree).  If the scope of the full-sync is `all` the data, then the tree comparison is very low cost (based on cached trees).  If the scope of the full-sync is `bucket` or `type` then the cost of the tree comparison increases with the number of keys in the bucket.  The clock comparison also with the size of the database (of the buckets covered by the scope).
 
 Setting the check type can reduce the cost of both the tree comparison and the clock comparison (in the case of `bucket` and `type` scope), and the clock comparison (in the case of the `all` scope).  The cost reduction is made by looking only at data modified within a given range.
 
@@ -283,7 +291,7 @@ If a previous check is still running when the allocated scheduled time for the n
 
 By default the `riak_kv_ttaaefs_manager` will log counts of keys repaired on each sync.  Enabling `ttaaefs_logrepairs` will log the Bucket and Key of every key re-queued for synchronisation via full-sync.
 
-`ttaaefs_maxresults = 64`
+`ttaaefs_maxresults = 32`
 
 A negative aspect of the Tictac AAE full-sync solution is that deltas are relatively slow to be fixed.  The Merkle tree used to represent the cluster has 1M segments, but only `ttaaefs_maxresults` segments will be repaired each cycle.  This means that if there are 100K discrepancies, and we assume these discrepancies are evenly distributed around the Merkle tree - it will take 400 full-sync cycles to complete the repair of the delta.
 
@@ -388,7 +396,7 @@ This will suspend a queue on a replication source node, so that no new items wil
 
 *Previously there were moves to run real-time replication via RabbitMQ, is this still the intention?*
 
-Not presently, although it would not be a significant code change to modify the `riak_kc_replrtq_src` so that it would point to an external queue not an internal riak_core_priority_queue.
+Not presently, although it would not be a significant code change to modify the `riak_kc_replrtq_src` so that it would point to an external queue not an internal riak_kv_overflow_queue.
 
 
 *Can this be used to synchronise data between Riak and another data store (e.g. Elastic Search, Hadoop etc)?*
@@ -398,16 +406,12 @@ The intention is to open up this possibility by removing the need to understand 
 
 *In this future will this mean there is 1 way of doing replication in Riak, or n + 1 ways?*
 
-In the medium term it will certainly be an additional replication feature and not a replacement.  The `riak_repl` remains to assist in transition, but also Riak customers are committed to continued investment in improving `riak_repl`, and adding features such as improved replication filtering logic.
+In the medium term it will certainly be an additional replication feature and not a replacement.  The `riak_repl` remains to assist in transition, but also Riak customers are committed to continued investment in improving `riak_repl`, and adding features such as improved replication filtering logic.  There are trade-offs between the approaches, so it it not necessarily the case that all Riak users will switch replictaion schemes in the short term.
 
 
 *What is left to do to make this production ready?  When might it be production ready?*
 
-Original release target was Autumn 2019, and the current target for release is e/o January 2020.  The release schedule has been extended as:
-
-- There was an increase in scope for the release to add in `riak_kv_reaper` and `riak_kv_eraser` functionality to improve support for mass deletion and tombstone management.
-
-- Initial volume tests indicated a need for improvements in observability and median replication latency.
+Original release target was Autumn 2019, and the current target for release is e/o January 2020.  A number of updates have required beyond this.  The Riak 2.9 version of nextgenrepl should be considered deprecated, as many performance improvements have only been made to the Riak 3.0 release path.
 
 
 *Does this work with all Riak backends?  Does the efficiency of the solution change depending on backend choice?*
@@ -434,7 +438,7 @@ No, and there are no plans to extend the solution to support strongly consistent
 
 *What about hash collisions in the merkle tree - as only 4 byte hashes are used rather than full cryptographic hashes*
 
-The aae_fold feature allows for a modification in the hash_method so that instead of the pre-calculated hash, each hash will be recalculated using a combination of the vector clock (the current hash input) and an initialisation vector (passed in through the hash_method).  So it is possible to validate synchronisation against hash collisions, although the `riak_kv_ttaaefs_manager` doe snot support the orchestration of such validation.
+The aae_fold feature allows for a modification in the hash_method so that instead of the pre-calculated hash, each hash will be recalculated using a combination of the vector clock (the current hash input) and an initialisation vector (passed in through the hash_method).  So it is possible to validate synchronisation against hash collisions, although the `riak_kv_ttaaefs_manager` does not support the orchestration of such validation.
 
 
 ### Outstanding TODO
