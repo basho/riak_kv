@@ -642,14 +642,6 @@ handle_info(timeout, State) ->
                             StartTime,
                             SlotInfo,
                             State#state.slice_count),
-    case State#state.slice_set_start of
-        undefined ->
-            lager:info(
-                "Initial schedule uses SlotInfo=~p Schedule ~p start time ~w",
-                [SlotInfo, State#state.schedule, ScheduleStartTime]);
-        _ ->
-            ok
-    end,
     lager:info(
         "Scheduling work_item=~w in ~w seconds ~w items to run in schedule",
         [WorkItem, Wait, length(RemainingSlices)]),
