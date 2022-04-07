@@ -75,6 +75,8 @@
     % Reset the range if the number of results for repair are less than
     % MaxResults div ?RANGE_DIVISOR.  Either all the results have been
     % returned, or the range has narrowed and is no longer effective
+-define(SCHEDULE_JITTER, 60).
+    % Jitter each schedule start time by up to a minute, to avoid overlaps
 
 -record(state, {slice_allocations = [] :: list(allocation()),
                 slice_set_start :: erlang:timestamp()|undefined,
@@ -1242,7 +1244,7 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
     RevisedStartTime = 
         case ScheduleStartTime of
             undefined ->
-                os:timestamp();
+                beginning_of_next_hour(os:timestamp());
             {Mega, Sec, _Micro} ->
                 Seconds = Mega * ?MEGA + Sec + 86400,
                 {Seconds div ?MEGA, Seconds rem ?MEGA, 0}
@@ -1252,16 +1254,19 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
 take_next_workitem([NextAlloc|T], Wants,
                         ScheduleStartTime, SlotInfo, SliceCount) ->
     {NodeNumber, NodeCount, ClusterSlice} = SlotInfo,
-    SliceSeconds = ?SECONDS_IN_DAY div max(SliceCount, 1),
-    NodeSliceSeconds = SliceSeconds div max(NodeCount, 1),
-    ClusterSliceSeconds = NodeSliceSeconds div 4,
-    SlotSeconds =
-        (NodeNumber - 1) * NodeSliceSeconds
-        + (ClusterSlice - 1) * ClusterSliceSeconds,
     {SliceNumber, NextAction} = NextAlloc,
+    SecsFromStartTime =
+        schedule_seconds(
+            NodeNumber,
+            SliceNumber,
+            ClusterSlice,
+            NodeCount,
+            SliceCount),
     {Mega, Sec, _Micro} = ScheduleStartTime,
-    ScheduleSeconds = 
-        Mega * ?MEGA + Sec + SlotSeconds + SliceNumber * SliceSeconds,
+    ScheduleSeconds =
+        Mega * ?MEGA
+     + Sec + SecsFromStartTime
+     + rand:uniform(?SCHEDULE_JITTER),
     {MegaNow, SecNow, _MicroNow} = os:timestamp(),
     NowSeconds = MegaNow * ?MEGA + SecNow,
     case ScheduleSeconds > NowSeconds of
@@ -1276,6 +1281,31 @@ take_next_workitem([NextAlloc|T], Wants,
             take_next_workitem(T, Wants,
                                 ScheduleStartTime, SlotInfo, SliceCount)
     end.
+
+-spec schedule_seconds(
+        pos_integer(), pos_integer(), 1..4, pos_integer(), pos_integer())
+            -> non_neg_integer().
+schedule_seconds(
+        NodeNumber, SliceNumber, ClusterSliceNumber, NodeCount, SliceCount) ->
+    SliceSeconds = ?SECONDS_IN_DAY div max(SliceCount, 1),
+    NodeSliceSeconds = SliceSeconds div max(NodeCount, 1),
+    ClusterSliceSeconds = NodeSliceSeconds div 4,
+    SlotSeconds =
+        (NodeNumber - 1) * NodeSliceSeconds
+        + (ClusterSliceNumber - 1) * ClusterSliceSeconds,
+    SlotSeconds + (SliceNumber - 1) * SliceSeconds.
+
+
+-spec beginning_of_next_hour(erlang:timestamp()) -> erlang:timestamp().
+beginning_of_next_hour({Mega, Sec, _Micro}) ->
+    {{Y, Mo, D}, {H, Min, S}} = calendar:now_to_datetime({Mega, Sec, 0}),
+    NowGS =
+        calendar:datetime_to_gregorian_seconds({{Y, Mo, D}, {H, Min, S}}),
+    TopOfHourGS =
+        calendar:datetime_to_gregorian_seconds({{Y, Mo, D}, {H, 0, 0}}),
+    NextHourGS = TopOfHourGS + 60 * 60,
+    EpochSeconds = Mega * ?MEGA + Sec + NextHourGS - NowGS,
+    {EpochSeconds div ?MEGA, EpochSeconds rem ?MEGA, 0}.
 
 
 %% @doc
@@ -1440,8 +1470,9 @@ choose_schedule_test() ->
             lists:foldl(CountFun, MixedSyncSchedule, MixedSync)).
 
 take_first_workitem_test() ->
+    SC = 48,
     Wants =
-        [{no_check, 100},
+        [{no_check, SC},
         {all_check, 0}, 
         {auto_check, 0},
         {day_check, 0},
@@ -1449,40 +1480,38 @@ take_first_workitem_test() ->
         {range_check, 0}],
     {Mega, Sec, Micro} = os:timestamp(),
     TwentyFourHoursAgo = Mega * ?MEGA + Sec - (60 * 60 * 24),
-    {NextAction, PromptSeconds, _T, ScheduleStartTime} = 
-        take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div ?MEGA,
-                                TwentyFourHoursAgo rem ?MEGA, Micro},
-                            {1, 8, 1},
-                            100),
-    ?assertMatch(no_check, NextAction),
-    ?assertMatch(true, ScheduleStartTime < {Mega, Sec, Micro}),
+    OrigStartTime =
+        beginning_of_next_hour(
+            {TwentyFourHoursAgo div ?MEGA,
+                TwentyFourHoursAgo rem ?MEGA,
+                Micro}),
+    SchedRem =
+        lists:map(fun(I) -> {I, no_check} end, lists:seq(2, SC)),
+    ScheduleStartTime =
+        beginning_of_next_hour({Mega, Sec, Micro}),
+    % 24 hours on, the new scheudle start time should be the same it would be
+    % if we started now
+    {no_check, PromptSeconds, SchedRem, ScheduleStartTime} = 
+        take_next_workitem([], Wants, OrigStartTime, {1, 8, 1}, SC),
+    ?assertMatch(true, ScheduleStartTime > {Mega, Sec, Micro}),
     ?assertMatch(true, PromptSeconds > 0),
-    {NextAction, PromptMoreSeconds, _T, ScheduleStartTime} = 
-        take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div ?MEGA,
-                                TwentyFourHoursAgo rem ?MEGA, Micro},
-                            {2, 8, 1},
-                            100),
+    {no_check, PromptMoreSeconds, SchedRem, ScheduleStartTime} = 
+        take_next_workitem([], Wants, OrigStartTime, {2, 8, 1}, SC),
     ?assertMatch(true, PromptMoreSeconds > PromptSeconds),
-    {NextAction, PromptEvenMoreSeconds, T, ScheduleStartTime} = 
-        take_next_workitem([], Wants,
-                            {TwentyFourHoursAgo div ?MEGA,
-                                TwentyFourHoursAgo rem ?MEGA, Micro},
-                            {7, 8, 1},
-                            100),
+    {no_check, PromptEvenMoreSeconds, SchedRem, ScheduleStartTime} = 
+        take_next_workitem([], Wants, OrigStartTime, {7, 8, 1}, SC),
     ?assertMatch(true, PromptEvenMoreSeconds > PromptMoreSeconds),
-    {NextAction, PromptYetMoreSeconds, _T0, ScheduleStartTime} = 
-        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8, 1}, 100),
+    {no_check, PromptYetMoreSeconds, _T0, ScheduleStartTime} = 
+        take_next_workitem(SchedRem, Wants, ScheduleStartTime, {1, 8, 1}, SC),
     ?assertMatch(true, PromptYetMoreSeconds > PromptEvenMoreSeconds),
-    {NextAction, PromptS2YetMoreSeconds, _, ScheduleStartTime} = 
-        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8, 2}, 100),
-    {NextAction, PromptS3YetMoreSeconds, _, ScheduleStartTime} = 
-        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8, 3}, 100),
-    {NextAction, PromptS4YetMoreSeconds, _, ScheduleStartTime} = 
-        take_next_workitem(T, Wants, ScheduleStartTime, {1, 8, 4}, 100),
-    {NextAction, PromptN2YetMoreSeconds, _, ScheduleStartTime} = 
-        take_next_workitem(T, Wants, ScheduleStartTime, {2, 8, 1}, 100),
+    {no_check, PromptS2YetMoreSeconds, _, ScheduleStartTime} = 
+        take_next_workitem(SchedRem, Wants, ScheduleStartTime, {1, 8, 2}, SC),
+    {no_check, PromptS3YetMoreSeconds, _, ScheduleStartTime} = 
+        take_next_workitem(SchedRem, Wants, ScheduleStartTime, {1, 8, 3}, SC),
+    {no_check, PromptS4YetMoreSeconds, _, ScheduleStartTime} = 
+        take_next_workitem(SchedRem, Wants, ScheduleStartTime, {1, 8, 4}, SC),
+    {no_check, PromptN2YetMoreSeconds, _, ScheduleStartTime} = 
+        take_next_workitem(SchedRem, Wants, ScheduleStartTime, {2, 8, 1}, SC),
     ?assertMatch(true, PromptS4YetMoreSeconds > PromptS3YetMoreSeconds),
     ?assertMatch(true, PromptS3YetMoreSeconds > PromptS2YetMoreSeconds),
     ?assertMatch(true, PromptN2YetMoreSeconds > PromptS4YetMoreSeconds).
@@ -1513,5 +1542,48 @@ window_test() ->
 
     ?assert(in_window(Now1, always)),
     ?assertNot(in_window(Now1, never)).
+
+-define(DAYS_FROM_GREGORIAN_BASE_TO_EPOCH, (1970 * 365 + 478)).
+-define(SECONDS_FROM_GREGORIAN_BASE_TO_EPOCH,
+    ?DAYS_FROM_GREGORIAN_BASE_TO_EPOCH * ?SECONDS_IN_DAY).
+
+datetime_to_timestamp(DT) ->
+    TS =
+        calendar:datetime_to_gregorian_seconds(DT)
+        - ?SECONDS_FROM_GREGORIAN_BASE_TO_EPOCH,
+    {TS div ?MEGA, TS rem ?MEGA, 0}.
+
+beginning_of_next_hour_test() ->
+    Now = {1649,320592,173737}, % 08:36 7 April 2022
+    ?assertEqual({{2022, 4, 7}, {8, 36, 32}}, calendar:now_to_datetime(Now)),
+    NH = beginning_of_next_hour(Now),
+    ?assertMatch({{2022, 4, 7}, {9, 0, 0}}, calendar:now_to_datetime(NH)),
+    DT23 = {{2022, 4, 7}, {23, 59, 59}},
+    NH23 = beginning_of_next_hour(datetime_to_timestamp(DT23)),
+    ?assertMatch({{2022, 4, 8}, {0, 0, 0}}, calendar:now_to_datetime(NH23)).
+
+schedule_seconds_test() ->
+    NodeNumber = 1,
+    SliceNumber = 1,
+    ClusterSliceNumber = 1,
+    NodeCount = 3,
+    SliceCount = 24,
+    SecsFromStartTime0 =
+        schedule_seconds(
+        NodeNumber, SliceNumber, ClusterSliceNumber, NodeCount, SliceCount),
+    % 24 slice count - so 60 minute window
+    % First node should be in first 20 minutes
+    % As first cluster slice should be at start
+    % => 0
+    ?assertEqual(0, SecsFromStartTime0),
+    % If this was cluster slice 3 - should be 10 minutes
+    SecsFromStartTime1 =
+        schedule_seconds(NodeNumber, SliceNumber, 3, NodeCount, SliceCount),
+    ?assertEqual(600, SecsFromStartTime1),
+    % If this was Node 2 and cluster slice 2 then - 25 minutes
+    SecsFromStartTime2 =
+        schedule_seconds(2, SliceNumber, 2, NodeCount, SliceCount),
+    ?assertEqual(1500, SecsFromStartTime2).
+
 
 -endif.
