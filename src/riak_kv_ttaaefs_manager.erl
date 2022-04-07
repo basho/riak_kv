@@ -403,6 +403,7 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
                 lager:info("exchange=~w complete result=~w in duration=~w s" ++
                                     " sync_state=true",
                                 [ReqID, Result, Duration div 1000000]),
+                disable_tree_repairs(),
                 {?LOOP_TIMEOUT,
                     State#state{previous_success = LastExchangeStart}};
             _ ->
@@ -719,6 +720,20 @@ drop_next_autocheck() ->
             false
     end.
 
+-spec trigger_tree_repairs() -> ok.
+trigger_tree_repairs() ->
+    lager:info(
+        "Setting node to repair trees as unsync'd all_check had no repairs"),
+    application:set_env(riak_kv, aae_fetchclocks_repair, true).
+
+-spec disable_tree_repairs() -> ok.
+disable_tree_repairs() ->
+    case application:get_env(riak_kv, aae_fetchclocks_repair_force, false) of
+        true ->
+            ok;
+        false ->
+            application:set_env(riak_kv, aae_fetchclocks_repair, false)
+    end.
 
 %%%============================================================================
 %%% Internal functions
@@ -1172,6 +1187,10 @@ determine_next_action(0, _Target, full, WorkItem, _RepairRanges) ->
     lager:info(
         "Suppressing auto_checks as no repairs for work_item=~w",
         [WorkItem]),
+    case WorkItem of
+        all_check -> trigger_tree_repairs();
+        _ -> ok
+    end,
     autocheck_suppress();
 determine_next_action(
     RepairCount, Target, _Scope, WorkItem, [{B, KC, LowDT, HighDT}])
