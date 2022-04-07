@@ -98,7 +98,8 @@
                 is_paused = false :: boolean(),
                 last_exchange_start = os:timestamp() :: erlang:timestamp(),
                 previous_success = os:timestamp() :: false|erlang:timestamp(),
-                check_window = always :: check_window()
+                check_window = always :: check_window(),
+                node_info :: node_info()|undefined
                 }).
 
 -type req_id() :: no_reply|integer().
@@ -620,10 +621,25 @@ handle_cast({auto_check, ReqID, From, Now}, State) ->
 handle_info(timeout, State) ->
     SlotInfoFun = State#state.slot_info_fun,
     SlotInfo = SlotInfoFun(),
+    {Allocations, StartTime} =
+        case State#state.node_info of
+            undefined ->
+                lager:info(
+                    "Initiating schedule at startup SlotInfo ~p Schedule ~p",
+                    [SlotInfo, State#state.schedule]),
+                {[], undefined};
+            SlotInfo ->
+                {State#state.slice_allocations, State#state.slice_set_start};
+            OldInfo ->
+                lager:info(
+                    "SlotInfo changed from ~p to ~p so resetting schedule",
+                    [OldInfo, SlotInfo]),
+                {[], undefined}
+        end,
     {WorkItem, Wait, RemainingSlices, ScheduleStartTime} = 
-        take_next_workitem(State#state.slice_allocations,
+        take_next_workitem(Allocations,
                             State#state.schedule,
-                            State#state.slice_set_start,
+                            StartTime,
                             SlotInfo,
                             State#state.slice_count),
     case State#state.slice_set_start of
@@ -641,7 +657,8 @@ handle_info(timeout, State) ->
     {noreply,
         State#state{
             slice_allocations = RemainingSlices,
-            slice_set_start = ScheduleStartTime}};
+            slice_set_start = ScheduleStartTime,
+            node_info = SlotInfo}};
 handle_info({work_item, WorkItem}, State) ->
     process_workitem(WorkItem, no_reply, os:timestamp()),
     {noreply, State}.
