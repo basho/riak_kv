@@ -50,10 +50,9 @@
             autocheck_suppress/0,
             autocheck_suppress/1]).
 
--define(SLICE_COUNT, 100).
 -define(SECONDS_IN_DAY, 86400).
--define(INITIAL_TIMEOUT, 60000).
-    % Wait a minute before the first allocation is considered,  Lot may be
+-define(INITIAL_TIMEOUT, 120000).
+    % Wait two minutes before the first allocation is considered,  Lot may be
     % going on at a node immeidately at startup
 -define(LOOP_TIMEOUT, 15000).
     % Always wait at least 15s after completing an action before
@@ -95,7 +94,7 @@
                 peer_queue_name ::
                     riak_kv_replrtq_src:queue_name() | disabled,
                 slot_info_fun :: slot_info_fun(),
-                slice_count = ?SLICE_COUNT :: pos_integer(),
+                slice_count :: pos_integer(),
                 is_paused = false :: boolean(),
                 last_exchange_start = os:timestamp() :: erlang:timestamp(),
                 previous_success = os:timestamp() :: false|erlang:timestamp(),
@@ -620,17 +619,29 @@ handle_cast({auto_check, ReqID, From, Now}, State) ->
 
 handle_info(timeout, State) ->
     SlotInfoFun = State#state.slot_info_fun,
+    SlotInfo = SlotInfoFun(),
     {WorkItem, Wait, RemainingSlices, ScheduleStartTime} = 
         take_next_workitem(State#state.slice_allocations,
                             State#state.schedule,
                             State#state.slice_set_start,
-                            SlotInfoFun(),
+                            SlotInfo,
                             State#state.slice_count),
-    lager:info("Scheduling work_item=~w in ~w seconds remaining=~w",
-                [WorkItem, Wait, length(RemainingSlices)]),
+    case State#state.slice_set_start of
+        undefined ->
+            lager:info(
+                "Initial schedule uses SlotInfo=~p Schedule ~p start time ~w",
+                [SlotInfo, State#state.schedule, ScheduleStartTime]);
+        _ ->
+            ok
+    end,
+    lager:info(
+        "Scheduling work_item=~w in ~w seconds ~w items to run in schedule",
+        [WorkItem, Wait, length(RemainingSlices)]),
     erlang:send_after(Wait * 1000, self(), {work_item, WorkItem}),
-    {noreply, State#state{slice_allocations = RemainingSlices,
-                            slice_set_start = ScheduleStartTime}};
+    {noreply,
+        State#state{
+            slice_allocations = RemainingSlices,
+            slice_set_start = ScheduleStartTime}};
 handle_info({work_item, WorkItem}, State) ->
     process_workitem(WorkItem, no_reply, os:timestamp()),
     {noreply, State}.
