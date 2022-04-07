@@ -51,8 +51,8 @@
             autocheck_suppress/1]).
 
 -define(SECONDS_IN_DAY, 86400).
--define(INITIAL_TIMEOUT, 120000).
-    % Wait two minutes before the first allocation is considered,  Lot may be
+-define(INITIAL_TIMEOUT, 60000).
+    % Wait a minute before the first allocation is considered,  Lot may be
     % going on at a node immeidately at startup
 -define(LOOP_TIMEOUT, 15000).
     % Always wait at least 15s after completing an action before
@@ -859,10 +859,18 @@ encode_clock_fun(pb) ->
 -spec get_slotinfo() -> node_info().
 get_slotinfo() ->
     UpNodes = lists:sort(riak_core_node_watcher:nodes(riak_kv)),
-    NotMe = lists:takewhile(fun(N) -> N /= node() end, UpNodes),
+    UpNodes0 =
+        case lists:member(node(), UpNodes) of
+            true ->
+                UpNodes;
+            false ->
+                %% Assume we will eventually come up!
+                lists:sort([node()|UpNodes])
+        end,
+    NotMe = lists:takewhile(fun(N) -> N /= node() end, UpNodes0),
     ClusterSlice = 
         max(min(app_helper:get_env(riak_kv, ttaaefs_cluster_slice, 1), 4), 1),
-    {length(NotMe) + 1, length(UpNodes), ClusterSlice}.
+    {length(NotMe) + 1, length(UpNodes0), ClusterSlice}.
 
 %% @doc
 %% Return a function which will send aae_exchange messages to a remote
