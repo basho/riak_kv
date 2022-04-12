@@ -48,12 +48,22 @@
 
 -export([ensemble_status/1]).
 
+-export([run_command/3]).
+
 %% Reused by Yokozuna for printing AAE status.
 -export([aae_exchange_status/1,
          aae_repair_status/1,
          aae_tree_status/1]).
 
 -include_lib("kernel/include/logger.hrl").
+
+run_command(Mod, Fun, Args) ->
+    case erlang:apply(Mod, Fun, Args) of
+        ok ->
+            rpc_ok;
+        Error ->
+            Error
+    end.
 
 join([NodeStr]) ->
     join(NodeStr, fun riak_core:join/1,
