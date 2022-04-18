@@ -1860,16 +1860,14 @@ handle_aaefold({repair_keys_range,
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
-    {ok, C} = riak:local_client(),
-    FetchFun = riak_kv_clusteraae_fsm:repair_fun(C),
     FoldFun =
         fun(BF, KF, _EFs, Acc) ->
             {AccL, Count, all, BatchSize} = Acc,
             case Count rem BatchSize of
                 0 ->
-                    % Reading in batch, then processing in batch assumed 
-                    % to be more efficient
-                    lists:foreach(FetchFun, AccL), 
+                    lists:foreach(
+                        fun riak_kv_reader:request_read/1,
+                        AccL), 
                     {[{BF, KF}], Count + 1, all, BatchSize};
                 _ ->
                     {[{BF, KF}|AccL], Count + 1, all, BatchSize}
@@ -4404,7 +4402,7 @@ maybe_new_actor_epoch(IncomingObject, State=#state{vnodeid=VId}) ->
             %% This actor has not acted on this object
             {VId, State, IncomingObject};
         {_InId, InEpoch, InCntr} ->
-            log_key_amnesia(VId, IncomingObject, InEpoch, InCntr),
+            log_key_amnesia(VId, IncomingObject, InEpoch, InCntr, false),
             {EpochActor, State2} = new_key_epoch(State),
             Obj2 = riak_object:new_actor_epoch(IncomingObject, EpochActor),
             {EpochActor, State2, Obj2}
@@ -4430,7 +4428,7 @@ maybe_new_key_epoch(_Coord=true, State, undefined, _IncomingObj) ->
     %% Coordinating, and local not found always means new key epoch
     {ActorId, State2} = new_key_epoch(State),
     {true, ActorId, State2};
-maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
+maybe_new_key_epoch(Coord, State, LocalObj, IncomingObj) ->
     %% Either coordinating and local found, or not coordinating with
     %% local found. If local notfound then maybe_new_actor_epoch will
     %% be called instead.
@@ -4441,7 +4439,9 @@ maybe_new_key_epoch(_Coord, State, LocalObj, IncomingObj) ->
     case is_local_amnesia(InEpoch, LocalEpoch, InCntr, LocalCntr) of
         true ->
             %% some local amnesia, new epoch.
-            log_key_amnesia(VId, IncomingObj, InEpoch, InCntr, LocalEpoch, LocalCntr),
+            log_key_amnesia(
+                VId, IncomingObj, InEpoch, InCntr, Coord,
+                LocalEpoch, LocalCntr),
             {ActorId, State2} = new_key_epoch(State),
             {true, ActorId, State2};
         false ->
@@ -4469,15 +4469,23 @@ is_local_amnesia(_, _, _, _) ->
 
 %% @private @see maybe_new_key_epoch, maybe_new_actor_epoch
 -spec log_key_amnesia(Actor::binary(), Obj::riak_object:riak_object(),
-                       InEpoch::non_neg_integer(), InCntr::non_neg_integer()) ->
+                       InEpoch::non_neg_integer(), InCntr::non_neg_integer(),
+                       Coord::boolean()) ->
                               ok.
-log_key_amnesia(VId, Obj, InEpoch, InCntr) ->
-    log_key_amnesia(VId, Obj, InEpoch, InCntr, 0, 0).
+log_key_amnesia(VId, Obj, InEpoch, InCntr, Coord) ->
+    log_key_amnesia(VId, Obj, InEpoch, InCntr, Coord, 0, 0).
 
-log_key_amnesia(VId, Obj, InEpoch, InCntr, LocalEpoch, LocalCntr) ->
+log_key_amnesia(VId, Obj, InEpoch, InCntr, Coord, LocalEpoch, LocalCntr) ->
     B = riak_object:bucket(Obj),
     K = riak_object:key(Obj),
-
+    case Coord of
+        true ->
+            ok;
+        false ->
+            % This vnode will be out-of-step given local-only change in clock,
+            % so a read repair is prompted
+            riak_kv_reader:request_read({B, K})
+    end,
     lager:warning("Inbound clock entry for ~p in ~p/~p greater than local." ++
                       "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
                   [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]).
