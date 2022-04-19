@@ -66,7 +66,8 @@
          get_version/1]).
 
 -export([poke/1,
-         get_build_time/1]).
+         get_build_time/1,
+         handle_corrupted_object/4]).
 
 -type index() :: non_neg_integer().
 -type index_n() :: {index(), non_neg_integer()}.
@@ -592,12 +593,8 @@ load_built(#state{trees=Trees}) ->
                         riak_object:riak_object() | riak_object:proxy_object(),
                     version()) -> binary().
 hash_object({Bucket, Key}, RObj, Version) ->
-    try
-        riak_object:hash(Bucket, Key, RObj, Version)
-    catch _:_ ->
-            Null = erlang:phash2(<<>>),
-            term_to_binary(Null)
-    end.
+    riak_object:hash(Bucket, Key, RObj, Version).
+
 
 hash_index_data(IndexData) when is_list(IndexData) ->
     Bin = term_to_binary(lists:usort(IndexData)),
@@ -665,31 +662,61 @@ maybe_throttle_build(RObjBin, Limit, Wait, Acc) ->
             {Acc2, {Limit, Wait}}
     end.
 
+-type hashtree_fold_fun() ::
+    fun((
+        {riak_object:bucket(), riak_object:key()},
+        riak_object:riak_object(),
+        {non_neg_integer(), {non_neg_integer(), non_neg_integer()}}) ->
+            {non_neg_integer(), {non_neg_integer(), non_neg_integer()}}).
+
 %% @doc Generate the folding function
 %% for a riak fold_req
--spec fold_fun(pid(), boolean()) -> fun().
+-spec fold_fun(pid(), boolean()) -> hashtree_fold_fun().
 fold_fun(HashtreePid, _HasIndexTree = false) ->
     ObjectFoldFun = object_fold_fun(HashtreePid),
-    fun(BKey, RObj, {Acc, {Limit, Wait}}) ->
+    fun(BKey = {Bucket, Key}, RObj, {Acc, {Limit, Wait}}) ->
+        try
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
-            Acc2 = maybe_throttle_build(RObj, Limit, Wait, Acc),
-            Acc2
+            maybe_throttle_build(RObj, Limit, Wait, Acc)
+        catch Error:Reason ->
+            handle_corrupted_object(Bucket, Key, Error, Reason),
+            {Acc, {Limit, Wait}}
+        end
     end;
 fold_fun(HashtreePid, _HasIndexTree = true) ->
     %% Index AAE backend, so hash the indexes
     ObjectFoldFun = object_fold_fun(HashtreePid),
     IndexFoldFun = index_fold_fun(HashtreePid),
     fun(BKey = {Bucket, Key}, BinObj, {Acc, {Limit, Wait}}) ->
+        try
             RObj = riak_object:from_binary(Bucket, Key, BinObj),
             BinBKey = term_to_binary(BKey),
             ObjectFoldFun(BKey, RObj, BinBKey),
             IndexFoldFun(RObj, BinBKey),
-            Acc2 = maybe_throttle_build(BinObj, Limit, Wait, Acc),
-            Acc2
+            maybe_throttle_build(BinObj, Limit, Wait, Acc)
+        catch Error:Reason ->
+            handle_corrupted_object(Bucket, Key, Error, Reason),
+            {Acc, {Limit, Wait}}
+        end
     end.
 
--spec object_fold_fun(pid()) -> fun().
+%% @doc
+%% If an object is corrupted, we dont want to include it in the AAE store, and
+%% a read repair should be attempted in expectation that this will update the
+%% object with an uncorrupted version
+-spec handle_corrupted_object(
+    riak_object:bucket(), riak_object:key(), term(), term()) -> ok.
+handle_corrupted_object(Bucket, Key, Error, Reason) ->
+    lager:warning("Unable to read B=~p K=~p", [Bucket, Key]),
+    lager:warning("Read failure due to ~w ~w", [Error, Reason]),
+    riak_kv_reader:request_read({Bucket, Key}).
+
+-spec object_fold_fun(pid()) ->
+    fun((
+        {riak_object:bucket(), riak_object:key()},
+        riak_object:object(),
+        binary()) -> ok).
 object_fold_fun(HashtreePid) ->
     Version = get_version(HashtreePid),
     fun(BKey={Bucket,Key}, RObj, BinBKey) ->
@@ -699,7 +726,8 @@ object_fold_fun(HashtreePid) ->
                    HashtreePid)
     end.
 
--spec index_fold_fun(pid()) -> fun().
+-spec index_fold_fun(pid()) ->
+    fun((riak_object:object(), binary()) -> ok).
 index_fold_fun(HashtreePid) ->
     fun(RObj, BinBKey) ->
             IndexData = riak_object:index_data(RObj),
@@ -836,7 +864,15 @@ expand_items(HasIndex, Items, Version) ->
 expand_item(Has2ITree, {object, BKey, RObj}, Version, Others) ->
     IndexN = riak_kv_util:get_index_n(BKey),
     BinBKey = term_to_binary(BKey),
-    ObjHash = hash_object(BKey, RObj, Version),
+    ObjHash = 
+        try
+            hash_object(BKey, RObj, Version)
+        catch Error:Reason ->
+            lager:warning("Unhashable object BKey=~p", [BKey]),
+            lager:warning("Hash failure due to ~w ~w", [Error, Reason]),
+            Null = erlang:phash2(<<>>),
+            term_to_binary(Null)
+        end,
     Item0 = {IndexN, BinBKey, ObjHash},
     case Has2ITree of
         false ->
