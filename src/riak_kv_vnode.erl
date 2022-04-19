@@ -1329,8 +1329,10 @@ handle_command(tictacaae_rebuildpoke, Sender, State) ->
                         [State#state.aae_controller]),
             ReturnFun = tictac_returnfun(State#state.idx, store),
             State0 = State#state{tictac_rebuilding = os:timestamp()},
-            case aae_controller:aae_rebuildstore(State#state.aae_controller, 
-                                                    fun tictac_rebuild/3) of
+            case aae_controller:aae_rebuildstore(
+                    State#state.aae_controller,
+                    fun tictac_rebuild/3,
+                    fun riak_kv_index_hashtree:handle_corrupted_object/4) of
                 ok ->
                     % This store is rebuilt already (i.e. it is native), so nothing to
                     % do here other than prompt the status change
