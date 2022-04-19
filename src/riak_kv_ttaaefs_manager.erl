@@ -341,9 +341,15 @@ handle_call(pause, _From, State) ->
                     {range_check, 0},
                     {auto_check, 0}],
             BackupSchedule = State#state.schedule,
-            {reply, ok, State#state{schedule = PausedSchedule,
-                                    backup_schedule = BackupSchedule,
-                                    is_paused = true}}
+            {reply,
+                ok,
+                State#state{
+                    schedule = PausedSchedule,
+                    backup_schedule = BackupSchedule,
+                    slice_allocations = [],
+                    slice_set_start = undefined,
+                    is_paused = true},
+                ?INITIAL_TIMEOUT}
     end;
 handle_call(resume, _From, State) ->
     case State#state.is_paused of
@@ -351,7 +357,11 @@ handle_call(resume, _From, State) ->
             Schedule = State#state.backup_schedule,
             {reply,
                 ok,
-                State#state{schedule = Schedule, is_paused = false},
+                State#state{
+                    schedule = Schedule,
+                    is_paused = false,
+                    slice_allocations = [],
+                    slice_set_start = undefined},
                 ?INITIAL_TIMEOUT};
         false ->
             {reply, {error, not_paused}, State, ?INITIAL_TIMEOUT}
@@ -653,7 +663,12 @@ handle_info(timeout, State) ->
             slice_set_start = ScheduleStartTime,
             node_info = SlotInfo}};
 handle_info({work_item, WorkItem}, State) ->
-    process_workitem(WorkItem, no_reply, os:timestamp()),
+    case State#state.is_paused of
+        true when WorkItem =/= no_check ->
+            process_workitem(no_check, no_reply, os:timestamp());
+        _ ->
+            process_workitem(WorkItem, no_reply, os:timestamp())
+    end,
     {noreply, State}.
 
 terminate(_Reason, _State) ->
