@@ -648,20 +648,28 @@ handle_info(timeout, State) ->
                 {[], undefined}
         end,
     {WorkItem, Wait, RemainingSlices, ScheduleStartTime} = 
-        take_next_workitem(Allocations,
-                            State#state.schedule,
-                            StartTime,
-                            SlotInfo,
-                            State#state.slice_count),
-    lager:info(
-        "Scheduling work_item=~w in ~w seconds ~w items to run in schedule",
-        [WorkItem, Wait, length(RemainingSlices)]),
-    erlang:send_after(Wait * 1000, self(), {work_item, WorkItem}),
-    {noreply,
-        State#state{
-            slice_allocations = RemainingSlices,
-            slice_set_start = ScheduleStartTime,
-            node_info = SlotInfo}};
+        take_next_workitem(
+            Allocations,
+            State#state.schedule,
+            StartTime,
+            SlotInfo,
+            State#state.slice_count),
+    case ?SECONDS_IN_DAY div State#state.slice_count of
+        SlotTimeLength when SlotTimeLength < Wait ->
+            % It is possible for multiple work items to be looping, so
+            % don't trigger unless it appears to be within the next slice.
+            {noreply, State, SlotTimeLength};
+        _ ->
+            lager:info(
+                "Sending work_item=~w msg in ~w seconds ~w more items in loop",
+                [WorkItem, Wait, length(RemainingSlices)]),
+            erlang:send_after(Wait * 1000, self(), {work_item, WorkItem}),
+            {noreply,
+                State#state{
+                    slice_allocations = RemainingSlices,
+                    slice_set_start = ScheduleStartTime,
+                    node_info = SlotInfo}}
+    end;
 handle_info({work_item, WorkItem}, State) ->
     case State#state.is_paused of
         true when WorkItem =/= no_check ->
