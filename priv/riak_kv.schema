@@ -399,7 +399,10 @@
 
 {translation,
  "riak_kv.aae_throttle_limits",
- riak_core_throttle:create_limits_translator_fun("anti_entropy", "mailbox_size")
+ begin
+   lists:foreach(fun code:add_path/1, filelib:wildcard("lib/*/ebin")),
+   riak_core_throttle:create_limits_translator_fun("anti_entropy", "mailbox_size")
+ end
 }.
 
 %% @see leveldb.bloomfilter
