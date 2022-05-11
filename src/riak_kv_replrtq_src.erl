@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Queue any replictaion changes emitting from this node due to
+%% @doc Queue any replication changes emitting from this node due to
 %% a PUT being co-ordinated on this node, a full-sync exchange initiated on
 %% this node, or an aae_fold replication-fold running on vnodes on this
 %% node.
@@ -276,7 +276,7 @@ stop() ->
 %%%============================================================================
 
 init([]) ->
-    QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
+    QueueDefnString = application:get_env(riak_kv, replrtq_srcqueue, ""),
     QFM = tokenise_queuedefn(QueueDefnString),
     MapToQM =
         fun({QueueName, _QF, _QA}) ->
@@ -288,9 +288,13 @@ init([]) ->
         end,
     QM = lists:map(MapToQM, QFM),
     QC = lists:map(MaptoQC, QFM),
-    QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
-    OL = app_helper:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
-    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency, ?LOG_TIMER_SECONDS * 1000),
+    QL = application:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
+    OL = application:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
+    LogFreq =
+        application:get_env(
+            riak_kv,
+            replrtq_logfrequency,
+            ?LOG_TIMER_SECONDS * 1000),
     erlang:send_after(LogFreq, self(), log_queue),
     {ok, #state{queue_filtermap = QFM,
                 queue_map = QM,
