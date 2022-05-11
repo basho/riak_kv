@@ -43,7 +43,7 @@ git push mine some-topic-branch
 # standard tests
 ./rebar3 do xref, dialyzer, eunit
 # property-based tests
-./rebar3 as test eqc
+./rebar3 as test eqc --testing_budget 600
 #+END_SRC
 
 For a more complete set of tests, update riak_kv in the full Riak application and run any appropriate [[https://github.com/basho/riak_test/tree/develop-3.0/groups][Riak riak_test groups]]

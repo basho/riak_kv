@@ -291,7 +291,13 @@ dep_apps(Test, Extra) ->
                                                         5}]}]),
                 application:set_env(lager,
                                     crash_log,
-                                    get_test_dir(Test) ++ "/log/crash.log");
+                                    get_test_dir(Test) ++ "/log/crash.log"),
+                application:set_env(riak_kv,
+                                    eraser_dataroot,
+                                    get_test_dir(Test) ++ "/kv_eraser"),
+                application:set_env(riak_kv,
+                                    reaper_dataroot,
+                                    get_test_dir(Test) ++ "/kv_reaper");
            (stop) -> ok;
            (_) -> ok
         end,

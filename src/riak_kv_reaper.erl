@@ -30,55 +30,34 @@
 -module(riak_kv_reaper).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-export([start_link/1]).
 -endif.
 
--behaviour(gen_server).
+-behaviour(riak_kv_queue_manager).
 
--export([init/1,
-        handle_call/3,
-        handle_cast/2,
-        handle_info/2,
-        terminate/2,
-        code_change/3]).
+-define(QUEUE_LIMIT, 100000).
+-define(OVERFLOW_LIMIT, 10000000).
+-define(REDO_TIMEOUT, 2000).
+-define(OVERLOAD_PAUSE_MS, 10000).
 
 -export([start_link/0,
             start_job/1,
             request_reap/1,
             request_reap/2,
             direct_reap/1,
+            reap_stats/0,
             reap_stats/1,
+            clear_queue/0,
             clear_queue/1,
             stop_job/1]).
 
--define(QUEUE_LIMIT, 100000).
--define(LOG_TICK, 60000).
--define(REDO_TIMEOUT, 2000).
--define(MAX_BATCH_SIZE, 100).
+-export([action/2,
+            get_limits/0,
+            redo/0]).
 
--record(state,  {
-            reap_queue = riak_core_priority_queue:new() :: pqueue(),
-            pqueue_length = {0, 0} :: queue_length(),
-            reap_attempts = 0 :: non_neg_integer(),
-            reap_aborts = 0 :: non_neg_integer(),
-            job_id :: non_neg_integer(), % can be 0 for named reaper
-            pending_close = false :: boolean(),
-            last_tick_time = os:timestamp() :: erlang:timestamp(),
-            reap_fun :: reap_fun(),
-            redo_timeout :: non_neg_integer()
-}).
-
--type priority() :: 1..2.
--type squeue() :: {queue, [any()], [any()]}.
--type pqueue() ::  squeue() | {pqueue, [{priority(), squeue()}]}.
--type queue_length() :: {non_neg_integer(), non_neg_integer()}.
 -type reap_reference() ::
     {{riak_object:bucket(), riak_object:key()}, non_neg_integer()}.
 -type job_id() :: pos_integer().
-
--type reap_stats() :: {non_neg_integer(), non_neg_integer(), queue_length()}.
-
--type reap_fun() :: fun((reap_reference()) -> boolean()).
--type reaper_state() :: #state{}.
 
 -export_type([reap_reference/0, job_id/0]).
 
@@ -86,215 +65,76 @@
 %%% API
 %%%============================================================================
 
+-spec start_link() -> {ok, pid()}.
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [0, fun reap/1], []).
+    start_link(app_helper:get_env(riak_kv, reaper_dataroot)).
+
+start_link(FilePath) ->
+    riak_kv_queue_manager:start_link(?MODULE, FilePath).
 
 -spec start_job(job_id()) -> {ok, pid()}.
 %% @doc
 %% To be used when starting a reaper for a specific workload
 start_job(JobID) ->
-    gen_server:start_link(?MODULE, [JobID, fun reap/1], []).
+    start_job(JobID, app_helper:get_env(riak_kv, reaper_dataroot)).
+
+start_job(JobID, FilePath) ->
+   riak_kv_queue_manager:start_job(JobID, ?MODULE, FilePath).
 
 -spec request_reap(reap_reference()) -> ok.
 request_reap(ReapReference) ->
-    request_reap(?MODULE, ReapReference, 2).
+    request_reap(?MODULE, ReapReference).
 
--spec request_reap(pid(), reap_reference()) -> ok.
+-spec request_reap(pid()|module(), reap_reference()) -> ok.
 request_reap(Pid, ReapReference) ->
-    request_reap(Pid, ReapReference, 2).
+    riak_kv_queue_manager:request(Pid, ReapReference).
 
-%% @doc
-%% Priority of Reaps is by default 2. 1 is reserved for redo of reaps
--spec request_reap(pid()|atom(), reap_reference(), priority()) -> ok.
-request_reap(Pid, ReapReference, Priority) when Priority == 1; Priority == 2 ->
-    gen_server:cast(Pid, {request_reap, ReapReference, Priority}).
+-spec reap_stats() ->
+    list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
+reap_stats() -> reap_stats(?MODULE).
 
--spec reap_stats(pid()) -> reap_stats().
+-spec reap_stats(pid()|module()) -> 
+    list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
 reap_stats(Pid) ->
-    gen_server:call(Pid, reap_stats, infinity).
+    riak_kv_queue_manager:stats(Pid).
 
 -spec direct_reap(reap_reference()) -> boolean().
 direct_reap(ReapReference) ->
-    gen_server:call(?MODULE, {direct_reap, ReapReference}).
+    riak_kv_queue_manager:immediate_action(?MODULE, ReapReference).
 
--spec clear_queue(pid()|riak_kv_reaper) -> ok.
+-spec clear_queue() -> ok.
+clear_queue() -> clear_queue(?MODULE).
+
+-spec clear_queue(pid()|module()) -> ok.
 clear_queue(Reaper) ->
-    gen_server:call(Reaper, clear_queue, infinity).
+   riak_kv_queue_manager:clear_queue(Reaper).
 
 %% @doc
 %% Stop the job once the queue is empty
 -spec stop_job(pid()) -> ok.
 stop_job(Pid) ->
-    gen_server:call(Pid, stop_job, 5000).
+    riak_kv_queue_manager:stop_job(Pid).
 
 %%%============================================================================
-%%% gen_server callbacks
+%%% Callback functions
 %%%============================================================================
 
-init([JobID, ReapFun]) ->
-    erlang:send_after(?LOG_TICK, self(), log_queue),
-    RedoTimeout = app_helper:get_env(riak_kv, reaper_redo_timeout, ?REDO_TIMEOUT),
-    {ok, #state{job_id = JobID, reap_fun = ReapFun, redo_timeout = RedoTimeout}, 0}.
-
-
-handle_call(Msg, _From, State) ->
-    {reply, R, S0} = handle_sync_message(Msg, State),
-    {reply, R, S0, 0}.
-
-handle_cast(Msg, State) ->
-    {noreply, S0} = handle_async_message(Msg, State),
-    {noreply, S0, 0}.
-
-handle_info(Msg, State) ->
-    case handle_async_message(Msg, State) of
-        {override_timeout, none, R} ->
-            R;
-        {override_timeout, T0, {noreply, S0}} ->
-            {noreply, S0, T0};
-        {noreply, S0} ->
-            {noreply, S0, 0}
-    end.
-
-terminate(_Reason, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-
-%%%============================================================================
-%%% Actual Callbacks
-%%%============================================================================
-
-%% Handle a call message - with a reply.  The handle_call function will enforce
-%% the addition of an immediate timeout
--spec handle_sync_message(any(), reaper_state()) ->
-        {reply, any(), reaper_state()}.
-handle_sync_message(reap_stats, State) ->
-    Stats =
-        {State#state.reap_attempts,
-            State#state.reap_aborts,
-            State#state.pqueue_length},
-    {reply, Stats, State};
-handle_sync_message({direct_reap, ReapReference}, State) ->
-    {reply, reap(ReapReference), State};
-handle_sync_message(clear_queue, State) ->
-    {reply,
-        ok,
-        State#state{reap_queue = riak_core_priority_queue:new(),
-                    pqueue_length = {0, 0}}};
-handle_sync_message(stop_job, State) ->
-    {reply, ok, State#state{pending_close = true}}.
-
-%% Handle a cast or info message - with a reply.  The handle_cast function
-%% will expet a {noreply, State} response and will override the return with
-%% an immediate timeout.  the handle_info may also receive a reply with an
-%% overrride to the timeout.
--spec handle_async_message(any(), reaper_state()) ->
-        {noreply, reaper_state()}|
-        {override_timeout, none|pos_integer(), tuple()}.
-handle_async_message({request_reap, ReapReference, Priority}, State) ->
-    UpdQL =
-        setelement(Priority,
-                    State#state.pqueue_length,
-                    element(Priority, State#state.pqueue_length) + 1),
-    UpdQ =
-        riak_core_priority_queue:in(ReapReference,
-                                    Priority,
-                                    State#state.reap_queue),
-    {noreply, State#state{pqueue_length = UpdQL, reap_queue = UpdQ}};
-handle_async_message(timeout, State) ->
-    ReapFun = State#state.reap_fun,
-    case State#state.pqueue_length of
-        {0, 0} ->
-            case State#state.pending_close of
-                true ->
-                    {override_timeout, none, {stop, normal, State}};
-                false ->
-                    %% No timeout here, as no work to do
-                    {override_timeout, none, {noreply, State}}
-            end;
-        {RedoQL, 0} ->
-            %% Work a single item on the redo queue, and no immediate timeout
-            %% if it aborts
-            case riak_core_priority_queue:out(State#state.reap_queue) of
-                {{value, ReapRef}, Q0} ->
-                    case ReapFun(ReapRef) of
-                        true ->
-                            AT0 = State#state.reap_attempts + 1,
-                            QL0 = {RedoQL - 1, 0},
-                            {noreply,
-                                State#state{reap_queue = Q0,
-                                            reap_attempts = AT0,
-                                            pqueue_length = QL0}};
-                        false ->
-                            AB0 = State#state.reap_aborts + 1,
-                            Q1 = riak_core_priority_queue:in(ReapRef, 1, Q0),
-                            {override_timeout,
-                                State#state.redo_timeout,
-                                {noreply,
-                                    State#state{reap_queue = Q1,
-                                                reap_aborts = AB0}}}
-                   end;
-                {empty, Q0} ->
-                    %% This shoudn't happen - must have miscalulated
-                    %% queue lengths
-                    {noreply,
-                        State#state{reap_queue = Q0,
-                                    pqueue_length = {0, 0}}}
-            end;
-        {RedoQL, ReapQL} ->
-            %% Work a batch of items from the reap queue before yielding
-            BatchSize = min(ReapQL, ?MAX_BATCH_SIZE),
-            BatchFun =
-                fun(_X, {Q, AT, AB}) ->
-                    case riak_core_priority_queue:out(Q) of
-                        {{value, ReapRef}, Q0} ->
-                            case ReapFun(ReapRef) of
-                                true ->
-                                    {Q0, AT + 1, AB};
-                                false ->
-                                    ok = request_reap(self(), ReapRef, 1),
-                                    {Q0, AT, AB + 1}
-                            end;
-                        {empty, Q0} ->
-                            %% This shouldn't happen
-                            {Q0, AT, AB}
-                    end
-                end,
-            {UpdQ, AT0, AB0} =
-                lists:foldl(BatchFun,
-                            {State#state.reap_queue,
-                                State#state.reap_attempts,
-                                State#state.reap_aborts},
-                            lists:seq(1, BatchSize)),
-            {noreply,
-                State#state{reap_queue = UpdQ,
-                            reap_attempts = AT0,
-                            reap_aborts = AB0,
-                            pqueue_length = {RedoQL, ReapQL - BatchSize}}}
-    end;
-handle_async_message(log_queue, State) ->
-    lager:info("Reaper Job ~w has queue lengths ~w " ++
-                    " reap_attempts=~w reap_aborts=~w ",
-                [State#state.job_id,
-                    State#state.pqueue_length,
-                    State#state.reap_attempts,
-                    State#state.reap_aborts]),
-    erlang:send_after(?LOG_TICK, self(), log_queue),
-    {noreply, State#state{reap_attempts = 0, reap_aborts = 0}}.
-
-
-%%%============================================================================
-%%% Internal functions
-%%%============================================================================
+-spec get_limits() -> {pos_integer(), pos_integer(), pos_integer()}.
+get_limits() ->
+    RedoTimeout =
+        app_helper:get_env(riak_kv, reaper_redo_timeout, ?REDO_TIMEOUT),
+    QueueLimit =
+        app_helper:get_env(riak_kv, reaper_queue_limit, ?QUEUE_LIMIT),
+    OverflowLimit =
+        app_helper:get_env(riak_kv, reaper_overflow_limit, ?OVERFLOW_LIMIT),
+    {RedoTimeout, QueueLimit, OverflowLimit}.
 
 %% @doc
 %% If all primaries are up try and reap the tombstone.  The reap may fail, but
-%% we will not redo - redo is only to handle the failire related to unavailable
+%% we will not redo - redo is only to handle the failure related to unavailable
 %% primaries
--spec reap(reap_reference()) -> boolean().
-reap({{Bucket, Key}, DeleteHash}) ->
+-spec action(reap_reference(), boolean()) -> boolean().
+action({{Bucket, Key}, DeleteHash}, Redo) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     {n_val, N} = lists:keyfind(n_val, 1, BucketProps),
@@ -302,12 +142,46 @@ reap({{Bucket, Key}, DeleteHash}) ->
     case length(PrefList) of
         N ->
             PL0 = lists:map(fun({Target, primary}) -> Target end, PrefList),
-            ok = riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
-            true;
+            case check_all_mailboxes(PL0) of
+                ok ->
+                    riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
+                    true;
+                soft_loaded ->
+                    timer:sleep(?OVERLOAD_PAUSE_MS),
+                    if Redo -> false; true -> true end
+            end;
         _ ->
-            false
+            if Redo -> false; true -> true end
     end.
 
+-spec redo() -> boolean().
+redo() -> true.
+
+%%%============================================================================
+%%% Internal functions
+%%%============================================================================
+
+-type preflist_entry() :: {non_neg_integer(), node()}.
+
+%% Protect against overloading the system when not reaping should any
+%% mailbox be in soft overload state
+-spec check_all_mailboxes(list(preflist_entry())) -> ok|soft_loaded.
+check_all_mailboxes([]) ->
+    ok;
+check_all_mailboxes([H|Rest]) ->
+    case check_mailbox(H) of
+        ok ->
+            check_all_mailboxes(Rest);
+        soft_loaded ->
+            riak_kv_stat:update(soft_loaded_vnode_mbox),
+            soft_loaded
+    end.
+
+%% Call off to vnode proxy for mailbox status.
+-spec check_mailbox(preflist_entry()) -> ok|soft_loaded.
+check_mailbox({Idx, Node}) ->
+    RegName = riak_core_vnode_proxy:reg_name(riak_kv_vnode, Idx, Node),
+    element(1, riak_core_vnode_proxy:call(RegName, mailbox_size)).
 
 %%%============================================================================
 %%% Test
@@ -315,20 +189,18 @@ reap({{Bucket, Key}, DeleteHash}) ->
 
 -ifdef(TEST).
 
-start_test(JobID, ReapFun) ->
-    gen_server:start_link(?MODULE, [JobID, ReapFun], []).
-
 
 test_1inNreapfun(N) ->
-    fun(ReapRef) ->
+    fun(ReapRef, _Bool) ->
         case erlang:phash2({ReapRef, os:timestamp()}) rem N of
             0 -> false;
             _ -> true
         end
     end.
 
-test_100reap(_ReapRef) ->
+test_100reap(_ReapRef, _Bool) ->
     true.
+
 
 standard_reaper_test_() ->
     {timeout, 30, fun standard_reaper_tester/0}.
@@ -338,24 +210,29 @@ failure_reaper_test_() ->
 
 standard_reaper_tester() ->
     NumberOfRefs = 1000,
-    {ok, P} = start_test(1, fun test_100reap/1),
+    {ok, P} = start_job(1, riak_kv_test_util:get_test_dir("std_reaper")),
+    ok = gen_server:call(P, {override_action, fun test_100reap/2}),
     B = {<<"type1">>, <<"B1">>},
     RefList =
         lists:map(fun(X) -> {{B, term_to_binary(X)}, erlang:phash2(X)} end,
                     lists:seq(1, NumberOfRefs)),
     spawn(fun() ->
-                lists:foreach(fun(R) -> request_reap(P, R, 2) end, RefList)
+                lists:foreach(fun(R) -> request_reap(P, R) end, RefList)
             end),
     WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->
                     timer:sleep(Sleep),
-                    {AT, AB, L} = reap_stats(P),
+                    [{mqueue_lengths,[{1,RedoQL},{2,ReapQL}]},
+                        {overflow_lengths,[{2,0},{1,0}]},
+                        {overflow_discards,[{2,0},{1,0}]},
+                        {attempts,AT},
+                        {aborts,AB}] = reap_stats(P),
                     case AT of
                         NumberOfRefs ->
                             ?assertMatch(0, AB),
-                            ?assertMatch({0, 0}, L),
+                            ?assertMatch({0, 0}, {RedoQL, ReapQL}),
                             true;
                         _ ->
                             false
@@ -377,20 +254,25 @@ somefail_reaper_tester() ->
 
 somefail_reaper_tester(N) ->
     NumberOfRefs = 1000,
-    {ok, P} = start_test(1, test_1inNreapfun(N)),
+    {ok, P} = start_job(1, riak_kv_test_util:get_test_dir("err_reaper")),
+    ok = gen_server:call(P, {override_action, test_1inNreapfun(N)}),
     B = {<<"type1">>, <<"B1">>},
     RefList =
         lists:map(fun(X) -> {{B, term_to_binary(X)}, erlang:phash2(X)} end,
                     lists:seq(1, NumberOfRefs)),
     spawn(fun() ->
-                lists:foreach(fun(R) -> request_reap(P, R, 2) end, RefList)
+                lists:foreach(fun(R) -> request_reap(P, R) end, RefList)
             end),
     WaitFun =
         fun(Sleep, Done) ->
             case Done of
                 false ->
                     timer:sleep(Sleep),
-                    {AT, AB, {RedoQL, ReapQL}} = reap_stats(P),
+                    [{mqueue_lengths,[{1,RedoQL},{2,ReapQL}]},
+                        {overflow_lengths,[{2,0},{1,0}]},
+                        {overflow_discards,[{2,0},{1,0}]},
+                        {attempts,AT},
+                        {aborts,AB}] = reap_stats(P),
                     case (AT + AB >= NumberOfRefs) of
                         true ->
                             ?assertMatch(true, AB > 0),
