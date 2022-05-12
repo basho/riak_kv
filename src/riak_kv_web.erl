@@ -167,6 +167,9 @@ raw_dispatch(Name) ->
     %% Repl queue fetch URL
 
     {["queuename", queuename],
+        riak_kv_wm_queue, Props},
+    
+    {["membership_request"],
         riak_kv_wm_queue, Props}
 
     ] || {Prefix, Props} <- Props2 ]).
