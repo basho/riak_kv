@@ -33,7 +33,10 @@
 
 -include("riak_kv_dtrace.hrl").
 
--define(TOMB_PAUSE, 10).
+-define(TOMB_PAUSE, 2).
+    % The pause has a dual-purpose, for both flow control and for improving
+    % the probability that tombstone PUTs are propogated before a reap attempt
+    % is prompted.
 
 
 

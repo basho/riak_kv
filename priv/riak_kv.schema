@@ -239,6 +239,18 @@
   {commented, 10}
 ]}.
 
+%% @doc Tombstone Pause (ms)
+%% The pause has a dual-purpose.  It slows both the riak_kv_reaper and
+%% riak_kv_eraser process, as the pause is imposed on each delete or reap.
+%% The pause also reduces the probability of a failure to reap when a non-keep
+%% delete_mode is used, allowing for more time for the tombstone to propogate.
+%% The pause is in milliseconds.
+{mapping, "tombstone_pause", "riak_kv.tombstone_pause", [
+  {datatype, integer},
+  {default, 2},
+  {commented, 2}
+]}.
+
 %% @doc Whether to allow node to participate in coverage queries.
 %% This is used as a manual switch to stop nodes in incomplete states
 %% (E.g. doing a full partition repair, or node replace) from participating
