@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_reaper: Process for queueing and applying reap requests
+%% riak_kv_reader: Process for queueing and applying read repairs
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -20,9 +20,6 @@
 
 %% @doc Queue any read request originating from this node.  This is intended
 %% for background read requests to trigger read repair. 
-%% Each node should have a singleton reader initiated at startup.  Should
-%% additional reap capacity be required, then reap jobs could start their own
-%% reapers.
 
 
 -module(riak_kv_reader).
@@ -70,7 +67,7 @@ start_link(FilePath) ->
 
 -spec start_job(job_id()) -> {ok, pid()}.
 %% @doc
-%% To be used when starting a reaper for a specific workload
+%% To be used when starting a reader for a specific workload
 start_job(JobID) ->
     start_job(JobID, app_helper:get_env(riak_kv, reader_dataroot)).
 
