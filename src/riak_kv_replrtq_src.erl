@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Queue any replictaion changes emitting from this node due to
+%% @doc Queue any replication changes emitting from this node due to
 %% a PUT being co-ordinated on this node, a full-sync exchange initiated on
 %% this node, or an aae_fold replication-fold running on vnodes on this
 %% node.
@@ -36,7 +36,8 @@
         handle_cast/2,
         handle_info/2,
         terminate/2,
-        code_change/3]).
+        code_change/3,
+        format_status/2]).
 
 -export([start_link/0,
             replrtq_aaefold/2,
@@ -86,7 +87,7 @@
 -record(state,  {
             queue_filtermap = [] :: list(queue_filtermap()),
             queue_countmap = [] :: list(queue_countmap()),
-            queue_map = [] :: list(queue_map()),
+            queue_map = [] :: list(queue_map())|not_logged,
             queue_limit = ?QUEUE_LIMIT :: pos_integer(),
             object_limit = ?OBJECT_LIMIT :: non_neg_integer(),
             log_frequency_in_ms = ?LOG_TIMER_SECONDS * 1000 :: pos_integer()
@@ -275,7 +276,7 @@ stop() ->
 %%%============================================================================
 
 init([]) ->
-    QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
+    QueueDefnString = application:get_env(riak_kv, replrtq_srcqueue, ""),
     QFM = tokenise_queuedefn(QueueDefnString),
     MapToQM =
         fun({QueueName, _QF, _QA}) ->
@@ -287,9 +288,13 @@ init([]) ->
         end,
     QM = lists:map(MapToQM, QFM),
     QC = lists:map(MaptoQC, QFM),
-    QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
-    OL = app_helper:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
-    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency, ?LOG_TIMER_SECONDS * 1000),
+    QL = application:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
+    OL = application:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
+    LogFreq =
+        application:get_env(
+            riak_kv,
+            replrtq_logfrequency,
+            ?LOG_TIMER_SECONDS * 1000),
     erlang:send_after(LogFreq, self(), log_queue),
     {ok, #state{queue_filtermap = QFM,
                 queue_map = QM,
@@ -417,6 +422,11 @@ handle_info(log_queue, State) ->
     lists:foreach(LogFun, State#state.queue_countmap),
     erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),
     {noreply, State}.
+
+format_status(normal, [_PDict, State]) ->
+    State;
+format_status(terminate, [_PDict, State]) ->
+    State#state{queue_map = not_logged}.
 
 terminate(_Reason, _State) ->
     ok.
@@ -627,6 +637,17 @@ generate_replentryfun(Bucket) ->
     fun(SQN) ->
         {Bucket, <<SQN:32/integer>>, vclock:fresh(test, SQN), to_fetch}
     end.
+
+
+format_status_test() ->
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []),
+    {status, _, {module, gen_server}, SItemL} =
+        sys:get_status(riak_kv_replrtq_src),
+    S = lists:keyfind(state, 1, lists:nth(5, SItemL)),
+    ?assert(is_list(S#state.queue_map)),
+    ST = format_status(terminate, [dict:new(), S]),
+    ?assertMatch(not_logged, ST#state.queue_map),
+    stop().
 
 basic_singlequeue_test() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []),
