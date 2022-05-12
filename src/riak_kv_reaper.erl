@@ -39,6 +39,11 @@
 -define(OVERFLOW_LIMIT, 10000000).
 -define(REDO_TIMEOUT, 2000).
 -define(OVERLOAD_PAUSE_MS, 10000).
+-define(TOMB_PAUSE, 2).
+    % Used as flow control in the reaper, shared configuration with the delete
+    % process where the pause has a dual-purpose, for both flow control and for
+    % improving the probability that tombstone PUTs are propogated before a
+    % reap attempt is prompted
 
 -export([start_link/0,
             start_job/1,
@@ -139,12 +144,14 @@ action({{Bucket, Key}, DeleteHash}, Redo) ->
     DocIdx = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     {n_val, N} = lists:keyfind(n_val, 1, BucketProps),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, N, riak_kv),
+    TombPause = app_helper:get_env(riak_kv, tombstone_pause, ?TOMB_PAUSE),
     case length(PrefList) of
         N ->
             PL0 = lists:map(fun({Target, primary}) -> Target end, PrefList),
             case check_all_mailboxes(PL0) of
                 ok ->
                     riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
+                    timer:sleep(TombPause),
                     true;
                 soft_loaded ->
                     timer:sleep(?OVERLOAD_PAUSE_MS),

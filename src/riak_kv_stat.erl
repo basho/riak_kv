@@ -790,6 +790,20 @@ stats() ->
       [{value, leveldb_read_block_error}]},
      {tictacaae_controller_queue, histogram, [], [{mean, tictacaae_queue_microsec_mean},
                                                     {max, tictacaae_queue_microsec__max}]},
+     
+     % Fullsync events
+     {[ttaaefs_manager, all_check], spiral, [], [{count, ttaaefs_allcheck_total}]},
+     {[ttaaefs_manager, day_check], spiral, [], [{count, ttaaefs_daycheck_total}]},
+     {[ttaaefs_manager, hour_check], spiral, [], [{count, ttaaefs_hourcheck_total}]},
+     {[ttaaefs_manager, range_check], spiral, [], [{count, ttaaefs_rangecheck_total}]},
+     {[ttaaefs_manager, sync, count], spiral, [], [{count, ttaaefs_sync_total}]},
+     {[ttaaefs_manager, nosync, count], spiral, [], [{count, ttaaefs_nosync_total}]},
+     {[ttaaefs_manager, fail, count], spiral, [], [{count, ttaaefs_fail_total}]},
+     {[ttaaefs_manager, sync, time], histogram, [], [{max, ttaaefs_sync_time_100}]},
+     {[ttaaefs_manager, nosync, time], histogram, [], [{max, ttaaefs_nosync_time_100}]},
+     {[ttaaefs_manager, fail, time], histogram, [], [{max, ttaaefs_fail_time_100}]},
+     {[ttaaefs_manager, src_ahead], spiral, [], [{count, ttaaefs_src_ahead_total}]},
+     {[ttaaefs_manager, snk_ahead], spiral, [], [{count, ttaaefs_snk_ahead_total}]},
 
      %% datatype stats
      {[counter, actor_count], histogram, [], [{mean  , counter_actor_counts_mean},

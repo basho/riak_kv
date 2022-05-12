@@ -300,7 +300,6 @@ fetch_batch(Priority, MaxBatchSize, FlowQ) ->
 %%% Internal functions
 %%%============================================================================
 
-
 -spec maybereload_queue(pos_integer(), pos_integer(), overflowq()) ->
                             overflowq().
 maybereload_queue(Priority, BatchSize, FlowQ) ->

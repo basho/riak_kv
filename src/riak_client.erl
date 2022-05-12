@@ -49,6 +49,7 @@
 -export([for_dialyzer_only_ignore/3]).
 -export([ensemble/1]).
 -export([fetch/2, push/4]).
+-export([membership_request/1, replrtq_reset_all_peers/1, replrtq_reset_all_workercounts/2]).
 -export([remove_node_from_coverage/0, reset_node_for_coverage/0]).
 
 -compile({no_auto_import,[put/2]}).
@@ -137,6 +138,56 @@ maybe_update_consistent_stat(Node, Stat, Bucket, StartTS, Result) ->
             ok
     end.
 
+%% @doc Find the active nodes in the cluster, and return the API IP/Port for
+%% those nodes.  Used in peer discovery for nextgenrepl real-time.
+-spec membership_request(pb|http) -> list({string(), pos_integer()}).
+membership_request(Protocol) ->
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    lists:foldl(membership_request_fun(Protocol), [], UpNodes).
+
+membership_request_fun(Protocol) ->
+    fun(Node, Acc) ->
+        case rpc:call(Node, application, get_env, [riak_api, Protocol]) of
+            {ok, [{IP, Port}]} when is_integer(Port) ->
+                [{IP, Port}|Acc];
+            _ ->
+                Acc
+        end
+    end.
+
+%% @doc Reset the discovered peers on each up node, returning
+%% a list of nodes to which the change was successfully applied
+-spec replrtq_reset_all_peers(
+    riak_kv_replrtq_snk:queue_name()) -> list(node()).
+replrtq_reset_all_peers(QueueName) ->
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    lists:foldl(replrtq_resetpeer_fun(QueueName), [], UpNodes).
+
+replrtq_resetpeer_fun(QueueN) ->
+    fun(Node, Acc) ->
+        B = rpc:call(Node, riak_kv_replrtq_peer, update_discovery, [QueueN]),
+        if B -> [Node|Acc]; true -> Acc end
+    end. 
+
+%% @doc Reset the worker count and per peer limit on each up node, returning
+%% a list of nodes to which the change was successfully applied
+-spec replrtq_reset_all_workercounts(
+    non_neg_integer(),
+    non_neg_integer()) -> list(node()).
+replrtq_reset_all_workercounts(WorkerC, PerPeerL) ->
+    UpNodes = riak_core_node_watcher:nodes(riak_kv),
+    FoldFun =
+        fun(Node, Acc) ->
+            UpdateSuccess = 
+                rpc:call(
+                    Node,
+                    riak_kv_replrtq_peer,
+                    update_workers,
+                    [WorkerC, PerPeerL]),
+            if UpdateSuccess -> [Node|Acc]; true -> Acc end
+        end,
+    lists:foldl(FoldFun, [], UpNodes).
+     
 
 %% @doc Fetch the next item from the replication queue
 -spec fetch(riak_kv_replrtq_src:queue_name(), riak_client()) ->
@@ -869,10 +920,12 @@ ttaaefs_fullsync(WorkItem) ->
 
 %% @doc
 %% Prompt a full-sync based on the current configuration, and using either
-%% - null_sync (a no op)
-%% - all_sync (sync over all time - only permissible sync if not bucket-based)
-%% - hour_sync (sync over past hour, only allowed if bucket-based sync)
-%% - day_sync (sync over past day, only allowed if bucket-based sync)
+%% - null_check (a no op)
+%% - all_check (sync over all time - only permissible sync if not bucket-based)
+%% - hour_check (sync over past hour, only allowed if bucket-based sync)
+%% - day_check (sync over past day, only allowed if bucket-based sync)
+%% - range_check (sync over a range if one has been discovered by a previour sync)
+%% - auto_check (sync over range if one is present, otherwise use all if within window, otherwise day)
 -spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item(), integer()) -> ok.
 ttaaefs_fullsync(WorkItem, SecsTimeout) ->
     ReqId = mk_reqid(),

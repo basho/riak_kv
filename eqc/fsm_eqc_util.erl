@@ -95,6 +95,7 @@ maybe_tombstone() ->
 lineage() ->
     elements([current, ancestor, brother, sister, otherbrother]).
 
+merge(Lineage, undefined)-> Lineage;
 merge(ancestor, Lineage) -> Lineage;  % order should match Clocks list in riak_objects
 merge(Lineage, ancestor) -> Lineage;  % as last modified is used as tie breaker with
 merge(_, current)        -> current;  % allow_mult=false
