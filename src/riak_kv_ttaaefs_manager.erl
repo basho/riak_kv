@@ -1306,9 +1306,9 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
     RevisedStartTime = 
         case ScheduleStartTime of
             undefined ->
-                beginning_of_next_hour(os:timestamp());
+                beginning_of_next_period(os:timestamp(), SliceCount);
             {Mega, Sec, _Micro} ->
-                Seconds = Mega * ?MEGA + Sec + 86400,
+                Seconds = Mega * ?MEGA + Sec + ?SECONDS_IN_DAY,
                 {Seconds div ?MEGA, Seconds rem ?MEGA, 0}
         end,
     take_next_workitem(NewAllocations, Wants,
@@ -1358,16 +1358,20 @@ schedule_seconds(
     SlotSeconds + (SliceNumber - 1) * SliceSeconds.
 
 
--spec beginning_of_next_hour(erlang:timestamp()) -> erlang:timestamp().
-beginning_of_next_hour({Mega, Sec, _Micro}) ->
+-spec beginning_of_next_period(
+    erlang:timestamp(), pos_integer()) -> erlang:timestamp().
+beginning_of_next_period({Mega, Sec, _Micro}, SlotCount) ->
     {{Y, Mo, D}, {H, Min, S}} = calendar:now_to_datetime({Mega, Sec, 0}),
     NowGS =
         calendar:datetime_to_gregorian_seconds({{Y, Mo, D}, {H, Min, S}}),
-    TopOfHourGS =
-        calendar:datetime_to_gregorian_seconds({{Y, Mo, D}, {H, 0, 0}}),
-    NextHourGS = TopOfHourGS + 60 * 60,
-    EpochSeconds = Mega * ?MEGA + Sec + NextHourGS - NowGS,
-    {EpochSeconds div ?MEGA, EpochSeconds rem ?MEGA, 0}.
+    TopOfDayGS =
+        calendar:datetime_to_gregorian_seconds({{Y, Mo, D}, {0, 0, 0}}),
+    SlotSize = ?SECONDS_IN_DAY div SlotCount,
+
+    SlotsPassed = (NowGS - TopOfDayGS) div SlotSize,
+    NextPeriodGS = TopOfDayGS + SlotSize * (SlotsPassed + 1),
+    EpochSeconds = Mega * ?MEGA + Sec + NextPeriodGS - NowGS,
+    {EpochSeconds div ?MEGA, EpochSeconds rem ?MEGA, 0}.    
 
 
 %% @doc
@@ -1543,14 +1547,15 @@ take_first_workitem_test() ->
     {Mega, Sec, Micro} = os:timestamp(),
     TwentyFourHoursAgo = Mega * ?MEGA + Sec - (60 * 60 * 24),
     OrigStartTime =
-        beginning_of_next_hour(
+        beginning_of_next_period(
             {TwentyFourHoursAgo div ?MEGA,
                 TwentyFourHoursAgo rem ?MEGA,
-                Micro}),
+                Micro},
+                SC),
     SchedRem =
         lists:map(fun(I) -> {I, no_check} end, lists:seq(2, SC)),
     ScheduleStartTime =
-        beginning_of_next_hour({Mega, Sec, Micro}),
+        beginning_of_next_period({Mega, Sec, Micro}, SC),
     % 24 hours on, the new scheudle start time should be the same it would be
     % if we started now
     {no_check, PromptSeconds, SchedRem, ScheduleStartTime} = 
@@ -1618,10 +1623,12 @@ datetime_to_timestamp(DT) ->
 beginning_of_next_hour_test() ->
     Now = {1649,320592,173737}, % 08:36 7 April 2022
     ?assertEqual({{2022, 4, 7}, {8, 36, 32}}, calendar:now_to_datetime(Now)),
-    NH = beginning_of_next_hour(Now),
+    NH = beginning_of_next_period(Now, 24),
     ?assertMatch({{2022, 4, 7}, {9, 0, 0}}, calendar:now_to_datetime(NH)),
+    N15 = beginning_of_next_period(Now, 96),
+    ?assertMatch({{2022, 4, 7}, {8, 45, 0}}, calendar:now_to_datetime(N15)),
     DT23 = {{2022, 4, 7}, {23, 59, 59}},
-    NH23 = beginning_of_next_hour(datetime_to_timestamp(DT23)),
+    NH23 = beginning_of_next_period(datetime_to_timestamp(DT23), 24),
     ?assertMatch({{2022, 4, 8}, {0, 0, 0}}, calendar:now_to_datetime(NH23)).
 
 schedule_seconds_test() ->
