@@ -1,6 +1,6 @@
 %% -------------------------------------------------------------------
 %%
-%% riak_kv_replrtq_snk: coordination of full-sync replication
+%% riak_kv_replrtq_peer: Peer discovery for real-time replication
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
