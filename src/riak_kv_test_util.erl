@@ -297,7 +297,10 @@ dep_apps(Test, Extra) ->
                                     get_test_dir(Test) ++ "/kv_eraser"),
                 application:set_env(riak_kv,
                                     reaper_dataroot,
-                                    get_test_dir(Test) ++ "/kv_reaper");
+                                    get_test_dir(Test) ++ "/kv_reaper"),
+                application:set_env(riak_kv,
+                                    reader_dataroot,
+                                    get_test_dir(Test) ++ "/kv_reader");
            (stop) -> ok;
            (_) -> ok
         end,

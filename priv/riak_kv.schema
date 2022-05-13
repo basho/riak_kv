@@ -59,6 +59,13 @@
   {datatype, directory}
 ]}.
 
+%% @doc A path under which the reader overload queue will be stored.
+{mapping, "reader_dataroot", "riak_kv.reader_dataroot", [
+  {default, "$(platform_data_dir)/kv_reader"},
+  {datatype, directory}
+]}.
+
+%% @doc A path under which the repl real-time overload queue will be stored.
 %% @doc A path under which the reaper overload queue will be stored.
 {mapping, "replrtq_dataroot", "riak_kv.replrtq_dataroot", [
   {default, "$(platform_data_dir)/kv_replrtqsrc"},
