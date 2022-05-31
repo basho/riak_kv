@@ -597,11 +597,15 @@ maybe_finalize(StateData=#state{get_core = GetCore}) ->
 finalize(StateData=#state{get_core = GetCore, trace = Trace}) ->
     {Action, UpdGetCore} = riak_kv_get_core:final_action(GetCore),
     UpdStateData = StateData#state{get_core = UpdGetCore},
+
     case Action of
         delete ->
             maybe_delete(UpdStateData);
         {read_repair, Indices, RepairObj} ->
             maybe_read_repair(Indices, RepairObj, UpdStateData);
+        {delete_repair, Indices, RepairObj} ->
+            maybe_read_repair(Indices, RepairObj, UpdStateData),
+            maybe_delete(UpdStateData);
         _Nop ->
             ?DTRACE(Trace, ?C_GET_FSM_FINALIZE, [], ["finalize"]),
             ok
@@ -637,7 +641,7 @@ using_custom_n_val(#state{n=N, bucket_props=BucketProps}) ->
     end.
 
 %% based on what the get_put_monitor stats say, and a random roll, potentially
-%% skip read-repriar
+%% skip read-repair
 %% On a very busy system with many writes and many reads, it is possible to
 %% get overloaded by read-repairs. By occasionally skipping read_repair we
 %% can keep the load more managable; ie the only load on the system becomes

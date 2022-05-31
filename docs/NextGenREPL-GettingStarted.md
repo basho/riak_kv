@@ -98,6 +98,7 @@ To enable full-sync replication on a cluster, the following configuration is req
 ```
 ttaaefs_scope = all
 ttaaefs_queuename = replq
+ttaaefs_queuename_peer = replq
 ttaaefs_localnval = 3
 ttaaefs_remotenval = 3
 ```
@@ -115,28 +116,37 @@ Unlike when configuring a real-time replication sink, each node can only have a 
 Once there are peer relationships, a schedule is required, and a capacity must be defined.
 
 ```
-ttaaefs_allcheck = 2
+ttaaefs_allcheck = 0
 ttaaefs_hourcheck = 0
-ttaaefs_daycheck = 22
-ttaaefs_rangecheck = 36
+ttaaefs_daycheck = 0
+ttaaefs_autocheck = 24
+ttaaefs_rangecheck = 0
 
-ttaaefs_maxresults = 64
-ttaaefs_rangeboost = 8
+ttaaefs_maxresults = 32
+ttaaefs_rangeboost = 16
+
+ttaaefs_allcheck.policy = window
+ttaaefs_allcheck.window.start = 22
+ttaaefs_allcheck.window.end = 6
+
+ttaaefs_cluster_slice = 1
 ```
 
-The schedule is how many times each 24 hour period to run a check of the defined type.  The schedule is re-shuffled at random each day, and is specific to that node's peer relationship.
+The schedule is how many times each 24 hour period to run a check of the defined type.  The schedule is re-shuffled at random each day, and is specific to that node's peer relationship.  It is recommended that only `ttaaefs_autocheck` be used in schedules by default, `ttaaefs_autocheck` is an adaptive check designed to be efficient in a variety of scenarios.  The other checks should only be used if there is specific test evidence to demonstrate that they are more efficient.
 
-As this is a configuration for nval full-sync, all of the data will always be compared - by merging a cluster-wide tictac tree and comparing the trees of both clusters. If a delta is found by that comparison, the scheduled work item determines what to do next:
+If the `ttaaefs_scope` is `all`, then the comparison is between all data in the clusters (so the clusters must be intended to have an entirely common set of data).  Otherwise alternative scopes can be used to just sync an individual bucket or bucket type.
 
-- `all` indicates that the whole database should be scanned for all time looking for deltas, but only for deltas in a limited number of broken leaves of the merkle tree (the `ttaaefs_maxresults`).
+There are three stages to the full-sync process.  The discovery of the hashtree delta, then the discovery of key and clock deltas within a subset of the found tree delta, then the repairing of that delta.  If `ttaaefs_scope` is set to `all` then the discovery of tree deltas will always be fast and efficient, as the comparison will use cached trees.  For other scopes the cost of discovery is much higher, and in proportion to the number of keys in the bucket being compared.  However, in this case the different `ttaaefs_check` types are designed to make this faster by focusing only on certain ranges (e.g. the `ttaaefs_hourcheck` will only look at data modified in the past hour).
 
-- `hour` or `day` restricts he scan to data modified in the past hour or past 24 hours.
+For all scopes, the discovery of key and clock deltas is proportionate to the size of the keyspace is covered (but is more efficient than a full key scan because the database contains hints to help it skip data that is not in the damaged area of the tree).  The different `ttaaefs_check` types make this process more efficient by focusing the key and clock comparison on specific ranges.  
 
-- `range`  is a "smart" check.  It will not be run when past queries have indicated nothing can be done to resolve the delta (for example as the other cluster is ahead, and only the source cluster can prompt fixes).  If past queries have shown the clusters to be synchronised, but then a delta occurs, the range_check will only scan for deltas since the last successful synchronisation.  If another check discovers the majority of deltas are in a certain bucket or modified range, the range query will switch to using this as a constraint for the scan.
-
-Each check is constrained by `ttaaefs_maxresults`, so that it only tries to resolve issues in a subset of broken leaves in the tree of that scale (there are o(1M) leaves to the tree overall).  However, the range checks will try and resolve more (as they are constrained by the range) - this will be the multiple of `ttaaefs_maxresults` and `ttaaefs_ranegboost`.
+The `all`, `day` and `hour` check's restrict the modified date range used in the full-sync comparison to all time, the past day or the past hour.  the `ttaaefs_rangecheck` uses information gained from previous queries to dynamically determine in which modified time range a problem may have occurred (and when the previous check was successful it assumes any delta must have occurred since that previous check).  The `ttaaefs_allcheck` is an adaptive check, which based on the previous checks and the `ttaaefs_allcheck.window`, will determine algorithmically whether it is best to run a `ttaaefs_allcheck`, a `ttaaefs_daycheck`, a `ttaaefs_rangecheck` or `ttaaefs_nocheck`.
 
 It is normally preferable to under-configure the schedule.  When over-configuring the schedule, i.e. setting too much repair work than capacity of the cluster allows, there are protections to queue those schedule items there is no capacity to serve, and proactively cancel items once the manager falls behind in the schedule.  However, those cancellations will reset range_checks and so may delay the overall time to recover.
+
+Adding `ttaaefs_nocheck` into the schedule can help randomise when checks take place, and mitigate the risk of overlapping checks.
+
+Each check is constrained by `ttaaefs_maxresults`, so that it only tries to resolve issues in a subset of broken leaves in the tree of that scale (there are o(1M) leaves to the tree overall).  However, the range checks will try and resolve more (as they are constrained by the range) - this will be the multiple of `ttaaefs_maxresults` and `ttaaefs_ranegboost`.
 
 It is possible to enhance the speed of recovery when there is capacity by manually requesting additional checks, or by temporarily overriding `ttaaefs_maxresults` and/or `ttaaefs_rangeboost`.
 
@@ -151,6 +161,12 @@ In a cluster with 1bn keys, under a steady load including 2K PUTs per second, re
 - range_sync (depends on how recent the low point in the modified range is).
 
 Timings will vary depending on the total number of keys in the cluster, the rate of changes, the size of the delta and the precise hardware used.  Full-sync repairs tend to be relatively demanding of CPU (rather than disk I/O), so available CPU capacity is important.
+
+The `ttaaefs_queuename` is the name of the queue on this node, to which deltas should be written (assuming the remote cluster being compared has sink workers fetching from this queue).  If the `ttaaefs_queuename_peer` is set to disabled, when repairs are discovered, but it is the peer node that has the superior value, then these repairs are ignored.  It is expected these repairs will be picked up instead by discovery initiated from the peer.  Setting the `ttaaefs_queuename_peer` to the name of a queue on the peer which this node has a sink worker enabled to fetch from will actually trigger repairs when the peer cluster is superior.  It is strongly recommended to make full-sync repair bi-directionally in this way.
+
+If there are 24 sync events scheduled a day, and default `ttaaefs_maxresults` and `ttaaefs_rangeboost` settings are used, and an 8-node cluster is in use - repairs via ttaaefs full-sync will happen at a rate of about 100K per day.  It is therefore expected that where a large delta emerges it may be necessary to schedule a `range_repl` fold, or intervene to raise the `ttaaefs_rangeboost` to speed up the closing of the delta.
+
+To help space out queries between clusters - i.e. stop two clusters with identical schedules from mutual full-syncs at the same time - each cluster may be configured with `ttaaefs_cluster_slice` number between 1 and 4.
 
 ### Configure work queues
 
