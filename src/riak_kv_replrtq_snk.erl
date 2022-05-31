@@ -878,7 +878,8 @@ log_mapfun({QueueName, Iteration, SinkWork}) ->
 log_queue_addition(_QN, [], _WC, _PPL) ->
     ok;
 log_queue_addition(QueueN, [Peer|OtherPeers], WorkerCount, PerPeerLimit) ->
-    lager:info("Queue=~w added peer ~p with worker_count=~w per_peer_limit=~w",
+    ?LOG_INFO(
+        "Queue=~w added peer ~p with worker_count=~w per_peer_limit=~w",
         [QueueN, Peer, WorkerCount, PerPeerLimit]),
     log_queue_addition(QueueN, OtherPeers, WorkerCount, PerPeerLimit).
 

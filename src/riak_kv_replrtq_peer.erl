@@ -38,6 +38,8 @@
             update_discovery/1,
             update_workers/2]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -type discovery_peer() ::
     {riak_kv_replrtq_snk:queue_name(), [riak_kv_replrtq_snk:peer_info()]}.
 
@@ -103,7 +105,8 @@ init([]) ->
 handle_call({update_discovery, QueueName}, _From, State) ->
     case lists:keyfind(QueueName, 1, State#state.discovery_peers) of
         false ->
-            lager:info("Type=~w discovery for unconfigured QueueName=~w",
+            ?LOG_INFO(
+                "Type=~w discovery for unconfigured QueueName=~w",
                 [update, QueueName]),
             {reply, false, State};
         {QueueName, PeerInfo} ->
@@ -195,10 +198,10 @@ do_discovery(QueueName, PeerInfo, Type) ->
         end,
     case discover_peers(PeerInfo, StartDelayMS) of
         CurrentPeers ->
-            lager:info("Type=~w discovery led to no change", [Type]),
+            ?LOG_INFO("Type=~w discovery led to no change", [Type]),
             false;
         [] ->
-            lager:info("Type=~w discovery led to reset of peers", [Type]),
+            ?LOG_INFO("Type=~w discovery led to reset of peers", [Type]),
             riak_kv_replrtq_snk:add_snkqueue(QueueName,
                 PeerInfo,
                 SnkWorkerCount,
@@ -209,7 +212,7 @@ do_discovery(QueueName, PeerInfo, Type) ->
                 count_change ->
                     ok;
                 CurrentPeers when is_list(CurrentPeers) ->
-                    lager:info(
+                    ?LOG_INFO(
                         "Type=~w discovery old_peers=~w new_peers=~w",
                         [Type, length(CurrentPeers), length(DiscoveredPeers)])
             end,
@@ -250,12 +253,12 @@ discover_from_peer(PeerInfo, Acc) ->
                             fun({IPa, Pa}) -> {IPa, Pa, Protocol} end,
                             lists:usort(IPPorts));
                 R ->
-                    lager:info("Unexpected peer discovery response ~p", [R]),
+                    ?LOG_INFO("Unexpected peer discovery response ~p", [R]),
                     Acc
             end
         catch
             Type:Exception ->
-                lager:warning(
+                ?LOG_WARNING(
                     "Peer discovery failed at Peer ~p due to ~w ~w",
                     [PeerInfo, Type, Exception]),
                 Acc

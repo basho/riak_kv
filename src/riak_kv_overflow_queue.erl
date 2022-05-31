@@ -40,6 +40,8 @@
         close/2,
         fetch_batch/3]).
 
+-include_lib("kernel/include/logger.hrl").
+
 -define(QUEUE_LIMIT, 1000).
 -define(OVERFLOW_LIMIT, 1000000).
 -define(OVERFLOW_BATCH, 256).
@@ -124,12 +126,14 @@ log(Type, JobID, Attempts, Aborts, Queue) ->
                     "Discard counts ",
                     Queue#overflowq.overflow_discards),
 
-    _ = lager:info(lists:flatten(["~p job_id=~p has ",
-                        "attempts=~w aborts=~w ",
-                        QueueLengths,
-                        OverflowLengths,
-                        DiscardCounts]),
-                    [Type, JobID, Attempts, Aborts]),
+    ?LOG_INFO(
+        lists:flatten(
+            ["~p job_id=~p has ",
+                "attempts=~w aborts=~w ",
+                QueueLengths,
+                OverflowLengths,
+                DiscardCounts]),
+        [Type, JobID, Attempts, Aborts]),
     
     ResetDiscards =
         lists:map(fun({P, _L}) -> {P, 0} end,

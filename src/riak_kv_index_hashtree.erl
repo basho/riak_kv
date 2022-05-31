@@ -710,8 +710,8 @@ fold_fun(HashtreePid, _HasIndexTree = true) ->
 -spec handle_corrupted_object(
     riak_object:bucket(), riak_object:key(), term(), term()) -> ok.
 handle_corrupted_object(Bucket, Key, Error, Reason) ->
-    lager:warning("Unable to read B=~p K=~p", [Bucket, Key]),
-    lager:warning("Read failure due to ~w ~w", [Error, Reason]),
+    ?LOG_WARNING("Unable to read B=~p K=~p", [Bucket, Key]),
+    ?LOG_WARNING("Read failure due to ~w ~w", [Error, Reason]),
     riak_kv_reader:request_read({Bucket, Key}).
 
 -spec object_fold_fun(pid()) ->
@@ -870,8 +870,8 @@ expand_item(Has2ITree, {object, BKey, RObj}, Version, Others) ->
         try
             hash_object(BKey, RObj, Version)
         catch Error:Reason ->
-            lager:warning("Unhashable object BKey=~p", [BKey]),
-            lager:warning("Hash failure due to ~w ~w", [Error, Reason]),
+            ?LOG_WARNING("Unhashable object BKey=~p", [BKey]),
+            ?LOG_WARNING("Hash failure due to ~w ~w", [Error, Reason]),
             Null = erlang:phash2(<<>>),
             term_to_binary(Null)
         end,

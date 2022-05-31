@@ -305,19 +305,20 @@ dep_apps(Test, Extra) ->
 %% see dep_apps/2
 -spec do_dep_apps(load | start | stop, [ atom() | fun() ]) -> [ any() ].
 do_dep_apps(start, Apps) ->
-    lists:foldl(fun do_dep_apps_fun/2,
-                [], Apps);
+    lists:foldl(fun do_dep_apps_fun/2, [], Apps);
 do_dep_apps(LoadStop, Apps) ->
-    lists:map(fun(A) when is_atom(A) ->
-                      case include_app_phase(LoadStop, A) of
-                          true ->
-                              application:LoadStop(A);
-                          _ ->
-                              ok
-                      end;
-                 (F) ->
-                      F(LoadStop)
-              end, Apps).
+    lists:map(
+        fun(A) when is_atom(A) ->
+                case include_app_phase(LoadStop, A) of
+                    true ->
+                        application:LoadStop(A);
+                    _ ->
+                        ok
+                end;
+            (F) ->
+                F(LoadStop)
+        end,
+        Apps).
 
 do_dep_apps_fun(A, Acc) when is_atom(A) ->
     case include_app_phase(start, A) of
