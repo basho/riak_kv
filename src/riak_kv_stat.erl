@@ -289,6 +289,29 @@ do_update(ngrrepl_object) ->
     ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_object], 1);
 do_update(ngrrepl_error) ->
     ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_error], 1);
+do_update({ngrrepl_srcdiscard, C}) ->
+    ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_srcdiscard], C);
+do_update({ttaaefs, all_check}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, all_check], 1);
+do_update({ttaaefs, day_check}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, day_check], 1);
+do_update({ttaaefs, hour_check}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, hour_check], 1);
+do_update({ttaaefs, range_check}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, range_check], 1);
+do_update({ttaaefs, sync_sync, Microsecs}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, sync, count], 1),
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, sync, time], Microsecs);
+do_update({ttaaefs, sync_nosync, Microsecs}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, nosync, count], 1),
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, nosync, time], Microsecs);
+do_update({ttaaefs, sync_fail, Microsecs}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, fail, count], 1),
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, fail, time], Microsecs);
+do_update({ttaaefs, src_ahead, C}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, src_ahead], C);
+do_update({ttaaefs, snk_ahead, C}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, snk_ahead], C);
 do_update(skipped_read_repairs) ->
     ok = exometer:update([?PFX, ?APP, node, gets, skipped_read_repairs], 1);
 do_update(coord_redir) ->
@@ -753,7 +776,8 @@ stats() ->
                                                     {count, ngrrepl_object_total}]},
      {[node, puts, ngrrepl_error], spiral, [], [{one, ngrrepl_error},
                                                     {count, ngrrepl_error_total}]},
-
+     {[node, puts, ngrrepl_srcdiscard], spiral, [], [{one, ngrrepl_srcdiscard},
+                                                    {count, ngrrepl_srcdiscard_total}]},
      %% index & list{keys,buckets} & clusteraae stats
      {[index, fsm, create], spiral, [], [{one, index_fsm_create}]},
      {[index, fsm, create, error], spiral, [], [{one, index_fsm_create_error}]},
@@ -789,6 +813,20 @@ stats() ->
       [{value, leveldb_read_block_error}]},
      {tictacaae_controller_queue, histogram, [], [{mean, tictacaae_queue_microsec_mean},
                                                     {max, tictacaae_queue_microsec__max}]},
+     
+     % Fullsync events
+     {[ttaaefs_manager, all_check], spiral, [], [{count, ttaaefs_allcheck_total}]},
+     {[ttaaefs_manager, day_check], spiral, [], [{count, ttaaefs_daycheck_total}]},
+     {[ttaaefs_manager, hour_check], spiral, [], [{count, ttaaefs_hourcheck_total}]},
+     {[ttaaefs_manager, range_check], spiral, [], [{count, ttaaefs_rangecheck_total}]},
+     {[ttaaefs_manager, sync, count], spiral, [], [{count, ttaaefs_sync_total}]},
+     {[ttaaefs_manager, nosync, count], spiral, [], [{count, ttaaefs_nosync_total}]},
+     {[ttaaefs_manager, fail, count], spiral, [], [{count, ttaaefs_fail_total}]},
+     {[ttaaefs_manager, sync, time], histogram, [], [{max, ttaaefs_sync_time_100}]},
+     {[ttaaefs_manager, nosync, time], histogram, [], [{max, ttaaefs_nosync_time_100}]},
+     {[ttaaefs_manager, fail, time], histogram, [], [{max, ttaaefs_fail_time_100}]},
+     {[ttaaefs_manager, src_ahead], spiral, [], [{count, ttaaefs_src_ahead_total}]},
+     {[ttaaefs_manager, snk_ahead], spiral, [], [{count, ttaaefs_snk_ahead_total}]},
 
      %% datatype stats
      {[counter, actor_count], histogram, [], [{mean  , counter_actor_counts_mean},

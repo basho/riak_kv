@@ -460,22 +460,32 @@ check_delete(Objects, RepairH, H, PerfectPreflist) ->
     Deletes = [Part || {Part, Req} <- RepairH,
                        riak_kv_requests:request_type(Req) == kv_delete_request],
 
-    %% Should get deleted if all vnodes returned the same object
-    %% and a perfect preflist and the object is deleted
+    %% Should get deleted if any object that is not a descendent of another
+    %% object is a tombstone, and a perfect preflist
     RetLins = [Lineage || {_Idx, {ok, Lineage}} <- H],
     URetLins = lists:usort(RetLins),
-    Expected = case PerfectPreflist andalso
-                   length(RetLins) == length(H) andalso
-                   length(URetLins) == 1 andalso
-                   riak_kv_util:is_x_deleted(proplists:get_value(hd(URetLins), Objects)) of
-                   true ->
-                       [P || {P, _} <- H];  %% send deletes to all nodes
-                   false ->
-                       []
-               end,
-    ?WHENFAIL(io:format("Objects: ~p\nExpected: ~p\nDeletes: ~p\nH: ~p\n",
-                        [Objects, Expected, Deletes, H]),
-              equals(lists:sort(Expected), lists:sort(Deletes))).
+
+    MergedResult =
+        lists:foldl(
+            fun(RL, Acc) -> fsm_eqc_util:merge(RL, Acc) end,
+            undefined,
+            RetLins),
+    
+    Expected = 
+        case PerfectPreflist andalso
+            length(RetLins) == length(H) andalso
+            length(URetLins) >= 1 andalso
+            riak_kv_util:is_x_deleted(proplists:get_value(MergedResult, Objects)) of
+            true ->
+                [P || {P, _} <- H];  %% send deletes to all nodes
+            false ->
+                []
+        end,
+    ?WHENFAIL(
+        io:format(
+            "Objects: ~p\n RepairH: ~p\n Expected: ~p\nDeletes: ~p\nH: ~p\n MergedRes: ~p\n",
+            [Objects, RepairH, Expected, Deletes, H, MergedResult]),
+            equals(lists:sort(Expected), lists:sort(Deletes))).
 
 all_distinct(Xs) ->
     equals(lists:sort(Xs),lists:usort(Xs)).

@@ -280,18 +280,16 @@ dep_apps(Test, Extra) ->
                 %% best guest in `get_deps_dir/0'
                 DepsDir = get_deps_dir(),
                 Dirs = [DepsDir ++ "*/priv"],
-                application:set_env(riak_core, schema_dirs, Dirs);
-                %%?LOG_SET_ENV(lager, handlers, [{lager_file_backend,
-                %%                                       [
-                %%                                        {get_test_dir(Test)
-                %%                                            ++ "/log/debug.log",
-                %%                                        debug,
-                %%                                        10485760,
-                %%                                        "$D0",
-                %%                                        5}]}]),
-                %%?LOG_SET_ENV(lager,
-                %%                    crash_log,
-                %%                    get_test_dir(Test) ++ "/log/crash.log");
+                application:set_env(riak_core, schema_dirs, Dirs),
+                application:set_env(riak_kv,
+                                    eraser_dataroot,
+                                    get_test_dir(Test) ++ "/kv_eraser"),
+                application:set_env(riak_kv,
+                                    reaper_dataroot,
+                                    get_test_dir(Test) ++ "/kv_reaper"),
+                application:set_env(riak_kv,
+                                    reader_dataroot,
+                                    get_test_dir(Test) ++ "/kv_reader");
            (stop) -> ok;
            (_) -> ok
         end,

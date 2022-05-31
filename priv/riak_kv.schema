@@ -47,6 +47,65 @@
   {datatype, directory}
 ]}.
 
+%% @doc A path under which the eraser overload queue will be stored.
+{mapping, "eraser_dataroot", "riak_kv.eraser_dataroot", [
+  {default, "$(platform_data_dir)/kv_eraser"},
+  {datatype, directory}
+]}.
+
+%% @doc A path under which the reaper overload queue will be stored.
+{mapping, "reaper_dataroot", "riak_kv.reaper_dataroot", [
+  {default, "$(platform_data_dir)/kv_reaper"},
+  {datatype, directory}
+]}.
+
+%% @doc A path under which the reader overload queue will be stored.
+{mapping, "reader_dataroot", "riak_kv.reader_dataroot", [
+  {default, "$(platform_data_dir)/kv_reader"},
+  {datatype, directory}
+]}.
+
+%% @doc A path under which the repl real-time overload queue will be stored.
+%% @doc A path under which the reaper overload queue will be stored.
+{mapping, "replrtq_dataroot", "riak_kv.replrtq_dataroot", [
+  {default, "$(platform_data_dir)/kv_replrtqsrc"},
+  {datatype, directory}
+]}.
+
+%% @doc The maximum size of the overflow queue for the eraser.  If the queue
+%% goes beyond this point, new additions will be discarded.
+%% To update this at run-time, the configuration item can be changed via
+%% remote_console, then `riak_kv_eraser:clear_queue()` can be called to clear
+%% the existing queue and start a new queue with the new limit.
+{mapping, "eraser_overflow_limit", "riak_kv.eraser_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
+
+%% @doc The maximum size of the overflow queue for the reaper.  If the queue
+%% goes beyond this point, new additions will be discarded.
+%% To update this at run-time, the configuration item can be changed via
+%% remote_console, then `riak_kv_reaper:clear_queue()` can be called to clear
+%% the existing queue and start a new queue with the new limit.
+{mapping, "reaper_overflow_limit", "riak_kv.reaper_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
+
+%% @doc The maximum size of the overflow queue for the real-time replication
+%% queue (nextgen repl only).  If the queue goes beyond this point, new
+%% additions will be discarded.
+%% For replrtq the queue is sized per QueueName (and priority), so differently
+%% named queues on the host will each independently inherit this limit, for
+%% each of the queue priorities.
+%% To update this at run-time, the configuration item can be changed via
+%% remote_console, then `riak_kv_replrtq_src:clear_rtq(QueueName)` can be
+%% called to clear the existing queue and start a new queue with the new limit.
+{mapping, "replrtq_overflow_limit", "riak_kv.replrtq_overflow_limit", [
+  {default, 10000000},
+  {datatype, integer}
+]}.
+
 %% @doc Parallel key store type
 %% When running in parallel mode, which will be the default if the backend does
 %% not support native tictac aae (i.e. is not leveled), what type of parallel 
@@ -225,6 +284,18 @@
   {datatype, integer},
   {default, 10},
   {commented, 10}
+]}.
+
+%% @doc Tombstone Pause (ms)
+%% The pause has a dual-purpose.  It slows both the riak_kv_reaper and
+%% riak_kv_eraser process, as the pause is imposed on each delete or reap.
+%% The pause also reduces the probability of a failure to reap when a non-keep
+%% delete_mode is used, allowing for more time for the tombstone to propogate.
+%% The pause is in milliseconds.
+{mapping, "tombstone_pause", "riak_kv.tombstone_pause", [
+  {datatype, integer},
+  {default, 2},
+  {commented, 2}
 ]}.
 
 %% @doc Whether to allow node to participate in coverage queries.
@@ -892,6 +963,30 @@
   {default, q1_ttaaefs}
 ]}.
 
+%% @doc Tictac full-sync repair is by default uni-directional - each full-sync
+%% operation managed from a given cluster will only attempt to prompt repair
+%% where that cluster is in advance (i.e the src of a more advanced value).
+%% From Riak 3.0.10 it can be bi-directional, and by configuring the queuename
+%% of the remote peer that this cluster is consuming from, repairs will be
+%% prompted in both directions.
+%% This change reduces the waste associated with discovery work that does not
+%% lead to repair activity.  To revert back to pre-3.0.10 uni-directional
+%% behaviour use the keyword disabled as the peer queuename.
+{mapping, "ttaaefs_queuename_peer", "riak_kv.ttaaefs_queuename_peer", [
+  {datatype, atom},
+  {default, disabled},
+  {commented, q1_ttaaefs}
+]}.
+
+%% @doc Tictac cluster slice number.  Each cluster can be configued with a
+%% slice number to space out full-sync events.  The numbers can be 1..4.  For
+%% example when doing bi-directional replication give one cluster a slice
+%% number of 1, and another a slice number of 3 (or alternatively use 2 and 4)
+{mapping, "ttaaefs_cluster_slice", "riak_kv.ttaaefs_cluster_slice", [
+    {datatype, integer},
+    {default, 1}
+]}.
+
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
 %% compared per exchange.  Reducing this will speed up clock compare queries,
 %% but will increase the number of exchanges required to complete a repair.
@@ -905,7 +1000,7 @@
 %% impact on KV performance when repairs are required.
 {mapping, "ttaaefs_maxresults", "riak_kv.ttaaefs_maxresults", [
   {datatype, integer},
-  {default, 64}
+  {default, 32}
 ]}.
 
 %% @doc For tictac full-sync what is the maximum number of AAE segments to be
@@ -916,7 +1011,7 @@
 %% range_check to do the heavy lifting) 
 {mapping, "ttaaefs_rangeboost", "riak_kv.ttaaefs_rangeboost", [
   {datatype, integer},
-  {default, 8}
+  {default, 16}
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this
@@ -983,15 +1078,20 @@
 %% @doc The port to be used when connecting to the remote peer cluster
 {mapping, "ttaaefs_peerport", "riak_kv.ttaaefs_peerport", [
   {datatype, integer},
-  {commented, 8098}
+  {commented, 8087}
 ]}.
 
 %% @doc The protocol to be used when conecting to the peer in the remote
-%% cluster.  Could be http or pb (but only http currently being tested)
-%% TODO: Support for SSL?  Support for pb.
+%% cluster.  Could be http or pb, with pb being relatively efficient.  Adding
+%% TLS security is possible with the pb protocol by setting the following
+%% configuration items:
+%% - riak_kv, repl_cacert_filename
+%% - riak_kv, repl_cert_filename
+%% - riak_kv, repl_key_filename,
+%% - riak_kv, repl_username
 {mapping, "ttaaefs_peerprotocol", "riak_kv.ttaaefs_peerprotocol", [
   {datatype, {enum, [http, pb]}},
-  {default, http}
+  {default, pb}
 ]}.
 
 %% @doc The filepath for the ca certificate to validate the ssl connection
@@ -1034,7 +1134,7 @@
 %% bucket, and warnings about sizing are specially relevant. 
 {mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [
   {datatype, integer},
-  {default, 24}
+  {default, 0}
 ]}.
 
 %% @doc How many times per 24hour period should no data be checked to
@@ -1093,6 +1193,75 @@
   {default, 0}
 ]}.
 
+%% @doc How many times per 24hour period should the an autocheck be run.  The
+%% autocheck is intended to be an adaptive check, in that it will:
+%% - use a rangecheck if the previous check has identified a range, or;
+%% - use a rangecheck if the previous check was a successful sync, using the
+%% timestamp of the previous success as low modified date, or;
+%% - use a nocheck if the previous check did not sync, but also did not lead
+%% to any repairs (e.g. because the sink was ahead), or;
+%% - use an allcheck if no range is identified, and the current time is inside
+%% the all_check window, or;
+%% - use a daycheck otherwise
+%% For full, nval, sync operations the range is only relevant to the search
+%% for objects to repair, the tree comparison is always between all data for
+%% that nval.
+{mapping, "ttaaefs_autocheck", "riak_kv.ttaaefs_autocheck", [
+  {datatype, integer},
+  {default, 24}
+]}.
+
+%% @doc Lets you specify when during the day autocheck may run allcheck
+%% rather than the less expensive daycheck, when no range has been identified.
+%% This restricts the fixing entropy between clusters of non recently-modified
+%% data to this window (and hence ensures the cost of fixing this entropy does
+%% not fall in prime hours).  Note this window applies to `ttaaefs_autocheck`,
+%% which will adapt to the window - any `ttaaefs_allcheck` count that has been
+%% configured will ignore the window:
+%%
+%% * `always` (default) No restrictions
+%% * `never` never convert an auto_check to an all_check
+%% * `window` Hours during which merging is permitted, where
+%%   `ttaaefs_allcheck.window.start` and `ttaaefs_allcheck.window.end` are
+%%   integers between 0 and 23.
+%%
+%% If all_check has a significant impact on performance of your cluster,
+%% or your cluster has quiet periods in which little storage activity
+%% occurs, you may want to change this setting from the default.
+{mapping, "ttaaefs_allcheck.policy", "riak_kv.ttaaefs_allcheck_window", [
+  {default, always},
+  {datatype, {enum, [always, never, window]}}
+]}.
+
+%% @see All check window
+{mapping, "ttaaefs_allcheck.window.start", "riak_kv.ttaaefs_allcheck_window", [
+  {default, 0},
+  {datatype, integer},
+  hidden
+]}.
+
+%% @see All check window
+{mapping, "ttaaefs_allcheck.window.end", "riak_kv.ttaaefs_allcheck_window", [
+  {default, 23},
+  {datatype, integer},
+  hidden
+]}.
+
+{translation,
+ "riak_kv.ttaaefs_allcheck_window",
+ fun(Conf) ->
+  Setting = cuttlefish:conf_get("ttaaefs_allcheck.policy", Conf),
+    case Setting of
+      always -> always;
+      never -> never;
+      window ->
+        Start = cuttlefish:conf_get("ttaaefs_allcheck.window.start", Conf, undefined),
+        End = cuttlefish:conf_get("ttaaefs_allcheck.window.end", Conf, undefined),
+        {Start, End};
+      _Default -> always
+    end
+ end}.
+
 %% @doc If Tictac AAE full-sync discovers keys to be repaired, should each key
 %% that is repaired be logged
 {mapping, "ttaaefs_logrepairs", "riak_kv.ttaaefs_logrepairs", [
@@ -1116,13 +1285,6 @@
     {datatype, {flag, enabled, disabled}},
     {default, disabled},
     {commented, enabled}
-]}.
-
-%% @doc Limit the size of replication queues (for a queue and priority, i.e.
-%% each priority on each queue will have this as the limit)
-{mapping, "replrtq_srcqueuelimit", "riak_kv.replrtq_srcqueuelimit", [
-  {datatype, integer},
-  {default, 300000}
 ]}.
 
 %% @doc Limit the number of objects to be cached on the replication queue,
@@ -1203,7 +1365,7 @@
 %% to the single queue specified in replrtq_sinkqueue is strongly recommended.
 {mapping, "replrtq_sinkpeers", "riak_kv.replrtq_sinkpeers", [
     {datatype, string},
-    {commented, "127.0.0.1:8098:http"}
+    {commented, "127.0.0.1:8087:pb"}
 ]}.
 
 %% @doc The number of workers to be used for each queue must be configured.
@@ -1217,6 +1379,27 @@
 {mapping, "replrtq_sinkpeerlimit", "riak_kv.replrtq_sinkpeerlimit", [
     {datatype, integer},
     {commented, 24}
+]}.
+
+%% @doc Enable this node to perform peer discovery for real time replication
+%% With peer discovery the configured peers will be used to discover more peers
+%% within those clusters.  The peer discovery process will re-discover at a
+%% random interval between 60s and `replrtq_prompt_max_seconds`.  Unexpected
+%% events will result in the configured peers being used, and discovered peers
+%% being ignored.  If disabled the peer discovery process will be initialised,
+%% but will remain idle
+{mapping, "replrtq_peer_discovery", "riak_kv.replrtq_peer_discovery", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc The maximum number of seconds to wait before re-prompting peer
+%% discovery.  Defaults to 15 minutes.  An immediate cluster-wide update can be
+%% prompted via `remote_console` using `riak_client:replrtq_reset_all_peers/1`.
+{mapping, "replrtq_prompt_max_seconds", "riak_kv.replrtq_prompt_max_seconds", [
+    {datatype, integer},
+    {commented, 900}
 ]}.
 
 %% @doc Enable the `recalc` compaction strategy within the leveled backend in
@@ -1269,4 +1452,16 @@
 {mapping, "worker_pool_size", "riak_kv.worker_pool_size", [
     {datatype, integer},
     {default, 5}
+]}.
+
+
+%% @doc Limit the size of replication queues (for a queue and priority, i.e.
+%% each priority on each queue will have this as the limit)
+%% This option will be ignored from Release 3.0.10, as the queue has been
+%% converted to an overflow queue as part of this release.  Instead use
+%% `replrtq_overflow_limit` to control the queue size, including on-disk size.
+{mapping, "replrtq_srcqueuelimit", "riak_kv.replrtq_srcqueuelimit", [
+  {datatype, integer},
+  {default, 300000},
+  hidden
 ]}.

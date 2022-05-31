@@ -38,8 +38,6 @@
             convert_fold/1,
             is_valid_fold/1]).
 
--export([repair_fun/1]).
-
 -include_lib("kernel/include/logger.hrl").
 
 -define(EMPTY, <<>>).
@@ -223,8 +221,7 @@
         modified_range() | all,
         all}|
         % Read repair all keys in the range.  Keys will be read in batches
-        % and then repaired by the fold worker performing a fetch within the
-        % fold.
+        % and then queued for repair
         % Will default to repairing all keys (i.e. all of those fetched and a
         % delta is discovered).  Scope to support not_in_coverage later - i.e.
         % only attempt to read those keys where a primary vnode is not
@@ -466,10 +463,10 @@ process_results(Results, State) ->
                         {_EL, AccCount, QueueName, RBS} = Acc,
                         {[], AccCount + Count, QueueName, RBS};
                     repair_keys_range ->
-                        {ok, C} = riak:local_client(),
-                        FetchFun = repair_fun(C),
                         {RepairTail, Count, all, RBS} = Results,
-                        lists:foreach(FetchFun, RepairTail),
+                        lists:foreach(
+                            fun riak_kv_reader:request_read/1,
+                            RepairTail),
                         % Count is incremented when the Repair attempt is added
                         % to the list, not when is is pushed to the queue
                         {_EL, AccCount, all, RBS} = Acc,
@@ -790,20 +787,6 @@ handle_in_batches(Type, [Ref|RestRefs], BatchCount, Worker) ->
             ok = riak_kv_eraser:request_delete(Worker, Ref)
     end,
     handle_in_batches(Type, RestRefs, BatchCount + 1, Worker).
-
-%% ===================================================================
-%% Query helper functions
-%% ===================================================================
-
-repair_fun(RiakClient) ->
-    fun({B, K}) ->
-        case riak_kv_util:consistent_object(B) of
-            true ->
-                riak_kv_exchange_fsm:repair_consistent({B, K});
-            false ->
-                riak_client:get(B, K, RiakClient)
-        end
-    end.
 
 %% ===================================================================
 %% Internal functions

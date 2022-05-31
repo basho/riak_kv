@@ -1407,7 +1407,7 @@ is_aae_object_deleted(MDs, ReturnMD) ->
     end.
 
 %% @doc
-%% In the case that the binary is the native objetc binayr format - can find
+%% In the case that the binary is the native object binary format - can find
 %% if it is deleted by pattern matching the binary, there is no need to process
 %% all the metadata
 -spec is_binary_deleted(binary(), boolean()) -> boolean().

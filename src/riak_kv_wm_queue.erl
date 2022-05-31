@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc Webmachine resource for fetching from queue
+%% @doc Webmachine resource for fetching for real-time replication
 %%
 %% Available operations:
 %%
@@ -30,6 +30,10 @@
 %% Parameters to pass:
 %% object_format - internal (return object in internal repl format)
 %%               - internal_aaehash (also return segment hash and vc hash)
+%%
+%% GET /membership_request
+%%
+%% Will return a list of IP addresses and Ports in a JSON body
 %%
 %% POST /queuename/QueueName
 %%
@@ -48,7 +52,8 @@
          malformed_request/2,
          content_types_provided/2,
          process_post/2,
-         produce_queue_fetch/2
+         produce_queue_fetch/2,
+         produce_membership_request/2
         ]).
 
 -include_lib("kernel/include/logger.hrl").
@@ -65,13 +70,16 @@
                             %% List of Bucket, Key, Clock tuples
             object_format = internal :: internal|internal_aaehash,
                             %% object format to be used in response
-            method :: 'GET'|'PUT'|'POST'|undefined
+            method :: 'GET'|'PUT'|'POST'|undefined,
+            get_type :: fetch|membership|post|undefined
 
          }).
 -type context() :: #ctx{}.
 
 -include_lib("webmachine/include/webmachine.hrl").
 -include("riak_kv_wm_raw.hrl").
+
+-define(MEMBER_REQ, "/membership_request").
 
 %% @doc Initialize this resource.
 -spec init(proplists:proplist()) -> {ok, context()}.
@@ -106,22 +114,28 @@ malformed_request(RD, Ctx) ->
     RDForError = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD),
     case wrq:method(RD) of
         'GET' ->
-            QueueName = malformed_queuename(RD),
-            ObjectFormatRaw =
-                wrq:get_qs_value(?Q_OBJECT_FORMAT, "internal", RD),
-            case existing_atom(ObjectFormatRaw) of
-                false ->
-                    ErrorBody =
-                        io_lib:format("Format ~w not defined~n",
-                            [ObjectFormatRaw]),
-                    {true,
-                        wrq:append_to_resp_body(ErrorBody, RDForError),
-                        Ctx};
-                ObjectFormat ->
-                    {false,
-                        RD,
-                        Ctx#ctx{queuename = QueueName,
-                                object_format = ObjectFormat}}
+            case wrq:path(RD) of
+                ?MEMBER_REQ ->
+                    {false, RD, Ctx#ctx{get_type = membership}};
+                _FetchUrl ->
+                    QueueName = malformed_queuename(RD),
+                    ObjectFormatRaw =
+                        wrq:get_qs_value(?Q_OBJECT_FORMAT, "internal", RD),
+                    case existing_atom(ObjectFormatRaw) of
+                        false ->
+                            ErrorBody =
+                                io_lib:format("Format ~w not defined~n",
+                                    [ObjectFormatRaw]),
+                            {true,
+                                wrq:append_to_resp_body(ErrorBody, RDForError),
+                                Ctx};
+                        ObjectFormat ->
+                            {false,
+                                RD,
+                                Ctx#ctx{queuename = QueueName,
+                                        get_type = fetch,
+                                        object_format = ObjectFormat}}
+                    end
             end;
         'POST' ->
             case malformed_queuename(RD) of
@@ -143,6 +157,7 @@ malformed_request(RD, Ctx) ->
                             {false,
                                 RD, 
                                 Ctx#ctx{queuename = QueueName,
+                                        get_type = post,
                                         keyclocklist = KeyClockList}}
                     end
             end
@@ -179,9 +194,11 @@ malformed_keyclocklist(ReqBody) ->
 -spec content_types_provided(#wm_reqdata{}, context()) ->
     {[{ContentType::string(), Producer::atom()}], #wm_reqdata{}, context()}.
 %% @doc List the content types available for representing this resource.
-content_types_provided(RD, Ctx) when Ctx#ctx.method =:= 'GET' ->
+content_types_provided(RD, Ctx) when Ctx#ctx.get_type =:= fetch ->
     {[{"application/octet-stream", produce_queue_fetch}], RD, Ctx};
-content_types_provided(RD, Ctx) when Ctx#ctx.method =:= 'POST' ->
+content_types_provided(RD, Ctx) when Ctx#ctx.get_type =:= membership ->
+    {[{"application/json", produce_membership_request}], RD, Ctx};
+content_types_provided(RD, Ctx) when Ctx#ctx.get_type =:= post ->
     {[{"text/plain", nop}], RD, Ctx}.
 
 
@@ -218,6 +235,21 @@ produce_queue_fetch(RD, Ctx) ->
                         riak_client:fetch(QueueName, Client),
                         RD,
                         Ctx).
+
+-spec produce_membership_request(#wm_reqdata{}, context()) ->
+    {iolist(), #wm_reqdata{}, context()}.
+produce_membership_request(RD, Ctx) ->
+    R = riak_client:membership_request(http),
+    MapToJsonFun =
+        fun({IP, Port}) ->
+            {struct,
+                [{<<"ip">>, list_to_binary(IP)},
+                    {<<"port">>, integer_to_binary(Port)}]}
+        end,
+    {mochijson2:encode(
+        {struct, [{"up_nodes", lists:map(MapToJsonFun, R)}]}),
+        RD, Ctx}.
+
 
 decode_bucketkeyclock({struct, BKC}, Acc) ->
     B = 
