@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc coordination of full-sync replication
+%% @doc Acting as a sink (receiver) for real-time replication
 
 -module(riak_kv_replrtq_snk).
 -ifdef(TEST).
@@ -44,9 +44,15 @@
             set_workercount/2,
             set_workercount/3,
             add_snkqueue/3,
-            add_snkqueue/4]).
+            add_snkqueue/4,
+            current_peers/1]).
 
--export([repl_fetcher/1]).
+-export([repl_fetcher/1, 
+            tokenise_peers/2,
+            get_worker_counts/0,
+            set_worker_counts/2,
+            remote_client_fun/3,
+            starting_delay/0]).
 
 -include_lib("kernel/include/logger.hrl").
 
@@ -79,7 +85,6 @@
                     queue_stats = ?ZERO_STATS :: queue_stats(),
                     suspended = false :: boolean()}).
 
-
 -record(state, {work = [] :: list(sink_work()),
                 iteration = 1 :: iteration(),
                     %% The iteration number increments with each operator
@@ -92,9 +97,12 @@
 -type queue_name() :: atom().
 -type peer_id() :: pos_integer().
 -type iteration() :: pos_integer().
+-type consume_outputs() ::
+    {ok, queue_empty}|{ok, {deleted, any(), binary()}}|{ok, binary()}.
+-type discovery_outputs() :: {ok, list({binary(), pos_integer()})}.
 -type remote_fun() ::
-    fun((queue_name()) ->
-        {ok, queue_empty}|{ok, {deleted, any(), binary()}}|{ok, binary()}).
+    fun(({consume, queue_name()}|peer_discovery|close) ->
+        consume_outputs()|discovery_outputs()|ok|{error, no_client}).
 -type renew_fun() :: fun(() -> any()).
 
 
@@ -136,6 +144,8 @@
         {tomb, non_neg_integer(), non_neg_integer(), non_neg_integer()} |
         {object, non_neg_integer(), non_neg_integer(), non_neg_integer()} |
         {error, any(), any()}.
+
+-export_type([peer_info/0, queue_name/0]).
 
 %%%============================================================================
 %%% API
@@ -206,6 +216,14 @@ add_snkqueue(QueueName, Peers, WorkerCount, PerPeerLimit)
                     {add, QueueName, Peers, WorkerCount, PerPeerLimit}).
 
 
+%% @doc
+%% Return the current list of peers being used by this snk host, and the
+%% settings currently being used for this host and he workers per peer. 
+%% Returns undefined if there are currently no peers defined.
+-spec current_peers(queue_name()) -> list(peer_info())|undefined.
+current_peers(QueueName) ->
+    gen_server:call(?MODULE, {current_peers, QueueName}).
+
 
 %% @doc
 %% Change the number of concurrent workers supporting a given queue.  Changing
@@ -232,20 +250,16 @@ set_workercount(QueueName, WorkerCount, PerPeerLimit)
 %%%============================================================================
 
 init([]) ->
-    SinkEnabled = app_helper:get_env(riak_kv, replrtq_enablesink, false),
+    SinkEnabled =
+        app_helper:get_env(riak_kv, replrtq_enablesink, false),
     case SinkEnabled of
         true ->
-            SinkPeers = app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
-            DefaultQueue = app_helper:get_env(riak_kv, replrtq_sinkqueue),
+            SinkPeers =
+                app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
+            DefaultQueue =
+                app_helper:get_env(riak_kv, replrtq_sinkqueue),
             SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
-            SnkWorkerCount =
-                app_helper:get_env(riak_kv,
-                                    replrtq_sinkworkers,
-                                    ?DEFAULT_WORKERCOUNT),
-            PerPeerLimit =
-                app_helper:get_env(riak_kv,
-                                        replrtq_sinkpeerlimit,
-                                        SnkWorkerCount),
+            {SnkWorkerCount, PerPeerLimit} = get_worker_counts(),
             Iteration = 1,
             MapPeerInfoFun =
                 fun({SnkQueueName, SnkPeerInfo}) ->
@@ -317,6 +331,7 @@ handle_call({add, QueueN, Peers, WorkerCount, PerPeerLimit}, _From, State) ->
                     max_worker_count = WorkerCount},
     W0 =
         lists:keystore(QueueN, 1, State#state.work, {QueueN, Iteration, SnkW}),
+    log_queue_addition(QueueN, Peers, WorkerCount, PerPeerLimit),
     prompt_work(),
     {reply, ok, State#state{work = W0, iteration = Iteration, enabled = true}};
 handle_call({worker_count, QueueN, WorkerCount, PerPeerLimit}, _From, State) ->
@@ -340,6 +355,13 @@ handle_call({worker_count, QueueN, WorkerCount, PerPeerLimit}, _From, State) ->
                                     {QueueN, Iteration, SinkWork0}),
             prompt_work(),
             {reply, ok, State#state{work = W0, iteration = Iteration}}
+    end;
+handle_call({current_peers, QueueN}, _From, State) ->
+    case lists:keyfind(QueueN, 1, State#state.work) of
+        false ->
+            {reply, undefined, State};
+        {QueueN, _I, SinkWork} ->
+            {reply, SinkWork#sink_work.peer_list, State}
     end.
 
 
@@ -411,12 +433,44 @@ handle_info({prompt_requeue, WorkItem}, State) ->
     requeue_work(WorkItem),
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    WorkItems = lists:map(fun(SW) -> element(3, SW) end, State#state.work),
+    CloseFun = 
+        fun(SinkWork) ->
+            lists:foreach(
+                fun({{_QN, _Iter, _Peer}, _LocalC, RemoteFun, _RCF}) ->
+                    RemoteFun(close)
+                end,
+                SinkWork#sink_work.work_queue)
+        end,
+    lists:foreach(CloseFun, WorkItems),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+
+%%%============================================================================
+%%% External functions
+%%%============================================================================
+
+get_worker_counts() ->
+    SnkWorkerCount =
+        app_helper:get_env(riak_kv,
+                            replrtq_sinkworkers,
+                            ?DEFAULT_WORKERCOUNT),
+    PerPeerLimit =
+        app_helper:get_env(riak_kv,
+                                replrtq_sinkpeerlimit,
+                                SnkWorkerCount),
+    {SnkWorkerCount, PerPeerLimit}.
+
+set_worker_counts(SnkWorkerCount, PerPeerLimit) ->
+    application:set_env(riak_kv, replrtq_sinkworkers, SnkWorkerCount),
+    application:set_env(riak_kv, replrtq_sinkpeerlimit, PerPeerLimit).
+
+starting_delay() ->
+    ?STARTING_DELAYMS.
 
 %%%============================================================================
 %%% Internal functions
@@ -436,7 +490,8 @@ calc_mean(Time, Count) ->
 %% Optionally the tokenised string may include a queue name, if more than the
 %% default queue name is to be used.  The queue name should be a prefix e.g.:
 %% "q1_ttaaefs:192.168.10.1:8097:pb|passive:192.168.10.2:8097:pb etc"
--spec tokenise_peers(queue_name(), string()) -> list({queue_name(), peer_info()}).
+-spec tokenise_peers(queue_name(), string())
+                        -> list({queue_name(), list(peer_info())}).
 tokenise_peers(DefaultQueue, PeersString) ->
     PeerL0 = string:tokens(PeersString, "|"),
     SplitHostPortFun =
@@ -496,62 +551,75 @@ determine_workitems(QueueName, Iteration, PeerInfo, WorkerCount, PerPeerLimit)
 map_peer_to_wi_fun({QueueName, Iteration, PeerInfo}) ->
     {PeerID, _Delay, Host, Port, Protocol} = PeerInfo,
     LocalClient = riak_client:new(node(), undefined),
-    GenClientFun = 
-        case Protocol of
-            http ->
-                InitClientFun = client_start(http, Host, Port, []),
-                fun() ->
-                    HTC = InitClientFun(),
-                    fun(Request) ->
-                        case Request of
-                            {consume, QN} ->
-                                rhc:fetch(HTC, QN);
-                            _ ->
-                                ok
-                        end
-                    end
-                end;
-            pb ->
-                CaCertificateFilename =
-                    app_helper:get_env(riak_kv, repl_cacert_filename),
-                CertificateFilename =
-                    app_helper:get_env(riak_kv, repl_cert_filename),
-                KeyFilename =
-                    app_helper:get_env(riak_kv, repl_key_filename),
-                SecuritySitename = 
-                    app_helper:get_env(riak_kv, repl_username),
-                Opts = 
-                    case CaCertificateFilename of
-                        undefined ->
-                            [{silence_terminate_crash, true}];
-                        CaCert ->
-                            [{silence_terminate_crash, true},
-                                {credentials, SecuritySitename, ""},
-                                {cacertfile, CaCert},
-                                {certfile, CertificateFilename},
-                                {keyfile, KeyFilename}]
-                    end,
-                InitClientFun = client_start(pb, Host, Port, Opts),
-                fun() ->
-                    PBC = InitClientFun(),
-                    fun(Request) ->
-                        case Request of
-                            {consume, QN} ->
-                                case check_pbc_client(PBC) of
-                                    true ->
-                                        QNB = atom_to_binary(QN, utf8),
-                                        riakc_pb_socket:fetch(PBC, QNB);
-                                    _ ->
-                                        {error, no_client}
-                                end;
-                            close ->
-                                close_pbc_client(PBC)
-                        end
-                    end
-                end
-        end,
+    GenClientFun = remote_client_fun(Protocol, Host, Port),
     {{QueueName, Iteration, PeerID},
         LocalClient, GenClientFun(), GenClientFun}.
+
+%% @doc
+%% Return a function which when called will enclose a remote_fun for sending
+%% requests with a reusable client (if required)
+-spec remote_client_fun(http|pb, string(), pos_integer()) -> 
+    fun(() -> remote_fun()).
+remote_client_fun(http, Host, Port) ->
+    InitClientFun = client_start(http, Host, Port, []),
+    fun() ->
+        HTC = InitClientFun(),
+        fun(Request) ->
+            case Request of
+                {consume, QN} ->
+                    rhc:fetch(HTC, QN);
+                peer_discovery ->
+                    rhc:peer_discovery(HTC);
+                _ ->
+                    ok
+            end
+        end
+    end;
+remote_client_fun(pb, Host, Port) ->
+    CaCertificateFilename =
+        app_helper:get_env(riak_kv, repl_cacert_filename),
+    CertificateFilename =
+        app_helper:get_env(riak_kv, repl_cert_filename),
+    KeyFilename =
+        app_helper:get_env(riak_kv, repl_key_filename),
+    SecuritySitename = 
+        app_helper:get_env(riak_kv, repl_username),
+    Opts = 
+        case CaCertificateFilename of
+            undefined ->
+                [{silence_terminate_crash, true}];
+            CaCert ->
+                [{silence_terminate_crash, true},
+                    {credentials, SecuritySitename, ""},
+                    {cacertfile, CaCert},
+                    {certfile, CertificateFilename},
+                    {keyfile, KeyFilename}]
+        end,
+    InitClientFun = client_start(pb, Host, Port, Opts),
+    fun() ->
+        PBC = InitClientFun(),
+        fun(Request) ->
+            case Request of
+                {consume, QN} ->
+                    case check_pbc_client(PBC) of
+                        true ->
+                            QNB = atom_to_binary(QN, utf8),
+                            riakc_pb_socket:fetch(PBC, QNB);
+                        _ ->
+                            {error, no_client}
+                    end;
+                peer_discovery ->
+                    case check_pbc_client(PBC) of
+                        true ->
+                            riakc_pb_socket:peer_discovery(PBC);
+                        _ ->
+                            {error, no_client}
+                    end;
+                close ->
+                    close_pbc_client(PBC)
+            end
+        end
+    end.
 
 -spec client_start(pb|http, string(), pos_integer(), list()) 
                     -> fun(() -> rhc:rhc()|pid()|no_pid).
@@ -805,6 +873,15 @@ log_mapfun({QueueName, Iteration, SinkWork}) ->
     ?LOG_INFO("Queue=~w has peer delays of~s", [QueueName, PeerDelays]),
     {QueueName, Iteration, SinkWork#sink_work{queue_stats = ?ZERO_STATS}}.
 
+-spec log_queue_addition(
+    queue_name(), list(peer_info()), pos_integer(), pos_integer()) -> ok.
+log_queue_addition(_QN, [], _WC, _PPL) ->
+    ok;
+log_queue_addition(QueueN, [Peer|OtherPeers], WorkerCount, PerPeerLimit) ->
+    ?LOG_INFO(
+        "Queue=~w added peer ~p with worker_count=~w per_peer_limit=~w",
+        [QueueN, Peer, WorkerCount, PerPeerLimit]),
+    log_queue_addition(QueueN, OtherPeers, WorkerCount, PerPeerLimit).
 
 %%%============================================================================
 %%% Test

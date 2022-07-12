@@ -39,6 +39,7 @@
 -type repair_reason() :: notfound | outofdate.
 -type final_action() :: nop |
                         {read_repair, [{non_neg_integer() | repair_reason()}], riak_object:riak_object()} |
+                        {delete_repair, [{non_neg_integer() | repair_reason()}], riak_object:riak_object()} |
                         delete.
 -type idxresult() :: {non_neg_integer(), result()}.
 -type idx_type() :: [{non_neg_integer, 'primary' | 'fallback'}].
@@ -366,28 +367,18 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
                         riak_object:strict_descendant(MObj, RObj)] ++
                     [{Idx, notfound} || {Idx, {error, notfound}} <- Results]
         end,
+    AllResults = length([xx || {_Idx, {ok, _RObj}} <- Results]) == N,
     Action =
         case ReadRepairs of
-           [] when ObjState == tombstone ->
-               %% Allow delete if merge object is deleted,
-               %% there are no read repairs pending and
-               %% a value was received from all vnodes
-               case riak_kv_util:is_x_deleted(MObj) andalso
-                   length([xx || {_Idx, {ok, _RObj}} <- Results]) == N of
-                   true ->
-                       delete;
-                   _ ->
-                       % maybe_log_old_vclock(Results),
-                       nop
-               end;
-           [] when ObjState == notfound ->
+            [] when ObjState == tombstone, AllResults ->
+                delete;
+            [] ->
                nop;
-           [] ->
-               % maybe_log_old_vclock(Results),
-               nop;
-           _ ->
-               {read_repair, ReadRepairs, MObj}
-       end,
+            _ when ObjState == tombstone, AllResults ->
+                {delete_repair, ReadRepairs, MObj};
+            _ ->
+                {read_repair, ReadRepairs, MObj}
+        end,
     {Action, GetCore#getcore{merged = Merged}}.
 
 

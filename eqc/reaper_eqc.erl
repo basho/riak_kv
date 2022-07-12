@@ -18,8 +18,10 @@ start_args(_S) ->
   [].
 
 start() ->
-  {ok, Pid} = gen_server:start_link(riak_kv_reaper, [eqc_job, fun reaper/1], []),
-  Pid.
+    FilePath = riak_kv_test_util:get_test_dir("reaper_eqc"),
+    {ok, Pid} = riak_kv_reaper:start_link(FilePath),
+    ok = gen_server:call(Pid, {override_action, fun reaper/2}),
+    Pid.
 
 start_next(S, Pid, []) ->
   S#{ pid => Pid }.
@@ -78,7 +80,7 @@ stop_job(Pid) ->
   end.
 
 
-reaper(Ref) ->
+reaper(Ref, _) ->
   case ets:lookup(?MODULE, Ref) of
     [{_, 1}] ->
       ets:delete(?MODULE, Ref), true;
