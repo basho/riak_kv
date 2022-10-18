@@ -62,7 +62,7 @@ next_state(#state{vnodes=VNodes0, mod_state=Expected, mod=Mod}=S,V,
     VNodes = lists:keyreplace(ID, 1, VNodes0, {ID, V}),
     S#state{vnodes=VNodes, mod_state=Mod:update_expected(ID, Op, Expected)};
 next_state(#state{vnodes=VNodes0, mod_state=Expected0, mod=Mod}=S,V,
-           {call,?MODULE, merge, [_Mod, {IDS, _C}=_Source, {ID, _C}=_Dest]}) ->
+           {call,?MODULE, merge, [_Mod, {IDS, C}=_Source, {ID, C}=_Dest]}) ->
     VNodes = lists:keyreplace(ID, 1, VNodes0, {ID, V}),
     Expected = Mod:update_expected(ID, {merge, IDS}, Expected0),
     S#state{vnodes=VNodes, mod_state=Expected};

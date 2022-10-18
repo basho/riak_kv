@@ -1263,7 +1263,7 @@ immutable_consistent(undefined, _N, undefined, _Bad) ->
 immutable_consistent(true, _N, undefined, _Bad) ->
     %% consistent still set to true and n_val not modified
     true;
-immutable_consistent(Consistent, _N, _N, _Bad) when Consistent =:= undefined orelse
+immutable_consistent(Consistent, N, N, _Bad) when Consistent =:= undefined orelse
                                                     Consistent =:= true ->
     %% consistent not modified or still set to true and n_val
     %% modified but set to same value
@@ -1306,10 +1306,10 @@ undefined_props(Names, Props, Errors) ->
 immutable_dt(_NewDT=undefined, _NewAllowMult=undefined, _ExistingDT, _Bad) ->
     %% datatype and allow_mult are not being modified, so its valid
     true;
-immutable_dt(_Datatype, undefined, _Datatype, _Bad) ->
+immutable_dt(Datatype, undefined, Datatype, _Bad) ->
     %% data types from new and existing match and allow mult not modified, valid
     true;
-immutable_dt(_Datatype, true, _Datatype, _Bad) ->
+immutable_dt(Datatype, true, Datatype, _Bad) ->
     %% data type from new and existing match and allow mult still set to true,
     %% valid
     true;
@@ -1325,7 +1325,7 @@ immutable_dt(_Datatype, true, _Datatype2, Bad) ->
 immutable_dt(_Datatype, false, undefined, Bad) ->
     %% datatype defined when it wasn't before
     has_datatype(Bad);
-immutable_dt(_Datatype, false, _Datatype, Bad) ->
+immutable_dt(Datatype, false, Datatype, Bad) ->
     %% attempt to set allow_mult to false when data type set is invalid, datatype not modified
     has_allow_mult(Bad);
 immutable_dt(undefined, false, _Datatype, Bad) ->
@@ -1337,7 +1337,7 @@ immutable_dt(_Datatype, false, _Datatype2, Bad) ->
 immutable_dt(undefined, _, _Datatype, Bad) ->
     %% datatype not modified but allow_mult is invalid
     has_allow_mult(Bad);
-immutable_dt(_Datatype, _, _Datatype, Bad) ->
+immutable_dt(Datatype, _, Datatype, Bad) ->
     %% allow mult is invalid but data types still match
     has_allow_mult(Bad);
 immutable_dt(_, _, _, Bad) ->
