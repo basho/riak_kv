@@ -348,6 +348,8 @@ find_bestobject(FetchedItems) ->
 
 -spec is_head({ok, riak_object()}|riak_object()) -> boolean().
 %% @private Check if an object is simply a head response
+is_head({ok, #r_object{contents=[]}}) ->
+    false;
 is_head({ok, #r_object{contents=Contents}}) ->
     C0 = lists:nth(1, Contents),
     case C0#r_content.value of
