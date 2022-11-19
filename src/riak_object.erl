@@ -1676,6 +1676,17 @@ delete_hash(ObjOrClock) ->
 
 -ifdef(TEST).
 
+%% See https://github.com/basho/riak_kv/issues/1707
+object_with_empty_contents_test() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+
+    Contents = [],
+    O = #r_object{bucket=B,key=K,
+                  contents=Contents,vclock=vclock:fresh()},
+
+    ?assertEqual(false, is_head(O)).
+
 object_test() ->
     B = <<"buckets_are_binaries">>,
     K = <<"keys are binaries">>,
