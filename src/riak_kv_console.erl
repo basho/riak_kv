@@ -233,13 +233,16 @@ reip([OldNode, NewNode]) ->
             error
     end.
 
-reip_manual([OldNode, NewNode, RingDir, ClusterName]) ->
+reip_manual([OldNode, NewNode, Dir, ClusterName]) ->
     try
         %% reip/1 requires riak_core to be loaded to learn the Ring Directory
         %% and the Cluster Name.  In reip_manual/1 these can be passed in 
         %% instead
+        RingDir = atom_to_list(Dir),
+        Cluster = atom_to_list(ClusterName),
         {ok, RingFile} =
-            riak_core_ring_manager:find_latest_ringfile(RingDir, ClusterName),
+            riak_core_ring_manager:find_latest_ringfile(RingDir, Cluster),
+        io:format("RingFile to update ~p~n", [RingFile]),
         BackupFN =
             filename:join([RingDir, filename:basename(RingFile)++".BAK"]),
         {ok, _} = file:copy(RingFile, BackupFN),
@@ -248,10 +251,9 @@ reip_manual([OldNode, NewNode, RingDir, ClusterName]) ->
         NewRing = riak_core_ring:rename_node(Ring, OldNode, NewNode),
         NewRingFN =
             riak_core_ring_manager:generate_ring_filename(
-                RingDir, ClusterName),
+                RingDir, Cluster),
         ok = riak_core_ring_manager:do_write_ringfile(NewRing, NewRingFN),
-        io:format("New ring file written to ~p~n",
-            [element(2, riak_core_ring_manager:find_latest_ringfile(RingDir))])
+        io:format("New ring file written to ~p~n", [NewRingFN])
     catch
         Exception:Reason ->
             io:format("Reip failed ~p:~p", [Exception, Reason]),
