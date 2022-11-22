@@ -31,7 +31,7 @@
          status/1,
          vnode_status/1,
          reip/1,
-         reip/3,
+         reip_manual/3,
          ringready/1,
          cluster_info/1,
          down/1,
@@ -233,7 +233,7 @@ reip([OldNode, NewNode]) ->
             error
     end.
 
-reip([OldNode, NewNode], RingDir, ClusterName) ->
+reip_manual([OldNode, NewNode], RingDir, ClusterName) ->
     try
         %% reip/1 requires riak_core to be loaded to learn the Ring Directory
         %% and the Cluster Name.  In reip/3 these can be passed in instead
