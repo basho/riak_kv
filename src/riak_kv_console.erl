@@ -236,8 +236,10 @@ reip([OldNode, NewNode]) ->
 reip_manual([OldNode, NewNode, RingDir, ClusterName]) ->
     try
         %% reip/1 requires riak_core to be loaded to learn the Ring Directory
-        %% and the Cluster Name.  In reip/3 these can be passed in instead
-        {ok, RingFile} = riak_core_ring_manager:find_latest_ringfile(RingDir),
+        %% and the Cluster Name.  In reip_manual/1 these can be passed in 
+        %% instead
+        {ok, RingFile} =
+            riak_core_ring_manager:find_latest_ringfile(RingDir, ClusterName),
         BackupFN =
             filename:join([RingDir, filename:basename(RingFile)++".BAK"]),
         {ok, _} = file:copy(RingFile, BackupFN),
