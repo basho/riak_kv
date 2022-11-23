@@ -335,23 +335,6 @@ init([FilePath]) ->
 
     {OL, QL} = get_limits(),
 
-    MapToQOverflow =
-        fun({QueueName, _QF, _QA}) ->
-            {QueueName, empty_overflow_queue(QueueName, FilePath)}
-        end,
-    MaptoQCache =
-        fun({QueueName, _QF, _QA}) ->
-            {QueueName, empty_local_queue()}
-        end,
-    QO = lists:map(MapToQOverflow, QFM),
-    QC = lists:map(MaptoQCache, QFM),
-    LogFreq =
-        app_helper:get_env(
-            riak_kv,
-            replrtq_logfrequency,
-            ?LOG_TIMER_SECONDS * 1000),
-    erlang:send_after(LogFreq, self(), log_queue),
-
     {ok, #state{queue_filtermap = QFM,
                 queue_overflow = QO,
                 queue_local = QC,
