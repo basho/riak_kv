@@ -143,7 +143,7 @@
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
-    
+
 %% @doc
 %% Override shcedule and process an individual work_item.  If called from
 %% riak_client an integer ReqID is passed to allow for a response to be
@@ -160,7 +160,7 @@ process_workitem(WorkItem, ReqID, From, Now) ->
     gen_server:cast(?MODULE, {WorkItem, ReqID, From, Now}).
 
 %% @doc
-%% Pause the management of full-sync from this node 
+%% Pause the management of full-sync from this node
 -spec pause() -> ok|{error, already_paused}.
 pause() ->
     gen_server:call(?MODULE, pause).
@@ -217,12 +217,12 @@ init([]) ->
     RangeCheck = app_helper:get_env(riak_kv, ttaaefs_rangecheck),
     AutoCheck = app_helper:get_env(riak_kv, ttaaefs_autocheck),
 
-    {SliceCount, Schedule} = 
+    {SliceCount, Schedule} =
         case Scope of
             disabled ->
                 {24,
                     [{no_check, 24},
-                        {all_check, 0}, 
+                        {all_check, 0},
                         {day_check, 0},
                         {hour_check, 0},
                         {range_check, 0},
@@ -238,11 +238,11 @@ init([]) ->
                         {range_check, RangeCheck},
                         {auto_check, AutoCheck}]}
         end,
-    
+
     CheckWindow =
         app_helper:get_env(riak_kv, ttaaefs_allcheck_window),
 
-    State1 = 
+    State1 =
         case Scope of
             all ->
                 LocalNVal = app_helper:get_env(riak_kv, ttaaefs_localnval),
@@ -257,7 +257,7 @@ init([]) ->
                 B = app_helper:get_env(riak_kv, ttaaefs_bucketfilter_name),
                 T = app_helper:get_env(riak_kv, ttaaefs_bucketfilter_type),
                 B0 =
-                    case is_binary(B) of 
+                    case is_binary(B) of
                         true ->
                             B;
                         false ->
@@ -283,8 +283,8 @@ init([]) ->
                         slice_count = SliceCount,
                         slot_info_fun = fun get_slotinfo/0}
         end,
-    
-    
+
+
     % Fetch connectivity information for remote cluster
     PeerIP = app_helper:get_env(riak_kv, ttaaefs_peerip),
     PeerPort = app_helper:get_env(riak_kv, ttaaefs_peerport),
@@ -295,9 +295,9 @@ init([]) ->
         app_helper:get_env(riak_kv, repl_cert_filename),
     KeyFilename =
         app_helper:get_env(riak_kv, repl_key_filename),
-    SecuritySitename = 
+    SecuritySitename =
         app_helper:get_env(riak_kv, repl_username),
-    SSLEnabled = 
+    SSLEnabled =
         (CaCertificateFilename =/= undefined) and
         (CertificateFilename =/= undefined) and
         (KeyFilename =/= undefined) and
@@ -312,13 +312,13 @@ init([]) ->
             false ->
                 undefined
         end,
-    
+
     % Queue name to be used for AAE exchanges on this cluster
     SrcQueueName = app_helper:get_env(riak_kv, ttaaefs_queuename),
     PeerQueueName =
         application:get_env(riak_kv, ttaaefs_queuename_peer, disabled),
 
-    State2 = 
+    State2 =
         State1#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = PeerProtocol,
@@ -326,7 +326,7 @@ init([]) ->
                         queue_name = SrcQueueName,
                         peer_queue_name = PeerQueueName,
                         check_window = CheckWindow},
-    
+
     ?LOG_INFO("Initiated Tictac AAE Full-Sync Mgr with scope=~w", [Scope]),
     {ok, State2, ?INITIAL_TIMEOUT}.
 
@@ -334,7 +334,7 @@ handle_call(pause, _From, State) ->
     case State#state.is_paused of
         true ->
             {reply, {error, already_paused}, State};
-        false -> 
+        false ->
             PausedSchedule =
                 [{no_check, State#state.slice_count},
                     {all_check, 0},
@@ -369,7 +369,7 @@ handle_call(resume, _From, State) ->
             {reply, {error, not_paused}, State, ?INITIAL_TIMEOUT}
     end;
 handle_call({set_sink, Protocol, PeerIP, PeerPort}, _From, State) ->
-    State0 = 
+    State0 =
         State#state{peer_ip = PeerIP,
                         peer_port = PeerPort,
                         peer_protocol = Protocol},
@@ -398,7 +398,7 @@ handle_call({set_bucketsync, BucketList}, _From, State) ->
 handle_cast({reply_complete, ReqID, Result}, State) ->
     LastExchangeStart = State#state.last_exchange_start,
     Duration = timer:now_diff(os:timestamp(), LastExchangeStart),
-    {Pause, State0} = 
+    {Pause, State0} =
         case Result of
             {waiting_all_results, _Deltas} ->
                 % If the exchange ends with waiting all results, then consider
@@ -414,7 +414,7 @@ handle_cast({reply_complete, ReqID, Result}, State) ->
                                 SyncState == branch_compare ->
                 riak_kv_stat:update({ttaaefs, sync_sync, Duration}),
                 ?LOG_INFO(
-                    "exchange=~w complete result=~w in duration=~w s" ++
+                    "exchange=~w complete result=~w in duration=~w s"
                     " sync_state=true",
                     [ReqID, Result, Duration div 1000000]),
                 disable_tree_repairs(),
@@ -447,7 +447,7 @@ handle_cast({all_check, ReqID, From, _Now}, State) ->
                     none, undefined, full};
             bucket ->
                 [H|T] = State#state.bucket_list,
-                {range, range, 
+                {range, range,
                     {filter, H, all, large, all, all, pre_hash},
                     T ++ [H],
                     partial}
@@ -472,7 +472,7 @@ handle_cast({day_check, ReqID, From, Now}, State) ->
                                 State#state.local_nval,
                                 State#state.remote_nval,
                                 Filter,
-                                undefined, 
+                                undefined,
                                 full,
                                 State,
                                 day_check),
@@ -508,14 +508,14 @@ handle_cast({hour_check, ReqID, From, Now}, State) ->
                                 State#state.local_nval,
                                 State#state.remote_nval,
                                 Filter,
-                                undefined, 
+                                undefined,
                                 full,
                                 State,
                                 hour_check),
             {noreply, State0, Timeout};
         bucket ->
             [H|T] = State#state.bucket_list,
-            
+
             % Note that the tree size is amended as well as the time range.
             % The bigger the time range, the bigger the tree.  Bigger trees
             % are less efficient when there is little change, but can more
@@ -577,7 +577,7 @@ handle_cast({range_check, ReqID, From, _Now}, State) ->
                                         State#state.local_nval,
                                         State#state.remote_nval,
                                         Filter,
-                                        undefined, 
+                                        undefined,
                                         full,
                                         State,
                                         range_check),
@@ -651,7 +651,7 @@ handle_info(timeout, State) ->
                     [OldInfo, SlotInfo]),
                 {[], undefined}
         end,
-    {WorkItem, Wait, RemainingSlices, ScheduleStartTime} = 
+    {WorkItem, Wait, RemainingSlices, ScheduleStartTime} =
         take_next_workitem(Allocations,
                             State#state.schedule,
                             StartTime,
@@ -696,7 +696,7 @@ code_change(_OldVsn, State, _Extra) ->
 set_range(Bucket, KeyRange, LowDate, HighDate) ->
     EpochTime =
         calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
-    LowTS = 
+    LowTS =
         calendar:datetime_to_gregorian_seconds(LowDate) - EpochTime,
     HighTS =
         calendar:datetime_to_gregorian_seconds(HighDate) - EpochTime,
@@ -710,7 +710,7 @@ clear_range() ->
     application:set_env(riak_kv, ttaaefs_check_range, none).
 
 -spec get_range() ->
-        none|{riak_object:bucket()|all, 
+        none|{riak_object:bucket()|all,
                 {riak_object:key(), riak_object:key()}|all,
                 pos_integer(), pos_integer()}.
 get_range() ->
@@ -781,7 +781,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
             StopFun = fun() -> stop_client(RemoteClient, RemoteMod) end,
             RemoteSendFun = generate_sendfun({RemoteClient, RemoteMod}, RNVal),
             LocalSendFun = generate_sendfun(local, LNVal),
-            ReqID0 = 
+            ReqID0 =
                 case ReqID of
                     no_reply ->
                         erlang:phash2({self(), os:timestamp()});
@@ -790,7 +790,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                 end,
             ReplyFun =
                 generate_replyfun(ReqID == no_reply, ReqID0, From, StopFun),
-            
+
             MaxResults =
                 case WorkType of
                     range_check ->
@@ -806,7 +806,7 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                             ttaaefs_maxresults,
                                             ?MAX_RESULTS)
                 end,
-            
+
             LocalRepairFun =
                 fun(RepairList) ->
                     riak_kv_replrtq_src:replrtq_ttaaefs(
@@ -859,17 +859,17 @@ sync_clusters(From, ReqID, LNVal, RNVal, Filter, NextBucketList,
                                     [{RemoteSendFun, all}],
                                     RepairFun,
                                     ReplyFun,
-                                    Filter, 
+                                    Filter,
                                     [{transition_pause_ms, ExchangePause},
                                         {max_results, MaxResults},
                                         {scan_timeout, ?CRASH_TIMEOUT div 2},
                                         {purpose, WorkType}]),
-            
-            ?LOG_INFO("Starting ~w full-sync work_item=~w " ++ 
+
+            ?LOG_INFO("Starting ~w full-sync work_item=~w " ++
                                 "reqid=~w exchange id=~s pid=~w",
                             [Ref, WorkType, ReqID0, ExID, ExPid]),
             riak_kv_stat:update({ttaaefs, WorkType}),
-            
+
             {State#state{bucket_list = NextBucketList,
                             last_exchange_start = os:timestamp()},
                 ?CRASH_TIMEOUT}
@@ -902,7 +902,7 @@ get_slotinfo() ->
                 lists:sort([node()|UpNodes])
         end,
     NotMe = lists:takewhile(fun(N) -> N /= node() end, UpNodes0),
-    ClusterSlice = 
+    ClusterSlice =
         max(min(app_helper:get_env(riak_kv, ttaaefs_cluster_slice, 1), 4), 1),
     {length(NotMe) + 1, length(UpNodes0), ClusterSlice}.
 
@@ -910,17 +910,17 @@ get_slotinfo() ->
 %% Return a function which will send aae_exchange messages to a remote
 %% cluster, and return the response.  The function should make an async call
 %% to try and make the remote and local cluster sends happen as close to
-%% parallel as possible. 
+%% parallel as possible.
 -spec generate_sendfun({rhc:rhc(), rhc}|{pid(), riakc_pb_socket}|local,
                         nval()) -> aae_exchange:send_fun().
 generate_sendfun(SendClient, NVal) ->
     fun(Msg, all, Colour) ->
         AAE_Exchange = self(),
-        ReturnFun = 
-            fun(R) -> 
+        ReturnFun =
+            fun(R) ->
                 aae_exchange:reply(AAE_Exchange, R, Colour)
             end,
-        SendFun = 
+        SendFun =
             case SendClient of
                 local ->
                     C = riak_client:new(node(), undefined),
@@ -952,7 +952,7 @@ init_client(pb, IP, Port, undefined) ->
     Options = [{auto_reconnect, true}],
     init_pbclient(IP, Port, Options);
 init_client(pb, IP, Port, Credentials) ->
-    SecurityOpts = 
+    SecurityOpts =
         [{cacertfile, element(1, Credentials)},
             {certfile, element(2, Credentials)},
             {keyfile, element(3, Credentials)},
@@ -977,7 +977,7 @@ init_pbclient(IP, Port, Options) ->
             ?LOG_INFO("Cannot reach remote cluster ~p ~p as ~p",
                             [IP, Port, Reason]),
             {no_client, riakc_pb_socket}
-    catch 
+    catch
         _Exception:Reason ->
             ?LOG_WARNING("Cannot reach remote cluster ~p ~p exception ~p",
                             [IP, Port, Reason]),
@@ -995,7 +995,7 @@ local_sender({fetch_clocks, SegmentIDs}, C, ReturnFun, NVal) ->
 local_sender({fetch_clocks, SegmentIDs, MR}, C, ReturnFun, NVal) ->
     %% riak_client expects modified range of form
     %% {date, non_neg_integer(), non_neg_integer()}
-    %% where as the riak erlang clients just expect 
+    %% where as the riak erlang clients just expect
     %% {non_neg_integer(), non_neg_integer()}
     %% They keyword all must also be supported
     LMR = localise_modrange(MR),
@@ -1010,12 +1010,12 @@ local_sender({fetch_clocks_range, B0, KR, SF, MR}, C, ReturnFun, _NVal) ->
 
 -spec run_localfold(riak_kv_clusteraae_fsm:query_definition(),
                         riak_client:riak_client(),
-                        fun((any()) -> ok)) -> 
+                        fun((any()) -> ok)) ->
                             fun(() -> ok).
 run_localfold(Query, Client, ReturnFun) ->
     fun() ->
         case riak_client:aae_fold(Query, Client) of
-            {ok, R} -> 
+            {ok, R} ->
                 ReturnFun(R);
             {error, Error} ->
                 ReturnFun({error, Error})
@@ -1126,7 +1126,7 @@ generate_replyfun(Clientless, ReqID, From, StopClientFun) ->
                 % Reply to riak_client
                 From ! {ReqID, Result}
         end,
-        gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),    
+        gen_server:cast(?MODULE, {reply_complete, ReqID, Result}),
         StopClientFun()
     end.
 
@@ -1172,11 +1172,11 @@ generate_repairfun(LocalRepairFun, RemoteRepairFun, MaxResults, LogInfo) ->
         {SrcRepair, SnkRepair} = lists:foldl(FoldFun, {[], []}, RepairList),
         ?LOG_INFO(
             "AAE reqid=~w work_item=~w scope=~w shows sink ahead " ++
-                "for key_count=~w keys limited by max_results=~w", 
+                "for key_count=~w keys limited by max_results=~w",
             [ExchangeID, WorkItem, WorkScope, length(SnkRepair), MaxResults]),
         ?LOG_INFO(
             "AAE reqid=~w work_item=~w scope=~w shows source ahead " ++
-                "for key_count=~w keys limited by max_results=~w", 
+                "for key_count=~w keys limited by max_results=~w",
             [ExchangeID, WorkItem, WorkScope, length(SrcRepair), MaxResults]),
         riak_kv_stat:update({ttaaefs, snk_ahead, length(SnkRepair)}),
         riak_kv_stat:update({ttaaefs, src_ahead, length(SrcRepair)}),
@@ -1192,9 +1192,9 @@ generate_repairfun(LocalRepairFun, RemoteRepairFun, MaxResults, LogInfo) ->
 
 
 %% @doc Examine the number of repairs, and the repair summary and determine
-%% what to do next e.g. set a range for the next range_check 
+%% what to do next e.g. set a range for the next range_check
 -spec determine_next_action(
-    non_neg_integer(), 
+    non_neg_integer(),
     pos_integer(),
     work_scope(), work_item(),
     list(repair_summary())) -> ok.
@@ -1267,7 +1267,7 @@ decode_clock(EncodedClock) ->
 -spec summarise_repairs(integer(),
                         list(repair_reference()),
                         work_scope(),
-                        work_item()) -> 
+                        work_item()) ->
                             list(repair_summary()).
 summarise_repairs(ExchangeID, RepairList, WorkScope, WorkItem) ->
     FoldFun =
@@ -1285,7 +1285,7 @@ summarise_repairs(ExchangeID, RepairList, WorkScope, WorkItem) ->
     LogFun =
         fun({B, C, MinDT, MaxDT}) ->
             ?LOG_INFO(
-                "AAE exchange=~w work_item=~w type=~w repaired " ++ 
+                "AAE exchange=~w work_item=~w type=~w repaired " ++
                     "key_count=~w for bucket=~p with low date ~p high date ~p",
                 [ExchangeID, WorkScope, WorkItem, C, B, MinDT, MaxDT])
         end,
@@ -1296,7 +1296,7 @@ summarise_repairs(ExchangeID, RepairList, WorkScope, WorkItem) ->
 %% Take the next work item from the list of allocations, assuming that the
 %% starting time for that work item has not alreasy passed.  If there are no
 %% more items queue, start a new queue based on the wants for the schedule.
--spec take_next_workitem(list(allocation()), 
+-spec take_next_workitem(list(allocation()),
                             schedule_wants(),
                             erlang:timestamp()|undefined,
                             node_info(),
@@ -1307,7 +1307,7 @@ take_next_workitem([], Wants, ScheduleStartTime, SlotInfo, SliceCount) ->
     NewAllocations = choose_schedule(Wants),
     % Should be 24 hours after ScheduleStartTime - so add 24 hours to
     % ScheduleStartTime
-    RevisedStartTime = 
+    RevisedStartTime =
         case ScheduleStartTime of
             undefined ->
                 beginning_of_next_period(os:timestamp(), SliceCount);
@@ -1375,7 +1375,7 @@ beginning_of_next_period({Mega, Sec, _Micro}, SlotCount) ->
     SlotsPassed = (NowGS - TopOfDayGS) div SlotSize,
     NextPeriodGS = TopOfDayGS + SlotSize * (SlotsPassed + 1),
     EpochSeconds = Mega * ?MEGA + Sec + NextPeriodGS - NowGS,
-    {EpochSeconds div ?MEGA, EpochSeconds rem ?MEGA, 0}.    
+    {EpochSeconds div ?MEGA, EpochSeconds rem ?MEGA, 0}.
 
 
 %% @doc
@@ -1506,8 +1506,8 @@ choose_schedule_test() ->
     AllSyncAll = choose_schedule(AllSyncAllSchedule),
     ExpAllSyncAll = lists:map(fun(I) -> {I, all_check} end, lists:seq(1, 100)),
     ?assertMatch(AllSyncAll, ExpAllSyncAll),
-    
-    MixedSyncSchedule = 
+
+    MixedSyncSchedule =
         [{no_check, 6},
             {all_check, 1},
             {auto_check, 3},
@@ -1521,14 +1521,14 @@ choose_schedule_test() ->
     HourWorkload =
         lists:map(SliceForHourFun, lists:filter(IsSyncFun, MixedSync)),
     ?assertMatch(84, length(lists:usort(HourWorkload))),
-    FoldFun = 
+    FoldFun =
         fun(I, Acc) ->
             true = I > Acc,
             I
         end,
     BiggestI = lists:foldl(FoldFun, 0, HourWorkload),
     ?assertMatch(true, BiggestI >= 84),
-    
+
     CountFun =
         fun({_I, Type}, Acc) ->
             {Type, CD} = lists:keyfind(Type, 1, Acc),
@@ -1543,7 +1543,7 @@ take_first_workitem_test() ->
     SC = 48,
     Wants =
         [{no_check, SC},
-        {all_check, 0}, 
+        {all_check, 0},
         {auto_check, 0},
         {day_check, 0},
         {hour_check, 0},
@@ -1562,26 +1562,26 @@ take_first_workitem_test() ->
         beginning_of_next_period({Mega, Sec, Micro}, SC),
     % 24 hours on, the new scheudle start time should be the same it would be
     % if we started now
-    {no_check, PromptSeconds, SchedRem, ScheduleStartTime} = 
+    {no_check, PromptSeconds, SchedRem, ScheduleStartTime} =
         take_next_workitem([], Wants, OrigStartTime, {1, 8, 1}, SC),
     ?assertMatch(true, ScheduleStartTime > {Mega, Sec, Micro}),
     ?assertMatch(true, PromptSeconds > 0),
-    {no_check, PromptMoreSeconds, SchedRem, ScheduleStartTime} = 
+    {no_check, PromptMoreSeconds, SchedRem, ScheduleStartTime} =
         take_next_workitem([], Wants, OrigStartTime, {2, 8, 1}, SC),
     ?assertMatch(true, PromptMoreSeconds > PromptSeconds),
-    {no_check, PromptEvenMoreSeconds, SchedRem, ScheduleStartTime} = 
+    {no_check, PromptEvenMoreSeconds, SchedRem, ScheduleStartTime} =
         take_next_workitem([], Wants, OrigStartTime, {7, 8, 1}, SC),
     ?assertMatch(true, PromptEvenMoreSeconds > PromptMoreSeconds),
-    {no_check, PromptYetMoreSeconds, _T0, ScheduleStartTime} = 
+    {no_check, PromptYetMoreSeconds, _T0, ScheduleStartTime} =
         take_next_workitem(SchedRem, Wants, ScheduleStartTime, {1, 8, 1}, SC),
     ?assertMatch(true, PromptYetMoreSeconds > PromptEvenMoreSeconds),
-    {no_check, PromptS2YetMoreSeconds, _, ScheduleStartTime} = 
+    {no_check, PromptS2YetMoreSeconds, _, ScheduleStartTime} =
         take_next_workitem(SchedRem, Wants, ScheduleStartTime, {1, 8, 2}, SC),
-    {no_check, PromptS3YetMoreSeconds, _, ScheduleStartTime} = 
+    {no_check, PromptS3YetMoreSeconds, _, ScheduleStartTime} =
         take_next_workitem(SchedRem, Wants, ScheduleStartTime, {1, 8, 3}, SC),
-    {no_check, PromptS4YetMoreSeconds, _, ScheduleStartTime} = 
+    {no_check, PromptS4YetMoreSeconds, _, ScheduleStartTime} =
         take_next_workitem(SchedRem, Wants, ScheduleStartTime, {1, 8, 4}, SC),
-    {no_check, PromptN2YetMoreSeconds, _, ScheduleStartTime} = 
+    {no_check, PromptN2YetMoreSeconds, _, ScheduleStartTime} =
         take_next_workitem(SchedRem, Wants, ScheduleStartTime, {2, 8, 1}, SC),
     ?assertMatch(true, PromptS4YetMoreSeconds > PromptS3YetMoreSeconds),
     ?assertMatch(true, PromptS3YetMoreSeconds > PromptS2YetMoreSeconds),
@@ -1599,7 +1599,7 @@ window_test() ->
     ?assert(in_window(Now0, {0, 0})),
     ?assertNot(in_window(Now0, {1, 1})),
     ?assertNot(in_window(Now0, {23, 23})),
-    
+
     NowSecs1 =
         calendar:datetime_to_gregorian_seconds(
             {{2000, 1, 1}, {23, 59, 59}}),
