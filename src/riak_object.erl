@@ -348,6 +348,8 @@ find_bestobject(FetchedItems) ->
 
 -spec is_head({ok, riak_object()}|riak_object()) -> boolean().
 %% @private Check if an object is simply a head response
+is_head({ok, #r_object{contents=[]}}) ->
+    false;
 is_head({ok, #r_object{contents=Contents}}) ->
     C0 = lists:nth(1, Contents),
     case C0#r_content.value of
@@ -1675,6 +1677,17 @@ delete_hash(ObjOrClock) ->
 
 
 -ifdef(TEST).
+
+%% See https://github.com/basho/riak_kv/issues/1707
+object_with_empty_contents_test() ->
+    B = <<"buckets_are_binaries">>,
+    K = <<"keys are binaries">>,
+
+    Contents = [],
+    O = #r_object{bucket=B,key=K,
+                  contents=Contents,vclock=vclock:fresh()},
+
+    ?assertEqual(false, is_head(O)).
 
 object_test() ->
     B = <<"buckets_are_binaries">>,
