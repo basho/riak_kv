@@ -81,19 +81,19 @@ update_workers(WorkerCount, PerPeerLimit) ->
 
 init([]) ->
     case application:get_env(riak_kv, replrtq_peer_discovery, false) of
-        true -> 
+        true ->
             SinkPeers = application:get_env(riak_kv, replrtq_sinkpeers, ""),
             DefaultQueue = app_helper:get_env(riak_kv, replrtq_sinkqueue),
             SnkQueuePeerInfo =
                 riak_kv_replrtq_snk:tokenise_peers(DefaultQueue, SinkPeers),
 
-            MinDelay = 
+            MinDelay =
                 application:get_env(riak_kv,
                     replrtq_prompt_min_seconds,
                     ?AUTO_DISCOVERY_MINIMUM_SECONDS),
 
             lists:foreach(
-                fun({QueueName, _PeerInfo}) -> 
+                fun({QueueName, _PeerInfo}) ->
                     _ = schedule_discovery(QueueName, self(), MinDelay)
                 end,
                 SnkQueuePeerInfo),
@@ -105,9 +105,8 @@ init([]) ->
 handle_call({update_discovery, QueueName}, _From, State) ->
     case lists:keyfind(QueueName, 1, State#state.discovery_peers) of
         false ->
-            ?LOG_INFO(
-                "Type=~w discovery for unconfigured QueueName=~w",
-                [update, QueueName]),
+            ?LOG_INFO("Type=~w discovery for unconfigured QueueName=~w",
+                      [update, QueueName]),
             {reply, false, State};
         {QueueName, PeerInfo} ->
             R = do_discovery(QueueName, PeerInfo, update),
@@ -133,7 +132,7 @@ handle_cast({prompt_discovery, QueueName}, State) ->
 
 handle_info({scheduled_discovery, QueueName}, State) ->
     ok = prompt_discovery(QueueName),
-    MinDelay = 
+    MinDelay =
         application:get_env(
             riak_kv,
             replrtq_prompt_min_seconds,
@@ -158,7 +157,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%============================================================================
 
 %% @doc
-%% Prompt the riak_kv_replrtq_peer to discover peers for a given queue name 
+%% Prompt the riak_kv_replrtq_peer to discover peers for a given queue name
 -spec prompt_discovery(riak_kv_replrtq_snk:queue_name()) -> ok.
 prompt_discovery(QueueName) ->
     gen_server:cast(?MODULE, {prompt_discovery, QueueName}).
@@ -180,7 +179,7 @@ schedule_discovery(QueueName, DiscoveryPid, SecondsDelay) ->
 do_discovery(QueueName, PeerInfo, Type) ->
     {SnkWorkerCount, PerPeerLimit} = riak_kv_replrtq_snk:get_worker_counts(),
     StartDelayMS = riak_kv_replrtq_snk:starting_delay(),
-    CurrentPeers = 
+    CurrentPeers =
         case Type of
             count_change ->
                 %% Ignore current peers, to update worker counts, so all
@@ -235,7 +234,7 @@ discover_peers(PeerInfo, StartingDelayMS) ->
         end,
     lists:usort(lists:foldl(ConvertToPeerInfoFun, [], Peers)).
 
-    
+
 -spec discover_from_peer(
     riak_kv_replrtq_snk:peer_info(),
     list({binary(), pos_integer(), pb|http}))
@@ -244,7 +243,7 @@ discover_from_peer(PeerInfo, Acc) ->
     {_PeerID, _Delay, Host, Port, Protocol} = PeerInfo,
     RemoteGenFun = riak_kv_replrtq_snk:remote_client_fun(Protocol, Host, Port),
     RemoteFun = RemoteGenFun(),
-    UpdAcc = 
+    UpdAcc =
         try
             case RemoteFun(peer_discovery) of
                 {ok, IPPorts} ->
@@ -265,5 +264,3 @@ discover_from_peer(PeerInfo, Acc) ->
         end,
     RemoteFun(close),
     UpdAcc.
-    
-    

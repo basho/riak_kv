@@ -161,7 +161,7 @@
     % If a priority 3 item is pushed to the queue and the length of the
     % queue_cache is less than the object limit, and the overflowq is empty
     % for this priority, the item will be added to the queue_cache.
-    % 
+    %
     % If a priority 3 item is pushed to the queue and the length of the
     % queue_cache is at/over the object limit, or the overflowq is non-empty
     % then the item will be added to the overflowq, and if the object_ref is
@@ -171,7 +171,7 @@
     % added first to the overflowq .
     %
     % If a fetch request is received and the priority 3 queue_cache is
-    % non-empty then the next entry from this queue will be returned.  
+    % non-empty then the next entry from this queue will be returned.
     % If the overflow queue is empty, then an attempt will be made to
     % return a batch from the overflowq, to add to the queue_cache.
     %
@@ -310,9 +310,33 @@ stop() ->
 %%% gen_server callbacks
 %%%============================================================================
 
-init([FilePath]) ->
-    QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
+init([]) ->
+    QueueDefnString = application:get_env(riak_kv, replrtq_srcqueue, ""),
     QFM = tokenise_queuedefn(QueueDefnString),
+    MapToQM =
+        fun({QueueName, _QF, _QA}) ->
+            {QueueName, riak_core_priority_queue:new()}
+        end,
+    MaptoQC =
+        fun({QueueName, _QF, _QA}) ->
+            {QueueName, {0, 0, 0}}
+        end,
+    QM = lists:map(MapToQM, QFM),
+    QC = lists:map(MaptoQC, QFM),
+    QL = application:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
+    OL = application:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
+    LogFreq =
+        application:get_env(
+            riak_kv,
+            replrtq_logfrequency,
+            ?LOG_TIMER_SECONDS * 1000),
+    erlang:send_after(LogFreq, self(), log_queue),
+    {ok, #state{queue_filtermap = QFM,
+                queue_map = QM,
+                queue_countmap = QC,
+                queue_limit = QL,
+                object_limit = OL,
+                log_frequency_in_ms = LogFreq}}.
 
     {OL, QL} = get_limits(),
 
@@ -828,7 +852,7 @@ empty_local_queue() ->
     {{queue:new(), 0, 0}, {queue:new(), 0, 0}, {queue:new(), 0, 0}}.
 
 -spec empty_overflow_queue(queue_name(), string())
-        -> riak_kv_overflow_queue:overflowq(). 
+        -> riak_kv_overflow_queue:overflowq().
 empty_overflow_queue(QueueName, FilePath) ->
     {_OL, QL} = get_limits(),
     Priorities = [?FLD_PRIORITY, ?AAE_PRIORITY, ?RTQ_PRIORITY],
@@ -1079,7 +1103,7 @@ limit_aaefold_test() ->
 
     ok = replrtq_aaefold(?QN1, Grp4),
     ?assertMatch({?QN1, {100000, 0, 2000}}, length_rtq(?QN1)),
-    
+
     lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 4000)),
     ?assertMatch({?QN1, {98000, 0, 0}}, length_rtq(?QN1)),
 
@@ -1106,7 +1130,7 @@ limit_ttaaefs_test() ->
 
     ok = replrtq_ttaaefs(?QN1, Grp4),
     ?assertMatch({?QN1, {0, 100000, 2000}}, length_rtq(?QN1)),
-    
+
     lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 4000)),
     ?assertMatch({?QN1, {0, 98000, 0}}, length_rtq(?QN1)),
 
@@ -1118,7 +1142,7 @@ limit_ttaaefs_test() ->
 
     ok = replrtq_ttaaefs(?QN1, Grp4),
     ?assertMatch({?QN1, {0, 2000, 0}}, length_rtq(?QN1)),
-    
+
     lists:foreach(fun(_I) -> _ = popfrom_rtq(?QN1) end, lists:seq(1, 2000)),
     ?assertMatch({?QN1, {0, 0, 0}}, length_rtq(?QN1)),
 
