@@ -98,7 +98,7 @@ request_reap(Pid, ReapReference) ->
     list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
 reap_stats() -> reap_stats(?MODULE).
 
--spec reap_stats(pid()|module()) -> 
+-spec reap_stats(pid()|module()) ->
     list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
 reap_stats(Pid) ->
     riak_kv_queue_manager:stats(Pid).

@@ -52,7 +52,7 @@
 -type filename() :: file:filename()|none.
 -type queue_stats() :: list({pos_integer(), non_neg_integer()}).
 
--record(overflowq,  
+-record(overflowq,
     {
         mqueues
             :: list({priority(), queue:queue()}) | not_logged,
@@ -134,7 +134,7 @@ log(Type, JobID, Attempts, Aborts, Queue) ->
                 OverflowLengths,
                 DiscardCounts]),
         [Type, JobID, Attempts, Aborts]),
-    
+
     ResetDiscards =
         lists:map(fun({P, _L}) -> {P, 0} end,
                     Queue#overflowq.overflow_discards),
@@ -155,13 +155,13 @@ stats(Queue) ->
 addto_queue(Priority, Item, FlowQ) ->
     MQueueLimit = FlowQ#overflowq.mqueue_limit,
     MQueueLengths = FlowQ#overflowq.mqueue_lengths,
-    {Priority, CurrentQL} = 
+    {Priority, CurrentQL} =
         lists:keyfind(Priority, 1, MQueueLengths),
     OverflowFiles = FlowQ#overflowq.overflow_files,
     MQueues = FlowQ#overflowq.mqueues,
     {Priority, {OverflowFile, OverflowC}} =
         lists:keyfind(Priority, 1, OverflowFiles),
-    
+
     case {OverflowFile, CurrentQL} of
         {none, CurrentQL} when CurrentQL < MQueueLimit ->
             UpdQueueLengths =
@@ -272,7 +272,7 @@ close(FilePath, FlowQ) ->
 fetch_batch(Priority, MaxBatchSize, FlowQ) ->
     UpdFlowQ = maybereload_queue(Priority, MaxBatchSize, FlowQ),
     case lists:keyfind(Priority, 1, UpdFlowQ#overflowq.mqueue_lengths) of
-        {Priority, 0} -> 
+        {Priority, 0} ->
             {empty, UpdFlowQ};
         {Priority, MQueueL} ->
             BatchSize = min(MQueueL, MaxBatchSize),
@@ -315,7 +315,7 @@ maybereload_queue(Priority, BatchSize, FlowQ) ->
             %% There are enough items on the queue, don't reload
             FlowQ;
         {{Priority, _N}, {Priority, {none, start}}} ->
-            %% There are no overflow files to reload from 
+            %% There are no overflow files to reload from
             FlowQ;
         {{Priority, N}, {Priority, {File, Continuation}}} ->
             %% Attempt to refill the queue from the overflow file
@@ -364,7 +364,7 @@ maybereload_queue(Priority, BatchSize, FlowQ) ->
                         mqueues = UpdMQueues,
                         mqueue_lengths = UpdMQueueCounts,
                         overflow_lengths = UpdOverflowCounts,
-                        overflow_files = UpdOverflowFiles}     
+                        overflow_files = UpdOverflowFiles}
             end
     end.
 
@@ -439,16 +439,16 @@ basic_inmemory_test() ->
     ?assertMatch([1], B2),
     {mqueue_lengths, MQL2} = lists:keyfind(mqueue_lengths, 1, stats(FlowQ3)),
     ?assertMatch([{1, 99}, {2, 0}], MQL2),
-    
+
     {B3, FlowQ4} = fetch_batch(1, 99, FlowQ3),
     ExpB = lists:seq(2, 100),
     ?assertMatch(ExpB, B3),
 
     {empty, _FlowQ5} = fetch_batch(1, 1, FlowQ4),
-    
+
     ok = filelib:ensure_dir(RootPath),
     {ok, Files} = file:list_dir(RootPath),
-    
+
     ?assertMatch([], Files).
 
 basic_overflow_test() ->
@@ -473,12 +473,12 @@ basic_overflow_test() ->
     ok = filelib:ensure_dir(RootPath),
     {ok, Files1} = file:list_dir(RootPath),
     ?assertMatch(0, length(Files1)),
-    
+
     FlowQ_NEW = new([1, 2], RootPath, 1000, 5000),
     {mqueue_lengths, MQL2} =
         lists:keyfind(mqueue_lengths, 1, stats(FlowQ_NEW)),
     ?assertMatch([{1, 0}, {2, 0}], MQL2),
-    
+
     ok = filelib:ensure_dir(RootPath),
     {ok, Files2} = file:list_dir(RootPath),
     ?assertMatch(0, length(Files2)).
@@ -527,7 +527,7 @@ underover_overflow_test() ->
     Refs2 = lists:seq(7001, 8000),
     FlowQ8 =
         lists:foldl(fun(R, FQ) -> addto_queue(1, R, FQ) end, FlowQ7, Refs2),
-    
+
     {B7, FlowQ9} = fetch_batch(1, 1200, FlowQ8),
     ExpB7 = lists:seq(1801, 3000),
     ?assertMatch(ExpB7, B7),
@@ -569,7 +569,7 @@ underover_overflow_test() ->
     Refs3 = lists:seq(8001, 10000),
     FlowQ15 =
         lists:foldl(fun(R, FQ) -> addto_queue(1, R, FQ) end, FlowQ14, Refs3),
-    
+
     {mqueue_lengths, MQL2} =
         lists:keyfind(mqueue_lengths, 1, stats(FlowQ15)),
     ?assertMatch([{1, 1000}, {2, 0}], MQL2),

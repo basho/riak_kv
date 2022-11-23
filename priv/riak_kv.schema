@@ -108,8 +108,8 @@
 
 %% @doc Parallel key store type
 %% When running in parallel mode, which will be the default if the backend does
-%% not support native tictac aae (i.e. is not leveled), what type of parallel 
-%% key store should be kept - leveled_ko (leveled and key-ordered), or 
+%% not support native tictac aae (i.e. is not leveled), what type of parallel
+%% key store should be kept - leveled_ko (leveled and key-ordered), or
 %% leveled_so (leveled and segment ordered).
 %% When running in native mode, this setting is ignored
 {mapping, "tictacaae_parallelstore", "riak_kv.tictacaae_parallelstore", [
@@ -119,7 +119,7 @@
 ]}.
 
 %% @doc Minimum Rebuild Wait
-%% The minimum number of hours to wait between rebuilds.  Default value is 2 
+%% The minimum number of hours to wait between rebuilds.  Default value is 2
 %% weeks
 {mapping, "tictacaae_rebuildwait", "riak_kv.tictacaae_rebuildwait", [
   {datatype, integer},
@@ -128,8 +128,8 @@
 
 %% @doc Maximum Rebuild Delay
 %% The number of seconds which represents the length of the period in which the
-%% next rebuild will be scheduled.  So if all vnodes are scheduled to rebuild 
-%% at the same time, they will actually rebuild randomly between 0 an this 
+%% next rebuild will be scheduled.  So if all vnodes are scheduled to rebuild
+%% at the same time, they will actually rebuild randomly between 0 an this
 %% value (in seconds) after the rebuild time. Default value is 4 days
 {mapping, "tictacaae_rebuilddelay", "riak_kv.tictacaae_rebuilddelay", [
   {datatype, integer},
@@ -137,9 +137,9 @@
 ]}.
 
 %% @doc Store heads in parallel key stores
-%% If running a parallel key store, the whole "head" object may be stored to 
-%% allow for fold_heads queries to be run against the parallel store.  
-%% Alternatively, the cost of the parallel key store can be reduced by storing 
+%% If running a parallel key store, the whole "head" object may be stored to
+%% allow for fold_heads queries to be run against the parallel store.
+%% Alternatively, the cost of the parallel key store can be reduced by storing
 %% only a minimal data set necessary for AAE and monitoring
 {mapping, "tictacaae_storeheads", "riak_kv.tictacaae_storeheads", [
   {datatype, {flag, enabled, disabled}},
@@ -151,10 +151,10 @@
 %% The number of milliseconds which the vnode must wait between self-pokes to
 %% maybe prompt the next exchange. Default is 8 minutes - check all partitions
 %% when n=3 once every hour (in each direction).  A cycle of exchanges will
-%% take (n - 1) * n + 1 exchange ticks for each nval.  
+%% take (n - 1) * n + 1 exchange ticks for each nval.
 %% Note if this is to be reduced further the riak_core vnode_inactivity_timeout
-%% should also be reduced or handoffs may be blocked.  To be safe the 
-%% vnode_inactivity_timeout must be < 0.5 * the tictacaae_exchangetick. 
+%% should also be reduced or handoffs may be blocked.  To be safe the
+%% vnode_inactivity_timeout must be < 0.5 * the tictacaae_exchangetick.
 {mapping, "tictacaae_exchangetick", "riak_kv.tictacaae_exchangetick", [
   {datatype, integer},
   {default, 480000},
@@ -180,7 +180,7 @@
 %% faster by doubling.  There are 1M segments in a standard tree overall.
 %% Performance tuning can also be made by adjusting the `tictacaae_repairloops`
 %% and `tictacaae_rangeboost` - but `tictacaae_maxresults` is the simplest
-%% factor that is likely to result in a relatively predictable (and linear) 
+%% factor that is likely to result in a relatively predictable (and linear)
 %% outcome in terms of both CPU cost and repair speed.
 {mapping, "tictacaae_maxresults", "riak_kv.tictacaae_maxresults", [
   {datatype, integer},
@@ -204,18 +204,18 @@
   hidden
 ]}.
 
-%% @doc Multiplier to the `tictcaaae_maxresults` when following an initial AAE 
+%% @doc Multiplier to the `tictcaaae_maxresults` when following an initial AAE
 %% exchange with a range-limited exchange.
 %% After each exchange, where sufficient deltas are discovered there will be a
 %% `tictacaae_repairloops` number of range-limited queries (assuming
 %% sufficient results continue to be found).  Each of these may have the
-%% the number of max results boosted by this integer factor.  
+%% the number of max results boosted by this integer factor.
 %% For example, if `tictacaae_maxresuts` is set to 64, and
 %% `tictacaae_repairloops` is set to 4, and the `tictacaae_rangeboost` is set
 %% to 2 - the initial loop will use `tictacaae_maxresuts` of 64, but any
 %% AAE exchanges on loops 1 to 4 will use 128.
 %% Exchanges with range-limited queries are more efficient, and so more tree
-%% segments can be fetched without creating significant CPU overheads, hence 
+%% segments can be fetched without creating significant CPU overheads, hence
 %% the use of this boost to maxresults.
 {mapping, "tictacaae_rangeboost", "riak_kv.tictacaae_rangeboost", [
   {datatype, integer},
@@ -249,7 +249,7 @@
 %% Separate assured forwarding pools will be used of `af_worker_pool_size` for
 %% informational aae_folds (find_keys, object_stats) and functional folds
 %% (merge_tree_range, fetch_clock_range).  The be_pool is used only for tictac
-%% AAE rebuilds at present 
+%% AAE rebuilds at present
 {mapping, "node_worker_pool_size", "riak_kv.node_worker_pool_size", [
   {datatype, integer},
   {default, 4}
@@ -946,11 +946,11 @@
 ]}.
 
 
-%% @doc For Tictac full-sync does all data need to be sync'd, or should a 
-%% specific bucket be sync'd (bucket), or a specific bucket type (type). 
+%% @doc For Tictac full-sync does all data need to be sync'd, or should a
+%% specific bucket be sync'd (bucket), or a specific bucket type (type).
 %% Note that in most cases sync of all data is lower overhead than sync of
 %% a subset of data - as cached AAE trees will be used.
-%% TODO: type is not yet implemented.  
+%% TODO: type is not yet implemented.
 {mapping, "ttaaefs_scope", "riak_kv.ttaaefs_scope", [
   {datatype, {enum, [all, bucket, type, disabled]}},
   {default, disabled}
@@ -996,7 +996,7 @@
 %% If using range_check to speed-up repairs, this can be reduced as the
 %% range_check maxresults will be boosted by the ttaaefs_rangeboost  When using
 %% range_check a value of 64 is recommended, which may be reduced to 32 or 16
-%% if the cluster has a very large volume of keys and/or limited capacity. 
+%% if the cluster has a very large volume of keys and/or limited capacity.
 %% Only reduce below 16 in exceptional circumstances.
 %% More capacity to process sync queries can be added by increaseing the af2
 %% and af3 queue sizes - but this will be at the risk of there being a bigger
@@ -1011,21 +1011,21 @@
 %% ttaaefs_max results * ttaaefs_rangeboost.
 %% When using range_check, a small maxresults can be used, in effect using
 %% other *_check syncs as discovery queries (to find the range_check for the
-%% range_check to do the heavy lifting) 
+%% range_check to do the heavy lifting)
 {mapping, "ttaaefs_rangeboost", "riak_kv.ttaaefs_rangeboost", [
   {datatype, integer},
   {default, 16}
 ]}.
 
 %% @doc For Tictac bucket full-sync which bucket should be sync'd by this
-%% node.  Only ascii string bucket definitions supported (which will be 
-%% converted using list_to_binary). 
+%% node.  Only ascii string bucket definitions supported (which will be
+%% converted using list_to_binary).
 {mapping, "ttaaefs_bucketfilter_name", "riak_kv.ttaaefs_bucketfilter_name", [
   {datatype, string},
   {commented, "sample_bucketname"}
 ]}.
 
-%% @doc For Tictac bucket full-sync what is the bucket type of the bucket name.  
+%% @doc For Tictac bucket full-sync what is the bucket type of the bucket name.
 %% Only ascii string type bucket definitions supported (these
 %% definitions will be converted to binary using list_to_binary)
 {mapping, "ttaaefs_bucketfilter_type", "riak_kv.ttaaefs_bucketfilter_type", [
@@ -1033,7 +1033,7 @@
   {commented, "default"}
 ]}.
 
-%% @doc For Tictac bucket-type full-sync what is the bucket type to be sync'd.  
+%% @doc For Tictac bucket-type full-sync what is the bucket type to be sync'd.
 %% Only ascii string type bucket definitions supported (these
 %% definitions will be converted to binary using list_to_binary).
 %% TODO: Type-based filtering is not yet supported
@@ -1134,7 +1134,7 @@
 %% The af3_queue size, and the ttaaefs_maxresults, both need to be tuned to
 %% ensure that the allcheck can run wihtin the 30 minute timeout.
 %% For per-bucket replication all is a reference to all of the data for that
-%% bucket, and warnings about sizing are specially relevant. 
+%% bucket, and warnings about sizing are specially relevant.
 {mapping, "ttaaefs_allcheck", "riak_kv.ttaaefs_allcheck", [
   {datatype, integer},
   {default, 0}
@@ -1180,7 +1180,7 @@
 %% @doc How many times per 24hour period should the a range_check be run.  The
 %% range_check is intended to be a smart check, in that it will:
 %% - use a last_modified range starting from the last successful check as its
-%% range if the last check was successful (i.e. showed the clusters to be 
+%% range if the last check was successful (i.e. showed the clusters to be
 %% in sync);
 %% - use a range identified by the last check (a last modified range, and
 %% perhaps also a specific Bucket) if a range to limit the issues has been
@@ -1407,7 +1407,7 @@
 
 %% @doc Enable the `recalc` compaction strategy within the leveled backend in
 %% riak.  The default (when disabled) is `retain`, but this will leave
-%% uncollected garbage within the, journal. 
+%% uncollected garbage within the, journal.
 %% It is now recommended from Riak KV 2.9.2 to consider the `recalc` strategy.
 %% This strategy has a side effect of slower startups, and slower recovery
 %% from a wiped ledger - but it will not keep an overhead of garbage within
@@ -1442,7 +1442,7 @@
 %% each worker is taking per query in microseconds, so the overall queries
 %% per second supported will be:
 %%  (1000000 div worker_vnode_pool_worktime) * n_val * worker_count
-%% It should normally be possible to support >> 100 queries per second with 
+%% It should normally be possible to support >> 100 queries per second with
 %% just a single worker per vnode.
 %% The statistic worker_vnode_pool_queuetime_mean will track the average time
 %% a query is spending on a queue, should the vnode pool be exhausted.
