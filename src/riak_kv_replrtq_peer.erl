@@ -212,8 +212,8 @@ do_discovery(QueueName, PeerInfo, Type) ->
                     ok;
                 CurrentPeers when is_list(CurrentPeers) ->
                     ?LOG_INFO(
-                        "Type=~w discovery old_peers=~w new_peers=~w",
-                        [Type, length(CurrentPeers), length(DiscoveredPeers)])
+                       "Type=~w discovery old_peers=~w new_peers=~w",
+                       [Type, length(CurrentPeers), length(DiscoveredPeers)])
             end,
             riak_kv_replrtq_snk:add_snkqueue(QueueName,
                 DiscoveredPeers,

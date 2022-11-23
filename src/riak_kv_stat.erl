@@ -291,6 +291,27 @@ do_update(ngrrepl_error) ->
     ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_error], 1);
 do_update({ngrrepl_srcdiscard, C}) ->
     ok = exometer:update([?PFX, ?APP, node, puts, ngrrepl_srcdiscard], C);
+do_update({ttaaefs, all_check}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, all_check], 1);
+do_update({ttaaefs, day_check}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, day_check], 1);
+do_update({ttaaefs, hour_check}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, hour_check], 1);
+do_update({ttaaefs, range_check}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, range_check], 1);
+do_update({ttaaefs, sync_sync, Microsecs}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, sync, count], 1),
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, sync, time], Microsecs);
+do_update({ttaaefs, sync_nosync, Microsecs}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, nosync, count], 1),
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, nosync, time], Microsecs);
+do_update({ttaaefs, sync_fail, Microsecs}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, fail, count], 1),
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, fail, time], Microsecs);
+do_update({ttaaefs, src_ahead, C}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, src_ahead], C);
+do_update({ttaaefs, snk_ahead, C}) ->
+    ok = exometer:update([?PFX, ?APP, ttaaefs_manager, snk_ahead], C);
 do_update(skipped_read_repairs) ->
     ok = exometer:update([?PFX, ?APP, node, gets, skipped_read_repairs], 1);
 do_update(coord_redir) ->
