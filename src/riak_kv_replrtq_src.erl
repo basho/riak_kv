@@ -310,33 +310,28 @@ stop() ->
 %%% gen_server callbacks
 %%%============================================================================
 
-init([]) ->
-    QueueDefnString = application:get_env(riak_kv, replrtq_srcqueue, ""),
+init([FilePath]) ->
+    QueueDefnString = app_helper:get_env(riak_kv, replrtq_srcqueue, ""),
     QFM = tokenise_queuedefn(QueueDefnString),
-    MapToQM =
+
+    {OL, QL} = get_limits(),
+
+    MapToQOverflow =
         fun({QueueName, _QF, _QA}) ->
-            {QueueName, riak_core_priority_queue:new()}
+            {QueueName, empty_overflow_queue(QueueName, FilePath)}
         end,
-    MaptoQC =
+    MaptoQCache =
         fun({QueueName, _QF, _QA}) ->
-            {QueueName, {0, 0, 0}}
+            {QueueName, empty_local_queue()}
         end,
-    QM = lists:map(MapToQM, QFM),
-    QC = lists:map(MaptoQC, QFM),
-    QL = application:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
-    OL = application:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
+    QO = lists:map(MapToQOverflow, QFM),
+    QC = lists:map(MaptoQCache, QFM),
     LogFreq =
-        application:get_env(
+        app_helper:get_env(
             riak_kv,
             replrtq_logfrequency,
             ?LOG_TIMER_SECONDS * 1000),
     erlang:send_after(LogFreq, self(), log_queue),
-    {ok, #state{queue_filtermap = QFM,
-                queue_map = QM,
-                queue_countmap = QC,
-                queue_limit = QL,
-                object_limit = OL,
-                log_frequency_in_ms = LogFreq}}.
 
     {OL, QL} = get_limits(),
 
