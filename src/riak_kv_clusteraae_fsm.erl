@@ -18,7 +18,7 @@
 %%
 %% -------------------------------------------------------------------
 
-%% @doc The AAE fold FSM allows for coverage folds acrosss Tictac AAE 
+%% @doc The AAE fold FSM allows for coverage folds acrosss Tictac AAE
 %% Controllers
 
 -module(riak_kv_clusteraae_fsm).
@@ -42,10 +42,10 @@
 
 -define(EMPTY, <<>>).
 
--define(NVAL_QUERIES, 
+-define(NVAL_QUERIES,
             [merge_root_nval, merge_branch_nval, fetch_clocks_nval,
                 list_buckets]).
--define(RANGE_QUERIES, 
+-define(RANGE_QUERIES,
             [merge_tree_range, fetch_clocks_range,
                 repl_keys_range, repair_keys_range,
                 find_keys, object_stats,
@@ -90,8 +90,8 @@
     %% the cluster and increase parallelistaion of the process.
     %% The count change_method() will perform no reaps/deletes - but will
     %% simply count the matching keys - this is cheaper than runnning
-    %% find_tombs/find_keys to accumulate/sort a large list for counting. 
--type query_types() :: 
+    %% find_tombs/find_keys to accumulate/sort a large list for counting.
+-type query_types() ::
     merge_root_nval|merge_branch_nval|fetch_clocks_nval|
     merge_tree_range|fetch_clocks_range|repl_keys_range|repair_keys_range|
     find_keys|object_stats|
@@ -100,7 +100,7 @@
 
 -type query_definition() ::
     % Use of these folds depends on the Tictac AAE being enabled in either
-    % native mode, or in parallel mode with key_order being used.  
+    % native mode, or in parallel mode with key_order being used.
 
     % N-val AAE (using cached trees)
     {merge_root_nval, n_val()}|
@@ -114,19 +114,19 @@
     {fetch_clocks_nval, n_val(), segment_filter()}|
     {fetch_clocks_nval, n_val(), segment_filter(), modified_range()}|
         % Scan over all the keys for a given n_val in the tictac AAE key store
-        % (which for native stores will be the actual key store), skipping 
+        % (which for native stores will be the actual key store), skipping
         % those blocks of the store not containing keys in the segment filter,
         % returning a list of keys and clocks for that n_val within the
-        % cluster.  This is a background operation, but will have lower 
+        % cluster.  This is a background operation, but will have lower
         % overheads than traditional store folds, subject to the size of the
         % segment filter being small - ideally o(10) or smaller
         % Variant supported with a modified range, which will be converted into
         % a fetch_clocks_range
 
     % Range-based AAE (requiring folds over native/parallel AAE key stores)
-    {merge_tree_range, 
+    {merge_tree_range,
         bucket(),
-        key_range(), 
+        key_range(),
         tree_size(),
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all,
@@ -139,7 +139,7 @@
         % Different size trees can be requested.  Smaller tree sizes are more
         % likely to lead to false negative results, but are more efficient
         % to calculate and have a reduced load on the network
-        % 
+        %
         % A segment_filter() may be passed.  For example, if a tree comparison
         % has been done between two clusters, it might be preferable to confirm
         % the differences before fetching clocks. This can be done by
@@ -169,9 +169,9 @@
         % which are either:
         % - pre_hash (use the default pre-calculated hash)
         % - {rehash, IV} rehash the vector clock concatenated with an integer
-    {fetch_clocks_range, 
+    {fetch_clocks_range,
         bucket(),
-        key_range(), 
+        key_range(),
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all}|
         % Return the keys and clocks in the given bucket and key range.
@@ -197,13 +197,13 @@
         %
         % The leveled backend supports a max_key_count which could be used to
         % provide a loose_limit on the results returned.  However, there are
-        % issues with this and segment_ordered backends, as well as extra 
+        % issues with this and segment_ordered backends, as well as extra
         % complexity curtailing the results (and signalling the results are
         % curtailed).  The main downside of large result sets is network over
         % use.  Perhaps compressing the payload may be a better answer?
-    {repl_keys_range, 
+    {repl_keys_range,
         bucket(),
-        key_range(), 
+        key_range(),
         modified_range() | all,
         riak_kv_replrtq_src:queue_name()}|
         % Replicate all the objects in a given key and modified range.  By
@@ -228,7 +228,7 @@
         % participating in coverage
 
     % Operational support functions
-    {find_keys, 
+    {find_keys,
         bucket(),
         key_range(),
         modified_range() | all,
@@ -244,11 +244,11 @@
         % is the pre-calculated size stored in the aae key store as
         % metadata.
         %
-        % The query returns a list of [{Key, SiblingCount}] tuples or 
-        % [{Key, ObjectSize}] tuples depending on the filter requested.  The 
+        % The query returns a list of [{Key, SiblingCount}] tuples or
+        % [{Key, ObjectSize}] tuples depending on the filter requested.  The
         % cost of this operation will increase with the size of the range
-        % 
-        % It would be beneficial to use the results of object_stats (or 
+        %
+        % It would be beneficial to use the results of object_stats (or
         % knowledge of the application) to ensure that the result size of
         % this query is reasonably bounded (e.g. don't set too low an object
         % size).  If only interested in the outcom of recent modifications,
@@ -259,15 +259,15 @@
         % - the total count of objects in the key range
         % - the accumulated total size of all objects in the range
         % - a list [{Magnitude, ObjectCount}] tuples where Magnitude represents
-        % the order of magnitude of the size of the object (e.g. 1KB is objects 
+        % the order of magnitude of the size of the object (e.g. 1KB is objects
         % from 100 bytes to 1KB, 10KB is objects from 1KB to 10KB etc)
         % - a list of [{SiblingCount, ObjectCount}] tuples where Sibling Count
         % is the number of siblings the object has.
         % - sample portion - (n_val * sample_size) / ring_size
         % e.g.
-        % [{total_count, 1000}, 
-        %   {total_size, 1000000}, 
-        %   {sizes, [{1, 800}, {2, 180}, {3, 20}]}, 
+        % [{total_count, 1000},
+        %   {total_size, 1000000},
+        %   {sizes, [{1, 800}, {2, 180}, {3, 20}]},
         %   {siblings, [{1, 1000}]}]
         %
         % If only interested in the outcome of recent modifications,
@@ -275,7 +275,7 @@
 
     {find_tombs,
         bucket(),
-        key_range(), 
+        key_range(),
         {segments, segment_filter(), tree_size()} | all,
         modified_range() | all} |
         % Find all tombstones in the range that match the criteria, and
@@ -355,16 +355,16 @@
 -endif.
 
 -spec init(from(), inbound_api()) -> init_response().
-%% @doc 
-%% Return a tuple containing the ModFun to call per vnode, the number of 
-%% primary preflist vnodes the operation should cover, the service to use to 
-%% check for available nodes,and the registered name to use to access the 
+%% @doc
+%% Return a tuple containing the ModFun to call per vnode, the number of
+%% primary preflist vnodes the operation should cover, the service to use to
+%% check for available nodes,and the registered name to use to access the
 %% vnode master process.
 init(From={_, _, _}, [Query, Timeout]) ->
     % Get the bucket n_val for use in creating a coverage plan
     QueryType = element(1, Query),
-    NVal = 
-        case {lists:member(QueryType, ?NVAL_QUERIES), 
+    NVal =
+        case {lists:member(QueryType, ?NVAL_QUERIES),
                 lists:member(QueryType, ?RANGE_QUERIES)} of
             {true, false} ->
                 element(2, Query);
@@ -382,7 +382,7 @@ init(From={_, _, _}, [Query, Timeout]) ->
                     merge_root_nval ->
                         ?EMPTY;
                     merge_branch_nval ->
-                        lists:map(fun(X) -> {X, ?EMPTY} end, 
+                        lists:map(fun(X) -> {X, ?EMPTY} end,
                                     element(3, Query));
                     merge_tree_range ->
                         TreeSize = element(4, Query),
@@ -392,7 +392,7 @@ init(From={_, _, _}, [Query, Timeout]) ->
                     repair_keys_range ->
                         {[], 0, element(5, Query), ?REPAIR_BATCH_SIZE};
                     object_stats ->
-                        [{total_count, 0}, 
+                        [{total_count, 0},
                             {total_size, 0},
                             {sizes, []},
                             {siblings, []}];
@@ -415,28 +415,28 @@ init(From={_, _, _}, [Query, Timeout]) ->
                 end
         end,
 
-    Req = riak_kv_requests:new_aaefold_request(Query, InitAcc, NVal), 
+    Req = riak_kv_requests:new_aaefold_request(Query, InitAcc, NVal),
 
-    State = #state{from = From, 
-                    acc = InitAcc, 
+    State = #state{from = From,
+                    acc = InitAcc,
                     start_time = os:timestamp(),
                     query_type = QueryType},
     ?LOG_INFO("AAE fold prompted of type=~w", [QueryType]),
-    {Req, all, NVal, 1, 
-        riak_kv, riak_kv_vnode_master, 
-        Timeout, 
+    {Req, all, NVal, 1,
+        riak_kv, riak_kv_vnode_master,
+        Timeout,
         State}.
-        
+
 
 process_results({error, Reason}, _State) ->
     ?LOG_WARNING("Failure to process fold results due to ~w", [Reason]),
     {error, Reason};
 process_results(Results, State) ->
-    % Results are received as a one-off for each vnode in this case, and so 
+    % Results are received as a one-off for each vnode in this case, and so
     % once results are merged work is always done.
     Acc = State#state.acc,
     QueryType = State#state.query_type,
-    UpdAcc = 
+    UpdAcc =
         case lists:member(QueryType, ?LIST_ACCUMULATE_QUERIES) of
             true ->
                 case QueryType of
@@ -472,15 +472,15 @@ process_results(Results, State) ->
                         {_EL, AccCount, all, RBS} = Acc,
                         {[], AccCount + Count, all, RBS};
                     object_stats ->
-                        [{total_count, R_TC}, 
+                        [{total_count, R_TC},
                             {total_size, R_TS},
                             {sizes, R_SzL},
                             {siblings, R_SbL}] = Results,
-                        [{total_count, A_TC}, 
+                        [{total_count, A_TC},
                             {total_size, A_TS},
                             {sizes, A_SzL},
                             {siblings, A_SbL}] = Acc,
-                        [{total_count, R_TC + A_TC}, 
+                        [{total_count, R_TC + A_TC},
                             {total_size, R_TS + A_TS},
                             {sizes, merge_countinlists(A_SzL, R_SzL)},
                             {siblings, merge_countinlists(A_SbL, R_SbL)}];
@@ -503,7 +503,7 @@ process_results(Results, State) ->
 
 %% Once the coverage FSM has received done for all vnodes (as an output from
 %% process_results), then it will call finish(clean, State) and so the results
-%% can be sent to the client, and the FSM can be stopped. 
+%% can be sent to the client, and the FSM can be stopped.
 finish({error, Error}, State=#state{from={raw, ReqId, ClientPid}}) ->
     % Notify the requesting client that an error
     % occurred or the timeout has elapsed.
@@ -511,10 +511,10 @@ finish({error, Error}, State=#state{from={raw, ReqId, ClientPid}}) ->
     ClientPid ! {ReqId, {error, Error}},
     {stop, normal, State};
 finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
-    % The client doesn't expect results in increments only the final result, 
+    % The client doesn't expect results in increments only the final result,
     % so no need for a seperate send of a 'done' message
     QueryDuration = timer:now_diff(os:timestamp(), State#state.start_time),
-    ?LOG_INFO("Finished aaefold of type=~w with fold_time=~w seconds", 
+    ?LOG_INFO("Finished aaefold of type=~w with fold_time=~w seconds",
                 [State#state.query_type, QueryDuration/1000000]),
     Results =
         case State#state.query_type of
@@ -530,7 +530,7 @@ finish(clean, State=#state{from={raw, ReqId, ClientPid}}) ->
                         end;
                     false ->
                         ok
-                end,    
+                end,
                 Count;
             _ ->
                 State#state.acc
@@ -614,14 +614,14 @@ pb_encode_results(merge_tree_range, QD, Tree) ->
     %% TODO:
     %% Using leveled_tictac:export_tree/1 requires unnecessary base64 encoding
     %% and decoding.  Add a leveled_tictac:export_tree_raw fun to avoid this
-    {struct, 
-        [{<<"level1">>, EncodedL1}, 
+    {struct,
+        [{<<"level1">>, EncodedL1},
             {<<"level2">>, {struct, EncodedL2}}]} =
         leveled_tictac:export_tree(Tree),
     L2 =
-        lists:map(fun({I, CB}) -> 
+        lists:map(fun({I, CB}) ->
                         CBDecoded = base64:decode(CB),
-                        Iint = binary_to_integer(I), 
+                        Iint = binary_to_integer(I),
                         <<Iint:32/integer, CBDecoded/binary>>
                     end,
                     EncodedL2),
@@ -636,32 +636,32 @@ pb_encode_results(fetch_clocks_range, _QD, KeysNClocks) ->
         keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
 pb_encode_results(repl_keys_range, _QD, ReplResult) ->
     R = element(2, ReplResult),
-    #rpbaaefoldkeycountresp{response_type = <<"repl_keys">>, 
+    #rpbaaefoldkeycountresp{response_type = <<"repl_keys">>,
                             keys_count =
                                 [#rpbkeyscount{tag = <<"dispatched_count">>,
                                                 count = R}]};
 pb_encode_results(repair_keys_range, _QD, ReplResult) ->
     R = element(2, ReplResult),
-    #rpbaaefoldkeycountresp{response_type = <<"repair_keys">>, 
+    #rpbaaefoldkeycountresp{response_type = <<"repair_keys">>,
                             keys_count =
                                 [#rpbkeyscount{tag = <<"dispatched_count">>,
                                                 count = R}]};
 pb_encode_results(find_keys, _QD, Results) ->
-    KeyCountMap = 
+    KeyCountMap =
         fun({_B, K, V}) ->
             #rpbkeyscount{tag = K, count = V}
         end,
-    #rpbaaefoldkeycountresp{response_type = <<"find_keys">>, 
+    #rpbaaefoldkeycountresp{response_type = <<"find_keys">>,
                             keys_count = lists:map(KeyCountMap, Results)};
 pb_encode_results(find_tombs, QD, Results) ->
     pb_encode_results(find_keys, QD, Results);
 pb_encode_results(reap_tombs, _QD, Count) ->
-    #rpbaaefoldkeycountresp{response_type = <<"reap_tombs">>, 
+    #rpbaaefoldkeycountresp{response_type = <<"reap_tombs">>,
                             keys_count =
                                 [#rpbkeyscount{tag = <<"dispatched_count">>,
                                                 count = Count}]};
 pb_encode_results(erase_keys, _QD, Count) ->
-    #rpbaaefoldkeycountresp{response_type = <<"erase_keys">>, 
+    #rpbaaefoldkeycountresp{response_type = <<"erase_keys">>,
                             keys_count =
                                 [#rpbkeyscount{tag = <<"dispatched_count">>,
                                                 count = Count}]};
@@ -680,7 +680,7 @@ pb_encode_results(object_stats, _QD, Results) ->
         end,
     SzL0 = lists:map(EncodeIdxL(sizes), SzL),
     SbL0 = lists:map(EncodeIdxL(siblings), SbL),
-    KeysCount = 
+    KeysCount =
         [#rpbkeyscount{tag = atom_to_binary(total_count, unicode),
                         count = TC},
             #rpbkeyscount{tag = atom_to_binary(total_size, unicode),
@@ -732,7 +732,7 @@ encode_find_key(Key, Value) ->
      {<<"value">>, Value}].
 
 encode_bucket({Type, Bucket}) ->
-    {struct, 
+    {struct,
         [{<<"bucket-type">>, Type}, {<<"bucket">>, Bucket}]};
 encode_bucket(Bucket) ->
     {struct, [{<<"bucket">>, Bucket}]}.
@@ -761,7 +761,7 @@ hash_function({rehash, InitialisationVector}) ->
 
 
 %% @doc
-%% Send requests to the reaper, but every batch size get the reaper stats (a 
+%% Send requests to the reaper, but every batch size get the reaper stats (a
 %% sync operation) to avoid mailbox overload.
 -spec handle_in_batches(reap_tombs|erase_keys,
                         list(riak_kv_reaper:reap_reference())|
@@ -771,7 +771,7 @@ handle_in_batches(_Type, [], _BatchCount, _Worker) ->
     ok;
 handle_in_batches(Type, RefList, BatchCount, Worker)
                                     when BatchCount >= ?DELETE_BATCH_SIZE ->
-    
+
     case Type of
         reap_tombs ->
             _ = riak_kv_reaper:reap_stats(Worker);
@@ -792,8 +792,8 @@ handle_in_batches(Type, [Ref|RestRefs], BatchCount, Worker) ->
 %% Internal functions
 %% ===================================================================
 
--spec merge_countinlists(list({integer(), integer()}), 
-                            list({integer(), integer()})) 
+-spec merge_countinlists(list({integer(), integer()}),
+                            list({integer(), integer()}))
                                             -> list({integer(), integer()}).
 %% @doc
 %% Take two lists with {IntegerId, Count} tuples and return a list where the
@@ -810,7 +810,7 @@ merge_countinlists(ResultList, AccList) ->
             end
         end,
     AccList0 = lists:map(MapFun, AccList),
-    lists:ukeymerge(1, 
+    lists:ukeymerge(1,
                     lists:ukeysort(1, AccList0),
                     lists:ukeysort(1, ResultList)).
 
@@ -842,7 +842,7 @@ is_nval(_) ->
 is_segment_list(L) when is_list(L) ->
     lists:all(fun is_integer/1, L);
 is_segment_list(_) ->
-    false. 
+    false.
 
 is_segment_filter({segments, SegmentList, TreeSize}) ->
     IsSegmentList = is_segment_list(SegmentList),
@@ -862,12 +862,12 @@ is_modrange(_) ->
     false.
 
 
-convert_modrange({date, {LowDate, LowTime}, {HighDate, HighTime}}) 
+convert_modrange({date, {LowDate, LowTime}, {HighDate, HighTime}})
         when is_tuple(LowDate), is_tuple(LowTime),
              is_tuple(HighDate), is_tuple(HighTime) ->
     EpochTime =
         calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
-    LowTS = 
+    LowTS =
         calendar:datetime_to_gregorian_seconds({LowDate, LowTime})
             - EpochTime,
     HighTS =
@@ -989,12 +989,12 @@ json_encode_tictac_withentries_test() ->
 encode_results_ofsize(TreeSize) ->
     Tree = leveled_tictac:new_tree(tictac_folder_test, TreeSize),
     ExtractFun = fun(K, V) -> {K, V} end,
-    FoldFun = 
+    FoldFun =
         fun({Key, Value}, AccTree) ->
             leveled_tictac:add_kv(AccTree, Key, Value, ExtractFun)
         end,
-    KVList = [{<<"key1">>, <<"value1">>}, 
-                {<<"key2">>, <<"value2">>}, 
+    KVList = [{<<"key1">>, <<"value1">>},
+                {<<"key2">>, <<"value2">>},
                 {<<"key3">>, <<"value3">>}],
     Tree0 = lists:foldl(FoldFun, Tree, KVList),
     JsonTree = json_encode_results(merge_tree_range, Tree0),
@@ -1027,7 +1027,7 @@ convert_validate_test() ->
                         ?assertMatch(true, is_valid_fold(convert_fold(F)))
                     end,
                     [Q1, Q2, Q3, Q4, Q5, Q6, Q7]),
-                    
+
     IQ1 = {objects_stats, {<<"T">>, <<"B">>}, all, all},
     IQ2 = {object_stats, all, all, all},
     IQ3 = {object_stats, <<"B">>, {<<"SK">>, <<"EK">>}, all},
@@ -1041,4 +1041,3 @@ convert_validate_test() ->
                     [IQ1, IQ2, IQ3, IQ4, IQ5, IQ6, IQ7]).
 
 -endif.
-

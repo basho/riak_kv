@@ -4490,9 +4490,9 @@ log_key_amnesia(VId, Obj, InEpoch, InCntr, Coord, LocalEpoch, LocalCntr) ->
             % so a read repair is prompted
             riak_kv_reader:request_read({B, K})
     end,
-    ?LOG_WARNING("Inbound clock entry for ~p in ~p/~p greater than local." ++
-                      "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
-                  [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]).
+    ?LOG_WARNING("Inbound clock entry for ~p in ~p/~p greater than local."
+                 "Epochs: {In:~p Local:~p}. Counters: {In:~p Local:~p}.",
+                 [VId, B, K, InEpoch, LocalEpoch, InCntr, LocalCntr]).
 
 %% @private generate an epoch actor, and update the vnode state.
 -spec new_key_epoch(#state{}) -> {EpochActor :: binary(), #state{}}.

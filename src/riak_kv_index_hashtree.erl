@@ -591,7 +591,7 @@ load_built(#state{trees=Trees}) ->
 
 %% Generate a hash value for a `riak_object'
 -spec hash_object({riak_object:bucket(), riak_object:key()},
-                    riak_object_t2b() | 
+                    riak_object_t2b() |
                         riak_object:riak_object() | riak_object:proxy_object(),
                     version()) -> binary().
 hash_object({Bucket, Key}, RObj, Version) ->
@@ -616,10 +616,10 @@ fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
     FoldFun = fold_fun(HashtreePid, HasIndexTree),
     {Limit, Wait} = get_build_throttle(),
     ?LOG_INFO("Making fold request to reconstruct AAE tree idx=~p"
-                            ++ " with version ~w", 
+                            ++ " with version ~w",
                 [Partition, Version]),
-    Opts = 
-        case Version of 
+    Opts =
+        case Version of
             legacy ->
                 [aae_reconstruction, {iterator_refresh, true}];
             _ ->
@@ -637,13 +637,13 @@ fold_keys(Partition, HashtreePid, Index, HasIndexTree) ->
 
 %% The accumulator in the fold is the number of bytes hashed
 %% modulo the "build limit" size. If we get an int back, everything is ok
-handle_fold_keys_result({Result, {Limit, Delay}}, HashtreePid, Index) 
+handle_fold_keys_result({Result, {Limit, Delay}}, HashtreePid, Index)
                                                 when is_integer(Result) ->
-    ?LOG_INFO("Finished AAE tree build idx=~p limit ~w delay ~w", 
+    ?LOG_INFO("Finished AAE tree build idx=~p limit ~w delay ~w",
                     [Index, Limit, Delay]),
     gen_server:cast(HashtreePid, build_finished);
 handle_fold_keys_result(Result, HashtreePid, Index) ->
-    ?LOG_ERROR("Failed to build hashtree for idx=~p. Result was: ~p", 
+    ?LOG_ERROR("Failed to build hashtree for idx=~p. Result was: ~p",
                     [Index, Result]),
     gen_server:cast(HashtreePid, build_failed).
 
@@ -866,7 +866,7 @@ expand_items(HasIndex, Items, Version) ->
 expand_item(Has2ITree, {object, BKey, RObj}, Version, Others) ->
     IndexN = riak_kv_util:get_index_n(BKey),
     BinBKey = term_to_binary(BKey),
-    ObjHash = 
+    ObjHash =
         try
             hash_object(BKey, RObj, Version)
         catch Error:Reason ->
