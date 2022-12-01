@@ -893,6 +893,8 @@ convert_fold({find_tombs, B, KR, SF, MR}) ->
     {find_tombs, B, KR, SF, convert_modrange(MR)};
 convert_fold({reap_tombs, B, KR, SF, MR, CM}) ->
     {reap_tombs, B, KR, SF, convert_modrange(MR), CM};
+convert_fold({repair_keys_range, B, KR, MR, L}) ->
+    {repair_keys_range, B, KR, convert_modrange(MR), L};
 convert_fold({erase_keys, B, KR, SF, MR, CM}) ->
     {erase_keys, B, KR, SF, convert_modrange(MR), CM};
 convert_fold(Fold) ->
