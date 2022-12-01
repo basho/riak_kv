@@ -907,7 +907,7 @@ aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
         true ->
             riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node,
                                                             [{raw, ReqId, Me},
-                                                            [Query, TimeOut]]),
+                                                            [Q0, TimeOut]]),
             wait_for_fold_results(ReqId, TimeOut);
         false ->
             {error, "Invalid AAE fold definition"}
