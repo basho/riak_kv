@@ -90,9 +90,8 @@
 
 -define(DEFAULT_TIMEOUT, 60000).
 -define(DEFAULT_R, default).
--define(DEFAULT_PR, 0).
+-define(DEFAULT_PR, default).
 -define(DEFAULT_RT, head).
--define(DEFAULT_NC, 0).
 -define(QUEUE_EMPTY_LOOPS, 8).
 
 %% ===================================================================
