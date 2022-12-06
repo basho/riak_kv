@@ -31,6 +31,7 @@
          status/1,
          vnode_status/1,
          reip/1,
+         reip_manual/1,
          ringready/1,
          cluster_info/1,
          down/1,
@@ -228,6 +229,40 @@ reip([OldNode, NewNode]) ->
         ok = riak_core_ring_manager:do_write_ringfile(NewRing),
         io:format("New ring file written to ~p~n",
             [element(2, riak_core_ring_manager:find_latest_ringfile())])
+    catch
+        Exception:Reason ->
+            io:format("Reip failed ~p:~p", [Exception, Reason]),
+            error
+    end.
+
+reip_manual([OldNode, NewNode, Dir, ClusterName]) ->
+    try
+        %% reip/1 requires riak_core to be loaded to learn the Ring Directory
+        %% and the Cluster Name.  In reip_manual/1 these can be passed in 
+        %% instead
+        RingDir = atom_to_list(Dir),
+        Cluster = atom_to_list(ClusterName),
+        {ok, RingFile} =
+            riak_core_ring_manager:find_latest_ringfile(RingDir, Cluster),
+        io:format("~nCHANGE DETAILS:~n"),
+        io:format("RingFile to update ~p~n", [RingFile]),
+        BackupFN =
+            filename:join([RingDir, filename:basename(RingFile)++".BAK"]),
+        {ok, _} = file:copy(RingFile, BackupFN),
+        io:format("Backed up existing ring file to ~p~n", [BackupFN]),
+        Ring = riak_core_ring_manager:read_ringfile(RingFile),
+        NewRing = riak_core_ring:rename_node(Ring, OldNode, NewNode),
+        NewRingFN =
+            riak_core_ring_manager:generate_ring_filename(
+                RingDir, Cluster),
+        ok = riak_core_ring_manager:do_write_ringfile(NewRing, NewRingFN),
+        io:format("New ring file written to ~p~n", [NewRingFN]),
+        io:format("~nATTENTION REQUIRED:~n"),
+        io:format(
+            "Update required to riak.conf nodename before restarting node;"
+            ++ " nodename should be changed to ~s~n",
+            [atom_to_list(NewNode)]),
+        io:format("~nok~n")
     catch
         Exception:Reason ->
             io:format("Reip failed ~p:~p", [Exception, Reason]),
