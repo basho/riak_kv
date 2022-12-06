@@ -253,7 +253,11 @@ reip_manual([OldNode, NewNode, Dir, ClusterName]) ->
             riak_core_ring_manager:generate_ring_filename(
                 RingDir, Cluster),
         ok = riak_core_ring_manager:do_write_ringfile(NewRing, NewRingFN),
-        io:format("New ring file written to ~p~n", [NewRingFN])
+        io:format("New ring file written to ~p~n", [NewRingFN]),
+        io:format(
+            "~nUpdate required to riak.conf nodename before restarting node" ++
+            "nodename should be changed to ~p~n",
+            [NewNode])
     catch
         Exception:Reason ->
             io:format("Reip failed ~p:~p", [Exception, Reason]),
