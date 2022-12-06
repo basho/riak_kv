@@ -242,6 +242,7 @@ reip_manual([OldNode, NewNode, Dir, ClusterName]) ->
         Cluster = atom_to_list(ClusterName),
         {ok, RingFile} =
             riak_core_ring_manager:find_latest_ringfile(RingDir, Cluster),
+        io:format("~nCHANGE DETAILS:~n"),
         io:format("RingFile to update ~p~n", [RingFile]),
         BackupFN =
             filename:join([RingDir, filename:basename(RingFile)++".BAK"]),
@@ -254,10 +255,12 @@ reip_manual([OldNode, NewNode, Dir, ClusterName]) ->
                 RingDir, Cluster),
         ok = riak_core_ring_manager:do_write_ringfile(NewRing, NewRingFN),
         io:format("New ring file written to ~p~n", [NewRingFN]),
+        io:format("~nATTENTION REQUIRED:~n"),
         io:format(
-            "~nUpdate required to riak.conf nodename before restarting node" ++
-            "nodename should be changed to ~p~n",
-            [NewNode])
+            "Update required to riak.conf nodename before restarting node;"
+            ++ " nodename should be changed to ~s~n",
+            [atom_to_list(NewNode)]),
+        io:format("~nok~n")
     catch
         Exception:Reason ->
             io:format("Reip failed ~p:~p", [Exception, Reason]),
