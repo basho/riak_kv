@@ -710,8 +710,10 @@ fold_fun(HashtreePid, _HasIndexTree = true) ->
 -spec handle_corrupted_object(
     riak_object:bucket(), riak_object:key(), term(), term()) -> ok.
 handle_corrupted_object(Bucket, Key, Error, Reason) ->
-    ?LOG_WARNING("Unable to read B=~p K=~p", [Bucket, Key]),
-    ?LOG_WARNING("Read failure due to ~w ~w", [Error, Reason]),
+    ?LOG_WARNING(
+        "Unable to read B=~p K=~p due to ~p ~p during tree rebuild " ++
+        "so will prompt read_repair - ignore warning during shutdown",
+        [Bucket, Key, Error, Reason]),
     riak_kv_reader:request_read({Bucket, Key}).
 
 -spec object_fold_fun(pid()) ->

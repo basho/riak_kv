@@ -1,13 +1,13 @@
 * riak_kv
 ** Overview
 
-[![Erlang CI Actions Status](https://github.com/basho/riak_kv/workflows/Erlang%20CI/badge.svg)](https://github.com/basho/riak_kv/actions)
+[[https://github.com/basho/riak_kv/actions][Build Status]] - [[https://github.com/basho/riak_kv/actions/workflows/erlang.yml/badge.svg?branch=develop]]
 
-Riak KV is an open source Erlang application that is distributed using the  [[https://github.com/basho/riak_core][riak_core]] Erlang 
+Riak KV is an open source Erlang application that is distributed using the [[https://github.com/basho/riak_core][riak_core]] Erlang 
 library. Riak KV provides a key/value datastore and features MapReduce, lightweight data relations, and several different client APIs. 
 
 ** Quick Start
-   You must have [[http://erlang.org/download.html][Erlang/OTP 20 or 22]] or later and a GNU-style build
+   You must have [[http://erlang.org/download.html][Erlang/OTP 22, 24 or 25]] or later and a GNU-style build
    system to compile and run =riak_kv=. The easiest way to utilize riak_kv is by installing the full 
    Riak application available on [[https://github.com/basho/riak][Github]].
 
