@@ -730,7 +730,7 @@ read_repair_index({{Idx, Node}, Type}, Indices) ->
     case get_option(Idx, Indices) of
         undefined ->
             false;
-        {Idx, Reason} ->
+        Reason ->
             RRP = app_helper:get_env(riak_kv, read_repair_primaryonly, false),
             case {RRP, Type} of
                 {true, fallback} ->
