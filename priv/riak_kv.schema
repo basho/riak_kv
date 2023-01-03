@@ -1461,7 +1461,27 @@
 %% converted to an overflow queue as part of this release.  Instead use
 %% `replrtq_overflow_limit` to control the queue size, including on-disk size.
 {mapping, "replrtq_srcqueuelimit", "riak_kv.replrtq_srcqueuelimit", [
-  {datatype, integer},
-  {default, 300000},
+    {datatype, integer},
+    {default, 300000},
   hidden
+]}.
+
+%% @doc Choose to read repair to primary vnodes only
+%% When fallback vnodes are elected, then read repair will by default repair
+%% any missing data from the vnode - i.e. every GET while the fallback is in
+%% play will lead to a PUT to add the rewuested object to the fallback vnode, 
+%% as the fallback by default starts empty.
+%% If the expectation is that failed vnodes are replaced quickly, as would be
+%% possible in a Cloud scenario, this may not be desirable.  Read repair to
+%% fallbacks reduce throughput in failure scenarios, and then the hinted
+%% handoffs following recovery are impaired by the historic data which is
+%% already in the recovered node, and has to be handed off as well as the
+%% fresh updates received since the failure.
+%% When fallback vnodes are expected to be in place for a long period, the
+%% default setting of read repairing fallbacks may be preferred, as it will
+%% provide additional data resilience, and potentially improved performance
+%% where the same objects are repeatedly fetched.
+{mapping, "read_repair_primaryonly", "riak_kv.read_repair_primaryonly", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled}
 ]}.
