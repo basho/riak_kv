@@ -911,53 +911,40 @@ handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
         fun(R) ->
             riak_core_vnode:reply(Sender, {reply, R, Colour})
         end,
-    case State#state.tictac_aae of 
+    MaybePause = app_helper:get_env(riak_kv, tictacaae_pause, false),
+    case State#state.tictac_aae and (not MaybePause) of 
         false ->
             ReturnFun(not_supported);
         true ->
             Cntrl = State#state.aae_controller,
             case AAERequest of 
                 fetch_root ->
-                    aae_controller:aae_mergeroot(Cntrl, 
-                                                    IndexNs, 
-                                                    ReturnFun);
+                    aae_controller:aae_mergeroot(
+                        Cntrl, IndexNs, ReturnFun);
                 {fetch_branches, BranchIDs} ->
-                    aae_controller:aae_mergebranches(Cntrl, 
-                                                        IndexNs, 
-                                                        BranchIDs, 
-                                                        ReturnFun);
+                    aae_controller:aae_mergebranches(
+                        Cntrl,  IndexNs, BranchIDs, ReturnFun);
                 {fetch_clocks, SegmentIDs} ->
                     IndexNFun = 
                         fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
-                    aae_controller:aae_fetchclocks(Cntrl,
-                                                    IndexNs,
-                                                    SegmentIDs,
-                                                    ReturnFun,
-                                                    IndexNFun);
+                    aae_controller:aae_fetchclocks(
+                        Cntrl, IndexNs, SegmentIDs, ReturnFun, IndexNFun);
                 {fetch_clocks, SegmentIDs, MR} ->
                     IndexNFun = 
                         fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
                     ModifiedLimiter = aaefold_setmodifiedlimiter(MR),
-                    aae_controller:aae_fetchclocks(Cntrl,
-                                                    IndexNs,
-                                                    all,
-                                                    SegmentIDs,
-                                                    ModifiedLimiter,
-                                                    ReturnFun,
-                                                    IndexNFun);
+                    aae_controller:aae_fetchclocks(
+                        Cntrl, IndexNs, all, SegmentIDs,
+                        ModifiedLimiter, ReturnFun, IndexNFun);
                 {fetch_clocks_range, Bucket, KR, SF, MR} ->
                     IndexNFun = 
                         fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
                     RangeLimiter = aaefold_setrangelimiter(Bucket, KR),
                     ModifiedLimiter = aaefold_setmodifiedlimiter(MR),
                     SegmentIDs = element(2, SF),
-                    aae_controller:aae_fetchclocks(Cntrl,
-                                                    IndexNs,
-                                                    RangeLimiter,
-                                                    SegmentIDs,
-                                                    ModifiedLimiter,
-                                                    ReturnFun,
-                                                    IndexNFun)
+                    aae_controller:aae_fetchclocks(
+                        Cntrl, IndexNs, RangeLimiter, SegmentIDs,
+                        ModifiedLimiter, ReturnFun, IndexNFun)
                     
             end
     end,
@@ -1191,6 +1178,18 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
     XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
     riak_core_vnode:send_command_after(XTick, tictacaae_exchangepoke),
     Idx = State#state.idx,
+    SkipCount =
+        case State#state.tictac_skiptick of
+            0 ->
+                case app_helper:get_env(riak_kv, tictacaae_pause, false) of
+                    true ->
+                        1;
+                    _ ->
+                        0
+                    end;
+            SC when SC > 0 ->
+                SC
+        end,
     case {State#state.tictac_exchangequeue, State#state.tictac_skiptick} of
         {[], _} ->
             {ok, Ring} = 
