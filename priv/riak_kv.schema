@@ -1485,3 +1485,11 @@
     {datatype, {flag, enabled, disabled}},
     {default, disabled}
 ]}.
+
+%% @doc If reads discovers keys to be repaired, should each key
+%% that is repaired be logged
+{mapping, "read_repair_log", "riak_kv.read_repair_log", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    hidden
+]}.

@@ -701,7 +701,15 @@ read_repair(GetCoreIndices, RepairObj,
             Sent),
     DocIdxList =
         lists:map(
-            fun({{Idx, Node}, _Type, _Reason}) ->
+            fun({{Idx, Node}, _Type, Reason}) ->
+                case app_helper:get_env(riak_kv, read_repair_log, false) of
+                    true ->
+                        lager:info(
+                            "Read repair of ~p on ~w ~w for reason ~w",
+                            [BKey, Idx, Node, Reason]);
+                    false ->
+                        ok
+                    end,
                 {Idx, Node}
             end,
             RepairPreflist),

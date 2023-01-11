@@ -1178,7 +1178,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
     XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
     riak_core_vnode:send_command_after(XTick, tictacaae_exchangepoke),
     Idx = State#state.idx,
-    SkipCount =
+    CurrentSkipCount =
         case State#state.tictac_skiptick of
             0 ->
                 case app_helper:get_env(riak_kv, tictacaae_pause, false) of
@@ -1190,7 +1190,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
             SC when SC > 0 ->
                 SC
         end,
-    case {State#state.tictac_exchangequeue, State#state.tictac_skiptick} of
+    case {State#state.tictac_exchangequeue, CurrentSkipCount} of
         {[], _} ->
             {ok, Ring} = 
                 riak_core_ring_manager:get_my_ring(),
