@@ -520,7 +520,9 @@ test_vnode(I) ->
     riak_core_vnode:start_link(riak_kv_vnode, I, infinity).
 
 
--spec aae_send(tuple()) -> fun().
+-spec aae_send(
+    tuple()) ->
+        fun((term(), list(riak_core_apl:preflist()), blue|pink) -> ok).
 %% @doc
 %% Return a function which will send an aae request to a given vnode, and can
 %% prompt the response to be received by sender 
@@ -2370,8 +2372,8 @@ handle_handoff_data(BinObj, State) ->
     try
         {BKey, Val} = decode_binary_object(BinObj),
         {B, K} = BKey,
-        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val),
-                            State) of
+        case do_handoff_put(
+                BKey, riak_object:from_binary(B, K, Val), State) of
             {ok, State2} ->
                 {reply, ok, State2};
             {error, Reason, State2} ->
@@ -2822,39 +2824,31 @@ prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State) ->
     {{true, {ObjToStore, unknown_no_old_object}}, 
         PutArgs#putargs{is_index = false}, State}.
 
-prepare_read_before_write_put(#state{mod = Mod,
-                                     modstate = ModState,
-                                     md_cache = MDCache}=State,
-                              #putargs{bkey={Bucket, Key}=BKey,
-                                       robj=RObj,
-                                       coord=Coord}=PutArgs,
-                              IndexBackend, IsSearchable) ->
-    {CacheClock, CacheData} = maybefetch_clock_and_indexdata(MDCache,
-                                                                BKey,
-                                                                Mod,
-                                                                ModState,
-                                                                Coord,
-                                                                IsSearchable),
+prepare_read_before_write_put(
+        #state{mod = Mod, modstate = ModState, md_cache = MDCache}=State,
+        #putargs{bkey={Bucket, Key}=BKey, robj=RObj, coord=Coord}=PutArgs,
+        IndexBackend,
+        IsSearchable) ->
+    {CacheClock, CacheData} =
+        maybefetch_clock_and_indexdata(
+            MDCache, BKey, Mod, ModState, Coord, IsSearchable),
     {GetReply, RequiresGet} =
         case CacheClock of
             not_found ->
                 {not_found, false};
             _ ->
-                ReqGet = determine_requires_get(CacheClock,
-                                                    RObj,
-                                                    IsSearchable),
-                {get_old_object_or_fake(ReqGet,
-                                            Bucket, Key,
-                                            Mod, ModState,
-                                            CacheClock),
+                ReqGet =
+                    determine_requires_get(CacheClock, RObj, IsSearchable),
+                {get_old_object_or_fake(
+                        ReqGet, Bucket, Key, Mod, ModState, CacheClock),
                     ReqGet}
         end,
     case GetReply of
         not_found ->
             prepare_put_new_object(State, PutArgs, IndexBackend);
         {ok, OldObj} ->
-            prepare_put_existing_object(State, PutArgs, OldObj,
-                                        IndexBackend, CacheData, RequiresGet)
+            prepare_put_existing_object(
+                State, PutArgs, OldObj, IndexBackend, CacheData, RequiresGet)
     end.
 
 prepare_put_existing_object(#state{idx =Idx} = State,
@@ -3528,7 +3522,10 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
             {reply, ER, State}
     end.
 
--spec maybe_use_fold_heads(list(), list(), atom()) -> fun().
+-type foldfun() ::
+    fun((riak_kv_backend:fold_objects_fun(), any(), list(), term()) -> 
+        {ok, any()}|{async, fun(() -> any())}|{error, term()}).
+-spec maybe_use_fold_heads(list(), list(), atom()) -> foldfun().
 %% @private
 %% If the fold can potential service requests through headers of objects alone,
 %% then the fold_heads function can be used on the backend if it suppports that
@@ -3606,69 +3603,37 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 %% upon receipt of a handoff datum, there is no client FSM
-do_diffobj_put({Bucket, Key}=BKey, DiffObj,
-               StateData=#state{mod=Mod,
-                                modstate=ModState,
-                                idx=Idx,
-                                update_hook=UpdateHook}) ->
-    StartTS = os:timestamp(),
-    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-    IndexBackend = lists:member(indexes, Capabilities),
-    maybe_cache_evict(BKey, StateData),
-    case do_get_object(Bucket, Key, Mod, ModState) of
-        {error, not_found, _UpdModState} ->
-            case IndexBackend of
-                true ->
-                    IndexSpecs = riak_object:index_specs(DiffObj);
-                false ->
-                    IndexSpecs = []
-            end,
-            {_, State2, DiffObj2} = maybe_new_actor_epoch(DiffObj, StateData),
-            case encode_and_put(DiffObj2, Mod, Bucket, Key,
-                                IndexSpecs, ModState, no_max_check, false) of
-                {{ok, UpdModState}, EncodedVal} ->
-                    aae_update(Bucket, Key, 
-                                DiffObj2, confirmed_no_old_object, EncodedVal, 
-                                StateData),
-                    update_index_write_stats(IndexBackend, IndexSpecs),
-                    update_vnode_stats(vnode_put, Idx, StartTS),
-                    maybe_update(UpdateHook, {DiffObj, no_old_object}, handoff, Idx),
-                    {ok, State2#state{modstate=UpdModState}};
-                {{error, Reason, UpdModState}, _Val} ->
-                    {error, Reason, State2#state{modstate=UpdModState}}
-            end;
-        {ok, OldObj, _UpdModState} ->
-            %% Merge handoff values with the current - possibly
-            %% discarding if out of date.
-            {IsNewEpoch, ActorId, State2} = maybe_new_key_epoch(false, StateData, OldObj, DiffObj),
-            case put_merge(false, false, OldObj, DiffObj, {IsNewEpoch, ActorId}, undefined) of
-                {oldobj, _} ->
-                    {ok, State2};
-                {newobj, NewObj} ->
-                    {ok, AMObj} = enforce_allow_mult(NewObj, OldObj, riak_core_bucket:get_bucket(Bucket)),
-                    case IndexBackend of
-                        true ->
-                            IndexSpecs = riak_object:diff_index_specs(AMObj, OldObj);
-                        false ->
-                            IndexSpecs = []
-                    end,
-                    case encode_and_put(AMObj, Mod, Bucket, Key,
-                                        IndexSpecs, ModState,
-                                        no_max_check, false) of
-                        {{ok, UpdModState}, EncodedVal} ->
-                            aae_update(Bucket, Key, 
-                                        AMObj, OldObj, EncodedVal, 
-                                        StateData),
-                            update_index_write_stats(IndexBackend, IndexSpecs),
-                            update_vnode_stats(vnode_put, Idx, StartTS),
-                            maybe_update(UpdateHook,
-                                        {AMObj, maybe_old_object(OldObj)},
-                                        handoff, Idx),
-                            {ok, State2#state{modstate=UpdModState}};
-                        {{error, Reason, UpdModState}, _Val} ->
-                            {error, Reason, State2#state{modstate=UpdModState}}
-                    end
-            end
+-spec do_handoff_put(
+        {riak_object:bucket(), riak_object:key()},
+            riak_object:riak_object(),
+            state()) -> {error, term(), state()}|{ok, state()}.
+do_handoff_put({Bucket, _Key}=BKey, HandoffObj, State) ->
+    BProps = riak_core_bucket:get_bucket(Bucket),
+    PutArgs = 
+        #putargs{
+            returnbody = false,
+            coord = false,
+            lww = proplists:get_value(last_write_wins, BProps, false),
+            bkey = BKey,
+            robj = HandoffObj,
+            reqid = erlang:phash2({self(), os:timestamp()}),
+            bprops = BProps,
+            starttime = riak_core_util:moment(),
+            readrepair = false,
+            prunetime = undefined,
+            crdt_op = undefined,
+                % crdt_op is used only to increment stats counters for CRDT
+                % changes.  These stats were not incremented when using the
+                % do_diffobj_put/3, and so this is undefined to maintain
+                % that behaviour 
+            sync_on_write = undefined},
+    {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
+    {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
+    case Reply of
+        {fail, _Idx, Reason} ->
+            {error, Reason, UpdState};
+        _ ->
+            {ok, UpdState}
     end.
 
 
