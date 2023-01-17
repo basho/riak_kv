@@ -914,8 +914,8 @@ handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
         fun(R) ->
             riak_core_vnode:reply(Sender, {reply, R, Colour})
         end,
-    MaybePause = app_helper:get_env(riak_kv, tictacaae_pause, false),
-    case State#state.tictac_aae and (not MaybePause) of 
+    MaybeSuspend = app_helper:get_env(riak_kv, tictacaae_suspend, false),
+    case State#state.tictac_aae and (not MaybeSuspend) of 
         false ->
             ReturnFun(not_supported);
         true ->
@@ -1184,7 +1184,7 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
     CurrentSkipCount =
         case State#state.tictac_skiptick of
             0 ->
-                case app_helper:get_env(riak_kv, tictacaae_pause, false) of
+                case app_helper:get_env(riak_kv, tictacaae_suspend, false) of
                     true ->
                         1;
                     _ ->
