@@ -252,7 +252,8 @@
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
                   hash_ops = no_hash_ops,
-                  sync_on_write = undefined :: undefined | atom()
+                  sync_on_write = undefined :: undefined | atom(),
+                  reason = riak_kv_update_hook:reason()
                  }).
 -type putargs() :: #putargs{}.
 
@@ -2380,8 +2381,8 @@ handle_handoff_data(BinObj, State) ->
                 {reply, {error, Reason}, State2}
         end
     catch Error:Reason2 ->
-            lager:warning("Unreadable object discarded in handoff: ~p:~p",
-                          [Error, Reason2]),
+        lager:warning(
+            "Unreadable object discarded in handoff: ~p:~p", [Error, Reason2]),
             {reply, ok, State}
     end.
 
@@ -2702,18 +2703,22 @@ do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     Coord = proplists:get_value(coord, Options, false),
     SyncOnWrite = proplists:get_value(sync_on_write, Options, undefined),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
-    PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
-                       coord=Coord,
-                       lww=proplists:get_value(last_write_wins, BProps, false),
-                       bkey=BKey,
-                       robj=RObj,
-                       reqid=ReqID,
-                       bprops=BProps,
-                       starttime=StartTime,
-                       readrepair = ReadRepair,
-                       prunetime=PruneTime,
-                       crdt_op = CRDTOp,
-                       sync_on_write = SyncOnWrite},
+    PutArgs = 
+        #putargs{
+            returnbody =
+                proplists:get_value(returnbody,Options,false) orelse Coord,
+            coord=Coord,
+            lww=proplists:get_value(last_write_wins, BProps, false),
+            bkey=BKey,
+            robj=RObj,
+            reqid=ReqID,
+            bprops=BProps,
+            starttime=StartTime,
+            readrepair = ReadRepair,
+            prunetime=PruneTime,
+            crdt_op = CRDTOp,
+            sync_on_write = SyncOnWrite,
+            reason = put},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -3009,7 +3014,8 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                      coord=Coord,
                      index_specs=IndexSpecs,
                      readrepair=ReadRepair,
-                     sync_on_write=SyncOnWrite}) ->
+                     sync_on_write=SyncOnWrite,
+                     reason=HookReason}) ->
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
@@ -3031,13 +3037,15 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                 false
         end,
     {Reply, State2} =
-        actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag,
-                    {Coord, Sync}, State),
+        actual_put(
+            BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag,
+            {Coord, Sync}, HookReason, State),
     {Reply, State2}.
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check,
-                {false, false}, State).
+    actual_put(
+        BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check,
+        {false, false}, put, State).
 
 actual_put(BKey={Bucket, Key},
             {Obj, OldObj},
@@ -3045,6 +3053,7 @@ actual_put(BKey={Bucket, Key},
             RB, ReqID,
             MaxCheckFlag,
             {Coord, Sync},
+            HookReason,
             State=#state{idx=Idx,
                             mod=Mod,
                             modstate=ModState,
@@ -3058,7 +3067,8 @@ actual_put(BKey={Bucket, Key},
                         State#state.enable_nextgenreplsrc,
                         State#state.sizelimit_nextgenreplsrc),
             maybe_cache_object(BKey, Obj, State),
-            maybe_update(UpdateHook, {Obj, maybe_old_object(OldObj)}, put, Idx),
+            maybe_update(
+                UpdateHook, {Obj, maybe_old_object(OldObj)}, HookReason, Idx),
             Reply = case RB of
                 true ->
                     {dw, Idx, Obj, ReqID};
@@ -3088,13 +3098,16 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             %% to the desired version, to reformat, all we need to do
             %% is submit a new write
             ST = riak_core_util:moment(),
-            PutArgs = #putargs{hash_ops = update,
-                               returnbody = false,
-                               bkey = BKey,
-                               index_specs = [],
-                               coord = false,
-                               lww = false,
-                               starttime = ST},
+            PutArgs = 
+                #putargs{
+                    hash_ops = update,
+                    returnbody = false,
+                    bkey = BKey,
+                    index_specs = [],
+                    coord = false,
+                    lww = false,
+                    starttime = ST,
+                    reason = put},
             case perform_put({true, {RObj, unchanged_no_old_object}}, State, PutArgs) of
                 {{fail, _, Reason}, UpdState}  ->
                     Reply = {error, Reason};
@@ -3608,7 +3621,13 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
             riak_object:riak_object(),
             state()) -> {error, term(), state()}|{ok, state()}.
 do_handoff_put({Bucket, _Key}=BKey, HandoffObj, State) ->
-    BProps = riak_core_bucket:get_bucket(Bucket),
+    BProps =
+        case riak_core_bucket:get_bucket(Bucket) of
+            {error, no_type} ->
+                [];
+            Properties when is_list(Properties) ->
+                Properties
+        end,
     PutArgs = 
         #putargs{
             returnbody = false,
@@ -3626,7 +3645,8 @@ do_handoff_put({Bucket, _Key}=BKey, HandoffObj, State) ->
                 % changes.  These stats were not incremented when using the
                 % do_diffobj_put/3, and so this is undefined to maintain
                 % that behaviour 
-            sync_on_write = undefined},
+            sync_on_write = undefined,
+            reason = handoff},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     case Reply of
