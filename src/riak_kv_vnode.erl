@@ -3621,13 +3621,7 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
             riak_object:riak_object(),
             state()) -> {error, term(), state()}|{ok, state()}.
 do_handoff_put({Bucket, _Key}=BKey, HandoffObj, State) ->
-    BProps =
-        case riak_core_bucket:get_bucket(Bucket) of
-            {error, no_type} ->
-                [];
-            Properties when is_list(Properties) ->
-                Properties
-        end,
+    BProps = riak_core_bucket:get_bucket(Bucket),
     PutArgs = 
         #putargs{
             returnbody = false,
