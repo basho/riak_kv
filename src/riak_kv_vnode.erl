@@ -254,7 +254,8 @@
                   is_index=false :: boolean(), %% set if the b/end supports indexes
                   crdt_op = undefined :: undefined | term(), %% if set this is a crdt operation
                   hash_ops = no_hash_ops,
-                  sync_on_write = undefined :: undefined | atom()
+                  sync_on_write = undefined :: undefined | atom(),
+                  reason = riak_kv_update_hook:reason()
                  }).
 -type putargs() :: #putargs{}.
 
@@ -522,7 +523,9 @@ test_vnode(I) ->
     riak_core_vnode:start_link(riak_kv_vnode, I, infinity).
 
 
--spec aae_send(tuple()) -> fun().
+-spec aae_send(
+    tuple()) ->
+        fun((term(), list(riak_core_apl:preflist()), blue|pink) -> ok).
 %% @doc
 %% Return a function which will send an aae request to a given vnode, and can
 %% prompt the response to be received by sender 
@@ -913,53 +916,40 @@ handle_command({aae, AAERequest, IndexNs, Colour}, Sender, State) ->
         fun(R) ->
             riak_core_vnode:reply(Sender, {reply, R, Colour})
         end,
-    case State#state.tictac_aae of 
+    MaybeSuspend = app_helper:get_env(riak_kv, tictacaae_suspend, false),
+    case State#state.tictac_aae and (not MaybeSuspend) of 
         false ->
             ReturnFun(not_supported);
         true ->
             Cntrl = State#state.aae_controller,
             case AAERequest of 
                 fetch_root ->
-                    aae_controller:aae_mergeroot(Cntrl, 
-                                                    IndexNs, 
-                                                    ReturnFun);
+                    aae_controller:aae_mergeroot(
+                        Cntrl, IndexNs, ReturnFun);
                 {fetch_branches, BranchIDs} ->
-                    aae_controller:aae_mergebranches(Cntrl, 
-                                                        IndexNs, 
-                                                        BranchIDs, 
-                                                        ReturnFun);
+                    aae_controller:aae_mergebranches(
+                        Cntrl,  IndexNs, BranchIDs, ReturnFun);
                 {fetch_clocks, SegmentIDs} ->
                     IndexNFun = 
                         fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
-                    aae_controller:aae_fetchclocks(Cntrl,
-                                                    IndexNs,
-                                                    SegmentIDs,
-                                                    ReturnFun,
-                                                    IndexNFun);
+                    aae_controller:aae_fetchclocks(
+                        Cntrl, IndexNs, SegmentIDs, ReturnFun, IndexNFun);
                 {fetch_clocks, SegmentIDs, MR} ->
                     IndexNFun = 
                         fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
                     ModifiedLimiter = aaefold_setmodifiedlimiter(MR),
-                    aae_controller:aae_fetchclocks(Cntrl,
-                                                    IndexNs,
-                                                    all,
-                                                    SegmentIDs,
-                                                    ModifiedLimiter,
-                                                    ReturnFun,
-                                                    IndexNFun);
+                    aae_controller:aae_fetchclocks(
+                        Cntrl, IndexNs, all, SegmentIDs,
+                        ModifiedLimiter, ReturnFun, IndexNFun);
                 {fetch_clocks_range, Bucket, KR, SF, MR} ->
                     IndexNFun = 
                         fun(B, K) -> riak_kv_util:get_index_n({B, K}) end,
                     RangeLimiter = aaefold_setrangelimiter(Bucket, KR),
                     ModifiedLimiter = aaefold_setmodifiedlimiter(MR),
                     SegmentIDs = element(2, SF),
-                    aae_controller:aae_fetchclocks(Cntrl,
-                                                    IndexNs,
-                                                    RangeLimiter,
-                                                    SegmentIDs,
-                                                    ModifiedLimiter,
-                                                    ReturnFun,
-                                                    IndexNFun)
+                    aae_controller:aae_fetchclocks(
+                        Cntrl, IndexNs, RangeLimiter, SegmentIDs,
+                        ModifiedLimiter, ReturnFun, IndexNFun)
                     
             end
     end,
@@ -1193,7 +1183,19 @@ handle_command(tictacaae_exchangepoke, _Sender, State) ->
     XTick = app_helper:get_env(riak_kv, tictacaae_exchangetick),
     riak_core_vnode:send_command_after(XTick, tictacaae_exchangepoke),
     Idx = State#state.idx,
-    case {State#state.tictac_exchangequeue, State#state.tictac_skiptick} of
+    CurrentSkipCount =
+        case State#state.tictac_skiptick of
+            0 ->
+                case app_helper:get_env(riak_kv, tictacaae_suspend, false) of
+                    true ->
+                        1;
+                    _ ->
+                        0
+                    end;
+            SC when SC > 0 ->
+                SC
+        end,
+    case {State#state.tictac_exchangequeue, CurrentSkipCount} of
         {[], _} ->
             {ok, Ring} = 
                 riak_core_ring_manager:get_my_ring(),
@@ -2373,16 +2375,16 @@ handle_handoff_data(BinObj, State) ->
     try
         {BKey, Val} = decode_binary_object(BinObj),
         {B, K} = BKey,
-        case do_diffobj_put(BKey, riak_object:from_binary(B, K, Val),
-                            State) of
+        case do_handoff_put(
+                BKey, riak_object:from_binary(B, K, Val), State) of
             {ok, State2} ->
                 {reply, ok, State2};
             {error, Reason, State2} ->
                 {reply, {error, Reason}, State2}
         end
     catch Error:Reason2 ->
-            ?LOG_WARNING("Unreadable object discarded in handoff: ~p:~p",
-                          [Error, Reason2]),
+        ?LOG_WARNING(
+            "Unreadable object discarded in handoff: ~p:~p", [Error, Reason2]),
             {reply, ok, State}
     end.
 
@@ -2703,18 +2705,22 @@ do_put(Sender, {Bucket, _Key}=BKey, RObj, ReqID, StartTime, Options, State) ->
     Coord = proplists:get_value(coord, Options, false),
     SyncOnWrite = proplists:get_value(sync_on_write, Options, undefined),
     CRDTOp = proplists:get_value(counter_op, Options, proplists:get_value(crdt_op, Options, undefined)),
-    PutArgs = #putargs{returnbody=proplists:get_value(returnbody,Options,false) orelse Coord,
-                       coord=Coord,
-                       lww=proplists:get_value(last_write_wins, BProps, false),
-                       bkey=BKey,
-                       robj=RObj,
-                       reqid=ReqID,
-                       bprops=BProps,
-                       starttime=StartTime,
-                       readrepair = ReadRepair,
-                       prunetime=PruneTime,
-                       crdt_op = CRDTOp,
-                       sync_on_write = SyncOnWrite},
+    PutArgs = 
+        #putargs{
+            returnbody =
+                proplists:get_value(returnbody,Options,false) orelse Coord,
+            coord=Coord,
+            lww=proplists:get_value(last_write_wins, BProps, false),
+            bkey=BKey,
+            robj=RObj,
+            reqid=ReqID,
+            bprops=BProps,
+            starttime=StartTime,
+            readrepair = ReadRepair,
+            prunetime=PruneTime,
+            crdt_op = CRDTOp,
+            sync_on_write = SyncOnWrite,
+            reason = put},
     {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
     {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
     riak_core_vnode:reply(Sender, Reply),
@@ -2825,39 +2831,31 @@ prepare_blind_put(Coord, RObj, VId, StartTime, PutArgs, State) ->
     {{true, {ObjToStore, unknown_no_old_object}}, 
         PutArgs#putargs{is_index = false}, State}.
 
-prepare_read_before_write_put(#state{mod = Mod,
-                                     modstate = ModState,
-                                     md_cache = MDCache}=State,
-                              #putargs{bkey={Bucket, Key}=BKey,
-                                       robj=RObj,
-                                       coord=Coord}=PutArgs,
-                              IndexBackend, IsSearchable) ->
-    {CacheClock, CacheData} = maybefetch_clock_and_indexdata(MDCache,
-                                                                BKey,
-                                                                Mod,
-                                                                ModState,
-                                                                Coord,
-                                                                IsSearchable),
+prepare_read_before_write_put(
+        #state{mod = Mod, modstate = ModState, md_cache = MDCache}=State,
+        #putargs{bkey={Bucket, Key}=BKey, robj=RObj, coord=Coord}=PutArgs,
+        IndexBackend,
+        IsSearchable) ->
+    {CacheClock, CacheData} =
+        maybefetch_clock_and_indexdata(
+            MDCache, BKey, Mod, ModState, Coord, IsSearchable),
     {GetReply, RequiresGet} =
         case CacheClock of
             not_found ->
                 {not_found, false};
             _ ->
-                ReqGet = determine_requires_get(CacheClock,
-                                                    RObj,
-                                                    IsSearchable),
-                {get_old_object_or_fake(ReqGet,
-                                            Bucket, Key,
-                                            Mod, ModState,
-                                            CacheClock),
+                ReqGet =
+                    determine_requires_get(CacheClock, RObj, IsSearchable),
+                {get_old_object_or_fake(
+                        ReqGet, Bucket, Key, Mod, ModState, CacheClock),
                     ReqGet}
         end,
     case GetReply of
         not_found ->
             prepare_put_new_object(State, PutArgs, IndexBackend);
         {ok, OldObj} ->
-            prepare_put_existing_object(State, PutArgs, OldObj,
-                                        IndexBackend, CacheData, RequiresGet)
+            prepare_put_existing_object(
+                State, PutArgs, OldObj, IndexBackend, CacheData, RequiresGet)
     end.
 
 prepare_put_existing_object(#state{idx =Idx} = State,
@@ -3018,7 +3016,8 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                      coord=Coord,
                      index_specs=IndexSpecs,
                      readrepair=ReadRepair,
-                     sync_on_write=SyncOnWrite}) ->
+                     sync_on_write=SyncOnWrite,
+                     reason=HookReason}) ->
     case ReadRepair of
       true ->
         MaxCheckFlag = no_max_check;
@@ -3040,13 +3039,15 @@ perform_put({true, {_Obj, _OldObj}=Objects},
                 false
         end,
     {Reply, State2} =
-        actual_put(BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag,
-                    {Coord, Sync}, State),
+        actual_put(
+            BKey, Objects, IndexSpecs, RB, ReqID, MaxCheckFlag,
+            {Coord, Sync}, HookReason, State),
     {Reply, State2}.
 
 actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, State) ->
-    actual_put(BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check,
-                {false, false}, State).
+    actual_put(
+        BKey, {Obj, OldObj}, IndexSpecs, RB, ReqID, do_max_check,
+        {false, false}, put, State).
 
 actual_put(BKey={Bucket, Key},
             {Obj, OldObj},
@@ -3054,6 +3055,7 @@ actual_put(BKey={Bucket, Key},
             RB, ReqID,
             MaxCheckFlag,
             {Coord, Sync},
+            HookReason,
             State=#state{idx=Idx,
                             mod=Mod,
                             modstate=ModState,
@@ -3067,7 +3069,8 @@ actual_put(BKey={Bucket, Key},
                         State#state.enable_nextgenreplsrc,
                         State#state.sizelimit_nextgenreplsrc),
             maybe_cache_object(BKey, Obj, State),
-            maybe_update(UpdateHook, {Obj, maybe_old_object(OldObj)}, put, Idx),
+            maybe_update(
+                UpdateHook, {Obj, maybe_old_object(OldObj)}, HookReason, Idx),
             Reply = case RB of
                 true ->
                     {dw, Idx, Obj, ReqID};
@@ -3097,13 +3100,16 @@ do_reformat({Bucket, Key}=BKey, State=#state{mod=Mod, modstate=ModState}) ->
             %% to the desired version, to reformat, all we need to do
             %% is submit a new write
             ST = riak_core_util:moment(),
-            PutArgs = #putargs{hash_ops = update,
-                               returnbody = false,
-                               bkey = BKey,
-                               index_specs = [],
-                               coord = false,
-                               lww = false,
-                               starttime = ST},
+            PutArgs = 
+                #putargs{
+                    hash_ops = update,
+                    returnbody = false,
+                    bkey = BKey,
+                    index_specs = [],
+                    coord = false,
+                    lww = false,
+                    starttime = ST,
+                    reason = put},
             case perform_put({true, {RObj, unchanged_no_old_object}}, State, PutArgs) of
                 {{fail, _, Reason}, UpdState}  ->
                     Reply = {error, Reason};
@@ -3531,7 +3537,10 @@ do_fold(Fun, Acc0, Sender, ReqOpts, State=#state{async_folding=AsyncFolding,
             {reply, ER, State}
     end.
 
--spec maybe_use_fold_heads(list(), list(), atom()) -> fun().
+-type foldfun() ::
+    fun((riak_kv_backend:fold_objects_fun(), any(), list(), term()) -> 
+        {ok, any()}|{async, fun(() -> any())}|{error, term()}).
+-spec maybe_use_fold_heads(list(), list(), atom()) -> foldfun().
 %% @private
 %% If the fold can potential service requests through headers of objects alone,
 %% then the fold_heads function can be used on the backend if it suppports that
@@ -3609,69 +3618,38 @@ do_get_vclock({Bucket, Key}, Mod, ModState) ->
 
 %% @private
 %% upon receipt of a handoff datum, there is no client FSM
-do_diffobj_put({Bucket, Key}=BKey, DiffObj,
-               StateData=#state{mod=Mod,
-                                modstate=ModState,
-                                idx=Idx,
-                                update_hook=UpdateHook}) ->
-    StartTS = os:timestamp(),
-    {ok, Capabilities} = Mod:capabilities(Bucket, ModState),
-    IndexBackend = lists:member(indexes, Capabilities),
-    maybe_cache_evict(BKey, StateData),
-    case do_get_object(Bucket, Key, Mod, ModState) of
-        {error, not_found, _UpdModState} ->
-            case IndexBackend of
-                true ->
-                    IndexSpecs = riak_object:index_specs(DiffObj);
-                false ->
-                    IndexSpecs = []
-            end,
-            {_, State2, DiffObj2} = maybe_new_actor_epoch(DiffObj, StateData),
-            case encode_and_put(DiffObj2, Mod, Bucket, Key,
-                                IndexSpecs, ModState, no_max_check, false) of
-                {{ok, UpdModState}, EncodedVal} ->
-                    aae_update(Bucket, Key, 
-                                DiffObj2, confirmed_no_old_object, EncodedVal, 
-                                StateData),
-                    update_index_write_stats(IndexBackend, IndexSpecs),
-                    update_vnode_stats(vnode_put, Idx, StartTS),
-                    maybe_update(UpdateHook, {DiffObj, no_old_object}, handoff, Idx),
-                    {ok, State2#state{modstate=UpdModState}};
-                {{error, Reason, UpdModState}, _Val} ->
-                    {error, Reason, State2#state{modstate=UpdModState}}
-            end;
-        {ok, OldObj, _UpdModState} ->
-            %% Merge handoff values with the current - possibly
-            %% discarding if out of date.
-            {IsNewEpoch, ActorId, State2} = maybe_new_key_epoch(false, StateData, OldObj, DiffObj),
-            case put_merge(false, false, OldObj, DiffObj, {IsNewEpoch, ActorId}, undefined) of
-                {oldobj, _} ->
-                    {ok, State2};
-                {newobj, NewObj} ->
-                    {ok, AMObj} = enforce_allow_mult(NewObj, OldObj, riak_core_bucket:get_bucket(Bucket)),
-                    case IndexBackend of
-                        true ->
-                            IndexSpecs = riak_object:diff_index_specs(AMObj, OldObj);
-                        false ->
-                            IndexSpecs = []
-                    end,
-                    case encode_and_put(AMObj, Mod, Bucket, Key,
-                                        IndexSpecs, ModState,
-                                        no_max_check, false) of
-                        {{ok, UpdModState}, EncodedVal} ->
-                            aae_update(Bucket, Key, 
-                                        AMObj, OldObj, EncodedVal, 
-                                        StateData),
-                            update_index_write_stats(IndexBackend, IndexSpecs),
-                            update_vnode_stats(vnode_put, Idx, StartTS),
-                            maybe_update(UpdateHook,
-                                        {AMObj, maybe_old_object(OldObj)},
-                                        handoff, Idx),
-                            {ok, State2#state{modstate=UpdModState}};
-                        {{error, Reason, UpdModState}, _Val} ->
-                            {error, Reason, State2#state{modstate=UpdModState}}
-                    end
-            end
+-spec do_handoff_put(
+        {riak_object:bucket(), riak_object:key()},
+            riak_object:riak_object(),
+            state()) -> {error, term(), state()}|{ok, state()}.
+do_handoff_put({Bucket, _Key}=BKey, HandoffObj, State) ->
+    BProps = riak_core_bucket:get_bucket(Bucket),
+    PutArgs = 
+        #putargs{
+            returnbody = false,
+            coord = false,
+            lww = proplists:get_value(last_write_wins, BProps, false),
+            bkey = BKey,
+            robj = HandoffObj,
+            reqid = erlang:phash2({self(), os:timestamp()}),
+            bprops = BProps,
+            starttime = riak_core_util:moment(),
+            readrepair = false,
+            prunetime = undefined,
+            crdt_op = undefined,
+                % crdt_op is used only to increment stats counters for CRDT
+                % changes.  These stats were not incremented when using the
+                % do_diffobj_put/3, and so this is undefined to maintain
+                % that behaviour 
+            sync_on_write = undefined,
+            reason = handoff},
+    {PrepPutRes, UpdPutArgs, State2} = prepare_put(State, PutArgs),
+    {Reply, UpdState} = perform_put(PrepPutRes, State2, UpdPutArgs),
+    case Reply of
+        {fail, _Idx, Reason} ->
+            {error, Reason, UpdState};
+        _ ->
+            {ok, UpdState}
     end.
 
 
