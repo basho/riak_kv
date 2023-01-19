@@ -50,7 +50,9 @@
 -export([ensemble/1]).
 -export([fetch/2, push/4]).
 -export([membership_request/1, replrtq_reset_all_peers/1, replrtq_reset_all_workercounts/2]).
+-export([tictacaae_suspend_node/0, tictacaae_resume_node/0]).
 -export([remove_node_from_coverage/0, reset_node_for_coverage/0]).
+-export([repair_node/0]).
 
 -compile({no_auto_import,[put/2]}).
 %% @type default_timeout() = 60000
@@ -901,13 +903,14 @@ aae_fold(Query) ->
 aae_fold(Query, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
-    TimeOut = ?DEFAULT_FOLD_TIMEOUT,
+    TimeOut = 
+        app_helper:get_env(
+            riak_kv, riak_client_aaefold_timeout, ?DEFAULT_FOLD_TIMEOUT),
     Q0 = riak_kv_clusteraae_fsm:convert_fold(Query),
     case riak_kv_clusteraae_fsm:is_valid_fold(Q0) of
         true ->
-            riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(Node,
-                                                            [{raw, ReqId, Me},
-                                                            [Q0, TimeOut]]),
+            riak_kv_clusteraae_fsm_sup:start_clusteraae_fsm(
+                Node, [{raw, ReqId, Me}, [Q0, TimeOut]]),
             wait_for_fold_results(ReqId, TimeOut);
         false ->
             {error, "Invalid AAE fold definition"}
@@ -929,9 +932,8 @@ ttaaefs_fullsync(WorkItem) ->
 -spec ttaaefs_fullsync(riak_kv_ttaaefs_manager:work_item(), integer()) -> ok.
 ttaaefs_fullsync(WorkItem, SecsTimeout) ->
     ReqId = mk_reqid(),
-    riak_kv_ttaaefs_manager:process_workitem(WorkItem,
-                                                ReqId,
-                                                os:timestamp()),
+    riak_kv_ttaaefs_manager:process_workitem(
+        WorkItem, ReqId, os:timestamp()),
     wait_for_reqid(ReqId, SecsTimeout * 1000).
 
 %% @doc
@@ -941,22 +943,42 @@ ttaaefs_fullsync(WorkItem, SecsTimeout) ->
                                                     erlang:timestamp()) -> ok.
 ttaaefs_fullsync(WorkItem, SecsTimeout, Now) ->
     ReqId = mk_reqid(),
-    riak_kv_ttaaefs_manager:process_workitem(WorkItem,
-                                                ReqId,
-                                                Now),
+    riak_kv_ttaaefs_manager:process_workitem(WorkItem, ReqId, Now),
     wait_for_reqid(ReqId, SecsTimeout * 1000).
 
+-spec repair_node() -> ok.
+repair_node() ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    NodeToRepair = node(),
+    PartitionsToRepair =
+        lists:filtermap(
+            fun({P, Node}) ->
+                case Node of
+                    NodeToRepair ->
+                        {true, P};
+                    _ ->
+                        false
+                end
+            end,
+            riak_core_ring:all_owners(Ring)),
+    [riak_kv_vnode:repair(P) || P <- PartitionsToRepair],
+    ok.
+
+-spec tictacaae_suspend_node() -> ok.
+tictacaae_suspend_node() ->
+    application:set_env(riak_kv, tictacaae_suspend, true).
+
+-spec tictacaae_resume_node() -> ok.
+tictacaae_resume_node() ->
+    application:set_env(riak_kv, tictacaae_suspend, false).
 
 -spec participate_in_coverage(boolean()) -> ok.
 participate_in_coverage(Participate) ->
     F =
-        fun(Ring, _) ->
+        fun(R, _) ->
             {new_ring, 
-                riak_core_ring:update_member_meta(node(),
-                                                    Ring,
-                                                    node(),
-                                                    participate_in_coverage,
-                                                    Participate)}
+                riak_core_ring:update_member_meta(
+                    node(), R, node(), participate_in_coverage, Participate)}
         end,
     {ok, _FinalRing} = riak_core_ring_manager:ring_trans(F, undefined),
     ok.

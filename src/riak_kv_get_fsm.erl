@@ -689,12 +689,30 @@ roll_d100() ->
 -endif.
 
 %% Issue read repairs for any vnodes that are out of date
-read_repair(Indices, RepairObj,
+read_repair(GetCoreIndices, RepairObj,
             #state{req_id = ReqId, starttime = StartTime,
                    preflist2 = Sent, bkey = BKey, crdt_op = CrdtOp,
                    bucket_props = BucketProps, trace = Trace}) ->
-    RepairPreflist = [{Idx, Node} || {{Idx, Node}, _Type} <- Sent,
-                                     get_option(Idx, Indices) /= undefined],
+    RepairPreflist =
+        lists:filtermap(
+            fun({{Idx, Node}, Type}) ->
+                read_repair_index({{Idx, Node}, Type}, GetCoreIndices)
+            end,
+            Sent),
+    DocIdxList =
+        lists:map(
+            fun({{Idx, Node}, _Type, Reason}) ->
+                case app_helper:get_env(riak_kv, read_repair_log, false) of
+                    true ->
+                        lager:info(
+                            "Read repair of ~p on ~w ~w for reason ~w",
+                            [BKey, Idx, Node, Reason]);
+                    false ->
+                        ok
+                    end,
+                {Idx, Node}
+            end,
+            RepairPreflist),
     case Trace of
         true ->
             Ps = preflist_for_tracing(RepairPreflist),
@@ -702,11 +720,33 @@ read_repair(Indices, RepairObj,
         _ ->
             ok
     end,
-    riak_kv_vnode:readrepair(RepairPreflist, BKey, RepairObj, ReqId,
+    riak_kv_vnode:readrepair(DocIdxList, BKey, RepairObj, ReqId,
                              StartTime, [{returnbody, false},
                                          {bucket_props, BucketProps},
                                          {crdt_op, CrdtOp}]),
-    ok = riak_kv_stat:update({read_repairs, Indices, Sent}).
+    ok = riak_kv_stat:update({read_repairs, RepairPreflist}).
+
+-spec read_repair_index(
+    {{non_neg_integer(), node()}, primary|fallback},
+        list({non_neg_integer(), outofdate|notfound})) ->
+            boolean()|
+                {true,
+                    {{non_neg_integer(), node()},
+                    primary|fallback,
+                    outofdate|notfound}}.
+read_repair_index({{Idx, Node}, Type}, Indices) ->
+    case get_option(Idx, Indices) of
+        undefined ->
+            false;
+        Reason ->
+            RRP = app_helper:get_env(riak_kv, read_repair_primaryonly, false),
+            case {RRP, Type} of
+                {true, fallback} ->
+                    false;
+                _ ->
+                {true, {{Idx, Node}, Type, Reason}}
+            end
+    end.
 
 get_option(Name, Options) ->
     get_option(Name, Options, undefined).

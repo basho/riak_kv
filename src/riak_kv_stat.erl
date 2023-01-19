@@ -268,9 +268,9 @@ do_update({index_fsm_time, Microsecs, ResultCount}) ->
     ok = exometer:update([P, ?APP, index, fsm, complete], 1),
     ok = exometer:update([P, ?APP, index, fsm, results], ResultCount),
     ok = exometer:update([P, ?APP, index, fsm, time], Microsecs);
-do_update({read_repairs, Indices, Preflist}) ->
+do_update({read_repairs, Preflist}) ->
     ok = exometer:update([?PFX, ?APP, node, gets, read_repairs], 1),
-    do_repairs(Indices, Preflist);
+    do_repairs(Preflist);
 do_update({tictac_aae, ExchangeState}) ->
     ok = exometer:update([?PFX, ?APP, node, tictacaae, ExchangeState], 1);
 do_update({tictac_aae, ExchangeType, RepairCount}) ->
@@ -507,19 +507,18 @@ do_stages(Path, [{Stage, Time}|Stages]) ->
     do_stages(Path, Stages).
 
 %% create dimensioned stats for read repairs.
-%% The indexes are from get core [{Index, Reason::notfound|outofdate}]
-%% preflist is a preflist of [{{Index, Node}, Type::primary|fallback}]
-do_repairs(Indices, Preflist) ->
+%% The preflist has been filtered to remove those that will not be subject to
+%% repair
+do_repairs(Preflist) ->
     Pfx = riak_core_stat:prefix(),
-    lists:foreach(fun({{Idx, Node}, Type}) ->
-                          case proplists:get_value(Idx, Indices) of
-                              undefined ->
-                                  ok;
-                              Reason ->
-                                  create_or_update([Pfx, ?APP, node, gets, read_repairs, Node, Type, Reason], 1, spiral)
-                          end
-                  end,
-                  Preflist).
+    lists:foreach(
+        fun({{_Idx, Node}, Type, Reason}) ->
+            create_or_update(
+                [Pfx, ?APP, node, gets, read_repairs, Node, Type, Reason],
+                1, 
+                spiral)
+        end,
+        Preflist).
 
 %% for dynamically created / dimensioned stats
 %% that can't be registered at start up
