@@ -307,8 +307,7 @@ maybe_validate_resource({true, _}, RD, Ctx, Perm) ->
     validate_resource(RD, Ctx, Perm).
 
 -spec validate_resource(#wm_reqdata{}, context(), string()) -> term().
-validate_resource(RD, Ctx, Perm)
-        when (Perm == "riak_kv.get" orelse Perm == "riak_kv.delete") ->
+validate_resource(RD, Ctx, Perm) when Perm == "riak_kv.get" ->
     %% Ensure the key is here, otherwise 404
     %% we do this early as it used to be done in the
     %% malformed check, so the rest of the resource
@@ -628,7 +627,7 @@ content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx)
     {[{ContentType, produce_doc_body}], RD, Ctx};
 content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx)
             when Method =:= 'DELETE' ->
-    {[], RD, Ctx};
+    {[{"text/html", to_html}], RD, Ctx};
 content_types_provided(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
     %% we can assume DocCtx#ctx.doc is {ok,Doc} because of malformed_request
@@ -747,8 +746,9 @@ content_types_accepted(RD, Ctx) ->
 %%      and either no vtag query parameter was specified, or the value of the
 %%      vtag param matches the vtag of some value of the Riak object.
 resource_exists(RD, Ctx0) ->
+    Method = Ctx0#ctx.method,
     ToFetch =
-        case Ctx0#ctx.method of
+        case Method of
             UpdM when UpdM =:= 'PUT'; UpdM =:= 'POST'; UpdM =:= 'DELETE' ->
                 conditional_headers_present(RD) == true;
             _ ->
@@ -764,11 +764,13 @@ resource_exists(RD, Ctx0) ->
                             {true, RD, DocCtx};
                         Vtag ->
                             MDs = riak_object:get_metadatas(Doc),
-                            {lists:any(fun(M) ->
-                                            dict:fetch(?MD_VTAG, M) =:= Vtag
+                            {lists:any(
+                                    fun(M) ->
+                                        dict:fetch(?MD_VTAG, M) =:= Vtag
                                     end,
                                     MDs),
-                            RD, DocCtx#ctx{vtag=Vtag}}
+                                RD,
+                                DocCtx#ctx{vtag=Vtag}}
                     end;
                 {error, _} ->
                     %% This should never actually be reached because all the 
@@ -777,7 +779,14 @@ resource_exists(RD, Ctx0) ->
                     {false, RD, DocCtx}
             end;
         false ->
-            {false, RD, Ctx0}
+            % Fake it - rather than fetch to see.  If we're deleting we assume
+            % it does exist, and if PUT/POST, assume it doesn't
+            case Method of
+                'DELETE' ->
+                    {true, RD, Ctx0};
+                _ ->
+                    {false, RD, Ctx0}
+            end
     end.
 
 -spec conditional_headers_present(request_data()) -> boolean().
@@ -1090,7 +1099,7 @@ select_doc(#ctx{doc={ok, Doc}, vtag=Vtag}) ->
                 Mult ->
                     case lists:dropwhile(
                            fun({M,_}) ->
-                                   dict:fetch(?MD_VTAG, M) /= Vtag
+                                dict:fetch(?MD_VTAG, M) /= Vtag
                            end,
                            Mult) of
                         [Match|_] -> Match;
@@ -1133,8 +1142,10 @@ ensure_doc(Ctx=#ctx{doc=undefined, bucket_type=T, bucket=B, key=K, client=C,
                     basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
     case riak_kv_wm_utils:bucket_type_exists(T) of
         true ->
-            Options0 = [deletedvclock, {basic_quorum, Quorum},
-                        {notfound_ok, NotFoundOK}],
+            Options0 =
+                [deletedvclock,
+                {basic_quorum, Quorum},
+                {notfound_ok, NotFoundOK}],
             Options = make_options(Options0, Ctx),
             BT = riak_kv_wm_utils:maybe_bucket_type(T,B),
             Ctx#ctx{doc=riak_client:get(BT, K, Options, C)};
