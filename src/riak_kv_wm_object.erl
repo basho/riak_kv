@@ -201,6 +201,11 @@
 -type link() :: {{Bucket::binary(), Key::binary()}, Tag::binary()}.
 
 -define(DEFAULT_TIMEOUT, 60000).
+-define(V1_BUCKET_REGEX, "/([^/]+)>; ?rel=\"([^\"]+)\"").
+-define(V1_KEY_REGEX, "/([^/]+)/([^/]+)>; ?riaktag=\"([^\"]+)\"").
+-define(V2_BUCKET_REGEX, "</buckets/([^/]+)>; ?rel=\"([^\"]+)\"").
+-define(V2_KEY_REGEX,
+            "</buckets/([^/]+)/keys/([^/]+)>; ?riaktag=\"([^\"]+)\"").
 
 -spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.  This function extracts the
@@ -220,23 +225,33 @@ init(Props) ->
 %%      query parameter.
 service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
     Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
-    case riak_kv_wm_utils:get_riak_client(RiakProps, riak_kv_wm_utils:get_client_id(RD)) of
+    ClientID = riak_kv_wm_utils:get_client_id(RD),
+    case riak_kv_wm_utils:get_riak_client(RiakProps, ClientID) of
         {ok, C} ->
+            Bucket =
+                case wrq:path_info(bucket, RD) of
+                    undefined ->
+                        undefined;
+                    B ->
+                        list_to_binary(
+                            riak_kv_wm_utils:maybe_decode_uri(RD, B))
+                end,
+            Key =
+                case wrq:path_info(key, RD) of
+                    undefined ->
+                        undefined;
+                    K ->
+                        list_to_binary(
+                            riak_kv_wm_utils:maybe_decode_uri(RD, K))
+                end,
             {true,
-             RD,
-             Ctx#ctx{
-               method=wrq:method(RD),
-               client=C,
-               bucket=case wrq:path_info(bucket, RD) of
-                         undefined -> undefined;
-                         B -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, B))
-                      end,
-               key=case wrq:path_info(key, RD) of
-                       undefined -> undefined;
-                       K -> list_to_binary(riak_kv_wm_utils:maybe_decode_uri(RD, K))
-                   end,
-               vtag=wrq:get_qs_value(?Q_VTAG, RD)
-              }};
+                RD,
+                Ctx#ctx{
+                    method=wrq:method(RD),
+                    client=C,
+                    bucket=Bucket,
+                    key=Key,
+                    vtag=wrq:get_qs_value(?Q_VTAG, RD)}};
         Error ->
             {false,
              wrq:set_resp_body(
@@ -271,7 +286,8 @@ forbidden(RD, Ctx) ->
 
 -spec validate(#wm_reqdata{}, context()) -> term().
 validate(RD, Ctx=#ctx{security=undefined}) ->
-    validate_resource(RD, Ctx, riak_kv_wm_utils:method_to_perm(Ctx#ctx.method));
+    validate_resource(
+        RD, Ctx, riak_kv_wm_utils:method_to_perm(Ctx#ctx.method));
 validate(RD, Ctx=#ctx{security=Security}) ->
     Perm = riak_kv_wm_utils:method_to_perm(Ctx#ctx.method),
     Res = riak_core_security:check_permission({Perm,
@@ -280,7 +296,8 @@ validate(RD, Ctx=#ctx{security=Security}) ->
                                               Security),
     maybe_validate_resource(Res, RD, Ctx, Perm).
 
--spec maybe_validate_resource(term(), #wm_reqdata{}, context(), string()) -> term().
+-spec maybe_validate_resource(
+        term(), #wm_reqdata{}, context(), string()) -> term().
 maybe_validate_resource({false, Error, _}, RD, Ctx, _Perm) ->
     RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
     {true, wrq:append_to_resp_body(
@@ -290,7 +307,8 @@ maybe_validate_resource({true, _}, RD, Ctx, Perm) ->
     validate_resource(RD, Ctx, Perm).
 
 -spec validate_resource(#wm_reqdata{}, context(), string()) -> term().
-validate_resource(RD, Ctx, Perm) when (Perm == "riak_kv.get" orelse Perm == "riak_kv.delete") ->
+validate_resource(RD, Ctx, Perm)
+        when (Perm == "riak_kv.get" orelse Perm == "riak_kv.delete") ->
     %% Ensure the key is here, otherwise 404
     %% we do this early as it used to be done in the
     %% malformed check, so the rest of the resource
@@ -401,11 +419,11 @@ malformed_timeout_param(RD, Ctx) ->
             catch
                 _:_ ->
                     {true,
-                     wrq:append_to_resp_body(io_lib:format("Bad timeout "
-                                                           "value ~p~n",
-                                                           [TimeoutStr]),
-                                             wrq:set_resp_header(?HEAD_CTYPE,
-                                                                 "text/plain", RD)),
+                        wrq:append_to_resp_body(
+                            io_lib:format("Bad timeout "
+                                            "value ~p~n",
+                                            [TimeoutStr]),
+                        wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD)),
                      Ctx}
             end
     end.
@@ -576,23 +594,26 @@ malformed_index_headers(RD, Ctx) ->
 extract_index_fields(RD) ->
     PrefixSize = length(?HEAD_INDEX_PREFIX),
     {ok, RE} = re:compile(",\\s"),
-    F = fun({K,V}, Acc) ->
-                KList = riak_kv_wm_utils:any_to_list(K),
-                case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
-                    true ->
-                        %% Isolate the name of the index field.
-                        IndexField = list_to_binary(element(2, lists:split(PrefixSize, KList))),
+    F = 
+        fun({K,V}, Acc) ->
+            KList = riak_kv_wm_utils:any_to_list(K),
+            case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
+                true ->
+                    %% Isolate the name of the index field.
+                    IndexField =
+                        list_to_binary(
+                            element(2, lists:split(PrefixSize, KList))),
 
-                        %% HACK ALERT: Split values on comma. The HTTP
-                        %% spec allows for comma separated tokens
-                        %% where the tokens can be quoted strings. We
-                        %% don't currently support quoted strings.
-                        %% (http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html)
-                        Values = re:split(V, RE, [{return, binary}]),
-                        [{IndexField, X} || X <- Values] ++ Acc;
-                    false ->
-                        Acc
-                end
+                    %% HACK ALERT: Split values on comma. The HTTP
+                    %% spec allows for comma separated tokens
+                    %% where the tokens can be quoted strings. We
+                    %% don't currently support quoted strings.
+                    %% (http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html)
+                    Values = re:split(V, RE, [{return, binary}]),
+                    [{IndexField, X} || X <- Values] ++ Acc;
+                false ->
+                    Acc
+            end
         end,
     lists:foldl(F, [], mochiweb_headers:to_list(wrq:req_headers(RD))).
 
@@ -605,6 +626,9 @@ content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx)
             when Method =:= 'PUT'; Method =:= 'POST' ->
     {ContentType, _} = extract_content_type(RD),
     {[{ContentType, produce_doc_body}], RD, Ctx};
+content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+            when Method =:= 'DELETE' ->
+    {[], RD, Ctx};
 content_types_provided(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
     %% we can assume DocCtx#ctx.doc is {ok,Doc} because of malformed_request
@@ -631,6 +655,9 @@ charsets_provided(RD, Ctx=#ctx{method=Method}=Ctx)
         {_, Charset} ->
             {[{Charset, fun(X) -> X end}], RD, Ctx}
     end;
+charsets_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+            when Method =:= 'DELETE' ->
+    {no_charset, RD, Ctx};
 charsets_provided(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
     case DocCtx#ctx.doc of
@@ -656,11 +683,14 @@ charsets_provided(RD, Ctx0) ->
 %%      The encoding for a key-level request is the encoding that was
 %%      used in the PUT request that stored the document in Riak, or
 %%      "identity" and "gzip" if no encoding was specified at PUT-time.
-encodings_provided(RD, Ctx=#ctx{method=Method}=Ctx)
-            when Method =:= 'PUT'; Method =:= 'POST' ->
-    {riak_kv_wm_utils:default_encodings(), RD, Ctx};
 encodings_provided(RD, Ctx0) ->
-    DocCtx = ensure_doc(Ctx0),
+    DocCtx =
+        case Ctx0#ctx.method of
+            UpdM when UpdM =:= 'PUT'; UpdM =:= 'POST'; UpdM =:= 'DELETE' ->
+                Ctx0;
+            _ ->
+                ensure_doc(Ctx0)
+        end,
     case DocCtx#ctx.doc of
         {ok, _} ->
             case select_doc(DocCtx) of
@@ -674,7 +704,7 @@ encodings_provided(RD, Ctx0) ->
                 multiple_choices ->
                     {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
             end;
-        {error, _} ->
+        _ ->
             {riak_kv_wm_utils:default_encodings(), RD, DocCtx}
     end.
 
@@ -719,7 +749,7 @@ content_types_accepted(RD, Ctx) ->
 resource_exists(RD, Ctx0) ->
     ToFetch =
         case Ctx0#ctx.method of
-            Method when Method =:= 'PUT'; Method =:= 'POST' ->
+            UpdM when UpdM =:= 'PUT'; UpdM =:= 'POST'; UpdM =:= 'DELETE' ->
                 conditional_headers_present(RD) == true;
             _ ->
                 true
@@ -797,26 +827,40 @@ process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 %% @doc Store the data the client is PUTing in the document.
 %%      This function translates the headers and body of the HTTP request
 %%      into their final riak_object() form, and executes the Riak put.
-accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, index_fields=IF}) ->
+accept_doc_body(
+        RD,
+        Ctx=#ctx{
+            bucket_type=T, bucket=B, key=K, client=C,
+            links=L,
+            index_fields=IF}) ->
     Doc0 = riak_object:new(riak_kv_wm_utils:maybe_bucket_type(T,B), K, <<>>),
     VclockDoc = riak_object:set_vclock(Doc0, decode_vclock_header(RD)),
     {CType, Charset} = extract_content_type(RD),
     UserMeta = extract_user_meta(RD),
     CTypeMD = dict:store(?MD_CTYPE, CType, dict:new()),
-    CharsetMD = if Charset /= undefined ->
-                        dict:store(?MD_CHARSET, Charset, CTypeMD);
-                   true -> CTypeMD
-                end,
-    EncMD = case wrq:get_req_header(?HEAD_ENCODING, RD) of
-                undefined -> CharsetMD;
-                E -> dict:store(?MD_ENCODING, E, CharsetMD)
-            end,
+    CharsetMD = 
+        if Charset /= undefined ->
+                dict:store(?MD_CHARSET, Charset, CTypeMD);
+            true ->
+                CTypeMD
+        end,
+    EncMD =
+        case wrq:get_req_header(?HEAD_ENCODING, RD) of
+            undefined -> CharsetMD;
+            E -> dict:store(?MD_ENCODING, E, CharsetMD)
+        end,
     LinkMD = dict:store(?MD_LINKS, L, EncMD),
     UserMetaMD = dict:store(?MD_USERMETA, UserMeta, LinkMD),
     IndexMD = dict:store(?MD_INDEX, IF, UserMetaMD),
     MDDoc = riak_object:update_metadata(VclockDoc, IndexMD),
-    Doc = riak_object:update_value(MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
-    Options0 = case wrq:get_qs_value(?Q_RETURNBODY, RD) of ?Q_TRUE -> [returnbody]; _ -> [] end,
+    Doc =
+        riak_object:update_value(
+            MDDoc, riak_kv_wm_utils:accept_value(CType, wrq:req_body(RD))),
+    Options0 =
+        case wrq:get_qs_value(?Q_RETURNBODY, RD) of
+            ?Q_TRUE -> [returnbody];
+            _ -> []
+        end,
     Options = make_options(Options0, Ctx),
     NoneMatch = (wrq:get_req_header("If-None-Match", RD) =/= undefined),
     Options2 = case riak_kv_util:consistent_object(B) and NoneMatch of
@@ -846,7 +890,8 @@ send_returnbody(RD, DocCtx, _HasSiblings = false) ->
 %% multipart body, depending on what the client accepts.
 send_returnbody(RD, DocCtx, _HasSiblings = true) ->
     AcceptHdr = wrq:get_req_header("Accept", RD),
-    case webmachine_util:choose_media_type(["multipart/mixed", "text/plain"], AcceptHdr) of
+    PossibleTypes = ["multipart/mixed", "text/plain"],
+    case webmachine_util:choose_media_type(PossibleTypes, AcceptHdr) of
         "multipart/mixed"  ->
             {Body, DocRD, DocCtx2} = produce_multipart_body(RD, DocCtx),
             {DocRD2, DocCtx3} = add_conditional_headers(DocRD, DocCtx2),
@@ -863,9 +908,14 @@ send_returnbody(RD, DocCtx, _HasSiblings = true) ->
 add_conditional_headers(RD, Ctx) ->
     {ETag, RD2, Ctx2} = generate_etag(RD, Ctx),
     {LM, RD3, Ctx3} = last_modified(RD2, Ctx2),
-    RD4 = wrq:set_resp_header("ETag", webmachine_util:quoted_string(ETag), RD3),
-    RD5 = wrq:set_resp_header("Last-Modified",
-                              httpd_util:rfc1123_date(calendar:universal_time_to_local_time(LM)), RD4),
+    RD4 =
+        wrq:set_resp_header(
+            "ETag", webmachine_util:quoted_string(ETag), RD3),
+    RD5 =
+        wrq:set_resp_header(
+            "Last-Modified",
+            httpd_util:rfc1123_date(
+                calendar:universal_time_to_local_time(LM)), RD4),
     {RD5,Ctx3}.
 
 -spec extract_content_type(#wm_reqdata{}) ->
@@ -927,7 +977,11 @@ multiple_choices(RD, Ctx) ->
                     {false, RD, Ctx}
             end;
         multiple_choices ->
-            throw({unexpected_code_path, ?MODULE, multiple_choices, multiple_choices})
+            throw(
+                {unexpected_code_path,
+                ?MODULE,
+                multiple_choices,
+                multiple_choices})
     end.
 
 -spec produce_doc_body(#wm_reqdata{}, context()) ->
@@ -949,33 +1003,45 @@ produce_doc_body(RD, Ctx) ->
                         {ok, L} -> L;
                         error -> []
                     end,
-            Links2 = riak_kv_wm_utils:format_links([{Bucket, "up"}|Links1], Prefix, APIVersion),
+            Links2 =
+                riak_kv_wm_utils:format_links(
+                    [{Bucket, "up"}|Links1], Prefix, APIVersion),
             LinkRD = wrq:merge_resp_headers(Links2, RD),
 
             %% Add user metadata to response...
             UserMetaRD = case dict:find(?MD_USERMETA, MD) of
                         {ok, UserMeta} ->
-                            lists:foldl(fun({K,V},Acc) ->
-                                            wrq:merge_resp_headers([{K,V}],Acc)
-                                        end,
-                                        LinkRD, UserMeta);
+                            lists:foldl(
+                                fun({K,V},Acc) ->
+                                    wrq:merge_resp_headers([{K,V}],Acc)
+                                end,
+                                LinkRD, UserMeta);
                         error -> LinkRD
                     end,
 
             %% Add index metadata to response...
-            IndexRD = case dict:find(?MD_INDEX, MD) of
-                          {ok, IndexMeta} ->
-                              lists:foldl(fun({K,V}, Acc) ->
-                                                  K1 = riak_kv_wm_utils:any_to_list(K),
-                                                  V1 = riak_kv_wm_utils:any_to_list(V),
-                                                  wrq:merge_resp_headers([{?HEAD_INDEX_PREFIX ++ K1, V1}], Acc)
-                                          end,
-                                          UserMetaRD, IndexMeta);
-                          error -> UserMetaRD
-                      end,
-            {riak_kv_wm_utils:encode_value(Doc), encode_vclock_header(IndexRD, Ctx), Ctx};
+            IndexRD =
+                case dict:find(?MD_INDEX, MD) of
+                    {ok, IndexMeta} ->
+                        lists:foldl(
+                        fun({K,V}, Acc) ->
+                            K1 = riak_kv_wm_utils:any_to_list(K),
+                            V1 = riak_kv_wm_utils:any_to_list(V),
+                            wrq:merge_resp_headers(
+                                [{?HEAD_INDEX_PREFIX ++ K1, V1}], Acc)
+                        end,
+                        UserMetaRD, IndexMeta);
+                    error ->
+                        UserMetaRD
+                end,
+            {riak_kv_wm_utils:encode_value(Doc),
+                encode_vclock_header(IndexRD, Ctx), Ctx};
         multiple_choices ->
-            throw({unexpected_code_path, ?MODULE, produce_doc_body, multiple_choices})
+            throw(
+                {unexpected_code_path,
+                ?MODULE,
+                produce_doc_body,
+                multiple_choices})
     end.
 
 -spec produce_sibling_message_body(#wm_reqdata{}, context()) ->
@@ -1042,7 +1108,8 @@ encode_vclock_header(RD, #ctx{doc={ok, Doc}}) ->
     wrq:set_resp_header(Head, Val, RD);
 encode_vclock_header(RD, #ctx{doc={error, {deleted, VClock}}}) ->
     BinVClock = riak_object:encode_vclock(VClock),
-    wrq:set_resp_header(?HEAD_VCLOCK, binary_to_list(base64:encode(BinVClock)), RD).
+    wrq:set_resp_header(
+        ?HEAD_VCLOCK, binary_to_list(base64:encode(BinVClock)), RD).
 
 -spec decode_vclock_header(#wm_reqdata{}) -> vclock:vclock().
 %% @doc Translate the X-Riak-Vclock header value from the request into
@@ -1091,10 +1158,12 @@ delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
                 riak_client:delete_vclock(BT, K, VC, Options, C)
         end,
     case Result of
-        {error, Reason} ->
-            handle_common_error(Reason, RD, Ctx);
         ok ->
-            {true, RD, Ctx}
+            {true, RD, Ctx};
+        {error, notfound} ->
+            {true, RD, Ctx};
+        {error, Reason} ->
+            handle_common_error(Reason, RD, Ctx)
     end.
 
 -ifndef(old_hash).
@@ -1125,9 +1194,10 @@ generate_etag(RD, Ctx) ->
 -spec last_modified(#wm_reqdata{}, context()) ->
     {undefined|calendar:datetime(), #wm_reqdata{}, context()}.
 %% @doc Get the last-modified time for this resource.
-%%      Documents will have the last-modified time specified by the riak_object.
-%%      For documents with siblings, this is the last-modified time of the latest
-%%      sibling.
+%%      Documents will have the last-modified time specified by the 
+%%      riak_object.
+%%      For documents with siblings, this is the last-modified time of the
+%%      latest sibling.
 last_modified(RD, Ctx) ->
     case select_doc(Ctx) of
         {MD, _} ->
@@ -1171,13 +1241,17 @@ get_link_heads(RD, Ctx) ->
     {BucketLinks, KeyLinks} =
         case APIVersion of
             1 ->
-                {ok, BucketRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)>; ?rel=\"([^\"]+)\""),
-                {ok, KeyRegex} = re:compile("</" ++ Prefix ++ "/([^/]+)/([^/]+)>; ?riaktag=\"([^\"]+)\""),
+                {ok, BucketRegex} =
+                    re:compile("</" ++ Prefix ++ ?V1_BUCKET_REGEX),
+                {ok, KeyRegex} =
+                    re:compile("</" ++ Prefix ++ ?V1_KEY_REGEX),
                 extract_links(LinkHeaders1, BucketRegex, KeyRegex);
             %% @todo Handle links in API Version 3?
             Two when Two >= 2 ->
-                {ok, BucketRegex} = re:compile("</buckets/([^/]+)>; ?rel=\"([^\"]+)\""),
-                {ok, KeyRegex} = re:compile("</buckets/([^/]+)/keys/([^/]+)>; ?riaktag=\"([^\"]+)\""),
+                {ok, BucketRegex} =
+                    re:compile(?V2_BUCKET_REGEX),
+                {ok, KeyRegex} =
+                    re:compile(?V2_KEY_REGEX),
                 extract_links(LinkHeaders1, BucketRegex, KeyRegex)
         end,
 
