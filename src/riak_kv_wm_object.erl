@@ -188,14 +188,19 @@
 -type riak_kv_wm_object_dict() :: dict().
 -endif.
 
+-include_lib("webmachine/include/webmachine.hrl").
+-include("riak_kv_wm_raw.hrl").
+
 -type context() :: #ctx{}.
+-type request_data() :: #wm_reqdata{}.
+
+-type validation_function() ::
+    fun((request_data(), context()) ->
+        {boolean()|{halt, pos_integer()}, request_data(), context()}).
 
 -type link() :: {{Bucket::binary(), Key::binary()}, Tag::binary()}.
 
 -define(DEFAULT_TIMEOUT, 60000).
-
--include_lib("webmachine/include/webmachine.hrl").
--include("riak_kv_wm_raw.hrl").
 
 -spec init(proplists:proplist()) -> {ok, context()}.
 %% @doc Initialize this resource.  This function extracts the
@@ -358,7 +363,9 @@ malformed_request(RD, Ctx) ->
 %% @doc Given a list of 2-arity funs, threads through the request data
 %% and context, returning as soon as a single fun discovers a
 %% malformed request or halts.
--spec malformed_request([fun()], #wm_reqdata{}, #ctx{}) -> {boolean() | {halt, non_neg_integer()}, #wm_reqdata{}, #ctx{}}.
+-spec malformed_request(
+        list(validation_function()), request_data(), context()) ->
+            {boolean() | {halt, pos_integer()}, request_data(), context()}.
 malformed_request([], RD, Ctx) ->
     {false, RD, Ctx};
 malformed_request([H|T], RD, Ctx) ->
@@ -594,8 +601,8 @@ extract_index_fields(RD) ->
 %% @doc List the content types available for representing this resource.
 %%      The content-type for a key-level request is the content-type that
 %%      was used in the PUT request that stored the document in Riak.
-content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx) when Method =:= 'PUT';
-                                                             Method =:= 'POST' ->
+content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+            when Method =:= 'PUT'; Method =:= 'POST' ->
     {ContentType, _} = extract_content_type(RD),
     {[{ContentType, produce_doc_body}], RD, Ctx};
 content_types_provided(RD, Ctx0) ->
@@ -616,8 +623,8 @@ content_types_provided(RD, Ctx0) ->
 %%      The charset for a key-level request is the charset that was used
 %%      in the PUT request that stored the document in Riak (none if
 %%      no charset was specified at PUT-time).
-charsets_provided(RD, #ctx{method=Method}=Ctx) when Method =:= 'PUT';
-                                                    Method =:= 'POST' ->
+charsets_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+            when Method =:= 'PUT'; Method =:= 'POST' ->
     case extract_content_type(RD) of
         {_, undefined} ->
             {no_charset, RD, Ctx};
@@ -764,10 +771,7 @@ process_post(RD, Ctx) -> accept_doc_body(RD, Ctx).
 %%      This function translates the headers and body of the HTTP request
 %%      into their final riak_object() form, and executes the Riak put.
 accept_doc_body(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C, links=L, index_fields=IF}) ->
-    Doc0 = case Ctx#ctx.doc of
-               {ok, D} -> D;
-               _       -> riak_object:new(riak_kv_wm_utils:maybe_bucket_type(T,B), K, <<>>)
-           end,
+    Doc0 = riak_object:new(riak_kv_wm_utils:maybe_bucket_type(T,B), K, <<>>),
     VclockDoc = riak_object:set_vclock(Doc0, decode_vclock_header(RD)),
     {CType, Charset} = extract_content_type(RD),
     UserMeta = extract_user_meta(RD),
@@ -1029,6 +1033,9 @@ decode_vclock_header(RD) ->
 %%      convenience for memoizing the result of a get so it can be
 %%      used in multiple places in this resource, without having to
 %%      worry about the order of executing of those places.
+ensure_doc(
+    Ctx=#ctx{method=Method}=Ctx) when Method =:= 'PUT'; Method =:= 'POST' ->
+    Ctx;
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket_type=T, bucket=B, key=K, client=C,
