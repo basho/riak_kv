@@ -656,6 +656,9 @@ charsets_provided(RD, Ctx0) ->
 %%      The encoding for a key-level request is the encoding that was
 %%      used in the PUT request that stored the document in Riak, or
 %%      "identity" and "gzip" if no encoding was specified at PUT-time.
+encodings_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+            when Method =:= 'PUT'; Method =:= 'POST' ->
+    {riak_kv_wm_utils:default_encodings(), RD, Ctx};
 encodings_provided(RD, Ctx0) ->
     DocCtx = ensure_doc(Ctx0),
     case DocCtx#ctx.doc of
@@ -714,25 +717,49 @@ content_types_accepted(RD, Ctx) ->
 %%      and either no vtag query parameter was specified, or the value of the
 %%      vtag param matches the vtag of some value of the Riak object.
 resource_exists(RD, Ctx0) ->
-    DocCtx = ensure_doc(Ctx0),
-    case DocCtx#ctx.doc of
-        {ok, Doc} ->
-            case DocCtx#ctx.vtag of
-                undefined ->
-                    {true, RD, DocCtx};
-                Vtag ->
-                    MDs = riak_object:get_metadatas(Doc),
-                    {lists:any(fun(M) ->
-                                       dict:fetch(?MD_VTAG, M) =:= Vtag
-                               end,
-                               MDs),
-                     RD, DocCtx#ctx{vtag=Vtag}}
+    ToFetch =
+        case Ctx0#ctx.method of
+            Method when Method =:= 'PUT'; Method =:= 'POST' ->
+                conditional_headers_present(RD) == true;
+            _ ->
+                true
+        end,
+    case ToFetch of
+        true ->
+            DocCtx = ensure_doc(Ctx0),
+            case DocCtx#ctx.doc of
+                {ok, Doc} ->
+                    case DocCtx#ctx.vtag of
+                        undefined ->
+                            {true, RD, DocCtx};
+                        Vtag ->
+                            MDs = riak_object:get_metadatas(Doc),
+                            {lists:any(fun(M) ->
+                                            dict:fetch(?MD_VTAG, M) =:= Vtag
+                                    end,
+                                    MDs),
+                            RD, DocCtx#ctx{vtag=Vtag}}
+                    end;
+                {error, _} ->
+                    %% This should never actually be reached because all the 
+                    %% error conditions from ensure_doc are handled up in
+                    %% malformed_request.
+                    {false, RD, DocCtx}
             end;
-        {error, _} ->
-            %% This should never actually be reached because all the error
-            %% conditions from ensure_doc are handled up in malformed_request.
-            {false, RD, DocCtx}
+        false ->
+            {false, RD, Ctx0}
     end.
+
+-spec conditional_headers_present(request_data()) -> boolean().
+conditional_headers_present(RD) ->
+    NoneMatch =
+        (wrq:get_req_header("If-None-Match", RD) =/= undefined),
+    Match =
+        (wrq:get_req_header("If-Match", RD) =/= undefined),
+    UnModifiedSince =
+        (wrq:get_req_header("If-Unmodified-Since", RD) =/= undefined),
+    (NoneMatch or Match or UnModifiedSince).
+
 
 -spec post_is_create(#wm_reqdata{}, context()) ->
     {boolean(), #wm_reqdata{}, context()}.
@@ -1033,9 +1060,6 @@ decode_vclock_header(RD) ->
 %%      convenience for memoizing the result of a get so it can be
 %%      used in multiple places in this resource, without having to
 %%      worry about the order of executing of those places.
-ensure_doc(
-    Ctx=#ctx{method=Method}=Ctx) when Method =:= 'PUT'; Method =:= 'POST' ->
-    Ctx;
 ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket_type=T, bucket=B, key=K, client=C,
