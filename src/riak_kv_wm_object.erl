@@ -137,6 +137,7 @@
          allow_missing_post/2,
          malformed_request/2,
          resource_exists/2,
+         is_conflict/2,
          last_modified/2,
          generate_etag/2,
          content_types_provided/2,
@@ -789,6 +790,28 @@ resource_exists(RD, Ctx0) ->
             end
     end.
 
+-spec is_conflict(request_data(), context()) ->
+        {boolean(), request_data(), context()}.
+is_conflict(RD, Ctx) ->
+    case {Ctx#ctx.method, wrq:get_req_header(?HEAD_IF_NOT_MODIFIED, RD)} of
+        {_ , undefined} ->
+            {false, RD, Ctx};
+        {UpdM, NotModifiedClock} when UpdM =:= 'PUT'; UpdM =:= 'POST' ->
+            case Ctx#ctx.doc of
+                {ok, Obj} -> 
+                    InClock =
+                        riak_object:decode_vclock(
+                            base64:decode(NotModifiedClock)),
+                    CurrentClock =
+                        riak_object:vclock(Obj),
+                    {not vclock:equal(InClock, CurrentClock), RD, Ctx};
+                _ ->
+                    {true, RD, Ctx}
+            end;
+        _ ->
+            {false, RD, Ctx}
+    end.
+
 -spec conditional_headers_present(request_data()) -> boolean().
 conditional_headers_present(RD) ->
     NoneMatch =
@@ -797,7 +820,9 @@ conditional_headers_present(RD) ->
         (wrq:get_req_header("If-Match", RD) =/= undefined),
     UnModifiedSince =
         (wrq:get_req_header("If-Unmodified-Since", RD) =/= undefined),
-    (NoneMatch or Match or UnModifiedSince).
+    NotModified =
+        (wrq:get_req_header(?HEAD_IF_NOT_MODIFIED, RD) =/= undefined),
+    (NoneMatch or Match or UnModifiedSince or NotModified).
 
 
 -spec post_is_create(#wm_reqdata{}, context()) ->

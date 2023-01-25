@@ -37,6 +37,7 @@
 -define(HEAD_DELETED,         "X-Riak-Deleted").
 -define(HEAD_TIMEOUT,         "X-Riak-Timeout").
 -define(HEAD_CRDT_CONTEXT,    "X-Riak-CRDT-Ctx").
+-define(HEAD_IF_NOT_MODIFIED, "X-Riak_If_Not_Modified").
 
 %% Names of JSON fields in bucket properties
 -define(JSON_PROPS,   <<"props">>).
