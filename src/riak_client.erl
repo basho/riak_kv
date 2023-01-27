@@ -531,7 +531,7 @@ delete(Bucket,Key,{?MODULE, [_Node, _ClientId]}=THIS) -> delete(Bucket,Key,[],?D
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
 delete(Bucket,Key,Options,{?MODULE, [_Node, _ClientId]}=THIS) when is_list(Options) ->
-    delete(Bucket,Key,Options,?DEFAULT_TIMEOUT,THIS);
+    delete(Bucket,Key,Options,recv_timeout(Options),THIS);
 delete(Bucket,Key,RW,{?MODULE, [_Node, _ClientId]}=THIS) ->
     delete(Bucket,Key,[{rw, RW}],?DEFAULT_TIMEOUT,THIS).
 
@@ -622,7 +622,7 @@ delete_vclock(Bucket,Key,VClock,{?MODULE, [_Node, _ClientId]}=THIS) ->
 %%      nodes have responded with a value or error.
 %% @equiv delete(Bucket, Key, RW, default_timeout())
 delete_vclock(Bucket,Key,VClock,Options,{?MODULE, [_Node, _ClientId]}=THIS) when is_list(Options) ->
-    delete_vclock(Bucket,Key,VClock,Options,?DEFAULT_TIMEOUT,THIS);
+    delete_vclock(Bucket,Key,VClock,Options,recv_timeout(Options),THIS);
 delete_vclock(Bucket,Key,VClock,RW,{?MODULE, [_Node, _ClientId]}=THIS) ->
     delete_vclock(Bucket,Key,VClock,[{rw, RW}],?DEFAULT_TIMEOUT,THIS).
 

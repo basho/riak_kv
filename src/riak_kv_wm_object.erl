@@ -1196,8 +1196,6 @@ delete_resource(RD, Ctx=#ctx{bucket_type=T, bucket=B, key=K, client=C}) ->
     case Result of
         ok ->
             {true, RD, Ctx};
-        {error, notfound} ->
-            {true, RD, Ctx};
         {error, Reason} ->
             handle_common_error(Reason, RD, Ctx)
     end.
