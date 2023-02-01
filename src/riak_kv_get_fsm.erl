@@ -23,6 +23,7 @@
 -module(riak_kv_get_fsm).
 -behaviour(gen_fsm).
 -include_lib("riak_kv_vnode.hrl").
+-include_lib("kernel/include/logger.hrl").
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -export([test_link/7, test_link/5]).
@@ -704,7 +705,7 @@ read_repair(GetCoreIndices, RepairObj,
             fun({{Idx, Node}, _Type, Reason}) ->
                 case app_helper:get_env(riak_kv, read_repair_log, false) of
                     true ->
-                        lager:info(
+                        ?LOG_INFO(
                             "Read repair of ~p on ~w ~w for reason ~w",
                             [BKey, Idx, Node, Reason]);
                     false ->
