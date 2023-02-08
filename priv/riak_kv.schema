@@ -1493,3 +1493,10 @@
     {default, disabled},
     hidden
 ]}.
+
+%% @doc When doing handoffs, forward delete requests so that if the delete_mode
+%% is not keep, tombstones will still be reaped.
+{mapping, "handoff_deletes", "riak_kv.handoff_deletes", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled}
+]}.
