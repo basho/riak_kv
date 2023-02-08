@@ -2326,6 +2326,16 @@ handle_handoff_request(kv_w1c_put_request, Request, Sender, State) ->
             NewState
     end,
     {forward, NewState0};
+handle_handoff_request(kv_delete_request, Request, Sender, State) ->
+    {reply, Reply, NewState} =
+        handle_request(kv_delete_request, Request, Sender, State),
+    riak_core_vnode:reply(Sender, Reply),
+    case Reply of
+        {del, _Idx, _Reason} ->
+            {forward, NewState};
+        _ ->
+            {noreply, NewState}
+    end;
 handle_handoff_request(_Other, Req, Sender, State) ->
     %% @todo: this should be based on the type of the request when the
     %%        hiding of records is complete.
