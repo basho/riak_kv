@@ -2327,14 +2327,13 @@ handle_handoff_request(kv_w1c_put_request, Request, Sender, State) ->
     end,
     {forward, NewState0};
 handle_handoff_request(kv_delete_request, Request, Sender, State) ->
-    {reply, Reply, NewState} =
-        handle_request(kv_delete_request, Request, Sender, State),
-    riak_core_vnode:reply(Sender, Reply),
-    case Reply of
-        {del, _Idx, _Reason} ->
+    HandoffDeletes = app_helper:get_env(riak_kv, handoff_deletes),
+    case {HandoffDeletes, handle_command(Request, Sender, State)} of
+        {true, {reply, {del, Idx, Reason}, NewState}} ->
+            riak_core_vnode:reply(Sender, {del, Idx, Reason}),
             {forward, NewState};
-        _ ->
-            {noreply, NewState}
+        {_, Result} ->
+            Result
     end;
 handle_handoff_request(_Other, Req, Sender, State) ->
     %% @todo: this should be based on the type of the request when the
