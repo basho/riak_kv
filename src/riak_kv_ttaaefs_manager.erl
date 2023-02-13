@@ -630,7 +630,7 @@ handle_cast({auto_check, ReqID, From, Now}, State) ->
                 [ReqID, Clause]),
             process_workitem(range_check, ReqID, From, Now)
     end,
-    {noreply, State, timeout}.
+    {noreply, State}.
 
 
 handle_info(timeout, State) ->
