@@ -616,6 +616,8 @@ data_size(_State) ->
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref, compact_journal, State) ->
+    log_fragmentation(eheap_alloc),
+    log_fragmentation(binary_alloc),
     case is_reference(Ref) of
         true ->
              prompt_journalcompaction(State#state.bookie,
@@ -634,6 +636,31 @@ callback(Ref, UnexpectedCallback, State) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+
+-spec log_fragmentation(eheap_alloc|binary_alloc) -> ok.
+log_fragmentation(Allocator) ->
+    FragStats =
+        lists:filter(
+            fun(MemStuff) ->
+                element(1, element(1, MemStuff)) == Allocator
+            end,
+            recon_alloc:fragmentation(current)),
+    {MB_BS, MB_CS, SB_BS, SB_CS} =
+        lists:foldl(
+            fun({{_A, _I}, Stats}, {MBAcc, MCAcc, SBAcc, SCAcc}) ->
+                {MBAcc + proplists:get_value(mbcs_block_size, Stats),
+                    MCAcc + proplists:get_value(mbcs_carriers_size, Stats),
+                    SBAcc + proplists:get_value(sbcs_block_size, Stats),
+                    SCAcc + proplists:get_value(sbcs_carriers_size, Stats)}
+            end,
+            {0, 0, 0, 0},
+            FragStats),
+    lager:info(
+        "Memory for allocator=~p "
+        "mbcs_block_size=~w mbcs_carrier_size=~w "
+        "sbcs_block_size=~w sbcs_carrier_size=~W",
+        [MB_BS, MB_CS, SB_BS, SB_CS]).
 
 %% @private
 %% Complete a PUT, with the sync option true/false depending on whether 
