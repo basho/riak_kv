@@ -659,7 +659,7 @@ log_fragmentation(Allocator) ->
     lager:info(
         "Memory for allocator=~p "
         "mbcs_block_size=~w mbcs_carrier_size=~w "
-        "sbcs_block_size=~w sbcs_carrier_size=~W",
+        "sbcs_block_size=~w sbcs_carrier_size=~w",
         [Allocator, MB_BS, MB_CS, SB_BS, SB_CS]).
 
 %% @private
