@@ -616,8 +616,8 @@ data_size(_State) ->
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref, compact_journal, State) ->
-    log_fragmentation(eheap_alloc),
-    log_fragmentation(binary_alloc),
+    _ = spawn(fun() -> log_fragmentation(eheap_alloc) end),
+    _ = spawn(fun() -> log_fragmentation(binary_alloc) end),
     case is_reference(Ref) of
         true ->
              prompt_journalcompaction(State#state.bookie,
