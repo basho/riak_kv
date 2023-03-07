@@ -642,9 +642,9 @@ callback(Ref, UnexpectedCallback, State) ->
 log_fragmentation(Allocator) ->
     {MB_BS, MB_CS, SB_BS, SB_CS} =
         lists:foldl(
-            fun({{A, I}, Stats}, {MBAcc, MCAcc, SBAcc, SCAcc}) ->
-                case {{A, I}, Stats} of
-                    {{Allocator, I}, Stats} when I > 0 ->
+            fun(ReconAllocOutputLine, {MBAcc, MCAcc, SBAcc, SCAcc}) ->
+                case ReconAllocOutputLine of
+                    {{Allocator, I}, Stats} when I > 0, is_list(Stats) ->
                         {MBAcc + proplists:get_value(
                                     mbcs_block_size, Stats, 0),
                             MCAcc + proplists:get_value(
