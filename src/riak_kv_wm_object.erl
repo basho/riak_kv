@@ -157,6 +157,7 @@
 
 -record(ctx, {api_version,  %% integer() - Determine which version of the API to use.
               bucket_type,  %% binary() - Bucket type (from uri)
+              type_exists,  %% bool() - Type exists as riak_core_bucket_type
               bucket,       %% binary() - Bucket name (from uri)
               key,          %% binary() - Key (from uri)
               client,       %% riak_client() - the store client
@@ -225,7 +226,7 @@ init(Props) ->
 %%      bindings from the dispatch, as well as any vtag
 %%      query parameter.
 service_available(RD, Ctx0=#ctx{riak=RiakProps}) ->
-    Ctx = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx0, #ctx.bucket_type),
+    Ctx = ensure_bucket_type(RD, Ctx0),
     ClientID = riak_kv_wm_utils:get_client_id(RD),
     case riak_kv_wm_utils:get_riak_client(RiakProps, ClientID) of
         {ok, C} ->
@@ -331,7 +332,7 @@ validate_doc(RD, Ctx) ->
 
 %% @doc Detects whether the requested object's bucket-type exists.
 validate_bucket_type(RD, Ctx) ->
-    case riak_kv_wm_utils:bucket_type_exists(Ctx#ctx.bucket_type) of
+    case Ctx#ctx.type_exists of
         true ->
             {false, RD, Ctx};
         false ->
@@ -1165,7 +1166,7 @@ ensure_doc(Ctx=#ctx{doc=undefined, key=undefined}) ->
     Ctx#ctx{doc={error, notfound}};
 ensure_doc(Ctx=#ctx{doc=undefined, bucket_type=T, bucket=B, key=K, client=C,
                     basic_quorum=Quorum, notfound_ok=NotFoundOK}) ->
-    case riak_kv_wm_utils:bucket_type_exists(T) of
+    case Ctx#ctx.type_exists of
         true ->
             Options0 =
                 [deletedvclock,
@@ -1447,3 +1448,8 @@ make_options(Prev, Ctx) ->
     NewOpts = [ {Opt, Val} || {Opt, Val} <- NewOpts0,
                               Val /= undefined, Val /= default ],
     Prev ++ NewOpts.
+
+ensure_bucket_type(RD, Ctx) ->
+    Ctx0 = riak_kv_wm_utils:ensure_bucket_type(RD, Ctx, #ctx.bucket_type),
+    Ctx0#ctx{type_exists =
+               riak_kv_wm_utils:bucket_type_exists(Ctx0#ctx.bucket_type)}.
