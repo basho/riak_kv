@@ -300,7 +300,7 @@ validate(RD, Ctx=#ctx{security=Security}) ->
 -spec maybe_validate_resource(
         term(), #wm_reqdata{}, context(), string()) -> term().
 maybe_validate_resource({false, Error, _}, RD, Ctx, _Perm) ->
-    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+    RD1 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD),
     {true, wrq:append_to_resp_body(
              unicode:characters_to_binary(Error, utf8, utf8),
              RD1), Ctx};
@@ -397,7 +397,7 @@ malformed_request([H|T], RD, Ctx) ->
 %% @doc Detects whether the Content-Type header is missing on
 %% PUT/POST.
 malformed_content_type(RD, Ctx) ->
-    case wrq:get_req_header("Content-Type", RD) of
+    case wrq:get_req_header(?HEAD_CTYPE, RD) of
         undefined ->
             {true, missing_content_type(RD), Ctx};
         _ -> {false, RD, Ctx}
@@ -1339,11 +1339,11 @@ get_ctype(MD,V) ->
     end.
 
 missing_content_type(RD) ->
-    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+    RD1 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD),
     wrq:append_to_response_body(<<"Missing Content-Type request header">>, RD1).
 
 send_precommit_error(RD, Reason) ->
-    RD1 = wrq:set_resp_header("Content-Type", "text/plain", RD),
+    RD1 = wrq:set_resp_header(?HEAD_CTYPE, "text/plain", RD),
     Error = if
                 Reason =:= undefined ->
                     list_to_binary([atom_to_binary(wrq:method(RD1), utf8),
@@ -1364,14 +1364,14 @@ handle_common_error(Reason, RD, Ctx) ->
                     " to satisfy W/DW\n", RD), Ctx};
         {error, timeout} ->
             {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain",
                     wrq:append_to_response_body(
                         io_lib:format("request timed out~n",[]),
                         RD)),
                 Ctx};
         {error, notfound} ->
             {{halt, 404},
-                wrq:set_resp_header("Content-Type", "text/plain",
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain",
                     wrq:append_to_response_body(
                         io_lib:format("not found~n",[]),
                         RD)),
@@ -1384,7 +1384,7 @@ handle_common_error(Reason, RD, Ctx) ->
              Ctx};
         {error, {deleted, _VClock}} ->
             {{halt, 404},
-                wrq:set_resp_header("Content-Type", "text/plain",
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain",
                     wrq:set_resp_header(?HEAD_DELETED, "true",
                         wrq:append_to_response_body(
                             io_lib:format("not found~n",[]),
@@ -1396,7 +1396,7 @@ handle_common_error(Reason, RD, Ctx) ->
             {{halt, 400}, wrq:append_to_response_body(Msg, RD), Ctx};
         {error, {r_val_unsatisfied, Requested, Returned}} ->
             {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain",
                     wrq:append_to_response_body(
                         io_lib:format("R-value unsatisfied: ~p/~p~n",
                             [Returned, Requested]),
@@ -1404,7 +1404,7 @@ handle_common_error(Reason, RD, Ctx) ->
                 Ctx};
         {error, {dw_val_unsatisfied, DW, NumDW}} ->
             {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain",
                     wrq:append_to_response_body(
                         io_lib:format("DW-value unsatisfied: ~p/~p~n",
                             [NumDW, DW]),
@@ -1412,7 +1412,7 @@ handle_common_error(Reason, RD, Ctx) ->
                 Ctx};
         {error, {pr_val_unsatisfied, Requested, Returned}} ->
             {{halt, 503},
-                wrq:set_resp_header("Content-Type", "text/plain",
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain",
                     wrq:append_to_response_body(
                         io_lib:format("PR-value unsatisfied: ~p/~p~n",
                             [Returned, Requested]),
@@ -1430,7 +1430,7 @@ handle_common_error(Reason, RD, Ctx) ->
             {{halt, 412}, RD, Ctx};
         {error, Err} ->
             {{halt, 500},
-                wrq:set_resp_header("Content-Type", "text/plain",
+                wrq:set_resp_header(?HEAD_CTYPE, "text/plain",
                     wrq:append_to_response_body(
                         io_lib:format("Error:~n~p~n",[Err]),
                         RD)),
