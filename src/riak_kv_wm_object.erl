@@ -180,6 +180,8 @@
               links,        %% [link()] - links of the object
               index_fields, %% [index_field()]
               method,       %% atom() - HTTP method for the request
+              ctype,        %% string() - extracted content-type provided
+              charset,      %% string() | undefined - extracted character set provided
               timeout,      %% integer() - passed-in timeout value in ms
               security      %% security context
              }).
@@ -397,11 +399,16 @@ malformed_request([H|T], RD, Ctx) ->
 
 %% @doc Detects whether the Content-Type header is missing on
 %% PUT/POST.
+%% This should probably result in a 415 using the known_content_type callback
 malformed_content_type(RD, Ctx) ->
     case wrq:get_req_header(?HEAD_CTYPE, RD) of
         undefined ->
             {true, missing_content_type(RD), Ctx};
-        _ -> {false, RD, Ctx}
+        RawCType ->
+            [ContentType|RawParams] = string:tokens(RawCType, "; "),
+            Params = [ list_to_tuple(string:tokens(P, "=")) || P <- RawParams],
+            Charset = proplists:get_value("charset", Params),
+            {false, RD, Ctx#ctx{ctype = ContentType, charset = Charset}}
     end.
 
 -spec malformed_timeout_param(#wm_reqdata{}, context()) ->
@@ -494,7 +501,7 @@ malformed_custom_param({Idx, Name, Default, AllowedValues}, {Result, RD, Ctx}) -
             list_to_atom(
                 string:to_lower(
                     wrq:get_qs_value(Name, Default, RD))),
-                1, 
+                1,
                 AllowedValueTuples),
     case Option of
         false ->
@@ -595,7 +602,7 @@ malformed_index_headers(RD, Ctx) ->
 extract_index_fields(RD) ->
     PrefixSize = length(?HEAD_INDEX_PREFIX),
     {ok, RE} = re:compile(",\\s"),
-    F = 
+    F =
         fun({K,V}, Acc) ->
             KList = riak_kv_wm_utils:any_to_list(K),
             case lists:prefix(?HEAD_INDEX_PREFIX, string:to_lower(KList)) of
@@ -623,9 +630,8 @@ extract_index_fields(RD) ->
 %% @doc List the content types available for representing this resource.
 %%      The content-type for a key-level request is the content-type that
 %%      was used in the PUT request that stored the document in Riak.
-content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+content_types_provided(RD, Ctx=#ctx{method=Method, ctype=ContentType})
             when Method =:= 'PUT'; Method =:= 'POST' ->
-    {ContentType, _} = extract_content_type(RD),
     {[{ContentType, produce_doc_body}], RD, Ctx};
 content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx)
             when Method =:= 'DELETE' ->
@@ -648,12 +654,12 @@ content_types_provided(RD, Ctx0) ->
 %%      The charset for a key-level request is the charset that was used
 %%      in the PUT request that stored the document in Riak (none if
 %%      no charset was specified at PUT-time).
-charsets_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+charsets_provided(RD, Ctx=#ctx{method=Method})
             when Method =:= 'PUT'; Method =:= 'POST' ->
-    case extract_content_type(RD) of
-        {_, undefined} ->
+    case Ctx#ctx.charset of
+        undefined ->
             {no_charset, RD, Ctx};
-        {_, Charset} ->
+        Charset ->
             {[{Charset, fun(X) -> X end}], RD, Ctx}
     end;
 charsets_provided(RD, Ctx=#ctx{method=Method}=Ctx)
@@ -775,7 +781,7 @@ resource_exists(RD, Ctx0) ->
                                 DocCtx#ctx{vtag=Vtag}}
                     end;
                 {error, _} ->
-                    %% This should never actually be reached because all the 
+                    %% This should never actually be reached because all the
                     %% error conditions from ensure_doc are handled up in
                     %% malformed_request.
                     {false, RD, DocCtx}
@@ -799,7 +805,7 @@ is_conflict(RD, Ctx) ->
             {false, RD, Ctx};
         {UpdM, NotModifiedClock} when UpdM =:= 'PUT'; UpdM =:= 'POST' ->
             case Ctx#ctx.doc of
-                {ok, Obj} -> 
+                {ok, Obj} ->
                     InClock =
                         riak_object:decode_vclock(
                             base64:decode(NotModifiedClock)),
@@ -866,14 +872,13 @@ accept_doc_body(
         RD,
         Ctx=#ctx{
             bucket_type=T, bucket=B, key=K, client=C,
-            links=L,
+            links=L, ctype=CType, charset=Charset,
             index_fields=IF}) ->
     Doc0 = riak_object:new(riak_kv_wm_utils:maybe_bucket_type(T,B), K, <<>>),
     VclockDoc = riak_object:set_vclock(Doc0, decode_vclock_header(RD)),
-    {CType, Charset} = extract_content_type(RD),
     UserMeta = extract_user_meta(RD),
     CTypeMD = dict:store(?MD_CTYPE, CType, dict:new()),
-    CharsetMD = 
+    CharsetMD =
         if Charset /= undefined ->
                 dict:store(?MD_CHARSET, Charset, CTypeMD);
             true ->
@@ -952,21 +957,6 @@ add_conditional_headers(RD, Ctx) ->
             httpd_util:rfc1123_date(
                 calendar:universal_time_to_local_time(LM)), RD4),
     {RD5,Ctx3}.
-
--spec extract_content_type(#wm_reqdata{}) ->
-    {ContentType::string(), Charset::string()|undefined}.
-%% @doc Interpret the Content-Type header in the client's PUT request.
-%%      This function extracts the content type and charset for use
-%%      in subsequent GET requests.
-extract_content_type(RD) ->
-    case wrq:get_req_header(?HEAD_CTYPE, RD) of
-        undefined ->
-            undefined;
-        RawCType ->
-            [CType|RawParams] = string:tokens(RawCType, "; "),
-            Params = [ list_to_tuple(string:tokens(P, "=")) || P <- RawParams],
-            {CType, proplists:get_value("charset", Params)}
-    end.
 
 -spec extract_user_meta(#wm_reqdata{}) -> proplists:proplist().
 %% @doc Extract headers prefixed by X-Riak-Meta- in the client's PUT request
@@ -1229,7 +1219,7 @@ generate_etag(RD, Ctx) ->
 -spec last_modified(#wm_reqdata{}, context()) ->
     {undefined|calendar:datetime(), #wm_reqdata{}, context()}.
 %% @doc Get the last-modified time for this resource.
-%%      Documents will have the last-modified time specified by the 
+%%      Documents will have the last-modified time specified by the
 %%      riak_object.
 %%      For documents with siblings, this is the last-modified time of the
 %%      latest sibling.
