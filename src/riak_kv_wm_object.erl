@@ -633,7 +633,7 @@ extract_index_fields(RD) ->
 content_types_provided(RD, Ctx=#ctx{method=Method, ctype=ContentType})
             when Method =:= 'PUT'; Method =:= 'POST' ->
     {[{ContentType, produce_doc_body}], RD, Ctx};
-content_types_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+content_types_provided(RD, Ctx=#ctx{method=Method})
             when Method =:= 'DELETE' ->
     {[{"text/html", to_html}], RD, Ctx};
 content_types_provided(RD, Ctx0) ->
@@ -662,7 +662,7 @@ charsets_provided(RD, Ctx=#ctx{method=Method})
         Charset ->
             {[{Charset, fun(X) -> X end}], RD, Ctx}
     end;
-charsets_provided(RD, Ctx=#ctx{method=Method}=Ctx)
+charsets_provided(RD, Ctx=#ctx{method=Method})
             when Method =:= 'DELETE' ->
     {no_charset, RD, Ctx};
 charsets_provided(RD, Ctx0) ->
