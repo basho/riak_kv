@@ -661,7 +661,7 @@ log_fragmentation(Allocator) ->
             end,
             {0, 0, 0, 0},
             recon_alloc:fragmentation(current)),
-    lager:info(
+    ?LOG_INFO(
         "Memory for allocator=~p "
         "mbcs_block_size=~w mbcs_carrier_size=~w "
         "sbcs_block_size=~w sbcs_carrier_size=~w",
