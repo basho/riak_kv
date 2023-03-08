@@ -281,7 +281,7 @@ delete(Bucket, Key, IndexSpecs, #state{bookie=Bookie}=State) ->
 -spec fold_buckets(riak_kv_backend:fold_buckets_fun(),
                    any(),
                    [],
-                   state()) -> {ok, any()} | {async, fun()}.
+                   state()) -> {ok, any()} | {async, fun(() -> any())}.
 fold_buckets(FoldBucketsFun, Acc, Opts, #state{bookie=Bookie}) ->
     {async, Folder} = 
         leveled_bookie:book_bucketlist(Bookie, 
@@ -299,7 +299,7 @@ fold_buckets(FoldBucketsFun, Acc, Opts, #state{bookie=Bookie}) ->
 -spec fold_keys(riak_kv_backend:fold_keys_fun(),
                 any(),
                 [{atom(), term()}],
-                state()) -> {ok, term()} | {async, fun()}.
+                state()) -> {ok, term()} | {async, fun(() -> any())}.
 fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
     %% Figure out how we should limit the fold: by bucket, by
     %% secondary index, or neither (fold across everything.)
@@ -391,7 +391,7 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
 -spec fold_objects(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()} | {async, fun()}.
+                   state()) -> {ok, any()} | {async, fun(() -> any())}.
 fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
 
     {async, ObjectFolder} =
@@ -503,7 +503,7 @@ fold_objects(FoldObjectsFun, Acc, Opts, #state{bookie=Bookie}) ->
 -spec fold_heads(riak_kv_backend:fold_objects_fun(),
                    any(),
                    [{atom(), term()}],
-                   state()) -> {ok, any()} | {async, fun()}.
+                   state()) -> {ok, any()} | {async, fun(() -> any())}.
 fold_heads(FoldHeadsFun, Acc, Opts, #state{bookie=Bookie}) ->
     CheckPresence =
         case proplists:get_value(check_presence, Opts) of
@@ -581,7 +581,7 @@ is_empty(#state{bookie=Bookie}) ->
     leveled_bookie:book_isempty(Bookie, ?RIAK_TAG).
 
 %% @doc Prompt a snapshot function from which a hot backup can be called
--spec hot_backup(state(), string()) -> {queue, fun()}|{error, term()}.
+-spec hot_backup(state(), string()) -> {queue, fun(() -> any())}|{error, term()}.
 hot_backup(#state{bookie=Bookie, partition=Partition, db_path=DBP}, BackupRoot) ->
     {ok, BackupDir} = get_data_dir(BackupRoot, integer_to_list(Partition)),
     case BackupDir == DBP of
@@ -616,6 +616,8 @@ data_size(_State) ->
 %% @doc Register an asynchronous callback
 -spec callback(reference(), any(), state()) -> {ok, state()}.
 callback(Ref, compact_journal, State) ->
+    _ = spawn(fun() -> log_fragmentation(eheap_alloc) end),
+    _ = spawn(fun() -> log_fragmentation(binary_alloc) end),
     case is_reference(Ref) of
         true ->
              prompt_journalcompaction(State#state.bookie,
@@ -634,6 +636,34 @@ callback(Ref, UnexpectedCallback, State) ->
 %% ===================================================================
 %% Internal functions
 %% ===================================================================
+
+
+-spec log_fragmentation(eheap_alloc|binary_alloc) -> ok.
+log_fragmentation(Allocator) ->
+    {MB_BS, MB_CS, SB_BS, SB_CS} =
+        lists:foldl(
+            fun(ReconAllocOutputLine, {MBAcc, MCAcc, SBAcc, SCAcc}) ->
+                case ReconAllocOutputLine of
+                    {{Allocator, I}, Stats} when I > 0, is_list(Stats) ->
+                        {MBAcc + proplists:get_value(
+                                    mbcs_block_size, Stats, 0),
+                            MCAcc + proplists:get_value(
+                                    mbcs_carriers_size, Stats, 0),
+                            SBAcc + proplists:get_value(
+                                    sbcs_block_size, Stats, 0),
+                            SCAcc + proplists:get_value(
+                                    sbcs_carriers_size, Stats, 0)};
+                    _ ->
+                        {MBAcc, MCAcc, SBAcc, SCAcc}
+                end
+            end,
+            {0, 0, 0, 0},
+            recon_alloc:fragmentation(current)),
+    lager:info(
+        "Memory for allocator=~p "
+        "mbcs_block_size=~w mbcs_carrier_size=~w "
+        "sbcs_block_size=~w sbcs_carrier_size=~w",
+        [Allocator, MB_BS, MB_CS, SB_BS, SB_CS]).
 
 %% @private
 %% Complete a PUT, with the sync option true/false depending on whether 
