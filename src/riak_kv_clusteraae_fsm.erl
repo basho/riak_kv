@@ -315,7 +315,8 @@
                         %% fetch_clocks_range | fetch_clocks_nval |
                         %% find_keys
                         list_query_result() |
-                        repl_result().
+                        repl_result() |
+                        erase_result().
 
 -type branches() :: list(branch()).
 %% level 2 of tree
@@ -329,11 +330,12 @@
 -type key_clock() :: {riak_object:bucket(), riak_object:key(), vclock:vclock()}.
 
 -type keys() :: list({riak_object:bucket(), riak_object:key(), integer()}).
--type object_stats() :: proplist:proplist().
+-type object_stats() :: proplists:proplist().
 -type repl_result() :: {list(riak_kv_replrtq_src:repl_entry()),
                         non_neg_integer(),
                         riak_kv_replrtq_src:queue_name(),
                         pos_integer()}.
+-type erase_result() :: {list(), non_neg_integer(), local|count|pid()}.
 
 -type query_state() :: #state{}.
 

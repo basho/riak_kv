@@ -397,7 +397,7 @@ generate_ordered_guid() ->
         [Year, Month, Day, H, M, C band 16#0fff, D band 16#3fff bor 16#8000, E]).
 
 
--spec disklog_filename(string(), string()) -> filename:filename().
+-spec disklog_filename(string(), string()) -> filename().
 disklog_filename(RootPath, GUID) ->
     filename:join(RootPath, GUID ++ ?DISKLOG_EXT).
 

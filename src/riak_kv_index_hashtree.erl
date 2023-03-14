@@ -590,10 +590,10 @@ load_built(#state{trees=Trees}) ->
     end.
 
 %% Generate a hash value for a `riak_object'
--spec hash_object({riak_object:bucket(), riak_object:key()},
-                    riak_object_t2b() | 
-                        riak_object:riak_object() | riak_object:proxy_object(),
-                    version()) -> binary().
+-spec hash_object(
+    {riak_object:bucket(), riak_object:key()},
+    riak_object_t2b() | riak_object:riak_object() | riak_object:proxy_object(),
+    version()) -> binary().
 hash_object({Bucket, Key}, RObj, Version) ->
     riak_object:hash(Bucket, Key, RObj, Version).
 
@@ -666,8 +666,7 @@ maybe_throttle_build(RObjBin, Limit, Wait, Acc) ->
 
 -type hashtree_fold_fun() ::
     fun((
-        {riak_object:bucket(), riak_object:key()},
-        riak_object:riak_object(),
+        {riak_object:bucket(), riak_object:key()}, riak_object_t2b(),
         {non_neg_integer(), {non_neg_integer(), non_neg_integer()}}) ->
             {non_neg_integer(), {non_neg_integer(), non_neg_integer()}}).
 
@@ -719,7 +718,7 @@ handle_corrupted_object(Bucket, Key, Error, Reason) ->
 -spec object_fold_fun(pid()) ->
     fun((
         {riak_object:bucket(), riak_object:key()},
-        riak_object:object(),
+        riak_object_t2b() | riak_object:riak_object() | riak_object:proxy_object(),
         binary()) -> ok).
 object_fold_fun(HashtreePid) ->
     Version = get_version(HashtreePid),
@@ -731,7 +730,8 @@ object_fold_fun(HashtreePid) ->
     end.
 
 -spec index_fold_fun(pid()) ->
-    fun((riak_object:object(), binary()) -> ok).
+    fun((riak_object:riak_object()|riak_object:proxy_object(), binary())
+            -> ok).
 index_fold_fun(HashtreePid) ->
     fun(RObj, BinBKey) ->
             IndexData = riak_object:index_data(RObj),

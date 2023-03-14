@@ -62,16 +62,28 @@
 -type update() :: {toplevel_type(), toplevel_op(), context()}.
 -type all_type_op() :: toplevel_op() | register_op() | flag_op().
 
+%% mochijson2 types (not exported from mochijson2)
+-type json_string() :: atom() | binary().
+-type json_number() :: integer() | float().
+-type json_iolist() :: {json, iolist()}.
+-type json_term() ::
+    json_string() | json_number() | json_array() |
+    json_object() | json_eep18_object() | json_iolist().
+-type json_array() :: [json_term()].
+-type json_object() :: {struct, [{json_string(), json_term()}]}.
+-type json_eep18_object() :: {[{json_string(), json_term()}]}.
+
+
 %% @doc Encodes a fetch response as a JSON struct, ready for
 %% serialization with mochijson2.
--spec fetch_response_to_json(toplevel_type(), term(), context(), type_mappings()) -> mochijson2:json_object().
+-spec fetch_response_to_json(toplevel_type(), term(), context(), type_mappings()) -> json_object().
 fetch_response_to_json(Type, Value, Context, Mods) ->
     {struct, [{<<"type">>, atom_to_binary(Type, utf8)},
               {<<"value">>, value_to_json(Type, Value, Mods)}] ++
          [ {<<"context">>, base64:encode(Context)} || Context /= undefined, Context /= <<>> ]}.
 
 %% @doc Decodes a JSON value into an update operation.
--spec update_request_from_json(toplevel_type(), mochijson2:json_term(), type_mappings()) -> update().
+-spec update_request_from_json(toplevel_type(), json_term(), type_mappings()) -> update().
 update_request_from_json(Type, JSON0, Mods) ->
     {JSON, Context} = extract_context(JSON0),
     {Type, op_from_json(Type, JSON, Mods), Context}.
@@ -91,7 +103,7 @@ value_to_json(map, Pairs, Mods) ->
            {field_to_json(JSONField), value_to_json(Type, Value, Mods)}
        end || {Key, Value} <- Pairs ]}.
 
--spec extract_context(mochijson2:json_value()) -> {mochijson2:json_value(), undefined | context()}.
+-spec extract_context(json_term()) -> {json_term(), undefined | context()}.
 extract_context({struct, Fields0}=JSON) ->
     case lists:keytake(<<"context">>, 1, Fields0) of
         {value, {<<"context">>, Ctx}, Fields} ->
@@ -105,7 +117,7 @@ extract_context(JSON) ->
     %% as well.
     {JSON, undefined}.
 
--spec decode_context(base64:ascii_binary()) -> context().
+-spec decode_context(binary()) -> context().
 decode_context(Bin) when is_binary(Bin) ->
     try
         base64:decode(Bin)
@@ -146,8 +158,7 @@ field_from_json(Bin) when is_binary(Bin) ->
             bad_field(Bin)
     end.
 
--spec op_from_json(all_type(), mochijson2:json_term(), type_mappings())
-                  -> all_type_op().
+-spec op_from_json(all_type(), json_term(), type_mappings()) -> all_type_op().
 op_from_json(flag, Op, _Mods) -> flag_op_from_json(Op);
 op_from_json(register, Op, _Mods) -> register_op_from_json(Op);
 op_from_json(counter, Op, _Mods) -> counter_op_from_json(Op);
@@ -157,7 +168,7 @@ op_from_json(gset, Op, _Mods) -> gset_op_from_json(Op);
 op_from_json(map, Op, Mods) -> map_op_from_json(Op, Mods).
 
 %% Map: {"update":{Field:Op, ...}}
--spec map_op_from_json(mochijson2:json_object(), type_mappings()) -> map_op().
+-spec map_op_from_json(json_object(), type_mappings()) -> map_op().
 map_op_from_json({struct, Ops0}=InOp, Mods) ->
     Ops = lists:keymap(fun(<<"update">>) -> update;
                           (<<"remove">>) -> remove;
@@ -176,7 +187,7 @@ map_op_from_json(Op, _Mods) ->
     bad_op(map, Op).
 
 
--spec map_update_op_from_json({mochijson2:json_string(), mochijson2:json_term()}, type_mappings()) ->
+-spec map_update_op_from_json({json_string(), json_term()}, type_mappings()) ->
                                      {update, map_field(), embedded_type_op()}.
 map_update_op_from_json({JSONField, Op}, Mods) ->
     Field = {_Name, Type} = field_from_json(JSONField),
@@ -187,12 +198,12 @@ flag_op_from_json(<<"enable">>) -> enable;
 flag_op_from_json(<<"disable">>) -> disable;
 flag_op_from_json(Op) -> bad_op(flag, Op).
 
--spec register_op_from_json(mochijson2:json_object()) -> register_op().
+-spec register_op_from_json(json_object()) -> register_op().
 register_op_from_json({struct, [{<<"assign">>, Value}]}) when is_binary(Value) -> {assign, Value};
 register_op_from_json(Value) when is_binary(Value) -> {assign, Value};
 register_op_from_json(Op) -> bad_op(register, Op).
 
--spec counter_op_from_json(mochijson2:json_term()) -> counter_op().
+-spec counter_op_from_json(json_term()) -> counter_op().
 counter_op_from_json(Int) when is_integer(Int), Int >= 0 -> {increment, Int};
 counter_op_from_json(Int) when is_integer(Int), Int < 0 -> {decrement, -Int};
 counter_op_from_json(<<"increment">>) -> increment;
@@ -201,9 +212,7 @@ counter_op_from_json({struct, [{<<"increment">>,Int}]}) when is_integer(Int) -> 
 counter_op_from_json({struct, [{<<"decrement">>,Int}]}) when is_integer(Int) -> {decrement, Int};
 counter_op_from_json(Op) -> bad_op(counter, Op).
 
--spec gset_op_from_json(mochijson2:json_term() |
-                       {mochijson2:json_string(), mochijson2:json_term()}) ->
-                              gset_op().
+-spec gset_op_from_json(json_term() | {json_string(), json_term()}) -> gset_op().
 gset_op_from_json({struct, Ops}) when is_list(Ops) ->
     try
         {update, [ gset_op_from_json(Op) || Op <- Ops]}
@@ -225,9 +234,7 @@ gset_op_from_json({<<"update">>, Ops}) when is_list(Ops) ->
     {update, [ gset_op_from_json(Op) || Op <- Ops]};
 gset_op_from_json(Op) -> bad_op(gset, Op).
 
--spec set_op_from_json(mochijson2:json_term() |
-                       {mochijson2:json_string(), mochijson2:json_term()}) ->
-                              set_op().
+-spec set_op_from_json(json_term() | {json_string(), json_term()}) -> set_op().
 set_op_from_json({struct, Ops}) when is_list(Ops) ->
     try
         {update, [ set_op_from_json(Op) || Op <- Ops]}
@@ -251,9 +258,7 @@ set_op_from_json({<<"update">>, Ops}) when is_list(Ops) ->
     {update, [ set_op_from_json(Op) || Op <- Ops]};
 set_op_from_json(Op) -> bad_op(set, Op).
 
--spec hll_op_from_json(mochijson2:json_term() |
-                       {mochijson2:json_string(), mochijson2:json_term()})
-                       -> hll_op().
+-spec hll_op_from_json(json_term() | {json_string(), json_term()}) -> hll_op().
 hll_op_from_json({struct, Ops}) when is_list(Ops) ->
     try
         {update, [hll_op_from_json(Op) || Op <- Ops]}
