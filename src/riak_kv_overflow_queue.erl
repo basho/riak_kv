@@ -49,7 +49,7 @@
 
 -type priority() :: pos_integer().
 -type continuation() :: start|disk_log:continuation().
--type filename() :: file:filename()|none.
+-type filename() :: file:filename_all()|none.
 -type queue_stats() :: list({pos_integer(), non_neg_integer()}).
 
 -record(overflowq,  
@@ -397,7 +397,7 @@ generate_ordered_guid() ->
         [Year, Month, Day, H, M, C band 16#0fff, D band 16#3fff bor 16#8000, E]).
 
 
--spec disklog_filename(string(), string()) -> filename().
+-spec disklog_filename(string(), string()) -> file:filename_all().
 disklog_filename(RootPath, GUID) ->
     filename:join(RootPath, GUID ++ ?DISKLOG_EXT).
 
