@@ -62,7 +62,7 @@
 -endif.
 
 -record(timings, 
-            {start_time = os:timestamp() :: os:timestamp(),
+            {start_time = os:timestamp() :: erlang:timestamp(),
                 max = 0 :: non_neg_integer(),
                 min = infinity :: non_neg_integer()|infinity,
                 count = 0 :: non_neg_integer(),
@@ -80,7 +80,7 @@
                 max_results :: all | pos_integer(),
                 results_per_vnode = dict:new() :: riak_kv_index_fsm_dict(),
                 timings = #timings{} :: timings(),
-                bucket :: riak_object:buckey() | undefined,
+                bucket :: riak_object:bucket() | undefined,
                 results_sent = 0 :: non_neg_integer()}).
 
 

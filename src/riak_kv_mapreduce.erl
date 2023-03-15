@@ -49,10 +49,6 @@
 
 -include_lib("kernel/include/logger.hrl").
 
-%-ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
-%-endif.
-
 %%
 %% Map Phases
 %%
@@ -279,6 +275,9 @@ is_datum(_) ->
     true.
 
 %% unit tests %%
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
 map_identity_test() ->
     O1 = riak_object:new(<<"a">>, <<"1">>, "value1"),
     [O1] = map_identity(O1, test, test).
@@ -345,3 +344,5 @@ reduce_count_inputs_test() ->
                               {"b5","k5"},{"b5","k5"}],
                              none),
                         none)).
+
+-endif.

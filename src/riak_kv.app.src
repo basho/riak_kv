@@ -26,7 +26,8 @@
                   redbug,
                   recon,
                   riakc,
-                  rhc
+                  rhc,
+                  bitcask
                  ]},
   {registered, []},
   {mod, {riak_kv_app, []}},

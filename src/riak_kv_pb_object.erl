@@ -448,8 +448,7 @@ make_binarykey(RObj) ->
     make_binarykey(riak_object:bucket(RObj), riak_object:key(RObj)).
 
 -spec unpack_keyclock_fun(#rpbkeysvalue{}) ->
-        {riak_object:bucket(RObj), riak_object:key(RObj), vclock:vclock(),
-            to_fetch}.
+        {riak_object:bucket(), riak_object:key(), vclock:vclock(), to_fetch}.
 unpack_keyclock_fun(RpbKeysClock) ->
     Bucket =
         case RpbKeysClock#rpbkeysvalue.type of
