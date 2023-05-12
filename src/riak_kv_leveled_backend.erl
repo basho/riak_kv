@@ -585,17 +585,17 @@ is_empty(#state{bookie=Bookie}) ->
 %% @doc Prompt a snapshot function from which a hot backup can be called
 -spec hot_backup(state(), string()) -> {queue, fun(() -> any())}|{error, term()}.
 hot_backup(#state{bookie=Bookie, partition=Partition, db_path=DBP}, BackupRoot) ->
-    {ok, BackupDir} = get_data_dir(BackupRoot, integer_to_list(Partition)),
-    case BackupDir == DBP of
-        true ->
+    case get_data_dir(BackupRoot, integer_to_list(Partition)) of
+        {ok, BackupDir} when BackupDir == DBP ->
             ?LOG_WARNING("Attempt to backup to own path ~s", [BackupRoot]),
             {error, invalid_path};
-        false ->
-            % Don't check anything else about the path, as an invalid path
-            % (e.g. one without write permissions will crash the snapshot not
-            % the store)
+        {ok, BackupDir} ->
             {async, BackupFolder} = leveled_bookie:book_hotbackup(Bookie),
-            {queue, fun() -> BackupFolder(BackupDir) end}
+            {queue, fun() -> BackupFolder(BackupDir) end};
+        {error, Reason} ->
+            %% e.g. of get_data_dir cannot create due to lack of write
+            %% permissions
+            {error, Reason}
     end.
 
 %% @doc Get the status information for this leveled backend
