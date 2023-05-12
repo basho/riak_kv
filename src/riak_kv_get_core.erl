@@ -245,12 +245,15 @@ enough(_) ->
 %% Get success/fail response once enough results received
 -spec response(getcore()) -> {reply(), getcore()}.
 %% Met quorum for a standard get request/response
-response(#getcore{node_confirms = RequiredConfirms,
-                    confirmed_nodes = Nodes} = GetCore)
-            when length(Nodes) < RequiredConfirms ->
-    check_overload({error,
-                    {insufficient_nodes,
-                        length(Nodes), need, RequiredConfirms}}, GetCore);
+response(
+    #getcore{
+        node_confirms = RqdConfirms,
+        confirmed_nodes = Nodes,
+        expected_fetchclock = ExpClock} = GetCore)
+            when (length(Nodes) < RqdConfirms andalso ExpClock =/= true) ->
+    check_overload(
+        {error, {insufficient_nodes, length(Nodes), need, RqdConfirms}},
+        GetCore);
     %% Insufficient nodes confirmed
 response(#getcore{r = R, num_ok = NumOK, pr= PR, num_pok = NumPOK,
                     expected_fetchclock = ExpClock, head_merge = HM} = GetCore)
