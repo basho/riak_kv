@@ -39,6 +39,7 @@
 -export([start_link/2,
             start_job/3,
             request/2,
+            bulk_request/2,
             stats/1,
             immediate_action/2,
             override_redo/2,
@@ -121,6 +122,10 @@ start_job(JobID, Module, RootPath) ->
 request(Pid, Reference) ->
     gen_server:cast(Pid, {request, Reference, ?REQUEST_PRIORITY}).
 
+-spec bulk_request(pid()|module(), list()) -> ok.
+bulk_request(Pid, RefList) ->
+    gen_server:call(Pid, {bulk_request, RefList, ?REQUEST_PRIORITY}, infinity).
+
 -spec stats(pid()|module()) ->
     list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
 stats(Pid) ->
@@ -180,14 +185,23 @@ handle_call(stop_job, _From, State) ->
     {reply, ok, State#state{pending_close = true}, 0};
 handle_call({immediate_action, Reference}, _From, State) ->
     Mod = State#state.callback_mod,
-    {reply, Mod:action(Reference, false), State, 0}.
+    {reply, Mod:action(Reference, false), State, 0};
+handle_call({bulk_request, RefList, Priority}, From, State) ->
+    gen_server:reply(From, ok),
+    UpdOverflowQueue =
+        lists:foldr(
+            fun(Ref, AccQ) ->
+                riak_kv_overflow_queue:addto_queue(Priority, Ref, AccQ)
+            end,
+            State#state.queue,
+            RefList),
+    {noreply, State#state{queue = UpdOverflowQueue}, 0}.
 
 
 handle_cast({request, Reference, Priority}, State) ->
     UpdOverflowQueue =
-        riak_kv_overflow_queue:addto_queue(Priority,
-                                            Reference,
-                                            State#state.queue),
+        riak_kv_overflow_queue:addto_queue(
+            Priority, Reference, State#state.queue),
     {noreply, State#state{queue = UpdOverflowQueue}, 0}.
 
 

@@ -484,14 +484,25 @@ process_results(Results, State) ->
                             {siblings, merge_countinlists(A_SbL, R_SbL)}];
                     QT when QT == erase_keys; QT == reap_tombs ->
                         case Results of
-                            {[], Count, local} ->
-                                {[], element(2, Acc) + Count, local};
+                            {BKDHL, Count, local} ->
+                                UpdCount = element(2, Acc) + Count,
+                                Mod =
+                                    case QT of
+                                        erase_keys ->
+                                            riak_kv_eraser;
+                                        reap_tombs ->
+                                            riak_kv_reaper
+                                    end,
+                                handle_in_batches(
+                                    QT, lists:reverse(BKDHL), 0, Mod),
+                                {[], UpdCount, local};
                             {[], Count, count} ->
                                 {[], element(2, Acc) + Count, count};
-                            {BKDHL, 0, Pid} ->
+                            {BKDHL, Count, Pid} ->
                                 {[], AccCount, Pid} = Acc,
-                                UpdCount = length(BKDHL) + AccCount,
-                                handle_in_batches(QT, lists:reverse(BKDHL), 0, Pid),
+                                UpdCount = Count + AccCount,
+                                handle_in_batches(
+                                    QT, lists:reverse(BKDHL), 0, Pid),
                                 {[], UpdCount, Pid}
                         end
                 end
@@ -764,12 +775,11 @@ hash_function({rehash, InitialisationVector}) ->
 -spec handle_in_batches(reap_tombs|erase_keys,
                         list(riak_kv_reaper:reap_reference())|
                             list(riak_kv_eraser:delete_reference()),
-                        non_neg_integer(), pid()) -> ok.
+                        non_neg_integer(), pid()|module()) -> ok.
 handle_in_batches(_Type, [], _BatchCount, _Worker) ->
     ok;
 handle_in_batches(Type, RefList, BatchCount, Worker)
                                     when BatchCount >= ?DELETE_BATCH_SIZE ->
-    
     case Type of
         reap_tombs ->
             _ = riak_kv_reaper:reap_stats(Worker);
@@ -785,6 +795,8 @@ handle_in_batches(Type, [Ref|RestRefs], BatchCount, Worker) ->
             ok = riak_kv_eraser:request_delete(Worker, Ref)
     end,
     handle_in_batches(Type, RestRefs, BatchCount + 1, Worker).
+
+
 
 %% ===================================================================
 %% Internal functions
