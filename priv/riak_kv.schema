@@ -1287,6 +1287,15 @@
     {commented, enabled}
 ]}.
 
+%% @doc For queue-based replication what should be the r value on fetches,
+%% and the w value on pushes.  Default is to use `one` but `quorum` or `all`
+%% can be used should there be issues with vnode stress that will otherwise
+%% generate anti-entropy workloads (e.g. with mailbox overloads)
+{mapping, "replrtq_vnodecheck", "riak_kv.replrtq_vnodecheck", [
+  {datatype, {enum, [one, quorum, all]}},
+  {default, one}
+]}.
+
 %% @doc Limit the number of objects to be cached on the replication queue,
 %% with objects queued when the priority queue is beyond this limit stored as
 %% clocks only to be fetched on replication
