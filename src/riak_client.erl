@@ -202,7 +202,8 @@ replrtq_reset_all_workercounts(WorkerC, PerPeerL) ->
 fetch(QueueName, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
-    Options = [deletedvclock, {pr, 1}, {r, 1}, {notfound_ok, false}],
+    R = application:get_env(riak_kv, replrtq_vnodecheck, 1),
+    Options = [deletedvclock, {pr, 1}, {r, R}, {notfound_ok, false}],
     case node() of
         Node ->
             riak_kv_get_fsm:start({raw, ReqId, Me},
@@ -239,8 +240,9 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
     Key = riak_object:key(RObj),
     Me = self(),
     ReqId = mk_reqid(),
+    W = application:get_env(riak_kv, replrtq_vnodecheck, 1),
     Options = [asis, disable_hooks, {update_last_modified, false},
-                {w, 1}, {pw, 1}, {dw, 0}, {node_confirms, 1}],
+                {w, W}, {pw, 1}, {dw, 0}, {node_confirms, 1}],
         % asis - stops the PUT from being re-coordinated
         % disable_hooks - this makes this compatible with previous repl,
         % although this may no longer be necessary (no repl hook to disable)
