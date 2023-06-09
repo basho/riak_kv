@@ -38,6 +38,8 @@
             start_job/1,
             request_delete/1,
             request_delete/2,
+            bulk_request_delete/1,
+            bulk_request_delete/2,
             delete_stats/0,
             delete_stats/1,
             override_redo/1,
@@ -85,6 +87,14 @@ request_delete(DeleteReference) ->
 -spec request_delete(pid()|module(), delete_reference()) -> ok.
 request_delete(Pid, DeleteReference) ->
     riak_kv_queue_manager:request(Pid, DeleteReference).
+
+-spec bulk_request_delete(list(delete_reference())) -> ok.
+bulk_request_delete(RefList) ->
+    bulk_request_delete(?MODULE, RefList).
+
+-spec bulk_request_delete(pid()|module(), list(delete_reference())) -> ok.
+bulk_request_delete(Pid, RefList) ->
+    riak_kv_queue_manager:bulk_request(Pid, RefList).
 
 -spec delete_stats() ->
     list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
