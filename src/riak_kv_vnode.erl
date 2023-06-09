@@ -233,6 +233,10 @@
     %% Best efforts (aka scavenger) pool.  
     %% Parallel AAE store rebuilds
 
+
+-define(REAPER_BATCH_SIZE, 1024).
+-define(ERASER_BATCH_SIZE, 1024).
+
 %% Erlang's if Bool -> thing; true -> thang end. syntax hurts my
 %% brain. It scans as if true -> thing; true -> thang end. So, here is
 %% a macro, ?ELSE to use in if statements. You're welcome.
@@ -1983,7 +1987,7 @@ handle_aaefold({find_tombs,
 handle_aaefold({reap_tombs, 
                         Bucket, KeyRange,
                         SegmentFilter, ModifiedRange,
-                        ReapMethod},
+                        _ReapMethod},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
@@ -1994,18 +1998,24 @@ handle_aaefold({reap_tombs,
                 {true, undefined} ->
                     {clock, VV} = lists:keyfind(clock, 1, EFs),
                     DH = riak_object:delete_hash(VV),
-                    case ReapMethod of
-                        local ->
-                            riak_kv_reaper:request_reap({{BF, KF}, DH}),
-                            NewCount = element(2, TombHashAcc) + 1,
-                            setelement(2, TombHashAcc, NewCount);
-                        count ->
-                            NewCount = element(2, TombHashAcc) + 1,
-                            setelement(2, TombHashAcc, NewCount);
-                        {job, _JobID} ->
-                            {[{{BF, KF}, DH}|element(1, TombHashAcc)],
-                                element(2, TombHashAcc),
-                                element(3, TombHashAcc)}
+                    case TombHashAcc of
+                        {BatchList, Count, local} ->
+                            NewCount = Count + 1,
+                            case NewCount div ?REAPER_BATCH_SIZE of
+                                0 ->
+                                    riak_kv_reaper:bulk_request_reap(
+                                        [{{BF, KF}, DH}|BatchList]
+                                    ),
+                                    {[], NewCount, local};
+                                _ ->
+                                    {[{{BF, KF}, DH}|BatchList],
+                                        NewCount,
+                                        local}
+                            end;
+                        {BatchList, Count, count} ->
+                            {BatchList, Count + 1, count};
+                        {BatchList, Count, Job} ->
+                            {[{{BF, KF}, DH}|BatchList], Count + 1, Job}
                     end;
                 {false, undefined} ->
                     TombHashAcc
@@ -2027,7 +2037,7 @@ handle_aaefold({reap_tombs,
 handle_aaefold({erase_keys, 
                         Bucket, KeyRange,
                         SegmentFilter, ModifiedRange,
-                        DeleteMethod},
+                        _DeleteMethod},
                     InitAcc, _Nval,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
@@ -2044,18 +2054,23 @@ handle_aaefold({erase_keys,
                     EraseKeyAcc;
                 {false, undefined} ->
                     {clock, VV} = lists:keyfind(clock, 1, EFs),
-                    case DeleteMethod of
-                        local ->
-                            riak_kv_eraser:request_delete({{BF, KF}, VV}),
-                            NewCount = element(2, EraseKeyAcc) + 1,
-                            setelement(2, EraseKeyAcc, NewCount);
-                        count ->
-                            NewCount = element(2, EraseKeyAcc) + 1,
-                            setelement(2, EraseKeyAcc, NewCount);
-                        {job, _JobID} ->
-                            {[{{BF, KF}, VV}|element(1, EraseKeyAcc)],
-                                element(2, EraseKeyAcc),
-                                element(3, EraseKeyAcc)}
+                    case EraseKeyAcc of
+                        {BatchList, Count, local} ->
+                            NewCount = Count + 1,
+                            case NewCount div ?ERASER_BATCH_SIZE of
+                                0 ->
+                                    riak_kv_eraser:bulk_request_delete(
+                                        [{{BF, KF}, VV}|BatchList]),
+                                    {[], NewCount, local};
+                                _ ->
+                                    {[{{BF, KF}, VV}|BatchList],
+                                        NewCount,
+                                        local}
+                            end;
+                        {BatchList, Count, count} ->
+                            {BatchList, Count + 1, count};
+                        {BatchList, Count, Job} ->
+                            {[{{BF, KF}, VV}|BatchList], Count + 1, Job}
                     end
             end
         end,
@@ -2754,7 +2769,7 @@ final_delete(BKey, DeleteHash, State = #state{mod=Mod, modstate=ModState}) ->
                                 [BKey, IsDeleted, DeleteHash, OtherHash]),
                     State#state{modstate=ModState1}
             end;
-        {{error, _}, ModState1} ->
+        {{error, _R}, ModState1} ->
             State#state{modstate=ModState1}
     end.
 
@@ -3489,7 +3504,7 @@ do_delete(BKey, State) ->
     ModState = State#state.modstate,
     Idx = State#state.idx,
     DeleteMode = State#state.delete_mode,
-
+    
     %% Get the existing object.
     case do_get_term(BKey, Mod, ModState) of
         {{ok, RObj}, UpdModState} ->

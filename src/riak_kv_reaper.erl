@@ -49,6 +49,8 @@
             start_job/1,
             request_reap/1,
             request_reap/2,
+            bulk_request_reap/1,
+            bulk_request_reap/2,
             direct_reap/1,
             reap_stats/0,
             reap_stats/1,
@@ -93,6 +95,14 @@ request_reap(ReapReference) ->
 -spec request_reap(pid()|module(), reap_reference()) -> ok.
 request_reap(Pid, ReapReference) ->
     riak_kv_queue_manager:request(Pid, ReapReference).
+
+-spec bulk_request_reap(list(reap_reference())) -> ok.
+bulk_request_reap(RefList) ->
+    bulk_request_reap(?MODULE, RefList).
+
+-spec bulk_request_reap(pid()|module(), list(reap_reference())) -> ok.
+bulk_request_reap(Pid, RefList) ->
+    riak_kv_queue_manager:bulk_request(Pid, RefList).
 
 -spec reap_stats() ->
     list({atom(), non_neg_integer()|riak_kv_overflow_queue:queue_stats()}).
