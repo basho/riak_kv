@@ -241,8 +241,19 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
     Me = self(),
     ReqId = mk_reqid(),
     W = application:get_env(riak_kv, replrtq_vnodecheck, 1),
+    BucketProps = riak_kv_put_fsm:get_bucket_props(Bucket),
+    Clock = riak_object:vclock(RObj),
+    MaybePrunedClock =
+        vclock:prune(Clock, riak_core_util:moment(), BucketProps),
+    RR =
+        case {length(MaybePrunedClock), length(Clock)} of
+            {PVL, UPVL} when PVL < UPVL ->
+                true;
+            _ ->
+                false
+        end,
     Options = [asis, disable_hooks, {update_last_modified, false},
-                {w, W}, {pw, 1}, {dw, 0}, {node_confirms, 1}],
+                {w, W}, {pw, 1}, {dw, 0}, {node_confirms, 1}, {rr, RR}],
         % asis - stops the PUT from being re-coordinated
         % disable_hooks - this makes this compatible with previous repl,
         % although this may no longer be necessary (no repl hook to disable)

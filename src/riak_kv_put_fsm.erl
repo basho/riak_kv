@@ -50,6 +50,7 @@
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
+-export([get_bucket_props/1]).
 
 -type detail_info() :: timing.
 -type detail() :: true |
@@ -777,6 +778,8 @@ handle_options([{K, _V} = Opt|T], Acc)
   when K == sloppy_quorum; K == n_val ->
     %% Take these options as-is
     handle_options(T, [Opt|Acc]);
+handle_options([{rr, true}|T], Acc) ->
+    handle_options(T, [{rr, true}|Acc]);
 handle_options([{_,_}|T], Acc) -> handle_options(T, Acc).
 
 %% Invokes the hook and returns a tuple of
