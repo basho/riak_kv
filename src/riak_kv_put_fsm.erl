@@ -50,7 +50,6 @@
          waiting_local_vnode/2,
          waiting_remote_vnode/2,
          postcommit/2, finish/2]).
--export([get_bucket_props/1]).
 
 -type detail_info() :: timing.
 -type detail() :: true |
@@ -397,13 +396,32 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                 {[{returnbody,true}], false}
                         end
                 end,
+            RObj = apply_updates(RObj0, Options),
+            Asis = get_option(asis, Options),
+            RR =
+                case Asis of
+                    true ->
+                        Clock = riak_object:vclock(RObj),
+                        MaybePrunedClock =
+                            vclock:prune(
+                                Clock, riak_core_util:moment(), BucketProps),
+                        case {length(MaybePrunedClock), length(Clock)} of
+                            {PVL, UPVL} when PVL < UPVL ->
+                                true;
+                            _ ->
+                                false
+                        end;
+                    _ ->
+                        false
+                end,
             PutCore = riak_kv_put_core:init(N, W, PW, NodeConfirms, DW,
                                             AllowMult,
                                             ReturnBody,
                                             IdxType),
             Options1 = lists:keydelete(sync_on_write, 1, Options),
             Options2 = [{sync_on_write, SyncOnWrite}|Options1],
-            VNodeOpts = handle_options(Options2, VNodeOpts0),
+            Options3 = [{rr, RR}|Options2],
+            VNodeOpts = handle_options(Options3, VNodeOpts0),
             StateData = StateData0#state{n=N,
                                          w=W,
                                          pw=PW, node_confirms=NodeConfirms, dw=DW,
@@ -411,7 +429,7 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                                          precommit = Precommit,
                                          postcommit = Postcommit,
                                          req_id = ReqId,
-                                         robj = apply_updates(RObj0, Options),
+                                         robj = RObj,
                                          putcore = PutCore,
                                          vnode_options = VNodeOpts,
                                          timeout = Timeout},
@@ -973,14 +991,15 @@ late_put_fsm_coordinator_ack(_Node) ->
 
 -spec get_bucket_props(riak_object:bucket()) -> list().
 get_bucket_props(Bucket) ->
-    {ok, DefaultProps} = application:get_env(riak_core,
-                                             default_bucket_props),
+    {ok, DefaultProps} = application:get_env(riak_core, default_bucket_props),
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     %% typed buckets never fall back to defaults
     case is_tuple(Bucket) of
         false ->
-            lists:keymerge(1, lists:keysort(1, BucketProps),
-                           lists:keysort(1, DefaultProps));
+            lists:keymerge(
+                1,
+                lists:keysort(1, BucketProps),
+                lists:keysort(1, DefaultProps));
         true ->
             BucketProps
     end.
