@@ -397,9 +397,8 @@ validate(timeout, StateData0 = #state{from = {raw, ReqId, _Pid},
                         end
                 end,
             RObj = apply_updates(RObj0, Options),
-            Asis = get_option(asis, Options),
             RR =
-                case Asis of
+                case get_option(asis, Options) of
                     true ->
                         Clock = riak_object:vclock(RObj),
                         MaybePrunedClock =
