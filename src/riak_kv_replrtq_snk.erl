@@ -349,6 +349,7 @@ handle_call({worker_count, QueueN, WorkerCount, PerPeerLimit}, _From, State) ->
             SinkWork0 =
                 SinkWork#sink_work{work_queue = WorkQueue,
                                     minimum_queue_length = QueueLength,
+                                    deferred_queue_length = 0,
                                     max_worker_count = WorkerCount},
             W0 =
                 lists:keyreplace(QueueN, 1, State#state.work,
