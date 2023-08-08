@@ -298,6 +298,19 @@
   {commented, 2}
 ]}.
 
+%% @doc Deferred reap on failure
+%% Should one or more primaries be unavilable the reap following delete will
+%% not be triggered.  Rather than being ignored, it can be deferred by enabling
+%% defer_reap_on_failure.  This will queue the reap on the reaper untill all
+%% primaries are available.  The reaper queue will be erased on restart, so
+%% further failure may lead to the loss of deferred reaps
+{mapping, "defer_reap_on_failure", "riak_kv.defer_reap_on_failure", [
+  {datatype, flag},
+  {default, on},
+  hidden
+]}.
+
+
 %% @doc Whether to allow node to participate in coverage queries.
 %% This is used as a manual switch to stop nodes in incomplete states
 %% (E.g. doing a full partition repair, or node replace) from participating
