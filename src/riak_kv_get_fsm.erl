@@ -598,13 +598,13 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace}) ->
     UpdStateData = StateData#state{get_core = UpdGetCore},
 
     case Action of
-        delete ->
-            maybe_delete(UpdStateData);
+        {delete, TombObj} ->
+            maybe_delete(UpdStateData, TombObj);
         {read_repair, Indices, RepairObj} ->
             maybe_read_repair(Indices, RepairObj, UpdStateData);
         {delete_repair, Indices, RepairObj} ->
             maybe_read_repair(Indices, RepairObj, UpdStateData),
-            maybe_delete(UpdStateData);
+            maybe_delete(UpdStateData, RepairObj);
         _Nop ->
             ?DTRACE(Trace, ?C_GET_FSM_FINALIZE, [], ["finalize"]),
             ok
@@ -615,8 +615,10 @@ finalize(StateData=#state{get_core = GetCore, trace = Trace}) ->
 %% Maybe issue deletes if all primary nodes are available.
 %% Get core will only requestion deletion if all vnodes
 %% replies with the same value.
-maybe_delete(StateData=#state{n = N, preflist2=Sent, trace=Trace,
-                              req_id=ReqId, bkey=BKey}) ->
+maybe_delete(
+    StateData=#state{
+        n = N, preflist2=Sent, trace=Trace, req_id=ReqId, bkey=BKey},
+    TombObj) ->
     %% Check sent to a perfect preflist and we can delete
     IdealNodes = [{I, Node} || {{I, Node}, primary} <- Sent],
     NotCustomN = not using_custom_n_val(StateData),
@@ -628,7 +630,25 @@ maybe_delete(StateData=#state{n = N, preflist2=Sent, trace=Trace,
         _ ->
             ?DTRACE(Trace, ?C_GET_FSM_MAYBE_DELETE, [0],
                     ["maybe_delete", "nop"]),
+            maybe_defer_reap(BKey, TombObj),
             nop
+    end.
+
+-spec maybe_defer_reap(
+    {riak_object:bucket(), riak_object:key()}, riak_object:object()) -> ok.
+maybe_defer_reap(BKey, TombstoneObj) ->
+    case app_helper:get_env(riak_kv, delete_mode, 3000) of
+        keep ->
+            ok;
+        _ ->
+            case app_helper:get_env(riak_kv, defer_reap_on_failure, true) of
+                true ->
+                    VC = riak_object:vclock(TombstoneObj),
+                    riak_kv_reaper:request_reap(
+                        {BKey, riak_object:delete_hash(VC)});
+                _ ->
+                    ok
+            end
     end.
 
 using_custom_n_val(#state{n=N, bucket_props=BucketProps}) ->

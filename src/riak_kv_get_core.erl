@@ -45,7 +45,7 @@
     {delete_repair,
         [{non_neg_integer(), repair_reason()}],
         riak_object:riak_object()} |
-    delete.
+    {delete, riak_object:riak_object()}.
 -type idxresult() :: {non_neg_integer(), result()}.
 -type idx_type() :: [{non_neg_integer, 'primary' | 'fallback'}].
 
@@ -379,7 +379,7 @@ final_action(GetCore = #getcore{n = N, merged = Merged0, results = Results,
     Action =
         case ReadRepairs of
             [] when ObjState == tombstone, AllResults ->
-                delete;
+                {delete, MObj};
             [] ->
                nop;
             _ when ObjState == tombstone, AllResults ->
