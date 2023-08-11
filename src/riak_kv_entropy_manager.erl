@@ -956,11 +956,7 @@ add_index_exchanges(Index, State) ->
 -spec prune_exchanges([exchange()])
                      -> [exchange()].
 prune_exchanges(Exchanges) ->
-    L = [if A < B ->
-                 {A, B, IndexN};
-            true ->
-                 {B, A, IndexN}
-         end || {A, B, IndexN} <- Exchanges],
+    L = [Exchange || {A, B, _IndexN} = Exchange <- Exchanges, A < B],
     lists:usort(L).
 
 -spec already_exchanging(index() ,state()) -> boolean().
