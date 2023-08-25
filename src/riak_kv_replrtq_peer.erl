@@ -66,7 +66,7 @@ update_discovery(QueueName) ->
         ?DISCOVERY_TIMEOUT_SECONDS * 1000).
 
 -spec update_workers(pos_integer(), pos_integer()) -> boolean().
-update_workers(WorkerCount, PerPeerLimit) ->
+update_workers(WorkerCount, PerPeerLimit) when PerPeerLimit =< WorkerCount ->
     gen_server:call(
         ?MODULE,
         {update_workers, WorkerCount, PerPeerLimit},

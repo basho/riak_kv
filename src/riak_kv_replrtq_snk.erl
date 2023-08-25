@@ -65,7 +65,7 @@
 -define(STARTING_DELAYMS, 8).
 -define(MAX_SUCCESS_DELAYMS, 1024).
 -define(ON_ERROR_DELAYMS, 65536).
--define(INACTIVITY_TIMEOUT_MS, 60000).
+-define(INITIAL_TIMEOUT_MS, 60000).
 -define(DEFAULT_WORKERCOUNT, 1).
 
 -record(sink_work, {queue_name :: queue_name(),
@@ -208,10 +208,13 @@ add_snkqueue(QueueName, Peers, WorkerCount) ->
 %% number of workers overall
 -spec add_snkqueue(queue_name(), list(peer_info()),
                     pos_integer(), pos_integer()) -> ok.
-add_snkqueue(QueueName, Peers, WorkerCount, PerPeerLimit) 
-                                            when PerPeerLimit =< WorkerCount ->
-    gen_server:call(?MODULE,
-                    {add, QueueName, Peers, WorkerCount, PerPeerLimit}).
+add_snkqueue(
+        QueueName, Peers, WorkerCount, PerPeerLimit) 
+        when PerPeerLimit =< WorkerCount ->
+    gen_server:call(
+        ?MODULE,
+        {add, QueueName, Peers, WorkerCount, PerPeerLimit},
+        infinity).
 
 
 %% @doc
@@ -236,50 +239,30 @@ set_workercount(QueueName, WorkerCount) ->
 %% @doc
 %% Change the number of concurrent workers whilst limiting the number of
 %% workers per peer
--spec set_workercount(queue_name(), pos_integer(), pos_integer())
-                                                            -> ok|not_found.
-set_workercount(QueueName, WorkerCount, PerPeerLimit)
-                                            when PerPeerLimit =< WorkerCount ->
-    gen_server:call(?MODULE,
-                    {worker_count, QueueName, WorkerCount, PerPeerLimit}).
+-spec set_workercount(
+    queue_name(), pos_integer(), pos_integer()) -> ok|not_found.
+set_workercount(
+        QueueName, WorkerCount, PerPeerLimit)
+        when PerPeerLimit =< WorkerCount ->
+    gen_server:call(
+        ?MODULE,
+        {worker_count, QueueName, WorkerCount, PerPeerLimit},
+        infinity
+    ).
 
 %%%============================================================================
 %%% gen_server callbacks
 %%%============================================================================
 
 init([]) ->
-    SinkEnabled =
-        app_helper:get_env(riak_kv, replrtq_enablesink, false),
+    SinkEnabled = app_helper:get_env(riak_kv, replrtq_enablesink, false),
     case SinkEnabled of
         true ->
-            SinkPeers =
-                app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
-            DefaultQueue =
-                app_helper:get_env(riak_kv, replrtq_sinkqueue),
-            SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
-            {SnkWorkerCount, PerPeerLimit} = get_worker_counts(),
-            Iteration = 1,
-            MapPeerInfoFun =
-                fun({SnkQueueName, SnkPeerInfo}) ->
-                    {SnkQueueLength, SnkWorkQueue} =
-                        determine_workitems(SnkQueueName,
-                                            Iteration,
-                                            SnkPeerInfo,
-                                            SnkWorkerCount,
-                                            min(SnkWorkerCount, PerPeerLimit)),
-                    SnkW =
-                        #sink_work{queue_name = SnkQueueName,
-                                    work_queue = SnkWorkQueue,
-                                    minimum_queue_length = SnkQueueLength,
-                                    peer_list = SnkPeerInfo,
-                                    max_worker_count = SnkWorkerCount},
-                    {SnkQueueName, Iteration, SnkW}
-                end,
-            Work = lists:map(MapPeerInfoFun, SnkQueuePeerInfo),
-            {ok, #state{enabled = true, work = Work}, ?INACTIVITY_TIMEOUT_MS};
+            gen_server:cast(?MODULE, initialise_work);
         false ->
-            {ok, #state{}}
-    end.
+            ok
+    end,
+    {ok, #state{}}.
 
 handle_call({suspend, QueueN}, _From, State) ->
     case lists:keyfind(QueueN, 1, State#state.work) of
@@ -364,6 +347,32 @@ handle_call({current_peers, QueueN}, _From, State) ->
     end.
 
 
+handle_cast(initialise_work, State) ->
+    SinkPeers =
+        app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
+    DefaultQueue =
+        app_helper:get_env(riak_kv, replrtq_sinkqueue),
+    SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
+    {SnkWorkerCount, PerPeerLimit} = get_worker_counts(),
+    Iteration = 1,
+    MapPeerInfoFun =
+        fun({SnkQueueName, SnkPeerInfo}) ->
+            {SnkQueueLength, SnkWorkQueue} =
+                determine_workitems(SnkQueueName,
+                                    Iteration,
+                                    SnkPeerInfo,
+                                    SnkWorkerCount,
+                                    min(SnkWorkerCount, PerPeerLimit)),
+            SnkW =
+                #sink_work{queue_name = SnkQueueName,
+                            work_queue = SnkWorkQueue,
+                            minimum_queue_length = SnkQueueLength,
+                            peer_list = SnkPeerInfo,
+                            max_worker_count = SnkWorkerCount},
+            {SnkQueueName, Iteration, SnkW}
+        end,
+    Work = lists:map(MapPeerInfoFun, SnkQueuePeerInfo),
+    {noreply, State#state{enabled = true, work = Work}, ?INITIAL_TIMEOUT_MS};
 handle_cast(prompt_work, State) ->
     Work0 = lists:map(fun do_work/1, State#state.work),
     {noreply, State#state{work = Work0}};
