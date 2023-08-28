@@ -142,6 +142,11 @@ handle_info({scheduled_discovery, QueueName}, State) ->
             ?AUTO_DISCOVERY_MAXIMUM_SECONDS),
     Delay = rand:uniform(max(1, MaxDelay - MinDelay)) + MinDelay,
     _ = schedule_discovery(QueueName, self(), Delay),
+    {noreply, State};
+handle_info({_Ref, HTTPClientError}, State) ->
+    lager:info(
+        "Client error caught - error ~p returned after timeout",
+        [HTTPClientError]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
