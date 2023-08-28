@@ -223,7 +223,7 @@ add_snkqueue(
 %% Returns undefined if there are currently no peers defined.
 -spec current_peers(queue_name()) -> list(peer_info())|undefined.
 current_peers(QueueName) ->
-    gen_server:call(?MODULE, {current_peers, QueueName}).
+    gen_server:call(?MODULE, {current_peers, QueueName}, infinity).
 
 
 %% @doc

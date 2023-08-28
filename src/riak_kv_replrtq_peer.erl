@@ -41,8 +41,8 @@
 -type discovery_peer() ::
     {riak_kv_replrtq_snk:queue_name(), [riak_kv_replrtq_snk:peer_info()]}.
 
--define(DISCOVERY_TIMEOUT_SECONDS, 60).
--define(UPDATE_TIMEOUT_SECONDS, 60).
+-define(DISCOVERY_TIMEOUT_SECONDS, 300).
+-define(UPDATE_TIMEOUT_SECONDS, 300).
 -define(AUTO_DISCOVERY_MAXIMUM_SECONDS, 900).
 -define(AUTO_DISCOVERY_MINIMUM_SECONDS, 60).
 
