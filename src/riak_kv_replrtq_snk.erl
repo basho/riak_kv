@@ -31,6 +31,7 @@
         handle_call/3,
         handle_cast/2,
         handle_info/2,
+        handle_continue/2,
         terminate/2,
         code_change/3]).
 
@@ -258,11 +259,10 @@ init([]) ->
     SinkEnabled = app_helper:get_env(riak_kv, replrtq_enablesink, false),
     case SinkEnabled of
         true ->
-            gen_server:cast(?MODULE, initialise_work);
+            {ok, #state{}, {continue, initialise_work}};
         false ->
-            ok
-    end,
-    {ok, #state{}}.
+            {ok, #state{}}
+    end.
 
 handle_call({suspend, QueueN}, _From, State) ->
     case lists:keyfind(QueueN, 1, State#state.work) of
@@ -347,32 +347,6 @@ handle_call({current_peers, QueueN}, _From, State) ->
     end.
 
 
-handle_cast(initialise_work, State) ->
-    SinkPeers =
-        app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
-    DefaultQueue =
-        app_helper:get_env(riak_kv, replrtq_sinkqueue),
-    SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
-    {SnkWorkerCount, PerPeerLimit} = get_worker_counts(),
-    Iteration = 1,
-    MapPeerInfoFun =
-        fun({SnkQueueName, SnkPeerInfo}) ->
-            {SnkQueueLength, SnkWorkQueue} =
-                determine_workitems(SnkQueueName,
-                                    Iteration,
-                                    SnkPeerInfo,
-                                    SnkWorkerCount,
-                                    min(SnkWorkerCount, PerPeerLimit)),
-            SnkW =
-                #sink_work{queue_name = SnkQueueName,
-                            work_queue = SnkWorkQueue,
-                            minimum_queue_length = SnkQueueLength,
-                            peer_list = SnkPeerInfo,
-                            max_worker_count = SnkWorkerCount},
-            {SnkQueueName, Iteration, SnkW}
-        end,
-    Work = lists:map(MapPeerInfoFun, SnkQueuePeerInfo),
-    {noreply, State#state{enabled = true, work = Work}, ?INITIAL_TIMEOUT_MS};
 handle_cast(prompt_work, State) ->
     Work0 = lists:map(fun do_work/1, State#state.work),
     {noreply, State#state{work = Work0}};
@@ -440,6 +414,33 @@ handle_info(log_stats, State) ->
 handle_info({prompt_requeue, WorkItem}, State) ->
     requeue_work(WorkItem),
     {noreply, State}.
+
+handle_continue(initialise_work, State) ->
+    SinkPeers =
+        app_helper:get_env(riak_kv, replrtq_sinkpeers, ""),
+    DefaultQueue =
+        app_helper:get_env(riak_kv, replrtq_sinkqueue),
+    SnkQueuePeerInfo = tokenise_peers(DefaultQueue, SinkPeers),
+    {SnkWorkerCount, PerPeerLimit} = get_worker_counts(),
+    Iteration = 1,
+    MapPeerInfoFun =
+        fun({SnkQueueName, SnkPeerInfo}) ->
+            {SnkQueueLength, SnkWorkQueue} =
+                determine_workitems(SnkQueueName,
+                                    Iteration,
+                                    SnkPeerInfo,
+                                    SnkWorkerCount,
+                                    min(SnkWorkerCount, PerPeerLimit)),
+            SnkW =
+                #sink_work{queue_name = SnkQueueName,
+                            work_queue = SnkWorkQueue,
+                            minimum_queue_length = SnkQueueLength,
+                            peer_list = SnkPeerInfo,
+                            max_worker_count = SnkWorkerCount},
+            {SnkQueueName, Iteration, SnkW}
+        end,
+    Work = lists:map(MapPeerInfoFun, SnkQueuePeerInfo),
+    {noreply, State#state{enabled = true, work = Work}, ?INITIAL_TIMEOUT_MS}.
 
 terminate(_Reason, State) ->
     WorkItems = lists:map(fun(SW) -> element(3, SW) end, State#state.work),
