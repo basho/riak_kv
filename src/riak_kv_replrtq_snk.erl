@@ -397,7 +397,7 @@ handle_cast({requeue_work, WorkItem}, State) ->
             {noreply, State}
     end.
 
-handle_info(timeout, State) ->
+handle_info(deferred_start, State) ->   
     prompt_work(),
     erlang:send_after(?LOG_TIMER_SECONDS * 1000, self(), log_stats),
     {noreply, State};
@@ -440,7 +440,8 @@ handle_continue(initialise_work, State) ->
             {SnkQueueName, Iteration, SnkW}
         end,
     Work = lists:map(MapPeerInfoFun, SnkQueuePeerInfo),
-    {noreply, State#state{enabled = true, work = Work}, ?INITIAL_TIMEOUT_MS}.
+    erlang:send_after(?INITIAL_TIMEOUT_MS, self(), deferred_start),
+    {noreply, State#state{enabled = true, work = Work}}.
 
 terminate(_Reason, State) ->
     WorkItems = lists:map(fun(SW) -> element(3, SW) end, State#state.work),
