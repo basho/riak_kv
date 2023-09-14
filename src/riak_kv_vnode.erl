@@ -1961,14 +1961,14 @@ handle_aaefold({find_tombs,
                     IndexNs, Filtered, ReturnFun, Cntrl, Sender,
                     State) ->
     FoldFun =
-        fun(BF, KF, EFs, TombHashAcc) ->
+        fun(BF, KF, EFs, TombClockAcc) ->
             {md, MD} = lists:keyfind(md, 1, EFs),
             case riak_object:is_aae_object_deleted(MD, false) of
                 {true, undefined} ->
                     {clock, VV} = lists:keyfind(clock, 1, EFs),
-                    [{BF, KF, riak_object:delete_hash(VV)}|TombHashAcc];
+                    [{BF, KF, VV}|TombClockAcc];
                 {false, undefined} ->
-                    TombHashAcc
+                    TombClockAcc
             end
         end,
     WrappedFoldFun = aaefold_withcoveragecheck(FoldFun, IndexNs, Filtered),
@@ -1997,25 +1997,24 @@ handle_aaefold({reap_tombs,
             case riak_object:is_aae_object_deleted(MD, false) of
                 {true, undefined} ->
                     {clock, VV} = lists:keyfind(clock, 1, EFs),
-                    DH = riak_object:delete_hash(VV),
                     case TombHashAcc of
                         {BatchList, Count, local} ->
                             NewCount = Count + 1,
                             case NewCount rem ?REAPER_BATCH_SIZE of
                                 0 ->
                                     riak_kv_reaper:bulk_request_reap(
-                                        [{{BF, KF}, DH}|BatchList]
+                                        [{{BF, KF}, VV, true}|BatchList]
                                     ),
                                     {[], NewCount, local};
                                 _ ->
-                                    {[{{BF, KF}, DH}|BatchList],
+                                    {[{{BF, KF}, VV, true}|BatchList],
                                         NewCount,
                                         local}
                             end;
                         {BatchList, Count, count} ->
                             {BatchList, Count + 1, count};
                         {BatchList, Count, Job} ->
-                            {[{{BF, KF}, DH}|BatchList], Count + 1, Job}
+                            {[{{BF, KF}, VV, true}|BatchList], Count + 1, Job}
                     end;
                 {false, undefined} ->
                     TombHashAcc

@@ -35,6 +35,7 @@
         handle_call/3,
         handle_cast/2,
         handle_info/2,
+        handle_continue/2,
         terminate/2,
         code_change/3,
         format_status/2]).
@@ -44,6 +45,7 @@
     replrtq_aaefold/2,
     replrtq_ttaaefs/2,
     replrtq_coordput/1,
+    replrtq_reap/4,
     register_rtq/2,
     delist_rtq/1,
     suspend_rtq/1,
@@ -114,9 +116,13 @@
 -type object_ref() ::
     {tomb, riak_object:riak_object()}|
         {object, riak_object:riak_object()}|
+        {reap, erlang:timestamp()}|
         to_fetch.
     % The object reference can be the actual object or a request to fetch the
     % actual object using the Bucket, Key and Clock in the repl_entry
+    % If the replicated operation is a reap the future vector clock should be
+    % the mpty list (as there will be no object) and the delete hash should be
+    % passed for validation (as required by riak_kv_vnode:final_delete/3).
 -type repl_entry() ::
     {riak_object:bucket(), riak_object:key(), vclock:vclock(), object_ref()}.
     % If the object is a tombstone which had been PUT, then the actual
@@ -222,11 +228,22 @@ replrtq_ttaaefs(QueueName, ReplEntries) ->
 
 %% @doc
 %% Add a single repl_entry associated with a PUT coordinated on this node.
-%% Never wait for the response or backoff - replictaion should be asynchronous
+%% Never wait for the response or backoff - replication should be asynchronous
 %% and never slow the PUT path on the src cluster.
 -spec replrtq_coordput(repl_entry()) -> ok.
 replrtq_coordput({Bucket, _, _, _} = ReplEntry) when is_binary(Bucket); is_tuple(Bucket) ->
     gen_server:cast(?MODULE, {rtq_coordput, Bucket, ReplEntry}).
+
+
+%% @doc
+%% Add a single reference to a reap to be replicated.  This is a call to
+%% prevent queued reaps from overloading the mailbox of the real-time queue.
+-spec replrtq_reap(
+    riak_object:bucket(), riak_object:key(),
+    vclock:vclock(), erlang:timestamp()) -> ok.
+replrtq_reap(Bucket, Key, TombClock, LMD) ->
+    gen_server:call(
+        ?MODULE, {rtq_reap, Bucket, Key, TombClock, LMD}, infinity).
 
 %% @doc
 %% Setup a queue with a given queuename, which will take coordput repl_entries
@@ -391,6 +408,10 @@ handle_call({bulk_add, Priority, QueueName, ReplEntries}, _From, State) ->
         _ ->
             {reply, ok, State}
     end;
+handle_call({rtq_reap, Bucket, Key, TombClock, LMD}, _From, State) ->
+    QueueNames = find_queues(Bucket, State#state.queue_filtermap, []),
+    ReapRef = {Bucket, Key, TombClock, {reap, LMD}},
+    {reply, ok, State, {continue, {repl, ReapRef, QueueNames}}};
 handle_call({length_rtq, QueueName}, _From, State) ->
     case lists:keyfind(QueueName, 1, State#state.queue_local) of
         {QueueName, LocalQueues} ->
@@ -601,61 +622,9 @@ handle_call(stop, _From, State) ->
 
 
 handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
-    QueueNames =
-        find_queues(Bucket, State#state.queue_filtermap, []),
-    AddFun =
-        fun(QueueName, AccState) ->
-            {QueueName, LQ} =
-                lists:keyfind(QueueName, 1, AccState#state.queue_local),
-            case element(?RTQ_PRIORITY, LQ) of
-                {_Q, LC, OC} when (LC + OC) >= State#state.queue_limit ->
-                    _ = riak_kv_stat:update({ngrrepl_srcdiscard, 1}),
-                    AccState;
-                {Q, LC, OC} when LC >= State#state.object_limit; OC > 0 ->
-                    {QueueName, OverflowQ} =
-                        lists:keyfind(
-                            QueueName,
-                            1,
-                            AccState#state.queue_overflow),
-                    UpdOverflowQ =
-                        riak_kv_overflow_queue:addto_queue(
-                            ?RTQ_PRIORITY,
-                            filter_on_objectlimit(ReplEntry),
-                            OverflowQ),
-                    UpdOverflowQueues =
-                        lists:keyreplace(
-                            QueueName,
-                            1,
-                            AccState#state.queue_overflow,
-                            {QueueName, UpdOverflowQ}),
-                    UpdLQs =
-                        lists:keyreplace(
-                            QueueName,
-                            1,
-                            AccState#state.queue_local,
-                            {QueueName,
-                                setelement(
-                                    ?RTQ_PRIORITY,
-                                    LQ,
-                                    {Q, LC, OC + 1})}),
-                    AccState#state{
-                        queue_overflow = UpdOverflowQueues,
-                        queue_local = UpdLQs};
-                {Q, LC, 0} ->
-                    UpdLQs =
-                        lists:keyreplace(
-                            QueueName,
-                            1,
-                            AccState#state.queue_local,
-                            {QueueName,
-                                setelement(
-                                    ?RTQ_PRIORITY,
-                                    LQ,
-                                    {queue:in(ReplEntry, Q), LC + 1, 0})}),
-                    AccState#state{queue_local = UpdLQs}
-            end
-        end,
-    {noreply, lists:foldl(AddFun, State, QueueNames)}.
+    QueueNames = find_queues(Bucket, State#state.queue_filtermap, []),
+    {noreply, State, {continue, {repl, ReplEntry, QueueNames}}}.
+    
 
 handle_info(log_queue, State) ->
     LogFun =
@@ -677,6 +646,55 @@ handle_info(log_queue, State) ->
     lists:foreach(LogFun, State#state.queue_filtermap),
     erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),
     {noreply, State}.
+
+
+handle_continue({repl, _ReplEntry, []}, State) ->
+    {noreply, State};
+handle_continue({repl, ReplEntry, [QueueName|OtherQueues]}, State) ->
+    {QueueName, LQ} = lists:keyfind(QueueName, 1, State#state.queue_local),
+    case element(?RTQ_PRIORITY, LQ) of
+        {_Q, LC, OC} when (LC + OC) >= State#state.queue_limit ->
+            _ = riak_kv_stat:update({ngrrepl_srcdiscard, 1}),
+            {noreply, State, {continue, {repl, ReplEntry, OtherQueues}}};
+        {Q, LC, OC} when LC >= State#state.object_limit; OC > 0 ->
+            {QueueName, OverflowQ} =
+                lists:keyfind(QueueName, 1, State#state.queue_overflow),
+            UpdOverflowQ =
+                riak_kv_overflow_queue:addto_queue(
+                    ?RTQ_PRIORITY,
+                    filter_on_objectlimit(ReplEntry),
+                    OverflowQ),
+            UpdOverflowQueues =
+                lists:keyreplace(
+                    QueueName,
+                    1,
+                    State#state.queue_overflow,
+                    {QueueName, UpdOverflowQ}),
+            UpdCount =
+                {QueueName, setelement(?RTQ_PRIORITY, LQ, {Q, LC, OC + 1})},
+            UpdLQs =
+                lists:keyreplace(
+                    QueueName, 1, State#state.queue_local, UpdCount),
+            {noreply,
+                State#state{
+                    queue_overflow = UpdOverflowQueues,
+                    queue_local = UpdLQs},
+                {continue, {repl, ReplEntry, OtherQueues}}};
+        {Q, LC, 0} ->
+            UpdLQs =
+                lists:keyreplace(
+                    QueueName,
+                    1,
+                    State#state.queue_local,
+                    {QueueName,
+                        setelement(
+                            ?RTQ_PRIORITY,
+                            LQ,
+                            {queue:in(ReplEntry, Q), LC + 1, 0})}),
+            {noreply,
+                State#state{queue_local = UpdLQs},
+                {continue, {repl, ReplEntry, OtherQueues}}}
+    end.
 
 format_status(normal, [_PDict, State]) ->
     State;

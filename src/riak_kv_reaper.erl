@@ -63,7 +63,12 @@
             redo/0]).
 
 -type reap_reference() ::
-    {{riak_object:bucket(), riak_object:key()}, non_neg_integer()}.
+    {{riak_object:bucket(), riak_object:key()}, vclock:vclock(), boolean()}.
+    %% the reap reference is {Bucket, Key, Clock (of tombstone), Forward}.  The
+    %% Forward boolean() indicates if this reap should be replicated if
+    %% riak_kv.repl_reap is true.  When a reap is received via replication
+    %% Forward should be set to false, to prevent reaps from perpetually
+    %% circulating
 -type job_id() :: pos_integer().
 
 -export_type([reap_reference/0, job_id/0]).
@@ -149,7 +154,7 @@ get_limits() ->
 %% we will not redo - redo is only to handle the failure related to unavailable
 %% primaries
 -spec action(reap_reference(), boolean()) -> boolean().
-action({{Bucket, Key}, DeleteHash}, Redo) ->
+action({{Bucket, Key}, TombClock, ToRepl}, Redo) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     DocIdx = riak_core_util:chash_key({Bucket, Key}, BucketProps),
     {n_val, N} = lists:keyfind(n_val, 1, BucketProps),
@@ -160,7 +165,11 @@ action({{Bucket, Key}, DeleteHash}, Redo) ->
             PL0 = lists:map(fun({Target, primary}) -> Target end, PrefList),
             case check_all_mailboxes(PL0) of
                 ok ->
-                    riak_kv_vnode:reap(PL0, {Bucket, Key}, DeleteHash),
+                    riak_kv_vnode:reap(
+                        PL0,
+                        {Bucket, Key},
+                        riak_object:delete_hash(TombClock)),
+                    maybe_repl_reap(Bucket, Key, TombClock, ToRepl),
                     timer:sleep(TombPause),
                     true;
                 soft_loaded ->
@@ -171,6 +180,7 @@ action({{Bucket, Key}, DeleteHash}, Redo) ->
             if Redo -> false; true -> true end
     end.
 
+
 -spec redo() -> boolean().
 redo() -> true.
 
@@ -179,6 +189,18 @@ redo() -> true.
 %%%============================================================================
 
 -type preflist_entry() :: {non_neg_integer(), node()}.
+
+-spec maybe_repl_reap(
+    riak_object:bucket(), riak_object:key(), vclock:vclock(), boolean()) -> ok.
+maybe_repl_reap(Bucket, Key, TombClock, ToReap) ->
+    case application:get_env(riak_kv, repl_reap, false) and ToReap of
+        true ->
+            riak_kv_replrtq_src:replrtq_reap(
+                Bucket, Key, TombClock, os:timestamp());
+        false ->
+            ok
+    end.
+
 
 %% Protect against overloading the system when not reaping should any
 %% mailbox be in soft overload state
