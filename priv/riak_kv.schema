@@ -1478,7 +1478,7 @@
 %% @doc Choose to read repair to primary vnodes only
 %% When fallback vnodes are elected, then read repair will by default repair
 %% any missing data from the vnode - i.e. every GET while the fallback is in
-%% play will lead to a PUT to add the rewuested object to the fallback vnode, 
+%% play will lead to a PUT to add the requested object to the fallback vnode, 
 %% as the fallback by default starts empty.
 %% If the expectation is that failed vnodes are replaced quickly, as would be
 %% possible in a Cloud scenario, this may not be desirable.  Read repair to
@@ -1508,4 +1508,13 @@
 {mapping, "handoff_deletes", "riak_kv.handoff_deletes", [
     {datatype, {flag, enabled, disabled}},
     {default, disabled}
+]}.
+
+%% @doc For $key index queries, should keys which are tombstones be returned.
+%% This config will only make a difference with the leveled backend, it is
+%% ignored on other backends.  Disable to change default behaviour and stop
+%% returning keys of tombstones in $key queries
+{mapping, "dollarkey_readtombs", "riak_kv.dollarkey_readtombs", [
+    {datatype, {flag, enabled, disabled}},
+    {default, enabled}
 ]}.
