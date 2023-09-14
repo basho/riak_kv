@@ -585,8 +585,8 @@ json_encode_results(find_keys, Result) ->
     Keys = {struct, [{<<"results">>, [{struct, encode_find_key(Key, Int)} || {_Bucket, Key, Int} <- Result]}
                     ]},
     mochijson2:encode(Keys);
-json_encode_results(find_tombs, Result) ->
-    json_encode_results(find_keys, Result);
+json_encode_results(find_tombs, KeysNClocks) ->
+    encode_keys_and_clocks(KeysNClocks);
 json_encode_results(reap_tombs, Count) ->
     mochijson2:encode({struct, [{<<"dispatched_count">>, Count}]});
 json_encode_results(erase_keys, Count) ->
@@ -616,7 +616,7 @@ pb_encode_results(merge_branch_nval, _QD, Branches) ->
         level_two = L2
     };
 pb_encode_results(fetch_clocks_nval, _QD, KeysNClocks) ->
-     #rpbaaefoldkeyvalueresp{
+    #rpbaaefoldkeyvalueresp{
         response_type = atom_to_binary(clock, unicode),
         keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
 pb_encode_results(merge_tree_range, QD, Tree) ->
@@ -662,8 +662,10 @@ pb_encode_results(find_keys, _QD, Results) ->
         end,
     #rpbaaefoldkeycountresp{response_type = <<"find_keys">>, 
                             keys_count = lists:map(KeyCountMap, Results)};
-pb_encode_results(find_tombs, QD, Results) ->
-    pb_encode_results(find_keys, QD, Results);
+pb_encode_results(find_tombs, _QD, KeysNClocks) ->
+    #rpbaaefoldkeyvalueresp{
+        response_type = atom_to_binary(clock, unicode),
+        keys_value = lists:map(fun pb_encode_bucketkeyclock/1, KeysNClocks)};
 pb_encode_results(reap_tombs, _QD, Count) ->
     #rpbaaefoldkeycountresp{response_type = <<"reap_tombs">>, 
                             keys_count =

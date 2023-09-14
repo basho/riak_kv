@@ -196,6 +196,7 @@ replrtq_reset_all_workercounts(WorkerC, PerPeerL) ->
             {ok, riak_object:riak_object()} |
             {ok, queue_empty} |
             {ok, {deleted, vclock:vclock(), riak_object:riak_object()}} |
+            {ok, {reap, {riak_object:bucket(), riak_object:key(), vclock:vclock(), erlang:timestamp()}}}|
             {error, timeout} |
             {error, not_yet_implemented} |
             {error, Err :: term()}.
@@ -223,10 +224,11 @@ fetch(QueueName, {?MODULE, [Node, _ClientId]}) ->
 -spec push(riak_object:riak_object()|binary(),
                 boolean(), list(), riak_client()) ->
             {ok, erlang:timestamp()} |
+            {ok, reap} |
             {error, too_many_fails} |
             {error, timeout} |
             {error, {n_val_violation, N::integer()}}.
-push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
+push(RObjMaybeBin, IsDeleted, Opts, RiakClient) ->
     RObj = 
         case riak_object:is_robject(RObjMaybeBin) of
             % May get pushed a riak object, or a riak object as a binary, but
@@ -236,6 +238,25 @@ push(RObjMaybeBin, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
             false ->
                 riak_object:nextgenrepl_decode(RObjMaybeBin)
         end,
+    case RObj of
+        {reap, {B, K, TC, LMD}} ->
+            {repl_reap(B, K, TC), LMD};
+        RObj ->
+            repl_push(RObj, IsDeleted, Opts, RiakClient)
+    end.
+
+-spec repl_reap(
+    riak_object:bucket(), riak_object:key(), vclock:vclock()) -> ok.
+repl_reap(B, K, TC) ->
+    riak_kv_reaper:request_reap({{B, K}, TC, false}).
+
+-spec repl_push(riak_object:riak_object()|binary(),
+    boolean(), list(), riak_client()) ->
+        {ok, erlang:timestamp()} |
+        {error, too_many_fails} |
+        {error, timeout} |
+        {error, {n_val_violation, N::integer()}}.
+repl_push(RObj, IsDeleted, _Opts, {?MODULE, [Node, _ClientId]}) ->
     Bucket = riak_object:bucket(RObj),
     Key = riak_object:key(RObj),
     Me = self(),
@@ -579,26 +600,30 @@ consistent_delete(Bucket, Key, Options, _Timeout, {?MODULE, [Node, _ClientId]}) 
     end.
 
 
--spec reap(riak_object:bucket(), riak_object:key(), riak_client()) 
-                                                                -> boolean().
+-spec reap(
+    riak_object:bucket(), riak_object:key(), riak_client()) -> boolean().
 reap(Bucket, Key, Client) ->
     case normal_get(Bucket, Key, [deletedvclock], Client) of
         {error, {deleted, TombstoneVClock}} ->
-            DeleteHash = riak_object:delete_hash(TombstoneVClock),
-            reap(Bucket, Key, DeleteHash, Client);
+            reap(Bucket, Key, TombstoneVClock, Client);
         _Unexpected ->
             false
     end.
 
--spec reap(riak_object:bucket(), riak_object:key(), pos_integer(),
-                                                riak_client()) -> boolean().
-reap(Bucket, Key, DeleteHash, {?MODULE, [Node, _ClientId]}) ->
+-spec reap(
+    riak_object:bucket(), riak_object:key(), vclock:vclock(), riak_client())
+        -> boolean().
+reap(Bucket, Key, TombClock, {?MODULE, [Node, _ClientId]}) ->
     case node() of
         Node ->
-            riak_kv_reaper:direct_reap({{Bucket, Key}, DeleteHash});
+            riak_kv_reaper:direct_reap({{Bucket, Key}, TombClock, true});
         _ ->
-            riak_core_util:safe_rpc(Node, riak_kv_reaper, direct_reap,
-                                    [{{Bucket, Key}, DeleteHash}])
+            riak_core_util:safe_rpc(
+                Node,
+                riak_kv_reaper,
+                direct_reap,
+                [{{Bucket, Key}, TombClock, true}]
+            )
     end.
 
 %% @spec delete_vclock(riak_object:bucket(), riak_object:key(), vclock:vclock(), riak_client()) ->

@@ -1188,24 +1188,26 @@ to_binary_version(Vsn, _B, _K, Obj = #r_object{}) ->
 binary_version(<<131,_/binary>>) -> v0;
 binary_version(<<?MAGIC:8/integer, 1:8/integer, _/binary>>) -> v1.
 
+-type repl_ref() ::
+    {reap,
+        {riak_object:bucket(), riak_object:key(),
+            vclock:vclock(), erlang:timestamp()}}.
+
 %% @doc Encode for nextgen_repl
--spec nextgenrepl_encode(repl_v1, riak_object(), boolean()) -> binary().
+-spec nextgenrepl_encode(
+    repl_v1, riak_object()|repl_ref(), boolean()) -> binary().
+nextgenrepl_encode(repl_v1, {reap, {B, K, TC, LMD}}, _ToCompress) ->
+    ObjBK = nextgenrepl_binarykey(B, K),
+    TCBin = term_to_binary(TC),
+    {Mega, Secs, Micro} = LMD,
+    <<1:4/integer, 0:1/integer, 1:1/integer, 0:2/integer,
+        ObjBK/binary,
+        Mega:32/integer, Secs:32/integer, Micro:32/integer,
+        TCBin/binary>>;
 nextgenrepl_encode(repl_v1, RObj, ToCompress) ->
     B = riak_object:bucket(RObj),
     K = riak_object:key(RObj),
-    KS = byte_size(K),
-    ObjBK =
-        case B of
-            {T, B0} ->
-                TS = byte_size(T),
-                B0S = byte_size(B0),
-                <<TS:32/integer, T/binary, B0S:32/integer, B0/binary,
-                    KS:32/integer, K/binary>>;
-            B0 ->
-                B0S = byte_size(B0),
-                <<0:32/integer, B0S:32/integer, B0/binary,
-                    KS:32/integer, K/binary>>
-        end,
+    ObjBK = nextgenrepl_binarykey(B, K),
     {Version, ObjBin} =
         case ToCompress of
             true ->
@@ -1217,22 +1219,40 @@ nextgenrepl_encode(repl_v1, RObj, ToCompress) ->
         end,
     <<Version/binary, ObjBK/binary, ObjBin/binary>>.
 
-%% @doc Deocde for nextgen_repl
--spec nextgenrepl_decode(binary()) -> riak_object().
-nextgenrepl_decode(<<1:4/integer, C:1/integer, _:3/integer,
+-spec nextgenrepl_binarykey(
+    riak_object:bucket(), riak_object:key()) -> binary().
+nextgenrepl_binarykey({T, B}, K) ->
+    TS = byte_size(T),
+    BS = byte_size(B),
+    KS = byte_size(K),
+    <<TS:32/integer, T/binary,
+        BS:32/integer, B/binary,
+        KS:32/integer, K/binary>>;
+nextgenrepl_binarykey(B, K) ->
+    BS = byte_size(B),
+    KS = byte_size(K),
+    <<0:32/integer, BS:32/integer, B/binary, KS:32/integer, K/binary>>.
+
+%% @doc Deocde for nextgenrepl
+-spec nextgenrepl_decode(binary()) -> riak_object()|repl_ref().
+nextgenrepl_decode(<<1:4/integer, C:1/integer, R:1/integer, _:2/integer,
                         0:32/integer, BL:32/integer, B:BL/binary,
                         KL:32/integer, K:KL/binary,
                         ObjBin/binary>>) ->
-    nextgenrepl_decode(B, K, C == 1, ObjBin);
-nextgenrepl_decode(<<1:4/integer, C:1/integer, _:3/integer,
+    nextgenrepl_decode(B, K, C == 1, R == 1, ObjBin);
+nextgenrepl_decode(<<1:4/integer, C:1/integer, R:1/integer, _:2/integer,
                         TL:32/integer, T:TL/binary, BL:32/integer, B:BL/binary,
                         KL:32/integer, K:KL/binary,
                         ObjBin/binary>>) ->
-    nextgenrepl_decode({T, B}, K, C == 1, ObjBin).
+    nextgenrepl_decode({T, B}, K, C == 1, R == 1, ObjBin).
 
-nextgenrepl_decode(B, K, true, ObjBin) ->
-    nextgenrepl_decode(B, K, false, zlib:uncompress(ObjBin));
-nextgenrepl_decode(B, K, false, ObjBin) ->
+nextgenrepl_decode(B, K, _, true, MetaBin) ->
+    <<Mega:32/integer, Secs:32/integer, Micro:32/integer, TClockBin/binary>> =
+        MetaBin,
+    {reap, {B, K, binary_to_term(TClockBin), {Mega, Secs, Micro}}};
+nextgenrepl_decode(B, K, true, false, ObjBin) ->
+    nextgenrepl_decode(B, K, false, false, zlib:uncompress(ObjBin));
+nextgenrepl_decode(B, K, false, false, ObjBin) ->
     riak_object:from_binary(B, K, ObjBin).
 
 %% @doc Convert binary object to riak object
@@ -2257,7 +2277,17 @@ nextgenrepl() ->
     ACZ = riak_object:reconcile([A, C, Z], true),
     ACZ0 = nextgenrepl_decode(nextgenrepl_encode(repl_v1, ACZ, false)),
     ACZ0 = nextgenrepl_decode(nextgenrepl_encode(repl_v1, ACZ, true)),
-    ?assertEqual(ACZ0, ACZ).
+    ?assertEqual(ACZ, ACZ0),
+    LMD = os:timestamp(),
+    {reap, {B, K, ACZ1, LMD}} =
+        nextgenrepl_decode(
+            nextgenrepl_encode(repl_v1, {reap, {B, K, ACZ, LMD}}, false)),
+    {reap, {B, K, ACZ1, LMD}} =
+        nextgenrepl_decode(
+            nextgenrepl_encode(repl_v1, {reap, {B, K, ACZ, LMD}}, true)),
+    ?assertEqual(ACZ, ACZ1).
+
+
 
 
 verify_contents([], []) ->
