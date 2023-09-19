@@ -222,7 +222,7 @@ add_snkqueue(
 %% Return the current list of peers being used by this snk host, and the
 %% settings currently being used for this host and he workers per peer. 
 %% Returns undefined if there are currently no peers defined.
--spec current_peers(queue_name()) -> list(peer_info())|undefined.
+-spec current_peers(queue_name()) -> list(peer_info()).
 current_peers(QueueName) ->
     gen_server:call(?MODULE, {current_peers, QueueName}, infinity).
 
@@ -341,7 +341,7 @@ handle_call({worker_count, QueueN, WorkerCount, PerPeerLimit}, _From, State) ->
 handle_call({current_peers, QueueN}, _From, State) ->
     case lists:keyfind(QueueN, 1, State#state.work) of
         false ->
-            {reply, undefined, State};
+            {reply, [], State};
         {QueueN, _I, SinkWork} ->
             {reply, SinkWork#sink_work.peer_list, State}
     end.
