@@ -410,8 +410,10 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
 handle_info(log_queue, State) ->
     LogFun =
         fun({QueueName, {P1Q, P2Q, P3Q}}) ->
-            lager:info("QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
-                        [QueueName, P1Q, P2Q, P3Q])
+            lager:info(
+              [{queue_name, QueueName}, {p1q, P1Q}, {p2q, P2Q}, {p3q, P3Q}],
+              "QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
+              [QueueName, P1Q, P2Q, P3Q])
         end,
     lists:foreach(LogFun, State#state.queue_countmap),
     erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),

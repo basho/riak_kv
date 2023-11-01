@@ -786,7 +786,8 @@ log_mapfun({QueueName, Iteration, SinkWork}) ->
         {replmod_time, RT},
         {modified_time, MTS, MTM, MTH, MTD, MTL}}
         = SinkWork#sink_work.queue_stats,
-    lager:info("Queue=~w success_count=~w error_count=~w" ++
+    lager:info([{queue_name, QueueName}],
+               "Queue=~w success_count=~w error_count=~w" ++
                 " mean_fetchtime_ms=~s" ++
                 " mean_pushtime_ms=~s" ++
                 " mean_repltime_ms=~s" ++
@@ -800,7 +801,8 @@ log_mapfun({QueueName, Iteration, SinkWork}) ->
         end,
     PeerDelays =
         lists:foldl(FoldPeerInfoFun, "", SinkWork#sink_work.peer_list),
-    lager:info("Queue=~w has peer delays of~s", [QueueName, PeerDelays]),
+    lager:info([{queue_name, QueueName}],
+               "Queue=~w has peer delays of~s", [QueueName, PeerDelays]),
     {QueueName, Iteration, SinkWork#sink_work{queue_stats = ?ZERO_STATS}}.
 
 
