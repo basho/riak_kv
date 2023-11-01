@@ -288,14 +288,14 @@ init([]) ->
     QC = lists:map(MaptoQC, QFM),
     QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
     OL = app_helper:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
-    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency, ?LOG_TIMER_SECONDS * 1000),
+    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency, ?LOG_TIMER_SECONDS),
     erlang:send_after(LogFreq, self(), log_queue),
     {ok, #state{queue_filtermap = QFM,
                 queue_map = QM,
                 queue_countmap = QC,
                 queue_limit = QL,
                 object_limit = OL,
-                log_frequency_in_ms = LogFreq}}.
+                log_frequency_in_ms = LogFreq * 1000}}.
 
 handle_call({rtq_ttaaefs, QueueName, ReplEntries}, _From, State) ->
     {ApproachingLimit, QueueMap, QueueCountMap} =

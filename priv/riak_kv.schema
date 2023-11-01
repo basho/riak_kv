@@ -1146,6 +1146,13 @@
     {default, 24}
 ]}.
 
+%% @doc Periodically log replrtq queue stats (queue size, reap/delete
+%% attempts and aborts) at this interval (seconds)
+{mapping, "replrtq_logfrequency", "riak_kv.replrtq_logfrequency", [
+    {datatype, integer},
+    {default, 30}
+]}.
+
 %% @doc The maximume number of workers to be for any given peer may be
 %% configured - if not configured will default to the number of sinkworkers
 {mapping, "replrtq_sinkpeerlimit", "riak_kv.replrtq_sinkpeerlimit", [
