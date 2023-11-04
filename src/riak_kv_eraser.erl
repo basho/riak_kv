@@ -292,22 +292,19 @@ handle_async_message(timeout, State) ->
                             pqueue_length = {RedoQL, DeleteQL - BatchSize}}}
     end;
 handle_async_message(log_queue, State) ->
-    LogLevel =
-        case State of
-            #state{pqueue_length = {0,0},
-                   delete_attempts = 0,
-                   delete_aborts = 0} ->
-                debug;
-            _ ->
-                info
+    case app_helper:get_env(riak_kv, queue_manager_log_suppress_zero_stats, false) of
+        true when State#state.pqueue_length =:= {0,0},
+                  State#state.delete_attempts =:= 0,
+                  State#state.delete_aborts =:= 0 ->
+            nop;
+        _ ->
+            lager:info("Reaper Job ~w has queue lengths ~w "
+                       "reap_attempts=~w reap_aborts=~w",
+                       [State#state.job_id,
+                        State#state.pqueue_length,
+                        State#state.delete_attempts,
+                        State#state.delete_aborts])
         end,
-    lager:log(LogLevel,
-              "Eraser job ~w has queue lengths ~w "
-              "delete_attempts=~w delete_aborts=~w",
-              [State#state.job_id,
-               State#state.pqueue_length,
-               State#state.delete_attempts,
-               State#state.delete_aborts]),
     erlang:send_after(?LOG_TICK, self(), log_queue),
     {noreply, State#state{delete_attempts = 0, delete_aborts = 0}}.
 

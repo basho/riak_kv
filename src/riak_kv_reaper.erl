@@ -275,22 +275,19 @@ handle_async_message(timeout, State) ->
                             pqueue_length = {RedoQL, ReapQL - BatchSize}}}
     end;
 handle_async_message(log_queue, State) ->
-    LogLevel =
-        case State of
-            #state{pqueue_length = {0,0},
-                   reap_attempts = 0,
-                   reap_aborts = 0} ->
-                debug;
-            _ ->
-                info
+    case app_helper:get_env(riak_kv, queue_manager_log_suppress_zero_stats, false) of
+        true when State#state.pqueue_length =:= {0,0},
+                  State#state.reap_attempts =:= 0,
+                  State#state.reap_aborts =:= 0 ->
+            nop;
+        _ ->
+            lager:info("Reaper Job ~w has queue lengths ~w "
+                       "reap_attempts=~w reap_aborts=~w",
+                       [State#state.job_id,
+                        State#state.pqueue_length,
+                        State#state.reap_attempts,
+                        State#state.reap_aborts])
         end,
-    lager:log(LogLevel,
-              "Reaper Job ~w has queue lengths ~w "
-              "reap_attempts=~w reap_aborts=~w",
-              [State#state.job_id,
-                  State#state.pqueue_length,
-                  State#state.reap_attempts,
-                  State#state.reap_aborts]),
     erlang:send_after(?LOG_TICK, self(), log_queue),
     {noreply, State#state{reap_attempts = 0, reap_aborts = 0}}.
 
