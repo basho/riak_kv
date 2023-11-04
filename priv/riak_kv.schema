@@ -1148,7 +1148,7 @@
 
 %% @doc Periodically log replrtq queue stats (queue size, reap/delete
 %% attempts and aborts) at this interval (seconds)
-{mapping, "replrtq_logfrequency", "riak_kv.replrtq_logfrequency", [
+{mapping, "queue_manager_log_frequency", "riak_kv.queue_manager_log_frequency", [
     {datatype, integer},
     {default, 30}
 ]}.

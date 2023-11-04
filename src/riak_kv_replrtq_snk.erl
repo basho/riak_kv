@@ -393,12 +393,12 @@ handle_cast({requeue_work, WorkItem}, State) ->
 
 handle_info(timeout, State) ->
     prompt_work(),
-    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency,
+    LogFreq = app_helper:get_env(riak_kv, queue_manager_log_frequency,
                                  ?LOG_TIMER_SECONDS),
     erlang:send_after(LogFreq * 1000, self(), log_stats),
     {noreply, State};
 handle_info(log_stats, State) ->
-    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency,
+    LogFreq = app_helper:get_env(riak_kv, queue_manager_log_frequency,
                                  ?LOG_TIMER_SECONDS),
     erlang:send_after(LogFreq * 1000, self(), log_stats),
     SinkWork0 =
