@@ -408,8 +408,9 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
                             queue_countmap = QueueCountMap}}.
 
 handle_info(log_queue, State) ->
+    Suppress = app_helper:get_env(riak_kv, queue_manager_log_suppress_zero_stats, false),
     LogFun =
-        fun({_QueueName, {0, 0, 0}}) ->
+        fun({_QueueName, {0, 0, 0}}) when Suppress == true ->
                 ok;
            ({QueueName, {P1Q, P2Q, P3Q}}) ->
                 lager:info(
