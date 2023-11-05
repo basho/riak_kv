@@ -288,14 +288,14 @@ init([]) ->
     QC = lists:map(MaptoQC, QFM),
     QL = app_helper:get_env(riak_kv, replrtq_srcqueuelimit, ?QUEUE_LIMIT),
     OL = app_helper:get_env(riak_kv, replrtq_srcobjectlimit, ?OBJECT_LIMIT),
-    LogFreq = app_helper:get_env(riak_kv, replrtq_logfrequency, ?LOG_TIMER_SECONDS * 1000),
+    LogFreq = app_helper:get_env(riak_kv, queue_manager_log_frequency, ?LOG_TIMER_SECONDS),
     erlang:send_after(LogFreq, self(), log_queue),
     {ok, #state{queue_filtermap = QFM,
                 queue_map = QM,
                 queue_countmap = QC,
                 queue_limit = QL,
                 object_limit = OL,
-                log_frequency_in_ms = LogFreq}}.
+                log_frequency_in_ms = LogFreq * 1000}}.
 
 handle_call({rtq_ttaaefs, QueueName, ReplEntries}, _From, State) ->
     {ApproachingLimit, QueueMap, QueueCountMap} =
@@ -408,10 +408,15 @@ handle_cast({rtq_coordput, Bucket, ReplEntry}, State) ->
                             queue_countmap = QueueCountMap}}.
 
 handle_info(log_queue, State) ->
+    Suppress = app_helper:get_env(riak_kv, queue_manager_log_suppress_zero_stats, false),
     LogFun =
-        fun({QueueName, {P1Q, P2Q, P3Q}}) ->
-            lager:info("QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
-                        [QueueName, P1Q, P2Q, P3Q])
+        fun({_QueueName, {0, 0, 0}}) when Suppress == true ->
+                ok;
+           ({QueueName, {P1Q, P2Q, P3Q}}) ->
+                lager:info(
+                  [{queue_name, QueueName}, {p1q, P1Q}, {p2q, P2Q}, {p3q, P3Q}],
+                  "QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
+                  [QueueName, P1Q, P2Q, P3Q])
         end,
     lists:foreach(LogFun, State#state.queue_countmap),
     erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),
