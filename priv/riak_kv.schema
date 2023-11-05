@@ -1411,6 +1411,19 @@
     {commented, 900}
 ]}.
 
+%% @doc Periodically log replrtq queue stats (queue size, reap/delete
+%% attempts and aborts) at this interval (seconds)
+{mapping, "queue_manager_log_frequency", "riak_kv.queue_manager_log_frequency", [
+    {datatype, integer},
+    {default, 30}
+]}.
+
+%% @doc Suppress logging of queue stats when all items are 0
+{mapping, "queue_manager_log_suppress_zero_stats", "riak_kv.queue_manager_log_suppress_zero_stats", [
+    {datatype, flag},
+    {default, off}
+]}.
+
 %% @doc Enable the `recalc` compaction strategy within the leveled backend in
 %% riak.  The default (when disabled) is `retain`, but this will leave
 %% uncollected garbage within the, journal. 

@@ -105,32 +105,39 @@ new(Priorities, FilePath, QueueLimit, OverflowLimit) ->
             non_neg_integer(), non_neg_integer(),
             overflowq()) -> overflowq().
 log(Type, JobID, Attempts, Aborts, Queue) ->
-    QueueLengths =
-        lists:foldl(fun({P, L}, Acc) ->
-                        [Acc, io_lib:format("queue_p~w=~w ", [P, L])]
+    {QueueLengths, QLCount} =
+        lists:foldl(fun({P, L}, {AccS, AccN}) ->
+                        {[AccS, io_lib:format("queue_p~w=~w ", [P, L])], AccN + L}
                     end,
-                    "Queue lengths ",
+                    {"Queue lengths ", 0},
                     Queue#overflowq.mqueue_lengths),
-    OverflowLengths =
-        lists:foldl(fun({P, L}, Acc) ->
-                        [Acc, io_lib:format("overflow_p~w=~w ", [P, L])]
+    {OverflowLengths, OLCount} =
+        lists:foldl(fun({P, L}, {AccS, AccN}) ->
+                        {[AccS, io_lib:format("overflow_p~w=~w ", [P, L])], AccN + L}
                     end,
-                    "Overflow lengths ",
+                    {"Overflow lengths ", 0},
                     Queue#overflowq.overflow_lengths),
-    DiscardCounts =
-        lists:foldl(fun({P, L}, Acc) ->
-                        [Acc, io_lib:format("discard_p~w=~w ", [P, L])]
+    {DiscardCounts, DCCount} =
+        lists:foldl(fun({P, L}, {AccS, AccN}) ->
+                        {[AccS, io_lib:format("discard_p~w=~w ", [P, L])], AccN}
                     end,
-                    "Discard counts ",
+                    {"Discard counts ", 0},
                     Queue#overflowq.overflow_discards),
 
-    _ = lager:info(lists:flatten(["~p job_id=~p has ",
-                        "attempts=~w aborts=~w ",
-                        QueueLengths,
-                        OverflowLengths,
-                        DiscardCounts]),
-                    [Type, JobID, Attempts, Aborts]),
-    
+    case app_helper:get_env(riak_kv, queue_manager_log_suppress_zero_stats, false) of
+        true when QLCount == 0,
+                  OLCount == 0,
+                  DCCount == 0,
+                  Attempts == 0,
+                  Aborts == 0 ->
+            ok;
+        _ ->
+            lager:info(lists:flatten(["~p job_id=~p has attempts=~w aborts=~w ",
+                                      QueueLengths,
+                                      OverflowLengths,
+                                      DiscardCounts]),
+                       [Type, JobID, Attempts, Aborts])
+    end,
     ResetDiscards =
         lists:map(fun({P, _L}) -> {P, 0} end,
                     Queue#overflowq.overflow_discards),
