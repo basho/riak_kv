@@ -178,46 +178,48 @@ do_discovery(QueueName, PeerInfo, Type) ->
     {SnkWorkerCount, PerPeerLimit} = riak_kv_replrtq_snk:get_worker_counts(),
     StartDelayMS = riak_kv_replrtq_snk:starting_delay(),
     CurrentPeers = 
-        case Type of
-            count_change ->
+        case {Type, riak_kv_replrtq_snk:current_peers(QueueName)} of
+            {count_change, _} ->
                 %% Ignore current peers, to update worker counts, so all
                 %% discovered peers will have their worker counts updated as
                 %% the list returned from discover_peers/2 will never match
                 %% the atom count_change.
                 count_change;
-            _ ->
+            {_, PeerList} when is_list(PeerList) ->
                 lists:usort(
                     lists:map(
                         fun({ID, _D, H, P, Prot}) ->
                             {ID, StartDelayMS, H, P, Prot}
                         end,
-                        riak_kv_replrtq_snk:current_peers(QueueName)))
+                        PeerList));
+            {_, SnkResponse} ->
+                lager:info(
+                    "Peer Discovery disabled as snk status ~w", [SnkResponse]),
+                SnkResponse
         end,
-    case discover_peers(PeerInfo, StartDelayMS) of
-        CurrentPeers ->
+    case {discover_peers(PeerInfo, StartDelayMS), CurrentPeers} of
+        {CurrentPeers, CurrentPeers} ->
             lager:info("Type=~w discovery led to no change", [Type]),
             false;
-        [] ->
+        {[], CurrentPeers} when is_list(CurrentPeers) ->
             lager:info("Type=~w discovery led to reset of peers", [Type]),
-            riak_kv_replrtq_snk:add_snkqueue(QueueName,
-                PeerInfo,
-                SnkWorkerCount,
-                PerPeerLimit),
+            riak_kv_replrtq_snk:add_snkqueue(
+                QueueName, PeerInfo, SnkWorkerCount, PerPeerLimit),
             false;
-        DiscoveredPeers ->
-            case CurrentPeers of
-                count_change ->
-                    ok;
-                CurrentPeers when is_list(CurrentPeers) ->
-                    lager:info(
-                        "Type=~w discovery old_peers=~w new_peers=~w",
-                        [Type, length(CurrentPeers), length(DiscoveredPeers)])
-            end,
-            riak_kv_replrtq_snk:add_snkqueue(QueueName,
-                DiscoveredPeers,
-                SnkWorkerCount,
-                PerPeerLimit),
-            true
+        {DiscoveredPeers, count_change} ->
+            riak_kv_replrtq_snk:add_snkqueue(
+                QueueName, DiscoveredPeers, SnkWorkerCount, PerPeerLimit),
+            true;
+        {DiscoveredPeers, _} when is_list(CurrentPeers) ->
+            lager:info(
+                "Type=~w discovery old_peers=~w new_peers=~w",
+                [Type, length(CurrentPeers), length(DiscoveredPeers)]),
+                riak_kv_replrtq_snk:add_snkqueue(
+                    QueueName, DiscoveredPeers, SnkWorkerCount, PerPeerLimit),
+            true;
+        {_, _} ->
+            lager:info("Type=~w discovery led to no change", [Type]),
+            false
     end.
 
 -spec discover_peers(list(riak_kv_replrtq_snk:peer_info()), pos_integer())
