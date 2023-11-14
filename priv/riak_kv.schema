@@ -1337,8 +1337,15 @@
     {default, "q1_ttaaefs:block_rtq"}
 ]}.
 
-%% @doc Enable this node zlib compress objects over the wire
+%% @doc Enable this node to zlib compress objects over the wire
 {mapping, "replrtq_compressonwire", "riak_kv.replrtq_compressonwire", [
+    {datatype, {flag, enabled, disabled}},
+    {default, disabled},
+    {commented, enabled}
+]}.
+
+%% @doc Enable this node to replicate reap requests to other clusters
+{mapping, "repl_reap", "riak_kv.repl_reap", [
     {datatype, {flag, enabled, disabled}},
     {default, disabled},
     {commented, enabled}

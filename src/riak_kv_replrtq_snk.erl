@@ -138,10 +138,10 @@
     % Modified time by bucket - second, minute, hour, day, longer}
 
 -type reply_tuple() ::
-    {queue_empty, non_neg_integer()} |
-        {tomb, non_neg_integer(), non_neg_integer(), non_neg_integer()} |
-        {object, non_neg_integer(), non_neg_integer(), non_neg_integer()} |
-        {error, any(), any()}.
+    {queue_empty, non_neg_integer()}|
+    {tomb, non_neg_integer(), non_neg_integer(), non_neg_integer()}|
+    {object, non_neg_integer(), non_neg_integer(), non_neg_integer()}|
+    {error, any(), any()}.
 
 -export_type([peer_info/0, queue_name/0]).
 
@@ -712,9 +712,9 @@ repl_fetcher(WorkItem) ->
                 SWFetched = os:timestamp(),
                 {ok, LMD} = riak_client:push(RObj, false, [], LocalClient),
                 SWPushed = os:timestamp(),
-                ModSplit = timer:now_diff(SWPushed, LMD),
                 FetchSplit = timer:now_diff(SWFetched, SW),
                 PushSplit = timer:now_diff(SWPushed, SWFetched),
+                ModSplit = timer:now_diff(SWPushed, LMD),
                 ok = riak_kv_stat:update(ngrrepl_object),
                 done_work(WorkItem, true,
                             {object, FetchSplit, PushSplit, ModSplit});
@@ -739,9 +739,16 @@ repl_fetcher(WorkItem) ->
                 done_work(UpdWorkItem, false, {error, error, remote_error})
         end
     catch
-        Type:Exception ->
-            lager:warning("Snk worker failed at Peer ~w due to ~w error ~w",
-                            [Peer, Type, Exception]),
+        Type:Exception:Stk ->
+            lager:warning(
+                "Snk worker failed at Peer ~w due to ~w error ~w",
+                [Peer, Type, Exception]),
+            case app_helper:get_env(riak_kv, log_snk_stacktrace, false) of
+                true ->
+                    lager:warning("Snk worker failed due to ~p", [Stk]);
+                _ ->
+                    ok
+            end,
             RemoteFun(close),
             UpdWorkItem0 = setelement(3, WorkItem, RenewClientFun()),
             ok = riak_kv_stat:update(ngrrepl_error),
@@ -786,8 +793,9 @@ add_success({{success, Success}, F, FT, PT, RT, MT}) ->
 add_failure({S, {failure, Failure}, FT, PT, RT, MT}) ->
     {S, {failure, Failure + 1}, FT, PT, RT, MT}.
 
--spec add_repltime(queue_stats(),
-                    {integer(), integer(), integer()}) -> queue_stats().
+-spec add_repltime(
+    queue_stats(), {non_neg_integer(), non_neg_integer(), non_neg_integer()})
+    -> queue_stats().
 add_repltime({S, 
                 F,
                 {replfetch_time, FT}, {replpush_time, PT}, {replmod_time, RT},
@@ -799,7 +807,7 @@ add_repltime({S,
         {replmod_time, RT + RT0},
         MT}.
 
--spec add_modtime(queue_stats(), integer()) -> queue_stats().
+-spec add_modtime(queue_stats(), non_neg_integer()) -> queue_stats().
 add_modtime({S, F, FT, PT, RT, MT}, ModTime) ->
     E = mod_split_element(ModTime div 1000) +  1,
     C = element(E, MT),
