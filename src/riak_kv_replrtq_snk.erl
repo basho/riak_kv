@@ -218,7 +218,7 @@ add_snkqueue(QueueName, Peers, WorkerCount, PerPeerLimit)
 %% Return the current list of peers being used by this snk host, and the
 %% settings currently being used for this host and he workers per peer. 
 %% Returns undefined if there are currently no peers defined.
--spec current_peers(queue_name()) -> list(peer_info())|undefined.
+-spec current_peers(queue_name()) -> list(peer_info())|suspended|disabled.
 current_peers(QueueName) ->
     gen_server:call(?MODULE, {current_peers, QueueName}).
 
@@ -242,6 +242,7 @@ set_workercount(QueueName, WorkerCount, PerPeerLimit)
                                             when PerPeerLimit =< WorkerCount ->
     gen_server:call(?MODULE,
                     {worker_count, QueueName, WorkerCount, PerPeerLimit}).
+
 
 %%%============================================================================
 %%% gen_server callbacks
@@ -356,11 +357,21 @@ handle_call({worker_count, QueueN, WorkerCount, PerPeerLimit}, _From, State) ->
             {reply, ok, State#state{work = W0, iteration = Iteration}}
     end;
 handle_call({current_peers, QueueN}, _From, State) ->
-    case lists:keyfind(QueueN, 1, State#state.work) of
-        false ->
-            {reply, undefined, State};
-        {QueueN, _I, SinkWork} ->
-            {reply, SinkWork#sink_work.peer_list, State}
+    case State#state.enabled of
+        true ->
+            case lists:keyfind(QueueN, 1, State#state.work) of
+                false ->
+                    {reply, [], State};
+                {QueueN, _I, SinkWork} ->
+                    case SinkWork#sink_work.suspended of
+                        false ->
+                            {reply, SinkWork#sink_work.peer_list, State};
+                        _ ->
+                            {reply, suspended, State}
+                    end
+            end;
+        _ ->
+            {reply, disabled, State}
     end.
 
 
