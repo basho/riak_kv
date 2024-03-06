@@ -692,7 +692,7 @@ repair_2i(Args) ->
             error;
         {error, Reason} ->
             io:format("Error: ~p\n", [Reason]),
-            io:format("Usage: riak-admin repair-2i [--speed [1-100]] <Idx> ...\n", []),
+            io:format("Usage: riak admin repair-2i [--speed [1-100]] <Idx> ...\n", []),
             io:format("Speed defaults to 100 (full speed)\n", []),
             io:format("If no partitions are given, all partitions in the\n"
                       "node are repaired\n", []),
