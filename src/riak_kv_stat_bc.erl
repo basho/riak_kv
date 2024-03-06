@@ -23,7 +23,7 @@
 
 %% @doc riak_kv_stat_bc is a module that maps the new riak_kv_stats metrics
 %% to the old set of stats. It exists to maintain backwards compatibility for
-%% those using the `/stats' endpoint and `riak-admin status'. This module
+%% those using the `/stats' endpoint and `riak admin status'. This module
 %% should be considered soon to be deprecated and temporary.
 %%
 %%      Legacy stats:
