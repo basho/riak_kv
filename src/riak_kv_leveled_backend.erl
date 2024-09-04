@@ -319,13 +319,14 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
         if
             Index /= false  ->
                 {index, QBucket, Q} = Index,
-                ?KV_INDEX_Q{filter_field=Field,
-                            start_key=StartKey0,
-                            start_term=StartTerm,
-                            end_term=EndTerm,
-                            return_terms=ReturnTerms,
-                            start_inclusive=StartInc,
-                            term_regex=TermRegex} = riak_index:upgrade_query(Q),
+                ?KV_INDEX_Q{
+                    filter_field=Field,
+                    start_key=StartKey0,
+                    start_term=StartTerm,
+                    end_term=EndTerm,
+                    return_terms=ReturnTerms,
+                    start_inclusive=StartInc,
+                    term_regex=TermRegex} = riak_index:upgrade_query(Q),
 
                 StartKey = 
                     case StartInc of
@@ -337,44 +338,50 @@ fold_keys(FoldKeysFun, Acc, Opts, #state{bookie=Bookie}) ->
                     % If this is a $key index query, the start key is assumed 
                     % to mean the start of the range, and so we want to use
                     % this start key inclusively (and so don't advance it to
-                    % the next_key.
+                    % the next_key).
 
                 case Field of
                     <<"$bucket">> ->
-                        leveled_bookie:book_keylist(Bookie,
-                                                    ?RIAK_TAG,
-                                                    QBucket,
-                                                    {StartKey, null},
-                                                    {FoldKeysFun, Acc},
-                                                    TermRegex);
+                        leveled_bookie:book_keylist(
+                            Bookie,
+                            ?RIAK_TAG,
+                            QBucket,
+                            {StartKey, null},
+                            {FoldKeysFun, Acc},
+                            TermRegex);
                     <<"$key">> ->
-                        leveled_bookie:book_keylist(Bookie,
-                                                    ?RIAK_TAG,
-                                                    QBucket,
-                                                    {StartKey, EndTerm},
-                                                    {FoldKeysFun, Acc},
-                                                    TermRegex);
+                        ReadTombs =
+                            application:get_env(
+                                riak_kv, dollarkey_readtombs, true),
+                        FoldHeadsFun =
+                            dollarkey_foldfun(
+                                FoldKeysFun, ReadTombs, TermRegex),
+                        leveled_bookie:book_headfold(
+                            Bookie,
+                            ?RIAK_TAG,
+                            {range, QBucket, {StartKey, EndTerm}},
+                            {FoldHeadsFun, Acc},
+                            false,
+                            SnapPreFold,
+                            false
+                        );
                     _ ->
-                        leveled_bookie:book_indexfold(Bookie,
-                                                        {QBucket, StartKey},
-                                                        {FoldKeysFun, Acc},
-                                                        {Field, 
-                                                            StartTerm, 
-                                                            EndTerm},
-                                                        {ReturnTerms, 
-                                                            TermRegex})
+                        leveled_bookie:book_indexfold(
+                            Bookie,
+                            {QBucket, StartKey},
+                            {FoldKeysFun, Acc},
+                            {Field, StartTerm, EndTerm},
+                            {ReturnTerms, TermRegex})
                 end;
             Bucket /= false ->
                 % Equivalent to $bucket query, but without the StartKey
                 {bucket, B} = Bucket,
-                leveled_bookie:book_keylist(Bookie, 
-                                            ?RIAK_TAG, B, 
-                                            {FoldKeysFun, Acc});
+                leveled_bookie:book_keylist(
+                    Bookie, ?RIAK_TAG, B, {FoldKeysFun, Acc});
             true ->
                 % All key query - don't constrain by bucket
-                leveled_bookie:book_keylist(Bookie, 
-                                            ?RIAK_TAG,
-                                            {FoldKeysFun, Acc})
+                leveled_bookie:book_keylist(
+                    Bookie, ?RIAK_TAG, {FoldKeysFun, Acc})
         end,
 
     case {lists:member(async_fold, Opts), SnapPreFold} of
@@ -637,6 +644,39 @@ callback(Ref, UnexpectedCallback, State) ->
 %% Internal functions
 %% ===================================================================
 
+
+-spec dollarkey_foldfun(
+    riak_kv_backend:fold_keys_fun(), boolean(), re:mp()|undefined)
+        -> riak_kv_backend:fold_objects_fun().
+dollarkey_foldfun(FoldKeysFun, ReadTombs, TermRegex) ->
+    FilteredFoldKeysFun =
+        fun(B, K, Acc) ->
+            case TermRegex of
+                undefined ->
+                    FoldKeysFun(B, K, Acc);
+                TermRegex ->
+                    case re:run(K, TermRegex) of
+                        nomatch ->
+                            Acc;
+                        _ ->
+                            FoldKeysFun(B, K, Acc)
+                    end
+            end
+        end,
+    fun(B, K, HeadObj, KeyAcc) ->
+        case ReadTombs of
+            true ->
+                FilteredFoldKeysFun(B, K, KeyAcc);
+            false ->
+                MetaBin = element(5, riak_object:summary_from_binary(HeadObj)),
+                case riak_object:is_aae_object_deleted(MetaBin, false) of
+                    {true, undefined} ->
+                        KeyAcc;
+                    _ ->
+                        FilteredFoldKeysFun(B, K, KeyAcc)
+                end
+        end
+    end.
 
 -spec log_fragmentation(eheap_alloc|binary_alloc) -> ok.
 log_fragmentation(Allocator) ->
