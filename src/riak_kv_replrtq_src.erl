@@ -325,11 +325,7 @@ init([FilePath]) ->
         end,
     QO = lists:map(MapToQOverflow, QFM),
     QC = lists:map(MaptoQCache, QFM),
-    LogFreq =
-        app_helper:get_env(
-            riak_kv,
-            replrtq_logfrequency,
-            ?LOG_TIMER_SECONDS * 1000),
+    LogFreq = 1000 * app_helper:get_env(riak_kv, queue_manager_log_frequency, ?LOG_TIMER_SECONDS),
     erlang:send_after(LogFreq, self(), log_queue),
 
     {ok, #state{queue_filtermap = QFM,
@@ -670,9 +666,15 @@ handle_info(log_queue, State) ->
                 lists:map(
                     MapFun,
                     [?FLD_PRIORITY, ?AAE_PRIORITY, ?RTQ_PRIORITY]),
-            lager:info(
-                "QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
-                [QueueName, P1L, P2L, P3L])
+            case app_helper:get_env(riak_kv, queue_manager_log_suppress_zero_stats, false) of
+                true when P1L == 0, P2L == 0, P3L == 0 ->
+                    ok;
+                _ ->
+                    lager:info(
+                      [{queue_name, QueueName}],
+                      "QueueName=~w has queue sizes p1=~w p2=~w p3=~w",
+                      [QueueName, P1L, P2L, P3L])
+            end
         end,
     lists:foreach(LogFun, State#state.queue_filtermap),
     erlang:send_after(State#state.log_frequency_in_ms, self(), log_queue),
