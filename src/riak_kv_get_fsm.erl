@@ -237,6 +237,13 @@ queue_fetch(timeout, StateData) ->
             Msg = {ReqID, {ok, {deleted, ExpectedClock, Obj}}},
             Pid ! Msg,
             ok = riak_kv_stat:update(ngrfetch_prefetch),
+            {stop, normal, StateData};
+        {Bucket, Key, TombClock, {reap, LMD}} ->
+            % A reap request was queued - so there is no need to fetch
+            % A tombstone was queued - so there is no need to fetch
+            Msg = {ReqID, {ok, {reap, {Bucket, Key, TombClock, LMD}}}},
+            Pid ! Msg,
+            ok = riak_kv_stat:update(ngrfetch_prefetch),
             {stop, normal, StateData}
     end.
 

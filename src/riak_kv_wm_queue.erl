@@ -309,6 +309,16 @@ format_response(_, {ok, queue_empty}, RD, Ctx) ->
 format_response(_, {error, Reason}, RD, Ctx) ->
     lager:warning("Fetch error ~w", [Reason]),
     {{error, Reason}, RD, Ctx};
+format_response(internal_aaehash, {ok, {reap, {B, K, TC, LMD}}}, RD, Ctx) ->
+    BK = make_binarykey(B, K),
+    {SegmentID, SegmentHash} =
+        leveled_tictac:tictac_hash(BK, lists:sort(TC)),
+    SuccessMark = <<1:8/integer>>,
+    IsTombstone = <<0:8/integer>>,
+    ObjBin = encode_riakobject({reap, {B, K, TC, LMD}}),
+    {<<SuccessMark/binary, IsTombstone/binary,
+        SegmentID:32/integer, SegmentHash:32/integer,
+        ObjBin/binary>>, RD, Ctx};
 format_response(internal_aaehash, {ok, {deleted, TombClock, RObj}}, RD, Ctx) ->
     BK = make_binarykey(riak_object:bucket(RObj), riak_object:key(RObj)),
     {SegmentID, SegmentHash} =
@@ -331,6 +341,12 @@ format_response(internal_aaehash, {ok, RObj}, RD, Ctx) ->
     ObjBin = encode_riakobject(RObj),
     {<<SuccessMark/binary, IsTombstone/binary,
         SegmentID:32/integer, SegmentHash:32/integer,
+        ObjBin/binary>>, RD, Ctx};
+format_response(internal, {ok, {reap, {B, K, TC, LMD}}}, RD, Ctx) ->
+    SuccessMark = <<1:8/integer>>,
+    IsTombstone = <<0:8/integer>>,
+    ObjBin = encode_riakobject({reap, {B, K, TC, LMD}}),
+    {<<SuccessMark/binary, IsTombstone/binary,
         ObjBin/binary>>, RD, Ctx};
 format_response(internal, {ok, {deleted, TombClock, RObj}}, RD, Ctx) ->
     SuccessMark = <<1:8/integer>>,

@@ -202,6 +202,19 @@ process(#rpbfetchreq{queuename = QueueName, encoding = EncodingBin},
     case Result of
         {ok, queue_empty} ->
             {reply, #rpbfetchresp{queue_empty = true}, State};
+        {ok, {reap, {B, K, TC, LMD}}} ->
+            EncObj =
+                riak_object:nextgenrepl_encode(
+                    repl_v1, {reap, {B, K, TC, LMD}}, false),
+            CRC32 = erlang:crc32(EncObj),
+            Resp =
+                #rpbfetchresp{
+                    queue_empty = false,
+                    replencoded_object = EncObj,
+                    crc_check = CRC32},
+            {reply,
+                encode_nextgenrepl_response(Encoding, Resp, {B, K, TC}),
+                State};
         {ok, {deleted, TombClock, RObj}} ->
             % Never bother compressing tombstones, they're practically empty
             EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, false),
@@ -212,18 +225,7 @@ process(#rpbfetchreq{queuename = QueueName, encoding = EncodingBin},
                                 replencoded_object = EncObj,
                                 crc_check = CRC32,
                                 deleted_vclock = pbify_rpbvc(TombClock)},
-            case Encoding of
-                internal ->
-                    {reply, Resp, State};
-                internal_aaehash ->
-                    BK = make_binarykey(RObj),
-                    {SegID, SegHash} =
-                        leveled_tictac:tictac_hash(BK, lists:sort(TombClock)),
-                    {reply,
-                        Resp#rpbfetchresp{segment_id = SegID,
-                                            segment_hash = SegHash},
-                        State}
-            end;
+            {reply, encode_nextgenrepl_response(Encoding, Resp, RObj), State};
         {ok, RObj} ->
             EncObj = riak_object:nextgenrepl_encode(repl_v1, RObj, ToCompress),
             CRC32 = erlang:crc32(EncObj),
@@ -232,19 +234,7 @@ process(#rpbfetchreq{queuename = QueueName, encoding = EncodingBin},
                                 deleted = false,
                                 replencoded_object = EncObj,
                                 crc_check = CRC32},
-            case Encoding of
-                internal ->
-                    {reply, Resp, State};
-                internal_aaehash ->
-                    BK = make_binarykey(RObj),
-                    Clock = lists:sort(riak_object:vclock(RObj)),
-                    {SegID, SegHash} =
-                        leveled_tictac:tictac_hash(BK, Clock),
-                    {reply,
-                        Resp#rpbfetchresp{segment_id = SegID,
-                                            segment_hash = SegHash},
-                        State}
-            end;
+            {reply, encode_nextgenrepl_response(Encoding, Resp, RObj), State};
         {error, Reason} ->
             {error, {format, Reason}, State}
     end;
@@ -443,7 +433,35 @@ process_stream(_,_,State) ->
 %% Internal functions
 %% ===================================================================
 
--spec make_binarykey(riak_object:riak_object()) -> binary().
+-spec encode_nextgenrepl_response(
+    intenal|internal_aaehash,
+    #rpbfetchresp{},
+    riak_object:riak_object()|
+        {riak_object:bucket(), riak_object:key(), vclock:vclock()})
+        -> #rpbfetchresp{}.
+encode_nextgenrepl_response(Encoding, Resp, RObj) ->
+    case Encoding of
+        internal ->
+            Resp;
+        internal_aaehash ->
+            {SegID, SegHash} =
+                case RObj of
+                    {B, K, TC} ->
+                        BK = make_binarykey({B, K}),
+                        leveled_tictac:tictac_hash(BK, lists:sort(TC));
+                    RObj ->
+                        BK = make_binarykey(RObj),
+                        leveled_tictac:tictac_hash(
+                            BK, lists:sort(riak_object:vclock(RObj)))
+                    end,
+            Resp#rpbfetchresp{segment_id = SegID, segment_hash = SegHash}
+    end.
+
+-spec make_binarykey(
+    riak_object:riak_object()|{riak_object:bucket(), riak_object:key()})
+        -> binary().
+make_binarykey({B, K}) ->
+    make_binarykey(B, K);
 make_binarykey(RObj) ->
     make_binarykey(riak_object:bucket(RObj), riak_object:key(RObj)).
 
