@@ -41,8 +41,8 @@
 -type discovery_peer() ::
     {riak_kv_replrtq_snk:queue_name(), [riak_kv_replrtq_snk:peer_info()]}.
 
--define(DISCOVERY_TIMEOUT_SECONDS, 60).
--define(UPDATE_TIMEOUT_SECONDS, 60).
+-define(DISCOVERY_TIMEOUT_SECONDS, 300).
+-define(UPDATE_TIMEOUT_SECONDS, 300).
 -define(AUTO_DISCOVERY_MAXIMUM_SECONDS, 900).
 -define(AUTO_DISCOVERY_MINIMUM_SECONDS, 60).
 
@@ -66,7 +66,7 @@ update_discovery(QueueName) ->
         ?DISCOVERY_TIMEOUT_SECONDS * 1000).
 
 -spec update_workers(pos_integer(), pos_integer()) -> boolean().
-update_workers(WorkerCount, PerPeerLimit) ->
+update_workers(WorkerCount, PerPeerLimit) when PerPeerLimit =< WorkerCount ->
     gen_server:call(
         ?MODULE,
         {update_workers, WorkerCount, PerPeerLimit},
@@ -142,6 +142,11 @@ handle_info({scheduled_discovery, QueueName}, State) ->
             ?AUTO_DISCOVERY_MAXIMUM_SECONDS),
     Delay = rand:uniform(max(1, MaxDelay - MinDelay)) + MinDelay,
     _ = schedule_discovery(QueueName, self(), Delay),
+    {noreply, State};
+handle_info({Ref, {error, HTTPClientError}}, State) when is_reference(Ref) ->
+    lager:info(
+        "Client error caught - error ~p returned after timeout",
+        [HTTPClientError]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
