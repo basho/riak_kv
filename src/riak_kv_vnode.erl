@@ -2001,7 +2001,7 @@ handle_aaefold({reap_tombs,
                     case TombHashAcc of
                         {BatchList, Count, local} ->
                             NewCount = Count + 1,
-                            case NewCount div ?REAPER_BATCH_SIZE of
+                            case NewCount rem ?REAPER_BATCH_SIZE of
                                 0 ->
                                     riak_kv_reaper:bulk_request_reap(
                                         [{{BF, KF}, DH}|BatchList]
@@ -2057,7 +2057,7 @@ handle_aaefold({erase_keys,
                     case EraseKeyAcc of
                         {BatchList, Count, local} ->
                             NewCount = Count + 1,
-                            case NewCount div ?ERASER_BATCH_SIZE of
+                            case NewCount rem ?ERASER_BATCH_SIZE of
                                 0 ->
                                     riak_kv_eraser:bulk_request_delete(
                                         [{{BF, KF}, VV}|BatchList]),
