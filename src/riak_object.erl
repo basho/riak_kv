@@ -1262,23 +1262,21 @@ from_binary(_B, _K, Obj = #r_object{}) ->
     Obj.
 
 
--spec summary_from_binary(binary()) -> 
+-spec summary_from_binary(binary()|riak_object()) -> 
         {vclock:vclock(), integer(), integer(),
             list(erlang:timestamp())|undefined, binary()}.
 %% @doc
-%% Extract only sumarry infromation from the binary - the vector, the object 
+%% Extract only summary information from the binary - the vector, the object 
 %% size and the sibling count
-summary_from_binary(<<131, _Rest/binary>>=ObjBin) ->
-    case binary_to_term(ObjBin) of 
+summary_from_binary(<<?MAGIC, _Rest/binary>>=ObjBin) ->
+    summary_from_binary(ObjBin, byte_size(ObjBin));
+summary_from_binary(TermToBin) when is_binary(TermToBin) ->
+    case binary_to_term(TermToBin) of
         {proxy_object, HeadBin, ObjSize, _Fetcher} ->
             summary_from_binary(HeadBin, ObjSize);
-        T ->
-            {vclock(T), byte_size(ObjBin), value_count(T),
-                undefined, <<>>}
-            % Legacy object version will end up with dummy details
+        Objv0 ->
+            summary_from_binary(Objv0)
     end;
-summary_from_binary(ObjBin) when is_binary(ObjBin) ->
-    summary_from_binary(ObjBin, byte_size(ObjBin));
 summary_from_binary(Object = #r_object{}) ->
     % Unexpected scenario but included for parity with from_binary
     % Calculating object size is expensive (relatively to other branches)
