@@ -55,29 +55,30 @@
          aae_tree_status/1]).
 
 join([NodeStr]) ->
-    join(NodeStr, fun riak_core:join/1,
-         "Sent join request to ~s~n", [NodeStr]).
+    Node = list_to_atom(NodeStr),
+    join(Node, fun riak_core:join/1,
+         "Sent join request to ~p~n", [Node]).
 
 staged_join([NodeStr]) ->
     Node = list_to_atom(NodeStr),
-    join(NodeStr, fun riak_core:staged_join/1,
+    join(Node, fun riak_core:staged_join/1,
          "Success: staged join request for ~p to ~p~n", [node(), Node]).
 
-join(NodeStr, JoinFn, SuccessFmt, SuccessArgs) ->
+join(Node, JoinFn, SuccessFmt, SuccessArgs) ->
     try
-        case JoinFn(NodeStr) of
+        case JoinFn(Node) of
             ok ->
                 io:format(SuccessFmt, SuccessArgs),
                 ok;
             {error, not_reachable} ->
-                io:format("Node ~s is not reachable!~n", [NodeStr]),
+                io:format("Node ~p is not reachable!~n", [Node]),
                 error;
             {error, different_ring_sizes} ->
-                io:format("Failed: ~s has a different ring_creation_size~n",
-                          [NodeStr]),
+                io:format("Failed: ~p has a different ring_creation_size~n",
+                          [Node]),
                 error;
             {error, unable_to_get_join_ring} ->
-                io:format("Failed: Unable to get ring from ~s~n", [NodeStr]),
+                io:format("Failed: Unable to get ring from ~p~n", [Node]),
                 error;
             {error, not_single_node} ->
                 io:format("Failed: This node is already a member of a "
@@ -153,7 +154,7 @@ down([Node]) ->
                 io:format("Success: ~p marked as down~n", [Node]),
                 ok;
             {error, is_up} ->
-                io:format("Failed: ~s is up~n", [Node]),
+                io:format("Failed: ~p is up~n", [Node]),
                 error;
             {error, not_member} ->
                 io:format("Failed: ~p is not a member of the cluster.~n",
